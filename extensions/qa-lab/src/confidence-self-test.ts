@@ -157,7 +157,6 @@ function detectTokenEfficiencyRegression(): boolean {
         },
       ],
     },
-    thresholdPercent: 15,
     generatedAt: "2026-05-12T00:00:00.000Z",
   });
   return !report.pass && report.failures.length === 1;
@@ -178,9 +177,12 @@ function detectJsonlReplayDrift(): boolean {
   return !evaluation.passed && evaluation.status !== "unknown";
 }
 
-async function buildQaConfidenceSelfTestSummary(
-  generatedAt = new Date().toISOString(),
-): Promise<QaConfidenceSelfTestSummary> {
+export async function writeQaConfidenceSelfTestArtifacts(params: {
+  outputDir: string;
+  generatedAt?: string;
+}): Promise<{ reportPath: string; summaryPath: string; summary: QaConfidenceSelfTestSummary }> {
+  await fs.mkdir(params.outputDir, { recursive: true });
+  const { generatedAt = new Date().toISOString() } = params;
   const canaries: QaConfidenceSelfTestCanary[] = [
     {
       id: "prompt-drift",
@@ -249,14 +251,11 @@ async function buildQaConfidenceSelfTestSummary(
       details: "synthetic JSONL replay drifted after turn ordering changed",
     },
   ];
-  return {
+  const summary: QaConfidenceSelfTestSummary = {
     generatedAt,
     pass: canaries.every((canary) => canary.detected),
     canaries,
   };
-}
-
-function renderQaConfidenceSelfTestMarkdownReport(summary: QaConfidenceSelfTestSummary): string {
   const lines = [
     "# OpenClaw QA Confidence Self-Test",
     "",
@@ -271,16 +270,7 @@ function renderQaConfidenceSelfTestMarkdownReport(summary: QaConfidenceSelfTestS
       `| ${canary.id} | ${canary.category} | ${canary.detected ? "yes" : "no"} | ${canary.expectedVerdict} | ${escapeTableCell(canary.details)} |`,
     );
   }
-  return `${lines.join("\n")}\n`;
-}
-
-export async function writeQaConfidenceSelfTestArtifacts(params: {
-  outputDir: string;
-  generatedAt?: string;
-}): Promise<{ reportPath: string; summaryPath: string; summary: QaConfidenceSelfTestSummary }> {
-  await fs.mkdir(params.outputDir, { recursive: true });
-  const summary = await buildQaConfidenceSelfTestSummary(params.generatedAt);
-  const report = renderQaConfidenceSelfTestMarkdownReport(summary);
+  const report = `${lines.join("\n")}\n`;
   const reportPath = path.join(params.outputDir, "qa-confidence-self-test-report.md");
   const summaryPath = path.join(params.outputDir, "qa-confidence-self-test-summary.json");
   await fs.writeFile(reportPath, report, "utf8");

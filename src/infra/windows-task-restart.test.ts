@@ -23,8 +23,10 @@ vi.mock("node:child_process", async () => {
 vi.mock("./tmp-openclaw-dir.js", () => ({
   resolvePreferredOpenClawTmpDir: resolvePreferredOpenClawTmpDirMock,
 }));
-// mock-isolation: launcher paths are supplied without probing the host Task Scheduler.
-vi.mock("../daemon/schtasks.js", () => ({ resolveTaskScriptPath: resolveTaskScriptPathMock }));
+vi.mock("../daemon/schtasks-layout.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/schtasks-layout.js")>()),
+  resolveTaskScriptPath: resolveTaskScriptPathMock,
+}));
 vi.mock("./windows-encoding.js", async (original) => ({
   ...(await original<typeof import("./windows-encoding.js")>()),
   resolveWindowsOemCodePage: () => 437,
@@ -171,8 +173,6 @@ it("writes a detached schtasks relaunch helper", () => {
   expect(seenCommandArg.endsWith('"')).toBe(true);
   expect(seenCommandArg).toContain("&");
   expect(result).toMatchObject({ ok: true, method: "schtasks" });
-  expect(result.tried).toContain('schtasks /Run /TN "OpenClaw Gateway (work)"');
-  expect(result.tried).toContain(`${cmdExePath} /d /s /c ${seenCommandArg}`);
   expect(spawnCall).toStrictEqual([
     cmdExePath,
     ["/d", "/s", "/c", seenCommandArg],

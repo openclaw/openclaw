@@ -191,6 +191,8 @@ describe("Doctor auth migration source ownership", () => {
       changes: [],
       migratedProfileIds: new Set<string>(),
       blockedProfileIds: new Set<string>(),
+      findings: [],
+      aliasFindings: [],
       warnings: [],
     });
     for (const source of [...selectedSources, ...ambientSources]) {

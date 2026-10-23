@@ -1,108 +1,81 @@
-import { describe, expect, it } from "vitest";
-import { resolveLiveTransportQaScenarioIds } from "./live-transports/shared/scenario-selection.js";
+import { expect, it } from "vitest";
+import { resolveLiveTransportQaScenarioIds as transportScenarios } from "./live-transports/shared/scenario-selection.js";
 import {
   resolveQaProfileScenarios,
-  resolveQaRunProfileExecutionSelection,
+  resolveQaRunProfileExecutionSelection as executionSelection,
 } from "./profile-planning.js";
 import { readQaScenarioById, readQaScenarioPack } from "./scenario-catalog.js";
 import { readQaScorecardTaxonomyReport } from "./scorecard-taxonomy.js";
 
-describe("taxonomy profile scenario selection", () => {
-  it("resolves smoke membership from every primary coverage owner", () => {
-    const catalog = readQaScenarioPack().scenarios;
-    const report = readQaScorecardTaxonomyReport(catalog);
-    const profile = report.profiles.find((candidate) => candidate.id === "smoke-ci");
-    expect(profile).toBeDefined();
-    const selectedCoverageIds = new Set(profile?.coverageIds ?? []);
-    const selectedScenarioRefs = new Set(profile?.scenarioRefs ?? []);
+function readProfile(id = "smoke-ci") {
+  const catalog = readQaScenarioPack().scenarios;
+  const report = readQaScorecardTaxonomyReport(catalog);
+  const profile = report.profiles.find((candidate) => candidate.id === id);
+  expect(profile).toBeDefined();
+  return { catalog, report, profile };
+}
 
-    expect(selectedScenarioRefs.size).toBeGreaterThan(0);
-    for (const scenario of catalog.filter((candidate) =>
-      selectedScenarioRefs.has(candidate.sourcePath),
-    )) {
-      expect(scenario.coverage?.primary.some((id) => selectedCoverageIds.has(id))).toBe(true);
-    }
-    for (const coverageId of selectedCoverageIds) {
-      const primaryOwners = catalog.filter((scenario) =>
-        scenario.coverage?.primary.includes(coverageId),
-      );
-      expect(primaryOwners.length).toBeGreaterThan(0);
-      expect(primaryOwners.every((scenario) => selectedScenarioRefs.has(scenario.sourcePath))).toBe(
-        true,
-      );
-    }
-  });
+it("resolves smoke membership from every primary coverage owner", () => {
+  const { catalog, profile } = readProfile();
+  const coverageIds = new Set(profile?.coverageIds ?? []);
+  const scenarioRefs = new Set(profile?.scenarioRefs ?? []);
+  const owners = catalog.filter(({ coverage }) =>
+    coverage?.primary.some((id) => coverageIds.has(id)),
+  );
+  expect(scenarioRefs.size).toBeGreaterThan(0);
+  expect(new Set(owners.map(({ sourcePath }) => sourcePath))).toEqual(scenarioRefs);
+  for (const id of coverageIds) {
+    expect(owners.some(({ coverage }) => coverage?.primary.includes(id))).toBe(true);
+  }
+});
 
-  it("does not pull unrelated scenarios from a selected coverage category", () => {
-    const scenarioPack = readQaScenarioPack();
-    const report = readQaScorecardTaxonomyReport(scenarioPack.scenarios);
-    const profile = report.profiles.find((candidate) => candidate.id === "smoke-ci");
-    expect(profile).toBeDefined();
-    const categoryScenarioRefs = new Set(
-      report.categories
-        .filter((category) => category.profiles.includes("smoke-ci"))
-        .flatMap((category) => category.scenarioRefs),
-    );
-    const profileScenarioRefs = new Set(profile?.scenarioRefs ?? []);
-    const unrelatedRefs = [...categoryScenarioRefs].filter((ref) => !profileScenarioRefs.has(ref));
+it("does not pull unrelated scenarios from a selected coverage category", () => {
+  const { report, profile } = readProfile();
+  const scenarioRefs = new Set(profile?.scenarioRefs ?? []);
+  const unrelatedRefs = report.categories
+    .filter(({ profiles }) => profiles.includes("smoke-ci"))
+    .flatMap((category) => category.scenarioRefs)
+    .filter((ref) => !scenarioRefs.has(ref));
+  expect(unrelatedRefs.length).toBeGreaterThan(0);
+  expect(
+    resolveQaProfileScenarios({ profile: "smoke-ci", providerMode: "mock-openai" }).scenarios,
+  ).not.toContainEqual(expect.objectContaining({ sourcePath: unrelatedRefs[0] }));
+});
 
-    expect(unrelatedRefs.length).toBeGreaterThan(0);
-    expect(
-      resolveQaProfileScenarios({ profile: "smoke-ci", providerMode: "mock-openai" }).scenarios,
-    ).not.toContainEqual(expect.objectContaining({ sourcePath: unrelatedRefs[0] }));
-  });
+it("selects the packaged first-run journey for release container setup", () => {
+  const { catalog, report, profile } = readProfile("release");
+  const onboarding = catalog.find(({ id }) => id === "docker-npm-onboard-channel-agent");
+  const systemAgent = catalog.find(({ id }) => id === "docker-system-agent-first-run");
+  const ref = "containers.first-run-onboarding";
+  expect(onboarding?.coverage?.primary).toContain(ref);
+  expect(systemAgent?.coverage?.primary).not.toContain(ref);
+  expect(systemAgent?.coverage?.secondary).toContain(ref);
+  expect(report.validationIssues).not.toContainEqual(
+    expect.objectContaining({ code: "coverage-id-missing-primary-inventory", ref }),
+  );
+  expect(profile?.scenarioRefs).toContain(onboarding?.sourcePath);
+});
 
-  it("selects the packaged first-run journey for release container setup", () => {
-    const catalog = readQaScenarioPack().scenarios;
-    const report = readQaScorecardTaxonomyReport(catalog);
-    const onboarding = catalog.find(
-      (scenario) => scenario.id === "docker-npm-onboard-channel-agent",
-    );
-    const systemAgent = catalog.find((scenario) => scenario.id === "docker-system-agent-first-run");
+it("derives channel defaults from catalog metadata and lane constraints", () => {
+  const live = transportScenarios({ channelId: "telegram", providerMode: "live-frontier" });
+  const mock = transportScenarios({ channelId: "telegram", providerMode: "mock-openai" });
+  expect(live).toContain("telegram-help-command");
+  expect(live).not.toContain("telegram-assistant-transcript-role-boundary");
+  expect(mock).not.toContain("telegram-assistant-transcript-role-boundary");
+  expect(mock).not.toContain("discord-canary");
+});
 
-    expect(onboarding?.coverage?.primary).toContain("containers.first-run-onboarding");
-    expect(systemAgent?.coverage?.primary).not.toContain("containers.first-run-onboarding");
-    expect(systemAgent?.coverage?.secondary).toContain("containers.first-run-onboarding");
-    expect(report.validationIssues).not.toContainEqual(
-      expect.objectContaining({
-        code: "coverage-id-missing-primary-inventory",
-        ref: "containers.first-run-onboarding",
-      }),
-    );
-    expect(report.profiles.find((profile) => profile.id === "release")?.scenarioRefs).toContain(
-      onboarding?.sourcePath,
-    );
-  });
-
-  it("derives channel defaults from catalog metadata and lane constraints", () => {
-    const liveTelegram = resolveLiveTransportQaScenarioIds({
-      channelId: "telegram",
-      providerMode: "live-frontier",
-    });
-    const mockTelegram = resolveLiveTransportQaScenarioIds({
-      channelId: "telegram",
-      providerMode: "mock-openai",
-    });
-
-    expect(liveTelegram).toContain("telegram-help-command");
-    expect(liveTelegram).not.toContain("telegram-assistant-transcript-role-boundary");
-    expect(mockTelegram).not.toContain("telegram-assistant-transcript-role-boundary");
-    expect(mockTelegram).not.toContain("discord-canary");
-  });
-
-  it("lets flow-only consumers exclude a channel-declared script without changing membership", () => {
-    const scenario = readQaScenarioById("telegram-startup-getme-live");
-    const lane = {
-      scenarios: [scenario],
-      providerMode: "mock-openai" as const,
-      primaryModel: "mock-openai/gpt-5.6-luna",
-      channelDriver: "live" as const,
-      channel: "telegram",
-    };
-
-    expect(resolveQaRunProfileExecutionSelection(lane).selectedScenarios).toEqual([scenario]);
-    expect(
-      resolveQaRunProfileExecutionSelection({ ...lane, executionKind: "flow" }).excludedScenarios,
-    ).toEqual([{ scenario, reasons: ["execution.kind=flow"] }]);
-  });
+it("lets flow-only consumers exclude a channel-declared script without changing membership", () => {
+  const scenario = readQaScenarioById("telegram-startup-getme-live");
+  const lane = {
+    scenarios: [scenario],
+    providerMode: "mock-openai" as const,
+    primaryModel: "mock-openai/gpt-5.6-luna",
+    channelDriver: "live" as const,
+    channel: "telegram",
+  };
+  expect(executionSelection(lane).selectedScenarios).toEqual([scenario]);
+  expect(executionSelection({ ...lane, executionKind: "flow" }).excludedScenarios).toEqual([
+    { scenario, reasons: ["execution.kind=flow"] },
+  ]);
 });

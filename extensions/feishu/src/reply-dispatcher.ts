@@ -324,23 +324,14 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     });
   };
 
-  const queueStreamingUpdate = (
-    nextText: string,
-    options?: {
-      dedupeWithLastPartial?: boolean;
-      mode?: "snapshot" | "delta";
-    },
-  ) => {
+  const queueStreamingUpdate = (nextText: string, mode: "snapshot" | "delta") => {
     if (!nextText) {
       return;
     }
-    if (options?.dedupeWithLastPartial && nextText === lastPartial) {
+    if (nextText === lastPartial) {
       return;
     }
-    if (options?.dedupeWithLastPartial) {
-      lastPartial = nextText;
-    }
-    const mode = options?.mode ?? "snapshot";
+    lastPartial = nextText;
     if (mode === "delta") {
       streamText = `${streamText}${nextText}`;
     } else {
@@ -1255,7 +1246,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (info?.kind === "block") {
               // Some runtimes emit block payloads without onPartial/final callbacks.
               // Mirror block text into streamText so onIdle close still sends content.
-              queueStreamingUpdate(text, { mode: "delta", dedupeWithLastPartial: true });
+              queueStreamingUpdate(text, "delta");
             }
             if (info?.kind === "final") {
               // Final payloads can be cumulative snapshots or independent
@@ -1349,10 +1340,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               return false;
             }
             startStreaming();
-            queueStreamingUpdate(cleaned, {
-              dedupeWithLastPartial: true,
-              mode: "snapshot",
-            });
+            queueStreamingUpdate(cleaned, "snapshot");
             return false;
           }
         : undefined,

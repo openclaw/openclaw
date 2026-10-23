@@ -5,7 +5,7 @@ import type { Message } from "../../llm/types.js";
 
 const MAX_HISTORY_DIFF_FIELDS = 8;
 // Persistence-only metadata is absent from provider messages; content is hashed separately.
-const MESSAGE_ENVELOPE_OMITTED_FIELDS = new Set(["content", "__openclaw"]);
+const MESSAGE_ENVELOPE_OMITTED_FIELDS = new Set(["content", "__openclaw", "display"]);
 
 export type PromptHistoryFingerprint = {
   role: string;
@@ -22,6 +22,7 @@ type RecordFingerprint = {
   digest: string;
   fields: Map<string, string>;
   primitives: Map<string, unknown>;
+  immutable: boolean;
 };
 // Primitive revisions avoid rehashing retained text; nested values remain mutable.
 const recordFingerprints = new WeakMap<object, RecordFingerprint>();
@@ -48,11 +49,16 @@ function fingerprintText(value: string): string {
     : `e${hash("sha256", stableStringify(value), "latin1")}`;
 }
 
-function fingerprintRecord(record: object, omit?: ReadonlySet<string>): RecordFingerprint {
+function fingerprintRecord(
+  record: object,
+  omit?: ReadonlySet<string>,
+  immutableParent = false,
+): RecordFingerprint {
   const previous = recordFingerprints.get(record);
-  if (previous && isOwnedTranscriptPayload(record)) {
+  if (previous?.immutable) {
     return previous;
   }
+  const immutable = immutableParent || isOwnedTranscriptPayload(record);
   let fields = previous ? undefined : new Map<string, string>();
   const primitives = previous?.primitives ?? new Map<string, unknown>();
   for (const [key, value] of Object.entries(record)) {
@@ -82,12 +88,14 @@ function fingerprintRecord(record: object, omit?: ReadonlySet<string>): RecordFi
     }
   }
   if (!fields && previous) {
+    previous.immutable = immutable;
     return previous;
   }
   const fingerprint = {
     digest: hash("sha256", stableStringify(Object.fromEntries(fields!)), "latin1"),
     fields: fields!,
     primitives,
+    immutable,
   };
   recordFingerprints.set(record, fingerprint);
   return fingerprint;
@@ -126,7 +134,9 @@ export function fingerprintMessage(
     blocks = [memo.digest];
   } else {
     stringFingerprints.delete(message);
-    fingerprints = content.map((block) => fingerprintRecord(block));
+    // Append normalization owns the content root and freezes every descendant.
+    const immutableContent = isOwnedTranscriptPayload(content);
+    fingerprints = content.map((block) => fingerprintRecord(block, undefined, immutableContent));
     blocks = fingerprints.map(({ digest }) => digest);
   }
   const envelope = fingerprintRecord(message, MESSAGE_ENVELOPE_OMITTED_FIELDS);

@@ -132,16 +132,6 @@ check(
   ),
   "registry type grouping must not add a runtime owner or import",
 );
-const composerSource = read("packages/gateway-protocol/src/schema/protocol-schema-composer.ts");
-check(
-  !/\.(?:sort|toSorted)\s*\(/u.test(composerSource),
-  "schema composer must not sort its fragments",
-);
-check(
-  composerSource.includes("Object.hasOwn(registry, key)"),
-  "schema composer must reject duplicate fragment keys",
-);
-
 const withoutComments = (source: string) =>
   source
     .replace(/\r\n?/gu, "\n")

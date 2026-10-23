@@ -1,10 +1,12 @@
-import { For, Show, createMemo } from "solid-js";
+import { Errored, For, Loading, Show, createMemo, isPending, latest } from "solid-js";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { PanelRefreshStatus } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerDashboardsEnglish } from "../../i18n/locales/en-dashboards.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -15,6 +17,8 @@ import {
 } from "../../lib/sessions/route-navigation.ts";
 import "../../styles/dashboards.css";
 import { DashboardPreview } from "./dashboard-preview.tsx";
+
+registerDashboardsEnglish();
 
 export type DashboardsRouteData = {
   result: SessionsListResult | null;
@@ -321,10 +325,15 @@ function DashboardGallerySkeleton() {
 
 export function DashboardsView(props: {
   data?: DashboardsRouteData;
+  readReady: () => void;
   filters: DashboardGalleryFilters;
   handlers: DashboardGalleryHandlers;
   gatewaySnapshot?: ApplicationGatewaySnapshot;
 }) {
+  const readiness = () => {
+    latest(props.readReady);
+    return null;
+  };
   return (
     <>
       <HubPageHeader
@@ -342,32 +351,45 @@ export function DashboardsView(props: {
         }
       />
       <SettingsWorkspace>
-        <Show
-          when={props.data && (props.data.result || props.data.error) ? props.data : undefined}
+        <Loading
+          on={!props.data?.result && !props.data?.error}
           fallback={<DashboardGallerySkeleton />}
         >
-          {(data) => (
-            <>
-              <PanelRefreshStatus
-                status={{
-                  error: data().error,
-                  hasLoaded: data().result !== null,
-                  stale: Boolean(data().result && data().error),
-                  awaitingGateway: false,
-                }}
-                errorMessage={
-                  data().error ? t("dashboardsPage.loadError", { error: data().error! }) : undefined
-                }
-              />
+          <Show
+            when={!props.data?.result && isPending(props.readReady)}
+            fallback={
+              <Errored
+                fallback={(error) => (
+                  <PanelRefreshStatus
+                    status={{
+                      error: formatUiError(error()),
+                      hasLoaded: Boolean(props.data?.result),
+                      stale: Boolean(props.data?.result),
+                      awaitingGateway: false,
+                    }}
+                    errorMessage={t("dashboardsPage.loadError", {
+                      error: formatUiError(error()),
+                    })}
+                  />
+                )}
+              >
+                {readiness()}
+              </Errored>
+            }
+          >
+            <DashboardGallerySkeleton />
+          </Show>
+          <Show when={props.data?.result ? props.data : undefined}>
+            {(data) => (
               <DashboardList
                 data={data()}
                 filters={props.filters}
                 handlers={props.handlers}
                 gatewaySnapshot={props.gatewaySnapshot}
               />
-            </>
-          )}
-        </Show>
+            )}
+          </Show>
+        </Loading>
       </SettingsWorkspace>
     </>
   );

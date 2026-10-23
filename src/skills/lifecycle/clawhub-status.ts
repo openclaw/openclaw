@@ -255,12 +255,10 @@ export function readLocalSkillCardContentSync(skillDir: string): string | undefi
 export async function searchSkillsFromClawHub(params: {
   query?: string;
   limit?: number;
-  baseUrl?: string;
 }): Promise<ClawHubSkillSearchResult[]> {
   return await searchClawHubSkills({
     query: params.query?.trim() ?? "",
     limit: params.limit,
-    baseUrl: params.baseUrl,
   });
 }
 

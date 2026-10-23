@@ -108,97 +108,85 @@
   gap: 8px;
   flex: 0 0 52px;
   padding: 8px;
-}
 
-.sidebar-region--mobile-host
-  > .chat-mobile-host
-  > .chat-mobile-host__header
   .chat-mobile-host__circle {
-  display: grid;
-  place-items: center;
-  flex: 0 0 36px;
-  width: 36px;
-  height: 36px;
-  padding: 0;
-  border: 1px solid var(--border-strong);
-  border-radius: 50%;
-  color: var(--muted);
-  background: var(--bg-hover);
-}
+    display: grid;
+    place-items: center;
+    flex: 0 0 36px;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: 50%;
+    color: var(--muted);
+    background: var(--bg-hover);
+  }
 
-.sidebar-region--mobile-host
-  > .chat-mobile-host
-  > .chat-mobile-host__header
   .chat-mobile-host__circle:is(:hover, :focus-visible) {
-  border-color: var(--border-hover);
-  color: var(--text-strong);
-}
+    border-color: var(--border-hover);
+    color: var(--text-strong);
+  }
 
-.sidebar-region--mobile-host
-  > .chat-mobile-host
-  > .chat-mobile-host__header
-  .chat-mobile-host__circle
-  svg {
-  width: 18px;
-  height: 18px;
-}
+  .chat-mobile-host__circle svg {
+    width: 18px;
+    height: 18px;
+  }
 
-.sidebar-region--mobile-host
-  > .chat-mobile-host
-  > .chat-mobile-host__header
   .chat-mobile-host__segments {
-  display: flex;
-  justify-content: center;
-  flex: 1;
-  min-width: 0;
-  gap: 0;
-  max-width: 240px;
-  padding: 3px;
-  margin-inline: auto;
-  border-radius: 18px;
-  background: var(--bg);
-}
+    display: flex;
+    justify-content: center;
+    flex: 1;
+    min-width: 0;
+    gap: 0;
+    max-width: 240px;
+    padding: 3px;
+    margin-inline: auto;
+    border-radius: 18px;
+    background: var(--bg);
+  }
 
-.sidebar-region--mobile-host
-  > .chat-mobile-host
-  > .chat-mobile-host__header
-  .chat-mobile-host__segments
-  button {
-  flex: 1;
-  min-width: 0;
-  height: 30px;
-  padding: 5px 12px;
-  border: 0;
-  border-radius: 16px;
-  background: transparent;
-  color: var(--muted);
-  font-size: 13px;
-}
+  .chat-mobile-host__segments button {
+    flex: 1;
+    min-width: 0;
+    height: 30px;
+    padding: 5px 12px;
+    border: 0;
+    border-radius: 16px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 13px;
+  }
 
-.sidebar-region--mobile-host
-  > .chat-mobile-host
-  > .chat-mobile-host__header
-  .chat-mobile-host__segments
-  button[aria-pressed="true"] {
-  background: var(--bg-hover);
-  color: var(--text-strong);
-}
+  .chat-mobile-host__segments button[aria-pressed="true"] {
+    background: var(--bg-hover);
+    color: var(--text-strong);
+  }
 
-.sidebar-region--mobile-host
-  > .chat-mobile-host
-  > .chat-mobile-host__header
   .chat-mobile-host__title {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-  font-family: var(--font-body);
-  font-size: 16px;
-  line-height: 24px;
-  font-weight: 500;
-  color: var(--text-strong);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 24px;
+    font-weight: 500;
+    color: var(--text-strong);
+    overflow: hidden;
+    text-overflow: clip;
+    white-space: nowrap;
+
+    /* Selected PR is the sole two-line heading exception. Keep the header height. */
+    &[data-details-route="pull-request"] {
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+      text-overflow: ellipsis;
+      font-size: 16px;
+      line-height: 20px;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+  }
 }
 
 .sidebar-region--mobile-host > .chat-mobile-host > .chat-mobile-host__panels {
@@ -358,10 +346,6 @@
 .sidebar-region--mobile-host > .chat-mobile-host > .chat-mobile-host__details {
   display: flex;
   overflow: hidden;
-}
-
-.sidebar-region--mobile-host > .chat-mobile-host > .chat-mobile-host__details[hidden] {
-  display: none;
 }
 
 /* Host-owned insets only for leaves without an interior padding owner.
@@ -528,20 +512,6 @@
   background: transparent;
 }
 
-/* Selected PR is the sole two-line heading exception. Keep the header height. */
-.sidebar-region--mobile-host
-  > .chat-mobile-host
-  > .chat-mobile-host__header
-  .chat-mobile-host__title[data-details-route="pull-request"] {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  font-size: 16px;
-  line-height: 20px;
-  white-space: normal;
-  overflow-wrap: anywhere;
-}
-
 /* Like the desktop fallback rail, this fills only the gap before a native reader
    supplies its own chrome, including lazy loading, errors and generic content. */
 .sidebar-region--mobile-host
@@ -598,17 +568,7 @@
     opacity: 0.92;
     translate: 0 2px;
   }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sidebar-region--mobile-host
-    .chat-mobile-host
-    :is(
-      .chat-mobile-host__details,
-      .chat-mobile-host__panels,
-      .chat-mobile-host__page,
-      .chat-mobile-details-page
-    ):not([hidden]) {
+  @media (prefers-reduced-motion: reduce) {
     transition: none;
     @starting-style {
       opacity: 1;
@@ -654,12 +614,6 @@
 }
 
 .chat-mobile-host__scroll-edge[hidden] {
-  display: none;
-}
-
-/* This footer fade is unconditional and uses the outer chat surface. The host
-   now paints only the child's actual overflow boundaries on its own surface. */
-.sidebar-region--mobile-host .chat-subagents__detail-pane .chat-footer::before {
   display: none;
 }
 

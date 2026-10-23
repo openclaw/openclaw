@@ -75,34 +75,6 @@ export async function initializeImapCursor(
   return { kind: existing ? "reset" : "baseline", cursor };
 }
 
-export async function advanceImapCursor(
-  state: ImapWatcherState,
-  accountId: string,
-  uidValidity: string,
-  uid: number,
-): Promise<void> {
-  await state.cursors.register(accountId, {
-    uidValidity,
-    lastSeenUid: uid,
-    updatedAt: Date.now(),
-  });
-}
-
-export async function rememberImapMessage(
-  state: ImapWatcherState,
-  accountId: string,
-  messageId: string,
-): Promise<boolean> {
-  const ring = await state.messageIds.lookup(accountId);
-  if (ring?.messageIds.includes(messageId)) {
-    return false;
-  }
-  await state.messageIds.register(accountId, {
-    messageIds: [...(ring?.messageIds ?? []), messageId].slice(-100),
-  });
-  return true;
-}
-
 export async function recordImapAttempt(
   state: ImapWatcherState,
   messageKey: string,

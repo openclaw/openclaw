@@ -193,6 +193,86 @@ it.each(["replaced", "preparation"] as const)(
   },
 );
 
+it.each(["released", "replaced"] as const)(
+  "preserves committed progress when publication closes its worker claim: %s",
+  async (scenario) => {
+    const { claim, store, identity } = await transcriptFixture("publication-race");
+    const target = claimTarget(claim.sessionId, "openclaw-agent.sqlite");
+    await upsertSessionEntryCore(target, {
+      sessionId: claim.sessionId,
+      lifecycleRevision: "publication-race-lifecycle",
+      updatedAt: 1,
+    });
+    const workerService = transcriptService(store, () => ({
+      session: { store: target.storePath },
+    }));
+    const claimOps = createPlacementTurnClaimFixtureOps(support.testState.stateDb);
+    let replacement: WorkerSessionTurnClaim | undefined;
+    let owner: Owner | undefined;
+    let replacementOwner: Owner | undefined;
+    const replacementInput = {
+      ...target,
+      claimId: "replacement-publication-claim",
+      runId: "replacement-publication-run",
+      owner: claim.owner,
+    };
+    const updates: unknown[] = [];
+    const unsubscribe = onSessionTranscriptUpdate((update) => {
+      if (update.sessionId !== claim.sessionId) {
+        return;
+      }
+      updates.push(update);
+      if (updates.length === 1) {
+        claimOps.releaseTurn(claim);
+        if (scenario === "replaced") {
+          replacement = claimOps.claimTurn(replacementInput);
+        }
+      }
+    });
+    try {
+      owner = await bindClaimOwner(store, claim, { target });
+      const firstRequest = support.transcriptRequest(identity, "committed before closure");
+      await expect(workerService.commitTranscript(identity, firstRequest)).resolves.toEqual({
+        ok: false,
+        closeReason: "placement-mismatch",
+      });
+      expect(SessionManager.open(target).getEntries()).toHaveLength(1);
+      expect(updates).toHaveLength(1);
+      expect(store.get(claim.sessionId)?.lastTranscriptAckCursor).toBe(firstRequest.seq);
+
+      replacement ??= await store.claimTurn(replacementInput);
+      replacementOwner = await bindClaimOwner(store, replacement, { target });
+      const credential = await workerService.acquireTurnCredential(replacement);
+      expect(await workerService.acknowledgeCredentialDelivery(credential)).toBe(true);
+      const admitted = await workerService.admitWorker(
+        claimAdmission(replacement, credential.credential),
+      );
+      assert(admitted.ok, "replacement worker was not admitted");
+      const nextSeq = (store.get(claim.sessionId)?.lastTranscriptAckCursor ?? 0) + 1;
+      expect(nextSeq).toBe(firstRequest.seq + 1);
+      const nextRequest = support.transcriptRequest(admitted.identity, "replacement progresses", {
+        seq: nextSeq,
+        baseLeafId: SessionManager.open(target).getLeafId(),
+      });
+      const result = await workerService.commitTranscript(admitted.identity, nextRequest);
+      expect(result).toMatchObject({ ok: true });
+      await expect(workerService.commitTranscript(admitted.identity, nextRequest)).resolves.toEqual(
+        result,
+      );
+      expect(SessionManager.open(target).getEntries()).toHaveLength(2);
+      expect(updates).toHaveLength(2);
+      expect(store.get(claim.sessionId)?.lastTranscriptAckCursor).toBe(nextSeq);
+    } finally {
+      unsubscribe();
+      if (store.validateTurnClaim(replacement ?? claim)) {
+        await store.releaseTurn(replacement ?? claim);
+      }
+      owner?.release();
+      replacementOwner?.release();
+    }
+  },
+);
+
 it.each(["current", "deleted"] as const)(
   "keeps an admitted transcript on its original store after configuration changes: %s",
   async (scenario) => {

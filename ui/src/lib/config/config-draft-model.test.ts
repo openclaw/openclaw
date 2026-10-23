@@ -158,6 +158,11 @@ describe("config draft model", () => {
               enabled: { type: "boolean" },
               tags: { type: "array", items: { type: "integer" } },
               label: { type: "string", minLength: 1 },
+              ownMap: {
+                type: "object",
+                properties: { keep: { type: "boolean" } },
+                additionalProperties: { type: "number" },
+              },
             },
           },
           uiHints: {},
@@ -176,6 +181,12 @@ describe("config draft model", () => {
     runtimeConfig.patchForm(["enabled"], "true");
     runtimeConfig.patchForm(["tags"], ["7", ""]);
     runtimeConfig.patchForm(["label"], "");
+    runtimeConfig.patchForm(["ownMap"], {
+      keep: true,
+      constructor: "12",
+      prototype: "13",
+      ["__proto__"]: "14",
+    });
 
     await expect(runtimeConfig.save()).resolves.toBe(true);
     const submission = submitted.find((entry) => entry.method === "config.set");
@@ -187,6 +198,7 @@ describe("config draft model", () => {
       composedCount: 8.5,
       enabled: true,
       tags: [7],
+      ownMap: { keep: true, constructor: 12, prototype: 13, ["__proto__"]: 14 },
     });
     runtimeConfig.dispose();
   });

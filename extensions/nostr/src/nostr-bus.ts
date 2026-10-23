@@ -1,10 +1,7 @@
 import { SimplePool, finalizeEvent, getPublicKey, verifyEvent, type Event } from "nostr-tools";
 import { decrypt, encrypt } from "nostr-tools/nip04";
 import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
-import {
-  createDirectDmPreCryptoGuardPolicy,
-  type DirectDmPreCryptoGuardPolicyOverrides,
-} from "openclaw/plugin-sdk/direct-dm-guard-policy";
+import { createDirectDmPreCryptoGuardPolicy } from "openclaw/plugin-sdk/direct-dm-guard-policy";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { createFixedWindowRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
 import type { NostrProfile } from "./config-schema.js";
@@ -64,8 +61,6 @@ interface NostrBusOptions {
   }) => Promise<"allow" | "block" | "pairing">;
   /** Internal local rejection hint for literal-only allowlist accounts; never grants access. */
   admissionPubkeys?: readonly string[];
-  /** Override pre-crypto DM guardrails for tests or future channel tuning (optional) */
-  guardPolicy?: DirectDmPreCryptoGuardPolicyOverrides;
   onError?: (error: Error, context: string) => void;
   onConnect?: (relay: string) => void;
   onDisconnect?: (relay: string) => void;
@@ -102,7 +97,7 @@ export async function startNostrBus(options: NostrBusOptions) {
   pool.onRelayConnectionSuccess = options.onConnect;
   const accountId = options.accountId ?? pk.slice(0, 16);
   const gatewayStartedAt = Math.floor(Date.now() / 1000);
-  const guardPolicy = createDirectDmPreCryptoGuardPolicy(options.guardPolicy);
+  const guardPolicy = createDirectDmPreCryptoGuardPolicy();
 
   let preferredRelay: string | undefined;
 

@@ -1,6 +1,7 @@
 /** Original-state update and standalone Doctor captures in user-invoked cleanup. */
 import fs from "node:fs";
 import path from "node:path";
+import { readRootStructuredFileSync } from "@openclaw/fs-safe/json";
 import { collectStandaloneDoctorCaptures } from "../infra/doctor-capture-retention.js";
 import { hasSymbolicLinkInDirectoryPath } from "../infra/session-sqlite-migration-manifest.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
@@ -10,6 +11,10 @@ import { getUpdateRun, listUpdateRuns } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { isUpdateRecoveryPending } from "../infra/update-run-recovery-schema.js";
 import { loadUpdateRecovery } from "../infra/update-run-recovery.js";
+import {
+  parseUpdateRecoveryBackupManifest,
+  type UpdateRecoveryBackupManifest,
+} from "./backup-verify-manifest.js";
 import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
 
 type CaptureIdentity = { dev: bigint; ino: bigint };
@@ -152,6 +157,25 @@ function collectCaptureRootInventory(params: { stateDir: string; env: NodeJS.Pro
         getUpdateRun(entry.name, { env: params.env });
       const doctor = standalone.get(directory);
       if (!run && !doctor) {
+        // Doctor owns its namespace, including incomplete or unrecognized captures.
+        if (
+          entry.name.startsWith("doctor-") ||
+          fs.existsSync(path.join(directory, "manifest.json.partial"))
+        ) {
+          continue;
+        }
+        const manifest = readRootStructuredFileSync<UpdateRecoveryBackupManifest>({
+          rootDir: directory,
+          relativePath: "manifest.json",
+          boundaryLabel: "update capture",
+          rejectHardlinks: true,
+          maxBytes: 128 * 1024 * 1024,
+          parse: parseUpdateRecoveryBackupManifest,
+        });
+        if (manifest.ok && manifest.value.runId === entry.name) {
+          item.reason = "orphan-update-capture";
+          item.detail = `Sealed update capture created ${manifest.value.createdAt}; no matching update run. No supported command retires it.`;
+        }
         continue;
       }
       item.runs = [entry.name];

@@ -288,6 +288,7 @@ export async function markRestartAbortedMainSessions(params: {
               captureYieldedMainSessionContinuation({
                 entry,
                 requester,
+                purpose: "recovery",
               })
             ) {
               recordSkip("yielded_continuation", sessionKey);
@@ -471,6 +472,7 @@ async function markOrphanedMainSessionStore(
       const continuation = captureYieldedMainSessionContinuation({
         entry,
         requester: requesters.get(sessionKey),
+        purpose: "recovery",
       });
       if (continuation) {
         // A newer foreground start clears endedAt. Only an unclaimed waiting cycle
@@ -546,12 +548,14 @@ export async function markStartupOrphanedMainSessionsForRecovery(params: {
   startupCheckedStorePaths?: Set<string>;
   updatedBeforeMs?: number;
   onOwnerPending?: OrphanMarkParams["onOwnerPending"];
+  assertCommitAllowed?: () => void;
 }): Promise<{ marked: number; skipped: number; failedTargets?: RestartRecoveryStoreTarget[] }> {
   const result = { marked: 0, skipped: 0 };
   const failedTargets: RestartRecoveryStoreTarget[] = [];
   const lifecycleGeneration = getAgentEventLifecycleGeneration();
   const storeTargets = await discoverRestartRecoveryStoreTargets(params);
   for (const target of storeTargets) {
+    params.assertCommitAllowed?.();
     const key = restartRecoveryStoreTargetKey(target);
     if (params.startupCheckedStorePaths?.has(key)) {
       continue;

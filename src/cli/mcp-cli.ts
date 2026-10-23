@@ -7,6 +7,7 @@ import { asNullableRecord as asRecord } from "@openclaw/normalization-core/recor
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeStringifiedOptionalString,
+  readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeCsvOrLooseStringList } from "@openclaw/normalization-core/string-normalization";
 import { Command } from "commander";
@@ -22,7 +23,6 @@ import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
 import { parseConfigValue } from "../auto-reply/reply/config-value.js";
 import { renderEnvTemplateToken, scanEnvTemplateTokens } from "../config/env-substitution.js";
 import { listConfiguredMcpServers } from "../config/mcp-config.js";
-import type { McpCodexToolApprovalMode } from "../config/types.mcp.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { executableFileExists, safeStat } from "../infra/path-existence.js";
@@ -140,19 +140,6 @@ function parseKeyValueEntries(values: readonly string[] | undefined, label: stri
   return Object.keys(entries).length > 0 ? entries : undefined;
 }
 
-function parseMcpApprovalModeOption(
-  value: string | undefined,
-): McpCodexToolApprovalMode | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  const mode = normalizeLowercaseStringOrEmpty(value);
-  if (mode !== "auto" && mode !== "prompt" && mode !== "approve") {
-    fail('--approval must be "auto", "prompt", or "approve".');
-  }
-  return mode;
-}
-
 function setOptionalField(target: Record<string, unknown>, key: string, value: unknown): void {
   if (value !== undefined) {
     target[key] = value;
@@ -198,8 +185,12 @@ function applyMcpServerControls(
     delete server.supportsParallelToolCalls;
     delete server.supports_parallel_tool_calls;
   }
-  const approvalMode = parseMcpApprovalModeOption(opts.approval);
-  if (approvalMode) {
+  const approval = opts.approval;
+  if (approval !== undefined) {
+    const approvalMode = normalizeLowercaseStringOrEmpty(approval);
+    if (approvalMode !== "auto" && approvalMode !== "prompt" && approvalMode !== "approve") {
+      fail('--approval must be "auto", "prompt", or "approve".');
+    }
     server.codex = { ...asRecord(server.codex), defaultToolsApprovalMode: approvalMode };
   }
 }
@@ -467,46 +458,34 @@ async function collectMcpDoctorIssues(params: {
     server.enabled !== false &&
     !issues.some((entry) => entry.level === "error")
   ) {
-    const probeIssues = await probeMcpServerIssues({
-      config: params.config,
-      name,
-      server,
-    });
-    issues.push(...probeIssues);
+    try {
+      const result = await probeMcpServers("openclaw-cli-mcp-doctor", params.config, {
+        [name]: server,
+      });
+      const diagnostic = result.diagnostics[0];
+      if (diagnostic) {
+        issues.push(issue("error", `check failed: ${diagnostic.message}`));
+      } else {
+        const connectedServer = result.servers[name];
+        if (!connectedServer) {
+          issues.push(issue("error", "check did not connect to this server"));
+        } else if (connectedServer.approvalHint) {
+          issues.push(
+            issue(
+              "info",
+              `Codex approval mode: ${connectedServer.codexApprovalMode}; ${connectedServer.approvalHint}`,
+            ),
+          );
+        }
+      }
+      if (result.cleanupError) {
+        issues.push(issue("error", `cleanup failed: ${result.cleanupError}`));
+      }
+    } catch (err) {
+      issues.push(issue("error", `check failed: ${formatErrorMessage(err)}`));
+    }
   }
   return issues;
-}
-
-async function probeMcpServerIssues(params: {
-  config: OpenClawConfig;
-  name: string;
-  server: Record<string, unknown>;
-}): Promise<McpDoctorIssue[]> {
-  try {
-    const result = await probeMcpServers("openclaw-cli-mcp-doctor", params.config, {
-      [params.name]: params.server,
-    });
-    const issues: McpDoctorIssue[] = [];
-    const diagnostic = result.diagnostics[0];
-    if (diagnostic) {
-      issues.push(issue("error", `check failed: ${diagnostic.message}`));
-    } else {
-      const server = result.servers[params.name];
-      if (!server) {
-        issues.push(issue("error", "check did not connect to this server"));
-      } else if (server.approvalHint) {
-        issues.push(
-          issue("info", `Codex approval mode: ${server.codexApprovalMode}; ${server.approvalHint}`),
-        );
-      }
-    }
-    if (result.cleanupError) {
-      issues.push(issue("error", `cleanup failed: ${result.cleanupError}`));
-    }
-    return issues;
-  } catch (err) {
-    return [issue("error", `check failed: ${formatErrorMessage(err)}`)];
-  }
 }
 
 async function countConnectedMcpPrincipals(
@@ -923,7 +902,7 @@ export function registerMcpCli(program: Command) {
           },
         ) => {
           const server: Record<string, unknown> = {};
-          const command = normalizeStringifiedOptionalString(opts.command);
+          const command = readNonBlankString(opts.command);
           const url = normalizeStringifiedOptionalString(opts.url);
           if (command && url) {
             fail("Specify either --command for stdio or --url for HTTP, not both.");
@@ -937,7 +916,7 @@ export function registerMcpCli(program: Command) {
               server.args = opts.arg;
             }
             setOptionalField(server, "env", parseKeyValueEntries(opts.env, "--env"));
-            setOptionalField(server, "cwd", normalizeStringifiedOptionalString(opts.cwd));
+            setOptionalField(server, "cwd", readNonBlankString(opts.cwd));
           }
           if (url) {
             server.url = url;
@@ -959,9 +938,7 @@ export function registerMcpCli(program: Command) {
           if (targetName && Object.hasOwn(loaded.mcpServers, targetName)) {
             fail(`MCP server ${JSON.stringify(targetName)} already exists.`);
           }
-          const shouldProbe =
-            opts.probe !== false && server.enabled !== false && server.auth !== "oauth";
-          if (shouldProbe) {
+          if (opts.probe !== false && server.enabled !== false && server.auth !== "oauth") {
             await probeMcpServersOrFail({
               config: loaded.config,
               path: loaded.path,

@@ -86,7 +86,7 @@ describe("fetchBrowserJson automatic auth over loopback HTTP", () => {
         defaultProfile: "fixture",
         profiles: { fixture: { cdpPort: 1, color: "#123456" } },
       }),
-      authToken: "fixture-private-bridge-token",
+      authToken: " \tfixture-private-bridge-token\n ",
     });
     try {
       await expect(fetchBrowserJson(`${bridge.baseUrl}/tabs?profile=fixture`)).resolves.toEqual({

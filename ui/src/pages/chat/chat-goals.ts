@@ -10,6 +10,7 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import type { SessionGoal } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
+import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import type { ChatGoalAction, ChatGoalDraft, ChatGoalRecovery } from "../../lib/chat/chat-types.ts";
 import {
   goalOperationExpired,
@@ -35,6 +36,8 @@ import { generateUUID } from "../../lib/uuid.ts";
 import { isInitialChatHistoryUnavailable, setChatError } from "./chat-history-state.ts";
 import type { ChatHost, ChatSendSubmitOptions } from "./chat-send-contract.ts";
 import { adoptStartedChatRun } from "./run-lifecycle.ts";
+
+registerChatSessionEnglish();
 
 registerChatGoalsEnglish();
 

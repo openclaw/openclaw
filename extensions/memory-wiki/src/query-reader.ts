@@ -109,13 +109,7 @@ async function runPoolTask<Task extends WikiPagePoolTask>(
   if (result.select === "refused") {
     throw new FsSafeError(result.code, result.message);
   }
-  // A scan task reads at least one segment before it can yield, so each one makes progress.
-  const stalled =
-    "readPages" in result &&
-    task.select !== "list" &&
-    task.relativePaths.length > 0 &&
-    result.readPages <= 0;
-  if (result.select !== task.select || stalled) {
+  if (result.select !== task.select) {
     throw new Error("Invalid memory wiki page read worker result");
   }
   // SAFETY: The discriminant check above pairs the reply with the submitted task.

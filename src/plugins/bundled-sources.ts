@@ -8,7 +8,7 @@ import {
   isBundledPluginInsideDevSourceRoot,
   resolveBundledPluginSourceRoot,
 } from "./dev-source-root.js";
-import { discoverOpenClawPlugins, type PluginDiscoveryResult } from "./discovery.js";
+import { discoverOpenClawPlugins } from "./discovery.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
 import { loadPluginManifest } from "./manifest.js";
 
@@ -87,18 +87,17 @@ export function resolveBundledPluginSources(params: {
   workspaceDir?: string;
   /** Use an explicit env when bundled roots should resolve independently from process.env. */
   env?: NodeJS.ProcessEnv;
-  discovery?: PluginDiscoveryResult;
 }): Map<string, BundledPluginSource> {
-  const snapshot = params.discovery ? undefined : getGatewayPluginMetadataSnapshot();
+  const snapshot = getGatewayPluginMetadataSnapshot();
   const sources = snapshot
     ? (snapshot.bundledManifestRegistry?.plugins ?? []).map((manifest) => ({
         candidate: manifest,
         manifest,
       }))
-    : (
-        params.discovery ??
-        discoverOpenClawPlugins({ workspaceDir: params.workspaceDir, env: params.env })
-      ).candidates.flatMap((candidate) => {
+    : discoverOpenClawPlugins({
+        workspaceDir: params.workspaceDir,
+        env: params.env,
+      }).candidates.flatMap((candidate) => {
         if (candidate.origin !== "bundled") {
           return [];
         }

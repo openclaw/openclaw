@@ -777,7 +777,7 @@ openclaw-pending-session-create {
   text-transform: uppercase;
 }
 
-.chat-history-boundary__action:not(:disabled):hover {
+.chat-history-boundary__action:not([aria-disabled="true"]):hover {
   color: var(--text);
 }
 
@@ -793,6 +793,11 @@ openclaw-pending-session-create {
   }
 }
 
+.chat {
+  --chat-scroll-to-bottom-size: 36px;
+  --chat-scroll-to-bottom-gap: 12px;
+}
+
 /* The zero-height anchor keeps the affordance out of the flex flow so showing
    it never shrinks the transcript or moves the composer. */
 .chat-scroll-to-bottom-wrap {
@@ -805,13 +810,13 @@ openclaw-pending-session-create {
 
 .chat-scroll-to-bottom {
   position: absolute;
-  bottom: 12px;
+  bottom: calc(var(--chat-scroll-to-bottom-gap) + var(--chat-scroll-to-bottom-clearance, 0px));
   left: 50%;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
+  width: var(--chat-scroll-to-bottom-size);
+  height: var(--chat-scroll-to-bottom-size);
   padding: 0;
   line-height: 1;
   color: var(--text);
@@ -877,17 +882,6 @@ openclaw-pending-session-create {
 .chat-scroll-to-bottom:focus-visible {
   outline: 2px solid color-mix(in srgb, var(--text) 28%, transparent);
   outline-offset: 2px;
-}
-
-.chat-scroll-to-bottom svg {
-  width: 16px;
-  height: 16px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.5px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  flex-shrink: 0;
 }
 
 .context-usage {
@@ -974,16 +968,6 @@ openclaw-pending-session-create {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-}
-
-.context-usage__title,
-.context-usage__section-label {
-  color: var(--muted);
-  font-size: 11px;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  line-height: 1.2;
-  text-transform: uppercase;
 }
 
 .context-usage__context-value {
@@ -2080,13 +2064,6 @@ openclaw-chat-video-player {
 
 .chat-swarm__task-icon--failed {
   color: var(--danger);
-}
-
-.chat-swarm__task-name {
-  overflow: hidden;
-  color: var(--text);
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .chat-swarm__task-duration {

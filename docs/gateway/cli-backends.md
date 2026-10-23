@@ -14,9 +14,10 @@ OpenClaw can run agent turns through a local AI CLI, such as Claude Code or Gemi
 - Sessions are supported, so follow-up turns stay coherent.
 - Images pass through if the CLI accepts image paths.
 
-With Claude CLI, a successful `sessions_yield` ends the current turn through the
-native interrupt control, suppresses later reply text, and keeps the Claude session
-available for the next child-completion turn.
+With Claude CLI, a successful `sessions_yield` closes the current subprocess after
+its tool result is consumed and suppresses later reply text. The next child-completion
+turn resumes the same saved Claude session in a new subprocess. This avoids recording
+the yield as a user interruption; it adds process startup time after a yield.
 
 A CLI backend can be an agent's primary runtime or a fallback. Choosing **Claude CLI** during onboarding keeps `anthropic/*` model refs and runs them through Claude Code. For ACP session controls, background tasks, thread/conversation binding, and persistent external coding sessions, use [ACP Agents](/tools/acp-agents) instead. CLI backends are not ACP.
 
@@ -192,6 +193,11 @@ CLI backends have two independent limits:
 - `agents.defaults.timeoutSeconds` limits the whole agent turn. Normal Gateway turns inherit the 48-hour default. `0` makes the turn budget unlimited. A stored override such as `600` replaces that default.
 - The CLI no-output watchdog stops a subprocess that remains silent. Each backend plugin owns separate fresh/resume profiles, and the watchdog remains active even when the overall turn budget is unlimited.
 
+Cancellation also reaches `before_agent_reply` hooks that run before the CLI
+subprocess starts. When a cron deadline aborts the turn, the hook's next admission
+check rejects further work. This is cooperative cancellation; it does not interrupt
+an already-dispatched operation that has no cancellation checkpoint.
+
 Remove a short overall-timeout override to return to the 48-hour default, or set an explicit budget such as 12 hours:
 
 ```bash
@@ -224,6 +230,8 @@ Plugin tools such as remote SSH do not become background jobs automatically.
 
 When Claude Code moves a foreground Bash command to the background after its tool timeout,
 OpenClaw keeps the turn active until Claude processes the completion and returns its final answer.
+Stopping a native task releases that task's hold. Completions belonging to an earlier
+input do not hold or settle a newer input.
 Follow-up tools still require the current turn's host permissions. Commands started explicitly
 in the background do not hold the turn open. If the turn fails or is cancelled while one of these
 commands still needs a follow-up, OpenClaw closes that subprocess and starts a fresh one for the next turn.
@@ -404,6 +412,12 @@ sessions keep their account until you select another or remove its saved profile
 Explicit account selections and empty account orders remain authoritative. API keys saved
 for the `anthropic` provider require an explicit selection; they do not replace
 native subscription login automatically.
+
+Model catalog readiness honors the effective primary model's `@profile` pin,
+including inherited defaults and agent overrides. An explicit session account or
+personal provider default takes precedence. The pin applies only to that primary;
+other models retain their own account selection. An invalid pin remains unavailable
+even when native Claude login is ready.
 
 Fresh plugin completions, including Memory Dreaming, use the same account order.
 An explicit profile on the requested model stays authoritative; an empty account
@@ -631,6 +645,8 @@ Some CLI backends run an agent that compacts its own transcript. OpenClaw must n
 
 `claude-cli` has no harness endpoint (Claude Code compacts internally), so it declares `ownsNativeCompaction: true`. Automatic OpenClaw compaction defers to Claude Code, while an explicit `/compact` resumes the bound Claude Code session and sends its native `/compact` command. OpenClaw passes the run's effective context budget through Claude Code's documented [`CLAUDE_CODE_AUTO_COMPACT_WINDOW`](https://code.claude.com/docs/en/env-vars), keeping native auto-compaction aligned with configured Anthropic `contextTokens` limits. Native-harness sessions such as Codex keep routing to their harness compaction endpoint instead.
 
+Manual `/compact` omits policy-derived bypass permissions so root-run Gateways can compact. Explicit `--permission-mode` arguments are preserved; ordinary turns continue to follow the configured OpenClaw exec policy.
+
 `google-gemini-cli` also owns automatic compaction and persists its compressed session for resume. OpenClaw defers to Gemini CLI rather than running a second summarizer. Explicit `/compact` is unsupported for this backend because it does not declare a manual compaction capability.
 
 ```typescript
@@ -783,6 +799,11 @@ Claude CLI backends scale this cap with the resolved Claude context window inste
 - Structured outputs depend on the CLI's own JSON format.
 
 ## Troubleshooting
+
+If JSONL output exceeds the parser's turn, line-size, or line-count limit, OpenClaw
+stops the local CLI turn and reports the output-limit error. Further CLI work is
+interrupted because OpenClaw can no longer observe its results. An established
+Claude session binding is kept so the next turn can resume it.
 
 Once a final CLI reply is committed to the OpenClaw transcript, later cleanup,
 continuity, or authority failures are logged as warnings and do not turn the

@@ -186,7 +186,12 @@ export function buildOpenAIResponsesParams(
       transport: "stream",
       supportsStrictMode: compat.supportsStrictMode,
     });
-    const { projection, tools: converted } = prepareResponsesTools(tools, strict, model);
+    const { projection, tools: converted } = prepareResponsesTools(
+      tools,
+      strict,
+      model,
+      Boolean(options?.onPayload),
+    );
     if (
       converted.length > 0 ||
       (projection.inputToolCount === 0 && projection.diagnostics.length === 0)

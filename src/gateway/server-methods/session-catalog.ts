@@ -378,6 +378,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
         agentId: request.agentId,
         requireCliAgents: true,
         ...CATALOG_TERMINAL_INITIAL_SIZE,
+        ...(nodeId ? { catalogNodeId: nodeId } : {}),
         ...(!nodeId ? { requiredCwd: request.cwd } : {}),
         failureHint: "check the selected CLI, host, and terminal configuration, then retry",
         resolveCatalogPlan: async () => {

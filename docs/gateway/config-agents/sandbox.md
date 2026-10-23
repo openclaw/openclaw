@@ -206,6 +206,10 @@ Transport is SSH into the OpenShell sandbox, but the plugin owns sandbox lifecyc
 Codex app-server turns in an active OpenClaw sandbox use this same egress setting for their native code-mode network access.
 
 **Inbound attachments** are staged into `media/inbound/*` in the active workspace.
+The per-file staging limit is at least 50 MiB. Explicitly raising
+`agents.defaults.mediaMaxMb` or the incoming channel/account's `mediaMaxMb` also
+raises this limit; account settings override channel settings. Local workspace
+copies stream from disk. SSH and remote workspace transfers still buffer each file.
 
 **`docker.binds`** mounts additional host directories; global and per-agent binds are merged.
 

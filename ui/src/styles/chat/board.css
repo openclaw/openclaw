@@ -99,6 +99,12 @@
   opacity: 1;
 }
 
+.board-session-surface:has(.board-tabs) .chat-dashboard-menu__trigger {
+  border: 1px solid var(--border);
+  background: transparent;
+  opacity: 1;
+}
+
 .sidebar-region--mobile-host .chat-dashboard-menu__trigger {
   opacity: 1;
 }

@@ -1,11 +1,14 @@
 import { For, Show, createMemo } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
-import type { ChatSubagentActivity } from "../chat-subagent-wait.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import "./chat-details-subagents.css";
 import "./chat-subagents-working.css";
+import type { ChatSubagentActivity } from "../chat-subagent-wait.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type Subagent = Pick<ChatSubagentActivity, "key" | "label" | "status">;
 
@@ -30,7 +33,7 @@ const STATUS_KEYS = {
   failed: "common.failed",
   stopped: "chat.sessionDetails.stopped",
 } as const;
-const SUMMARY_ORDER = ["running", "waiting", "queued", "done", "failed", "stopped"] as const;
+const SUMMARY_ORDER = ["running", "waiting", "queued", "done", "stopped"] as const;
 
 function isWorking(row: Subagent) {
   return row.status === "running" || row.status === "waiting";
@@ -104,7 +107,9 @@ export function ChatDetailsSubagents(props: ChatDetailsSubagentsProps) {
   const counts = createMemo(() =>
     SUMMARY_ORDER.map((status) => ({
       status,
-      count: props.rows.filter((row) => row.status === status).length,
+      // Done summarizes settled work here; individual rows retain their real outcome.
+      count: props.rows.filter((row) => (row.status === "failed" ? "done" : row.status) === status)
+        .length,
     })).filter((entry) => entry.count > 0),
   );
   const countLabel = (status: Subagent["status"]) =>
@@ -125,7 +130,7 @@ export function ChatDetailsSubagents(props: ChatDetailsSubagentsProps) {
                   : t("chat.subagentsRunning", { count: String(working().length) })
               }
             >
-              <span class="chat-details-subagents__spinner" aria-hidden="true" />
+              <span class="session-run-spinner" aria-hidden="true" />
             </span>
           </Show>
         }
@@ -161,33 +166,9 @@ export function ChatDetailsSubagents(props: ChatDetailsSubagentsProps) {
               <span class="chat-details-subagents__counts">
                 <For each={counts()} keyed={(entry) => entry.status}>
                   {(entry) => (
-                    <span class="chat-details-subagents__count">
+                    <span class="chat-details-subagents__count" data-status={entry().status}>
                       <span>{entry().count}</span>{" "}
-                      <Show
-                        when={
-                          props.mobile &&
-                          (entry().status === "running" || entry().status === "done")
-                        }
-                      >
-                        <Show
-                          when={entry().status === "running"}
-                          fallback={<Icon name="check" class="chat-details-subagents__check" />}
-                        >
-                          <span class="chat-details-subagents__spinner" aria-hidden="true" />
-                        </Show>
-                      </Show>
-                      <span
-                        class={[
-                          "chat-details-subagents__count-label",
-                          {
-                            "sr-only":
-                              props.mobile &&
-                              (entry().status === "running" || entry().status === "done"),
-                            "chat-details-subagents__working":
-                              !props.mobile && entry().status === "running",
-                          },
-                        ]}
-                      >
+                      <span class="chat-details-subagents__count-label">
                         {countLabel(entry().status)}
                       </span>
                     </span>

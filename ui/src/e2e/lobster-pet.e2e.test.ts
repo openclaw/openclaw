@@ -1,6 +1,7 @@
 import type { BrowserContext, Page } from "playwright";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { planLobsterPasser } from "../components/lobster-pet-plans.ts";
+import type { LobsterPetElement as BrowserLobsterPet } from "../components/lobster-pet.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installMockGateway } from "./new-session-page.test-support.ts";
 
@@ -9,13 +10,6 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
   unavailableMessage: (executablePath) => `Playwright Chromium cannot start at ${executablePath}`,
 });
-
-type BrowserLobsterPet = HTMLElement & {
-  mode: "idle" | "busy" | "offline";
-  runOutcome: "ok" | "error" | "aborted";
-  seed: number;
-  updateComplete: Promise<unknown>;
-};
 
 let context: BrowserContext;
 let page: Page;

@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   HEARTBEAT_RESPONSE_TOOL_PROMPT,
   isHeartbeatAcknowledgementText,
-  isHeartbeatContentEffectivelyEmpty,
   resolveHeartbeatPromptForResponseTool,
   stripHeartbeatToken,
 } from "./heartbeat.js";
@@ -63,43 +62,6 @@ describe("isHeartbeatAcknowledgementText", () => {
       expect(isHeartbeatAcknowledgementText(text, undefined, true)).toBe(false);
     },
   );
-});
-
-describe("isHeartbeatContentEffectivelyEmpty", () => {
-  it("returns false for missing scratch so the monitor can still run", () => {
-    expect(isHeartbeatContentEffectivelyEmpty(undefined)).toBe(false);
-    expect(isHeartbeatContentEffectivelyEmpty(null)).toBe(false);
-  });
-
-  it("returns true for comments only", () => {
-    for (const content of [
-      "# Header\n# Another comment",
-      "## Subheader\n### Another",
-      "<!-- Template -->",
-      "<!--\nHeartbeat template.\nKeep quiet.\n-->",
-      `<!--
-tasks:
-  - name: inbox
-    interval: 30m
-    prompt: Check inbox
--->`,
-      "<!-- One --> <!-- Two -->",
-      "<!-- One -->\n# Header",
-    ]) {
-      expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
-    }
-    expect(isHeartbeatContentEffectivelyEmpty("Reminder <!-- not scaffolding -->")).toBe(false);
-  });
-
-  it("returns false when fenced heartbeat content includes a real task", () => {
-    const content = `\`\`\`markdown
-# Keep this scratch empty when you want to skip.
-
-- Check email
-\`\`\`
-`;
-    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
-  });
 });
 
 describe("resolveHeartbeatPromptForResponseTool", () => {

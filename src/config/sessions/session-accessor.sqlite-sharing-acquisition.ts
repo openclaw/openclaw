@@ -1,3 +1,4 @@
+import { isDeepStrictEqual } from "node:util";
 import type { SessionRowFacts } from "../../sessions/session-row-changes.js";
 import type {
   SessionEntryPlaceholder,
@@ -62,6 +63,7 @@ export type SessionSharingAcquisition = {
 };
 
 export type PreparedSessionSharingRead = {
+  followLifecycle?: boolean;
   predicate?: PreparedSessionEntryPredicate;
   pending: Set<object>;
   facts: CommittedSessionSharingFacts | undefined;
@@ -81,6 +83,8 @@ export type PreparedSessionSharingRead = {
 export type SessionSharingRetentionRequest = {
   databaseIdentity: string;
   sessionKey: string;
+  /** Input custody owns same-session rollovers; access facts follow committed postimages. */
+  followLifecycle?: boolean;
   predicate?: PreparedSessionEntryPredicate;
 } & (
   | { acquiring: true }
@@ -193,8 +197,11 @@ export function publishRetainedSessionGeneration(
     generation.current.lifecycleRevision !== entry.lifecycleRevision
   ) {
     generation.current = null;
-  } else {
-    // Same-generation policy changes must narrow retained execution before its next effect.
+  } else if (
+    generation.current.permissionMode !== entry.permissionMode ||
+    !isDeepStrictEqual(generation.current.toolOverrides, entry.toolOverrides)
+  ) {
+    // Keep the same fact for metadata-only writes; policy changes narrow the next effect.
     generation.current = entry;
   }
 }

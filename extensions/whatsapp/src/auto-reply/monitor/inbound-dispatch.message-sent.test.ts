@@ -15,12 +15,12 @@ import {
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { clearInternalHooks, registerInternalHook } from "openclaw/plugin-sdk/hook-runtime";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createWebSendApi } from "../../inbound/send-api.js";
 import { normalizeWhatsAppSendResult } from "../../inbound/send-result.js";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
-import { loadWebMedia } from "../../media.js";
 import { deliverWebReply } from "../deliver-reply.js";
 import {
   buildWhatsAppInboundTransportContext,
@@ -140,7 +140,10 @@ vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
   };
 });
 
-vi.mock("../../media.js", () => ({ loadWebMedia: vi.fn() }));
+vi.mock("openclaw/plugin-sdk/web-media", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/web-media")>()),
+  loadWebMedia: vi.fn(),
+}));
 
 function createPlan(
   deliverReply: Parameters<typeof createWhatsAppReplyPlan>[0]["deliverReply"],

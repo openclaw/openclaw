@@ -45,6 +45,8 @@ describe("Mattermost websocket capture", () => {
         botToken: "test-token",
         nextSeq: () => 7,
         onPosted,
+        onReaction: async () => {},
+        getBotUpdateAt: async () => 0,
         statusSink,
         runtime,
       })();

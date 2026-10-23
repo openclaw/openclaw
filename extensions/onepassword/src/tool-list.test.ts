@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
+  createPluginStateKeyedStoreV2ForTests,
   openOpenClawStateDatabase,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -17,11 +17,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const NOW = 10_000;
 const invocation = { agentId: "agent-a", sessionKey: "session-a", sessionId: "conversation-a" };
 
-function grantKey(agentId: string, slug: string) {
-  return createHash("sha256")
-    .update(JSON.stringify([agentId, slug]))
-    .digest("hex");
-}
+const hash = (parts: string[]) => createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+const grantKey = (agentId: string, slug: string) => hash([agentId, slug]);
 
 function configured(slugs: string[]): OnePasswordConfig {
   return {
@@ -45,9 +42,7 @@ function grant(slug: string, agentId = invocation.agentId): StandingGrant {
     slug,
     grantedAtMs: NOW - 1,
     expiresAtMs: NOW + 60_000,
-    targetFingerprint: createHash("sha256")
-      .update(JSON.stringify(["Automation", slug, "credential"]))
-      .digest("hex"),
+    targetFingerprint: hash(["Automation", slug, "credential"]),
   };
 }
 
@@ -68,15 +63,19 @@ describe("onepassword list with SQLite grants", () => {
   });
 
   function openGrants() {
-    return createPluginStateKeyedStoreForTests<StandingGrant>("onepassword", {
-      namespace: "grants",
-      maxEntries: 1_024,
-      overflowPolicy: "evict-oldest",
-      env,
-    });
+    return createPluginStateKeyedStoreV2ForTests<StandingGrant>(
+      "onepassword",
+      {
+        namespace: "grants",
+        maxEntries: 1_024,
+        overflowPolicy: "evict-oldest",
+        env,
+      },
+      { assertCurrent() {} },
+    );
   }
 
-  function setup(slugs: string[], grants: PluginStateKeyedStore<StandingGrant>) {
+  function setup(slugs: string[], grants: PluginStateKeyedStore<StandingGrant, 2>) {
     const getItem = vi.fn(async () => {
       throw new Error("list must not retrieve a secret");
     });
@@ -90,7 +89,7 @@ describe("onepassword list with SQLite grants", () => {
     return { list, getItem };
   }
 
-  it.each([true, false])("validates selected grants with bulk support=%s", async (bulk) => {
+  it("validates selected grants", async () => {
     const grants = openGrants();
     const slugs = ["wrong-slug", "wrong-agent", "retargeted", "missing", "expired", "active"];
     for (const slug of slugs.filter((value) => value !== "missing")) {
@@ -102,8 +101,7 @@ describe("onepassword list with SQLite grants", () => {
         ...(slug === "retargeted" ? { targetFingerprint: "old-target" } : {}),
       });
     }
-    const { lookupMany: _lookupMany, ...olderStore } = grants;
-    const { list, getItem } = setup(slugs, bulk ? grants : olderStore);
+    const { list, getItem } = setup(slugs, grants);
     expect((await list()).details).toEqual({
       ok: true,
       items: [...slugs].toSorted().map((slug) => ({
@@ -136,11 +134,6 @@ describe("onepassword list with SQLite grants", () => {
     expect((await setup(["selected"], grants).list()).details).toMatchObject({
       ok: true,
       items: [{ slug: "selected", standingGrantActive: true }],
-    });
-    const { lookupMany: _lookupMany, ...olderStore } = grants;
-    expect((await setup(["selected"], olderStore).list()).details).toMatchObject({
-      ok: false,
-      error: { code: "PLUGIN_STATE_CORRUPT" },
     });
   });
 

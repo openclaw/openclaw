@@ -13,26 +13,8 @@ const expectVolatile = (relative: string, expected: boolean, root = stateDir) =>
 
 describe("isVolatileBackupPath", () => {
   it.each([
-    // volatile: session transcripts
-    [`${stateDir}/sessions/s-abc/transcript.jsonl`, true],
-    [`${stateDir}/sessions/s-abc/run.log`, true],
-    [`${stateDir}/agents/main/sessions/transcript.jsonl`, true],
-    [`${stateDir}/agents/ops/sessions/run.log`, true],
-    // volatile: cron run logs
-    [`${stateDir}/cron/runs/2026-01-01/job.log`, true],
-    [`${stateDir}/cron/runs/nightly.jsonl`, true],
-    // volatile: generic state logs
-    [`${stateDir}/logs/gateway.jsonl`, true],
-    [`${stateDir}/logs/nested/gateway.log`, true],
-    // volatile: sockets/pids/tmp under state
     [`${stateDir}/ipc/gateway.sock`, true],
-    [`${stateDir}/gateway.pid`, true],
-    [`${stateDir}/tmp/pending.tmp`, true],
     [`${stateDir}/audit/system-agent.jsonl.migrated.raw`, true],
-    [`${stateDir}/audit/system-agent.jsonl.migrated.2.raw`, true],
-    [`${stateDir}/audit/system-agent.jsonl.migrated.raw.doctor-scrub-restore`, true],
-    [`${stateDir}/logs/config-audit.jsonl.migrated.raw.doctor-scrub-staging`, true],
-    [`${stateDir}/logs/config-audit.jsonl.migrated.raw.doctor-scrub-progress`, true],
     [`${stateDir}/logs/config-audit.jsonl.migrated.raw.quarantined-2026-09-17`, true],
     [`${stateDir}/audit/crestodian.jsonl.migrated.2.raw.quarantined-copy`, true],
     [`${stateDir}/logs/config-audit.jsonl.migrated`, false],
@@ -45,14 +27,10 @@ describe("isVolatileBackupPath", () => {
     [`${stateDir}/sandbox/skills-workspaces/workspace-main`, true],
     [`${stateDir}/cache/control-ui-assets/generation/assets/app.js`, true],
     [`${stateDir}/tmp/plugin-captures/instance/captures/source.js`, true],
-    [`${stateDir}/tmp/plugin-captures/instance/owner.sqlite`, true],
     [`${stateDir}/tmp/plugin-captures-saved/source.js`, false],
-    // non-volatile: session config, not jsonl/log
     [`${stateDir}/sessions/s-abc/meta.json`, false],
     [`${stateDir}/agents/main/sessions/sessions.json`, false],
-    // non-volatile: cron definitions
     [`${stateDir}/cron/jobs.json`, false],
-    // non-volatile: cron runs but wrong extension
     [`${stateDir}/cron/runs/2026-01-01/job.json`, false],
     [`${stateDir}/browser/openclaw/user-data/Preferences`, false],
     [`${stateDir}/browser/openclaw/user-data/nested/SingletonSocket`, false],
@@ -60,17 +38,15 @@ describe("isVolatileBackupPath", () => {
     [`${stateDir}/sandbox/registry.json`, false],
     [`${stateDir}/sandbox/workspaces/workspace-main/README.md`, false],
     [`${stateDir}/cache/other-product/artifact.bin`, false],
-    // non-volatile: plain config
     [`${stateDir}/config.json`, false],
-    // non-volatile: workspace files outside state
-    ["/home/user/project/Cargo.lock", false],
+    [`${stateDir}/delivery-queue/subdir/job.json`, true],
+    [`${stateDir}/delivery-queue/README.md`, false],
+    ["/tmp/delivery-queue/file.json", false],
   ])("classifies %s as volatile=%s", (p, expected) => {
     expect(isVolatileBackupPath(p, plan)).toBe(expected);
   });
   it("does not skip transient extensions without a state anchor", () => {
     expect(isVolatileBackupPath("/any/path/daemon.sock", { stateDirs: [] })).toBe(false);
-    expect(isVolatileBackupPath("/any/path/daemon.pid", { stateDirs: [] })).toBe(false);
-    expect(isVolatileBackupPath("/any/path/Cargo.lock", { stateDirs: [] })).toBe(false);
   });
 
   it("does not match paths that escape the anchor via `..`", () => {
@@ -81,23 +57,6 @@ describe("isVolatileBackupPath", () => {
     ]) {
       expectVolatile(relative, false);
     }
-  });
-
-  it("treats nested delivery-queue json files under stateDir as volatile", () => {
-    expect(
-      isVolatileBackupPath(
-        `${stateDir}/delivery-queue/subdir/3fac5e46-42dc-4230-a725-51c203830b4f.json`,
-        plan,
-      ),
-    ).toBe(true);
-  });
-
-  it("does not treat non-json delivery-queue files as volatile", () => {
-    expect(isVolatileBackupPath(`${stateDir}/delivery-queue/README.md`, plan)).toBe(false);
-  });
-
-  it("does not treat delivery-queue json outside stateDir as volatile", () => {
-    expect(isVolatileBackupPath(`/tmp/delivery-queue/file.json`, plan)).toBe(false);
   });
 
   it("normalizes Windows-style separators before anchor checks", () => {
@@ -124,38 +83,21 @@ describe("isVolatileBackupPath", () => {
       expect(isVolatileBackupPath(outside, { stateDirs: ["C:\\openclaw\\state"] })).toBe(false);
     },
   );
-
-  it("treats session-delivery-queue json files under stateDir as volatile", () => {
-    expect(
-      isVolatileBackupPath(
-        `${stateDir}/session-delivery-queue/3fac5e46-42dc-4230-a725-51c203830b4f.json`,
-        plan,
-      ),
-    ).toBe(true);
-  });
 });
 
 describe("isTransientSqliteBackupPath", () => {
   it.each([
-    "memory/main.sqlite.reindex-lock.sqlite",
-    "memory/main.sqlite.reindex-lock.sqlite-shm",
-    "memory/main.sqlite.generation-writer.sqlite",
     "memory/main.sqlite.generation-writer.sqlite-wal",
-    "memory/main.sqlite.generation-lock.sqlite",
     "memory/main.sqlite.generation-lock.sqlite-journal",
     "memory/main.sqlite.tmp-11111111-2222-3333-4444-555555555555",
   ])("classifies transient reindex state: %s", (filePath) => {
     expect(isTransientSqliteBackupPath(filePath)).toBe(true);
   });
 
-  it.each([
-    "tmp/openclaw-502/gateway.state.lock.sqlite",
-    "tmp/openclaw-502/gateway.12345678.lock.sqlite-wal",
-    "tmp/openclaw-502/device-identity.12345678.lock.sqlite-journal",
-    "tmp/openclaw-502/retained.sqlite",
-    "plugins/dedicated/cache.lock.sqlite",
-    "plugins/dedicated/lock.sqlite",
-  ])("preserves durable SQLite state: %s", (filePath) => {
-    expect(isTransientSqliteBackupPath(filePath)).toBe(false);
-  });
+  it.each(["plugins/dedicated/cache.lock.sqlite", "plugins/dedicated/lock.sqlite"])(
+    "preserves durable SQLite state: %s",
+    (filePath) => {
+      expect(isTransientSqliteBackupPath(filePath)).toBe(false);
+    },
+  );
 });

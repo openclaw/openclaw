@@ -1,4 +1,5 @@
 import { beforeEach, expect, it, vi } from "vitest";
+import { buildBootstrapContextFiles } from "../agents/embedded-agent-helpers/bootstrap.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -75,12 +76,35 @@ it("reports a budget-dropped file that repeats a sibling basename as fully trunc
     [
       "Workspace bootstrap files exceed limits and will be truncated:",
       "- AGENTS.md: 500 raw / 0 injected (100% truncated; max/total)",
+      "  No content from this file reaches the model.",
       "Total bootstrap injected chars: 1,000 (100% of max/total 1,000).",
       "Total bootstrap raw chars (before truncation): 1,500.",
       "",
       "- Tip: tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback, for total-budget limits.",
     ].join("\n"),
   );
+});
+
+it("explains the retained excerpts using the real bootstrap output", async () => {
+  const bootstrapFiles = [
+    {
+      ...bootstrapFile("AGENTS.md", 25_000),
+      content: "# Rules\n- Never lose rules.\n".repeat(1_000),
+    },
+    bootstrapFile("SOUL.md", 25_000),
+  ];
+  resolveBootstrapContextForDiagnostics.mockResolvedValue({
+    bootstrapFiles,
+    contextFiles: buildBootstrapContextFiles(bootstrapFiles, { maxChars: 20_000 }),
+  });
+  const text = await message();
+  expect(text).toContain(
+    "The model receives start/end excerpts as space permits, plus a bounded policy digest when available; other middle text is omitted.",
+  );
+  expect(text).toContain(
+    "The model receives start/end excerpts as space permits; middle text is omitted.",
+  );
+  expect(text).toContain("agents.defaults.bootstrapMaxChars");
 });
 
 it.each([

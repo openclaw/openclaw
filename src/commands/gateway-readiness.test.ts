@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DaemonStatus } from "../cli/daemon-cli/status.gather.js";
-import { ensureDashboardGatewayReady } from "./gateway-readiness.js";
-import { createTestRuntime } from "./test-runtime-config-helpers.js";
+import { createCliTtyMock } from "../cli/test-runtime-capture.js";
+import { dashboardCommand } from "./dashboard.js";
+import { baseConfigSnapshot, createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const { gatherStatus, confirm, installGateway, startGateway } = vi.hoisted(() => ({
   gatherStatus: vi.fn(),
@@ -11,8 +12,34 @@ const { gatherStatus, confirm, installGateway, startGateway } = vi.hoisted(() =>
 }));
 vi.mock("../cli/daemon-cli/status.gather.js", () => ({ gatherDaemonStatus: gatherStatus }));
 vi.mock("../cli/prompt.js", () => ({ promptYesNo: confirm }));
-vi.mock("../cli/daemon-cli/install.runtime.js", () => ({ runDaemonInstall: installGateway }));
+vi.mock("../cli/daemon-cli/install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/daemon-cli/install.js")>()),
+  runDaemonInstall: installGateway,
+}));
 vi.mock("../cli/daemon-cli/lifecycle.js", () => ({ runDaemonStart: startGateway }));
+vi.mock("../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/config.js")>()),
+  readConfigFileSnapshot: async () => ({ ...baseConfigSnapshot, sourceConfig: {} }),
+}));
+vi.mock("./control-ui-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./control-ui-handoff.js")>()),
+  resolveControlUiHandoffTarget: async () => ({
+    port: 18789,
+    bind: "loopback",
+    links: { httpUrl: "http://127.0.0.1:18789/", wsUrl: "ws://127.0.0.1:18789" },
+    authMode: "token",
+    includeTokenInUrl: false,
+    dashboardUrl: "http://127.0.0.1:18789/",
+    documentUrl: "http://127.0.0.1:18789/",
+    probeUrl: "ws://127.0.0.1:18789",
+  }),
+  waitForControlUiDocument: async () => ({ ready: true }),
+  issueControlUiBrowserHandoff: async () => ({ browserUrl: "http://127.0.0.1:18789/" }),
+}));
+vi.mock("../infra/clipboard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/clipboard.js")>()),
+  copyToClipboard: async () => true,
+}));
 
 type StatusOverrides = Omit<Partial<DaemonStatus>, "service"> & {
   service?: Omit<DaemonStatus["service"], "loaded">;
@@ -59,12 +86,11 @@ function createStatus(overrides: StatusOverrides = {}, port = 18789): DaemonStat
 }
 
 const runtime = createTestRuntime();
+const tty = createCliTtyMock();
+afterEach(() => tty.restore());
 const output = () => runtime.log.mock.calls.flat().join("\n");
-const check = (
-  options: Omit<Parameters<typeof ensureDashboardGatewayReady>[0], "runtime"> = {
-    interactive: true,
-  },
-) => ensureDashboardGatewayReady({ runtime, ...options });
+const check = (options: { yes?: boolean } = {}) =>
+  dashboardCommand(runtime, { noOpen: true, ...options });
 const installedService = (
   overrides: Partial<NonNullable<StatusOverrides["service"]>> = {},
 ): NonNullable<StatusOverrides["service"]> => ({
@@ -83,7 +109,7 @@ const runningStatus = () =>
     rpc: { ok: true },
   });
 
-describe("ensureDashboardGatewayReady", () => {
+describe("dashboard Gateway readiness", () => {
   beforeEach(() => {
     vi.resetAllMocks();
   });
@@ -95,9 +121,9 @@ describe("ensureDashboardGatewayReady", () => {
     });
     gatherStatus.mockResolvedValue(status);
 
-    const result = await check();
+    await check();
 
-    expect(result).toMatchObject({ ready: false });
+    expect(output()).not.toContain("Dashboard URL:");
     expect(confirm).not.toHaveBeenCalled();
     expect(installGateway).not.toHaveBeenCalled();
     expect(startGateway).not.toHaveBeenCalled();
@@ -107,12 +133,13 @@ describe("ensureDashboardGatewayReady", () => {
   });
 
   it("prints diagnosis and skips recovery when an interactive user declines", async () => {
+    tty.set(true);
     gatherStatus.mockResolvedValue(createStatus());
     confirm.mockResolvedValue(false);
 
-    const result = await check();
+    await check();
 
-    expect(result.ready).toBe(false);
+    expect(output()).not.toContain("Dashboard URL:");
     expect(confirm).toHaveBeenCalledWith(
       "No background Gateway service was detected for this profile. Install and start one to open the dashboard?",
       true,
@@ -131,9 +158,9 @@ describe("ensureDashboardGatewayReady", () => {
       : createStatus();
     gatherStatus.mockResolvedValueOnce(stopped).mockResolvedValueOnce(runningStatus());
 
-    const result = await check({ yes: true });
+    await check({ yes: true });
 
-    expect(result).toMatchObject({ ready: true, recovered: true });
+    expect(output()).toContain("Dashboard URL: http://127.0.0.1:18789/");
     expect(installGateway).toHaveBeenCalledTimes(installed ? 0 : 1);
     expect(startGateway).toHaveBeenCalledTimes(installed ? 1 : 0);
   });
@@ -156,9 +183,9 @@ describe("ensureDashboardGatewayReady", () => {
 
     gatherStatus.mockResolvedValue(status);
 
-    const result = await check();
+    await check();
 
-    expect(result).toMatchObject({ ready: false });
+    expect(output()).not.toContain("Dashboard URL:");
     expect(confirm).not.toHaveBeenCalled();
     expect(installGateway).not.toHaveBeenCalled();
     expect(startGateway).not.toHaveBeenCalled();
@@ -182,10 +209,12 @@ describe("ensureDashboardGatewayReady", () => {
 
     gatherStatus.mockResolvedValue(status);
 
-    const result = await check();
+    await check();
 
-    expect(result).toMatchObject({ ready: true, recovered: false });
+    expect(output()).toContain("Dashboard URL: http://127.0.0.1:18789/");
     expect(confirm).not.toHaveBeenCalled();
-    expect(runtime.log).not.toHaveBeenCalled();
+    expect(installGateway).not.toHaveBeenCalled();
+    expect(startGateway).not.toHaveBeenCalled();
+    expect(output()).not.toContain("Gateway check failed:");
   });
 });

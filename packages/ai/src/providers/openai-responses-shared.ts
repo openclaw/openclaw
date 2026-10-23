@@ -3,7 +3,7 @@ import type {
   ResponseCreateParamsStreaming,
   ResponseStreamEvent,
 } from "openai/resources/responses/responses.js";
-import type { BaseOpenAIStreamOptions } from "../provider-options.js";
+import { codeModeToolSurfaceObserver, type BaseOpenAIStreamOptions } from "../provider-options.js";
 import { prepareModelRequestBody } from "../transports/model-request-body.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
@@ -20,6 +20,11 @@ import { createResponsesStreamWithRecovery } from "../transports/openai-response
 import { hasOnlyResponsesFunctionTools } from "../transports/openai-responses-stream-errors.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import type { ResponsesStreamOptions } from "../transports/openai-responses-stream-types-internal.js";
+import {
+  assertCodeModeResponsesToolSurface,
+  enforceCodeModeResponsesToolSurface,
+  resolveCodeModeResponsesVisibleToolNames,
+} from "../transports/openai-transport-params.js";
 import { createOpenAIProviderAcceptanceHook } from "../transports/openai-transport-shared.js";
 import {
   failTransportStream,
@@ -78,14 +83,20 @@ type ResponsesLifecycleStreamOptions = Pick<
   StreamOptions,
   "signal" | "timeoutMs" | "onPayload" | "onResponse" | "sessionId"
 > &
-  Pick<BaseOpenAIStreamOptions, "authProfileId" | "onCompactionRejected"> &
+  Pick<
+    BaseOpenAIStreamOptions,
+    | "authProfileId"
+    | "onCompactionRejected"
+    | "openclawCodeModeToolSurface"
+    | "openclawCodeModeAllowedHostedToolTypes"
+  > &
   FirstStreamEventInternalOptions;
 
 type ResponsesReasoningSummary = "auto" | "detailed" | "concise" | null;
 
 type ResponsesCommonParamsOptions = Pick<
   StreamOptions,
-  "maxTokens" | "temperature" | "responseFormat"
+  "maxTokens" | "temperature" | "responseFormat" | "onPayload"
 > & {
   reasoningEffort?: OpenAIRequestReasoningEffort;
   reasoningSummary?: ResponsesReasoningSummary;
@@ -143,7 +154,10 @@ export function applyCommonResponsesParams<TApi extends Api>(
   }
 
   if (context.tools) {
-    const tools = convertResponsesToolPayload(context.tools, { model });
+    const tools = convertResponsesToolPayload(context.tools, {
+      model,
+      mutableParameters: Boolean(options?.onPayload),
+    });
     if (tools.length > 0) {
       params.tools = tools;
     }
@@ -180,6 +194,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
   stream: AssistantMessageEventStream;
   model: Model<TApi>;
   output: AssistantMessage;
+  context?: Pick<Context, "tools">;
   options?: ResponsesLifecycleStreamOptions;
   resolveRequestModel?: (model: Model<TApi>) => Model<TApi>;
   createClient: (model: Model<TApi>) => ResponsesStreamClient;
@@ -201,6 +216,17 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
       const nextRequest = await options?.onPayload?.(request, model);
       if (nextRequest !== undefined) {
         request = nextRequest as OpenAIResponsesRequestParams;
+      }
+      if (options?.openclawCodeModeToolSurface === true) {
+        const visibleToolNames = resolveCodeModeResponsesVisibleToolNames(params.context ?? {});
+        const allowedHostedToolTypes = options.openclawCodeModeAllowedHostedToolTypes;
+        enforceCodeModeResponsesToolSurface(
+          request,
+          visibleToolNames,
+          allowedHostedToolTypes,
+          codeModeToolSurfaceObserver.get(options),
+        );
+        assertCodeModeResponsesToolSurface(request, visibleToolNames, allowedHostedToolTypes);
       }
       return request;
     };

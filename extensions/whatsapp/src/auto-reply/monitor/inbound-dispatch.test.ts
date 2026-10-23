@@ -1,9 +1,9 @@
 import { createStatusReactionController } from "openclaw/plugin-sdk/channel-feedback";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { loadWebMedia } from "openclaw/plugin-sdk/web-media";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAcceptedWhatsAppSendResult } from "../../inbound/send-result.test-helper.js";
 import { createTestWebInboundMessage } from "../../inbound/test-message.test-helper.js";
-import { loadWebMedia } from "../../media.js";
 import { deliverWebReply } from "../deliver-reply.js";
 import {
   buildWhatsAppInboundTransportContext,
@@ -27,7 +27,10 @@ vi.mock("./runtime-api.js", async (importOriginal) => ({
   logVerbose: verboseLog,
   shouldLogVerbose: () => true,
 }));
-vi.mock("../../media.js", () => ({ loadWebMedia: vi.fn() }));
+vi.mock("openclaw/plugin-sdk/web-media", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/web-media")>()),
+  loadWebMedia: vi.fn(),
+}));
 
 type Params = Parameters<typeof createWhatsAppReplyPlan>[0];
 type PrepareParams = Parameters<typeof prepareWhatsAppInboundContext>[0];

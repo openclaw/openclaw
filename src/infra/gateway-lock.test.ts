@@ -515,7 +515,6 @@ describe("gateway lock", () => {
       await expect(
         acquireForTest(env, {
           timeoutMs: 15,
-          staleMs: 0,
           platform: "linux",
         }),
       ).rejects.toBeInstanceOf(GatewayLockError);
@@ -548,7 +547,6 @@ describe("gateway lock", () => {
     await expect(
       acquireForTest(env, {
         platform: "linux",
-        staleMs: 0,
         timeoutMs: 80,
       }),
     ).rejects.toBeInstanceOf(GatewayLockError);
@@ -571,7 +569,6 @@ describe("gateway lock", () => {
     );
     const pending = acquireForTest(env, {
       timeoutMs: 20,
-      staleMs: 10_000,
       platform: "linux",
     });
     await expect(pending).rejects.toBeInstanceOf(GatewayLockError);
@@ -598,7 +595,6 @@ describe("gateway lock", () => {
       acquireForTest(env, {
         timeoutMs: 80,
         pollIntervalMs: 5,
-        staleMs: 10_000,
         platform: "darwin",
         port: 18789,
       }),
@@ -625,7 +621,6 @@ describe("gateway lock", () => {
         allowInTests: true,
         timeoutMs: 5,
         pollIntervalMs: Number.MAX_SAFE_INTEGER,
-        staleMs: 10_000,
         platform: "darwin",
         now: () => now,
         sleep: async (ms) => {
@@ -709,7 +704,6 @@ describe("gateway lock", () => {
       acquireForTest(env, {
         timeoutMs: 80,
         pollIntervalMs: 5,
-        staleMs: 10_000,
         platform: "win32",
         port: 18789,
       }),
@@ -730,7 +724,6 @@ describe("gateway lock", () => {
     const pending = acquireForTest(env, {
       timeoutMs: 20,
       pollIntervalMs: 2,
-      staleMs: 10_000,
       platform: "win32",
       port: 18789,
     });

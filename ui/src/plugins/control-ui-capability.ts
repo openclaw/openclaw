@@ -53,6 +53,8 @@ export type ControlUiPluginCapability = {
   };
   readonly errors: readonly PluginControlUiDiagnostic[];
   readonly hasPlugins: boolean;
+  /** Advances before notifications, including plugin-owned presentation mutations. */
+  readonly revision: number;
   readonly registryStatus: "pending" | "complete" | "failed";
   readonly canReload: boolean;
   isLoading: (pluginId: string) => boolean;

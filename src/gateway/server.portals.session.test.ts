@@ -40,7 +40,8 @@ import {
   coerceNodeInvokeCancelPayload,
   coerceNodeInvokePayload,
 } from "../node-host/invoke-payload.js";
-import { invokeNodeWorkerPortalStream } from "../node-host/portal-stream-command.js";
+import { invokeNodeWorkerSupervisorCommand } from "../node-host/node-worker-supervisor-commands.js";
+import type { NodeWorkerSupervisorControl } from "../node-host/node-worker-supervisor-contract.js";
 import { projectPluginContributions } from "../plugins/registry-contributions.js";
 import { adoptPluginRegistryRecords } from "../plugins/registry-lifecycle.js";
 import * as stateWorkerStore from "../state/openclaw-state-worker-store.js";
@@ -64,6 +65,17 @@ import { hashWorkerCredential } from "./worker-environments/credential.js";
 import * as workerService from "./worker-environments/service.js";
 
 let portalProof: Awaited<ReturnType<typeof createSessionPortalProof>>;
+const unexpectedSupervisorCommand = async (): Promise<never> => {
+  throw new Error("Portal stream must not call another supervisor command");
+};
+const portalSupervisor: NodeWorkerSupervisorControl = {
+  launch: unexpectedSupervisorCommand,
+  status: unexpectedSupervisorCommand,
+  retainWorkspaces: unexpectedSupervisorCommand,
+  cancel: unexpectedSupervisorCommand,
+  observeProcesses: unexpectedSupervisorCommand,
+  stopEnvironment: unexpectedSupervisorCommand,
+};
 installGatewayTestHooks({
   scope: "suite",
   setup: async () => {
@@ -269,6 +281,7 @@ async function createSessionPortalProof() {
       const sockets: WebSocket[] = [];
       const controllers = new Map<string, AbortController>();
       const running = new Set<Promise<void>>();
+      const portalCompletions: Promise<unknown>[] = [];
       const track = (work: Promise<unknown>) => {
         const completion = work.then(() => {});
         running.add(completion);
@@ -381,15 +394,20 @@ async function createSessionPortalProof() {
           invocations.push(frame.id);
           const controller = new AbortController();
           controllers.set(frame.id, controller);
-          track(
-            invokeNodeWorkerPortalStream({
-              paramsJSON: frame.paramsJSON,
-              gatewayUrl: `ws://127.0.0.1:${port}`,
-              signal: controller.signal,
+          const completion = invokeNodeWorkerSupervisorCommand({
+            command: NODE_WORKER_PORTAL_STREAM_COMMAND,
+            supervisor: portalSupervisor,
+            paramsJSON: frame.paramsJSON,
+            gatewayUrl: `ws://127.0.0.1:${port}`,
+            signal: controller.signal,
+          })
+            .then((result) => {
+              expect(result).toEqual({ handled: true, ok: true, payload: null });
+              return reportResult(frame, { status: "closed" });
             })
-              .then(() => reportResult(frame, { status: "closed" }))
-              .finally(() => controllers.delete(frame.id)),
-          );
+            .finally(() => controllers.delete(frame.id));
+          portalCompletions.push(completion);
+          track(completion);
         });
         // Hello precedes pairing bookkeeping; this manual RPC does not use the node host's retry owner.
         await withinTest(nodeConnectionRecorded.promise, signal);
@@ -557,6 +575,7 @@ async function createSessionPortalProof() {
           () => closing,
           () => Promise.allSettled(running),
           () => Promise.all(sockets.map(closeGatewayTestWebSocket)),
+          () => Promise.all(portalCompletions),
         );
       }
     };

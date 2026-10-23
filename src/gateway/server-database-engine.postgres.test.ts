@@ -2,12 +2,15 @@ import fs from "node:fs/promises";
 import { getEnvironmentData } from "node:worker_threads";
 import pg from "pg";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { cliRecoveryEntrypoints } from "../cli/cli-entrypoint.test-support.js";
+import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import { runStartupConfigPreflight } from "../commands/startup-config-preflight.js";
 import { resetConfigRuntimeState } from "../config/runtime-snapshot.js";
 import { resetDatabaseEngineSelectionForTest } from "../infra/database-engine/context.test-support.js";
 import { migrateLegacyDesktopStreamOptOuts } from "../infra/device-pairing-node-desktop-migration.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
+import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { resetLogger } from "../logging/logger.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -20,6 +23,7 @@ import { executeOpenClawStateWorker } from "../state/openclaw-state-worker-store
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -189,6 +193,49 @@ describe.skipIf(!connection)("Gateway PostgreSQL shared-state bootstrap", () => 
     });
     return state;
   }
+
+  it("reports invalid config with exit 78 through gateway run on PostgreSQL and SQLite", async () => {
+    const { current, snapshot } = await bootstrapped();
+    const agents = { entries: { main: {}, helper: {} } };
+    await current.writeConfig({ ...snapshot.sourceConfig, agents });
+    const sqliteConfigPath = current.path("sqlite-invalid.json");
+    await fs.writeFile(sqliteConfigPath, JSON.stringify({ gateway: { mode: "local" }, agents }));
+    const diagnostic =
+      'agents.ownership: multi-agent rosters require agents.ownership="explicit" or one legacy default=true marker; add agents.ownership="explicit" or run openclaw doctor';
+    const nodeExecutable = resolveTestNodeExecPath();
+    for (const engine of ["sqlite", "postgres"]) {
+      const result = await runCliProcessChild({
+        nodeExecutable,
+        timeoutMs: 30_000,
+        nodeArgs: [
+          ...resolveRuntimeWorkerArgv(
+            resolveRuntimeWorkerUrl(cliRecoveryEntrypoints.cli),
+            nodeExecutable,
+          ),
+          "gateway",
+          "run",
+        ],
+        env: {
+          ...process.env,
+          ...current.env,
+          ...(engine === "sqlite"
+            ? { OPENCLAW_CONFIG_PATH: sqliteConfigPath, OPENCLAW_STATE_DIR: current.path("sqlite") }
+            : {}),
+          NODE_ENV: undefined,
+          NODE_OPTIONS: undefined,
+          VITEST: undefined,
+          VITEST_POOL_ID: undefined,
+          VITEST_WORKER_ID: undefined,
+          OPENCLAW_NO_RESPAWN: "1",
+          OPENCLAW_HIDE_BANNER: "1",
+        },
+      });
+      const output = `${result.stdout}\n${result.stderr}`;
+      expect(result, `${engine}: ${output}`).toMatchObject({ code: 78, signal: null });
+      expect(output).toContain(diagnostic);
+      expect(output).not.toContain("Cannot open PostgreSQL connection");
+    }
+  });
 
   it("resolves an exec DSN during bootstrap, captures workers' input, and reuses the anchor on restart", () =>
     withSecureTestNodeCommand(async (command) => {

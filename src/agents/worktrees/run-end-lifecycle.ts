@@ -4,6 +4,7 @@ import {
   hasSqliteWorkerOutcomeUnknown,
   SqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
+import { runWithAsyncStore } from "../../shared/async-store.js";
 import { GatewayRetainedWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -155,7 +156,7 @@ function createLifetime({ admission }: OpenClawStateWorkerContext) {
           const validating = token.validating;
           token.validating = true;
           try {
-            mutationAuthority.run(token, assertCurrent);
+            runWithAsyncStore(mutationAuthority, token, assertCurrent);
           } finally {
             token.validating = validating;
           }
@@ -275,7 +276,7 @@ export function withWorktreeRunEnd<T>(
   const operation: RunEndOperation = { context, active: true };
   return lifetime(context).run(
     () =>
-      current.run(operation, async () => {
+      runWithAsyncStore(current, operation, async () => {
         try {
           return await run();
         } finally {

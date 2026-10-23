@@ -10,6 +10,26 @@ const defaults = (value: AgentDefaultsConfig): OpenClawConfig => ({ agents: { de
 const harness = (id: string) => ({ agentRuntime: { id } });
 
 describe("configured runtime provider discovery", () => {
+  it("keeps credential-only providers out of static catalog preparation", () => {
+    const config: OpenClawConfig = {
+      models: {
+        providers: {
+          inline: { baseUrl: "https://inline.invalid/v1", apiKey: "fixture-key", models: [] },
+          referenced: {
+            baseUrl: "https://referenced.invalid/v1",
+            apiKey: { source: "file", provider: "fixture", id: "key" },
+            models: [],
+          },
+          blank: { baseUrl: "https://blank.invalid/v1", apiKey: " ", models: [] },
+          unrelated: { baseUrl: "https://unrelated.invalid/v1", models: [] },
+        },
+      },
+    };
+
+    expect(providerIds(config, {}, false, [])).toEqual([]);
+    expect(providerIds(config, {}, true, [])).toEqual(["inline", "referenced"]);
+  });
+
   it.each([
     ["decisionModel", "fixture/decision", false],
     ["decisionModel", "fixture/decision@fixture:key", false],

@@ -9,7 +9,10 @@ import { REMOTE_WORKSPACE_MANIFEST_JS } from "../gateway/worker-environments/wor
 import * as gitExec from "../infra/git-exec.js";
 import * as exec from "../process/exec.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import { NODE_WORKSPACE_DRAIN_COMMAND } from "../worker/node-workspace-protocol.js";
+import {
+  NODE_WORKSPACE_DRAIN_COMMAND,
+  parseNodeWorkerWorkspaceExecInput,
+} from "../worker/node-workspace-protocol.js";
 import {
   fileEntry,
   manifestFixture,
@@ -64,7 +67,7 @@ async function fixture() {
 }
 
 describe("resident node manifest capture", () => {
-  it("captures, memoizes, and detects small edits through workspace exec without spawning", async () => {
+  it("captures, memoizes, and detects small edits through parsed workspace exec without spawning", async () => {
     const { runtime, identity, workspaceDir, argv } = await fixture();
     const spawn = vi
       .spyOn(exec, "runCommandWithTimeout")
@@ -72,7 +75,9 @@ describe("resident node manifest capture", () => {
     const file = path.join(workspaceDir, "file.txt");
     await fs.writeFile(file, "before");
     const capture = async (memo = "[]") => {
-      const result = await runtime.exec({ ...identity, argv, input: memo });
+      const result = await runtime.exec(
+        parseNodeWorkerWorkspaceExecInput(JSON.stringify({ ...identity, argv, input: memo })),
+      );
       expect(result).toMatchObject({ code: 0, termination: "exit", workspaceDir });
       return parseRemoteWorkspaceManifestEnvelope(result.stdout);
     };

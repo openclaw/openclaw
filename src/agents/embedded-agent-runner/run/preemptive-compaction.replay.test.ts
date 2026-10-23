@@ -9,44 +9,41 @@ import { recordResponsesContextUsage } from "../../../../packages/ai/src/transpo
 import { convertResponsesMessages } from "../../../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
 import { testing } from "../../openai-transport-stream.test-support.js";
 import type { AgentMessage } from "../../runtime/index.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import {
   estimateLlmBoundaryTokenPressure,
   shouldPreemptivelyCompactBeforePrompt,
 } from "./preemptive-compaction.js";
 
-const model = {
+const model = makeProviderModelFixture<"openai-responses">({
   id: "gpt-5.6-luna",
   name: "GPT-5.6 Luna",
   api: "openai-responses",
   provider: "openai",
   baseUrl: "https://api.openai.com/v1",
   reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 100_000,
   maxTokens: 8_192,
-} satisfies Model;
+}) satisfies Model;
 const identity = { sessionId: "session-a", authProfileId: "profile-a" };
 
 function assistant(totalTokens: number): AssistantMessage {
-  return {
-    role: "assistant",
+  return makeAgentAssistantMessage({
     api: model.api,
     provider: model.provider,
     model: model.id,
     content: [{ type: "text", text: "covered assistant" }],
     timestamp: 2,
-    stopReason: "stop",
     usage: {
+      ...createZeroUsageFixture(),
       input: totalTokens - 1,
       output: 1,
-      cacheRead: 0,
-      cacheWrite: 0,
       totalTokens,
       contextUsage: { state: "available", promptTokens: totalTokens - 1, totalTokens },
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
-  };
+  });
 }
 
 function checkpoint(text: string): AssistantMessage {

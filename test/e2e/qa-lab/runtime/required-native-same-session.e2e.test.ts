@@ -475,13 +475,32 @@ it.skipIf(process.platform === "win32")(
             const aWait = wait(markers.A);
             await checkpoint(atQuiesce.promise);
             expect(await aWait).toMatchObject({ status: "ok" });
-            const current = await describe(key);
-            expect(current.placement).toMatchObject({
-              state: "active",
-              workspaceResultReconciling: true,
+            const settlement = readSettlement(gateway, key);
+            const placed = settlement.placement!;
+            // The display is advisory; the matching durable worker claim and result
+            // prove reconciliation is in progress while quiescence is held.
+            expect(settlement).toMatchObject({
+              placement: {
+                state: "active",
+                execution_mode: "worker-turn",
+                turn_claim_owner: "worker",
+                turn_claim_owner_epoch: placed.active_owner_epoch,
+                turn_claim_id: aClaim,
+                turn_claim_run_id: aRun,
+              },
+              pending: {
+                session_id: placed.session_id,
+                environment_id: placed.environment_id,
+                owner_epoch: placed.active_owner_epoch,
+                placement_generation: placed.turn_claim_generation,
+                claim_id: aClaim,
+                run_id: aRun,
+                staged_result_ref: null,
+                workspace_accepted_at_ms: null,
+              },
             });
+            const current = await describe(key);
             expect((await history(key)).messages.map(wireMessageText)).toContain(markers.A);
-            const placed = readSettlement(gateway, key).placement!;
             if (retained) {
               expect(placed).toMatchObject({
                 session_id: retained.session_id,

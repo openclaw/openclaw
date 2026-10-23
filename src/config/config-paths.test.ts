@@ -3,6 +3,7 @@ import {
   parseConcreteConfigPath,
   parseConcreteConfigPathTokens,
   parseConcreteConfigPathWithProvenance,
+  readObjectPath,
   tokenizeConcreteConfigPath,
 } from "../shared/dot-path.js";
 import {
@@ -45,40 +46,19 @@ describe("concrete config path readers and mutation guards", () => {
 });
 
 describe("config path own-property traversal", () => {
-  const fallbacks = { member: "fallbacks", value: ["openai/gpt-4o"] };
   it.each([
-    { parent: ["agents", "defaults", "model"], ...fallbacks },
-    {
-      parent: ["agents", "defaults", "utilityModel"],
-      ...fallbacks,
-    },
-    {
-      parent: ["agents", "entries", "worker", "utilityModel"],
-      ...fallbacks,
-    },
-    {
-      parent: ["agents", "defaults", "subagents", "model"],
-      ...fallbacks,
-    },
-    {
-      parent: ["agents", "entries", "worker", "model"],
-      ...fallbacks,
-    },
-    {
-      parent: ["agents", "entries", "worker", "subagents", "model"],
-      ...fallbacks,
-    },
-    {
-      parent: ["tools", "exec", "reviewer", "model"],
-      ...fallbacks,
-    },
-    {
-      parent: ["agents", "entries", "worker", "tools", "exec", "reviewer", "model"],
-      ...fallbacks,
-    },
-    { parent: ["agents", "defaults", "pdfModel"], member: "timeoutMs", value: 5000 },
-    { parent: ["agents", "defaults", "mediaModels", "video"], member: "timeoutMs", value: 5000 },
-  ])("keeps a shorthand primary when setting $parent.$member", ({ parent, member, value }) => {
+    ["agents.defaults.model", "fallbacks", ["openai/gpt-4o"]],
+    ["agents.defaults.utilityModel", "fallbacks", ["openai/gpt-4o"]],
+    ["agents.entries.worker.utilityModel", "fallbacks", ["openai/gpt-4o"]],
+    ["agents.defaults.subagents.model", "fallbacks", ["openai/gpt-4o"]],
+    ["agents.entries.worker.model", "fallbacks", ["openai/gpt-4o"]],
+    ["agents.entries.worker.subagents.model", "fallbacks", ["openai/gpt-4o"]],
+    ["tools.exec.reviewer.model", "fallbacks", ["openai/gpt-4o"]],
+    ["agents.entries.worker.tools.exec.reviewer.model", "fallbacks", ["openai/gpt-4o"]],
+    ["agents.defaults.pdfModel", "timeoutMs", 5000],
+    ["agents.defaults.mediaModels.video", "timeoutMs", 5000],
+  ] as const)("keeps a shorthand primary when setting %s.%s", (path, member, value) => {
+    const parent = path.split(".");
     const root: Record<string, unknown> = {};
     setConfigValueAtPath(root, parent, "openai/gpt-4o-mini");
     setConfigValueAtPath(root, [...parent, member], value);
@@ -88,18 +68,19 @@ describe("config path own-property traversal", () => {
     });
   });
 
-  it.each([
-    { parent: ["agents", "defaults", "utilityModel"] },
-    { parent: ["agents", "entries", "worker", "utilityModel"] },
-  ])("keeps utility routing disabled when adding fallbacks at $parent", ({ parent }) => {
-    const root: Record<string, unknown> = {};
-    setConfigValueAtPath(root, parent, "");
-    setConfigValueAtPath(root, [...parent, "fallbacks"], ["local/backup"]);
-    expect(getConfigValueAtPath(root, parent)).toEqual({
-      primary: "",
-      fallbacks: ["local/backup"],
-    });
-  });
+  it.each(["agents.defaults.utilityModel", "agents.entries.worker.utilityModel"])(
+    "keeps utility routing disabled when adding fallbacks at %s",
+    (path) => {
+      const parent = path.split(".");
+      const root: Record<string, unknown> = {};
+      setConfigValueAtPath(root, parent, "");
+      setConfigValueAtPath(root, [...parent, "fallbacks"], ["local/backup"]);
+      expect(getConfigValueAtPath(root, parent)).toEqual({
+        primary: "",
+        fallbacks: ["local/backup"],
+      });
+    },
+  );
 
   it.each([
     { member: "fallbacks", value: ["backup"] },
@@ -186,4 +167,45 @@ describe("config path own-property traversal", () => {
       expectOwnProperty(parent, "leaf", "own");
     });
   }
+});
+
+describe("raw diagnostic path traversal", () => {
+  it.each([
+    ["raw", ["first", "named", 1, "inherited"]],
+    ["canonical", ["first", undefined, undefined, "inherited"]],
+    ["bounded", ["first", undefined, undefined, undefined]],
+  ] as const)("retains the %s array-key policy", (mode, expected) => {
+    const values = Object.assign(["first"], { named: "named" });
+    Object.setPrototypeOf(
+      values,
+      Object.assign(Object.create(Array.prototype), { 2: "inherited" }),
+    );
+    expect(["0", "named", "length", "2"].map((key) => readObjectPath(values, [key], mode))).toEqual(
+      expected,
+    );
+  });
+
+  it.each([
+    [{ values: [{ leaf: "array" }] }, ["values", "0", "leaf"], "array"],
+    [Object.create({ inherited: { leaf: "prototype" } }), ["inherited", "leaf"], "prototype"],
+    [{ missing: null }, ["missing", "leaf"], undefined],
+    [{ value: "text" }, ["value", "length"], undefined],
+  ] as const)("reads %j at %j", (root, path, expected) => {
+    expect(readObjectPath(root, path)).toBe(expected);
+  });
+
+  it("retains root identity for an empty path", () => {
+    const root = { leaf: "value" };
+    expect(readObjectPath(root, [])).toBe(root);
+  });
+
+  it("propagates the original property getter failure", () => {
+    const failure = new Error("getter failed");
+    const root = Object.defineProperty({}, "value", {
+      get() {
+        throw failure;
+      },
+    });
+    expect(() => readObjectPath(root, ["value"])).toThrow(failure);
+  });
 });

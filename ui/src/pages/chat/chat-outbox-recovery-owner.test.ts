@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { flush } from "solid-js";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { t } from "../../i18n/index.ts";
+import { createComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { readChatOutboxRecovery } from "../../lib/chat/outbox-recovery.ts";
 import {
   readStoredOutboxStore,
@@ -10,11 +11,23 @@ import {
   storageTargetForGateway,
 } from "../../lib/chat/outbox-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import {
+  answerConfirmDialog,
+  createModalDialogTestFixture,
+  waitForConfirmDialogActions,
+} from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
+import {
+  createComposerContainer,
+  createComposerProps,
+  renderComposerInto,
+} from "./chat-composer.test-support.ts";
 import { PaneOutboxRecovery } from "./chat-outbox-recovery.tsx";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
+import type { ChatComposerPersistenceState } from "./composer-persistence-state.ts";
+import { ChatComposerPersistence } from "./composer-persistence.ts";
 
 const recoveryIo = vi.hoisted(() => ({
   confirm: vi.fn<(typeof import("../../components/confirm-dialog.ts"))["showConfirmDialog"]>(),
@@ -54,7 +67,7 @@ afterEach(async () => {
 
 async function mountRecovery(kind: "draft" | "queue" = "draft") {
   const request = vi.fn(async () => ({}));
-  const host: Parameters<typeof PaneOutboxRecovery>[0]["state"] = {
+  const host: Parameters<typeof PaneOutboxRecovery>[0]["state"] & ChatComposerPersistenceState = {
     settings: { gatewayUrl: "ws://recovery-owner.test" },
     connected: true,
     client: createTestGatewayClient(request),
@@ -105,6 +118,8 @@ async function mountRecovery(kind: "draft" | "queue" = "draft") {
       preview,
     ),
   );
+  // Wait for initial durable preparation before measuring later run-owner refreshes.
+  await waitForSolid(() => expect(recoveryIo.prepare).toHaveBeenCalled());
   const button = (action: "restore" | "discard") => {
     const label = t(
       action === "restore" ? "chat.outboxRecoveryRestore" : "chat.outboxRecoveryDelete",
@@ -155,20 +170,78 @@ it("retires durable delivery receipts from the run owner without bridge prop ref
   expect(readChatOutboxRecovery(host).entries).toEqual([]);
 });
 
-it("admits one review before Solid flushes and restores through the storage owner", async () => {
-  const confirmation = createDeferred<boolean>();
-  recoveryIo.confirm.mockReturnValue(confirmation.promise);
+it("clears a failed restore on retry and admits one review before Solid flushes", async () => {
+  const dialogs = createModalDialogTestFixture();
+  const cancellation = new AbortController();
+  onTestFinished(async () => {
+    cancellation.abort();
+    await dialogs.cleanup();
+  });
+  const { showConfirmDialog } = await vi.importActual<
+    typeof import("../../components/confirm-dialog.ts")
+  >("../../components/confirm-dialog.ts");
+  // Exercise the already-loaded modal path that otherwise inherits the action transaction.
+  await import("../../components/modal-dialog.tsx");
+  recoveryIo.confirm.mockImplementation((options) =>
+    dialogs.track(showConfirmDialog({ ...options, signal: cancellation.signal })),
+  );
   const fixture = await mountRecovery();
+  const host = Object.assign(fixture.host, { selectedChatSessionIncognito: false });
+  const draftSource = createComposerDraftSource(() => ({
+    draft: host.chatMessage,
+    mentions: [],
+    attachments: host.chatAttachments,
+    pendingAttachmentReads: 0,
+  }));
+  const persistence = new ChatComposerPersistence(() => host, draftSource.publish);
+  fixture.restored.mockImplementation(() => {
+    persistence.restore();
+    persistence.persistChangedState();
+  });
+  const composer = createComposerContainer();
+  document.body.append(composer);
+  renderComposerInto(
+    composer,
+    createComposerProps({
+      sessionKey: host.sessionKey,
+      getDraft: () => host.chatMessage,
+      draftSource,
+    }),
+  );
+  await waitForSolid(() => expect(composer.querySelector("textarea")?.value).toBe(""));
+  recoveryIo.readDraft.mockResolvedValueOnce({ status: "storage-failed" });
+  fixture.button("restore").click();
+  await waitForSolid(() => {
+    expect(fixture.element.querySelector(".chat-outbox-recovery__error")?.textContent).toBe(
+      t("chat.outboxRecoveryStorageFailed"),
+    );
+    expect(fixture.button("restore").disabled).toBe(false);
+  });
   fixture.button("restore").click();
   fixture.button("restore").click();
   await waitForSolid(() => {
     expect(recoveryIo.confirm).toHaveBeenCalledOnce();
     expect(fixture.button("restore").disabled).toBe(true);
     expect(fixture.button("discard").disabled).toBe(true);
+    expect(fixture.element.querySelector(".chat-outbox-recovery__error")).toBeNull();
   });
   expect(readChatOutboxRecovery(fixture.host).entries).toHaveLength(1);
+  const confirmation = await waitForConfirmDialogActions();
 
-  confirmation.resolve(true);
+  const refresh = createDeferred<Awaited<ReturnType<typeof recoveryIo.prepare>>>();
+  recoveryIo.prepare.mockReturnValue(refresh.promise);
+  try {
+    answerConfirmDialog(confirmation, "confirm");
+    await waitForSolid(() => expect(fixture.restored).toHaveBeenCalledOnce());
+    expect(host.chatMessage, "restored owner draft").toBe("Saved input for explicit review");
+    await waitForSolid(() =>
+      expect(composer.querySelector("textarea")?.value, "visible restored draft").toBe(
+        "Saved input for explicit review",
+      ),
+    );
+  } finally {
+    refresh.resolve({ status: "ready", entries: [] });
+  }
   await waitForSolid(() => {
     expect(fixture.restored).toHaveBeenCalledOnce();
     expect(fixture.element.querySelector(".chat-outbox-recovery-row")).toBeNull();

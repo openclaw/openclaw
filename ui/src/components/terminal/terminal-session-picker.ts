@@ -1,4 +1,4 @@
-import { createSignal, onSettled } from "solid-js";
+import { createMemo, createSignal, isPending, onSettled } from "solid-js";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { TerminalGatewayClient, TerminalSessionInfo } from "./terminal-connection.ts";
 import type { TerminalSessionListOptions } from "./terminal-panel-session-types.ts";
@@ -19,9 +19,14 @@ type PickerDependencies = {
 };
 
 export function createTerminalSessionPicker(deps: PickerDependencies) {
-  const [open, setOpen] = createSignal(deps.initialOpen());
-  const [loading, setLoading] = createSignal(false);
-  const [sessions, setSessions] = createSignal<TerminalSessionInfo[]>([]);
+  const [open, setOpen] = createSignal(false);
+  let acceptedSessions: TerminalSessionInfo[] = [];
+  const [request, setRequest] = createSignal<{
+    key: number;
+    value: TerminalSessionInfo[] | Promise<TerminalSessionInfo[]>;
+  }>({ key: 0, value: acceptedSessions });
+  const sessions = createMemo<TerminalSessionInfo[]>(() => request().value);
+  const loading = () => isPending(sessions);
   let generation = 0;
   let discoveredTabCount: number | undefined;
   let inlineTrigger: HTMLButtonElement | undefined;
@@ -31,32 +36,39 @@ export function createTerminalSessionPicker(deps: PickerDependencies) {
   let refresh: HTMLButtonElement | undefined;
 
   async function load(options?: TerminalSessionListOptions) {
-    const request = ++generation;
+    const key = ++generation;
     const client = deps.client();
     if (!client || !deps.available()) {
-      setLoading(false);
+      setRequest({ key, value: acceptedSessions });
       return;
     }
-    setLoading(true);
-    const isCurrent = () => request === generation && client === deps.client() && deps.available();
-    try {
-      const result = await deps.list(options);
-      if (isCurrent() && result !== null) {
-        setSessions(result);
-        reconcileVisibility(result);
-      }
-    } catch (error) {
-      if (isCurrent()) {
-        // Background discovery must leave focus in the terminal or composer.
-        if (open()) {
-          dismiss(true);
+    const isCurrent = () => key === generation && client === deps.client() && deps.available();
+    let restoreFocus = false;
+    const value = (async () => {
+      try {
+        const result = await deps.list(options);
+        if (isCurrent() && result !== null) {
+          acceptedSessions = result;
+          reconcileVisibility(result);
         }
-        deps.showError(error);
+      } catch (error) {
+        if (isCurrent()) {
+          // Background discovery must leave focus in the terminal or composer.
+          if (open()) {
+            dismiss(false);
+            restoreFocus = true;
+          }
+          deps.showError(error);
+        }
       }
-    } finally {
-      if (isCurrent()) {
-        setLoading(false);
-      }
+      // The panel owner routes failures; null and retired reads preserve the accepted list.
+      return acceptedSessions;
+    })();
+    setRequest({ key, value });
+    await value;
+    if (restoreFocus && isCurrent()) {
+      // Focus-triggered discovery must see the completed read, not its pending frame.
+      onSettled(() => trigger()?.focus());
     }
   }
 
@@ -78,7 +90,7 @@ export function createTerminalSessionPicker(deps: PickerDependencies) {
     );
   }
 
-  function reconcileVisibility(current = sessions()) {
+  function reconcileVisibility(current = acceptedSessions) {
     if (hiddenFor(current)) {
       // The trigger is being removed; focus must remain in the terminal.
       dismiss(false);
@@ -90,6 +102,8 @@ export function createTerminalSessionPicker(deps: PickerDependencies) {
   }
 
   onSettled(() => {
+    // Lazy bridge inputs bind after the component body has created this picker.
+    setOpen(deps.initialOpen());
     const stop = listen(
       document,
       "pointerdown",
@@ -121,9 +135,13 @@ export function createTerminalSessionPicker(deps: PickerDependencies) {
       return deps.currentSessionIds();
     },
     open,
-    loading,
     sessions,
-    hidden: () => hiddenFor(sessions()),
+    requestKey: () => request().key,
+    hidden: () => {
+      // Track read settlement without holding the surrounding chrome on its async value.
+      loading();
+      return hiddenFor(acceptedSessions);
+    },
     syncPresentation() {
       const count = deps.presented() && deps.standalone() ? deps.tabCount() : 0;
       const changed = count !== discoveredTabCount;
@@ -187,8 +205,8 @@ export function createTerminalSessionPicker(deps: PickerDependencies) {
       generation += 1;
       discoveredTabCount = undefined;
       setOpen(false);
-      setLoading(false);
-      setSessions([]);
+      acceptedSessions = [];
+      setRequest({ key: generation, value: acceptedSessions });
     },
   };
 }

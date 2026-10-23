@@ -670,9 +670,7 @@ async function resetSubagentRegistryForTests(opts?: { persist?: boolean }) {
   completionRetryTimers.clear();
   subagentRuns.clear();
   resumedRuns.clear();
-  resumeReader.reset();
   pendingLifecycle.clearAll();
-  contextCleanup.reset();
   clearSubagentRunsReadCacheForTest();
   const sweeperRetirement = subagentSweeper.reset();
   subagentRestorer.reset();
@@ -705,6 +703,8 @@ export const ackPendingAgentSteeringItems = publicApi.ackPendingAgentSteeringIte
 export const releasePendingAgentSteeringItems = publicApi.releasePendingAgentSteeringItems;
 export const getSubagentRunByRunId = publicApi.getSubagentRunByRunId;
 export const prepareSubagentRunsByRunIds = publicApi.prepareSubagentRunsByRunIds;
+export const listCollectorRunsForRequesterIncarnation =
+  publicApi.listCollectorRunsForRequesterIncarnation;
 export const completeCollectorLaunchCleanup = publicApi.completeCollectorLaunchCleanup;
 export const recordSwarmStructuredOutput = publicApi.recordSwarmStructuredOutput;
 export const listSwarmRunsForGroup = publicApi.listSwarmRunsForGroup;

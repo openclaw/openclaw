@@ -528,7 +528,6 @@ export async function handleChatHistoryRequest({
           const sessionSnapshot = buildGatewaySessionSnapshot({
             sessionRow: sessionInfo,
             agentId: sessionAgentId,
-            includeSession: true,
             activeRunState,
           });
           let delta: Awaited<ReturnType<typeof readChatHistoryDelta>>;
@@ -623,7 +622,8 @@ export async function handleChatHistoryRequest({
         sessionInfo,
         thinkingLevel,
         fastMode: prepareSessionFastModePresentation(client)(entry?.fastMode),
-        toolOverrides: entry?.toolOverrides,
+        // Internal adapters own mutable overrides; the selected entry stays an immutable snapshot.
+        toolOverrides: entry?.toolOverrides && structuredClone(entry.toolOverrides),
         verboseLevel,
         ...(boundedInFlightRun ? { inFlightRun: boundedInFlightRun } : {}),
         ...(startupMetadata ? { metadata: startupMetadata } : {}),

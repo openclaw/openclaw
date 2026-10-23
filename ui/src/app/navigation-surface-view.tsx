@@ -1,10 +1,25 @@
-import { dynamic } from "@solidjs/web";
-import { createSignal, onSettled, Show } from "solid-js";
+import { Errored, lazy, Loading, Show } from "solid-js";
 import type { SidebarAttentionElementAttributes } from "../components/sidebar-attention-element.ts";
-import type { SidebarUpdateCard } from "../components/sidebar-update-card.tsx";
+import { t } from "../lib/reactive/i18n.ts";
+import { ShellComponentBoundary } from "./app-shell-component-boundary.tsx";
 import type { ApplicationContext } from "./context.ts";
 import { floatingSidebarAttentionVisible } from "./navigation-surface.ts";
 import { isStaleChunkImportError, scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
+
+const UpdateCard = lazy(
+  () =>
+    import("../components/sidebar-update-card.tsx").catch((error: unknown) => {
+      if (isStaleChunkImportError(error)) {
+        void scheduleStaleChunkReload();
+      }
+      throw error;
+    }),
+  { export: "SidebarUpdateCard" },
+);
+
+const SidebarAttention = lazy(() => import("../components/sidebar-attention.tsx"), {
+  export: "SidebarAttention",
+});
 
 type FloatingUpdateCardProps = {
   navigationSurfaceHidden: boolean;
@@ -30,34 +45,22 @@ export function FloatingUpdateCard(props: FloatingUpdateCardProps) {
   return (
     <>
       <Show when={floatingSidebarAttentionVisible(props)}>
-        <openclaw-sidebar-attention
-          class="sidebar-attention--floating"
-          prop:onNavigate={props.onNavigate}
-        />
+        <ShellComponentBoundary label={t("attention.issues")}>
+          <SidebarAttention class="sidebar-attention--floating" onNavigate={props.onNavigate} />
+        </ShellComponentBoundary>
       </Show>
       <Show when={!props.compact && props.refreshRequired}>
-        {(_refreshRequired) => {
-          const [card, setCard] = createSignal<typeof SidebarUpdateCard>();
-          const Card = dynamic(card);
-          onSettled(() => {
-            void import("../components/sidebar-update-card.tsx")
-              .then((module) => setCard(() => module.SidebarUpdateCard))
-              .catch((error: unknown) => {
-                if (isStaleChunkImportError(error)) {
-                  void scheduleStaleChunkReload();
-                }
-              });
-          });
-          return (
-            <Card
+        <Errored fallback={null}>
+          <Loading>
+            <UpdateCard
               class="sidebar-update-card--floating"
               updateRun={props.updateRun ?? null}
               statusBanner={props.statusBanner ?? null}
               refreshRequired={props.refreshRequired}
               onRefresh={props.onRefresh}
             />
-          );
-        }}
+          </Loading>
+        </Errored>
       </Show>
     </>
   );

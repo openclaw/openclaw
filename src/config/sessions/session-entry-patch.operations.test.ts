@@ -23,6 +23,8 @@ import type { SessionEntry } from "./types.js";
 const { getSessionEntryPatchDelivery } =
   await import("./session-entry-patch-delivery.test-support.js");
 const delivery = getSessionEntryPatchDelivery();
+const withFixture = (run: (f: ReturnType<typeof fixture>) => Promise<void>) =>
+  withOpenClawTestState({ scenario: "minimal" }, () => run(fixture()));
 
 async function conversationGuard(f: ReturnType<typeof fixture>, peerId: string) {
   const identity = buildConversationIdentity({
@@ -57,8 +59,7 @@ function replaceRouteBeforeCommit(f: ReturnType<typeof fixture>, conversationRef
 it.each(["inbound", "route"] as const)(
   "merges %s metadata with an in-process write without a detached comparison read",
   async (kind) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = fixture();
+    await withFixture(async (f) => {
       const original = f.read()!;
       delivery.beforeCommit = () => {
         delivery.beforeCommit = undefined;
@@ -99,8 +100,7 @@ it.each(["inbound", "route"] as const)(
 );
 
 it("reduces a fixed patch against the current row in one worker request without losing foreign metadata", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const original = f.read()!;
     delivery.beforeCommit = () => {
       delivery.beforeCommit = undefined;
@@ -144,8 +144,7 @@ it("reduces a fixed patch against the current row in one worker request without 
 });
 
 it("acknowledges no-result patches without transferring the entry and keeps final authority", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const prompt = "synthetic instructions ".repeat(4096);
     replaceSessionEntrySync(f.scope, {
       ...f.read()!,
@@ -224,8 +223,7 @@ it("acknowledges no-result patches without transferring the entry and keeps fina
 });
 
 it("commits cron state in one request while preserving concurrent metadata and cleared policy", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const initial: SessionEntry = {
       ...f.read()!,
       lifecycleRevision: "admitted",
@@ -274,8 +272,7 @@ it("commits cron state in one request while preserving concurrent metadata and c
 });
 
 it("creates the full initial cron session in one owner command", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const scope = {
       ...f.scope,
       sessionKey: "agent:main:cron:created",
@@ -301,13 +298,7 @@ it("creates the full initial cron session in one owner command", async () => {
       { fallbackEntry: next, replaceEntry: true, skipMaintenance: true },
     );
     expect(result).toMatchObject({
-      sessionId: "cron-created",
-      updatedAt: 20,
-      label: "Cron: initial state",
-      lifecycleRevision: "admitted",
-      thinkingLevel: "high",
-      modelProvider: "openai",
-      model: "gpt-5.4",
+      ...next,
       createdVia: "cron",
       createdActor: { type: "system" },
       createdAt: 10,
@@ -318,8 +309,7 @@ it("creates the full initial cron session in one owner command", async () => {
 });
 
 it("rechecks conversation authority before a fixed patch commits", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const conversation = await conversationGuard(f, "patch-peer");
     const workerGuard = { conversation };
     const onCommitted = vi.fn();
@@ -350,8 +340,7 @@ it("rechecks conversation authority before a fixed patch commits", async () => {
 });
 
 it("retains typed source and conversation authority when updating the last route", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const conversation = await conversationGuard(f, "route-peer");
     let sourceCurrent = true;
     const refusal = new Error("route source was revoked");

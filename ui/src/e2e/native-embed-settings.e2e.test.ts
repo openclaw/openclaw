@@ -198,7 +198,7 @@ suite.define(() => {
         await waitForControlUiRoute(page, { routeId: "settings", pathname: "/settings" });
         await page
           .locator(".native-embed-header")
-          .getByRole("button", { name: /reconnecting.*retry/i })
+          .getByText("Reconnecting…", { exact: true })
           .waitFor();
         await page.locator('.settings-embed-list a[href="/settings/appearance"]').click();
         await waitForControlUiRoute(page, { routeId: "appearance" });

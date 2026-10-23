@@ -1,25 +1,8 @@
 import { vi } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
 import type { ApplicationRouter, RouteId } from "../app-routes.ts";
-import type { ShellNavigationOwner } from "./app-shell-navigation.ts";
 import { createApplicationConfigCapability } from "./config.ts";
 import type { ApplicationContext } from "./context.ts";
-import type { OptionalCustomElement } from "./lazy-custom-element.ts";
-export type { OptionalCustomElement as TestOptionalCustomElement } from "./lazy-custom-element.ts";
-
-export type ShellRouteCommitState = {
-  runtime: { context: ApplicationContext };
-  activeSessionKey: string;
-  didConsiderNativeRouteRestore: boolean;
-  shellNavigation: ShellNavigationOwner;
-};
-
-export type ShellCustodianRouteState = {
-  custodianMinimizeRequestId: number;
-  shellNavigation: ShellNavigationOwner;
-};
-
-export type ShellKeyboardState = { element: HTMLElement } & Pick<ShellRouteCommitState, "runtime">;
 
 export function resetAppHostTestGlobals(): void {
   vi.useRealTimers();
@@ -30,35 +13,6 @@ export function resetAppHostTestGlobals(): void {
     "openclaw-native-web-chrome",
   );
   vi.unstubAllGlobals();
-}
-
-let lazyElementSequence = 0;
-
-export function createLazyElementSpec(
-  label: string,
-  options: { firstError?: Error } = {},
-): OptionalCustomElement {
-  const tagName = `openclaw-app-host-lazy-${++lazyElementSequence}`;
-  let attempt = 0;
-  return {
-    tagName,
-    label,
-    loadModule: async () => {
-      if (++attempt === 1 && options.firstError) {
-        throw options.firstError;
-      }
-      customElements.define(tagName, class extends HTMLElement {});
-    },
-  };
-}
-
-/** Model rendering as soon as the module defines the tag. */
-export function stubRenderedWhenDefined(shell: object): void {
-  Object.defineProperty(shell, "queryRenderedElement", {
-    configurable: true,
-    value: (tagName: string) =>
-      customElements.get(tagName) ? document.createElement(tagName) : null,
-  });
 }
 
 export function committedRouterState(routeId: RouteId, pathname: string, data?: unknown) {

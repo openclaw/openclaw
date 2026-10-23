@@ -2,14 +2,18 @@
 // real chat composer and verify chat.send receives it without overflowing base64 handling.
 import { copyFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { crc32 } from "node:zlib";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { createRequireRecord } from "../../../test/helpers/record.js";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiE2eWaitTimeoutMs, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createChatFlowE2eSuite } from "./chat-flow.test-support.ts";
+import {
+  chatMessage,
+  createChatFlowE2eSuite,
+  requireRecord,
+  requireString,
+} from "./chat-flow.test-support.ts";
+import { sizedOutboxPng } from "./chat-outbox-payloads.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const viewport = { height: 900, width: 1280 };
@@ -19,40 +23,6 @@ type RecordedPage = {
   page: Page;
   rawVideoDir: string;
 };
-
-const requireRecord = createRequireRecord("record", "expected-label-object-capitalized");
-
-function requireString(value: unknown, label: string): string {
-  if (typeof value !== "string" || !value) {
-    throw new Error(`Expected non-empty ${label}`);
-  }
-  return value;
-}
-
-function chunk(type: string, payload: Uint8Array): Buffer {
-  const result = Buffer.alloc(12 + payload.length);
-  result.writeUInt32BE(payload.length, 0);
-  result.write(type, 4, "ascii");
-  result.set(payload, 8);
-  result.writeUInt32BE(crc32(result.subarray(4, 8 + payload.length)), 8 + payload.length);
-  return result;
-}
-
-function createLargePngBytes(targetBytes: number): Uint8Array {
-  const signature = Uint8Array.of(0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a);
-  const ihdr = chunk("IHDR", Uint8Array.of(0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0));
-  const idat = chunk(
-    "IDAT",
-    Uint8Array.of(0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0xf0, 0x1f, 0x00, 0x05, 0x00, 0x01, 0xff),
-  );
-  const iend = chunk("IEND", new Uint8Array());
-  const fixedBytes = signature.length + ihdr.length + idat.length + iend.length + 12;
-  const payload = new Uint8Array(Math.max(0, targetBytes - fixedBytes));
-  for (let i = 0; i < payload.length; i += 1) {
-    payload[i] = 0x41 + (i % 26);
-  }
-  return Buffer.concat([signature, ihdr, chunk("tEXt", payload), idat, iend]);
-}
 
 async function newRecordedPage(artifactDir: string, label: string): Promise<RecordedPage> {
   const rawVideoDir = createControlUiE2eArtifactDir(`${label}-raw`, artifactDir);
@@ -91,7 +61,7 @@ async function closeRecordedPage(
 suite.define(() => {
   it("sends a roughly 2 MB PNG without overlapping transcript rows", async () => {
     const artifactDir = createControlUiE2eArtifactDir("chat-large-paste-99213");
-    const pngBytes = createLargePngBytes(1_901_669);
+    const pngBytes = sizedOutboxPng(1_901_669, 255);
     const imageBase64 = Buffer.from(pngBytes).toString("base64");
     const dataUrl = `data:image/png;base64,${imageBase64}`;
     const prompt = "proof: large Control UI clipboard image";
@@ -113,16 +83,11 @@ suite.define(() => {
     try {
       const gateway = await installMockGateway(page, {
         historyMessages: [
-          {
-            content: [
-              {
-                text: `${previousReply}\n\n${["First", "Second", "Third", "Fourth", "Fifth"].map((ordinal) => `- ${ordinal} line of the existing answer.`).join("\n")}`,
-                type: "text",
-              },
-            ],
-            role: "assistant",
-            timestamp: Date.now(),
-          },
+          chatMessage(
+            "assistant",
+            `${previousReply}\n\n${["First", "Second", "Third", "Fourth", "Fifth"].map((ordinal) => `- ${ordinal} line of the existing answer.`).join("\n")}`,
+            { timestamp: Date.now() },
+          ),
         ],
       });
 
@@ -144,7 +109,7 @@ suite.define(() => {
 
       await recorded.page.getByRole("button", { name: "Send message" }).click();
       const sendRequest = await gateway.waitForRequest("chat.send");
-      const params = requireRecord(sendRequest.params, "chat.send params");
+      const params = requireRecord(sendRequest.params);
       expect(params).toMatchObject({
         message: prompt,
         attachments: [

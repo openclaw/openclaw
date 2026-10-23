@@ -18,6 +18,7 @@ import { applySidebarSessionOwnerFilter } from "./app-sidebar-session-ownership.
 import {
   setStoredSessionCatalogHidden,
   type SidebarRecentSession,
+  type SidebarPinZone,
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
 import type { SessionOwnerFilter } from "./session-owner-filter.ts";
@@ -87,11 +88,15 @@ export function hidePersonalSidebarCatalog(
 }
 
 /** Descriptor snapshots last one connection; loaded rows always supersede them. */
-export function createSidebarPinnedSessions(host: {
-  readonly isConnected: boolean;
-  readonly sessionDataContext: PersonalNavigationHost["sessionDataContext"];
-  readonly sessionData: Pick<SessionDataOwner, "requestSessionDataUpdate">;
-}) {
+export function createSidebarPinnedSessions(
+  host: Pick<
+    PersonalNavigationHost,
+    "sessionDataContext" | "findSidebarSessionByKey" | "navigationCatalog"
+  > & {
+    readonly isConnected: boolean;
+    readonly sessionData: Pick<SessionDataOwner, "requestSessionDataUpdate">;
+  },
+) {
   let source: ApplicationContext["sessions"] | undefined;
   let scope: SessionConnectionScope | null = null;
   const requested = new Map<string, "pending" | "settled">();
@@ -163,7 +168,12 @@ export function createSidebarPinnedSessions(host: {
         if (!current()) {
           return;
         }
-        if (!host.isConnected) {
+        // The roster can supply a pin while its lookup waits behind foreground bootstrap.
+        if (
+          !host.isConnected ||
+          host.findSidebarSessionByKey(key) ||
+          host.navigationCatalog.dashboards?.result?.sessions.some((row) => row.key === key)
+        ) {
           requested.delete(key);
           return;
         }
@@ -262,4 +272,36 @@ export function personalSidebarOwnerProjection(
     selectedProfileId: host.sessionOwnerFilterId === self?.id ? self.id : undefined,
     self,
   });
+}
+
+/** Rendering and selection share archive visibility; saved pins survive restoration. */
+export function sidebarPinnedSessionRows(
+  zone: SidebarPinZone,
+  archiveVisibility?: ApplicationContext["sessions"]["archiveVisibility"],
+): SidebarRecentSession[] {
+  return zone.entries.flatMap((entry) => {
+    const row =
+      entry.type === "session" && !entry.rail ? zone.sessionRows.get(entry.key) : undefined;
+    return row && row.archived !== true && !archiveVisibility?.(row.key) ? [row] : [];
+  });
+}
+
+export function sidebarVisibleRowsInOrder(
+  zone: SidebarPinZone,
+  visibleRows: SidebarRecentSession[],
+  host: {
+    readonly collapsedSessionSections: ReadonlySet<string>;
+    readonly sessionDataContext?: {
+      sessions: Pick<ApplicationContext["sessions"], "archiveVisibility">;
+    };
+  },
+): SidebarRecentSession[] {
+  return host.collapsedSessionSections.has("pinned")
+    ? visibleRows
+    : [
+        ...sidebarPinnedSessionRows(zone, (key) =>
+          host.sessionDataContext?.sessions.archiveVisibility(key),
+        ),
+        ...visibleRows,
+      ];
 }

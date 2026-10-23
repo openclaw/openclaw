@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { findAgentRunTerminalOutcome } from "../agents/agent-run-terminal-error.js";
 import { createAgentToolExecutionBudget } from "../agents/agent-tool-source-execution-guard.js";
 import {
@@ -18,6 +19,7 @@ import {
   getInstallationTarget,
   LOCAL_INSTALLATION_TARGET_UNSUPPORTED,
 } from "../infra/installation-target-context.js";
+import { applyProcessEnvKeys } from "../infra/process-env.js";
 import { writeRuntimeJson, writeRuntimeStdout, type RuntimeEnv } from "../runtime.js";
 import {
   applyExecConfigOverrides,
@@ -89,15 +91,7 @@ function setAgentExecEnvironment(params: { stateDir: string; cwd: string }): () 
   process.env.OPENCLAW_STATE_DIR = params.stateDir;
   delete process.env.OPENCLAW_CONFIG_PATH;
   process.env.OPENCLAW_WORKSPACE_DIR = params.cwd;
-  return () => {
-    for (const [key, value] of Object.entries(previous)) {
-      if (value === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = value;
-      }
-    }
-  };
+  return () => applyProcessEnvKeys(Object.keys(previous), previous);
 }
 
 function formatActiveGatewayExecRefusal(identity: GatewayLockIdentity): string {
@@ -110,15 +104,10 @@ function isStructuredTimeoutError(error: unknown): boolean {
   }
   let candidate = error;
   for (let depth = 0; depth < 4; depth += 1) {
-    if (!candidate || typeof candidate !== "object") {
+    const record = asOptionalObjectRecord(candidate);
+    if (!record) {
       return false;
     }
-    const record = candidate as {
-      cause?: unknown;
-      code?: unknown;
-      name?: unknown;
-      reason?: unknown;
-    };
     if (
       record.name === "TimeoutError" ||
       record.code === "ETIMEDOUT" ||
@@ -129,38 +118,6 @@ function isStructuredTimeoutError(error: unknown): boolean {
     candidate = record.cause;
   }
   return false;
-}
-
-function errorEnvelope(error: unknown, sessionId: string): AgentExecEnvelope {
-  const status = isStructuredTimeoutError(error) ? "timeout" : "error";
-  return {
-    ok: false,
-    status,
-    final: "",
-    payloads: [],
-    model: null,
-    provider: null,
-    sessionId,
-    error: {
-      message: formatErrorMessage(error),
-      kind: status === "timeout" ? "timeout" : "exception",
-    },
-  };
-}
-
-function writeAgentExecOutput(
-  runtime: RuntimeEnv,
-  envelope: AgentExecEnvelope,
-  json: boolean,
-): void {
-  if (json) {
-    writeRuntimeJson(runtime, envelope);
-  } else if (envelope.final) {
-    writeRuntimeStdout(runtime, envelope.final);
-  }
-  if (!envelope.ok && envelope.error) {
-    runtime.error(envelope.error.message);
-  }
 }
 
 /** Run one isolated embedded agent turn and project its stable CLI result. */
@@ -389,7 +346,20 @@ export async function agentExecCommand(
     }
     commandResult = resultForEnvelope(envelope);
   } catch (error) {
-    commandResult = resultForEnvelope(errorEnvelope(error, sessionId));
+    const status = isStructuredTimeoutError(error) ? "timeout" : "error";
+    commandResult = resultForEnvelope({
+      ok: false,
+      status,
+      final: "",
+      payloads: [],
+      model: null,
+      provider: null,
+      sessionId,
+      error: {
+        message: formatErrorMessage(error),
+        kind: status === "timeout" ? "timeout" : "exception",
+      },
+    });
   }
 
   let cleanupError: unknown =
@@ -478,6 +448,15 @@ export async function agentExecCommand(
     return commandResult;
   }
 
-  writeAgentExecOutput(runtime, commandResult.envelope, opts.json === true);
+  const envelope = commandResult.envelope;
+  const json = opts.json === true;
+  if (json) {
+    writeRuntimeJson(runtime, envelope);
+  } else if (envelope.final) {
+    writeRuntimeStdout(runtime, envelope.final);
+  }
+  if (!envelope.ok && envelope.error) {
+    runtime.error(envelope.error.message);
+  }
   return commandResult;
 }

@@ -9,10 +9,11 @@ import type {
   MigrationPlan,
   MigrationProviderPlugin,
 } from "../plugins/types.js";
+import { createOnboardTestConfigStore } from "./onboard-non-interactive.test-helpers.js";
 import { createThrowingTestRuntime } from "./test-runtime-config-helpers.js";
 
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
-const configStore = new Map<string, OpenClawConfig>();
+const { configStore, readSnapshot, resolveConfigPath: configPath } = createOnboardTestConfigStore();
 const ensureWorkspaceAndSessions = vi.hoisted(() => vi.fn(async () => {}));
 const provider = vi.hoisted(() => ({
   id: "hermes",
@@ -26,26 +27,9 @@ function withSummary<T extends Pick<MigrationPlan, "items">>(plan: T) {
   return { ...plan, summary: summarizeMigrationItems(plan.items) };
 }
 
-function configPath(): string {
-  const stateDir = process.env.OPENCLAW_STATE_DIR;
-  if (!stateDir) {
-    throw new Error("OPENCLAW_STATE_DIR is required");
-  }
-  return path.join(stateDir, "openclaw.json");
-}
-
 // mock-isolation: Read only this test's in-memory config store, never the operator's config.
 vi.mock("../config/io.js", () => ({
-  readConfigFileSnapshot: async () => {
-    const config = configStore.get(configPath());
-    return {
-      exists: Boolean(config),
-      valid: true,
-      config: config ?? {},
-      sourceConfig: config ?? {},
-      hash: config ? "test-config-hash" : undefined,
-    };
-  },
+  readConfigFileSnapshot: async () => readSnapshot(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -85,6 +69,7 @@ it("stages, promotes, and acknowledges an explicit import", async () => {
   await fs.mkdir(source, { recursive: true });
   await fs.writeFile(path.join(source, "AGENTS.md"), "Imported agents.\n", "utf8");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
 
   provider.plan.mockImplementation(async (ctx): Promise<MigrationPlan> => {
     expect(ctx.config.agents?.defaults?.workspace).toBe(workspace);

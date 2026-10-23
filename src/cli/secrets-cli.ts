@@ -1,6 +1,7 @@
 import type { Command } from "commander";
 import { danger } from "../globals.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
+import { decodeUtf8Input } from "../infra/utf8-input.js";
 import { defaultRuntime } from "../runtime.js";
 import type { SecretsApplyPlan } from "../secrets/plan.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
@@ -80,7 +81,8 @@ async function readPlanFile(pathname: string): Promise<SecretsApplyPlan> {
         `Secrets plan file exceeds ${SECRETS_PLAN_MAX_BYTES} bytes: ${pathname}`,
       );
     }
-    raw = (await readFileDescriptorBounded(file.fd, SECRETS_PLAN_MAX_BYTES)).toString("utf8");
+    const bytes = await readFileDescriptorBounded(file.fd, SECRETS_PLAN_MAX_BYTES);
+    raw = decodeUtf8Input(bytes, `Secrets plan file ${pathname}`);
   } finally {
     await file.close();
   }

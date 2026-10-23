@@ -6,9 +6,10 @@ import {
   resolveGatewayErrorDetailCode,
   type GatewayBrowserClient,
 } from "../../../api/gateway.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
 import { MAX_HUMAN_MENTIONS, updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import "../../../styles/chat/mention-menu.css";
@@ -17,6 +18,8 @@ import {
   ComposerMenu,
   renderComposerMenuOption as ComposerMenuOption,
 } from "./chat-composer-menu.tsx";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 export type HumanMentionDirectory = {
   client: GatewayBrowserClient;

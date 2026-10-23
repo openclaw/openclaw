@@ -101,36 +101,6 @@ export function isTwilioDeliveryStatusForm(form: Record<string, string>): boolea
   return Boolean(resolveDeliveryStatus(form));
 }
 
-function parseSmsDeliveryObservation(
-  form: Record<string, string>,
-  nowMs = Date.now(),
-): { messageSid: string; observation: SmsDeliveryObservation } | null {
-  const messageSid = resolveTwilioMessageSid(form);
-  const status = resolveDeliveryStatus(form);
-  if (!messageSid || !status) {
-    return null;
-  }
-  const errorCode = firstTrimmed(form, "ErrorCode");
-  const rawDlrDoneDate = firstTrimmed(form, "RawDlrDoneDate");
-  return {
-    messageSid,
-    observation: {
-      source: "callback",
-      fingerprint: fingerprintObservation({
-        source: "callback",
-        messageSid,
-        status,
-        ...(errorCode ? { errorCode } : {}),
-        ...(rawDlrDoneDate ? { rawDlrDoneDate } : {}),
-      }),
-      status,
-      observedAt: nowMs,
-      ...(errorCode ? { errorCode } : {}),
-      ...(rawDlrDoneDate ? { rawDlrDoneDate } : {}),
-    },
-  };
-}
-
 function reduceDeliveryStatus(
   current: SmsDeliveryRecord | undefined,
   observation: SmsDeliveryObservation,
@@ -239,16 +209,29 @@ export function createSmsDeliveryRecorder(
 ) {
   return {
     async record({ account, form }: { account: ResolvedSmsAccount; form: Record<string, string> }) {
-      const parsed = parseSmsDeliveryObservation(form);
-      if (!parsed) {
+      const nowMs = Date.now();
+      const messageSid = resolveTwilioMessageSid(form);
+      const status = resolveDeliveryStatus(form);
+      if (!messageSid || !status) {
         throw new Error("Invalid Twilio delivery status callback.");
       }
-      return await recordSmsDeliveryObservation({
-        account,
-        messageSid: parsed.messageSid,
-        observation: parsed.observation,
-        store,
-      });
+      const errorCode = firstTrimmed(form, "ErrorCode");
+      const rawDlrDoneDate = firstTrimmed(form, "RawDlrDoneDate");
+      const observation: SmsDeliveryObservation = {
+        source: "callback",
+        fingerprint: fingerprintObservation({
+          source: "callback",
+          messageSid,
+          status,
+          ...(errorCode ? { errorCode } : {}),
+          ...(rawDlrDoneDate ? { rawDlrDoneDate } : {}),
+        }),
+        status,
+        observedAt: nowMs,
+        ...(errorCode ? { errorCode } : {}),
+        ...(rawDlrDoneDate ? { rawDlrDoneDate } : {}),
+      };
+      return await recordSmsDeliveryObservation({ account, messageSid, observation, store });
     },
   };
 }

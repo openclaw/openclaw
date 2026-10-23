@@ -83,55 +83,6 @@ function buildMatrixQaRoomInitialState(encrypted?: boolean): MatrixQaRoomInitial
   return initialState;
 }
 
-async function uploadMatrixQaContent(params: {
-  accessToken?: string;
-  baseUrl: string;
-  buffer: Buffer;
-  contentType?: string;
-  fileName?: string;
-}) {
-  const url = new URL("/_matrix/media/v3/upload", params.baseUrl);
-  const fileName = params.fileName?.trim();
-  if (fileName) {
-    url.searchParams.set("filename", fileName);
-  }
-  const uploadBody: Uint8Array<ArrayBuffer> =
-    params.buffer.buffer instanceof ArrayBuffer
-      ? new Uint8Array(params.buffer.buffer, params.buffer.byteOffset, params.buffer.byteLength)
-      : Uint8Array.from(params.buffer);
-  const { response, release } = await fetchWithSsrFGuard({
-    url: url.href,
-    policy: { allowPrivateNetwork: true },
-    auditContext: "qa-lab-matrix-media-upload",
-    init: {
-      method: "POST",
-      headers: {
-        accept: "application/json",
-        "content-type": params.contentType ?? "application/octet-stream",
-        ...(params.accessToken ? { authorization: `Bearer ${params.accessToken}` } : {}),
-      },
-      body: uploadBody,
-      signal: AbortSignal.timeout(20_000),
-    },
-  });
-  try {
-    const body = (await readMatrixQaJsonResponse(response)) as {
-      content_uri?: string;
-      error?: string;
-    };
-    if (response.status !== 200) {
-      throw new Error(body.error ?? `Matrix media upload failed with status ${response.status}`);
-    }
-    const contentUri = body.content_uri?.trim();
-    if (!contentUri) {
-      throw new Error("Matrix media upload did not return content_uri.");
-    }
-    return contentUri;
-  } finally {
-    await release();
-  }
-}
-
 function buildRegisteredAccount(params: {
   localpart: string;
   password: string;
@@ -320,13 +271,53 @@ export function createMatrixQaClient(params: {
         roomId: string;
       },
     ) {
-      const contentUri = await uploadMatrixQaContent({
-        accessToken: params.accessToken,
-        baseUrl: params.baseUrl,
-        buffer: opts.buffer,
-        contentType: opts.contentType,
-        fileName: opts.fileName,
-      });
+      const { accessToken, baseUrl } = params;
+      const { buffer, contentType, fileName: uploadFileName } = opts;
+      async function uploadMatrixQaContent() {
+        const url = new URL("/_matrix/media/v3/upload", baseUrl);
+        const fileName = uploadFileName?.trim();
+        if (fileName) {
+          url.searchParams.set("filename", fileName);
+        }
+        const uploadBody: Uint8Array<ArrayBuffer> =
+          buffer.buffer instanceof ArrayBuffer
+            ? new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength)
+            : Uint8Array.from(buffer);
+        const { response, release } = await fetchWithSsrFGuard({
+          url: url.href,
+          policy: { allowPrivateNetwork: true },
+          auditContext: "qa-lab-matrix-media-upload",
+          init: {
+            method: "POST",
+            headers: {
+              accept: "application/json",
+              "content-type": contentType ?? "application/octet-stream",
+              ...(accessToken ? { authorization: `Bearer ${accessToken}` } : {}),
+            },
+            body: uploadBody,
+            signal: AbortSignal.timeout(20_000),
+          },
+        });
+        try {
+          const body = (await readMatrixQaJsonResponse(response)) as {
+            content_uri?: string;
+            error?: string;
+          };
+          if (response.status !== 200) {
+            throw new Error(
+              body.error ?? `Matrix media upload failed with status ${response.status}`,
+            );
+          }
+          const contentUri = body.content_uri?.trim();
+          if (!contentUri) {
+            throw new Error("Matrix media upload did not return content_uri.");
+          }
+          return contentUri;
+        } finally {
+          await release();
+        }
+      }
+      const contentUri = await uploadMatrixQaContent();
       const txnId = randomUUID();
       return await sendEvent({
         body: buildMatrixQaMediaMessageContent({
@@ -398,65 +389,6 @@ export function createMatrixQaClient(params: {
   };
 }
 
-async function provisionMatrixQaTopology(params: {
-  accounts: Record<MatrixQaParticipantRole, MatrixQaRegisteredAccount>;
-  baseUrl: string;
-  spec: MatrixQaTopologySpec;
-}): Promise<MatrixQaProvisionedTopology> {
-  const rooms = [];
-
-  for (const room of params.spec.rooms) {
-    const memberRoles = uniqueValues(room.members);
-    const [creatorRole, ...inviteeRoles] = memberRoles;
-    if (creatorRole === undefined) {
-      throw new Error("Matrix QA room provisioning requires at least one member");
-    }
-    const creatorClient = createMatrixQaClient({
-      accessToken: params.accounts[creatorRole].accessToken,
-      baseUrl: params.baseUrl,
-    });
-    const roomId = await creatorClient.createPrivateRoom({
-      encrypted: room.encrypted === true,
-      inviteUserIds: inviteeRoles.map((role) => params.accounts[role].userId),
-      isDirect: room.kind === "dm",
-      name: room.name,
-    });
-    await Promise.all(
-      inviteeRoles.map((role) =>
-        createMatrixQaClient({
-          accessToken: params.accounts[role].accessToken,
-          baseUrl: params.baseUrl,
-        }).joinRoom(roomId),
-      ),
-    );
-    rooms.push({
-      encrypted: room.encrypted === true,
-      key: room.key,
-      kind: room.kind,
-      memberRoles,
-      memberUserIds: memberRoles.map((role) => params.accounts[role].userId),
-      name: room.name,
-      requireMention: room.kind === "group" && room.requireMention !== false,
-      roomId,
-    });
-  }
-
-  const defaultRoom = findMatrixQaProvisionedRoom(
-    {
-      defaultRoomId: "",
-      defaultRoomKey: params.spec.defaultRoomKey,
-      rooms,
-    },
-    params.spec.defaultRoomKey,
-  );
-
-  return {
-    defaultRoomId: defaultRoom.roomId,
-    defaultRoomKey: params.spec.defaultRoomKey,
-    rooms,
-  };
-}
-
 export async function provisionMatrixQaRoom(params: {
   baseUrl: string;
   topology?: MatrixQaTopologySpec;
@@ -481,28 +413,77 @@ export async function provisionMatrixQaRoom(params: {
     registerActor("sut", "OpenClaw Matrix QA SUT"),
     registerActor("observer", "OpenClaw Matrix QA Observer"),
   ]);
-  const topology = await provisionMatrixQaTopology({
-    accounts: {
-      driver,
-      observer,
-      sut,
-    },
-    baseUrl: params.baseUrl,
-    spec:
-      params.topology ??
-      ({
-        defaultRoomKey: "main",
-        rooms: [
-          {
-            key: "main",
-            kind: "group",
-            members: ["driver", "observer", "sut"],
-            name: params.roomName,
-            requireMention: true,
-          },
-        ],
-      } satisfies MatrixQaTopologySpec),
-  });
+  const accounts = { driver, observer, sut };
+  const baseUrl = params.baseUrl;
+  const spec =
+    params.topology ??
+    ({
+      defaultRoomKey: "main",
+      rooms: [
+        {
+          key: "main",
+          kind: "group",
+          members: ["driver", "observer", "sut"],
+          name: params.roomName,
+          requireMention: true,
+        },
+      ],
+    } satisfies MatrixQaTopologySpec);
+  async function provisionMatrixQaTopology(): Promise<MatrixQaProvisionedTopology> {
+    const rooms = [];
+
+    for (const room of spec.rooms) {
+      const memberRoles = uniqueValues(room.members);
+      const [creatorRole, ...inviteeRoles] = memberRoles;
+      if (creatorRole === undefined) {
+        throw new Error("Matrix QA room provisioning requires at least one member");
+      }
+      const creatorClient = createMatrixQaClient({
+        accessToken: accounts[creatorRole].accessToken,
+        baseUrl,
+      });
+      const roomId = await creatorClient.createPrivateRoom({
+        encrypted: room.encrypted === true,
+        inviteUserIds: inviteeRoles.map((role) => accounts[role].userId),
+        isDirect: room.kind === "dm",
+        name: room.name,
+      });
+      await Promise.all(
+        inviteeRoles.map((role) =>
+          createMatrixQaClient({
+            accessToken: accounts[role].accessToken,
+            baseUrl,
+          }).joinRoom(roomId),
+        ),
+      );
+      rooms.push({
+        encrypted: room.encrypted === true,
+        key: room.key,
+        kind: room.kind,
+        memberRoles,
+        memberUserIds: memberRoles.map((role) => accounts[role].userId),
+        name: room.name,
+        requireMention: room.kind === "group" && room.requireMention !== false,
+        roomId,
+      });
+    }
+
+    const defaultRoom = findMatrixQaProvisionedRoom(
+      {
+        defaultRoomId: "",
+        defaultRoomKey: spec.defaultRoomKey,
+        rooms,
+      },
+      spec.defaultRoomKey,
+    );
+
+    return {
+      defaultRoomId: defaultRoom.roomId,
+      defaultRoomKey: spec.defaultRoomKey,
+      rooms,
+    };
+  }
+  const topology = await provisionMatrixQaTopology();
   // A /sync cursor acknowledges device messages even when a room-only reader
   // ignores them. Passive readers must never share the encrypted actor's device.
   const createObservationAccount = (account: MatrixQaRegisteredAccount) =>

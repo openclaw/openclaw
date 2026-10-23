@@ -27,6 +27,7 @@ import {
   classifyAgentRunTerminalOutcome,
 } from "../../agent-run-terminal-outcome.js";
 import { resolveEmbeddedRunAbandonment } from "../../embedded-agent-runner/runs.js";
+import { isReplaySafeTranscriptConflict } from "../../embedded-agent-runner/transcript-conflict.js";
 import {
   hasFailedSubagentNoOutputCompletion,
   hasVisibleCompletionResult,
@@ -418,16 +419,24 @@ async function sendSubagentAnnounceDirectlyBound(
       : sessionOnlyOriginChannel
         ? sessionOnlyOrigin
         : undefined;
-    const replyExpectation = resolveCommandReplyExpectation({
-      cfg,
-      sessionKey: canonicalRequesterSessionKey,
-      sessionEntry: requesterEntry,
-      messageChannel: shouldDeliverAgentFinal ? deliveryTarget.channel : sessionOnlyOriginChannel,
-      opts: {
-        ...(parentOnly ? { privateCompletion: true as const } : {}),
-        inputProvenance: { kind: "inter_session" },
-      },
-    });
+    const inputReplyExpectation =
+      params.expectsCompletionMessage || params.requireVisibleReply ? "required" : "optional";
+    // Settle execution and receipt classification share the owner's reply obligation.
+    const replyExpectation =
+      sourceToolId === "subagent_settle"
+        ? inputReplyExpectation
+        : resolveCommandReplyExpectation({
+            cfg,
+            sessionKey: canonicalRequesterSessionKey,
+            sessionEntry: requesterEntry,
+            messageChannel: shouldDeliverAgentFinal
+              ? deliveryTarget.channel
+              : sessionOnlyOriginChannel,
+            opts: {
+              ...(parentOnly ? { privateCompletion: true as const } : {}),
+              inputProvenance: { kind: "inter_session" },
+            },
+          });
     // A private completion gets its own serialized turn. Steering into a public
     // turn would inherit that turn's delivery policy and expose child output.
     let directAgentParams: Record<string, unknown> = {
@@ -486,6 +495,7 @@ async function sendSubagentAnnounceDirectlyBound(
     });
     let directAnnounceResponse: unknown;
     let directFailure: SubagentAnnounceDeliveryResult | undefined;
+    let replaySafeTranscriptConflict = false;
     try {
       directAnnounceResponse = recoveredResult
         ? { status: "ok", result: recoveredResult }
@@ -497,11 +507,7 @@ async function sendSubagentAnnounceDirectlyBound(
             return await runAnnounceAgentCall({
               agentParams: directAgentParams,
               controllerInput: params.controllerInput,
-              // The input owner decides whether this handoff owes another reply.
-              replyExpectation:
-                params.expectsCompletionMessage || params.requireVisibleReply
-                  ? "required"
-                  : "optional",
+              replyExpectation: inputReplyExpectation,
               // A resumed parent has no inbound channel dispatcher to keep activity visible.
               typing:
                 sourceToolId === "subagent_settle" &&
@@ -597,6 +603,8 @@ async function sendSubagentAnnounceDirectlyBound(
         }
       }
       params.onDeliveryError?.(err);
+      replaySafeTranscriptConflict =
+        sourceToolId === "subagent_settle" && isReplaySafeTranscriptConflict(err);
       directFailure = {
         delivered: false,
         path: "direct",
@@ -679,6 +687,7 @@ async function sendSubagentAnnounceDirectlyBound(
     const settledRecovery = resolveRequesterRecoveryDelivery(
       currentEntry,
       params.directIdempotencyKey,
+      replaySafeTranscriptConflict,
     );
     if (!settledRecovery) {
       return delivery;

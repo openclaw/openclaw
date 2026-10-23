@@ -13,6 +13,7 @@ import {
   setNativeGatewayTestState,
 } from "../../../test-helpers/native-gateways.ts";
 import { createSessionOwnerMenuHarness } from "../../../test-helpers/session-owner-menu.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   createGatewayBrowserClientFixture,
   createPaneHeaderWorkspaceFixture,
@@ -23,13 +24,18 @@ import type { ChatPageHost } from "../chat-state-host.ts";
 import type { HeaderMenuAction } from "./chat-header-session-menu.ts";
 import { PaneHeaderView } from "./chat-pane-header.tsx";
 import "./chat-header-session-menu.ts";
-import type { ChatSessionSharingProps } from "./chat-session-sharing.solid.tsx";
+import type { ChatSessionSharingProps } from "./chat-session-sharing-shared.tsx";
 import { openNativeSessionMenu } from "./native-session-menu.runtime.ts";
 
 type HeaderMenuElement = HTMLElementTagNameMap["openclaw-chat-header-session-menu"];
 type MenuItemElement = HTMLButtonElement;
 
 const containers: HTMLElement[] = [];
+const viewLabels = ["Reasoning", "Tool calls", "Keep commentary"];
+const shortcut = (menuItem: Element, compact = false) => {
+  const text = menuItem.querySelector(".session-menu__shortcut")?.textContent;
+  return (compact ? text?.replace(/\s+/gu, "") : text)?.trim();
+};
 
 afterEach(() => {
   for (const container of containers.splice(0)) {
@@ -39,20 +45,11 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function settings(): UiSettings {
+function settings(): HeaderMenuElement["settings"] {
   return {
-    gatewayUrl: "ws://localhost:18789",
-    token: "",
-    sessionKey: "main",
-    lastActiveSessionKey: "main",
-    theme: "claw",
-    themeMode: "dark",
     chatShowThinking: true,
     chatShowToolCalls: true,
     chatPersistCommentary: true,
-    navCollapsed: false,
-    navWidth: 280,
-    sidebarEntries: [],
   };
 }
 
@@ -107,12 +104,73 @@ async function mountMenu(
   container.append(menu);
   await menu.updateComplete;
   if (open) {
-    expect(menu.openMenu()).toBe(true);
-    flush();
+    await openMenu(menu);
     await materializeSubmenus(menu);
     await menu.updateComplete;
   }
   return menu;
+}
+
+async function mountPaneMenu(
+  { pane, state }: ReturnType<typeof createTestChatPane>,
+  session: Parameters<ReturnType<typeof createTestChatPane>["pane"]["renderPaneHeader"]>[1],
+) {
+  state.settings = {} as ChatPageHost["settings"];
+  const container = document.createElement("div");
+  document.body.append(container);
+  containers.push(container);
+  mountSolid(
+    () =>
+      createComponent(
+        PaneHeaderView,
+        pane.renderPaneHeader(
+          createPaneHeaderWorkspaceFixture(state),
+          session,
+          false,
+          undefined,
+          false,
+          null,
+        ),
+      ),
+    { container },
+  );
+  const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
+  if (!menu) {
+    throw new Error("Expected chat header session menu");
+  }
+  await menu.updateComplete;
+  await openMenu(menu);
+  await menu.updateComplete;
+  await materializeSubmenus(menu);
+  return menu;
+}
+
+async function openMenu(menu: HeaderMenuElement) {
+  expect(menu.openMenu()).toBe(true);
+  await waitForSolid(() => expect(menu.querySelector('[data-value="rename"]')).not.toBeNull());
+}
+
+function whenHidden(menu: HeaderMenuElement) {
+  return new Promise<void>((resolve) => {
+    const hidden = (event: Event) => {
+      if (event.target === panel(menu)) {
+        panel(menu).removeEventListener("overlay-after-hide", hidden);
+        resolve();
+      }
+    };
+    panel(menu).addEventListener("overlay-after-hide", hidden);
+  });
+}
+
+async function expectParked(menu: HeaderMenuElement, update: () => void) {
+  const changes: MutationRecord[] = [];
+  const mutations = new MutationObserver((records) => changes.push(...records));
+  mutations.observe(panel(menu), { childList: true, subtree: true, attributes: true });
+  update();
+  await menu.updateComplete;
+  flush();
+  expect([...changes, ...mutations.takeRecords()]).toEqual([]);
+  mutations.disconnect();
 }
 
 function panel(menu: ParentNode): HTMLElement {
@@ -187,8 +245,7 @@ function submenuItems(trigger: HTMLElement): MenuItemElement[] {
 async function select(menu: HeaderMenuElement, value: string) {
   await menu.updateComplete;
   if (!panel(menu).matches(":popover-open")) {
-    expect(menu.openMenu()).toBe(true);
-    flush();
+    await openMenu(menu);
   }
   const target = menu.querySelector<HTMLButtonElement>(`[data-value="${value}"]`);
   if (!target) {
@@ -226,26 +283,17 @@ describe("chat header session menu", () => {
     expect(panel(menu).matches(":popover-open")).toBe(false);
     menu.session = { ...menu.session, label: "Latest session", pinned: true };
     await menu.updateComplete;
-    expect(menu.openMenu()).toBe(true);
-    flush();
+    await openMenu(menu);
     const pin = item(menu, "Unpin session");
-    const hidden = new Promise<void>((resolve) => {
-      panel(menu).addEventListener("overlay-after-hide", () => resolve(), { once: true });
-    });
+    const hidden = whenHidden(menu);
     panel(menu).dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     flush();
     expect(panel(menu).matches(":popover-open")).toBe(false);
     await hidden;
-    const changes: MutationRecord[] = [];
-    const mutations = new MutationObserver((records) => changes.push(...records));
-    mutations.observe(panel(menu), { childList: true, subtree: true, attributes: true });
-    menu.session = { ...menu.session, pinned: false, unread: true };
-    await menu.updateComplete;
-    flush();
-    expect([...changes, ...mutations.takeRecords()]).toEqual([]);
-    mutations.disconnect();
-    expect(menu.openMenu()).toBe(true);
-    flush();
+    await expectParked(menu, () => {
+      menu.session = { ...menu.session, pinned: false, unread: true };
+    });
+    await openMenu(menu);
     expect(item(menu, "Pin session")).toBe(pin);
     expect(item(menu, "Mark as read")).toBeDefined();
   });
@@ -254,38 +302,26 @@ describe("chat header session menu", () => {
     const owner = createSessionOwnerMenuHarness();
     owner.context.agents.state.agentsList!.agents.push({ id: "retired", name: "Retired" });
     const menu = await mountMenu({ context: owner.context }, false);
-    expect(menu.openMenu()).toBe(true);
-    flush();
+    await openMenu(menu);
     item(menu, "Assign to…").click();
     flush();
     await profileDirectory(owner.context.gateway).load();
     await menu.updateComplete;
     const research = item(menu, "Research");
     const self = item(menu, "Me");
-    const hidden = new Promise<void>((resolve) => {
-      panel(menu).addEventListener("overlay-after-hide", (event) => {
-        if (event.target === panel(menu)) {
-          resolve();
-        }
-      });
-    });
+    const hidden = whenHidden(menu);
     menu.querySelector<HTMLButtonElement>(".chat-header-session-menu__trigger")!.click();
     await menu.updateComplete;
     expect(panel(menu).matches(":popover-open")).toBe(false);
     await hidden;
-    const changes: MutationRecord[] = [];
-    const mutations = new MutationObserver((records) => changes.push(...records));
-    mutations.observe(panel(menu), { childList: true, subtree: true, attributes: true });
-    owner.context.agents.state.agentsList!.agents = [
-      { id: "research:one", name: "Updated research" },
-      { id: "new", name: "New agent" },
-    ];
-    owner.publish({ selfUser: { id: "profile-ada", name: "Ada" } });
-    await menu.updateComplete;
-    expect([...changes, ...mutations.takeRecords()]).toEqual([]);
-    mutations.disconnect();
-    expect(menu.openMenu()).toBe(true);
-    flush();
+    await expectParked(menu, () => {
+      owner.context.agents.state.agentsList!.agents = [
+        { id: "research:one", name: "Updated research" },
+        { id: "new", name: "New agent" },
+      ];
+      owner.publish({ selfUser: { id: "profile-ada", name: "Ada" } });
+    });
+    await openMenu(menu);
     expect(item(menu, "Updated research")).toBe(research);
     expect(item(menu, "Me")).toBe(self);
     expect(
@@ -340,25 +376,16 @@ describe("chat header session menu", () => {
     async (platform) => {
       vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
       const menu = await mountMenu({ archiveShortcut: true });
-      expect(
-        item(menu, "Archive session")
-          .querySelector(".session-menu__shortcut")
-          ?.textContent?.replace(/\s+/gu, "")
-          .trim(),
-      ).toBe(platform === "MacIntel" ? "A/⌘⇧A" : "A/Ctrl+Shift+A");
+      expect(shortcut(item(menu, "Archive session"), true)).toBe(
+        platform === "MacIntel" ? "A/⌘⇧A" : "A/Ctrl+Shift+A",
+      );
       menu.archiveShortcut = false;
       await menu.updateComplete;
-      expect(
-        item(menu, "Archive session").querySelector(".session-menu__shortcut")?.textContent?.trim(),
-      ).toBe("A");
+      expect(shortcut(item(menu, "Archive session"))).toBe("A");
       menu.archiveShortcut = true;
       menu.session = { ...menu.session, archived: true };
       await menu.updateComplete;
-      expect(
-        menu
-          .querySelector('[data-value="toggle-archived"] .session-menu__shortcut')
-          ?.textContent?.trim(),
-      ).toBe("A");
+      expect(shortcut(menu.querySelector('[data-value="toggle-archived"]')!)).toBe("A");
     },
   );
 
@@ -407,12 +434,12 @@ describe("chat header session menu", () => {
       const client = createGatewayBrowserClientFixture({
         gatewayUrl: "gatewayUrl" in testCase ? testCase.gatewayUrl : "ws://localhost:18789",
       });
-      const { pane, state } = createTestChatPane({
+      const fixture = createTestChatPane({
         client,
         sessions: createSessionCapabilityFixture(),
       });
       const session = {
-        key: state.sessionKey,
+        key: fixture.state.sessionKey,
         kind: "direct" as const,
         updatedAt: 0,
         spawnedWorkspaceDir: "/workspace",
@@ -420,34 +447,7 @@ describe("chat header session menu", () => {
           ? { execNode: testCase.execNode, execCwd: "/remote/workspace" }
           : {}),
       };
-      state.settings = {} as ChatPageHost["settings"];
-      const container = document.createElement("div");
-      document.body.append(container);
-      containers.push(container);
-      mountSolid(
-        () =>
-          createComponent(
-            PaneHeaderView,
-            pane.renderPaneHeader(
-              createPaneHeaderWorkspaceFixture(state),
-              session,
-              false,
-              undefined,
-              false,
-              null,
-            ),
-          ),
-        { container },
-      );
-      const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
-      await menu?.updateComplete;
-      expect(menu?.openMenu()).toBe(true);
-      flush();
-      await menu?.updateComplete;
-      if (!menu) {
-        throw new Error("Expected chat header session menu");
-      }
-      await materializeSubmenus(menu);
+      const menu = await mountPaneMenu(fixture, session);
 
       expect(menu?.textContent?.includes("Open in")).toBe(true);
       expect(menu?.textContent?.includes("Cursor")).toBe(testCase.offered);
@@ -481,39 +481,11 @@ describe("chat header session menu", () => {
         },
       },
     });
-    const { pane, state } = createTestChatPane({
+    const fixture = createTestChatPane({
       client: createGatewayBrowserClientFixture(),
       sessions,
     });
-    state.settings = {} as ChatPageHost["settings"];
-    const container = document.createElement("div");
-    document.body.append(container);
-    containers.push(container);
-    mountSolid(
-      () =>
-        createComponent(
-          PaneHeaderView,
-          pane.renderPaneHeader(
-            createPaneHeaderWorkspaceFixture(state),
-            session,
-            false,
-            undefined,
-            false,
-            null,
-          ),
-        ),
-      { container },
-    );
-    const menu = container.querySelector<HeaderMenuElement>("openclaw-chat-header-session-menu");
-    if (!menu) {
-      throw new Error("Expected chat header session menu");
-    }
-    await menu.updateComplete;
-    expect(menu.openMenu()).toBe(true);
-    flush();
-    await menu.updateComplete;
-
-    await materializeSubmenus(menu);
+    const menu = await mountPaneMenu(fixture, session);
     const moveToGroup = item(menu, "Move to group");
     const groupLabels = submenuItems(moveToGroup).map(itemLabel);
     expect(groupLabels).toEqual(["Catalog", "Discovered", "New group"]);
@@ -531,12 +503,7 @@ describe("chat header session menu", () => {
     const view = item(menu, "View");
     const viewItems = submenuItems(view);
 
-    expect(viewItems.map(itemLabel)).toEqual([
-      "Reasoning",
-      "Tool calls",
-      "Keep commentary",
-      "Speech bubbles",
-    ]);
+    expect(viewItems.map(itemLabel)).toEqual([...viewLabels, "Speech bubbles"]);
     expect(viewItems.map((entry) => entry.getAttribute("aria-checked") === "true")).toEqual([
       !onboarding,
       true,
@@ -722,7 +689,7 @@ describe("chat header session menu", () => {
       ]);
       await navigate("back");
       await navigate("open-view");
-      expect(rootLabels(menu)).toEqual(["Back", "Reasoning", "Tool calls", "Keep commentary"]);
+      expect(rootLabels(menu)).toEqual(["Back", ...viewLabels]);
       expect(panel(menu).querySelector('[role="menu"]')).toBeNull();
       await select(menu, "view:reasoning");
       expect(onSettingsChange).toHaveBeenCalledWith({ chatShowThinking: false });
@@ -734,16 +701,11 @@ describe("chat header session menu", () => {
         kind: "assign-owner",
         owner: { type: "human", id: "profile-ada" },
       });
-      expect(menu.openMenu()).toBe(true);
-      flush();
+      await openMenu(menu);
       await menu.updateComplete;
       expect(rootLabels(menu)).toEqual(initialLabels);
     } else {
-      expect(submenuItems(item(menu, "View")).map(itemLabel)).toEqual([
-        "Reasoning",
-        "Tool calls",
-        "Keep commentary",
-      ]);
+      expect(submenuItems(item(menu, "View")).map(itemLabel)).toEqual(viewLabels);
     }
   });
 
@@ -843,8 +805,7 @@ describe("chat header session menu", () => {
       }
       expect(onAction.mock.calls).toEqual(allowed ? gatedActions.map((kind) => [{ kind }]) : []);
       onAction.mockClear();
-      expect(menu.openMenu()).toBe(true);
-      flush();
+      await openMenu(menu);
       dropdown.dispatchEvent(
         new KeyboardEvent("keydown", { key: "f", bubbles: true, cancelable: true }),
       );

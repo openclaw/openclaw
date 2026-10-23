@@ -28,6 +28,7 @@ function buildPrelude(
     nowMs?: number;
   } = {},
 ) {
+  vi.spyOn(Date, "now").mockReturnValue(options.nowMs ?? Date.UTC(2026, 3, 11, 18, 0, 0));
   return buildSessionStartupContextPrelude({
     workspaceDir,
     cfg: {
@@ -38,7 +39,6 @@ function buildPrelude(
         },
       },
     },
-    nowMs: options.nowMs ?? Date.UTC(2026, 3, 11, 18, 0, 0),
   });
 }
 
@@ -263,9 +263,9 @@ describe("buildSessionStartupContextPrelude", () => {
 
   it("returns null when no daily memory files exist", async () => {
     const workspaceDir = await makeWorkspace();
+    vi.spyOn(Date, "now").mockReturnValue(Date.UTC(2026, 3, 11, 18, 0, 0));
     const prelude = await buildSessionStartupContextPrelude({
       workspaceDir,
-      nowMs: Date.UTC(2026, 3, 11, 18, 0, 0),
     });
     expect(prelude).toBeNull();
   });

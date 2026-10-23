@@ -179,7 +179,6 @@ describe("iMessage approval reaction persistence", () => {
       channel: "imessage",
       accountId,
       senderId: approver,
-      gatewayUrl: undefined,
     });
 
     await loadTargets(true);

@@ -230,6 +230,9 @@ export function handleSessionOperationEvent(
 function handleCompactionEvent(host: ToolStreamHost, payload: AgentEventPayload) {
   const data = payload.data ?? {};
   const phase = typeof data.phase === "string" ? data.phase : "";
+  if (phase !== "start" && phase !== "end") {
+    return;
+  }
   const completed = data.completed === true;
   const itemId = toTrimmedString(data.itemId) ?? undefined;
 

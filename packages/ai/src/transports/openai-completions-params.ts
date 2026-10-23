@@ -6,7 +6,7 @@ import {
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { getAiTransportHost } from "../host.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
-import type { OpenAICompletionsOptions } from "../provider-options.js";
+import { measuredRequestPressure, type OpenAICompletionsOptions } from "../provider-options.js";
 import {
   PROVIDER_MODEL_INPUT,
   type ProviderContext,
@@ -173,6 +173,7 @@ function convertTools(
   compat: ResolvedOpenAICompletionsCompat,
   model: OpenAIModeModel,
   mode: "direct" | "managed",
+  mutableParameters: boolean,
 ) {
   const prepared = mode === "managed" ? prepareOpenAITools(tools) : undefined;
   const projection = prepared?.projection ?? projectOpenAITools(tools);
@@ -206,6 +207,7 @@ function convertTools(
             ? parameters
             : normalizeOpenAIStrictToolParameters(parameters, strict === true, model.compat),
           strict,
+          mutableParameters,
         ).completions;
       }),
     };
@@ -300,7 +302,7 @@ export function buildOpenAICompletionsRequest(
   const supportsTools = policy.mode === "direct" || supportsModelTools(model);
   const converted =
     supportsTools && context.tools
-      ? convertTools(context.tools, compat, model, policy.mode)
+      ? convertTools(context.tools, compat, model, policy.mode, Boolean(options?.onPayload))
       : undefined;
   // The converter needs intact boundaries for Runtime relocation or cache markers.
   const providerModel: ProviderModel = {
@@ -503,7 +505,13 @@ export function buildOpenAICompletionsRequest(
       clampedMaxTokens !== undefined &&
       effectiveContextTokens !== undefined
     ) {
-      const estimatedInputTokens = estimateOpenAICompletionsInputTokens(params);
+      // The measured predecessor does not bind the response-format identity.
+      const measuredInputTokens =
+        params.response_format === undefined
+          ? measuredRequestPressure.get(model, context)
+          : undefined;
+      const estimatedInputTokens =
+        measuredInputTokens ?? estimateOpenAICompletionsInputTokens(params);
       const remainingBudget = Math.max(0, effectiveContextTokens - estimatedInputTokens - 1);
       if (clampedMaxTokens > remainingBudget) {
         // Tool arguments need useful headroom even when the provider accepts a smaller cap.

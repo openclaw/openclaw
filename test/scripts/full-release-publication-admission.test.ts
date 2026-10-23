@@ -35,7 +35,12 @@ import { createCommandTest, type CommandFixture } from "../helpers/command-fixtu
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
 import { prepareCopiedSourceModules } from "./copied-source-modules.test-support.js";
+import {
+  publicationSelectionFixture,
+  publicationSourceEnv,
+} from "./full-release-validation-state.test-support.js";
 import { preparedScriptWrapperPreload } from "./prepared-script-wrapper.test-support.js";
 import {
   SOURCE_ADMISSION_PATHS as toolingPaths,
@@ -66,6 +71,7 @@ const templateDirs = useAutoCleanupTempDirTracker(afterAll);
 let toolingTemplate: { loose: string; packed: string };
 const repo = resolve(".");
 const nodeExecutable = realpathSync(requireNodeTool("node"));
+const workflowBash = process.platform === "darwin" ? resolveWorkflowBash() : "bash";
 const workflowPath = ".github/workflows/full-release-validation.yml";
 type Step = {
   name: string;
@@ -154,19 +160,16 @@ beforeAll(async () => {
   toolingTemplate = { loose: prepared, packed };
 });
 
-const selection = {
-  route: "normal",
-  npmDistTag: "latest",
-  publishOpenclawNpm: true,
-  pluginPublishScope: "all-publishable",
-  plugins: [],
-};
+const selection = publicationSelectionFixture();
 const windowsSelection = {
   ...selection,
   windowsNodeTag: "v0.5.0",
   windowsNodeInstallerDigests: { "installer.exe": `sha256:${"a".repeat(64)}` },
 };
 const unobservedFailure = { status: 1, observations: undefined, firstHopJobs: [] };
+const settledWorker = expect.objectContaining({ kind: "settled", worker: true, active: 0 });
+const isolatedWorker = { kind: "runtime", worker: true, inherited: [] };
+const platform = (id: string) => expect.objectContaining({ id });
 
 function selectedPlugins(...plugins: string[]) {
   return { ...selection, publishOpenclawNpm: false, pluginPublishScope: "selected", plugins };
@@ -323,7 +326,7 @@ console.log('{"status":"identical"}');
           };
           Object.assign(env, workflowEnv(step.env, context));
           const result = await processFixture.run(
-            "bash",
+            workflowBash,
             ["-c", expectDefined(step.run, "transport command")],
             {
               cwd: root,
@@ -1183,8 +1186,8 @@ globalThis.Date = class extends OriginalDate {
     };
     const result =
       options.registry === "parent-interrupt"
-        ? spawnSync("bash", ["-c", step.run], commandOptions)
-        : await processFixture.run("bash", ["-c", step.run], commandOptions);
+        ? spawnSync(workflowBash, ["-c", step.run], commandOptions)
+        : await processFixture.run(workflowBash, ["-c", step.run], commandOptions);
     if (result.error !== undefined && !(result.error instanceof Error)) {
       throw new Error("Unexpected publication command failure", { cause: result.error });
     }
@@ -1252,9 +1255,7 @@ globalThis.Date = class extends OriginalDate {
   if (options.registry === "parent-interrupt" && workerBoundary) {
     // The admission parent settles only after its worker's close event; that joins
     // the worker's synchronous exit record and exact process before the shell returns.
-    check(registryTrace).toContainEqual(
-      expect.objectContaining({ kind: "settled", worker: true, active: 0 }),
-    );
+    check(registryTrace).toContainEqual(settledWorker);
     const proc = `/proc/${workerBoundary.pid}/stat`;
     const live = () => {
       try {
@@ -1438,11 +1439,7 @@ describe("FRV required registry admission", () => {
         check(result.targetSha).not.toBe(result.toolingSha);
         check(result.effects).toContain("Provision trusted admission parser");
         check(result.effects).toContain("Admit publication source");
-        check(result.registryCalls).toContainEqual({
-          kind: "runtime",
-          worker: true,
-          inherited: [],
-        });
+        check(result.registryCalls).toContainEqual(isolatedWorker);
         const actualRequests = result.registryCalls.filter((entry) => entry.kind === "request");
         check(actualRequests.length).toBeGreaterThan(0);
         if (registry === "healthy") {
@@ -1657,9 +1654,7 @@ describe("FRV observation worker boundary", () => {
       check(
         result.registryCalls.filter((entry) => entry.path?.startsWith("/advisory-")).length,
       ).toBeLessThan(20);
-      check(result.registryCalls).toContainEqual(
-        expect.objectContaining({ kind: "settled", worker: true, active: 0 }),
-      );
+      check(result.registryCalls).toContainEqual(settledWorker);
     }),
     30_000,
   );
@@ -1692,9 +1687,7 @@ describe("FRV observation worker boundary", () => {
       check(result.stderr).toContain(
         registry === "required-budget" ? "response-too-large" : "cancelled-or-timeout",
       );
-      check(result.registryCalls).toContainEqual(
-        expect.objectContaining({ kind: "settled", worker: true, active: 0 }),
-      );
+      check(result.registryCalls).toContainEqual(settledWorker);
     }),
   );
 
@@ -1712,11 +1705,7 @@ describe("FRV observation worker boundary", () => {
         selection: { ...selection, route },
       });
       check(result.status, result.stderr).toBe(admitted ? 0 : 1);
-      check(result.registryCalls).toContainEqual({
-        kind: "runtime",
-        worker: true,
-        inherited: [],
-      });
+      check(result.registryCalls).toContainEqual(isolatedWorker);
       if (admitted) {
         check(result.observations.pendingAuthority).toContainEqual({
           registry: registryName,
@@ -1777,13 +1766,7 @@ describe("FRV observation worker boundary", () => {
       check(result, result.stderr).toMatchObject(unobservedFailure);
       check(result.stderr).toContain("required npm observation http-403");
       check(result.registryCalls).toContainEqual({ kind: "body-cancelled" });
-      check(result.registryCalls).toContainEqual(
-        expect.objectContaining({
-          kind: "settled",
-          active: 0,
-          worker: true,
-        }),
-      );
+      check(result.registryCalls).toContainEqual(settledWorker);
     }),
     30_000,
   );
@@ -2008,9 +1991,9 @@ describe("FRV publication source admission", () => {
         source: ".github/workflows/linux-app-release-request.yml",
       });
       if (windows) {
-        check(platforms).toContainEqual(expect.objectContaining({ id: "windows" }));
+        check(platforms).toContainEqual(platform("windows"));
       } else {
-        check(platforms).not.toContainEqual(expect.objectContaining({ id: "windows" }));
+        check(platforms).not.toContainEqual(platform("windows"));
       }
     }),
   );
@@ -2228,7 +2211,7 @@ describe("FRV publication source admission", () => {
       check(result.status, result.stderr).toBe(0);
       check(result.fact).toMatchObject({ projection: { version }, targetContextRef });
       const platforms = expectDefined(result.fact?.projection?.platforms, "source platforms");
-      check(platforms).not.toContainEqual(expect.objectContaining({ id: "linux" }));
+      check(platforms).not.toContainEqual(platform("linux"));
       if (route === "extended-stable") {
         check(result.fact?.projection?.packages).toEqual(
           expect.arrayContaining([{ name: pluginName, version, targets: ["npm"] }]),
@@ -2253,9 +2236,7 @@ describe("FRV publication source admission", () => {
         plugins: pluginName,
         npm_dist_tag: "default",
       });
-      check(result.fact?.projection?.platforms).not.toContainEqual(
-        expect.objectContaining({ id: "linux" }),
-      );
+      check(result.fact?.projection?.platforms).not.toContainEqual(platform("linux"));
       check(result.fact?.coverage.rerun_group).toBe("ci");
     }),
     30_000,
@@ -2301,14 +2282,14 @@ describe("FRV publication source admission", () => {
           source: ".github/workflows/android-release.yml",
         });
       } else {
-        check(platforms).not.toContainEqual(expect.objectContaining({ id: "android" }));
+        check(platforms).not.toContainEqual(platform("android"));
       }
       if (npmDistTag !== "extended-stable") {
         for (const id of ["docker", "vcr"]) {
           if (core) {
-            check(platforms).toContainEqual(expect.objectContaining({ id }));
+            check(platforms).toContainEqual(platform(id));
           } else {
-            check(platforms).not.toContainEqual(expect.objectContaining({ id }));
+            check(platforms).not.toContainEqual(platform(id));
           }
         }
       }
@@ -2413,23 +2394,23 @@ describe("publication source intent and durable binding", () => {
         validationPurpose: "diagnostic",
         publicationSelection: null,
       };
-      const environment = {
-        PUBLICATION_INPUTS_JSON: JSON.stringify({
+      const environment = publicationSourceEnv(
+        {
           trusted_workflow_json: JSON.stringify(diagnosticIntent),
           ref: "main",
           release_profile: "full",
-        }),
-        PUBLICATION_TOOLING_JSON: JSON.stringify({
-          fullRef: "refs/heads/main",
-          sha: "a".repeat(40),
-        }),
-        PUBLICATION_TARGET_SHA: "b".repeat(40),
-        GITHUB_REPOSITORY: "openclaw/openclaw",
-        GITHUB_REF: "refs/heads/main",
-        GITHUB_SHA: "a".repeat(40),
-        GITHUB_RUN_ID: "123",
-        GITHUB_RUN_ATTEMPT: "1",
-      };
+          rerun_group: undefined,
+        },
+        {
+          PUBLICATION_TARGET_CONTEXT: undefined,
+          PUBLICATION_TOOLING_JSON: JSON.stringify({
+            fullRef: "refs/heads/main",
+            sha: "a".repeat(40),
+          }),
+          GITHUB_REF: "refs/heads/main",
+          GITHUB_RUN_ID: "123",
+        },
+      );
       const request = publicationSourceRequest(environment);
       expect(() =>
         publicationSourceRequest({
@@ -2451,18 +2432,27 @@ describe("publication source intent and durable binding", () => {
       const historical = createPublicationSourceFact(historicalRequest, null, null);
       const retained = structuredClone(historical);
       retained.coverage.known_flaky_jobs_json = "[]";
+      retained.coverage.telegram_waiver = "";
       refreshDigest(retained);
       for (const fact of [historical, retained]) {
         const bytes = publicationSourceJson(fact);
         expect(bindSource(fact)).toBe(fact);
         expect(publicationSourceJson(fact)).toBe(bytes);
       }
-      expect(() =>
-        bindSource({
-          ...retained,
-          coverage: { ...retained.coverage, known_flaky_jobs_json: '["normalCi:test"]' },
-        }),
-      ).toThrow("known_flaky_jobs_json must be empty");
+      for (const [key, value] of [
+        ["known_flaky_jobs_json", '["normalCi:test"]'],
+        ["telegram_waiver", "legacy-omission"],
+      ] as const) {
+        expect(() =>
+          bindSource({
+            ...retained,
+            coverage: { ...retained.coverage, [key]: value },
+          }),
+        ).toThrow(`${key} must be empty`);
+      }
+      const withoutLegacyField = structuredClone(retained);
+      delete withoutLegacyField.coverage.telegram_waiver;
+      expect(() => bindSource(withoutLegacyField)).toThrow("source admission digest mismatch");
       expect(() =>
         bindSource(historical, {
           validationInputs: {

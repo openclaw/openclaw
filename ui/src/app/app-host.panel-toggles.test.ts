@@ -5,12 +5,14 @@ import {
   BROWSER_PANEL_TOGGLE_EVENT,
   HOME_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
+  TERMINAL_PANEL_DOCK_BOTTOM_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { takeSessionPanelToggle } from "../components/session-panel-toggle-buffer.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createShellOwner } from "./app-host-solid.test-support.ts";
-import { createLazyElementSpec, resetAppHostTestGlobals } from "./app-host.test-support.ts";
+import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
 import { ShellChromeOwner, type ShellChromeHost } from "./app-shell-chrome.ts";
+import { SHELL_COMPONENT_TAGS } from "./app-shell-components.ts";
 import type { ApplicationContext } from "./context.ts";
 import { persistLazyShellAction, readLazyShellAction } from "./lazy-shell-action.ts";
 
@@ -28,15 +30,10 @@ function keyEvent(key: string, code: string, modifiers: KeyboardEventInit) {
   return new KeyboardEvent("keydown", { key, code, cancelable: true, ...modifiers });
 }
 
-function configurePanelShell(
-  label: string,
-  kind: "terminal" | "browser" = "terminal",
-  options?: Parameters<typeof createLazyElementSpec>[1],
-) {
-  const element = createLazyElementSpec(label, options);
+function configurePanelShell(kind: "terminal" | "browser" = "terminal", mounted = true) {
+  const tag = SHELL_COMPONENT_TAGS[kind];
   window.history.replaceState(null, "", "/usage");
   const shell = createShellOwner() as unknown as ShellPanelToggleState;
-  Object.defineProperty(shell, `${kind}PanelElement`, { value: element });
   if (kind === "browser") {
     vi.stubGlobal("webkit", { messageHandlers: { openclawBrowser: { postMessage: vi.fn() } } });
   }
@@ -61,7 +58,10 @@ function configurePanelShell(
     configurable: true,
     get: () => Promise.resolve(true),
   });
-  const panel = shell.element.appendChild(document.createElement(element.tagName));
+  const panel = document.createElement(tag);
+  if (mounted) {
+    shell.element.append(panel);
+  }
   if (kind === "browser") {
     shell.elements.browserPanel = panel;
   } else {
@@ -69,7 +69,7 @@ function configurePanelShell(
   }
   document.body.append(shell.element);
   onTestFinished(() => shell.element.remove());
-  return { shell, element, owner: new ShellChromeOwner(shell) };
+  return { shell, panel, owner: new ShellChromeOwner(shell) };
 }
 
 afterEach(() => {
@@ -79,8 +79,7 @@ afterEach(() => {
 
 describe("OpenClaw shell panel toggles", () => {
   it("captures the terminal chord once before a consuming target", async () => {
-    const { element, owner } = configurePanelShell("keyboard terminal");
-    await element.loadModule();
+    const { owner } = configurePanelShell();
     const target = document.body.appendChild(document.createElement("div"));
     onTestFinished(() => target.remove());
     target.addEventListener("keydown", (event) => event.stopPropagation());
@@ -97,7 +96,7 @@ describe("OpenClaw shell panel toggles", () => {
   });
 
   it("opens the Home dock from its keyboard chord only when the gateway allows it", () => {
-    const { shell, owner } = configurePanelShell("assistant panel");
+    const { shell, owner } = configurePanelShell();
     const gateway = shell.runtime.context.gateway;
     const homeToggle = vi.fn();
     listen(HOME_PANEL_TOGGLE_EVENT, homeToggle);
@@ -119,60 +118,65 @@ describe("OpenClaw shell panel toggles", () => {
   });
 
   it("buffers panel toggle events until the active chat pane mounts", () => {
-    const terminalElement = createLazyElementSpec("session terminal panel");
     const shell = createShellOwner() as unknown as ShellPanelToggleState;
-    Object.defineProperty(shell, "terminalPanelElement", { value: terminalElement });
     shell.routeState = { routeId: "chat" };
 
     const event = new CustomEvent(TERMINAL_PANEL_TOGGLE_EVENT, { detail: { open: true } });
     new ShellChromeOwner(shell).panels.handleDeferredTerminalToggle(event);
 
-    expect(customElements.get(terminalElement.tagName)).toBeUndefined();
+    expect(shell.queryRenderedElement(SHELL_COMPONENT_TAGS.terminal)).toBeNull();
     expect(takeSessionPanelToggle("terminal")).toBe(event);
   });
 
-  it("does not repeat a dismissed restoration until the context lifecycle resets", async () => {
+  it("does not repeat a restoration request until the context lifecycle resets", () => {
     vi.stubGlobal("localStorage", createStorageMock());
     localStorage.setItem("openclaw.terminal.panel.v1", JSON.stringify({ open: true }));
-    const { element, shell, owner } = configurePanelShell("restored terminal", "terminal", {
-      firstError: new Error("offline"),
-    });
-    const load = vi.spyOn(element, "loadModule");
+    const { owner } = configurePanelShell("terminal", false);
+    const request = vi.spyOn(owner, "requestShellComponent");
     owner.panels.restore();
-    await vi.waitFor(() => expect(shell.lazyCustomElements.visibleState?.status).toBe("error"));
-    shell.lazyCustomElements.close();
+    expect(request).toHaveBeenCalledWith("terminal", undefined);
+    owner.cancelShellComponentRequest("terminal");
     owner.panels.restore();
-    await Promise.resolve();
-    expect(load).toHaveBeenCalledOnce();
-    expect(shell.lazyCustomElements.visibleState).toBeUndefined();
+    expect(request).toHaveBeenCalledOnce();
     owner.abandonPendingLazyActionForContext();
     owner.panels.restore();
-    await vi.waitFor(() => expect(customElements.get(element.tagName)).toBeDefined());
-    expect(load).toHaveBeenCalledTimes(2);
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
-  it("retains the exact rejected terminal panel request through in-place retry", async () => {
-    const eventType = TERMINAL_PANEL_TOGGLE_EVENT;
-    const detail = { dock: "right", open: true, terminalSessionId: "terminal-1" };
-    const error = new Error("panel chunk unavailable");
-    const { shell, owner } = configurePanelShell("terminal panel", "terminal", {
-      firstError: error,
-    });
-    const toggle = vi.fn();
-    const event = new CustomEvent(eventType, { detail });
-    listen(eventType, toggle);
-    owner.panels.handleDeferredTerminalToggle(event);
-    await vi.waitFor(() =>
-      expect(shell.lazyCustomElements.visibleState).toMatchObject({ status: "error", error }),
-    );
-    expect(toggle).not.toHaveBeenCalled();
-    shell.lazyCustomElements.retry();
-    await vi.waitFor(() => expect(toggle).toHaveBeenCalledOnce());
-    const delivered = toggle.mock.calls[0]?.[0] as CustomEvent;
-    expect(delivered).not.toBe(event);
-    expect(delivered.type).toBe(eventType);
-    expect(delivered.detail).toEqual(detail);
-  });
+  it.each([TERMINAL_PANEL_TOGGLE_EVENT, TERMINAL_PANEL_DOCK_BOTTOM_EVENT])(
+    "retains %s until its shell receiver mounts",
+    (eventType) => {
+      vi.stubGlobal("sessionStorage", createStorageMock());
+      const detail = { dock: "right", open: true, terminalSessionId: "terminal-1" };
+      const { shell, panel, owner } = configurePanelShell("terminal", false);
+      expect(owner.terminalActivationReady).toBe(false);
+      owner.connect();
+      onTestFinished(() => owner.disconnect());
+      expect(owner.terminalActivationReady).toBe(true);
+      const toggle = vi.fn();
+      const event = new CustomEvent(eventType, { detail });
+      listen(eventType, toggle);
+      if (eventType === TERMINAL_PANEL_DOCK_BOTTOM_EVENT) {
+        shell.routeState = { routeId: "chat" };
+        owner.panels.handleDeferredTerminalDock(event);
+      } else {
+        owner.panels.handleDeferredTerminalToggle(event);
+      }
+      expect(owner.isShellComponentRequested("terminal")).toBe(true);
+      owner.restorePendingLazyAction();
+      expect(toggle).not.toHaveBeenCalled();
+      expect(readLazyShellAction()).toEqual({ eventType, detail });
+
+      shell.element.append(panel);
+      owner.restorePendingLazyAction();
+      const delivered = toggle.mock.calls[0]?.[0] as CustomEvent;
+      expect(delivered).not.toBe(event);
+      expect([delivered.type, delivered.detail]).toEqual([eventType, detail]);
+      expect(readLazyShellAction()).toBeNull();
+      owner.restorePendingLazyAction();
+      expect(toggle).toHaveBeenCalledOnce();
+    },
+  );
 
   it("restores a structured browser panel event once in a replacement shell", async () => {
     const eventType = BROWSER_PANEL_TOGGLE_EVENT;
@@ -180,23 +184,23 @@ describe("OpenClaw shell panel toggles", () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
     const toggle = vi.fn();
     persistLazyShellAction({ eventType, detail });
-    const { element, owner } = configurePanelShell("restored browser", "browser");
+    const { shell, panel, owner } = configurePanelShell("browser", false);
     const restoreListener = owner.panels.handleDeferredBrowserToggle;
     const panelListener = (restored: Event) => {
-      if (customElements.get(element.tagName)) {
+      if (panel.isConnected) {
         toggle(restored);
       }
     };
     listen(eventType, restoreListener);
     listen(eventType, panelListener);
-    await vi.waitFor(() => {
-      owner.restorePendingLazyAction();
-      expect(toggle).toHaveBeenCalledOnce();
-    });
+    owner.restorePendingLazyAction();
+    expect(toggle).not.toHaveBeenCalled();
+    shell.element.append(panel);
+    owner.restorePendingLazyAction();
+    expect(toggle).toHaveBeenCalledOnce();
     const restored = toggle.mock.calls[0]?.[0];
     expect(restored).toBeInstanceOf(CustomEvent);
-    expect(restored?.type).toBe(eventType);
-    expect((restored as CustomEvent).detail).toEqual(detail);
+    expect([restored?.type, (restored as CustomEvent).detail]).toEqual([eventType, detail]);
     expect(readLazyShellAction()).toBeNull();
   });
 });

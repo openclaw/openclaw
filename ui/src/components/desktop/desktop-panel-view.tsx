@@ -208,7 +208,7 @@ function DesktopHostSetupNotice(props: { setup: DesktopHostSetup; loading: boole
             class="desktop-button desktop-button--primary"
             type="button"
             disabled={!props.setup.canEnable || props.setup.busy}
-            onClick={props.setup.onEnable}
+            onClick={() => props.setup.onEnable()}
           >
             {t(props.setup.busy ? "systems.desktopSetupEnabling" : "systems.enableDesktopAccess")}
           </button>
@@ -227,7 +227,7 @@ function DesktopHostSetupNotice(props: { setup: DesktopHostSetup; loading: boole
           class="desktop-button"
           type="button"
           disabled={props.loading}
-          onClick={props.setup.onCheckAgain}
+          onClick={() => props.setup.onCheckAgain()}
         >
           {t(props.loading ? "desktop.refreshing" : "systems.desktopSetupCheckAgain")}
         </button>
@@ -261,7 +261,7 @@ export function DesktopPicker(props: {
             <DesktopHostSetupNotice setup={props.hostSetup} loading={props.loading} />
           ) : (
             <div class="desktop-status" role="status">
-              <button class="desktop-button" type="button" onClick={props.onRefresh}>
+              <button class="desktop-button" type="button" onClick={() => props.onRefresh()}>
                 {t("common.retry")}
               </button>
             </div>
@@ -289,7 +289,7 @@ export function DesktopPicker(props: {
               }
               type="button"
               disabled={props.loading}
-              onClick={props.onRefresh}
+              onClick={() => props.onRefresh()}
             >
               {props.presentation === "mobile" && <Icon name="refresh" />}
               {props.loading ? t("desktop.refreshing") : t("desktop.refresh")}
@@ -489,7 +489,7 @@ function DesktopConnection(
               type="button"
               aria-label={t("desktop.switchToViewOnly")}
               disabled={props.state !== "connected"}
-              onClick={props.onControlToggle}
+              onClick={() => props.onControlToggle()}
             >
               {t("desktop.control")}
             </button>
@@ -535,7 +535,7 @@ function DesktopConnection(
             title={desktop() ? undefined : t("desktop.takeControl")}
             aria-label={t("desktop.takeControl")}
             disabled={props.state !== "connected"}
-            onClick={props.onTakeControl}
+            onClick={() => props.onTakeControl()}
           />
         )}
         {desktop() && (
@@ -608,7 +608,7 @@ export function DesktopPanelRecovery(props: {
   kind?: "error" | "lost" | "closed" | null;
 }) {
   const retry = () => (
-    <button class="desktop-button" type="button" onClick={props.onRetry}>
+    <button class="desktop-button" type="button" onClick={() => props.onRetry()}>
       <Icon name="refresh" />
       {t(props.inventoryError ? "common.retry" : "desktop.reconnect")}
     </button>

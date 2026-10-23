@@ -372,6 +372,72 @@ describePosix("scripts/pr worktree containment", () => {
   );
 
   it.each([
+    "clean",
+    "refreshed-template",
+    "edited-after-refresh",
+    "missing-seed",
+    "edited",
+    "untracked",
+    "ignored",
+    "review-artifacts",
+    "foreign-template",
+    "own-registration",
+    "missing-template",
+  ])("cleans only a proven failed template clone (%s)", (kind) => {
+    const fixture = createFixture();
+    const id = "26a40edd-06f1-43d2-ad5a-a95722f4bd2d";
+    const template = join(fixture.root, ".worktrees", ".templates", id);
+    git(fixture.root, "worktree", "add", "--detach", template, fixture.mainSha);
+    if (kind !== "missing-seed") {
+      git(fixture.root, "branch", "temp/pr-42", fixture.mainSha);
+    }
+    const worktree = join(fixture.root, ".worktrees", "pr-42");
+    cpSync(template, worktree, { recursive: true });
+    const refreshed = kind === "refreshed-template" || kind === "edited-after-refresh";
+    if (refreshed) {
+      git(template, "checkout", "--detach", fixture.prASha);
+    }
+    if (kind === "edited" || kind === "edited-after-refresh") {
+      writeFileSync(join(worktree, "overlap.txt"), "operator edit\n");
+    } else if (kind === "untracked" || kind === "ignored") {
+      if (kind === "ignored") {
+        writeFileSync(join(fixture.root, ".git/info/exclude"), "operator-note\n");
+      }
+      writeFileSync(join(worktree, "operator-note"), "operator work\n");
+    } else if (kind === "review-artifacts") {
+      mkdirSync(join(worktree, ".local"));
+      writeFileSync(join(worktree, ".local/review.json"), "retain review evidence\n");
+    } else if (kind === "foreign-template") {
+      const foreign = join(fixture.root, "foreign-template");
+      git(fixture.root, "worktree", "move", template, foreign);
+    } else if (kind === "own-registration") {
+      const admin = join(fixture.root, ".git/worktrees/pr-42");
+      mkdirSync(admin);
+      writeFileSync(join(admin, "gitdir"), `${worktree}/.git\n`);
+      writeFileSync(join(admin, "commondir"), "../..\n");
+    } else if (kind === "missing-template") {
+      git(fixture.root, "worktree", "remove", template);
+    }
+    const result = runShell(fixture, ['remove_worktree_if_present ".worktrees/pr-42" || exit $?']);
+    const removed = kind === "clean" || kind === "refreshed-template";
+    if (removed) {
+      expectSuccess(result);
+    } else {
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+    }
+    expect(existsSync(worktree)).toBe(!removed);
+    if (kind === "edited" || kind === "edited-after-refresh") {
+      expectFile(worktree, "overlap.txt", "operator edit\n");
+    } else if (kind === "untracked" || kind === "ignored") {
+      expectFile(worktree, "operator-note", "operator work\n");
+    }
+    if (kind !== "missing-template" && kind !== "foreign-template") {
+      expect(git(template, "rev-parse", "HEAD")).toBe(refreshed ? fixture.prASha : fixture.mainSha);
+    }
+    expectCanonicalCheckoutUnchanged(fixture);
+  });
+
+  it.each([
     ["ordinary entry", "unreadable"],
     ["destructive cleanup", "missing"],
     ["destructive cleanup", "unreadable"],

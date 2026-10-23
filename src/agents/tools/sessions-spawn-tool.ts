@@ -41,6 +41,7 @@ import {
 import {
   bindCollectorSpawnTool,
   captureCollectorSpawnGuard,
+  captureCollectorPluginContext,
 } from "../subagents/swarm/swarm-collector-capability.js";
 import { resolveSwarmConfig } from "../subagents/swarm/swarm-config.js";
 import {
@@ -687,6 +688,7 @@ export function createSessionsSpawnTool(
               {
                 ...inheritedSpawnContext(),
                 requesterThinkingLevel: opts?.requesterThinkingLevel,
+                ...(collect ? captureCollectorPluginContext(tool, _toolCallId) : {}),
                 requesterThinkingExplicit,
                 requesterModel: opts?.requesterModel,
                 currentMessagingTarget: opts?.currentMessagingTarget ?? opts?.currentChannelId,

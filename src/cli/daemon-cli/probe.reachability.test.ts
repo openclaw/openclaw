@@ -2,7 +2,8 @@ import { once } from "node:events";
 import fs from "node:fs/promises";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
-import { ensureDashboardGatewayReady } from "../../commands/gateway-readiness.js";
+import { dashboardCommand } from "../../commands/dashboard.js";
+import { baseConfigSnapshot } from "../../commands/test-runtime-config-helpers.js";
 import {
   buildMinimalGatewayHelloOkPayload,
   closeMinimalGatewayServer,
@@ -15,16 +16,43 @@ import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js
 import { probeGatewayStatus } from "./probe.js";
 import type { DaemonStatus } from "./status.gather.js";
 
-const { gatherStatus, confirm, startGateway, installGateway } = vi.hoisted(() => ({
+const { gatherStatus, confirm, startGateway, installGateway, target } = vi.hoisted(() => ({
   gatherStatus: vi.fn(),
   confirm: vi.fn(),
   startGateway: vi.fn(),
   installGateway: vi.fn(),
+  target: { url: "ws://127.0.0.1:18789" },
 }));
 vi.mock("./status.gather.js", () => ({ gatherDaemonStatus: gatherStatus }));
 vi.mock("../prompt.js", () => ({ promptYesNo: confirm }));
 vi.mock("./lifecycle.js", () => ({ runDaemonStart: startGateway }));
-vi.mock("./install.runtime.js", () => ({ runDaemonInstall: installGateway }));
+vi.mock("./install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./install.js")>()),
+  runDaemonInstall: installGateway,
+}));
+vi.mock("../../config/config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/config.js")>()),
+  readConfigFileSnapshot: async () => ({ ...baseConfigSnapshot, sourceConfig: {} }),
+}));
+vi.mock("../../commands/control-ui-handoff.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../commands/control-ui-handoff.js")>()),
+  resolveControlUiHandoffTarget: async () => ({
+    port: Number(new URL(target.url).port),
+    bind: "loopback",
+    links: { httpUrl: "http://127.0.0.1/", wsUrl: target.url },
+    authMode: "token",
+    includeTokenInUrl: false,
+    dashboardUrl: "http://127.0.0.1/",
+    documentUrl: "http://127.0.0.1/",
+    probeUrl: target.url,
+  }),
+  waitForControlUiDocument: async () => ({ ready: true }),
+  issueControlUiBrowserHandoff: async () => ({ browserUrl: "http://127.0.0.1/" }),
+}));
+vi.mock("../../infra/clipboard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/clipboard.js")>()),
+  copyToClipboard: async () => true,
+}));
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -34,6 +62,7 @@ afterEach(async () => {
 });
 
 async function checkDashboardReadiness(url: string, rpc: NonNullable<DaemonStatus["rpc"]>) {
+  target.url = url;
   const port = Number(new URL(url).port);
   const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
   gatherStatus.mockResolvedValue({
@@ -50,14 +79,12 @@ async function checkDashboardReadiness(url: string, rpc: NonNullable<DaemonStatu
     rpc: { ...rpc, url },
     extraServices: [],
   } satisfies DaemonStatus);
-  const result = await ensureDashboardGatewayReady({
-    runtime,
-    interactive: true,
-  });
+  await dashboardCommand(runtime, { noOpen: true });
   expect(confirm).not.toHaveBeenCalled();
   expect(startGateway).not.toHaveBeenCalled();
   expect(installGateway).not.toHaveBeenCalled();
-  return { result, output: runtime.log.mock.calls.flat().join("\n") };
+  const output = runtime.log.mock.calls.flat().join("\n");
+  return { ready: output.includes("Dashboard URL:"), output };
 }
 
 describe("Gateway reachability over real sockets", () => {
@@ -147,8 +174,8 @@ describe("Gateway reachability over real sockets", () => {
       if (mode === "terminate") {
         expect(rpc.error).toContain("gateway closed (1006)");
       }
-      const { result, output } = await checkDashboardReadiness(url, rpc);
-      expect(result).toMatchObject({ ready: false });
+      const { ready, output } = await checkDashboardReadiness(url, rpc);
+      expect(ready).toBe(false);
       expect(output).toContain("Gateway check failed:");
       expect(output).not.toContain("Gateway is not running");
       expect(output).not.toContain("gateway start");
@@ -207,7 +234,7 @@ describe("Gateway reachability over real sockets", () => {
       capability: "read_only",
       server: { version: "test", connId: "conn-test" },
     });
-    expect((await checkDashboardReadiness(url, rpc)).result.ready).toBe(true);
+    expect((await checkDashboardReadiness(url, rpc)).ready).toBe(true);
   });
 
   it("accepts a real Gateway auth rejection as reachable without starting another service", async ({
@@ -229,7 +256,7 @@ describe("Gateway reachability over real sockets", () => {
       gatewayReached: true,
       connectFailure: { kind: "auth-rejected" },
     });
-    expect((await checkDashboardReadiness(gateway.url, rejected)).result.ready).toBe(true);
+    expect((await checkDashboardReadiness(gateway.url, rejected)).ready).toBe(true);
     const accepted = await probeGatewayStatus({
       url: gateway.url,
       token: gateway.token,
@@ -238,6 +265,6 @@ describe("Gateway reachability over real sockets", () => {
       json: true,
     });
     expect(accepted.ok).toBe(true);
-    expect((await checkDashboardReadiness(gateway.url, accepted)).result.ready).toBe(true);
+    expect((await checkDashboardReadiness(gateway.url, accepted)).ready).toBe(true);
   });
 });

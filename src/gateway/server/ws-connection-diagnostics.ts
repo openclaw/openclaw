@@ -86,8 +86,44 @@ export function isWsPayloadLimitError(err: unknown): boolean {
 
 const gatewayEventNames = new Set(GATEWAY_EVENTS);
 type EventTraffic = Extract<DiagnosticEventInput, { type: "gateway.ws.event" }>;
-let pendingEventTraffic: Map<string, EventTraffic> | undefined;
+type EventCounter = {
+  traffic: EventTraffic;
+  buckets: Float64Array;
+  pending: boolean;
+};
+// Event names and session reasons are bounded by their protocol/attribution owners.
+const eventCounters = new Map<
+  string,
+  Map<string | undefined, Map<string | undefined, EventCounter>>
+>();
+const pendingCounters: EventCounter[] = [];
 const FRAME_BYTE_BOUNDS = [256, 512, 1024, 2048, 4096, 8192, 16384, 65536, Infinity];
+const FRAME_BYTE_LABELS = FRAME_BYTE_BOUNDS.map((bound) =>
+  bound === Infinity ? "+Inf" : String(bound),
+);
+
+function flushEventCounters() {
+  for (const counter of pendingCounters) {
+    const { traffic } = counter;
+    if (traffic.count > 0) {
+      const frameBytes: NonNullable<EventTraffic["frameBytes"]> = {};
+      let cumulative = traffic.count;
+      // Start with the largest index so V8 never grows a mostly empty elements array.
+      for (let i = FRAME_BYTE_LABELS.length - 1; i >= 0; i--) {
+        frameBytes[FRAME_BYTE_LABELS[i]!] = cumulative;
+        cumulative -= counter.buckets[i]!;
+      }
+      traffic.frameBytes = frameBytes;
+    }
+    // Enrichment copies the top level synchronously; queued nested histograms stay detached.
+    emitTrustedDiagnosticEvent(traffic);
+    traffic.count = traffic.bytes = 0;
+    traffic.wireBytes = traffic.frameBytes = undefined;
+    counter.buckets.fill(0);
+    counter.pending = false;
+  }
+  pendingCounters.length = 0;
+}
 
 export function recordGatewayWsEvent(
   event: string,
@@ -102,50 +138,45 @@ export function recordGatewayWsEvent(
   ) {
     return false;
   }
-  // Bound storage to the protocol catalog and publish once per event-loop turn,
-  // so fanout counts every socket without queueing a diagnostic per frame.
   const name = gatewayEventNames.has(event) ? event : "other";
-  if (!pendingEventTraffic) {
-    pendingEventTraffic = new Map();
-    runInDetachedAsyncContext(() =>
-      setImmediate(() => {
-        const batch = pendingEventTraffic!;
-        pendingEventTraffic = undefined;
-        for (const observation of batch.values()) {
-          emitTrustedDiagnosticEvent(observation);
-        }
-      }).unref(),
-    );
+  let reasons = eventCounters.get(name);
+  if (!reasons) {
+    eventCounters.set(name, (reasons = new Map()));
   }
-  const key = sessionEvent
-    ? `${name}:${sessionEvent.reason}:${sessionEvent.delivery}`
-    : presenceMode
-      ? `${name}:${presenceMode}`
-      : name;
-  const observation = pendingEventTraffic.get(key);
-  if (observation) {
-    observation.count += wireBytes === undefined ? 1 : 0;
-    observation.bytes += bytes;
-    if (wireBytes !== undefined) {
-      observation.wireBytes = (observation.wireBytes ?? 0) + wireBytes;
+  let deliveries = reasons.get(sessionEvent?.reason);
+  if (!deliveries) {
+    reasons.set(sessionEvent?.reason, (deliveries = new Map()));
+  }
+  const delivery = sessionEvent?.delivery ?? presenceMode;
+  let counter = deliveries.get(delivery);
+  if (!counter) {
+    counter = {
+      traffic: { type: "gateway.ws.event", event: name, count: 0, bytes: 0 },
+      buckets: new Float64Array(FRAME_BYTE_BOUNDS.length),
+      pending: false,
+    };
+    deliveries.set(delivery, counter);
+  }
+  if (!counter.pending) {
+    if (pendingCounters.length === 0) {
+      runInDetachedAsyncContext(() => setImmediate(flushEventCounters).unref());
     }
-  } else {
-    pendingEventTraffic.set(key, {
-      type: "gateway.ws.event",
-      event: name,
-      count: wireBytes === undefined ? 1 : 0,
-      bytes,
-      ...(wireBytes !== undefined ? { wireBytes } : {}),
-      ...(sessionEvent ? { sessionEvent } : {}),
-      ...(presenceMode ? { presenceMode } : {}),
-    });
+    counter.pending = true;
+    counter.traffic.sessionEvent = sessionEvent;
+    counter.traffic.presenceMode = presenceMode;
+    pendingCounters.push(counter);
   }
-  if (wireBytes === undefined) {
-    const current = pendingEventTraffic.get(key)!;
-    const buckets = (current.frameBytes ??= {});
-    for (const bound of FRAME_BYTE_BOUNDS) {
-      const label = bound === Infinity ? "+Inf" : String(bound);
-      buckets[label] = (buckets[label] ?? 0) + (bytes <= bound ? 1 : 0);
+  counter.traffic.bytes += bytes;
+  if (wireBytes !== undefined) {
+    counter.traffic.wireBytes = (counter.traffic.wireBytes ?? 0) + wireBytes;
+  } else {
+    counter.traffic.count++;
+    // Count one exclusive bucket; cumulative exporter buckets are built only at flush.
+    for (let i = 0; i < FRAME_BYTE_BOUNDS.length; i++) {
+      if (bytes <= FRAME_BYTE_BOUNDS[i]!) {
+        counter.buckets[i] = counter.buckets[i]! + 1;
+        break;
+      }
     }
   }
   return true;

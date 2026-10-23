@@ -29,12 +29,18 @@ import {
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveGoogleApiClientHeaders } from "../google-api-client-header.js";
-import {
-  resolveGeminiConfig,
-  resolveGeminiBaseUrl,
-  resolveGeminiModel,
-  type GeminiConfig,
-} from "./gemini-web-search-provider.shared.js";
+import { normalizeGoogleApiBaseUrl } from "./google-api-base-url.js";
+
+const DEFAULT_GEMINI_WEB_SEARCH_MODEL = "gemini-3.6-flash";
+
+type GeminiConfig = {
+  apiKey?: unknown;
+  baseUrl?: unknown;
+  headers?: unknown;
+  model?: unknown;
+  providerApiKey?: unknown;
+  providerBaseUrl?: unknown;
+};
 
 type GeminiFreshness = "day" | "week" | "month" | "year";
 
@@ -88,94 +94,10 @@ function toGeminiTimeRangeTimestamp(date: Date): string {
   return date.toISOString().replace(/\.\d+Z$/, "Z");
 }
 
-function isoDateStart(value: string): string {
-  return `${value}T00:00:00Z`;
-}
-
 function isoDateExclusiveEnd(value: string): string {
   const end = new Date(`${value}T00:00:00Z`);
   end.setUTCDate(end.getUTCDate() + 1);
   return toGeminiTimeRangeTimestamp(end);
-}
-
-function freshnessStartTime(freshness: GeminiFreshness, now: Date): string {
-  const start = new Date(now);
-  start.setUTCDate(start.getUTCDate() - GEMINI_FRESHNESS_DAYS[freshness]);
-  return toGeminiTimeRangeTimestamp(start);
-}
-
-function queryWithSoftFreshness(query: string, freshness?: GeminiFreshness): string {
-  if (freshness !== "day") {
-    return query;
-  }
-  return `${query}\n\nSearch recency instruction: ${GEMINI_DAY_FRESHNESS_HINT} If no matching recent sources are available, state that limitation and use the most relevant available sources.`;
-}
-
-function resolveGeminiTimeRangeFilter(args: Record<string, unknown>):
-  | {
-      timeRangeFilter?: GeminiTimeRangeFilter;
-      freshness?: GeminiFreshness;
-      dateAfter?: string;
-      dateBefore?: string;
-    }
-  | {
-      error:
-        | "invalid_freshness"
-        | "invalid_date"
-        | "invalid_date_range"
-        | "conflicting_time_filters";
-      message: string;
-      docs: string;
-    } {
-  const now = new Date();
-  const rawFreshness = readStringParam(args, "freshness");
-  const rawDateAfter = readStringParam(args, "date_after");
-  const rawDateBefore = readStringParam(args, "date_before");
-  const parsedTimeFilters = parseWebSearchTimeFilters({
-    rawDateAfter,
-    rawDateBefore,
-    rawFreshness,
-    freshnessProvider: "perplexity",
-    invalidFreshnessMessage:
-      "freshness must be day, week, month, year, or the shortcuts pd, pw, pm, py.",
-    invalidDateAfterMessage: "date_after must be YYYY-MM-DD format.",
-    invalidDateBeforeMessage: "date_before must be YYYY-MM-DD format.",
-    invalidDateRangeMessage: "date_after must be before date_before.",
-  });
-  if ("error" in parsedTimeFilters) {
-    return parsedTimeFilters;
-  }
-
-  const { freshness, dateAfter, dateBefore } = parsedTimeFilters;
-  if (freshness) {
-    // Gemini rejects 24-hour google_search.timeRangeFilter windows, while
-    // wider freshness windows still preserve the hard grounding contract.
-    if (freshness === "day") {
-      return {
-        freshness,
-      };
-    }
-    return {
-      freshness,
-      timeRangeFilter: {
-        startTime: freshnessStartTime(freshness, now),
-        endTime: toGeminiTimeRangeTimestamp(now),
-      },
-    };
-  }
-
-  if (!dateAfter && !dateBefore) {
-    return {};
-  }
-
-  return {
-    dateAfter,
-    dateBefore,
-    timeRangeFilter: {
-      startTime: dateAfter ? isoDateStart(dateAfter) : "1970-01-01T00:00:00Z",
-      endTime: dateBefore ? isoDateExclusiveEnd(dateBefore) : toGeminiTimeRangeTimestamp(now),
-    },
-  };
 }
 
 function resolveGeminiRuntimeApiKey(gemini?: GeminiConfig): string | undefined {
@@ -241,12 +163,45 @@ export async function executeGeminiSearch(
     return unsupportedResponse;
   }
 
-  const timeRange = resolveGeminiTimeRangeFilter(args);
-  if ("error" in timeRange) {
-    return timeRange;
+  const now = new Date();
+  const rawFreshness = readStringParam(args, "freshness");
+  const rawDateAfter = readStringParam(args, "date_after");
+  const rawDateBefore = readStringParam(args, "date_before");
+  const parsedTimeFilters = parseWebSearchTimeFilters({
+    rawDateAfter,
+    rawDateBefore,
+    rawFreshness,
+    freshnessProvider: "perplexity",
+    invalidFreshnessMessage:
+      "freshness must be day, week, month, year, or the shortcuts pd, pw, pm, py.",
+    invalidDateAfterMessage: "date_after must be YYYY-MM-DD format.",
+    invalidDateBeforeMessage: "date_before must be YYYY-MM-DD format.",
+    invalidDateRangeMessage: "date_after must be before date_before.",
+  });
+  if ("error" in parsedTimeFilters) {
+    return parsedTimeFilters;
   }
 
-  const geminiConfig = resolveGeminiConfig(searchConfig);
+  const { freshness, dateAfter, dateBefore } = parsedTimeFilters;
+  let timeRangeFilter: GeminiTimeRangeFilter | undefined;
+  // Gemini rejects 24-hour google_search.timeRangeFilter windows, while
+  // wider freshness windows still preserve the hard grounding contract.
+  if (freshness && freshness !== "day") {
+    const freshnessStart = new Date(now);
+    freshnessStart.setUTCDate(freshnessStart.getUTCDate() - GEMINI_FRESHNESS_DAYS[freshness]);
+    timeRangeFilter = {
+      startTime: toGeminiTimeRangeTimestamp(freshnessStart),
+      endTime: toGeminiTimeRangeTimestamp(now),
+    };
+  } else if (!freshness && (dateAfter || dateBefore)) {
+    timeRangeFilter = {
+      startTime: dateAfter ? `${dateAfter}T00:00:00Z` : "1970-01-01T00:00:00Z",
+      endTime: dateBefore ? isoDateExclusiveEnd(dateBefore) : toGeminiTimeRangeTimestamp(now),
+    };
+  }
+
+  const gemini = searchConfig?.gemini;
+  const geminiConfig: GeminiConfig = isRecord(gemini) ? gemini : {};
   const apiKey = resolveGeminiRuntimeApiKey(geminiConfig);
   if (!apiKey) {
     return {
@@ -262,8 +217,11 @@ export async function executeGeminiSearch(
     max: MAX_SEARCH_COUNT,
     message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
   });
-  const model = resolveGeminiModel(geminiConfig);
-  const baseUrl = resolveGeminiBaseUrl(geminiConfig);
+  const model = normalizeOptionalString(geminiConfig?.model) ?? DEFAULT_GEMINI_WEB_SEARCH_MODEL;
+  const baseUrl = normalizeGoogleApiBaseUrl(
+    normalizeOptionalString(geminiConfig?.baseUrl) ??
+      normalizeOptionalString(geminiConfig?.providerBaseUrl),
+  );
   const operatorHeaders = resolveGeminiWebSearchHeaders(geminiConfig);
   const headersCacheKey = sha256Hex(JSON.stringify([apiKey, operatorHeaders]));
   const cacheKey = buildSearchCacheKey([
@@ -271,9 +229,9 @@ export async function executeGeminiSearch(
     query,
     baseUrl,
     model,
-    timeRange.freshness,
-    timeRange.dateAfter,
-    timeRange.dateBefore,
+    freshness,
+    dateAfter,
+    dateBefore,
     headersCacheKey,
   ]);
   const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
@@ -283,10 +241,12 @@ export async function executeGeminiSearch(
   }
 
   const start = Date.now();
-  const searchQuery = queryWithSoftFreshness(query, timeRange.freshness);
+  const searchQuery =
+    freshness === "day"
+      ? `${query}\n\nSearch recency instruction: ${GEMINI_DAY_FRESHNESS_HINT} If no matching recent sources are available, state that limitation and use the most relevant available sources.`
+      : query;
   const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
   const signal = context?.signal;
-  const timeRangeFilter = timeRange.timeRangeFilter;
   const endpoint = `${baseUrl}/models/${model}:generateContent`;
   const googleSearch = timeRangeFilter === undefined ? {} : { timeRangeFilter };
   const providerHeaders = {

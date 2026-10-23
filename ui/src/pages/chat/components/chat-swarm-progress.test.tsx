@@ -18,7 +18,8 @@ import { SwarmRosterHydrator } from "../../../lib/sessions/swarm-roster.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { ChatSwarmProgress, type ChatSwarmProgressProps } from "./chat-swarm-progress.solid.tsx";
+import type { ChatSwarmProgressProps } from "./chat-swarm-progress-types.ts";
+import { ChatSwarmProgress } from "./chat-swarm-progress.solid.tsx";
 
 const parentSessionKey = "agent:main:parent";
 const parentRunId = "11111111-2222-4333-8444-555555555555";

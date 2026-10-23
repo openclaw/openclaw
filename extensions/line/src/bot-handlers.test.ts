@@ -208,6 +208,48 @@ function imageEvent(id: string, userId: string): MessageEvent {
   });
 }
 
+function textEvent(
+  id: string,
+  userId: string,
+  webhookEventId: string,
+  text = "hello",
+): MessageEvent {
+  return createTestMessageEvent({
+    message: { id, type: "text", text, quoteToken: `${id}-quote` },
+    source: { type: "user", userId },
+    webhookEventId,
+  });
+}
+
+const questionUser = "U0123456789abcdef0123456789abcdef";
+function questionEvent(
+  id: string,
+  option = "1",
+  source: webhook.Source = { type: "user", userId: "user-one" },
+) {
+  return postbackEvent(
+    id,
+    `line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=${option}`,
+    source,
+  );
+}
+
+function expectHistory(inboundHistory: unknown[], call?: number) {
+  const expected = expect.objectContaining({ inboundHistory });
+  if (call === undefined) {
+    expect(buildLineMessageContextMock).toHaveBeenCalledWith(expected);
+  } else {
+    expect(buildLineMessageContextMock).toHaveBeenNthCalledWith(call, expected);
+  }
+}
+
+function noticeEvent(id: string) {
+  return postbackEvent(id, "line.question=ask_0123456789abcdef0123456789abcdef&line.option=1", {
+    type: "user",
+    userId: questionUser,
+  });
+}
+
 function imageSetPart(messageId: string, timestamp: number, index?: number) {
   return createTestMessageEvent({
     message: {
@@ -410,18 +452,9 @@ describe("handleLineWebhookEvents", () => {
     pairingDeliveryMocks.replyMessageLine.mockRejectedValueOnce(
       new Error("provider delivery rejected"),
     );
-    const event = createTestMessageEvent({
-      message: {
-        id: "pairing-final",
-        type: "text",
-        text: "hello",
-        quoteToken: "pairing-final-quote",
-      },
-      source: { type: "user", userId: "pairing-user" },
-      webhookEventId: "pairing-final-event",
-    });
-
-    await createHarness({ dmPolicy: "pairing" }).receive(event);
+    await createHarness({ dmPolicy: "pairing" }).receive(
+      textEvent("pairing-final", "pairing-user", "pairing-final-event"),
+    );
 
     expect(pairingDeliveryMocks.replyMessageLine).toHaveBeenCalledOnce();
     expect(pairingDeliveryMocks.pushMessageLine).toHaveBeenCalledTimes(1);
@@ -438,25 +471,16 @@ describe("handleLineWebhookEvents", () => {
     });
     upsertPairingRequestMock.mockResolvedValue({ code: "CODE", created: false });
 
-    const event = createTestMessageEvent({
-      message: { id: "m6", type: "text", text: "hi", quoteToken: "m6-quote" },
-      source: { type: "user", userId: "cross-account-user" },
-      webhookEventId: "evt-6",
-    });
-
     Object.assign(context.account, {
       accountId: "work",
       channelAccessToken: "token-work",
       channelSecret: "secret-work",
     });
-    await receive(event);
+    await receive(textEvent("m6", "cross-account-user", "evt-6", "hi"));
 
     expect(readAllowFromStoreMock).toHaveBeenCalledWith("line", undefined, "work");
     expect(processMessage).not.toHaveBeenCalled();
-    const pairingRequest = (upsertPairingRequestMock.mock.calls as unknown[][])[0]?.[0] as
-      | { accountId?: string; channel?: string; id?: string }
-      | undefined;
-    expect(pairingRequest).toMatchObject({
+    expect(upsertPairingRequestMock.mock.calls[0]?.[0]).toMatchObject({
       channel: "line",
       id: "cross-account-user",
       accountId: "work",
@@ -488,32 +512,21 @@ describe("handleLineWebhookEvents", () => {
     await send("user-two", "m-hist-2", "second", 1700000001000);
 
     expect(processMessage).not.toHaveBeenCalled();
-    expect(groupHistories.get("group-hist-1")).toEqual([
+    const history = [
       expect.objectContaining({ sender: "Sora (user-one)", body: "[emoji] (hello)" }),
       expect.objectContaining({ sender: "Sora (user-two)", body: "second" }),
-    ]);
+    ];
+    expect(groupHistories.get("group-hist-1")).toEqual(history);
 
     await send("user-three", "m-hist-mention", "@Bot summarize", 1700000002000, true);
 
-    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        inboundHistory: [
-          expect.objectContaining({ sender: "Sora (user-one)", body: "[emoji] (hello)" }),
-          expect.objectContaining({ sender: "Sora (user-two)", body: "second" }),
-        ],
-      }),
-    );
+    expectHistory(history);
   });
 
   it("consumes malformed question callbacks without starting an agent turn", async () => {
     resolveLineQuestionPostbackMock.mockClear();
     const { receive, processMessage } = createHarness({ dmPolicy: "open" });
-    await receive(
-      postbackEvent(
-        "evt-question-malformed",
-        "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=9007199254740992",
-      ),
-    );
+    await receive(questionEvent("evt-question-malformed", "9007199254740992"));
 
     expect(resolveLineQuestionPostbackMock).not.toHaveBeenCalled();
     expect(buildLinePostbackContextMock).not.toHaveBeenCalled();
@@ -527,11 +540,7 @@ describe("handleLineWebhookEvents", () => {
       groupAllowFrom: ["user-allowed"],
     });
     await receive(
-      postbackEvent(
-        "evt-question-denied-allowlist",
-        "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=1",
-        { type: "group", groupId: "group-1" },
-      ),
+      questionEvent("evt-question-denied-allowlist", "1", { type: "group", groupId: "group-1" }),
     );
 
     expect(resolveLineQuestionPostbackMock).not.toHaveBeenCalled();
@@ -541,8 +550,7 @@ describe("handleLineWebhookEvents", () => {
 
   it("rechecks paired access without another pairing challenge or answer notice", async () => {
     const { receive, processMessage } = createHarness({ dmPolicy: "pairing" });
-    const userId = "U0123456789abcdef0123456789abcdef";
-    readAllowFromStoreMock.mockResolvedValue([userId]);
+    readAllowFromStoreMock.mockResolvedValue([questionUser]);
     let admittedBeforeWrite = true;
     resolveLineQuestionPostbackMock.mockImplementationOnce(async ({ authorize }) => {
       // The Gateway can await its question read while this pairing is revoked.
@@ -551,11 +559,7 @@ describe("handleLineWebhookEvents", () => {
       return { status: admittedBeforeWrite ? "answered" : "denied" };
     });
     await receive(
-      postbackEvent(
-        "evt-question-revoked",
-        "line.question=ask_3d8dbe55be452a9a39add7c909beb119&line.option=1",
-        { type: "user", userId },
-      ),
+      questionEvent("evt-question-revoked", "1", { type: "user", userId: questionUser }),
     );
 
     expect(readAllowFromStoreMock).toHaveBeenCalledTimes(2);
@@ -570,9 +574,8 @@ describe("handleLineWebhookEvents", () => {
   it.each([false, true])(
     "rechecks failed notice admission for revoked=%s over reply",
     async (revoked) => {
-      const userId = "U0123456789abcdef0123456789abcdef";
       const { receive, processMessage } = createHarness({ dmPolicy: "pairing" });
-      readAllowFromStoreMock.mockResolvedValue([userId]);
+      readAllowFromStoreMock.mockResolvedValue([questionUser]);
       resolveLineQuestionPostbackMock.mockImplementationOnce(async () => {
         if (revoked) {
           readAllowFromStoreMock.mockResolvedValue([]);
@@ -581,13 +584,7 @@ describe("handleLineWebhookEvents", () => {
       });
       pairingDeliveryMocks.replyMessageLine.mockResolvedValueOnce(undefined);
       pairingDeliveryMocks.pushMessageLine.mockResolvedValueOnce(undefined);
-      await receive(
-        postbackEvent(
-          `notice-failed-${revoked}-reply`,
-          "line.question=ask_0123456789abcdef0123456789abcdef&line.option=1",
-          { type: "user", userId },
-        ),
-      );
+      await receive(noticeEvent(`notice-failed-${revoked}-reply`));
       expect(pairingDeliveryMocks.replyMessageLine).toHaveBeenCalledTimes(revoked ? 0 : 1);
       expect(pairingDeliveryMocks.pushMessageLine).not.toHaveBeenCalled();
       expect(upsertPairingRequestMock).not.toHaveBeenCalled();
@@ -602,9 +599,8 @@ describe("handleLineWebhookEvents", () => {
   ])(
     "rechecks notice fallback after reply failure revoked=$revoked partial=$partial",
     async ({ revoked, partial, pushed }) => {
-      const userId = "U0123456789abcdef0123456789abcdef";
       const { receive, processMessage } = createHarness({ dmPolicy: "pairing" });
-      readAllowFromStoreMock.mockResolvedValue([userId]);
+      readAllowFromStoreMock.mockResolvedValue([questionUser]);
       resolveLineQuestionPostbackMock.mockResolvedValueOnce({ status: "already-terminal" });
       pairingDeliveryMocks.replyMessageLine.mockImplementationOnce(async () => {
         if (revoked) {
@@ -616,13 +612,7 @@ describe("handleLineWebhookEvents", () => {
         );
       });
       pairingDeliveryMocks.pushMessageLine.mockResolvedValueOnce(undefined);
-      await receive(
-        postbackEvent(
-          `notice-fallback-${revoked}-${partial}`,
-          "line.question=ask_0123456789abcdef0123456789abcdef&line.option=1",
-          { type: "user", userId },
-        ),
-      );
+      await receive(noticeEvent(`notice-fallback-${revoked}-${partial}`));
       expect(pairingDeliveryMocks.replyMessageLine).toHaveBeenCalledOnce();
       expect(pairingDeliveryMocks.pushMessageLine).toHaveBeenCalledTimes(pushed ? 1 : 0);
       expect(upsertPairingRequestMock).not.toHaveBeenCalled();
@@ -660,11 +650,7 @@ describe("handleLineWebhookEvents", () => {
     gate.resolve();
     await mentionRun;
 
-    expect(buildLineMessageContextMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        inboundHistory: [expect.objectContaining({ body: "earlier chatter" })],
-      }),
-    );
+    expectHistory([expect.objectContaining({ body: "earlier chatter" })]);
     expect(groupHistories.get("grp-race")).toEqual([expect.objectContaining({ body: "ping" })]);
   });
 
@@ -691,12 +677,7 @@ describe("handleLineWebhookEvents", () => {
 
     await send("user-c", "m-mid", "ping", 3000);
 
-    expect(buildLineMessageContextMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        inboundHistory: [expect.objectContaining({ body: "earlier chatter" })],
-      }),
-    );
+    expectHistory([expect.objectContaining({ body: "earlier chatter" })], 1);
 
     contextGate.resolve();
     await mentionRun;
@@ -704,12 +685,7 @@ describe("handleLineWebhookEvents", () => {
     expect(groupHistories.get("grp-mid")).toEqual([expect.objectContaining({ body: "ping" })]);
 
     await send("user-a", "m-mention-2", "@Bot again", 4000, true);
-    expect(buildLineMessageContextMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({
-        inboundHistory: [expect.objectContaining({ body: "ping" })],
-      }),
-    );
+    expectHistory([expect.objectContaining({ body: "ping" })], 2);
     expect(groupHistories.has("grp-mid")).toBe(false);
   });
 
@@ -821,52 +797,30 @@ describe("handleLineWebhookEvents", () => {
     expect(processMessage).not.toHaveBeenCalled();
   });
 
-  it("answers a set with its freshest part while media keeps the picked order", async () => {
-    mockImageDownloads();
-    const { receive } = createHarness({
-      dmPolicy: "open",
-      turnAdoptionLifecycle: createTurnAdoptionLifecycleSpy(),
-    });
-    const base = 1_700_000_000_000;
-    // Delivered 2, 1, 3: image 3 is the freshest arrival, image 1 the oldest.
-    await receive(
-      imageSetPart("m2", base + 200, 2),
-      imageSetPart("m1", base + 100, 1),
-      imageSetPart("m3", base + 300, 3),
-    );
+  it.each([true, false])(
+    "keeps media order and the freshest reply token (indexed=%s)",
+    async (indexed) => {
+      mockImageDownloads();
+      const { receive } = createHarness({
+        dmPolicy: "open",
+        turnAdoptionLifecycle: createTurnAdoptionLifecycleSpy(),
+      });
+      const base = 1_700_000_000_000;
+      // Indexed sets arrive out of order; older clients omit indexes entirely.
+      const order = indexed ? [2, 1, 3] : [1, 2, 3];
+      await receive(
+        ...order.map((part) =>
+          imageSetPart(`m${part}`, base + part * 100, indexed ? part : undefined),
+        ),
+      );
 
-    // Use the freshest reply token without reordering the sender's media.
-    const built = buildLineMessageContextMock.mock.calls[0]?.[0];
-    expect(built?.event?.replyToken).toBe("reply-3");
-    expect(built?.allMedia?.map((media) => media.path)).toEqual([
-      "/media/m1.png",
-      "/media/m2.png",
-      "/media/m3.png",
-    ]);
-  });
-
-  it("keeps the delivered order for a set whose parts carry no index", async () => {
-    // Older Android clients omit the index; preserve the spool's delivered order.
-    mockImageDownloads();
-    const { receive } = createHarness({
-      dmPolicy: "open",
-      turnAdoptionLifecycle: createTurnAdoptionLifecycleSpy(),
-    });
-    const base = 1_700_000_000_000;
-    await receive(
-      imageSetPart("m1", base + 100),
-      imageSetPart("m2", base + 200),
-      imageSetPart("m3", base + 300),
-    );
-
-    const built = buildLineMessageContextMock.mock.calls[0]?.[0];
-    // The order handed over survives: no index means nothing may re-sort it.
-    expect(built?.allMedia?.map((media) => media.path)).toEqual([
-      "/media/m1.png",
-      "/media/m2.png",
-      "/media/m3.png",
-    ]);
-    // Answering still uses the freshest token, which is a separate fact.
-    expect(built?.event?.replyToken).toBe("reply-m3");
-  });
+      const built = buildLineMessageContextMock.mock.calls[0]?.[0];
+      expect(built?.allMedia?.map((media) => media.path)).toEqual([
+        "/media/m1.png",
+        "/media/m2.png",
+        "/media/m3.png",
+      ]);
+      expect(built?.event?.replyToken).toBe(indexed ? "reply-3" : "reply-m3");
+    },
+  );
 });

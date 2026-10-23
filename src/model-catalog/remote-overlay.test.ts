@@ -13,6 +13,7 @@ import {
   captureRemoteModelCatalogStartupSnapshot as captureStartup,
   prepareRemoteModelCatalogStartupSnapshot as prepareStartup,
   publishRemoteModelCatalogSnapshot as publishSnapshot,
+  readRemoteModelCatalogProviderRecommendations as readRecommendations,
   readRemoteModelCatalogUpdate as readUpdate,
   withRemoteModelCatalogSnapshot as withSnapshot,
   getActiveRemoteModelCatalog as activeCatalog,
@@ -44,9 +45,10 @@ function stageBundle(value: unknown = bundle, source_url = defaultUrl) {
 const overlay = (config: OpenClawConfig = {}) =>
   getRemoteModelCatalogProviderOverlay(config, "anthropic");
 const price = () => activeCatalog({})?.pricing?.["openai/gpt-external"];
-function expectAcceptedPair() {
-  expect(overlay()?.models).toEqual([{ id: "new" }]);
-  expect(price()?.cost.input).toBe(2.5);
+function expectPair(
+  expected: [Array<{ id: string }> | undefined, number | undefined] = [[{ id: "new" }], 2.5],
+) {
+  expect([overlay()?.models, price()?.cost.input]).toEqual(expected);
 }
 
 beforeEach(() => {
@@ -95,16 +97,12 @@ describe("remote model catalog overlay", () => {
     });
     await prepareStartup();
     const rank = createModelPickerRecommendationRank({});
-    const served = [
-      { provider: "anthropic", id: "current" },
-      { provider: "anthropic", id: "other" },
-    ];
-    expect(served.filter((entry) => rank(entry) !== undefined)).toEqual([served[0]]);
-    expect(rank(served[0]!)).toBe(1);
+    const current = { provider: "anthropic", id: "current" };
+    expect([rank(current), rank({ provider: "anthropic", id: "other" })]).toEqual([1, undefined]);
     expect(overlay()).toBeUndefined();
     expect(activeCatalog({})?.pricing).toEqual({});
     expect(activeCatalog({})?.upstreamPricing).toEqual({});
-    expect(createModelPickerRecommendationRank(disabledConfig)(served[0]!)).toBeUndefined();
+    expect(createModelPickerRecommendationRank(disabledConfig)(current)).toBeUndefined();
   });
 
   it.each([false, true])(
@@ -127,19 +125,41 @@ describe("remote model catalog overlay", () => {
         pricing: { "openai/gpt-external": { input: 5, output: 20 } },
       });
       const next = expectDefined(await readUpdate({}), "compatible catalog");
-      expect(overlay()?.models).toEqual(oldModels);
-      expect(price()?.cost.input).toBe(oldPrice);
+      expectPair([oldModels, oldPrice]);
       expect(publishSnapshot(next, previous)).toBe(true);
-      expect(overlay()?.models).toEqual([{ id: "downloaded" }]);
-      expect(price()?.cost.input).toBe(5);
-      withSnapshot(previous, () => {
-        expect(overlay()?.models).toEqual(oldModels);
-        expect(price()?.cost.input).toBe(oldPrice);
-      });
+      expectPair([[{ id: "downloaded" }], 5]);
+      withSnapshot(previous, () => expectPair([oldModels, oldPrice]));
       expect(publishSnapshot(next, previous)).toBe(false);
       expect(overlay()?.models).toEqual([{ id: "downloaded" }]);
     },
   );
+
+  it("reads stored recommendations even when the catalog is older than the build", async () => {
+    builtAt.mockReturnValue(300);
+    stageBundle({
+      schemaVersion: 2,
+      generatedAt: 200,
+      minVersion: "2026.7.0",
+      sourceCommit: "recommendation-test",
+      providers: { anthropic: { recommendedModels: ["first", "second"] } },
+      models: [
+        {
+          id: "first",
+          provider: "anthropic",
+          pricing: {
+            status: "known",
+            currency: "USD",
+            unit: "million_tokens",
+            input: 1,
+            output: 2,
+          },
+        },
+      ],
+    });
+    expect(await readUpdate({})).toBeUndefined();
+    expect(await readRecommendations({}, "anthropic")).toEqual(["first"]);
+    expect(await readRecommendations(disabledConfig, "anthropic")).toBeUndefined();
+  });
 
   it("does not adopt a stored bundle belonging to another source", async () => {
     const previous = await prepareStartup();
@@ -169,7 +189,7 @@ describe("remote model catalog overlay", () => {
     } else {
       expect(await update).toBeUndefined();
     }
-    expectAcceptedPair();
+    expectPair();
   });
 
   it("does not publish startup absence after its original read scope retires", async () => {
@@ -259,7 +279,7 @@ describe("remote model catalog overlay", () => {
     expect(overlay()).toHaveProperty("models");
     expect(overlay(disabledConfig)).toBeUndefined();
     expect(overlay(mirrorConfig)).toBeUndefined();
-    expectAcceptedPair();
+    expectPair();
     expect(captureStartup()).toBe(previous);
     expect(read).toHaveBeenCalledOnce();
   });

@@ -13,7 +13,7 @@ import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../run
 import { getModelCatalogWarnings, readSelectedGatewayModelCatalog } from "./catalog-warnings.js";
 import { formatTokenK, isRich, padTerminalCell, truncate } from "./list.format.js";
 import type { ModelRow } from "./list.types.js";
-import { loadModelsConfigWithSource } from "./load-config.js";
+import { loadModelsConfig } from "./load-config.js";
 import { ensureFlagCompatibility, resolveModelsTargetAgent } from "./shared.js";
 
 // The catalog worker permits three minutes; leave room for connection and result projection.
@@ -74,14 +74,37 @@ export async function modelsListCommand(
       import("../../agents/prepared-model-runtime-auth.js"),
       import("../../gateway/server-methods/models-list-result.js"),
     ]);
-    const readLocal = async () => {
-      const { resolvedConfig: localConfig } = await loadModelsConfigWithSource({
+    const readLocal = async (refreshOwner?: {
+      env: NodeJS.ProcessEnv;
+      signal: AbortSignal;
+      assertCurrent: () => void;
+    }) => {
+      const localConfig = await loadModelsConfig({
         commandName: "models list",
         runtime,
       });
       const { agentId, agentDir } = resolveModelsTargetAgent(localConfig, opts.agent, {
         kind: "read",
       });
+      if (refreshOwner) {
+        const [
+          { prepareOpenClawAgentDatabaseExecution },
+          { resolveAuthProfileDatabasePath },
+          { prepareLocalCapabilityAccountSecrets },
+        ] = await Promise.all([
+          import("../../state/openclaw-agent-execution.js"),
+          import("../../agents/auth-profiles/sqlite.js"),
+          import("../../cli/capability-cli/local-account-secrets.js"),
+        ]);
+        // Prepare the catalog's writable store before secrets observe its initial file identity.
+        await prepareOpenClawAgentDatabaseExecution(
+          { agentId, path: resolveAuthProfileDatabasePath(agentDir), env: refreshOwner.env },
+          refreshOwner.assertCurrent,
+          refreshOwner.signal,
+        );
+        await prepareLocalCapabilityAccountSecrets({ cfg: localConfig, agentId });
+        refreshOwner.assertCurrent();
+      }
       const proxy = opts.refresh ? await startProxy(localConfig.proxy) : null;
       try {
         return await withPreparedModelCatalogOwner(
@@ -118,9 +141,9 @@ export async function modelsListCommand(
           params,
           target: "local model catalog",
           onForeignOwner: "refuse",
-          runLocal: async ({ assertCurrent }) => {
-            const refreshed = await readLocal();
-            assertCurrent();
+          runLocal: async (owner) => {
+            const refreshed = await readLocal(owner);
+            owner.assertCurrent();
             return refreshed;
           },
         })

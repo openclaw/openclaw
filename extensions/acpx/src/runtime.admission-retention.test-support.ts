@@ -3,6 +3,7 @@ import { setImmediate } from "node:timers/promises";
 import { createFileSessionStore } from "acpx/runtime";
 import { promptJson, withProcessRuntime } from "./runtime-process.test-support.js";
 import { acpxOperationScope } from "./runtime-session-store.js";
+import type { AcpxRuntime } from "./runtime.js";
 
 const gc = globalThis.gc;
 assert.ok(gc, "The retention child requires --expose-gc");
@@ -15,6 +16,24 @@ const track = (label: string, value: object) =>
 const ids: number[] = [];
 let failLaunch = true;
 let lookupResult: "missing" | "error" | undefined;
+
+// Return the frame retaining the last rejected lookup promise before checking GC.
+async function exerciseUnusedLookups(runtime: AcpxRuntime) {
+  for (let index = 0; index < 8; index++) {
+    lookupResult = index % 2 === 0 ? "missing" : "error";
+    const lookup = runtime.findSession({
+      sessionKey: `lookup-only-${index}`,
+      agentId: "main",
+      agent: "fixture",
+    });
+    if (lookupResult === "error") {
+      await assert.rejects(lookup, /synthetic lookup failure/);
+    } else {
+      assert.equal(await lookup, undefined);
+    }
+  }
+  lookupResult = undefined;
+}
 
 await withProcessRuntime(
   `acpx-admission-${scenario}`,
@@ -30,20 +49,7 @@ await withProcessRuntime(
     }
     const failedIds = [...ids];
     if (scenario === "initial") {
-      for (let index = 0; index < 8; index++) {
-        lookupResult = index % 2 === 0 ? "missing" : "error";
-        const lookup = runtime.findSession({
-          sessionKey: `lookup-only-${index}`,
-          agentId: "main",
-          agent: "fixture",
-        });
-        if (lookupResult === "error") {
-          await assert.rejects(lookup, /synthetic lookup failure/);
-        } else {
-          assert.equal(await lookup, undefined);
-        }
-      }
-      lookupResult = undefined;
+      await exerciseUnusedLookups(runtime);
     }
     const control = new WeakRef({ unowned: true });
     // Cross task boundaries and allow GC convergence; the broken registry retains every owner.

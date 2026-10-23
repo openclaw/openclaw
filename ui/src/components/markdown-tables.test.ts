@@ -14,6 +14,8 @@ import {
   releaseMarkdownTables,
 } from "./markdown-tables.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
+import { SessionLinkTitler } from "./session-link-titling.ts";
+import { installSessionTitleRegistrar } from "./session-title-target-registration.ts";
 
 const writeText = vi.fn(async (_text: string) => undefined);
 
@@ -199,25 +201,48 @@ describe("Markdown table interactions", () => {
     expectCopy(copy, "Copy table");
   });
 
-  it("restores focus after the table dialog closes", async () => {
-    const { owner, expand } = interactiveOwner();
-    expand.focus();
-    expand.click();
-    expand.click();
+  it("announces table copy outcomes in a status region", async () => {
+    vi.useFakeTimers();
+    stubProperty(
+      document,
+      "execCommand",
+      vi.fn(() => false),
+    );
+    const { shell, copy } = interactiveOwner();
+    const statusText = () => shell.querySelector('[role="status"]')?.textContent;
+    await copyTable(copy, "Copied!");
+    expect(statusText()).toBe("Copied!");
 
-    const { dialog, modal } = await waitForRenderedModalDialog(owner);
-    expect(owner.querySelectorAll(".markdown-table-modal")).toHaveLength(1);
-    expect(dialog).toMatchObject({ open: true });
-    expect(modal.querySelector("table")?.textContent).toContain("Alpha");
-    dialog.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, detail: 1 }));
-    expect(document.querySelector(".markdown-table-dialog")).toBeNull();
-    expect(document.activeElement).toBe(expand);
+    writeText.mockRejectedValueOnce(new DOMException("Clipboard access denied", "NotAllowedError"));
+    await copyTable(copy, "Copy failed");
+    expect(statusText()).toBe("Copy failed");
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(statusText()).toBe("");
+  });
 
-    expand.click();
-    const reopened = await waitForRenderedModalDialog(owner);
-    reopened.modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
-    expect(document.querySelector(".markdown-table-dialog")).toBeNull();
-    expect(document.activeElement).toBe(expand);
+  it("decorates cloned session links and retires their registrations on close", async () => {
+    const titler = new SessionLinkTitler();
+    installSessionTitleRegistrar((target, label) => titler.register(target, label));
+    const { owner } = interactiveOwner("| Task |\n| --- |\n| agent:main:research |");
+    const source = owner.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
+    expect(source.hasAttribute("href")).toBe(false);
+
+    try {
+      const { modal } = await openTable(owner);
+      const clone = modal.querySelector<HTMLAnchorElement>("a.markdown-session-link")!;
+      expect(clone).not.toBe(source);
+      await expect.poll(() => clone.getAttribute("href")).toBe("/chat/main/research");
+
+      modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
+      expect(modal.isConnected).toBe(false);
+      clone.removeAttribute("href");
+      titler.refresh();
+      await Promise.resolve();
+      expect(clone.hasAttribute("href")).toBe(false);
+    } finally {
+      titler.disconnect();
+      releaseMarkdownTables(owner);
+    }
   });
 
   it("cancels a pending expansion when its owner disconnects and reconnects", async () => {
@@ -238,6 +263,7 @@ describe("Markdown table interactions", () => {
     expect(modal.querySelector("table")?.textContent).toContain("Beta");
     modal.querySelector<HTMLButtonElement>(".markdown-table-dialog__close")!.click();
     await Promise.resolve();
+    expect(document.querySelector(".markdown-table-dialog")).toBeNull();
     expect(document.activeElement).toBe(second);
   });
 

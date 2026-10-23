@@ -632,7 +632,7 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     ).toBe(true);
     expect(payloads.map((row) => JSON.parse(row.event_json))).toEqual(hydrated.snapshot.events);
     let store = openContextEngineTurnOutboxWorkerStore({ agentId: "actor", path: database.path });
-    const filter = { engineId: "postgres-fixture", isHeartbeat: false };
+    const filter = { engineId: "postgres-fixture" };
     const enqueue = (boundary: TranscriptTurnBoundary) =>
       store.enqueueIntent({ ...filter, admission: boundary.admission });
     const publish = async (boundary: TranscriptTurnBoundary) => {
@@ -759,7 +759,9 @@ describe.skipIf(!connection)("PostgreSQL agent database owner", () => {
     ]);
     await owners.upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 2 });
     await owners.upsertSessionEntryCore(sibling, { previousSessionId: undefined });
-    expect(await owners.deleteSessionEntryLifecycle(removal)).toMatchObject({ deleted: true });
+    expect(
+      await owners.deleteSessionEntryLifecycle({ ...removal, archiveTranscript: true }),
+    ).toMatchObject({ deleted: true, archivedTranscripts: [expect.anything()] });
     expect((await find()).hits).toEqual([
       expect.objectContaining({ sessionId: sibling.sessionId, messageId: "search-sibling-user" }),
     ]);

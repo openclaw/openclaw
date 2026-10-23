@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createSignal, onSettled } from "solid-js";
+import { createStore, onSettled } from "solid-js";
 import type { SessionObserverDigest } from "../../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewayEventFrame } from "../../../api/gateway.ts";
 import { createSidebarNarration } from "../../../components/app-sidebar-session-narration.ts";
@@ -15,7 +15,7 @@ import {
 } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type { ChatSubagentActivity as ChatSubagentActivityRow } from "../chat-subagent-wait.ts";
-import { SubagentActivity, type SubagentActivityProps } from "./chat-subagent-activity.ts";
+import { SubagentActivity, type SubagentActivityProps } from "./chat-subagent-activity.tsx";
 
 const inputHandlers = new WeakMap<HTMLElement, () => void>();
 
@@ -50,15 +50,18 @@ function SubagentActivityLive(
 ) {
   const context = useOptionalApplication();
   // The cache retains only digests belonging to the currently displayed runs.
-  const [digests, setDigests] = createSignal<Map<string, SessionObserverDigest>>(
-    (previous = new Map()) => {
+  const [digests, setDigests] = createStore<Record<string, SessionObserverDigest>>(
+    (draft: Record<string, SessionObserverDigest>) => {
       const rows = props.rows;
-      return new Map(
-        [...previous].filter(([key, digest]) =>
-          rows.some((row) => row.key === key && matchesRun(row, digest)),
-        ),
-      );
+      for (const [key, digest] of Object.entries(draft)) {
+        if (!rows.some((row) => row.key === key && matchesRun(row, digest))) {
+          delete draft[key];
+        }
+      }
     },
+    Object.create(null),
+    // Digests arrive as complete immutable records; retain their raw identity.
+    { shallow: true },
   );
   const narration = createSidebarNarration();
   const narrationView = projectOwner(narration, (owner) => owner.read());
@@ -110,7 +113,11 @@ function SubagentActivityLive(
       syncNarration();
       if (connection !== gateway.snapshot.hello) {
         connection = gateway.snapshot.hello;
-        setDigests(new Map());
+        setDigests((draft) => {
+          for (const key of Object.keys(draft)) {
+            delete draft[key];
+          }
+        });
       }
     });
     function onSessionObserver(event: GatewayEventFrame) {
@@ -133,11 +140,11 @@ function SubagentActivityLive(
       if (!row) {
         return;
       }
-      setDigests((previous) =>
-        pickFreshestObserverDigest(previous.get(row.key), digest) === digest
-          ? new Map(previous).set(row.key, digest)
-          : previous,
-      );
+      setDigests((draft) => {
+        if (pickFreshestObserverDigest(draft[row.key], digest) === digest) {
+          draft[row.key] = digest;
+        }
+      });
     }
     const unsubscribeEvents = gateway.subscribeEvents(onSessionObserver);
     return () => {
@@ -149,10 +156,9 @@ function SubagentActivityLive(
     };
   });
   const rows = () => {
-    const liveDigests = digests();
     const liveNarration = narrationView.read();
     return props.rows.map((row) => {
-      const live = liveDigests.get(row.key);
+      const live = digests[row.key];
       const stored = row.session.observerDigest;
       const digest = pickFreshestObserverDigest(
         live && matchesRun(row, live) ? live : undefined,

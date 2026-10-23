@@ -1079,20 +1079,37 @@ function verifyWorkflowRun(params: {
       jobConclusion !== undefined && jobConclusion !== "success" && jobConclusion !== "skipped"
     );
   });
+  const blockingFailedJobs = failedJobs.filter((job) => {
+    const jobConclusion = normalizeOptionalString(job.conclusion);
+    // Job-level continue-on-error preserves raw failure conclusions in the API.
+    if (
+      workflowName === "OpenClaw NPM Release" &&
+      job.name === "Notify Windows of published Gateway packages" &&
+      (jobConclusion === "failure" ||
+        jobConclusion === "timed_out" ||
+        jobConclusion === "cancelled")
+    ) {
+      console.error(
+        `Warning: ${params.label}: optional Gateway publication notification is ${jobConclusion}; inspect the notification job. Do not republish npm to retry notification.`,
+      );
+      return false;
+    }
+    return true;
+  });
   const acceptedFailure = conclusion === "failure" && params.acceptFailedRun?.(run, jobs) === true;
   params.observe?.(run, failedJobs.length);
-  if (failedJobs.length > 0 && params.rerunFailed && !acceptedFailure) {
+  if (blockingFailedJobs.length > 0 && params.rerunFailed && !acceptedFailure) {
     runReleaseVerifierCommand("gh", ["run", "rerun", params.id, "--repo", params.repo, "--failed"]);
     throw new Error(
-      `${params.label}: reran ${failedJobs.length} failed job(s); rerun verifier after it finishes.`,
+      `${params.label}: reran ${blockingFailedJobs.length} failed job(s); rerun verifier after it finishes.`,
     );
   }
   if (
     status !== "completed" ||
     (conclusion !== "success" && !acceptedFailure) ||
-    (failedJobs.length > 0 && !acceptedFailure)
+    (blockingFailedJobs.length > 0 && !acceptedFailure)
   ) {
-    const failedNames = failedJobs
+    const failedNames = blockingFailedJobs
       .map((job) => normalizeOptionalString(job.name) ?? "<unnamed>")
       .join(", ");
     throw new Error(

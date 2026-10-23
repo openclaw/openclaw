@@ -1,5 +1,5 @@
 import { createMemo, onCleanup, Show } from "solid-js";
-import { providerDisplayLabel } from "../../../components/provider-icon.ts";
+import { providerDisplayLabel } from "../../../components/provider-icon-data.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";

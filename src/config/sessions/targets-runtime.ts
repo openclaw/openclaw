@@ -9,7 +9,7 @@ import { listConfiguredSessionStoreAgentIds } from "./targets-configured-agents.
 export async function resolveAllAgentSessionStoreTargetsAsync(
   cfg: OpenClawConfig,
   options: { env?: NodeJS.ProcessEnv; registeredDatabases?: SessionStoreRegistryRead } = {},
-): Promise<SessionStoreTarget[]> {
+): Promise<Readonly<SessionStoreTarget>[]> {
   const request = prepareSessionStoreTargetInventory(
     cfg,
     listConfiguredSessionStoreAgentIds(cfg),
@@ -45,8 +45,8 @@ export async function listKnownSessionStoreAgentIdsAsync(
 export async function resolveExistingAgentSessionStoreTargetsAsync(
   cfg: OpenClawConfig,
   agentId: string,
-  options: { env?: NodeJS.ProcessEnv; excludeStorePath?: string } = {},
-): Promise<SessionStoreTarget[]> {
+  options: { env?: NodeJS.ProcessEnv } = {},
+): Promise<readonly Readonly<SessionStoreTarget>[]> {
   const request = prepareSessionStoreTargetInventory(cfg, [agentId], options.env);
   return prepareSessionStoreTargetInventoryRead(request).withRead(async (inventory) => {
     const selected = inventory.agents[0];
@@ -59,8 +59,6 @@ export async function resolveExistingAgentSessionStoreTargetsAsync(
     if (!selected.result.available) {
       throw new Error(`Session store discovery failed (${selected.result.reason})`);
     }
-    return selected.result.targets.filter(
-      (target) => target.storePath !== options.excludeStorePath,
-    );
+    return selected.result.targets;
   });
 }

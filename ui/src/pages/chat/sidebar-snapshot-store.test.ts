@@ -2,6 +2,9 @@
 import { IDBFactory, IDBObjectStore } from "fake-indexeddb";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { z } from "zod";
+import { projectSidebarSession } from "../../components/app-sidebar-session-navigation.test-support.ts";
+import { parseSidebarSnapshot, snapshotSessions } from "../../components/sidebar-snapshot-model.ts";
+import { sidebarSnapshot } from "../../components/sidebar-snapshot.test-support.ts";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
@@ -130,6 +133,49 @@ it("shares account and global invalidation with the transcript cache", async () 
   expect(await read(store, otherAccount)).toEqual(model);
   await clearStoredChatSnapshots();
   expect(await read(store, otherAccount)).toBeNull();
+});
+
+it("retires a legacy hierarchy without evicting valid sidebars or transcripts", async () => {
+  vi.spyOn(Date, "now").mockReturnValue(1000);
+  const store = createStore();
+  const profiles = Array.from({ length: 8 }, (_, index) => profile(`retained-${index}`));
+  for (const current of profiles) {
+    await store.writeSidebar(key(current), sidebarSnapshot, parseSidebarSnapshot);
+  }
+  const transcript = {
+    messages: ["Retained conversation"],
+    pagination: { hasMore: false as const },
+    sessionId: "cedar",
+  };
+  store.write(sessionKey, transcript);
+  await store.flush();
+  expect(await store.read(sessionKey)).toMatchObject(transcript);
+  const [parent, child] = snapshotSessions(
+    ["parent", "child"].map((name) =>
+      projectSidebarSession({ key: `agent:main:${name}`, label: name }),
+    ),
+  );
+  const legacy = { ...sidebarSnapshot, sessions: [{ ...parent!, children: [child!] }] };
+  expect(parseSidebarSnapshot(legacy)).toBeNull();
+  const database = await openSessionSnapshotDatabase();
+  if (!database) {
+    throw new Error("expected snapshot database");
+  }
+  const transaction = database.transaction(SIDEBAR, "readwrite");
+  transaction.objectStore(SIDEBAR).put({
+    sessionKey: key(scope),
+    savedAt: 2000,
+    projectionVersion: 1,
+    model: legacy,
+  });
+  await transactionComplete(transaction);
+  database.close();
+
+  expect(await store.readSidebar(key(scope), parseSidebarSnapshot)).toBeNull();
+  for (const current of profiles) {
+    expect(await store.readSidebar(key(current), parseSidebarSnapshot)).toEqual(sidebarSnapshot);
+  }
+  expect(await store.read(sessionKey)).toMatchObject(transcript);
 });
 
 it("prunes oldest records by count, UTF-8 bytes, and age", async () => {

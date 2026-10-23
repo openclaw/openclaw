@@ -7,6 +7,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as npm from "../../scripts/npm-prepared-bundle.mjs";
 import { validatePreflightManifest } from "../../scripts/release-candidate-checklist.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureGit } from "./release-publish.test-support.js";
 
 // Only the default root pack reaches pnpm; git and tar fixtures keep the real binaries.
 const pnpmPack = vi.hoisted(() => ({
@@ -48,14 +49,6 @@ const workflowPath = ".github/workflows/full-release-validation.yml";
 const hash = (bytes: Buffer) => createHash("sha256").update(bytes).digest("hex");
 const json = (value: unknown) => `${JSON.stringify(value)}\n`;
 const writeJson = (file: string, value: unknown) => writeFileSync(file, JSON.stringify(value));
-const gitIdentity = [
-  "-c",
-  "user.name=Release fixture",
-  "-c",
-  "user.email=release-fixture@example.invalid",
-  "-c",
-  "commit.gpgsign=false",
-];
 
 async function artifactFixture(
   id: string,
@@ -157,11 +150,7 @@ function packageSourceFixture(
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, typeof contents === "string" ? contents : JSON.stringify(contents));
   };
-  const git = (...args: string[]) =>
-    execFileSync("git", ["-C", sourceDir, ...gitIdentity, ...args], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
+  const git = fixtureGit(sourceDir, "Release fixture", "release-fixture@example.invalid");
   git("init", "--quiet");
   write("package.json", {
     name: "openclaw",
@@ -239,22 +228,20 @@ async function bundleFixture(callerWorkflowPath = workflowPath) {
   const producer = packageProducer(callerWorkflowPath);
   const tarball = Buffer.from("exact publishable root archive");
   const aiTarball = Buffer.from("exact publishable AI archive");
-  const corePackage = {
-    packageName: "@openclaw/ai",
+  const packageEntry = (packageName: string, tarballName: string, bytes: Buffer) => ({
+    packageName,
     packageVersion: "2026.8.1",
-    tarballName: "openclaw-ai-2026.8.1.tgz",
-    tarballSha256: hash(aiTarball),
-  };
+    tarballName,
+    tarballSha256: hash(bytes),
+  });
+  const corePackage = packageEntry("@openclaw/ai", "openclaw-ai-2026.8.1.tgz", aiTarball);
   const manifest = {
     schema: "openclaw.npm-package-bundle/v1",
     producer,
     releaseTag: "v2026.8.1",
     releaseSha: sourceSha,
     npmDistTag: "beta",
-    packageName: "openclaw",
-    packageVersion: "2026.8.1",
-    tarballName: "openclaw-2026.8.1.tgz",
-    tarballSha256: hash(tarball),
+    ...packageEntry("openclaw", "openclaw-2026.8.1.tgz", tarball),
     corePackageTarballs: [corePackage],
     dependencyTarballs: [corePackage],
   };
@@ -614,48 +601,7 @@ it.each([false, true])(
   },
 );
 
-it("seals sanitized declarations under the hoisted linker after root prepack", () => {
-  const { runRootPack: _runRootPack, runPack, ...fixture } = packageSourceFixture("2026.8.33");
-  const distRoot = join(fixture.sourceDir, "dist");
-  mkdirSync(distRoot);
-  const steps: string[] = [];
-  const sanitizeRootDeclarations = vi.fn((_root: string) => steps.push("sanitize"));
-  const refreshRootDistInventory = vi.fn((_root: string) => steps.push("inventory"));
-  pnpmPack.impl = runPack;
-  pnpmPack.observer = (args) => {
-    steps.push(args.includes("pack") ? "pack" : String(args.at(-1)));
-  };
-  expect(
-    npm.prepareNpmPackageBundle({
-      ...fixture,
-      sanitizeRootDeclarations,
-      refreshRootDistInventory,
-    }).packageVersion,
-  ).toBe("2026.8.33");
-
-  expect(sanitizeRootDeclarations.mock.calls).toEqual([[distRoot]]);
-  expect(refreshRootDistInventory.mock.calls).toEqual([[fixture.sourceDir]]);
-  expect(steps).toEqual(["prepack", "sanitize", "inventory", "pack", "postpack"]);
-  expect(pnpmPack.calls).toEqual(
-    [
-      ["run", "prepack"],
-      [
-        "pack",
-        "--config.ignore-scripts=true",
-        "--config.node-linker=hoisted",
-        "--pack-destination",
-        fixture.outputDir,
-      ],
-      ["run", "--if-present", "postpack"],
-    ].map((args) => ({
-      args,
-      cwd: fixture.sourceDir,
-      env: expect.objectContaining({ OPENCLAW_PREPACK_PREPARED: "1" }),
-    })),
-  );
-});
-
-it("does not load the declaration parser from the frozen candidate", () => {
+it("sanitizes with trusted tooling before inventory and hoisted packing", () => {
   const { runRootPack: _runRootPack, runPack, ...fixture } = packageSourceFixture("2026.8.33");
   const marker = join(fixture.sourceDir, "candidate-typescript-loaded");
   const distRoot = join(fixture.sourceDir, "dist");
@@ -673,8 +619,36 @@ it("does not load the declaration parser from the frozen candidate", () => {
     ].join("\n"),
   );
   writeFileSync(join(distRoot, "chunk.d.ts"), "export { __exportAll as helper };\n");
+  const steps: string[] = [];
   pnpmPack.impl = runPack;
-  npm.prepareNpmPackageBundle({ ...fixture, refreshRootDistInventory: vi.fn() });
+  pnpmPack.observer = (args) => steps.push(args.includes("pack") ? "pack" : String(args.at(-1)));
+  const refreshRootDistInventory = vi.fn((root: string) => {
+    expect(root).toBe(fixture.sourceDir);
+    expect(readFileSync(join(distRoot, "chunk.d.ts"), "utf8")).toBe("export { };\n");
+    steps.push("inventory");
+  });
+  expect(npm.prepareNpmPackageBundle({ ...fixture, refreshRootDistInventory }).packageVersion).toBe(
+    "2026.8.33",
+  );
+  expect(refreshRootDistInventory).toHaveBeenCalledTimes(1);
+  expect(steps).toEqual(["prepack", "inventory", "pack", "postpack"]);
+  expect(pnpmPack.calls).toEqual(
+    [
+      ["run", "prepack"],
+      [
+        "pack",
+        "--config.ignore-scripts=true",
+        "--config.node-linker=hoisted",
+        "--pack-destination",
+        fixture.outputDir,
+      ],
+      ["run", "--if-present", "postpack"],
+    ].map((args) => ({
+      args,
+      cwd: fixture.sourceDir,
+      env: expect.objectContaining({ OPENCLAW_PREPACK_PREPARED: "1" }),
+    })),
+  );
 
   expect(existsSync(marker)).toBe(false);
   expect(readFileSync(join(distRoot, "chunk.d.ts"), "utf8")).toBe("export { };\n");
@@ -887,18 +861,6 @@ it.each([
   expect(existsSync(outputDir)).toBe(false);
 });
 
-it("rejects a substituted tarball before sealing qualification", async () => {
-  const fixture = await bundleFixture();
-  const inputDir = writeBundleInput(fixture, "npm-substitution-");
-  writeFileSync(join(inputDir, fixture.manifest.tarballName), "replacement archive");
-  const outputDir = join(inputDir, "qualified");
-  const proof = await qualificationFixture(fixture.descriptor);
-  await expect(qualifyFixture(fixture.descriptor, inputDir, outputDir, proof)).rejects.toThrow(
-    "tarball digest mismatch",
-  );
-  expect(existsSync(outputDir)).toBe(false);
-});
-
 it("rejects a descriptor for another source or reusable owner", async () => {
   const { descriptor } = await bundleFixture();
   expect(() => validateDescriptor(descriptor, "c".repeat(40))).toThrow("source SHA mismatch");
@@ -906,7 +868,16 @@ it("rejects a descriptor for another source or reusable owner", async () => {
   expect(() => validateDescriptor(descriptor)).toThrow("trusted preflight owner");
 });
 
-it.each<[string, (proof: QualificationFixture) => void, string]>([
+it.each<
+  [string, (proof: QualificationFixture, fixture: BundleFixture, inputDir: string) => void, string]
+>([
+  [
+    "substituted tarball",
+    (_proof, fixture, inputDir) => {
+      writeFileSync(join(inputDir, fixture.manifest.tarballName), "replacement archive");
+    },
+    "tarball digest mismatch",
+  ],
   [
     "source check still running",
     (proof) => Object.assign(proof.jobs[0]!, { status: "in_progress" }),
@@ -953,7 +924,7 @@ it.each<[string, (proof: QualificationFixture) => void, string]>([
   const inputDir = writeBundleInput(fixture, "npm-proof-input-");
   const outputDir = join(inputDir, "qualified");
   const proof = await qualificationFixture(fixture.descriptor);
-  mutate(proof);
+  mutate(proof, fixture, inputDir);
   await expect(qualifyFixture(fixture.descriptor, inputDir, outputDir, proof)).rejects.toThrow(
     expectedError,
   );

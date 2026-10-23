@@ -36,7 +36,7 @@ type PrepareAgentSessionParams = {
   request: AgentRunRequest;
   canUseCronRunContinuation: boolean;
   lifecycleGeneration: string;
-  effectiveBootstrapContextRunKind?: "default" | "heartbeat" | "cron";
+  effectiveBootstrapContextRunKind?: "default" | "cron";
   preAttachmentSession?: { canonicalKey: string; sessionId?: string };
   respond: GatewayRequestHandlerOptions["respond"];
   assertCurrent?: () => void;
@@ -207,8 +207,7 @@ async function prepareAdmittedAgentSession(
       channel: sessionDeliveryChannel(entry) ?? params.recipientChannel,
     }),
   });
-  const isSystemGatewayRun =
-    effectiveBootstrapContextRunKind === "cron" || effectiveBootstrapContextRunKind === "heartbeat";
+  const isSystemGatewayRun = effectiveBootstrapContextRunKind === "cron";
   const visibleRequest = !isSystemGatewayRun && !params.request.internalEvents?.length;
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: canonicalSessionAgentId });
   params.assertCurrent?.();

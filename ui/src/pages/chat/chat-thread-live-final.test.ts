@@ -11,8 +11,8 @@ import {
   person,
   queued,
 } from "./chat-thread-fixtures.test-support.ts";
-import { coalesceStreamRuns } from "./chat-thread-grouping.ts";
 import { createProps } from "./chat-thread.test-support.ts";
+import { coalesceStreamRuns } from "./chat-turn-presentation.ts";
 import { projectTranscriptIndex } from "./components/chat-transcript-message-index.ts";
 import { rememberLiveTerminalRun } from "./terminal-message-identity.ts";
 

@@ -80,6 +80,10 @@ import {
   resolveSessionCreateInheritance,
   resolveSessionCreateSpawnPolicy,
 } from "./session-create-inheritance.js";
+import {
+  validateFreshSessionConstraints,
+  withInitialAssistantTranscript,
+} from "./session-create-initial-assistant.js";
 import { buildDashboardSessionKey, resolveSessionCreateTargetKey } from "./session-create-key.js";
 import { buildSessionCreateLifecycleTargets } from "./session-create-lifecycle-targets.js";
 import {
@@ -676,30 +680,15 @@ async function createGatewaySessionInScope(
         ) {
           return invalidSessionRequest(AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE);
         }
-        if (!params.initialEntry && existingEntry?.initializationPending === true) {
-          return initializingSessionFailure();
-        }
-        if (params.initialEntry && existingEntry !== undefined) {
-          return invalidSessionRequest("trusted initial session state requires a new session");
-        }
-        if (
-          params.deviceFolder &&
-          existingEntry !== undefined &&
-          (existingEntry.deviceFolder?.deviceId !== params.deviceFolder.deviceId ||
-            existingEntry.deviceFolder.path !== params.deviceFolder.path)
-        ) {
-          return invalidSessionRequest(
-            "device folder requires a new session or its original folder",
-          );
-        }
-        if (params.catalogTarget && existingEntry !== undefined) {
-          return invalidSessionRequest("catalog session target requires a new session");
-        }
-        if ((pendingProjectGitUrl || pendingWorktree) && existingEntry !== undefined) {
-          return invalidSessionRequest("workspace preparation requires a new session");
-        }
-        if (spawnToolPolicy && existingEntry !== undefined) {
-          return invalidSessionRequest("spawn tool policy requires a new session");
+        const freshSessionError = validateFreshSessionConstraints({
+          params,
+          existingEntry,
+          sessionKey: target.canonicalKey,
+          hasWorkspacePreparation: Boolean(pendingProjectGitUrl || pendingWorktree),
+          hasSpawnToolPolicy: Boolean(spawnToolPolicy),
+        });
+        if (freshSessionError) {
+          return freshSessionError;
         }
         const visibility = resolveSessionCreateVisibility(params, existingEntry);
         if (!visibility.ok) {
@@ -979,7 +968,12 @@ async function createGatewaySessionInScope(
           entry.publicShare = prepareSessionPublicShareGrant(entry, target.canonicalKey);
         }
         if (params.fork !== true) {
-          return { ...patched, entry };
+          return withInitialAssistantTranscript(
+            patched,
+            entry,
+            params.initialAssistantMessage,
+            runtimeCwd,
+          );
         }
         if (!canonicalParentSessionKey || !currentParentSessionEntry || !parentSessionTarget) {
           return unavailableSessionRequest("failed to resolve parent session for fork");

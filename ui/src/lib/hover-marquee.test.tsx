@@ -177,6 +177,22 @@ describe("hover marquee measurement budget", () => {
     expect(clock.observesSize(labels[1]!)).toBe(true);
   });
 
+  it("measures an explicitly stationary title without an interaction host", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { clock, label, show } = denseTitles(1, {
+      host: () => undefined,
+      stationaryWithoutHost: true,
+    });
+    reveal(clock);
+    expect(overflows(label)).toBe(true);
+    expect(scrolls(label)).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    show("Short");
+    clock.resize(label);
+    expect(overflows(label)).toBe(false);
+    expect(label.textContent).toBe("Short");
+  });
+
   it("reads a dense title batch before writing overflow styles", () => {
     const { clock, labels, operations } = denseTitles(100);
     reveal(clock);
@@ -268,6 +284,46 @@ describe("hover marquee measurement budget", () => {
     Object.defineProperty(text, "scrollWidth", { value: 800 });
     clock.resize(text);
     expect(overflows(labels[0]!)).toBe(true);
+  });
+
+  it("measures sustained focus but not brief navigation or blur", () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { clock, label, host } = denseTitles();
+    host.tabIndex = 0;
+    // jsdom does not model keyboard focus visibility consistently.
+    const matches = host.matches.bind(host);
+    vi.spyOn(host, "matches").mockImplementation((selector) =>
+      selector === ":hover, :focus-visible" || selector === ":focus-visible"
+        ? document.activeElement === host
+        : matches(selector),
+    );
+    reveal(clock);
+    const width = vi.fn(() => 100);
+    Object.defineProperty(label, "clientWidth", { configurable: true, get: width });
+    const style = vi.spyOn(globalThis, "getComputedStyle");
+
+    host.focus();
+    clock.flush();
+    expect(width).not.toHaveBeenCalled();
+    expect(style).not.toHaveBeenCalled();
+    host.blur();
+    advance(clock, 500);
+    expect(width).not.toHaveBeenCalled();
+    expect(style).not.toHaveBeenCalled();
+
+    host.focus();
+    advance(clock, 500);
+    expect(scrolls(label)).toBe(true);
+    expect(width).toHaveBeenCalledOnce();
+    width.mockClear();
+    style.mockClear();
+    host.blur();
+    clock.flush();
+
+    expect(scrolls(label)).toBe(false);
+    expect(overflows(label)).toBe(true);
+    expect(width).not.toHaveBeenCalled();
+    expect(style).not.toHaveBeenCalled();
   });
 
   it("follows touch menu intent, direction, visibility, and reduced motion for looping names", async () => {

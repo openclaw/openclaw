@@ -13,7 +13,8 @@ const mocks = vi.hoisted(() => ({
   runAuthProbes: vi.fn(),
 }));
 
-vi.mock("../../agents/agent-scope.js", () => ({
+vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
   listAgentIds: mocks.listAgentIds,
   resolveAgentDir: mocks.resolveAgentDir,
   resolveDefaultAgentId: mocks.resolveDefaultAgentId,
@@ -133,9 +134,12 @@ it("normalizes providers, trims profiles, and clamps the timeout", async () => {
   });
 });
 
-it("probes the default agent when agentId is empty", async () => {
+it("probes the default agent without a configured model when agentId is empty", async () => {
   await probe({ provider: "openai", agentId: "" });
   expectProbe({
+    cfg: {},
+    providers: ["openai"],
+    modelCandidates: [],
     agentId: "main",
     agentDir: "/tmp/agent-main",
     workspaceDir: "/tmp/workspace-main",
@@ -158,6 +162,65 @@ it("probes an explicit configured agent", async () => {
     workspaceDir: "/tmp/workspace-writer",
     modelCandidates: ["openai/small", "openai/writer-backup"],
   });
+});
+
+it.each([
+  {
+    name: "agent primary and fallback overrides",
+    agent: {
+      model: {
+        primary: " qwen/qwen-plus@work ",
+        fallbacks: ["vertex/claude-sonnet@20260201@work", "local/qwen@iq4_xs"],
+      },
+      utilityModel: { primary: "qwen/qwen-flash@work", fallbacks: ["local/utility"] },
+    },
+    expected: [
+      "qwen/qwen-plus",
+      "vertex/claude-sonnet@20260201",
+      "local/qwen@iq4_xs",
+      "qwen/qwen-flash",
+      "local/utility",
+    ],
+  },
+  {
+    name: "explicit empty fallbacks and disabled utility routing",
+    agent: { model: { fallbacks: [] }, utilityModel: "" },
+    expected: ["openai/default"],
+  },
+  {
+    name: "agent primary suppressing default fallbacks",
+    agent: { model: "qwen/qwen-plus" },
+    expected: ["qwen/qwen-plus", "openai/small", "local/utility-backup"],
+  },
+  {
+    name: "agent aliases overriding default aliases",
+    agent: {
+      model: { primary: "fast@work", fallbacks: ["backup"] },
+      utilityModel: { primary: "utility", fallbacks: ["utility-backup"] },
+      models: {
+        "openai/default": { alias: "" },
+        "qwen/qwen-plus": { alias: "fast" },
+        "qwen/qwen-backup": { alias: "backup" },
+        "qwen/qwen-flash": { alias: "utility" },
+        "local/small": { alias: "utility-backup" },
+      },
+    },
+    expected: ["qwen/qwen-plus", "qwen/qwen-backup", "qwen/qwen-flash", "local/small"],
+  },
+])("uses the selected agent's model policy for $name", async ({ agent, expected }) => {
+  const cfg: OpenClawConfig = {
+    agents: {
+      defaults: {
+        model: { primary: "openai/default", fallbacks: ["openai/backup"] },
+        utilityModel: { primary: "openai/small", fallbacks: ["local/utility-backup"] },
+        models: { "openai/default": { alias: "fast" } },
+      },
+      entries: { main: {}, writer: agent },
+    },
+  };
+  const { respond } = await probe({ provider: "qwen", agentId: "writer" }, cfg);
+  expectProbe({ agentId: "writer", modelCandidates: expected });
+  expect(respond).toHaveBeenCalledWith(true, expect.any(Object), undefined);
 });
 
 it.each(["retired", "   "])("rejects explicit unknown agentId %j", async (agentId) => {
@@ -193,8 +256,10 @@ it("probes the requested provider so overrides and model selection resolve", asy
   );
 });
 
-it("does not require a configured default before probing provider credentials", async () => {
-  const cfg: OpenClawConfig = {};
+it("does not invent a native default for a harness-runtime agent", async () => {
+  const cfg: OpenClawConfig = {
+    agents: { entries: { main: { runtime: { type: "acp" }, model: "harness/model" } } },
+  };
   await probe({ provider: "openai" }, cfg);
   expectProbe({
     cfg,
