@@ -1,6 +1,10 @@
 import type { AssistantMessage } from "@openclaw/llm-core";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import type { ExecutedToolCallOutcome, PreparedToolCall } from "./agent-loop-tool-execution.js";
+import type {
+  ExecutedToolCallOutcome,
+  PreparedToolCall,
+  ReadyPreparedToolCall,
+} from "./agent-loop-tool-execution.js";
 import {
   emitToolExecutionEnd,
   emitToolExecutionStart,
@@ -119,6 +123,24 @@ export async function finalizeExecutedToolCall(
     },
     finalArgs,
   );
+}
+
+export async function completeStartedToolCall(
+  batch: ToolOutcomeContext & { emit: AgentEventSink },
+  entry: ReadyPreparedToolCall,
+  outcome: ExecutedToolCallOutcome,
+  sequential: boolean,
+): Promise<FinalizedToolCallOutcome> {
+  try {
+    const finalized = await finalizeExecutedToolCall(batch, entry, outcome, entry.execution.args);
+    if (sequential) {
+      entry.execution.dispose();
+    }
+    await emitToolExecutionEnd(finalized, batch);
+    return finalized;
+  } finally {
+    entry.execution.dispose();
+  }
 }
 
 export async function finalizeToolCallOutcome(

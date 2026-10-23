@@ -62,6 +62,10 @@ function isNativeErrorCode(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 0 && value <= 0x7fff_ffff;
 }
 
+function isWorkerOutcomeCode(value: unknown): value is "outcome-unknown" | "unavailable" {
+  return value === "outcome-unknown" || value === "unavailable";
+}
+
 export function encodeOpenClawStateWorkerError(
   error: unknown,
   options: ErrorGraphOptions = {},
@@ -111,11 +115,13 @@ export function encodeOpenClawStateWorkerError(
         return undefined;
       }
       const nativeOpen = isSqliteNativeOpenFailure(current);
-      const outcomeUnknown = hasSqliteWorkerErrorCode(current, "outcome-unknown");
+      const workerOutcome =
+        hasSqliteWorkerErrorCode(current, "outcome-unknown") ||
+        hasSqliteWorkerErrorCode(current, "unavailable");
       const stateDatabasePath = readOpenClawStateDatabaseFailurePath(current);
       const errcode = "errcode" in current ? current.errcode : undefined;
       canonical ||=
-        outcomeUnknown ||
+        workerOutcome ||
         stateDatabasePath !== undefined ||
         nativeOpen ||
         isNativeErrorCode(errcode) ||
@@ -127,9 +133,9 @@ export function encodeOpenClawStateWorkerError(
       nodes.push({
         ...identity,
         // The reserved pair may only originate from the canonical worker error.
-        name: outcomeUnknown
+        name: workerOutcome
           ? "SqliteWorkerError"
-          : name === "SqliteWorkerError" && code === "outcome-unknown"
+          : name === "SqliteWorkerError" && isWorkerOutcomeCode(code)
             ? "Error"
             : name,
         message,
@@ -170,7 +176,7 @@ function decodeErrorGraph(
         (node) =>
           node.stateDatabasePath !== undefined ||
           node.nativeOpen === true ||
-          (node.name === "SqliteWorkerError" && node.code === "outcome-unknown") ||
+          (node.name === "SqliteWorkerError" && isWorkerOutcomeCode(node.code)) ||
           isNativeErrorCode(node.errcode) ||
           isSqliteLockError(node) ||
           (node.type === "aggregate" &&
@@ -181,8 +187,8 @@ function decodeErrorGraph(
       return undefined;
     }
     const errors = nodes.map((node) => {
-      if (node.name === "SqliteWorkerError" && node.code === "outcome-unknown") {
-        const canonical = new SqliteWorkerError(node.message, "outcome-unknown");
+      if (node.name === "SqliteWorkerError" && isWorkerOutcomeCode(node.code)) {
+        const canonical = new SqliteWorkerError(node.message, node.code);
         return node.type === "error"
           ? canonical
           : retainSqliteWorkerErrorCode(createError(node), canonical);

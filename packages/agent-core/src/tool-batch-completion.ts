@@ -1,6 +1,10 @@
 import type { AssistantMessage } from "@openclaw/llm-core";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import type { FinalizedToolCallEntry, StartedToolCall } from "./agent-loop-tool-execution.js";
+import type {
+  ExecutedToolCallOutcome,
+  FinalizedToolCallEntry,
+  StartedToolCall,
+} from "./agent-loop-tool-execution.js";
 import type { ExecutedToolCallBatch } from "./agent-stream-response.js";
 import { getInternalToolTurnInputScope } from "./internal-hooks.js";
 import type { FinalizedToolCallOutcome } from "./tool-call-outcome.js";
@@ -44,13 +48,22 @@ export async function drainToolCallGroup(
   started: readonly StartedToolCall[],
   entries: readonly FinalizedToolCallEntry[],
   primary: ExecutedToolCallBatch["fatal"],
+  settle: (call: StartedToolCall, outcome: ExecutedToolCallOutcome) => Promise<void>,
 ): Promise<ExecutedToolCallBatch["fatal"]> {
   let failure: ExecutedToolCallBatch["fatal"];
   if (started.length > 0) {
-    const outcomes = await Promise.allSettled(started.map(({ outcome }) => outcome));
+    const outcomes = await Promise.allSettled(
+      started.map(async (call) => ({ call, result: await call.outcome })),
+    );
     for (const outcome of outcomes) {
       if (outcome.status === "rejected") {
         failure = mergeToolExecutionFailure(failure ?? primary, outcome.reason);
+      } else {
+        try {
+          await settle(outcome.value.call, outcome.value.result);
+        } catch (error) {
+          failure = mergeToolExecutionFailure(failure ?? primary, error);
+        }
       }
     }
   }

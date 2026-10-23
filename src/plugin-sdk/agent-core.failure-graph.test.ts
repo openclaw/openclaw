@@ -163,6 +163,62 @@ it.each([false, true])(
   },
 );
 
+it("publishes a successful accepted sibling after a pre-start completion fails", async () => {
+  const uncertain = new SqliteWorkerError("Synthetic completion failure", "outcome-unknown");
+  const releaseSibling = Promise.withResolvers<void>();
+  const executeSibling = vi.fn(async () => {
+    await releaseSibling.promise;
+    return { content: [{ type: "text" as const, text: "Accepted work completed" }], details: {} };
+  });
+  const prestart = attachInternalToolExecutionPreparer(makeTool("prestart"), async () => ({
+    kind: "ready",
+    args: {},
+    execute: async () => ({ content: [], details: {} }),
+    dispose() {},
+  }));
+  const streamFn = vi.fn(createTurnSequenceStream([[makeCall("prestart"), makeCall("sibling")]]));
+  const siblingEnds: string[] = [];
+  const agent = new Agent({
+    toolExecution: "parallel",
+    streamFn,
+    afterToolCall: async ({ toolCall }) =>
+      toolCall.name === "sibling"
+        ? { content: [{ type: "text", text: "Finalized accepted work" }] }
+        : undefined,
+    afterToolOutcome: async ({ toolCall }) =>
+      toolCall.name === "sibling" ? { details: { outcomeObserved: true } } : undefined,
+    initialState: { tools: [prestart, { ...makeTool("sibling"), execute: executeSibling }] },
+  });
+  agent.subscribe((event) => {
+    if (event.type !== "tool_execution_end") {
+      return;
+    }
+    if (event.toolCallId === "prestart") {
+      releaseSibling.resolve();
+      throw uncertain;
+    }
+    siblingEnds.push(event.toolCallId);
+  });
+  const outcome = await agent.prompt("Complete both tools").catch((error: unknown) => error);
+  expectFailureGraph(outcome, uncertain);
+  expect(executeSibling).toHaveBeenCalledOnce();
+  expect(siblingEnds).toEqual(["sibling"]);
+  const siblingResults = agent.state.messages.filter(
+    (message) => message.role === "toolResult" && message.toolCallId === "sibling",
+  );
+  expect(siblingResults).toEqual([
+    expect.objectContaining({
+      role: "toolResult",
+      toolCallId: "sibling",
+      content: [{ type: "text", text: "Finalized accepted work" }],
+      details: { outcomeObserved: true },
+      isError: false,
+    }),
+  ]);
+  expect(streamFn).toHaveBeenCalledOnce();
+  expect(agent.state.isStreaming).toBe(false);
+});
+
 it.each(["turn-end", "skipped-tail"] as const)(
   "retains an accepted unknown outcome when %s publication also fails",
   async (publication) => {
@@ -280,6 +336,7 @@ it("releases an admitted sequential async batch when its predecessor fails local
   const waitingAdmitted = Promise.withResolvers<void>();
   const executeWaiting = vi.fn(async () => ({ content: [], details: {} }));
   const releaseWaiting = vi.fn();
+  const beforeCalls: string[] = [];
   const calls = [makeCall("first"), makeCall("waiting")].map((call) =>
     Object.assign(call, { async: true as const }),
   );
@@ -292,6 +349,9 @@ it("releases an admitted sequential async batch when its predecessor fails local
   const agent = new Agent({
     toolExecution: "parallel",
     streamFn,
+    beforeToolCall: async ({ toolCall }) => {
+      beforeCalls.push(toolCall.name);
+    },
     initialState: {
       tools: [
         {
@@ -316,6 +376,7 @@ it("releases an admitted sequential async batch when its predecessor fails local
   const outcome = await agent.prompt("Run both streamed tools").catch((error: unknown) => error);
   expectFailureGraph(outcome, uncertain);
   expect(releaseWaiting).toHaveBeenCalledExactlyOnceWith(["waiting"]);
+  expect(beforeCalls).toEqual(["first"]);
   expect(executeWaiting).not.toHaveBeenCalled();
   expect(streamFn).toHaveBeenCalledOnce();
   expect(agent.state.isStreaming).toBe(false);

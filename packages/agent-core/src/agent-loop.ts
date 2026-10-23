@@ -45,6 +45,7 @@ import {
 } from "./tool-batch-completion.js";
 import {
   completeUnstartedToolCall,
+  completeStartedToolCall,
   finalizeToolCallOutcome,
   finalizeExecutedToolCall,
   immediateToolArgumentValidationError,
@@ -607,6 +608,16 @@ async function executeToolCallGroups(
     const entries: FinalizedToolCallEntry[] = [];
     let started: StartedToolCall[] = [];
     let thrown: ExecutedToolCallBatch["fatal"];
+    const ordered: Array<FinalizedToolCallOutcome | undefined> = [];
+    const settle = async (
+      index: number,
+      entry: ReadyPreparedToolCall,
+      outcome: ExecutedToolCallOutcome,
+    ) => {
+      const finalized = await completeStartedToolCall(batch, entry, outcome, sequential);
+      ordered[index] = finalized;
+      return finalized;
+    };
     try {
       // Sequential groups commit before preparing the next call. Parallel groups
       // prepare together, then commit in source order after their started work settles.
@@ -640,30 +651,9 @@ async function executeToolCallGroups(
         const steering = getSteeringAtCheckpoint(batch.config);
         steeringMessages = Array.isArray(steering) ? steering : await steering;
       }
-      const ordered: Array<FinalizedToolCallOutcome | undefined> = entries.map((entry) =>
-        "kind" in entry ? undefined : entry,
-      );
-      const settle = async (
-        index: number,
-        entry: ReadyPreparedToolCall,
-        outcome: ExecutedToolCallOutcome,
-      ) => {
-        try {
-          const finalized = await finalizeExecutedToolCall(
-            batch,
-            entry,
-            outcome,
-            entry.execution.args,
-          );
-          if (sequential) {
-            entry.execution.dispose();
-          }
-          await emitToolExecutionEnd(finalized, batch);
-          ordered[index] = finalized;
-        } finally {
-          entry.execution.dispose();
-        }
-      };
+      for (const [index, entry] of entries.entries()) {
+        ordered[index] = "kind" in entry ? undefined : entry;
+      }
 
       // Rejected calls also launch, so a sequential validation failure commits here too.
       const launched =
@@ -787,7 +777,17 @@ async function executeToolCallGroups(
       thrown = mergeToolExecutionFailure(fatal, error);
     } finally {
       // A local persistence failure cannot release another accepted tool while it still runs.
-      thrown = (await drainToolCallGroup(started, entries, thrown ?? fatal)) ?? thrown;
+      thrown =
+        (await drainToolCallGroup(
+          started,
+          entries,
+          thrown ?? fatal,
+          async ({ index, entry }, outcome) => {
+            const finalized = await settle(index, entry, outcome);
+            messages.push(await emitToolResultMessage(finalized, batch.emit));
+            finalizedCalls.push(finalized);
+          },
+        )) ?? thrown;
     }
     if (thrown) {
       throw thrown.error;
@@ -944,9 +944,8 @@ async function prepareToolCall(
   toolCall: AgentToolCall,
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
   const cachedValidation = batch.validated.get(toolCall);
-  if (batch.signal?.aborted && !cachedValidation) {
-    // Execution cannot start after cancellation, so never begin validation
-    // work (including deferred tool resolvers) for an uncached call.
+  if (batch.signal?.aborted) {
+    // Cached validation does not authorize pre-execution hooks after cancellation.
     return immediateToolCallError("Operation aborted");
   }
   const validation = cachedValidation ?? (await validateToolCallForBatchAdmission(batch, toolCall));
