@@ -216,16 +216,14 @@ export function registerSharedStateWorkerAdmissionTests(
               // servicing messages so the native writer must service the commit grant.
               const deadline = Date.now() + 5_000;
               const pause = new Int32Array(new SharedArrayBuffer(4));
-              do {
-                contention.observe("transaction");
-                if (contention.observed.at(-1) === "transaction:held") {
-                  break;
-                }
+              contention.observe("transaction");
+              while (contention.observed.at(-1) !== "transaction:held") {
                 if (Date.now() >= deadline) {
                   throw new Error("Worker did not take the writer lock");
                 }
                 Atomics.wait(pause, 0, 0, 1);
-              } while (true);
+                contention.observe("transaction");
+              }
               insideNativeWrite = true;
               try {
                 runOpenClawStateWriteTransaction(
