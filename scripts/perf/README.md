@@ -1050,6 +1050,15 @@ idle time; first-dispatch skew includes profiler setup. CPU mode retains its
 pre-barrier profile start. Compare matching modes and shapes. Workers, external
 buffers, and controller allocations are outside the main-isolate estimate.
 
+For a history-owner comparison using one source tree and dependency installation,
+pass `--entry src/entry.ts --history-source /path/to/owner-copies`. That directory
+must contain `chat-history-session-read.ts` and `chat-history-handler.ts`; the
+benchmark preload substitutes only those modules and the report records their
+SHA-256 hashes. Keep the rest of the source fixed for both sides.
+History payload hashes normalize only `sessionInfo.snapshotAt` to zero and the
+fixture root to `<fixture>`; response content and field order remain intact.
+The first normalized response is saved as `<scenario>.json` for byte comparison.
+
 ## Measure transcript broadcast fanout
 
 With runtime artifacts built on the authorized benchmark host, seed a fixture

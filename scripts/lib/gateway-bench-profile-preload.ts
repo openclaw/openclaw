@@ -67,8 +67,9 @@ if (isMainThread) {
   const workerAttribution = process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1";
   const workerAttributionSourceHooks = new Set<string>();
   const sessionProjectionSource = process.env.OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE;
+  const historySource = process.env.OPENCLAW_BENCH_HISTORY_SOURCE;
   let broadcastTimingInstalled = false;
-  if (broadcastTiming || sessionProjectionSource || workerAttribution) {
+  if (broadcastTiming || sessionProjectionSource || workerAttribution || historySource) {
     const entry = new URL("../../src/entry.ts", import.meta.url);
     if (!process.argv[1] || realpathSync(process.argv[1]) !== realpathSync(entry)) {
       throw new Error("Benchmark source instrumentation requires --entry src/entry.ts");
@@ -84,6 +85,14 @@ if (isMainThread) {
         projectionSources.set(
           new URL(`../../src/gateway/${file}`, import.meta.url).href,
           readFileSync(path.join(sessionProjectionSource, file), "utf8"),
+        );
+      }
+    }
+    if (historySource) {
+      for (const file of ["chat-history-session-read.ts", "chat-history-handler.ts"]) {
+        projectionSources.set(
+          new URL(`../../src/gateway/server-methods/${file}`, import.meta.url).href,
+          readFileSync(path.join(historySource, file), "utf8"),
         );
       }
     }
