@@ -198,7 +198,7 @@ it("keeps the supervisor alive when a resource attachment endpoint is rejected s
   expect(types(1)).toEqual(["created", "error", "execution-exit", "stop-error"]);
   const failure = supervisor.replies.find((reply) => reply.id === 1 && reply.type === "error");
   expect(failure).toMatchObject({
-    error: { name: "RangeError", code: "ERR_SOCKET_BAD_PORT" },
+    error: { name: "RangeError", message: expect.stringContaining("70000") },
   });
 
   supervisor.post(createRequest(2));
