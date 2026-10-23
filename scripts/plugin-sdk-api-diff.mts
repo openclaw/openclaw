@@ -41,6 +41,7 @@ type Args = {
 
 const GIT_MAX_BUFFER = 64 * 1024 * 1024;
 const SCRIPT_PATH = fileURLToPath(import.meta.url);
+const TSX_IMPORT_PATH = import.meta.resolve("tsx");
 
 function usage(): never {
   console.error(
@@ -211,19 +212,20 @@ async function renderRevision(
   outputPath: string,
   signal: AbortSignal,
 ): Promise<void> {
+  const revisionRenderer = path.join(revisionRoot, "scripts/plugin-sdk-api-diff.mts");
   await runAbortableChild({
     command: process.execPath,
     args: [
       "--max-old-space-size=6144",
       "--import",
-      "tsx",
-      SCRIPT_PATH,
+      TSX_IMPORT_PATH,
+      existsSync(revisionRenderer) ? revisionRenderer : SCRIPT_PATH,
       "--render-root",
       revisionRoot,
       "--output",
       outputPath,
     ],
-    cwd: repoRoot,
+    cwd: revisionRoot,
     failureMessage: "Plugin SDK API render failed",
     signal,
   });
