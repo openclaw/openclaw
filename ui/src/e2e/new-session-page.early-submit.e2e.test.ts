@@ -12,15 +12,16 @@ const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
   it.each([
-    { method: "agents.list", attempt: "Enter" },
-    { method: "models.list", attempt: "paste+Enter" },
-    { method: "agents.list", attempt: "Start" },
+    { method: "agents.list", attempt: "Enter", width: 1280 },
+    { method: "agents.list", attempt: "Enter", width: 390 },
+    { method: "models.list", attempt: "paste+Enter", width: 1280 },
+    { method: "agents.list", attempt: "Start", width: 1280 },
   ])(
-    "explains $attempt only after attempting submission while $method is pending",
-    async ({ method, attempt }) => {
+    "explains $attempt only after attempting submission while $method is pending at $width px",
+    async ({ method, attempt, width }) => {
       await suite.withPage(
         {
-          viewport: { width: 1280, height: 800 },
+          viewport: { width, height: 800 },
           permissions: ["clipboard-read", "clipboard-write"],
         },
         async ({ page }) => {
@@ -55,9 +56,11 @@ suite.define(() => {
           const notice = page.locator(".new-session-page__blocked-submit");
           const frame = page.locator(".new-session-page__composer");
           const bounds = await frame.boundingBox();
+          const stableBounds =
+            width === 390 ? { x: bounds?.x, width: bounds?.width, height: bounds?.height } : bounds;
           expect(await start.isDisabled()).toBe(true);
           expect(await notice.count()).toBe(0);
-          await captureUiProof(suite, page, `${method}-${attempt}-rendered.png`);
+          await captureUiProof(suite, page, `${method}-${attempt}-${width}-rendered.png`);
           if (attempt === "Start") {
             await start.click({ force: true });
           } else {
@@ -70,8 +73,9 @@ suite.define(() => {
               : "Restoring your last session setup",
           );
           expect(await frame.locator(".new-session-page__blocked-submit").count()).toBe(0);
-          expect(await frame.boundingBox()).toEqual(bounds);
-          await captureUiProof(suite, page, `${method}-${attempt}-blocked.png`);
+          expect(await frame.boundingBox()).toMatchObject(stableBounds!);
+          await captureUiProof(suite, page, `${method}-${attempt}-${width}-blocked.png`);
+          expect(await notice.boundingBox()).toMatchObject({ x: bounds?.x, width: bounds?.width });
           expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
           expect(await composer.inputValue()).toBe(message);
 
@@ -80,13 +84,13 @@ suite.define(() => {
           expect(await notice.count()).toBe(0);
           expect(await composer.inputValue()).toBe(message);
           expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-          expect(await frame.boundingBox()).toEqual(bounds);
+          expect(await frame.boundingBox()).toMatchObject(stableBounds!);
           await composer.press("Enter");
           await waitForCommittedChatRoute(page);
           const creates = await gateway.getRequests("sessions.create");
           expect(creates).toHaveLength(1);
           expect(creates[0]?.params).toMatchObject({ agentId: "main", message });
-          await captureUiProof(suite, page, `${method}-${attempt}-sent.png`);
+          await captureUiProof(suite, page, `${method}-${attempt}-${width}-sent.png`);
         },
       );
     },
