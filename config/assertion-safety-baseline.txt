@@ -1502,7 +1502,7 @@ src/cli/models-cli.ts	1
 src/cli/native-hook-relay-cli.ts	1
 src/cli/nodes-cli/register.pairing.ts	2
 src/cli/nodes-cli/register.status.ts	3
-src/cli/nodes-cli/rpc.ts	2
+src/cli/nodes-cli/rpc.ts	1
 src/cli/pairing-cli.ts	1
 src/cli/plugins-authoring-command.ts	2
 src/cli/plugins-update-command.ts	5

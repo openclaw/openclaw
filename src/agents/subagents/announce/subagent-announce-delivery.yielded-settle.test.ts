@@ -57,6 +57,13 @@ it.each([
   settleCase("failed turn", { status: "error" }),
   settleCase("empty successful optional turn", ok({ payloads: [] }), { delivered: true }),
   settleCase(
+    "optional silence promoted to a required human reply",
+    ok({
+      ...silentResult,
+      meta: { ...silentResult.meta, terminalReplyExpectation: "result-required" },
+    }),
+  ),
+  settleCase(
     "failed silence",
     ok({ ...silentResult, meta: { ...silentResult.meta, aborted: true } }),
   ),
