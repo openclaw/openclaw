@@ -1,9 +1,54 @@
+import { canonicalizeMainSessionAlias } from "../config/sessions.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { buildCronCommandSummary } from "../cron/command-output-summary.js";
 import type { CronService } from "../cron/service.js";
+import type { CronServiceDeps } from "../cron/service/state.js";
+import { resolveCronSessionTargetSessionKey } from "../cron/session-target.js";
 import type { CronJob, CronPayload } from "../cron/types.js";
+import { normalizeAgentId } from "../routing/session-key.js";
+import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { truncateUtf16WithEllipsis } from "../shared/text-truncate.js";
 import type { CronExitResult } from "./cron-exit-watchers.js";
 import type { CronStreamFireDisposition } from "./cron-stream-watchers.js";
+
+type ResolveCronTarget = (opts?: {
+  agentId?: string | null;
+  sessionKey?: string | null;
+  preserveUntargeted?: boolean;
+}) => { runtimeConfig: OpenClawConfig; agentId?: string; sessionKey?: string };
+
+export async function runGatewayCronSessionEvent(
+  request: Parameters<NonNullable<CronServiceDeps["runSessionEvent"]>>[0],
+  resolveTarget: ResolveCronTarget,
+) {
+  const requestedSessionKey = resolveCronSessionTargetSessionKey(request.job.sessionTarget);
+  const target = resolveTarget({ agentId: request.job.agentId, sessionKey: requestedSessionKey });
+  if (!target.agentId || !target.sessionKey) {
+    return { status: "error" as const, error: "Automation has no valid session destination" };
+  }
+  const canonicalRequest = requestedSessionKey
+    ? canonicalizeMainSessionAlias({
+        cfg: target.runtimeConfig,
+        agentId: target.agentId,
+        sessionKey: requestedSessionKey,
+      })
+    : undefined;
+  const sessionAgentId = parseAgentSessionKey(canonicalRequest)?.agentId;
+  if (sessionAgentId && normalizeAgentId(sessionAgentId) !== normalizeAgentId(target.agentId)) {
+    return {
+      status: "error" as const,
+      error:
+        "Automation session target belongs to another agent; update agentId or sessionTarget before retrying",
+    };
+  }
+  const { runCronSessionTurn } = await import("../cron/session-run.js");
+  return await runCronSessionTurn({
+    ...request,
+    cfg: target.runtimeConfig,
+    agentId: target.agentId,
+    sessionKey: target.sessionKey,
+  });
+}
 
 export function formatOnExitRunSummary(exit: CronExitResult): string {
   const lines = [

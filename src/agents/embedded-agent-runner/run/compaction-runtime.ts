@@ -1,3 +1,4 @@
+import path from "node:path";
 import { acknowledgeReplySessionTransition } from "../../../auto-reply/reply/reply-run-registry.state.js";
 import {
   captureSessionActorStorageOwner,
@@ -95,6 +96,14 @@ export async function compactEmbeddedRunForRecovery(
   const { runParams } = input;
   const owner = input.prepareRecoveryOwner();
   const activeSession = owner.session;
+  const requestAdmission = runParams.userTurnTranscriptRecorder?.getAdmissionReceipt();
+  const requestFromEntryId =
+    requestAdmission?.agentId === input.sessionAgentId &&
+    requestAdmission.sessionKey === input.resolvedSessionKey &&
+    activeSession.target?.storePath !== undefined &&
+    path.resolve(requestAdmission.storePath) === path.resolve(activeSession.target.storePath)
+      ? requestAdmission.entryId
+      : undefined;
   const promptCacheIdentity = {
     ...runParams,
     sessionId: activeSession.id,
@@ -185,6 +194,7 @@ export async function compactEmbeddedRunForRecovery(
             if (backendParams.runtimeContext) {
               attachCompactionAccountingRecorder(backendParams.runtimeContext, {
                 requestBudget: input.state.compactionRequestBudget,
+                requestFromEntryId,
                 pendingRequestState:
                   recovery.trigger === "timeout_recovery" ? undefined : "unresolved",
                 memoryTranscript: owner.sessionManager

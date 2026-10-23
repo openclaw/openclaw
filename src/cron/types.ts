@@ -167,6 +167,8 @@ export type CronFailureNotificationDetail =
 /** Execution result used to author persisted state, run logs, and isolated turn results. */
 export type CronRunOutcome = {
   status: CronRunStatus;
+  /** Session-controller restart interrupted an admitted shared-conversation turn. */
+  interruptedByRestart?: boolean;
   error?: string;
   /** True once agent execution begins; retries after this point can replay side effects. */
   executionStarted?: boolean;

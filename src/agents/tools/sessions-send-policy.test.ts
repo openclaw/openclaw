@@ -364,7 +364,9 @@ describe("sessions_send directed policy at the tool boundary", () => {
       const prompt = callGateway.mock.calls.find(([request]) => request.method === "agent")?.[0]
         .params.message;
       expect(prompt).toContain("Please handle this task");
-      expect(prompt).toContain("interrupted by a gateway restart");
+      expect(prompt).toContain(
+        "This can happen after a Gateway restart or a tool execution timeout.",
+      );
       expect(prompt).toContain("marked interrupted, missing, or aborted");
       expect(prompt).toContain("unknown outcome");
       expect(prompt).toContain("not proof of tool failure");

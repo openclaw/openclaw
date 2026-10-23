@@ -45,6 +45,27 @@ describe("screen tool", () => {
         },
       },
     });
+    expect(tool.parameters).not.toMatchObject({
+      properties: { action: { enum: expect.arrayContaining(["github_identity_settings"]) } },
+    });
+  });
+
+  it("offers and dispatches masked GitHub settings only to capable clients", async () => {
+    const { callGateway, calls } = createGatewayRecorder();
+    const tool = createScreenTool({
+      agentSessionKey: "agent:main:main",
+      callGateway,
+      githubIdentitySettingsAvailable: true,
+    });
+    expect(tool.parameters).toMatchObject({
+      properties: { action: { enum: expect.arrayContaining(["github_identity_settings"]) } },
+    });
+
+    await tool.execute("call", { action: "github_identity_settings" });
+
+    expect(calls).toEqual([
+      ["ui.command", { command: { kind: "agent-github-settings" }, sessionKey: "agent:main:main" }],
+    ]);
   });
 
   it.each([

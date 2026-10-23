@@ -50,6 +50,10 @@ import { execPlainGh } from "./lib/plain-gh.mjs";
 import { parseReleaseContextRef, resolveReleaseContextIdentity } from "./lib/release-context.mjs";
 import { resolveQualificationBaselines } from "./lib/release-upgrade-baseline.mjs";
 import { validatePackageSourceRef } from "./package-source-preflight.mjs";
+import {
+  validateCandidateActorPermissionWithGithub,
+  verifyCandidateProvenanceWithGithub,
+} from "./release-candidate-provenance.mjs";
 import { buildQualificationAdmissionRequest } from "./release-qualification-admission.mjs";
 
 export { dispatchInputsDigest } from "./lib/full-release-dispatch-request.mts";
@@ -151,6 +155,40 @@ function requiredPositiveInteger(value: unknown, label: string): number {
     throw new Error(`${label} must be a positive integer`);
   }
   return normalized;
+}
+
+export function fullReleaseConcurrencyBranchPrefix(
+  workflowSha: string,
+  selection: { inputs: DispatchInputs; effectiveSoak: boolean },
+): string {
+  const target = String(selection.inputs.expected_sha || selection.inputs.ref || "");
+  const rerunGroup = String(selection.inputs.rerun_group || "");
+  const selectedProfile = String(selection.inputs.release_profile || "");
+  const profile = selectedProfile === "minimum" ? "beta" : selectedProfile;
+  requireDispatch(
+    SHA_PATTERN.test(workflowSha),
+    "Concurrency identity requires an exact Tooling SHA",
+  );
+  requireDispatch(
+    SHA_PATTERN.test(target),
+    "Concurrency identity requires an exact Validation SHA",
+  );
+  requireDispatch(RERUN_GROUPS.has(rerunGroup), "Concurrency identity requires a rerun group");
+  requireDispatch(
+    ["beta", "stable", "full"].includes(profile),
+    "Concurrency identity requires a release profile",
+  );
+  const identity = JSON.stringify({
+    target,
+    workflowSha,
+    rerunGroup,
+    profile,
+    soak: selection.effectiveSoak,
+  });
+  const suffix = `1${BigInt(`0x${createHash("sha256").update(identity).digest("hex").slice(0, 15)}`)
+    .toString()
+    .padStart(18, "0")}`;
+  return `release-ci/${workflowSha.slice(0, 12)}-${suffix}`;
 }
 
 function usage() {
@@ -675,6 +713,84 @@ function preflightTargetShaFetch(targetSha: string) {
   }
 }
 
+type CandidateTrustReason = "main-ancestor" | "release-branch" | "release-tag";
+
+function candidateTrustReason(
+  targetSha: string,
+  targetContextRef: string,
+): CandidateTrustReason | undefined {
+  const canonicalBranch = (value: string) =>
+    /^release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$/u.test(value) ||
+    /^extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33$/u.test(value);
+  if (targetContextRef !== targetSha) {
+    const context = parseReleaseContextRef(targetContextRef);
+    return context?.kind === "release tag"
+      ? "release-tag"
+      : context && canonicalBranch(context.ref)
+        ? "release-branch"
+        : undefined;
+  }
+  const comparison: unknown = JSON.parse(
+    runGh(["api", "-H", GH_NO_CACHE_HEADER, `repos/${REPOSITORY}/compare/${targetSha}...main`]),
+  );
+  if (
+    isJsonRecord(comparison) &&
+    (comparison.status === "ahead" || comparison.status === "identical")
+  ) {
+    return "main-ancestor";
+  }
+  const branchPages: unknown = JSON.parse(
+    runGh([
+      "api",
+      "--paginate",
+      "--slurp",
+      "-H",
+      GH_NO_CACHE_HEADER,
+      `repos/${REPOSITORY}/commits/${targetSha}/branches-where-head`,
+    ]),
+  );
+  const branches = Array.isArray(branchPages)
+    ? branchPages
+        .flatMap((page) => (Array.isArray(page) ? page : [page]))
+        .filter(isJsonRecord)
+        .map((branch) => stringValue(branch.name))
+        .filter(canonicalBranch)
+    : [];
+  if (branches.length === 1) {
+    return "release-branch";
+  }
+  const matchingTags = run("git", ["ls-remote", "--tags", "origin", "refs/tags/v*"])
+    .split("\n")
+    .flatMap((line) => {
+      const match = /^([a-f0-9]{40})\s+refs\/tags\/(v[^\s]+?)(?:\^\{\})?$/u.exec(line);
+      const contextRef = match?.[2];
+      if (!match || match[1] !== targetSha || !contextRef) {
+        return [];
+      }
+      const context = parseReleaseContextRef(contextRef);
+      return context?.kind === "release tag" ? [context.ref] : [];
+    });
+  return matchingTags.length > 0 ? "release-tag" : undefined;
+}
+
+function preflightCandidateSigningProvenance(
+  targetSha: string,
+  targetContextRef: string,
+): string | undefined {
+  const trustReason = candidateTrustReason(targetSha, targetContextRef);
+  requireDispatch(trustReason, `Release candidate ${targetSha} is not trusted release provenance`);
+  const actor = verifyCandidateProvenanceWithGithub({
+    repository: REPOSITORY,
+    targetSha,
+    provenanceKind: trustReason,
+    request: (args: string[]) => JSON.parse(runGh(args)),
+  });
+  console.log(
+    `Release candidate provenance verified for ${targetSha}${actor ? ` (${actor})` : " (main-ancestor)"}`,
+  );
+  return actor;
+}
+
 function targetVersionForTarget(targetSha: string): string {
   let version: unknown;
   try {
@@ -743,6 +859,73 @@ function resolveTrustedWorkflowSha(requestedSha: string, trustedWorkflowRef: str
   const workflowSha = resolveSha(requestedSha || "origin/main");
   verifyTrustedWorkflowRef(workflowSha, trustedWorkflowRef);
   return workflowSha;
+}
+
+export function formatCandidateToolingLagWarning(
+  candidateSha: string,
+  mainSha: string,
+  commitCount: number,
+  changedPathCount: number,
+  changedAreas: string[],
+) {
+  return [
+    `WARNING: candidate-owned Q=C tooling ${candidateSha} is ${commitCount} non-merge commit(s) behind main ${mainSha}, with ${changedPathCount} net changed path(s). Main cannot repair this candidate harness; review and port applicable release fixes before dispatch.`,
+    ...(changedAreas.length > 0
+      ? ["Largest changed areas (share of net changed paths):", ...changedAreas]
+      : []),
+    `Inspect every exact path: git diff --name-status ${candidateSha} ${mainSha}`,
+  ].join("\n");
+}
+
+function warnCandidateToolingLag(candidateSha: string) {
+  const fetch = runStatus(
+    "git",
+    ["fetch", "--no-tags", "origin", "refs/heads/main:refs/remotes/origin/main"],
+    { stdio: ["ignore", "ignore", "pipe"] },
+  );
+  if (fetch.status !== 0) {
+    console.warn(
+      "WARNING: candidate tooling lag is unavailable because origin/main could not be refreshed; continuing with the existing qualification checks.",
+    );
+    return;
+  }
+  const mainSha = resolveSha("origin/main");
+  if (candidateSha === mainSha) {
+    return;
+  }
+  const commitCount = Number(
+    run("git", [
+      "rev-list",
+      "--count",
+      "--right-only",
+      "--no-merges",
+      `${candidateSha}...${mainSha}`,
+    ]),
+  );
+  const changedPaths = run("git", ["diff", "--no-renames", "--name-only", candidateSha, mainSha])
+    .split(/\r?\n/u)
+    .filter(Boolean);
+  if (commitCount > 0 && changedPaths.length > 0) {
+    const changedAreas = run("git", [
+      "diff",
+      "--no-renames",
+      "--dirstat=files,1",
+      candidateSha,
+      mainSha,
+    ])
+      .split(/\r?\n/u)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    console.warn(
+      formatCandidateToolingLagWarning(
+        candidateSha,
+        mainSha,
+        commitCount,
+        changedPaths.length,
+        changedAreas,
+      ),
+    );
+  }
 }
 
 function assertAdmissionContract(admissionWorkflowSha: string) {
@@ -966,6 +1149,119 @@ function readDispatchRuns(request: DispatchRequest) {
     );
   }
   throw new Error("Dispatch run inventory exceeded its page bound");
+}
+
+function readActiveConcurrencyRuns(request: DispatchRequest) {
+  const runs: Record<string, unknown>[] = [];
+  for (const status of ACTIVE_RUN_STATUSES) {
+    let total: number | undefined;
+    let statusCount = 0;
+    for (let page = 1; page <= MAX_RUN_PAGES; page += 1) {
+      const response = parseGhHttpResponse(
+        readGhApi(`repos/${REPOSITORY}/actions/workflows/${request.workflowId}/runs`, [
+          "--include",
+          "-f",
+          "event=workflow_dispatch",
+          "-f",
+          `status=${status}`,
+          "-f",
+          `per_page=${RUN_PAGE_SIZE}`,
+          "-f",
+          `page=${page}`,
+        ]),
+      );
+      requireDispatch(
+        response.status === 200,
+        "Active run inventory returned a non-success response",
+      );
+      const value: unknown = JSON.parse(response.body);
+      requireDispatch(
+        isJsonRecord(value) &&
+          Array.isArray(value.workflow_runs) &&
+          Number.isSafeInteger(value.total_count) &&
+          Number(value.total_count) >= 0 &&
+          Number(value.total_count) <= RUN_PAGE_SIZE * MAX_RUN_PAGES,
+        "Active run inventory is incomplete or exceeds its bound",
+      );
+      total ??= Number(value.total_count);
+      requireDispatch(
+        value.total_count === total &&
+          value.workflow_runs.length === Math.min(RUN_PAGE_SIZE, total - statusCount),
+        "Active run pagination changed or is incomplete",
+      );
+      for (const item of value.workflow_runs) {
+        requireDispatch(
+          isJsonRecord(item) &&
+            item.status === status &&
+            Number.isSafeInteger(item.id) &&
+            Number(item.id) > 0 &&
+            !runs.some((other) => other.id === item.id),
+          "Active run inventory contains invalid or repeated runs",
+        );
+        runs.push(item);
+        statusCount += 1;
+      }
+      const next = response.headers.get("link")?.match(/<([^>]+)>;\s*rel="next"/u)?.[1];
+      if (statusCount === total) {
+        requireDispatch(!next, "Active run pagination is uncertain");
+        break;
+      }
+      requireDispatch(next, "Active run inventory omitted its next page");
+      const url = new URL(next);
+      requireDispatch(
+        url.origin === "https://api.github.com" &&
+          url.pathname === `/repos/${REPOSITORY}/actions/workflows/${request.workflowId}/runs` &&
+          url.searchParams.get("page") === String(page + 1) &&
+          url.searchParams.get("event") === "workflow_dispatch" &&
+          url.searchParams.get("status") === status &&
+          url.searchParams.get("per_page") === String(RUN_PAGE_SIZE),
+        "Active run pagination changed scope",
+      );
+    }
+    requireDispatch(statusCount === total, "Active run inventory exceeded its page bound");
+  }
+  return runs;
+}
+
+function assertNoActiveConcurrencyRun(request: DispatchRequest) {
+  const branchPrefix = fullReleaseConcurrencyBranchPrefix(request.workflowSha, {
+    inputs: request.inputs,
+    effectiveSoak: request.effectiveSoak,
+  });
+  const active = readActiveConcurrencyRuns(request).filter((workflowRun) =>
+    stringValue(workflowRun.head_branch).startsWith(branchPrefix),
+  );
+  for (const workflowRun of active) {
+    const headBranch = isJsonRecord(workflowRun) ? stringValue(workflowRun.head_branch) : "";
+    requireDispatch(
+      isJsonRecord(workflowRun) &&
+        Number.isSafeInteger(workflowRun.id) &&
+        Number(workflowRun.id) > 0 &&
+        workflowRun.workflow_id === request.workflowId &&
+        workflowRun.head_sha === request.workflowSha &&
+        headBranch.startsWith(branchPrefix) &&
+        workflowRun.event === request.event &&
+        [
+          request.workflowPath,
+          `${request.workflowPath}@${headBranch}`,
+          `${request.workflowPath}@refs/heads/${headBranch}`,
+        ].includes(stringValue(workflowRun.path)) &&
+        workflowRun.html_url ===
+          `https://github.com/${REPOSITORY}/actions/runs/${String(workflowRun.id)}`,
+      "Same-concurrency-group run identity is invalid",
+    );
+  }
+  if (active.length > 0) {
+    const runs = active
+      .map(
+        (workflowRun) =>
+          `${stringValue(workflowRun.html_url)} (${stringValue(workflowRun.status)})`,
+      )
+      .join(", ");
+    throw new Error(
+      `Same-concurrency-group Full Release Validation is already active: ${runs}. Refusing a replacement that would wait behind it; wait for completion or cancel that exact run explicitly.`,
+    );
+  }
 }
 
 function assertDispatchRun(workflowRun: unknown, request: DispatchRequest, expected: DispatchRun) {
@@ -1680,6 +1976,24 @@ async function main() {
     );
     args.trustedWorkflowRef = "candidate";
     args.admissionWorkflowRef = retained.admission!.workflowRef;
+    if (retained.request.targetContextRef !== retained.request.targetSha) {
+      fetchTargetRef(retained.request.targetContextRef);
+      verifyTargetRef(
+        retained.request.targetContextRef,
+        retained.request.targetSha,
+        retained.request.targetVersion,
+      );
+    }
+    const retainedIntent = decodePublicationDispatchEnvelope(
+      retained.request.inputs.trusted_workflow_json,
+    );
+    const candidateAuthorityActor =
+      retainedIntent.validationPurpose === "publish"
+        ? preflightCandidateSigningProvenance(
+            retained.request.targetSha,
+            retained.request.targetContextRef,
+          )
+        : undefined;
     await executeFrozenDispatch({
       args,
       record: retained,
@@ -1692,6 +2006,7 @@ async function main() {
         effectiveSoak: retained.request.effectiveSoak,
       },
       admissionWorkflowSha: retained.admission!.workflowSha,
+      candidateAuthorityActor,
     });
     return;
   }
@@ -1737,6 +2052,7 @@ async function main() {
     assertAdmissionContract(admissionWorkflowSha);
   }
   if (candidateOwned) {
+    warnCandidateToolingLag(workflowSha);
     const baselinePolicy: unknown = JSON.parse(
       run("git", ["show", `${workflowSha}:scripts/lib/upgrade-survivor-scenarios.json`]),
     );
@@ -1763,6 +2079,10 @@ async function main() {
       }),
     );
   }
+  const candidateAuthorityActor =
+    args.inputs.validation_purpose === "publish"
+      ? preflightCandidateSigningProvenance(targetSha, targetContextRef)
+      : undefined;
   // Read target blobs with trusted tooling before creating the workflow ref.
   validatePackageSourceRef(targetSha, {
     allowUnreleasedChangelog: args.inputs.allow_unreleased_changelog === "true",
@@ -1770,8 +2090,19 @@ async function main() {
   if (trustedWorkflowHarness.contract === "1") {
     args.inputs.reuse_evidence = "false";
   }
-  const shortSha = workflowSha.slice(0, 12);
-  const branch = `release-ci/${shortSha}-${Date.now()}`;
+  const concurrencyInputs: DispatchInputs = {
+    ref: targetSha,
+    expected_sha: targetSha,
+    ...args.inputs,
+  };
+  const branchPrefix = fullReleaseConcurrencyBranchPrefix(workflowSha, {
+    inputs: concurrencyInputs,
+    effectiveSoak:
+      String(args.inputs.run_release_soak) === "true" ||
+      concurrencyInputs.release_profile === "stable" ||
+      concurrencyInputs.release_profile === "full",
+  });
+  const branch = `${branchPrefix}${Date.now()}`;
   const remoteBranchRef = `refs/heads/${branch}`;
   const dispatchInputs = {
     ref: targetSha,
@@ -1878,6 +2209,7 @@ async function main() {
     workflowSha,
     branch,
     selection,
+    candidateAuthorityActor,
     admissionWorkflowSha,
   });
 }
@@ -1889,9 +2221,11 @@ async function executeFrozenDispatch(options: {
   workflowSha: string;
   branch: string;
   selection: ReturnType<typeof resolveDispatchSelection>;
+  candidateAuthorityActor?: string;
   admissionWorkflowSha?: string;
 }) {
-  const { args, requestPath, workflowSha, branch, admissionWorkflowSha } = options;
+  const { args, requestPath, workflowSha, branch, admissionWorkflowSha, candidateAuthorityActor } =
+    options;
   let { record, selection } = options;
   console.log(
     formatDispatchSelection(
@@ -1911,6 +2245,9 @@ async function executeFrozenDispatch(options: {
     record = next;
   };
   try {
+    if (record) {
+      assertNoActiveConcurrencyRun(record.request);
+    }
     if (record?.admission) {
       record = await qualifyAdmission(record, retain, qualificationDispatchClient);
       selection = {
@@ -1938,6 +2275,18 @@ async function executeFrozenDispatch(options: {
         payloadDirectory = mkdtempSync(join(tmpdir(), "openclaw-release-dispatch-payload-"));
         payloadPath = join(payloadDirectory, "dispatch.json");
         writeFileSync(payloadPath, payload, { flag: "wx", mode: 0o600 });
+      }
+      if (
+        !args.dryRun &&
+        candidateOwned &&
+        candidateAuthorityActor &&
+        candidateAuthorityActor !== "web-flow"
+      ) {
+        validateCandidateActorPermissionWithGithub({
+          repository: REPOSITORY,
+          actor: candidateAuthorityActor,
+          request: (requestArgs: string[]) => JSON.parse(runGh(requestArgs)),
+        });
       }
       if (record) {
         retain({ ...record, refs: { workflow: "uncertain" } });

@@ -212,6 +212,7 @@ export type FollowupRun = {
     | "bootstrapUserProfileId"
     | "gatewayUiCommandTarget"
     | "toolBindings"
+    | "scheduledAutomation"
     | "chatType"
     | "agentAccountId"
     | "conversationRoutePeerId"
@@ -252,6 +253,7 @@ export type FollowupRun = {
     | "suppressNextUserMessagePersistence"
     | "suppressTranscriptOnlyAssistantPersistence"
     | "skillLibraryAuthoring"
+    | "bootstrapContextMode"
   > & {
     internalEventExecution?: SessionEventExecution;
     agentId: string;

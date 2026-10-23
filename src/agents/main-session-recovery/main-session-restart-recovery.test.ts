@@ -4353,7 +4353,7 @@ describe("main-session-restart-recovery", () => {
       safeTools: "required",
     },
     {
-      name: "ends prior replay restrictions at a new full-access user turn",
+      name: "honors an authoritative replay restriction clear for a new full-access user turn",
       messages: [
         { role: "user", content: "the earlier request" },
         codeModeCheckpointMessage(),
@@ -4367,7 +4367,7 @@ describe("main-session-restart-recovery", () => {
         { role: "user", content: "a later request" },
         makeAssistantTextMessage("Finished the later request."),
       ],
-      entry: { permissionMode: "full", restartRecoveryForceSafeTools: true },
+      entry: { permissionMode: "full" },
       safeTools: "absent",
     },
     {
@@ -4429,7 +4429,7 @@ describe("main-session-restart-recovery", () => {
       ],
       safeTools: "required",
       promptIncludes: [
-        "interrupted by a gateway restart",
+        "interrupted while OpenClaw was waiting",
         "marked interrupted, missing, or aborted",
         "unknown outcome",
         "not proof of tool failure",
@@ -4639,11 +4639,30 @@ describe("main-session-restart-recovery", () => {
   );
 
   it.each([
-    { label: "inherited full access", mode: "full", permissionMode: undefined, restricted: false },
-    { label: "explicit guarded access", mode: "full", permissionMode: "guarded", restricted: true },
+    {
+      label: "inherited full access after a restart",
+      mode: "full",
+      permissionMode: undefined,
+      safeToolsRequired: false,
+      restricted: false,
+    },
+    {
+      label: "inherited full access after a tool timeout",
+      mode: "full",
+      permissionMode: undefined,
+      safeToolsRequired: true,
+      restricted: true,
+    },
+    {
+      label: "explicit guarded access",
+      mode: "full",
+      permissionMode: "guarded",
+      safeToolsRequired: false,
+      restricted: true,
+    },
   ] as const)(
     "continues interrupted work with $label",
-    async ({ mode, permissionMode, restricted }) => {
+    async ({ mode, permissionMode, safeToolsRequired, restricted }) => {
       const sessionsDir = await writePreparedMainSessionTranscript(
         [
           { role: "user", content: "do the thing" },
@@ -4657,7 +4676,16 @@ describe("main-session-restart-recovery", () => {
             },
           ]),
         ],
-        { permissionMode, restartRecoveryForceSafeTools: true },
+        {
+          permissionMode,
+          restartRecoveryForceSafeTools: true,
+          mainRestartRecovery: {
+            cycleId: "interrupted-cycle",
+            revision: 1,
+            chargedAttempts: 0,
+            ...(safeToolsRequired ? { safeToolsRequired: true } : {}),
+          },
+        },
       );
 
       await expectRecovery(
@@ -4667,6 +4695,9 @@ describe("main-session-restart-recovery", () => {
       expect(callGateway).toHaveBeenCalledTimes(1);
       expect(gatewayParams().forceRestartSafeTools === true).toBe(restricted);
       expect(gatewayParams()).not.toHaveProperty("forceCodeModeTools");
+      expect(gatewayParams().message).toContain(
+        "after a Gateway restart or a tool execution timeout",
+      );
       expect(gatewayParams().message).toContain("unknown outcome");
       expect(
         loadSessionEntry({

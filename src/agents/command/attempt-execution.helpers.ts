@@ -539,6 +539,9 @@ export function resolveCompletionToolPolicy(params: {
   completionNeedsMessageDelivery: boolean;
 }) {
   const { run, completionNeedsMessageDelivery, isSubagentAnnounceHandoff } = params;
+  if (params.isCliExecutionProvider && run.opts.forceRestartSafeTools === true) {
+    throw new Error("CLI runtimes cannot enforce restart-safe tool restrictions");
+  }
   const completionRetainsRequesterTools =
     params.trustedSubagentAnnounceHandoff &&
     !params.isRawModelRun &&

@@ -55,6 +55,8 @@ export type ResolvedToolPromptFinalizer = (params: {
 }) => string;
 
 export type RunEmbeddedAgentParams = {
+  /** Cron-owned context admitted through the ordinary session execution path. */
+  scheduledAutomation?: import("../../../auto-reply/reply/session-event-contract.js").ScheduledSessionAutomation;
   /** Settles the session's initial workspace attribution before tools can act. */
   awaitSessionDiffBaseline?: () => Promise<void>;
   /** Host-minted parent audience inherited by a trusted internal child run. */

@@ -25,6 +25,7 @@ export function resolveCronSourceDeliveryPlan(params: {
       force: false,
       requireExplicitTarget: announce,
       requireExplicitTargetEvidence: announce,
+      finalByDefault: false,
     },
     fallback: {
       directDelivery: announce,

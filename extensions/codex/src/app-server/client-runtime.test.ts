@@ -5,6 +5,7 @@ import {
   recordCodexTurnForkSettings,
   requireCodexThreadForkSettings,
 } from "./client-fork-settings.js";
+import { wasCodexAppServerThreadClosed } from "./client-thread-closure.js";
 import type { CodexAppServerClient } from "./client.js";
 import { createClientHarness } from "./test-support.js";
 
@@ -148,9 +149,9 @@ describe("Codex app-server client runtime", () => {
     ensureCodexAppServerClientRuntime(harness.client, context);
     ensureCodexAppServerClientRuntime(harness.client, updatedContext);
 
-    expect(addNotificationHandler).toHaveBeenCalledTimes(1);
+    expect(addNotificationHandler).toHaveBeenCalledTimes(2);
     expect(addRequestHandler).toHaveBeenCalledTimes(1);
-    expect(addCloseHandler).toHaveBeenCalledTimes(1);
+    expect(addCloseHandler).toHaveBeenCalledTimes(2);
     harness.send({
       method: "account/rateLimits/updated",
       params: { rateLimits: { primary: { usedPercent: 12 } } },
@@ -769,12 +770,15 @@ describe("Codex app-server client runtime", () => {
     harness.send({ method, params: { threadId: "thread-a" } });
     await notificationObserved;
     expect(invalidated).toHaveBeenCalledOnce();
+    expect(wasCodexAppServerThreadClosed(harness.client, "thread-a")).toBe(true);
     await expect(
       consumeCodexAppServerLiveThread(harness.client, "thread-a"),
     ).resolves.toBeUndefined();
     await expect(consumeCodexAppServerLiveThread(harness.client, "thread-b")).resolves.toEqual(
       expect.objectContaining({ release: expect.any(Function) }),
     );
+    await expect(retainCodexAppServerLiveThread(harness.client, "thread-a")).resolves.toBe(true);
+    expect(wasCodexAppServerThreadClosed(harness.client, "thread-a")).toBe(false);
   });
 
   it("cannot resurrect thread ownership when its client closes during release", async () => {
@@ -810,7 +814,7 @@ describe("Codex app-server client runtime", () => {
     vi.resetModules();
     const nextCopy = await import("./client-runtime.js");
     nextCopy.ensureCodexAppServerClientRuntime(harness.client, { agentDir: "/tmp/agent" });
-    expect(addCloseHandler).toHaveBeenCalledTimes(1);
+    expect(addCloseHandler).toHaveBeenCalledTimes(2);
     expect(nextCopy.isCodexAppServerClientRuntimeLive(harness.client)).toBe(true);
     expect(nextCopy.hasCodexAppServerLiveThread(harness.client, "copy-retained")).toBe(true);
     const claimed = await nextCopy.claimCodexAppServerLiveThread(harness.client, "copy-retained");

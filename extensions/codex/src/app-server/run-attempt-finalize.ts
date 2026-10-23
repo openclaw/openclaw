@@ -124,6 +124,9 @@ export async function finalizeCodexAttempt(
       }
     } finally {
       if (!state.projectionClosed) {
+        activeProjector.prepareTerminalToolResultCheckpoint(toolBridge.telemetry, {
+          readRetainedNativeCommands,
+        });
         await resources.runCleanupStep("codex-transcript-checkpoint", closeProjection);
       }
     }

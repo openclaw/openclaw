@@ -180,8 +180,12 @@ async function readToolSurface(context: PreparedCliRunContext, signal: AbortSign
 }
 
 it.for([
-  { name: "unrestricted native tools", toolsAllow: undefined },
-  { name: "a finite caller cap", toolsAllow: ["exec", "process", "session_status"] },
+  { name: "unrestricted native tools", toolsAllow: undefined, expectedStatus: "completed" },
+  {
+    name: "a finite caller cap",
+    toolsAllow: ["exec", "process", "session_status"],
+    expectedStatus: "failed",
+  },
 ])(
   "retains the CLI surface and enforces completion effects with $name",
   async (source, { signal }) => {
@@ -307,10 +311,15 @@ it.for([
       await withinTest(waitForExecScope(sessionKey), signal);
       const receipt = expectDefined(receipts[receiptIndex], "background exec completion");
       await expect(withinTest(receipt.accepted, signal)).resolves.toEqual({ ok: true });
-      await expect(withinTest(receipt.settled, signal)).resolves.toMatchObject({
-        status: "completed",
+      const outcome = await withinTest(receipt.settled, signal);
+      expect(outcome).toMatchObject({
+        status: source.expectedStatus,
         executionStarted: true,
       });
+      if (source.toolsAllow) {
+        expect(outcome.error).toContain("Session event permissions were restricted");
+        expect(outcome).toMatchObject({ delivered: false, deliveryAttempted: false });
+      }
       expect(completionSurfaces).toEqual([normalSurface]);
     } finally {
       for (const receipt of receipts.slice(receiptIndex)) {

@@ -13,9 +13,10 @@ title: "Goal"
 
 A **goal** is one durable objective attached to the current OpenClaw session.
 It gives the agent and the operator a shared target for long-running work.
-In built-in chat runs, OpenClaw continues pursuing an active goal after a normal
-turn finishes, even when the model ends with a final reply instead of calling
-another tool. A goal is not a reminder, cron job, or standing order.
+In built-in chat runs and supported local or cloud-worker Codex sessions,
+OpenClaw continues pursuing an active goal after a normal turn finishes, even
+when the model ends with a final reply instead of calling another tool. A goal
+is not a reminder, cron job, or standing order.
 
 Goals are session state: they move with the session key, survive process
 restarts, and appear in `/goal`, the model-facing goal tools, and the TUI
@@ -200,12 +201,12 @@ unfinished goal complete. Pause prevents further goal turns. Terminal errors
 and timeouts pause the goal as described above. Resuming a paused or limited
 goal remains an explicit operator action, not something the continuation does.
 
-Automatic nudges apply to built-in chat/auto-reply execution, not native Codex,
-other external runtimes, heartbeat turns, or independent scheduled work. They
-use the existing queue and run lifecycle rather than a periodic background
-scanner. A saved active goal alone does not start a new process or create a
-schedule after shutdown; normal session recovery or another admitted turn
-provides the next execution opportunity.
+Automatic nudges apply to built-in chat/auto-reply execution and supported local
+and cloud-worker Codex sessions, not other external runtimes, heartbeat turns,
+or independent scheduled work. They use the existing queue and run lifecycle
+rather than a periodic background scanner. A saved active goal alone does not
+start a new process or create a schedule after shutdown; normal session recovery
+or another admitted turn provides the next execution opportunity.
 
 ## Control UI
 

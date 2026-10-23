@@ -85,7 +85,7 @@ it(
     const readRecoveryPrompt = (payload: string) => {
       const prompts = readPromptFrames(payload).filter(
         (text) =>
-          text.includes("Your previous turn was interrupted by a gateway restart") &&
+          text.includes("Your previous turn was interrupted while OpenClaw was waiting") &&
           text.includes("Unfinished child sessions to reconcile:"),
       );
       expect(prompts).toHaveLength(1);

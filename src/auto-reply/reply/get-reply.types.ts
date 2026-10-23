@@ -29,7 +29,10 @@ import type { FollowupQueueDisposition, QueuedFollowupReplyDelivery } from "./qu
 import type { ReplyOptionsWithAdmissionTicket } from "./reply-admission-ticket.js";
 import type { ReplyOptionsWithOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
-import type { SessionEventExecution } from "./session-event-contract.js";
+import type {
+  ScheduledSessionAutomation,
+  SessionEventExecution,
+} from "./session-event-contract.js";
 
 export type ReplySessionBinding = {
   sessionKey?: string;
@@ -48,6 +51,10 @@ export type ReplyRunVerbosity = {
 };
 
 type InternalReplySessionOptions = {
+  /** Per-occurrence model override selected by a trusted scheduled source. */
+  modelOverride?: string;
+  /** Cron-owned execution context carried through ordinary session admission. */
+  scheduledAutomation?: ScheduledSessionAutomation;
   /** Settles attribution before tool effects; model preparation may run concurrently. */
   awaitSessionDiffBaseline?: () => Promise<void>;
   /** Producer callbacks follow this occurrence through queueing and delivery. */

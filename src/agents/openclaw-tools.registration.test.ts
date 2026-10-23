@@ -459,6 +459,30 @@ describe("gateway client capability tool filtering", () => {
     ).toBe(true);
   });
 
+  it("negotiates GitHub reconnect guidance with the requesting Control UI", () => {
+    const olderTools = createOpenClawTools({
+      githubPublicationAvailable: false,
+      clientCaps: ["ui-commands"],
+    });
+    const capableTools = createOpenClawTools({
+      githubPublicationAvailable: false,
+      clientCaps: ["ui-commands", "ui-agent-github-settings"],
+    });
+
+    expect(JSON.stringify(expectToolNamed(olderTools, "screen").parameters)).not.toContain(
+      "github_identity_settings",
+    );
+    expect(JSON.stringify(expectToolNamed(capableTools, "screen").parameters)).toContain(
+      "github_identity_settings",
+    );
+    expect(expectToolNamed(olderTools, "github_identity_status").description).not.toContain(
+      "github_identity_settings",
+    );
+    expect(expectToolNamed(capableTools, "github_identity_status").description).toContain(
+      "github_identity_settings",
+    );
+  });
+
   it.each([
     { name: "default policy", config: {}, available: true, expected: true },
     {

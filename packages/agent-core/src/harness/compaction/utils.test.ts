@@ -130,7 +130,7 @@ describe("serializeConversation", () => {
       ];
       const common = { content, timestamp: 0 };
       const message: AgentMessage = { ...common, role, customType: "test", display: true };
-      expect(serializeConversation(convertToLlm([message]))).toBe("[User]: alpha\nend");
+      expect(serializeConversation(convertToLlm([message]))).toBe("[Synthetic input]: alpha\nend");
       expect(estimateTokens(message)).toBe(3);
       expect(message.content).toEqual([
         { type: "text", text: "alpha" },

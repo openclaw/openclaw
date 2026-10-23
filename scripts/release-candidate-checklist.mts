@@ -31,6 +31,7 @@ import {
   stripLeadingPackageManagerSeparator,
 } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { parsePluginReleaseSelection } from "./lib/plugin-npm-release.ts";
 import { loadChangelogCollection } from "./lib/release-changelog.mjs";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
@@ -38,12 +39,16 @@ import { ensureReleasePublishToolingTag } from "./lib/release-publish-preflight-
 import { formatReleasePublishPreflight } from "./lib/release-publish-preflight-interface.mts";
 import { classifyReleaseTrain, parseReleaseVersion } from "./lib/release-version.mjs";
 import { sleep as wait } from "./lib/sleep.mjs";
+import { readUpgradeSurvivorScenarioCatalog } from "./lib/upgrade-survivor-policy.mjs";
 import {
   downloadFullReleaseNpmPreflight,
   verifyNpmPreflightProducer,
   validateReleasePreflightTagIdentity,
 } from "./npm-preflight-tooling-identity.mjs";
-import { validateNpmPreflightDistTag } from "./openclaw-npm-extended-stable-release.mjs";
+import {
+  resolveNpmPreflightSdkSelectors,
+  validateNpmPreflightDistTag,
+} from "./openclaw-npm-extended-stable-release.mjs";
 import {
   PluginSdkApiAcknowledgementError,
   validatePluginSdkApiReleaseEvidence,
@@ -119,6 +124,7 @@ const SHA256_HEX_PATTERN = /^[a-f0-9]{64}$/u;
 const RELEASE_CANDIDATE_STATE_VERSION = 2;
 const RELEASE_CANDIDATE_STATE_FILE = "release-candidate-state.json";
 const TRUSTED_TOOLING_SHA_ENV = "OPENCLAW_RELEASE_CANDIDATE_TRUSTED_TOOLING_SHA";
+const UPGRADE_SURVIVOR_CATALOG_PATH = "scripts/lib/upgrade-survivor-scenarios.json";
 // Release tooling (toolingSha and its publishWorkflowRef tag) is not candidate
 // identity: each run re-verifies the current tooling against trusted main, and
 // saved FRV/npm evidence is authenticated against its own producer run. Tooling
@@ -190,7 +196,7 @@ Options:
   --npm-dist-tag <beta|latest>  Default: ${DEFAULT_NPM_DIST_TAG}
   --plugin-publish-scope <scope>      selected|all-publishable. Default: ${DEFAULT_PLUGIN_SCOPE}
   --plugins <names>                   Required when plugin scope is selected.
-  --output-dir <dir>                  Evidence output dir. Default: .artifacts/release-candidate/<tag>
+  --output-dir <dir>                  Evidence output dir. Default: .artifacts/release-candidate/<tag>/<target-sha>
 `;
 }
 
@@ -378,6 +384,18 @@ export function parseArgs(argv: string[]) {
   return options;
 }
 
+export function resolveReleaseCandidateOutputDir({
+  outputDir,
+  tag,
+  targetSha,
+}: {
+  outputDir: string;
+  tag: string;
+  targetSha: string;
+}) {
+  return outputDir || join(".artifacts", "release-candidate", tag, targetSha);
+}
+
 export function run(
   command: string,
   args: string[],
@@ -418,6 +436,162 @@ function readJson(path: string, label: string) {
       `${label} is invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
       { cause: error },
     );
+  }
+}
+
+export function resolveEarlyPluginSdkApiBases({
+  distTags,
+  npmDistTag,
+  packageVersion,
+}: {
+  distTags: unknown;
+  npmDistTag: string;
+  packageVersion: string;
+}): Record<string, string> {
+  const entries = resolveNpmJsonEntries(distTags);
+  if (entries.length !== 1 || !isRecord(entries[0])) {
+    throw new Error("Expected one npm dist-tag selector map for the Plugin SDK API review");
+  }
+  const selectorMap = entries[0];
+  const selectors = resolveNpmPreflightSdkSelectors(packageVersion, npmDistTag);
+  return Object.fromEntries(
+    selectors.map((selector) => {
+      const version = selectorMap[selector];
+      if (typeof version !== "string" || !parseReleaseVersion(version)) {
+        throw new Error(`Invalid npm Plugin SDK API predecessor for ${selector}`);
+      }
+      return [selector, `v${version}`];
+    }),
+  );
+}
+
+function formatPluginSdkApiAcknowledgementFailure(
+  error: PluginSdkApiAcknowledgementError,
+  report: string,
+) {
+  const argv = stripLeadingPackageManagerSeparator(process.argv.slice(2));
+  const end = argv.indexOf("--");
+  const flag = "--plugin-sdk-api-acknowledgement";
+  let replaced = false;
+  for (let index = 0; index < (end === -1 ? argv.length : end); index++) {
+    if (argv[index] === flag) {
+      argv[++index] = error.digest;
+      replaced = true;
+    }
+  }
+  if (!replaced) {
+    argv.unshift(flag, error.digest);
+  }
+  return new Error(
+    [
+      error.message,
+      report || "Review the Plugin SDK API diff artifact before rerunning.",
+      ["pnpm", "release:candidate", "--", ...argv].map(shellQuote).join(" "),
+    ].join("\n\n"),
+    { cause: error },
+  );
+}
+
+export function resolveEarlyPluginSdkApiReviewPaths({
+  outputDir,
+  targetRoot,
+}: {
+  outputDir: string;
+  targetRoot: string;
+}) {
+  const reviewDir = resolvePath(targetRoot, outputDir, "plugin-sdk-api-early-review");
+  return {
+    reviewDir,
+    evidencePath: join(reviewDir, "plugin-sdk-api-release-evidence.json"),
+    reportPath: join(reviewDir, "plugin-sdk-api-release-diff.md"),
+    diffPath: join(reviewDir, "plugin-sdk-api-release-diff.json"),
+  };
+}
+
+function runEarlyPluginSdkApiReview({
+  npmDistTag,
+  outputDir,
+  targetRoot,
+  targetSha,
+  toolingSha,
+}: {
+  npmDistTag: string;
+  outputDir: string;
+  targetRoot: string;
+  targetSha: string;
+  toolingSha: string;
+}) {
+  const packageManifest: unknown = JSON.parse(
+    run("git", ["show", `${targetSha}:package.json`], { capture: true, cwd: targetRoot }),
+  );
+  const packageVersion = requireString(
+    isRecord(packageManifest) ? packageManifest.version : undefined,
+    "release package version",
+  );
+  const bases = resolveEarlyPluginSdkApiBases({
+    distTags: JSON.parse(
+      run("npm", ["view", "openclaw", "dist-tags", "--json"], {
+        capture: true,
+        cwd: targetRoot,
+      }),
+    ),
+    npmDistTag,
+    packageVersion,
+  });
+  for (const tag of new Set(Object.values(bases))) {
+    run(
+      "git",
+      [
+        "fetch",
+        "--no-tags",
+        "--filter=blob:none",
+        "--depth=1",
+        "origin",
+        `+refs/tags/${tag}:refs/tags/${tag}`,
+      ],
+      { cwd: TOOLING_ROOT },
+    );
+  }
+  const { reviewDir, evidencePath, reportPath, diffPath } = resolveEarlyPluginSdkApiReviewPaths({
+    outputDir,
+    targetRoot,
+  });
+  mkdirSync(reviewDir, { recursive: true });
+  const args = [
+    "run",
+    "plugin-sdk:api:diff",
+    "--",
+    "--head",
+    targetSha,
+    "--evidence",
+    evidencePath,
+    "--json",
+    diffPath,
+    "--summary",
+    reportPath,
+  ];
+  if (Object.keys(bases).length === 2) {
+    args.push("--bases-json", JSON.stringify(bases));
+  } else {
+    args.push("--base", requireString(Object.values(bases)[0], "Plugin SDK API predecessor"));
+  }
+  console.log("Reviewing the Plugin SDK API while Full Release Validation runs...");
+  run("pnpm", args, { cwd: TOOLING_ROOT });
+  const evidence = readJson(evidencePath, "early Plugin SDK API evidence");
+  const report = readFileSync(reportPath, "utf8").trim();
+  try {
+    return validatePluginSdkApiReleaseEvidence({
+      acknowledgement: "",
+      evidence,
+      expectedHeadSha: targetSha,
+      expectedWorkflowSha: toolingSha,
+      npmDistTag,
+    });
+  } catch (error) {
+    if (error instanceof PluginSdkApiAcknowledgementError) {
+      throw formatPluginSdkApiAcknowledgementFailure(error, report);
+    }
+    throw error;
   }
 }
 
@@ -994,6 +1168,54 @@ export function validateTrustedToolingPin({
     );
   }
   return pinnedToolingSha;
+}
+
+function releaseScenarioCatalog(source: string, owner: string) {
+  const scenarios = readUpgradeSurvivorScenarioCatalog(source, { includeAssertionOnly: false });
+  if (!scenarios) {
+    throw new Error(`${owner} has an invalid ${UPGRADE_SURVIVOR_CATALOG_PATH}`);
+  }
+  return scenarios;
+}
+
+export function validateReleaseScenarioCatalogCompatibility({
+  candidateCatalog,
+  toolingCatalog,
+  latestTrustedToolingCatalog,
+  toolingSha,
+  latestTrustedToolingSha,
+  workflowRef,
+}: {
+  candidateCatalog: string;
+  toolingCatalog: string;
+  latestTrustedToolingCatalog: string;
+  toolingSha: string;
+  latestTrustedToolingSha: string;
+  workflowRef: string;
+}) {
+  const candidateScenarios = releaseScenarioCatalog(candidateCatalog, "release candidate");
+  const toolingScenarios = new Set(releaseScenarioCatalog(toolingCatalog, `tooling ${toolingSha}`));
+  const unsupported = candidateScenarios
+    .filter((scenario) => !toolingScenarios.has(scenario))
+    .toSorted();
+  if (unsupported.length === 0) {
+    return { status: "passed" as const, unsupported };
+  }
+  const latestScenarios = new Set(
+    releaseScenarioCatalog(
+      latestTrustedToolingCatalog,
+      `trusted ${workflowRef} tooling ${latestTrustedToolingSha}`,
+    ),
+  );
+  const replacementSupportsCandidate = candidateScenarios.every((scenario) =>
+    latestScenarios.has(scenario),
+  );
+  const replacement = replacementSupportsCandidate
+    ? ` Trusted ${workflowRef} tooling ${latestTrustedToolingSha} supports this catalogue; rerun with --workflow-sha ${latestTrustedToolingSha}.`
+    : ` Trusted ${workflowRef} tip ${latestTrustedToolingSha} also lacks support; land the catalogue consumer before qualifying this candidate.`;
+  throw new Error(
+    `Pinned release tooling ${toolingSha} cannot consume candidate upgrade-survivor scenarios: ${unsupported.join(", ")}.${replacement}`,
+  );
 }
 
 export async function validateNpmPreflightRunSource(
@@ -2090,8 +2312,12 @@ async function main() {
     });
     return;
   }
-  options.outputDir ||= join(".artifacts", "release-candidate", options.tag);
   const targetSha = gitRevParse(options.targetSha || "HEAD", targetRoot);
+  options.outputDir = resolveReleaseCandidateOutputDir({
+    outputDir: options.outputDir,
+    tag: options.tag,
+    targetSha,
+  });
   assertReleaseCandidateTag(options.tag, targetSha, targetRoot);
   const toolingSha = gitRevParse("HEAD", TOOLING_ROOT);
   const latestTrustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT);
@@ -2216,6 +2442,27 @@ async function main() {
   // A new dispatch is gated by the local check; consuming existing evidence
   // defers it until the SDK acknowledgement has been checked.
   const dispatchesValidation = !options.fullReleaseRunId && !options.skipDispatch;
+  const validatesScenarioCatalog = dispatchesValidation && !hasRetainedRequest;
+  if (validatesScenarioCatalog) {
+    validateReleaseScenarioCatalogCompatibility({
+      candidateCatalog: run("git", ["show", `${targetSha}:${UPGRADE_SURVIVOR_CATALOG_PATH}`], {
+        capture: true,
+        cwd: targetRoot,
+      }),
+      toolingCatalog: run("git", ["show", `${toolingSha}:${UPGRADE_SURVIVOR_CATALOG_PATH}`], {
+        capture: true,
+        cwd: targetRoot,
+      }),
+      latestTrustedToolingCatalog: run(
+        "git",
+        ["show", `${latestTrustedToolingSha}:${UPGRADE_SURVIVOR_CATALOG_PATH}`],
+        { capture: true, cwd: targetRoot },
+      ),
+      toolingSha,
+      latestTrustedToolingSha,
+      workflowRef: options.workflowRef,
+    });
+  }
   let localGeneratedCheck = dispatchesValidation
     ? runLocalGeneratedCheckIfNeeded(options)
     : undefined;
@@ -2233,6 +2480,19 @@ async function main() {
     fullReleaseRunId: options.fullReleaseRunId,
     npmPreflightRunId: options.npmPreflightRunId,
   });
+
+  // The validation run continues in GitHub while trusted local tooling computes
+  // the review digest. A missing acknowledgement therefore surfaces near
+  // dispatch instead of after every FRV lane has sealed.
+  if (!options.pluginSdkApiAcknowledgement) {
+    runEarlyPluginSdkApiReview({
+      npmDistTag: options.npmDistTag,
+      outputDir: options.outputDir,
+      targetRoot,
+      targetSha,
+      toolingSha,
+    });
+  }
 
   const { run: fullRun } = await waitForSuccessfulRun(options.repo, options.fullReleaseRunId, {
     workflowName: "Full Release Validation",
@@ -2393,27 +2653,7 @@ async function main() {
           });
         }
       }
-      const argv = stripLeadingPackageManagerSeparator(process.argv.slice(2));
-      const end = argv.indexOf("--");
-      const flag = "--plugin-sdk-api-acknowledgement";
-      let replaced = false;
-      for (let index = 0; index < (end === -1 ? argv.length : end); index++) {
-        if (argv[index] === flag) {
-          argv[++index] = error.digest;
-          replaced = true;
-        }
-      }
-      if (!replaced) {
-        argv.unshift(flag, error.digest);
-      }
-      throw new Error(
-        [
-          error.message,
-          report || "Review the Plugin SDK API diff artifact before rerunning.",
-          ["pnpm", "release:candidate", "--", ...argv].map(shellQuote).join(" "),
-        ].join("\n\n"),
-        { cause: error },
-      );
+      throw formatPluginSdkApiAcknowledgementFailure(error, report);
     }
     throw error;
   }

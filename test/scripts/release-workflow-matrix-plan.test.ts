@@ -72,6 +72,38 @@ function requiredJob(definition: WorkflowDocument, name: string): WorkflowJob {
   return expectDefined(definition.jobs[name], `release workflow job ${name}`);
 }
 
+function requiredStep(job: WorkflowJob, name: string): WorkflowStep {
+  return expectDefined(
+    job.steps.find((step) => step.name === name),
+    name,
+  );
+}
+
+function bashRun(command: string, env: NodeJS.ProcessEnv, cwd?: string) {
+  return spawnSync("bash", ["--noprofile", "--norc", "-c", command], {
+    encoding: "utf8",
+    env,
+    cwd,
+  });
+}
+
+function runFixture(command: string, args: string[], env: NodeJS.ProcessEnv, cwd?: string) {
+  const result = spawnSync(command, args, { encoding: "utf8", env, cwd });
+  expect(result.status, result.stderr).toBe(0);
+  return result.stdout;
+}
+
+function parseOutputs(text: string) {
+  return Object.fromEntries(
+    text
+      .trim()
+      .split("\n")
+      .map((line) => {
+        const separator = line.indexOf("=");
+        return [line.slice(0, separator), line.slice(separator + 1)];
+      }),
+  );
+}
 // Direct dispatches build from the selected ref. Only trusted workflow callers
 // may provide the complete immutable package artifact tuple.
 const WORKFLOW_CALL_ONLY_INPUTS = new Set([
@@ -336,7 +368,7 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
     ],
     [
       "Verify live agent prompt prefix reuse",
-      "test:live src/agents/embedded-agent-runner.cache.live.test.ts --testNamePattern release prompt-prefix gate",
+      "test:live src/agents/embedded-agent-runner.cache.live.test.ts --testNamePattern release prompt-prefix gate --reporter=default --reporter=json --outputFile.json=.artifacts/live-cache/agent-prefix-reuse.vitest.json",
     ],
   ])("propagates harness results from %s to the release gate", (stepName, args) => {
     const job = requiredJob(workflow(), "validate_release_live_cache");
@@ -345,23 +377,40 @@ describe("scripts/plan-release-workflow-matrix.mjs", () => {
       "prompt-prefix step",
     );
     for (const code of [0, 23]) {
-      const result = spawnSync(
-        "bash",
-        [
-          "--noprofile",
-          "--norc",
-          "-c",
-          `timeout() { while [[ "$1" == --* ]]; do shift; done; shift; "$@"; }
+      const cwd = tempDirs.make("openclaw-live-cache-shell-replay-");
+      const result = bashRun(
+        `timeout() { while [[ "$1" == --* ]]; do shift; done; shift; "$@"; }
 node() { printf '%s\\n' "$*"; return "$HARNESS_EXIT"; }
 pnpm() { node "$@"; }
 ${expectDefined(step.run, "prompt-prefix command")}`,
-        ],
-        { encoding: "utf8", env: { PATH: process.env.PATH, HARNESS_EXIT: String(code) } },
+        { PATH: process.env.PATH, HARNESS_EXIT: String(code) },
+        cwd,
       );
       expect(result.stdout.trim()).toBe(args);
       expect(result.status, result.stderr).toBe(code);
     }
     expect(step["continue-on-error"]).not.toBe(true);
+  });
+
+  it("retains exact-candidate live cache diagnostics on failure", () => {
+    const job = requiredJob(workflow(), "validate_release_live_cache");
+    expect(requiredStep(job, "Verify live prompt cache floors").run).toContain(
+      "cache-floors.vitest.json",
+    );
+    expect(requiredStep(job, "Verify live agent prompt prefix reuse").run).toContain(
+      "agent-prefix-reuse.vitest.json",
+    );
+    const upload = requiredStep(job, "Upload live cache diagnostics");
+    expect(upload).toMatchObject({
+      if: "always()",
+      uses: "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+      with: {
+        name: "live-cache-${{ needs.validate_selected_ref.outputs.selected_sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+        path: ".artifacts/live-cache/",
+        "retention-days": 14,
+        "if-no-files-found": "warn",
+      },
+    });
   });
 
   it.each([

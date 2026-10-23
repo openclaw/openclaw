@@ -546,7 +546,15 @@ describe("native OpenAI Responses SSE continuation", () => {
       initialState: {
         model: astra,
         thinkingLevel: "low",
-        tools: [{ ...functionTool("lookup"), label: "lookup", execute }],
+        tools: [
+          { ...functionTool("lookup"), label: "lookup", execute },
+          {
+            ...functionTool("sessions_yield"),
+            label: "sessions_yield",
+            async: false,
+            execute: vi.fn(),
+          },
+        ],
       },
       streamFn: createOpenAIResponsesTransportStreamFn(),
       getApiKey: () => "test-key",
@@ -564,6 +572,7 @@ describe("native OpenAI Responses SSE continuation", () => {
       expect(sseState.requests).toHaveLength(1);
       expect(sseState.requests[0]?.tools).toEqual([
         expect.objectContaining({ name: "lookup", async: true }),
+        expect.not.objectContaining({ async: true }),
       ]);
       releaseTool.resolve();
       await prompt;
@@ -587,6 +596,58 @@ describe("native OpenAI Responses SSE continuation", () => {
       agent.abort();
       await prompt;
     }
+  });
+
+  it("keeps Astra tools synchronous without sessions_yield to collect async results", async () => {
+    const execute = vi.fn(async () => ({
+      content: [{ type: "text" as const, text: "lookup result" }],
+      details: {},
+    }));
+    const call = {
+      type: "function_call",
+      id: "fc_lookup",
+      call_id: "call_lookup",
+      name: "lookup",
+      arguments: "{}",
+      status: "completed",
+    };
+    const completed = completedEvent("resp_call", "");
+    sseState.outcomes.push(
+      sdkEvents(
+        { type: "response.output_item.added", output_index: 0, item: { ...call, arguments: "" } },
+        { type: "response.output_item.done", output_index: 0, item: call },
+        { ...completed, response: { ...completed.response, output: [call] } },
+      ),
+      sdkCompletion("resp_final", "used lookup result"),
+    );
+    // plugins is synchronous but cannot collect async results (cron surfaces lack sessions_yield).
+    const agent = new Agent({
+      initialState: {
+        model: astra,
+        thinkingLevel: "low",
+        tools: [
+          { ...functionTool("lookup"), label: "lookup", execute },
+          { ...functionTool("plugins"), label: "plugins", async: false, execute: vi.fn() },
+        ],
+      },
+      streamFn: createOpenAIResponsesTransportStreamFn(),
+      getApiKey: () => "test-key",
+      sessionId: "sync-agent",
+      transport: "sse",
+    });
+    await agent.prompt("Look it up and report.");
+    expect(sseState.requests[0]?.tools).not.toContainEqual(
+      expect.objectContaining({ async: true }),
+    );
+    expect(sseState.requests).toHaveLength(2);
+    const replay = sseState.requests[1]?.input as Array<{ type: string }>;
+    expect(replay.filter((item) => item.type === "function_call_output")).toEqual([
+      { type: "function_call_output", call_id: "call_lookup", output: "lookup result" },
+    ]);
+    expect(agent.state.messages.at(-1)).toMatchObject({
+      role: "assistant",
+      content: [expect.objectContaining({ text: "used lookup result" })],
+    });
   });
 
   it.each([

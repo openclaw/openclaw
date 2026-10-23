@@ -27,6 +27,7 @@ import {
   getSessionWorkAdmissionOwnerRelease,
   isSessionWorkAdmissionActive,
 } from "../../sessions/session-lifecycle-admission.js";
+import { CronSessionLifecycleClaimError } from "../run-authority.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
   normalizeCronScheduledToolPolicy,
@@ -43,6 +44,8 @@ import type {
 import { setSessionRuntimeModel } from "./run.runtime.js";
 import type { CronLaneWaitCallback } from "./run.types.js";
 import { loadCronSessionEntryLatest, type resolveCronSession } from "./session.js";
+
+export { CronSessionLifecycleClaimError } from "../run-authority.js";
 
 const CRON_SESSION_PREPARATION_OWNER = Symbol.for("openclaw.cronSessionPreparation");
 
@@ -153,18 +156,6 @@ export type CronRunContinuationSession = {
   ) => Promise<void>;
   seal: (options?: { basePersisted?: boolean }) => Promise<void>;
 };
-
-export class CronSessionLifecycleClaimError extends Error {
-  readonly admissionDisposition = "session-conflict" as const;
-
-  constructor(
-    sessionKey: string,
-    message = `Session "${sessionKey}" changed while starting work. Retry.`,
-  ) {
-    super(message);
-    this.name = "CronSessionLifecycleClaimError";
-  }
-}
 
 function resolveCronLifecycleRevisionIdentity(lifecycleRevision: string): string {
   return `cron-lifecycle-revision:${lifecycleRevision}`;

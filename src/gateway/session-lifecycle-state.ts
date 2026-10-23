@@ -1,9 +1,11 @@
+import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString as normalizeLifecycleRunId } from "@openclaw/normalization-core/string-coerce";
 import { isAgentLifecycleYieldedWaiting } from "../agents/agent-lifecycle-parent-state.js";
 import {
   buildAgentRunTerminalOutcomeFromLifecycleEvent,
   classifyAgentRunTerminalOutcome,
+  isAgentRunResumableToolTimeout,
   type AgentRunTerminalOutcome,
 } from "../agents/agent-run-terminal-outcome.js";
 import { projectMainSessionRecoveryLifecycle } from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
@@ -193,7 +195,9 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   // Use the normalized outcome so a prior hard timeout still owns the terminal state.
   const interruptedForRestart =
     terminal?.reason === "cancelled" && terminal.stopReason === "restart";
-  const status = interruptedForRestart
+  const interruptedForToolTimeout = isAgentRunResumableToolTimeout(terminal);
+  const resumableInterruption = interruptedForRestart || interruptedForToolTimeout;
+  const status = resumableInterruption
     ? "interrupted"
     : terminal
       ? SESSION_STATUS_BY_TERMINAL_CLASSIFICATION[classifyAgentRunTerminalOutcome(terminal)]
@@ -201,8 +205,10 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
   return {
     updatedAt,
     status,
-    lastRunError: interruptedForRestart
-      ? "Run interrupted by a Gateway restart."
+    lastRunError: resumableInterruption
+      ? interruptedForRestart
+        ? "Run interrupted by a Gateway restart."
+        : "Tool execution timed out with an unknown outcome. Resume to verify state before repeating it."
       : terminal && status
         ? resolveSessionRunError({ ...terminal, errorKind: params.event.data?.errorKind }, status)
         : undefined,
@@ -210,13 +216,13 @@ export function deriveGatewaySessionLifecycleSnapshot(params: {
     endedAt,
     runtimeMs: resolveRuntimeMs({ startedAt, endedAt, existingRuntimeMs: existing?.runtimeMs }),
     ...(terminal &&
-    !interruptedForRestart &&
+    !resumableInterruption &&
     params.event.controlUiVisible === true &&
     params.event.isHeartbeat !== true &&
     endedAt !== undefined
       ? { lastActivityAt: Math.max(existing?.lastActivityAt ?? 0, endedAt) }
       : {}),
-    abortedLastRun: interruptedForRestart || status === "killed",
+    abortedLastRun: resumableInterruption || status === "killed",
   };
 }
 
@@ -475,6 +481,16 @@ async function persistPreparedGatewaySessionLifecycleEvent(
         // their async persistence can settle out of order.
         return null;
       }
+      if (
+        phase !== "start" &&
+        entry.lifecycleRunId === undefined &&
+        terminalRunId !== undefined &&
+        (eventRunId === terminalRunId || eventClientRunId === terminalRunId)
+      ) {
+        // A duplicate terminal event cannot recreate recovery after its original
+        // checkpoint was settled or explicitly cleared.
+        return null;
+      }
       const patch: Partial<PersistedLifecycleSessionShape> &
         Pick<SessionEntry, "providerReview" | "goal"> = derivePersistedSessionLifecyclePatch({
         entry,
@@ -493,6 +509,16 @@ async function persistPreparedGatewaySessionLifecycleEvent(
           lifecycleGeneration:
             params.event.lifecycleGeneration ?? getAgentEventLifecycleGeneration(),
         });
+        if (isAgentRunResumableToolTimeout(resolveSettledLifecycleTerminalOutcome(params.event))) {
+          patch.mainRestartRecovery = entry.mainRestartRecovery
+            ? { ...entry.mainRestartRecovery, safeToolsRequired: true }
+            : {
+                cycleId: randomUUID(),
+                revision: 1,
+                chargedAttempts: 0,
+                safeToolsRequired: true,
+              };
+        }
       }
       if (providerReview && Object.keys(patch).length > 0) {
         patch.providerReview = providerReview.review;

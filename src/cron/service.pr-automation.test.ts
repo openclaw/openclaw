@@ -41,7 +41,16 @@ import {
 import type { CronEvent } from "./service.js";
 import { createCronServiceWithStateForTest, createNoopLogger } from "./service.test-harness.js";
 import { onTimer } from "./service/timer.test-support.js";
+import { runCronSessionTurn } from "./session-run.js";
 import { resolveCronSessionTargetSessionKey } from "./session-target.js";
+
+const sessionRunner = vi.hoisted(() => ({
+  runEmbedded: vi.fn<typeof import("../agents/embedded-agent-runner/run.js").runEmbeddedAgent>(),
+}));
+// mock-isolation: Both recipe runners share the synthetic model; controller and effects stay real.
+vi.mock("../agents/embedded-agent-runner/run.js", () => ({
+  runEmbeddedAgent: sessionRunner.runEmbedded,
+}));
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const { resolveAgentDir } = await import("./isolated-agent/run.runtime.js");
@@ -61,6 +70,9 @@ beforeEach(() => {
   ensureAgentWorkspaceMock.mockImplementation(async ({ dir }: { dir: string }) => ({ dir }));
   resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
   mockRunCronFallbackPassthrough();
+  sessionRunner.runEmbedded
+    .mockReset()
+    .mockImplementation((params) => runEmbeddedAgentMock(params));
 });
 
 // This synthetic model consumes only the serialized recipe target. It does not
@@ -170,6 +182,18 @@ async function createFixture(option: CiAutomationOption) {
         finished.resolve(event);
       }
     },
+    runSessionEvent: (request) =>
+      work.track(() =>
+        runCronSessionTurn({
+          ...request,
+          cfg: config,
+          agentId: "main",
+          sessionKey: expectDefined(
+            resolveCronSessionTargetSessionKey(request.job.sessionTarget),
+            "explicit recipe session target",
+          ),
+        }),
+      ),
     runIsolatedAgentJob: (request) =>
       work.track(() =>
         runCronIsolatedAgentTurn({
@@ -215,6 +239,9 @@ it("transports autoFix for only the selected PR across session replacement and d
       params.runId,
     );
     expectDefined(resolveAdmittedRunActiveAssertion(admitted), "active admission assertion")();
+    params.onExecutionPhase?.({ phase: "model_call_started" });
+    await params.onExecutionStarted?.();
+    await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
     const target = readRecipeTarget(params.prompt);
     finalEffect(
       { owner: target.owner, repo: target.repo, number: target.number },
