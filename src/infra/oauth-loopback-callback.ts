@@ -136,7 +136,6 @@ export async function startOAuthLoopbackCallbackServer(params: {
   bindOnlyHostname?: string;
   deferResponse?: boolean;
   lookup?: LoopbackLookup;
-  createServer?: typeof import("node:http").createServer;
   resolveCorsOrigin?: CorsOriginResolver;
   renderSuccess?: () => RenderedResponse;
   renderError?: (message: string) => RenderedResponse;
@@ -178,7 +177,7 @@ export async function startOAuthLoopbackCallbackServer(params: {
       );
   const port = resolveOAuthLoopbackPort(redirectUrl);
   const callbackPath = redirectUrl.pathname || "/";
-  const createServer = params.createServer ?? (await import("node:http")).createServer;
+  const { createServer } = await import("node:http");
   const servers: Server[] = [];
   let received = false;
   let settled = false;

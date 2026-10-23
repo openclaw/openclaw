@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import type { LookupAddress } from "node:dns";
 import * as dnsPromises from "node:dns/promises";
-import type { Server } from "node:http";
+import http, { type Server } from "node:http";
+import { syncBuiltinESMExports } from "node:module";
 import { createServer } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -21,6 +22,7 @@ afterEach(async () => {
   await Promise.all(portClaims.splice(0).map((claim) => claim.release()));
   vi.useRealTimers();
   vi.restoreAllMocks();
+  syncBuiltinESMExports();
 });
 
 function callbackUrl(hostname: string, port: number, query = ""): string {
@@ -346,13 +348,13 @@ describe("OAuth loopback callback server", () => {
         },
         closeAllConnections: () => undefined,
       };
+      using _ = vi.spyOn(http, "createServer").mockReturnValue(fakeServer as unknown as Server);
+      syncBuiltinESMExports();
       const callback = await startOAuthLoopbackCallbackServer({
         redirectUrl: "http://127.0.0.1/oauth/callback",
         bindOnlyHostname,
         expectedState: "state-1234567890",
         timeoutMs: 5_000,
-        createServer: (() =>
-          fakeServer as unknown as Server) as typeof import("node:http").createServer,
       });
       expect(observedPort).toBe(80);
       expect(observedHostname).toBe(bindOnlyHostname ?? "127.0.0.1");
