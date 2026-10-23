@@ -47,8 +47,8 @@ export class RequestBodyLimitError extends Error {
   readonly code: RequestBodyLimitErrorCode;
   readonly statusCode: number;
 
-  constructor(init: { code: RequestBodyLimitErrorCode; message?: string }) {
-    super(init.message ?? REQUEST_BODY_LIMIT_ERRORS[init.code].message);
+  constructor(init: { code: RequestBodyLimitErrorCode }) {
+    super(REQUEST_BODY_LIMIT_ERRORS[init.code].message);
     this.name = "RequestBodyLimitError";
     this.code = init.code;
     this.statusCode = REQUEST_BODY_LIMIT_ERRORS[init.code].status;

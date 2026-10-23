@@ -49,7 +49,6 @@ function resolveCompletionChatType(params: {
 export function completionRequiresMessageToolDelivery(
   params: Parameters<typeof resolveCompletionChatType>[0] & {
     cfg: OpenClawConfig;
-    messageToolAvailable?: boolean;
   },
 ): boolean {
   return (
@@ -58,7 +57,6 @@ export function completionRequiresMessageToolDelivery(
       ctx: {
         ChatType: resolveCompletionChatType(params),
       },
-      messageToolAvailable: params.messageToolAvailable,
     }) === "message_tool_only"
   );
 }
