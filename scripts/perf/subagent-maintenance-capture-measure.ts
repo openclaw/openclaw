@@ -126,7 +126,6 @@ function allocation(profile: HeapProfiler.SamplingHeapProfile) {
   };
   visit(profile.head);
   return {
-    samples: profile.samples.length,
     totalBytes,
     bytesPerOperation: totalBytes / operations,
     registryBytes,

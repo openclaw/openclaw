@@ -2475,6 +2475,7 @@ Supported scenarios:
 | `sessions.list`        | One compact sidebar page RPC, `archived=all`, `--limit` rows                                               |
 | `sessions.describe`    | One detailed parent-row RPC, including the harness's synthetic children                                    |
 | `sessions.patch`       | One title, expiring status-note, or model-selection mutation on a retained fixture session                 |
+| `sessions.cleanup`     | One cleanup RPC in warning mode, including current subagent preservation and commit compatibility checks   |
 | `connect`              | One owned socket replacement and validated hello handshake; no sidebar restoration                         |
 | `reconnect`            | One owned socket replacement, subscriptions, and verified current sidebar                                  |
 | `subscribe`            | One `sessions.subscribe` snapshot registration/refresh RPC on the sender, with the same page shape as list |
@@ -2519,6 +2520,20 @@ subscribe to session rows, so row publication is included. This scenario does
 not drive viewer-declaration churn or real running/settled agent lifecycles;
 use the separate `transcript-broadcast` or `memory-soak` turn scenario for that
 additional coverage.
+
+For subagent maintenance capture, use `--scenario sessions.cleanup --clients 1
+--runs 1 --operations 1000 --warmup-operations 2 --rounds 1 --allocations
+--trace-gc --capture-responses --entry src/entry.ts` with a separate 5,000-session,
+6,000-run fixture on each side. `--transcript-mib 0 --approvals 0 --cron 0
+--projects 0` keeps fixture writes small. The scenario sets and records
+`session.maintenance.mode=warn`: real cleanup admission and preservation checks
+run, while every response must report an unchanged nonempty session inventory.
+This is a maintenance RPC workload, not the production frequency of cleanup or
+session-list traffic. `sessions.patch` skips maintenance and cannot reproduce
+this allocation owner. First inspect a short baseline allocation profile for
+the subagent maintenance capture stack; do not use unrelated RPC allocation as
+proof. Run concurrent, swapped-core pairs with the campaign guard and shared
+`--start-at`, then apply its sample-count, GC-pause, and paired-baseline rules.
 
 The report includes allocation and promotion per completed patch, worker message
 counts and known payload bytes, and RPC p50/p95/p99 with sample counts. Worker
