@@ -3,7 +3,12 @@ import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import { expect, it } from "vitest";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  controlUiBundledSettingsStorageKey,
+  createControlUiMockBootstrapConfig,
+  controlUiSessionUrl,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -55,7 +60,7 @@ suite.define(() => {
         const capture = async () =>
           takeControlUiScreenshotFrame(page, thread, [start, end, image], {
             animations: "disabled",
-            elements: [image],
+            elements: [image, start],
           });
         const unselected = await capture();
         const points = await page.evaluate(
@@ -123,10 +128,89 @@ suite.define(() => {
         expect(selectedText).not.toContain("OpenClaw");
         expect(selectedText).not.toContain("Just now");
         expect(
-          await start.evaluate(
-            (element) => getComputedStyle(element, "::selection").backgroundColor,
-          ),
-        ).toBe("rgb(59, 75, 93)");
+          selected.elements[1]!.png.equals(unselected.elements[1]!.png),
+          "native selection must visibly paint the message text",
+        ).toBe(false);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      },
+    );
+  });
+
+  it.each([false, true])("keeps reasoning selectable with bubbles=%s", async (bubbles) => {
+    await suite.withPage(
+      { ...createControlUiE2eContextOptions(), colorScheme: "dark" },
+      async ({ page }) => {
+        const sessionKey = "agent:main:dashboard:selection-reasoning";
+        const reasoningText = "Reasoning prose remains selectable.";
+        const answerText = "The answer remains selectable too.";
+        await page.addInitScript(
+          ({ key, session, enabled }) => {
+            localStorage.setItem(
+              key,
+              JSON.stringify({
+                chatBubbleSessionKeys: enabled ? [session] : [],
+                chatShowThinking: true,
+              }),
+            );
+          },
+          {
+            key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+            session: sessionKey,
+            enabled: bubbles,
+          },
+        );
+        const gateway = await installMockGateway(page, {
+          sessionKey,
+          sessionInfo: { reasoningLevel: "on" },
+          sessions: [{ key: sessionKey, kind: "direct", reasoningLevel: "on" }],
+          historyMessages: [
+            { role: "assistant", content: [{ type: "thinking", thinking: reasoningText }] },
+            { role: "assistant", content: [{ type: "text", text: answerText }] },
+          ],
+        });
+        await page.route("**/control-ui-config.json", (route) =>
+          route.fulfill({
+            json: { ...createControlUiMockBootstrapConfig(), chatBubblesEnabled: true },
+          }),
+        );
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
+        const answer = pane.getByText(answerText, { exact: true });
+        await answer.waitFor();
+        const work = pane.locator(".chat-work-group > .chat-activity-group__summary");
+        if (await work.count()) {
+          await work.click();
+        }
+        const disclosure = pane.locator('.chat-bubble-activity__summary[aria-label="Reasoning"]');
+        if (await disclosure.count()) {
+          await disclosure.click();
+        }
+        const reasoning = pane.locator(".chat-thinking").getByText(reasoningText, { exact: true });
+        await reasoning.waitFor();
+        await reasoning.scrollIntoViewIfNeeded();
+        const box = await reasoning.boundingBox();
+        if (!box) {
+          throw new Error("Reasoning text has no rendered bounds");
+        }
+        await page.mouse.move(box.x + 1, box.y + box.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(box.x + box.width - 1, box.y + box.height / 2, { steps: 8 });
+        await page.mouse.up();
+        expect(await page.evaluate(() => window.getSelection()?.toString())).toContain(
+          reasoningText,
+        );
+        await pane.locator(".chat-thread").focus();
+        await page.keyboard.press("ControlOrMeta+A");
+        const selection = await page.evaluate(() => window.getSelection()?.toString());
+        expect(selection).toContain(reasoningText);
+        expect(selection).toContain(answerText);
+        expect(selection).not.toContain("Just now");
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1" && bubbles) {
+          const frame = await takeControlUiScreenshotFrame(page, pane, [reasoning, answer], {
+            animations: "disabled",
+          });
+          writeFileSync(path.join(suite.artifactDir, "reasoning-bubbles-selected.png"), frame.png);
+        }
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       },
     );

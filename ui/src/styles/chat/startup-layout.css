@@ -191,9 +191,13 @@
   margin-inline: var(--chat-composer-side-inset, 16px);
 }
 
-.chat-text {
+.chat-text,
+.chat-thinking {
   -webkit-user-select: text;
   user-select: text;
+}
+
+.chat-text {
   font-family: var(--font-chat);
   font-size: var(--chat-text-size);
   line-height: 1.5;
