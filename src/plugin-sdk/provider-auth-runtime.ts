@@ -53,7 +53,7 @@ export type OAuthCallbackResult = {
  * only after the callback route is ready. Invalid request candidates remain nonterminal.
  */
 export async function startProviderOAuthLoopbackCallbackServer(
-  params: Omit<Parameters<typeof startOAuthLoopbackCallbackServer>[0], "lookup">,
+  params: Parameters<typeof startOAuthLoopbackCallbackServer>[0],
 ): Promise<OAuthLoopbackCallbackServer> {
   return await startOAuthLoopbackCallbackServer(params);
 }

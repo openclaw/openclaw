@@ -14,6 +14,15 @@ import {
   type OAuthLoopbackCallbackServer,
 } from "./oauth-loopback-callback.js";
 
+const lookupMock = vi.hoisted(() =>
+  vi.fn<(hostname: string, options: { all: true; verbatim: true }) => Promise<LookupAddress[]>>(),
+);
+vi.mock("node:dns/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:dns/promises")>();
+  lookupMock.mockImplementation(actual.lookup);
+  return { ...actual, lookup: lookupMock };
+});
+
 const openCallbacks: OAuthLoopbackCallbackServer[] = [];
 const portClaims: TestPortClaim[] = [];
 
@@ -281,6 +290,7 @@ describe("OAuth loopback callback server", () => {
 
   it("observes aborts that arrive while localhost resolution is pending", async () => {
     const lookup = createDeferred<LookupAddress[]>();
+    lookupMock.mockReturnValueOnce(lookup.promise);
     const controller = new AbortController();
     const port = await getClaimedPort();
     const startPromise = startOAuthLoopbackCallbackServer({
@@ -288,7 +298,6 @@ describe("OAuth loopback callback server", () => {
       expectedState: "state-1234567890",
       timeoutMs: 5_000,
       signal: controller.signal,
-      lookup: () => lookup.promise,
     });
     controller.abort();
     await expect(startPromise).rejects.toThrow("cancelled");
@@ -372,11 +381,12 @@ describe("OAuth loopback callback server", () => {
       options: {
         redirectUrl: "http://localhost:8989/oauth/callback",
         bindHostname: "127.0.0.1",
-        lookup: async () => [{ address: "203.0.113.1", family: 4 }],
       },
+      prepare: () => lookupMock.mockResolvedValueOnce([{ address: "203.0.113.1", family: 4 }]),
       error: "exclusively to loopback",
     },
-  ])("rejects unsafe loopback configuration: $error", async ({ options, error }) => {
+  ])("rejects unsafe loopback configuration: $error", async ({ options, error, prepare }) => {
+    prepare?.();
     await expect(
       startOAuthLoopbackCallbackServer({
         ...options,
