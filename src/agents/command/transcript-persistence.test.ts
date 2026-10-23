@@ -1,13 +1,21 @@
 import path from "node:path";
 import { afterAll, expect, it } from "vitest";
+import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
   findTranscriptEvent,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import type { EmbeddedAgentRunResult } from "../embedded-agent-runner/types.js";
+import type { CliOutput } from "../cli-output-contracts.js";
+import { buildPreparedCliRunContext } from "../cli-runner.test-helpers.js";
+import { buildCliRunResult } from "../cli-runner/cli-run-settlement.js";
+import { prepareCliRunTerminalReply } from "../cli-runner/terminal-reply.js";
 import { SessionManager } from "../sessions/session-manager.js";
-import { persistAcpTurnTranscript, persistCliTurnTranscript } from "./transcript-persistence.js";
+import {
+  persistAcpTurnTranscript,
+  persistCliTurnTranscript,
+  resolveCliTranscriptReplyText,
+} from "./transcript-persistence.js";
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-coordination-fallback-");
 
@@ -35,6 +43,38 @@ function assistantMessage(text: string) {
 }
 
 type TranscriptContext = Omit<Parameters<typeof persistCliTurnTranscript>[0], "result">;
+
+const PEER_RESULT_FINAL = "The worker result is ready.";
+
+function buildOptionalPeerResult(sessionKey: string, options: { sourceReplyFinal?: boolean } = {}) {
+  const context = buildPreparedCliRunContext({ sessionKey, runId: "peer-result-producer" });
+  context.params.sourceReplyDeliveryMode = "message_tool_only";
+  context.params.terminalReplyExpectation = "optional";
+  const output = {
+    text: options.sourceReplyFinal ? PEER_RESULT_FINAL : "Starting.\n\nStill working.",
+    rawFinalText: PEER_RESULT_FINAL,
+    didSendViaMessagingTool: true,
+    didDeliverSourceReplyViaMessageTool: true,
+    messagingToolSourceReplyPayloads: options.sourceReplyFinal
+      ? [{ text: PEER_RESULT_FINAL, sourceReplyFinal: true }]
+      : [
+          { text: "Starting.", sourceReplyFinal: false },
+          { text: "Still working.", sourceReplyFinal: false },
+        ],
+  } satisfies CliOutput;
+  const preparedReply = prepareCliRunTerminalReply(context, output);
+  return buildCliRunResult({
+    context,
+    output,
+    preparedReply,
+    effectiveCliSessionId: "native-session",
+    bindingFlushOk: true,
+    usedHistoryPrompt: false,
+    userTurnHandled: true,
+    sessionBindingDisabled: false,
+    preparedContextAgentMeta: {},
+  });
+}
 
 function persist(runtime: string, common: TranscriptContext, finalText: string, hidden = false) {
   return runtime === "CLI"
@@ -93,18 +133,38 @@ it.each(["CLI", "ACP"] as const)("recovers full %s answer after a later turn", a
 
 it("persists the CLI answer instead of delivered progress sends for an optional peer-result turn", async () => {
   const common = await createSession("Review the worker result");
-  const result = {
-    payloads: [{ text: "Starting." }, { text: "Still working." }],
-    didDeliverSourceReplyViaMessageTool: true,
-    meta: {
-      durationMs: 0,
-      finalAssistantVisibleText: "Starting.\n\nStill working.",
-      finalAssistantRawText: "The worker result is ready.",
-    },
-  } satisfies EmbeddedAgentRunResult;
+  const result = buildOptionalPeerResult(common.sessionKey);
+  const mirrorMetadata = (result.payloads ?? []).map((payload) => getReplyPayloadMetadata(payload));
+
+  expect(mirrorMetadata).toHaveLength(2);
+  expect(mirrorMetadata).toEqual([
+    expect.objectContaining({
+      sourceReplyFinal: false,
+      sourceReplyTranscriptMirror: expect.objectContaining({ text: "Starting." }),
+    }),
+    expect.objectContaining({
+      sourceReplyFinal: false,
+      sourceReplyTranscriptMirror: expect.objectContaining({ text: "Still working." }),
+    }),
+  ]);
+  expect(result.meta.finalAssistantMessageRawText).toBe(PEER_RESULT_FINAL);
+  expect(resolveCliTranscriptReplyText(result)).toBe(PEER_RESULT_FINAL);
 
   await persistCliTurnTranscript({ ...common, result });
 
   const messages = SessionManager.open(common).buildSessionContext().messages;
-  expect(messages.at(-1)).toMatchObject(assistantMessage("The worker result is ready."));
+  const assistantMessages = messages.filter((message) => message.role === "assistant");
+  expect(assistantMessages).toHaveLength(1);
+  expect(assistantMessages[0]).toMatchObject(assistantMessage(PEER_RESULT_FINAL));
+});
+
+it("keeps an explicit final source reply mirror delivery-owned", () => {
+  const result = buildOptionalPeerResult("agent:qa:qa:peer-result-final", {
+    sourceReplyFinal: true,
+  });
+
+  expect(getReplyPayloadMetadata(result.payloads?.[0] as object)).toMatchObject({
+    sourceReplyFinal: true,
+  });
+  expect(resolveCliTranscriptReplyText(result)).toBe("");
 });

@@ -220,38 +220,68 @@ async function persistTextTurnTranscript(
   };
 }
 
-function hasSourceReplyTranscriptMirrors(result: EmbeddedAgentRunResult): boolean {
-  return (
-    result.payloads?.some(
-      (payload) => getReplyPayloadMetadata(payload)?.sourceReplyTranscriptMirror,
-    ) === true
-  );
-}
+type ResolvedCliTranscriptReply = { text: string; hasMirrors: boolean };
 
-export function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
-  // Delivery owns the individual source-reply mirrors. Their joined visible text
-  // is not another CLI answer, and private terminal output must stay private.
-  if (hasSourceReplyTranscriptMirrors(result)) {
-    return "";
+function resolveCliTranscriptReply(result: EmbeddedAgentRunResult): ResolvedCliTranscriptReply {
+  const mirrorTexts: string[] = [];
+  let hasMirrors = false;
+  let hasFinalMirror = false;
+  for (const payload of result.payloads ?? []) {
+    const metadata = getReplyPayloadMetadata(payload);
+    if (!metadata?.sourceReplyTranscriptMirror) {
+      continue;
+    }
+    hasMirrors = true;
+    hasFinalMirror ||= metadata.sourceReplyFinal === true;
+    const text = (metadata.sourceReplyTranscriptMirror.text ?? payload.text ?? "").trim();
+    if (text) {
+      mirrorTexts.push(text);
+    }
+  }
+  if (hasMirrors) {
+    // A final mirror already owns the answer. Progress-only mirrors do not, so
+    // retain the CLI's authored final message unless delivery already supplied it.
+    if (hasFinalMirror) {
+      return { text: "", hasMirrors };
+    }
+    const authoredText = (
+      result.meta.finalAssistantMessageRawText ?? result.meta.finalAssistantRawText
+    )?.trim();
+    const mirrorText = mirrorTexts.join("\n\n");
+    return {
+      text:
+        authoredText && authoredText !== mirrorText && !mirrorTexts.includes(authoredText)
+          ? authoredText
+          : "",
+      hasMirrors,
+    };
   }
   const visibleText = result.meta.finalAssistantVisibleText?.trim();
   if (visibleText) {
-    // Optional peer-result turns can deliver progress through message_tool_only
-    // without attaching transcript mirrors. The delivered text is not the CLI answer.
+    // A receipt-only delivery has no mirror row to identify the authored final message.
     if (result.didDeliverSourceReplyViaMessageTool === true) {
-      return (
-        (result.meta.finalAssistantMessageRawText ?? result.meta.finalAssistantRawText)?.trim() ??
-        ""
-      );
+      return {
+        text:
+          (result.meta.finalAssistantMessageRawText ?? result.meta.finalAssistantRawText)?.trim() ??
+          "",
+        hasMirrors,
+      };
     }
-    return visibleText;
+    return { text: visibleText, hasMirrors };
   }
 
-  return (result.payloads ?? [])
-    .filter((payload) => !payload.isError && !payload.isReasoning)
-    .map((payload) => payload.text?.trim() ?? "")
-    .filter(Boolean)
-    .join("\n\n");
+  return {
+    text: (result.payloads ?? [])
+      .filter((payload) => !payload.isError && !payload.isReasoning)
+      .map((payload) => payload.text?.trim() ?? "")
+      .filter(Boolean)
+      .join("\n\n"),
+    hasMirrors,
+  };
+}
+
+export function resolveCliTranscriptReplyText(result: EmbeddedAgentRunResult): string {
+  return resolveCliTranscriptReply(result).text;
 }
 
 export async function persistAcpTurnTranscript(
@@ -287,9 +317,10 @@ export async function persistCliTurnTranscript(
   },
 ): Promise<PersistTextTurnTranscriptResult> {
   const { result, skipUserTurn: requestedSkipUserTurn, ...transcript } = params;
-  const replyText = resolveCliTranscriptReplyText(result);
+  const transcriptReply = resolveCliTranscriptReply(result);
+  const replyText = transcriptReply.text;
   const skipUserTurn = requestedSkipUserTurn === true;
-  const assistantUsageOnly = hasSourceReplyTranscriptMirrors(result);
+  const assistantUsageOnly = transcriptReply.hasMirrors && !replyText;
 
   return await persistTextTurnTranscript({
     ...transcript,
