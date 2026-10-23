@@ -2,20 +2,29 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { AgentSandboxConfig } from "../config/types.agents-shared.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
+import { AsyncWorkScope, trackAsyncWork } from "../shared/async-work-scope.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
+import { resolveRuntimeSkillsPrompt } from "./embedded-agent-runner/skills-prompt.js";
 import { registerSandboxBackend, type SandboxBackendHandle } from "./sandbox/backend.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
 import { isSandboxProvisioningError } from "./sandbox/provisioning-error.js";
+import { withSandboxSkillCatalogs } from "./sandbox/skill-catalog.js";
 
 const readRegisteredSandboxRuntimeIdsMock = vi.hoisted(() => vi.fn(async () => [] as string[]));
 const syncSkillsToWorkspaceMock = vi.hoisted(() =>
   vi.fn<typeof import("../skills/loading/workspace-skill-sync.runtime.js").syncWorkspaceSkills>(
     async () => [],
   ),
+);
+const acquireWorkspaceSkillsMock = vi.hoisted(() =>
+  vi.fn<
+    typeof import("../skills/loading/workspace-skill-sync.runtime.js").acquireWorkspaceSkills
+  >(),
 );
 const ensureSandboxBrowserMock = vi.hoisted(() =>
   vi.fn<typeof import("./sandbox/browser.js").ensureSandboxBrowser>(async () => null),
@@ -55,8 +64,14 @@ vi.mock("../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: vi.fn(() => ({ note: "test-remote" })),
 }));
 
+// mock-isolation: Most cases test provisioning, not skill discovery or catalog custody.
 vi.mock("../skills/loading/workspace-skill-sync.runtime.js", () => ({
   syncWorkspaceSkills: syncSkillsToWorkspaceMock,
+  acquireWorkspaceSkills: acquireWorkspaceSkillsMock.mockImplementation(async (params) => ({
+    skillUsagePaths: await syncSkillsToWorkspaceMock(params),
+    skillsSnapshot: { prompt: "", skills: [], resolvedSkills: [], discoverySkills: [] },
+    release: async () => {},
+  })),
 }));
 
 function createBackend(
@@ -115,6 +130,172 @@ afterAll(async () => {
 });
 
 describe("resolveSandboxContext", () => {
+  it("keeps an active sandbox's advertised skill bytes across a later catalog refresh", async () => {
+    const workspaceDir = await createSandboxFixtureDir("retained-skills");
+    const skillDir = path.join(workspaceDir, "skills", "catalog-retention-proof");
+    await fs.mkdir(skillDir, { recursive: true });
+    const sourceFile = path.join(skillDir, "SKILL.md");
+    const original =
+      "---\nname: catalog-retention-proof\ndescription: Retained skill\n---\n\nOriginal instructions.\n";
+    await fs.writeFile(sourceFile, original);
+    await fs.writeFile(path.join(skillDir, "companion.txt"), "original companion\n");
+    const { acquireWorkspaceSkills } = await vi.importActual<
+      typeof import("../skills/loading/workspace-skill-sync.runtime.js")
+    >("../skills/loading/workspace-skill-sync.runtime.js");
+    const { refreshSkillsDiscovery } = await import("../skills/runtime/refresh.js");
+    const restore = registerSandboxBackend("catalog-retention", async () =>
+      createBackend({
+        id: "catalog-retention",
+        runtimeId: "shared-skill-runtime",
+        runtimeLabel: "Shared skill runtime",
+      }),
+    );
+    const config: OpenClawConfig = {
+      ...sandboxConfig("catalog-retention", { scope: "agent" }),
+      plugins: { enabled: false },
+    };
+    let first: Awaited<ReturnType<typeof resolveSandboxContext>> = null;
+    let second: Awaited<ReturnType<typeof resolveSandboxContext>> = null;
+    try {
+      acquireWorkspaceSkillsMock.mockImplementationOnce(acquireWorkspaceSkills);
+      first = await resolveSandboxContext({
+        config,
+        sessionKey: "agent:main:first",
+        workspaceDir,
+      });
+      const advertised = first?.skillUsagePaths?.find(
+        (entry) => entry.skillName === "catalog-retention-proof",
+      );
+      expect(advertised).toBeDefined();
+      if (!advertised) {
+        throw new Error("First sandbox did not advertise the fixture skill");
+      }
+      expect(await fs.readFile(advertised.readPath, "utf8")).toBe(original);
+      const firstPrompt = await resolveRuntimeSkillsPrompt({
+        sandbox: first,
+        skillsAnchorWorkspace: workspaceDir,
+        config,
+      });
+      expect(firstPrompt.prompt).toContain("catalog-retention-proof");
+      expect(firstPrompt.prompt).toContain(
+        "/workspace/.openclaw/sandbox-skills/skills/.openclaw-catalogs/",
+      );
+      expect(firstPrompt.prompt).not.toContain(workspaceDir);
+      await fs.writeFile(sourceFile, original.replace("Original", "Replacement"));
+      await fs.writeFile(path.join(skillDir, "companion.txt"), "replacement companion\n");
+      await refreshSkillsDiscovery({ workspaceDir });
+      acquireWorkspaceSkillsMock.mockImplementationOnce(acquireWorkspaceSkills);
+      second = await resolveSandboxContext({
+        config,
+        sessionKey: "agent:main:second",
+        workspaceDir,
+      });
+      const replacement = second?.skillUsagePaths?.find(
+        (entry) => entry.skillName === "catalog-retention-proof",
+      );
+      expect(replacement).toBeDefined();
+      if (!replacement) {
+        throw new Error("Second sandbox did not advertise the fixture skill");
+      }
+      expect(await fs.readFile(replacement.readPath, "utf8")).toContain(
+        "Replacement instructions.",
+      );
+      expect(
+        (
+          await resolveRuntimeSkillsPrompt({
+            sandbox: first,
+            skillsAnchorWorkspace: workspaceDir,
+            config,
+          })
+        ).prompt,
+      ).toBe(firstPrompt.prompt);
+      expect(await fs.readFile(advertised.readPath, "utf8")).toBe(original);
+      expect(
+        await fs.readFile(path.join(path.dirname(advertised.readPath), "companion.txt"), "utf8"),
+      ).toBe("original companion\n");
+    } finally {
+      second?.[Symbol.dispose]?.();
+      first?.[Symbol.dispose]?.();
+      restore();
+    }
+  });
+
+  it("keeps a failed optional publication from advertising a shared catalog", async () => {
+    const workspaceDir = await createSandboxFixtureDir("failed-publication");
+    const restore = registerSandboxBackend("failed-catalog", async () =>
+      createBackend({
+        id: "failed-catalog",
+        runtimeId: "failed-catalog",
+        runtimeLabel: "failed-catalog",
+      }),
+    );
+    acquireWorkspaceSkillsMock.mockRejectedValueOnce(new Error("catalog storage unavailable"));
+    let sandbox: Awaited<ReturnType<typeof resolveSandboxContext>> = null;
+    try {
+      sandbox = await resolveSandboxContext({
+        config: sandboxConfig("failed-catalog"),
+        workspaceDir,
+        sessionKey: "agent:main:failed-publication",
+      });
+      expect(sandbox?.enabled).toBe(true);
+      expect(
+        (await resolveRuntimeSkillsPrompt({ sandbox, skillsAnchorWorkspace: workspaceDir })).prompt,
+      ).toBe("");
+    } finally {
+      sandbox?.[Symbol.dispose]?.();
+      restore();
+    }
+  });
+
+  it("retains skills until asynchronous tool cleanup settles after the result", async () => {
+    const workspaceDir = await createSandboxFixtureDir("cleanup-retention");
+    await fs.mkdir(path.join(workspaceDir, "skills", "cleanup"), { recursive: true });
+    await fs.writeFile(
+      path.join(workspaceDir, "skills", "cleanup", "SKILL.md"),
+      "---\nname: cleanup\ndescription: cleanup\n---\nRetained during cleanup.",
+    );
+    const real = await vi.importActual<
+      typeof import("../skills/loading/workspace-skill-sync.runtime.js")
+    >("../skills/loading/workspace-skill-sync.runtime.js");
+    acquireWorkspaceSkillsMock.mockImplementationOnce(real.acquireWorkspaceSkills);
+    const restore = registerSandboxBackend("catalog-cleanup", async () =>
+      createBackend({ id: "catalog-cleanup", runtimeId: "cleanup", runtimeLabel: "cleanup" }),
+    );
+    const owner = new AsyncWorkScope();
+    const finishCleanup = createDeferred();
+    try {
+      const file = await owner.run(() =>
+        withSandboxSkillCatalogs(async () => {
+          const sandbox = await resolveSandboxContext({
+            config: { ...sandboxConfig("catalog-cleanup"), plugins: { enabled: false } },
+            workspaceDir,
+            sessionKey: "agent:main:cleanup",
+          });
+          const retainedFile = sandbox?.skillUsagePaths?.find(
+            (entry) => entry.skillName === "cleanup",
+          )?.readPath;
+          if (!retainedFile) {
+            throw new Error("Cleanup skill was not published");
+          }
+          void trackAsyncWork(async () => {
+            await finishCleanup.promise;
+            expect(await fs.readFile(retainedFile, "utf8")).toContain("Retained during cleanup.");
+          });
+          sandbox?.[Symbol.dispose]?.();
+          return retainedFile;
+        }),
+      );
+      expect(await fs.readFile(file, "utf8")).toContain("Retained during cleanup.");
+      finishCleanup.resolve();
+      await owner.drain();
+      await expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      finishCleanup.resolve();
+      await owner.drain();
+      restore();
+    }
+  });
+
   it("bypasses the selected main session in global scope", async () => {
     const cfg: OpenClawConfig = {
       session: { scope: "global" },

@@ -1,4 +1,5 @@
 // Sandbox workspace skill synchronization is deferred behind the sandbox runtime boundary.
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { root, type Root } from "@openclaw/fs-safe/root";
@@ -7,13 +8,16 @@ import { resolveSandboxPath } from "../../agents/sandbox-paths.js";
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { hasErrnoCode } from "../../infra/errno.js";
 import { removePathWithinRoot } from "../../infra/fs-safe-remove.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { retainMutationAuthority } from "../../infra/mutation-authority.js";
+import { acquireSqliteStagingToken } from "../../infra/sqlite-staging-token.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { resolveUserPath } from "../../utils.js";
 import {
   prepareSkillLibrarySelection,
@@ -22,6 +26,7 @@ import {
 import { getSkillsSnapshotVersion, getSkillsResourceVersion } from "../runtime/refresh-state.js";
 import { resolveSkillSnapshotExecutionFileHost } from "../runtime/skill-snapshot-provenance.js";
 import { fingerprintSkillSnapshotConfig } from "../runtime/snapshot-config-fingerprint.js";
+import { clearSkillFileHost } from "../skill-file-host.js";
 import type {
   SkillEligibilityContext,
   SkillEntry,
@@ -33,12 +38,18 @@ import { ensureWritableSkillDirectories } from "./skill-directory-modes.js";
 import { shouldSyncSkillPath } from "./skill-paths.js";
 import { resolveSkillTelemetrySource } from "./source.js";
 import { prepareWorkspaceSkills } from "./workspace-skill-loader.js";
+import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
 const fsp = fs.promises;
 const skillsLogger = createSubsystemLogger("skills");
 const skillsSyncQueue = new KeyedAsyncQueue();
 
 const SYNCED_SKILLS_MANIFEST_NAME = ".openclaw-sync.json";
+const PUBLISHED_SKILLS_DIRECTORY = ".openclaw-catalogs";
+const publicationNamespace = resolveGlobalSingleton(
+  Symbol.for("openclaw.sandboxSkillPublicationNamespace"),
+  randomUUID,
+);
 
 type SyncedSkillsManifest = {
   entryKeys: string[];
@@ -164,7 +175,7 @@ async function copySkillTree(
   assertCurrent?.();
 }
 
-export async function syncWorkspaceSkills(params: {
+type SyncWorkspaceSkillsParams = {
   sourceWorkspaceDir: string;
   targetWorkspaceDir: string;
   config?: OpenClawConfig;
@@ -176,7 +187,18 @@ export async function syncWorkspaceSkills(params: {
   pluginSkillsDir?: string;
   skillsSnapshot?: SkillSnapshot;
   assertCurrent?: () => void;
-}): Promise<SkillUsagePath[]> {
+};
+
+export async function syncWorkspaceSkills(
+  params: SyncWorkspaceSkillsParams,
+): Promise<SkillUsagePath[]> {
+  return materializeWorkspaceSkills(params);
+}
+
+async function materializeWorkspaceSkills(
+  params: SyncWorkspaceSkillsParams,
+  onPublished?: (entries: SkillEntry[], version: number) => Promise<void>,
+): Promise<SkillUsagePath[]> {
   const assertCurrent = params.assertCurrent
     ? retainMutationAuthority(params.assertCurrent)
     : undefined;
@@ -270,7 +292,7 @@ export async function syncWorkspaceSkills(params: {
       entries.push(...selectedEntries.filter((entry) => selectedNames.has(entry.skill.name)));
     }
 
-    const usedDirNames = new Set<string>();
+    const usedDirNames = new Set<string>([PUBLISHED_SKILLS_DIRECTORY]);
     const plans: Array<{ destinationPath?: string; entry: SkillEntry; identity: string }> = [];
     for (const entry of entries) {
       const identity = resolveSyncedSkillIdentity(resolveSkillKey(entry), entry.skill.name);
@@ -325,7 +347,11 @@ export async function syncWorkspaceSkills(params: {
     const children = await fsp.readdir(targetSkillsDir);
     assertCurrent?.();
     for (const child of children) {
-      if (child !== ".gitignore" && !preservedDestinations.has(child)) {
+      if (
+        child !== ".gitignore" &&
+        child !== PUBLISHED_SKILLS_DIRECTORY &&
+        !preservedDestinations.has(child)
+      ) {
         const stat = await fsp.lstat(path.join(targetSkillsDir, child));
         assertCurrent?.();
         if (stat.isDirectory()) {
@@ -343,10 +369,12 @@ export async function syncWorkspaceSkills(params: {
     }
 
     const skillUsagePaths: SkillUsagePath[] = [];
+    const publishedEntries: SkillEntry[] = [];
     let copyFailed = false;
     for (const plan of plans) {
       const { destinationPath, entry } = plan;
       if (!destinationPath) {
+        publishedEntries.push(entry);
         continue;
       }
       if (!preservedDestinations.has(path.basename(destinationPath))) {
@@ -377,6 +405,13 @@ export async function syncWorkspaceSkills(params: {
           if (entry.skill.source === "openclaw-library") {
             throw error;
           }
+          await removePathWithinRoot({
+            rootDir: targetSkillsDir,
+            relativePath: path.basename(destinationPath),
+            recursive: true,
+            symlinks: "unlink",
+            assertBeforeMutation: assertCurrent,
+          });
           copyFailed = true;
           const message = error instanceof Error ? error.message : JSON.stringify(error);
           skillsLogger.warn(`Failed to copy ${entry.skill.name} to sandbox: ${message}`);
@@ -384,6 +419,23 @@ export async function syncWorkspaceSkills(params: {
         }
       }
       assertCurrent?.();
+      const filePath = path.join(
+        destinationPath,
+        path.relative(entry.skill.baseDir, entry.skill.filePath),
+      );
+      publishedEntries.push({
+        ...entry,
+        skill: clearSkillFileHost({
+          ...entry.skill,
+          baseDir: destinationPath,
+          filePath,
+          sourceInfo: {
+            ...entry.skill.sourceInfo,
+            path: filePath,
+            ...(entry.skill.sourceInfo.baseDir === undefined ? {} : { baseDir: destinationPath }),
+          },
+        }),
+      });
       skillUsagePaths.push({
         readPath: path.join(
           destinationPath,
@@ -394,6 +446,8 @@ export async function syncWorkspaceSkills(params: {
         skillSource: resolveSkillTelemetrySource(entry.skill),
       });
     }
+    await onPublished?.(publishedEntries, skillsVersion);
+    assertCurrent?.();
     if (!copyFailed) {
       const nextManifest: SyncedSkillsManifest = {
         entryKeys: plans.map((plan) => plan.identity).toSorted(),
@@ -421,4 +475,148 @@ export async function syncWorkspaceSkills(params: {
   });
   assertCurrent?.();
   return synced;
+}
+
+export type PublishedWorkspaceSkills = {
+  skillUsagePaths: SkillUsagePath[];
+  skillsSnapshot: SkillSnapshot;
+  release: () => Promise<void>;
+};
+
+async function makePublishedSkillsReadable(
+  directory: string,
+  assertCurrent?: () => void,
+): Promise<void> {
+  for (const entry of await fsp.readdir(directory, { withFileTypes: true })) {
+    assertCurrent?.();
+    const pathname = path.join(directory, entry.name);
+    if (entry.isDirectory()) {
+      await makePublishedSkillsReadable(pathname, assertCurrent);
+      assertCurrent?.();
+      await fsp.chmod(pathname, 0o755);
+    } else if (entry.isFile()) {
+      const mode = (await fsp.lstat(pathname)).mode;
+      assertCurrent?.();
+      await fsp.chmod(pathname, mode & 0o111 ? 0o555 : 0o444);
+    }
+  }
+}
+
+/** Native staging locks distinguish an abandoned catalog from another live execution. */
+async function reclaimPublishedSkills(rootDir: string, assertCurrent?: () => void): Promise<void> {
+  for (const entry of await fsp.readdir(rootDir, { withFileTypes: true })) {
+    assertCurrent?.();
+    if (!entry.isDirectory() || !/^run-[A-Za-z0-9_-]+$/.test(entry.name)) {
+      continue;
+    }
+    let token: ReturnType<typeof acquireSqliteStagingToken>;
+    try {
+      token = acquireSqliteStagingToken(path.join(rootDir, entry.name), "reclaim");
+    } catch {
+      // Busy or unverifiable ownership never permits deleting a catalog.
+      continue;
+    }
+    try {
+      token(true);
+    } finally {
+      token();
+    }
+    await removePathWithinRoot({
+      rootDir,
+      relativePath: entry.name,
+      recursive: true,
+      symlinks: "unlink",
+      assertBeforeMutation: assertCurrent,
+    });
+  }
+}
+
+/** Keep immutable copies below the existing mounted inode until their execution settles. */
+export async function acquireWorkspaceSkills(
+  params: SyncWorkspaceSkillsParams,
+  sessionKey = params.sourceWorkspaceDir,
+): Promise<PublishedWorkspaceSkills> {
+  const skillsRoot = path.join(resolveUserPath(params.targetWorkspaceDir), "skills");
+  await ensureSyncedSkillsDirectory(skillsRoot, params.assertCurrent);
+  const rootDir = path.join(skillsRoot, PUBLISHED_SKILLS_DIRECTORY);
+  await ensureSyncedSkillsDirectory(rootDir, params.assertCurrent);
+  params.assertCurrent?.();
+  await fsp.chmod(rootDir, 0o755);
+  params.assertCurrent?.();
+  const catalogRoot = await root(rootDir, { assertBeforeMutation: params.assertCurrent });
+  params.assertCurrent?.();
+  await catalogRoot.write(".gitignore", "*\n", { mode: 0o644, durable: false });
+  params.assertCurrent?.();
+  await reclaimPublishedSkills(rootDir, params.assertCurrent);
+  params.assertCurrent?.();
+  // Sequential turns keep their prompt locations. An earlier cleanup tail must keep its own bytes.
+  const prefix = `run-${sha256Hex(JSON.stringify([publicationNamespace, sessionKey])).slice(0, 32)}`;
+  let publicationDir = path.join(rootDir, prefix);
+  try {
+    await fsp.mkdir(publicationDir, { mode: 0o700 });
+  } catch (error) {
+    if (!hasErrnoCode(error, "EEXIST")) {
+      throw error;
+    }
+    params.assertCurrent?.();
+    publicationDir = await fsp.mkdtemp(`${publicationDir}-`);
+  }
+  let token: ReturnType<typeof acquireSqliteStagingToken> | undefined;
+  let releasing: Promise<void> | undefined;
+  const release = (): Promise<void> =>
+    (releasing ??= (async () => {
+      token?.(true);
+      token = undefined;
+      await removePathWithinRoot({
+        rootDir,
+        relativePath: path.basename(publicationDir),
+        recursive: true,
+        symlinks: "unlink",
+      });
+      syncedSkillsUsageCache.delete(path.join(publicationDir, "skills"));
+    })().catch((error: unknown) => {
+      releasing = undefined;
+      throw error;
+    }));
+  try {
+    params.assertCurrent?.();
+    token = acquireSqliteStagingToken(publicationDir, "create");
+    let skillsSnapshot: SkillSnapshot | undefined;
+    const explicitlyEmpty =
+      params.skillsSnapshot &&
+      !params.skillsSnapshot.prompt.trim() &&
+      !params.skillsSnapshot.discoverySkills?.length;
+    const skillUsagePaths = await materializeWorkspaceSkills(
+      { ...params, targetWorkspaceDir: publicationDir },
+      async (entries, version) => {
+        skillsSnapshot = await buildSkillSnapshot(publicationDir, {
+          entries,
+          config: params.config,
+          agentId: params.agentId,
+          skillFilter: params.skillsSnapshot?.skillFilter ?? params.skillFilter,
+          skillOverrides: params.skillsSnapshot?.skillOverrides,
+          eligibility: params.eligibility,
+          snapshotVersion: version,
+          assertCurrent: params.assertCurrent,
+        });
+        if (params.skillsSnapshot?.librarySelections) {
+          skillsSnapshot.librarySelections = params.skillsSnapshot.librarySelections;
+        }
+      },
+    );
+    if (explicitlyEmpty && params.skillsSnapshot) {
+      skillsSnapshot = { ...params.skillsSnapshot, resolvedSkills: [], discoverySkills: [] };
+    }
+    if (!skillsSnapshot) {
+      throw new Error("Sandbox skill catalog was not published.");
+    }
+    await makePublishedSkillsReadable(path.join(publicationDir, "skills"), params.assertCurrent);
+    params.assertCurrent?.();
+    await fsp.chmod(publicationDir, 0o755);
+    params.assertCurrent?.();
+    return { skillUsagePaths, skillsSnapshot, release };
+  } catch (error) {
+    await release().catch(() => undefined);
+    throw error;
+  }
 }

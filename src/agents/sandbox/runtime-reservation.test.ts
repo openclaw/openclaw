@@ -26,8 +26,14 @@ import { readRegistry, readRegistryEntry, updateRegistry } from "./registry.js";
 import { acquireSandboxGatewayOwner, useSandboxRegistryState } from "./registry.test-support.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
 
+// mock-isolation: Sandbox policy and custody tests exclude unrelated host skill discovery and catalog I/O.
 vi.mock("../../skills/loading/workspace-skill-sync.runtime.js", () => ({
   syncWorkspaceSkills: async () => [],
+  acquireWorkspaceSkills: async () => ({
+    skillUsagePaths: [],
+    skillsSnapshot: { prompt: "", skills: [], resolvedSkills: [], discoverySkills: [] },
+    release: async () => {},
+  }),
 }));
 vi.mock("../../skills/runtime/remote.js", () => ({ getRemoteSkillEligibility: () => undefined }));
 // mock-isolation: Runtime-reservation tests keep skill eligibility independent of host approval storage.

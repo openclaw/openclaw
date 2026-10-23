@@ -68,6 +68,7 @@ import {
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
 import { isRequiredReplyExpectation, resolveReplyExpectation } from "./reply-completion.js";
+import { withSandboxSkillCatalogs } from "./sandbox/skill-catalog.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -105,7 +106,7 @@ export async function isCliBindingFlushed(
 }
 
 export function runCliAgent(paramsInput: RunCliAgentParams): Promise<EmbeddedAgentRunResult> {
-  return runWithCliTurn(paramsInput, runCliAgentInternal);
+  return withSandboxSkillCatalogs(() => runWithCliTurn(paramsInput, runCliAgentInternal));
 }
 
 async function runCliAgentInternal(

@@ -7,6 +7,7 @@ import {
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { hasModelFallbackStop } from "../failover-error.js";
+import { withSandboxSkillCatalogs } from "../sandbox/skill-catalog.js";
 import { executePreparedCompactionSession } from "./compaction-session-execution.js";
 import {
   prepareDirectCompactionAttempt,
@@ -19,6 +20,12 @@ import {
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export async function compactEmbeddedAgentSessionDirectOnce(
+  params: PreparedCompactEmbeddedAgentSessionParams,
+): Promise<EmbeddedAgentCompactResult> {
+  return withSandboxSkillCatalogs(() => compactEmbeddedAgentSessionDirectOnceWithCatalogs(params));
+}
+
+async function compactEmbeddedAgentSessionDirectOnceWithCatalogs(
   params: PreparedCompactEmbeddedAgentSessionParams,
 ): Promise<EmbeddedAgentCompactResult> {
   const callerResult = createDeferredCore<EmbeddedAgentCompactResult>();

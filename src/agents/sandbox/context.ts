@@ -13,6 +13,7 @@ import {
 import { defaultRuntime } from "../../runtime.js";
 import { captureChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { createLazyRuntimeNamedExport } from "../../shared/lazy-runtime.js";
+import type { PublishedWorkspaceSkills } from "../../skills/loading/workspace-skill-sync.runtime.js";
 import { prepareRemoteSkillConnections } from "../../skills/runtime/remote-skills.js";
 import type { SkillEligibilityContext, SkillSnapshot, SkillUsagePath } from "../../skills/types.js";
 import {
@@ -48,6 +49,7 @@ import {
 import { assertSshSandboxSecretOwnerAvailable } from "./secret-owner.js";
 import { resolveSandboxSession } from "./session-selection.js";
 import { resolveSandboxWorkspaceLayoutPaths } from "./shared.js";
+import { bindSandboxSkillCatalog } from "./skill-catalog.js";
 import { captureSandboxStateOwner, SandboxStateOwnerRequiredError } from "./state-owner.js";
 import { bindStreamSandboxContext } from "./stream-context.js";
 import type { SandboxContext, SandboxWorkspaceInfo } from "./types.js";
@@ -58,17 +60,23 @@ const loadSyncWorkspaceSkills = createLazyRuntimeNamedExport(
   () => import("../../skills/loading/workspace-skill-sync.runtime.js"),
   "syncWorkspaceSkills",
 );
+const loadAcquireWorkspaceSkills = createLazyRuntimeNamedExport(
+  () => import("../../skills/loading/workspace-skill-sync.runtime.js"),
+  "acquireWorkspaceSkills",
+);
 
 async function ensureSandboxWorkspaceLayout(
   params: ResolveSandboxContextParams,
   selected: Awaited<ReturnType<typeof prepareSandboxWorkspaceSelection>>,
   guard?: WorkspaceStateGuard,
+  publishSkills = false,
 ): Promise<{
   agentWorkspaceDir: string;
   scopeKey: string;
   skillsWorkspaceDir: string;
   skillsEligibility?: SkillEligibilityContext;
   skillUsagePaths?: SkillUsagePath[];
+  publication?: PublishedWorkspaceSkills;
   workspaceDir: string;
 }> {
   const { rawSessionKey, runtime, localWorkspace } = selected;
@@ -106,7 +114,9 @@ async function ensureSandboxWorkspaceLayout(
   async function syncSandboxSkillsToWorkspace(): Promise<{
     eligibility?: SkillEligibilityContext;
     skillUsagePaths?: SkillUsagePath[];
+    publication?: PublishedWorkspaceSkills;
   }> {
+    let publication: PublishedWorkspaceSkills | undefined;
     try {
       const [
         syncWorkspaceSkills,
@@ -132,7 +142,7 @@ async function ensureSandboxWorkspaceLayout(
           advertiseExecNode: nodeSkills.canExec,
         }),
       };
-      const skillUsagePaths = await syncWorkspaceSkills({
+      const syncParams = {
         sourceWorkspaceDir: agentWorkspaceDir,
         targetWorkspaceDir,
         config,
@@ -140,17 +150,36 @@ async function ensureSandboxWorkspaceLayout(
         eligibility,
         skillsSnapshot,
         assertCurrent,
-      });
+      };
+      publication = publishSkills
+        ? await (
+            await loadAcquireWorkspaceSkills()
+          )(syncParams, rawSessionKey)
+        : undefined;
+      const skillUsagePaths =
+        publication?.skillUsagePaths ?? (await syncWorkspaceSkills(syncParams));
       assertCurrent?.();
-      return { eligibility, skillUsagePaths };
+      return { eligibility, skillUsagePaths, ...(publication ? { publication } : {}) };
     } catch (error) {
+      await publication?.release().catch((cleanupError: unknown) => {
+        sandboxLog.warn(`Sandbox skill catalog cleanup failed: ${String(cleanupError)}`);
+      });
       assertCurrent?.();
       const message = error instanceof Error ? error.message : JSON.stringify(error);
       defaultRuntime.error?.(`Sandbox skill sync failed: ${message}`);
       if (skillsSnapshot?.librarySelections?.length) {
         throw error;
       }
-      return {};
+      // A failed publication cannot borrow another run's legacy shared catalog.
+      return publishSkills
+        ? {
+            publication: {
+              skillUsagePaths: [],
+              skillsSnapshot: { prompt: "", skills: [], resolvedSkills: [], discoverySkills: [] },
+              release: async () => {},
+            },
+          }
+        : {};
     }
   }
   const syncedSkills = await syncSandboxSkillsToWorkspace();
@@ -161,6 +190,7 @@ async function ensureSandboxWorkspaceLayout(
     skillsWorkspaceDir,
     ...(syncedSkills.eligibility ? { skillsEligibility: syncedSkills.eligibility } : {}),
     ...(syncedSkills.skillUsagePaths ? { skillUsagePaths: syncedSkills.skillUsagePaths } : {}),
+    ...(syncedSkills.publication ? { publication: syncedSkills.publication } : {}),
     workspaceDir,
   };
 }
@@ -322,6 +352,7 @@ async function resolveSandboxContextWithAuthority(
           operatorAuthority,
           persistentExecution,
         );
+        let publication: PublishedWorkspaceSkills | undefined;
         try {
           ownedParams.assertCurrent?.();
           const { rawSessionKey, runtime, cfg, localWorkspace } = selected;
@@ -368,9 +399,11 @@ async function resolveSandboxContextWithAuthority(
             skillUsagePaths,
             skillsWorkspaceDir,
             workspaceDir,
+            publication: preparedPublication,
           } = await timeWorktreePreparationPhase("workspaceLayout", () =>
-            ensureSandboxWorkspaceLayout(ownedParams, selected, guard),
+            ensureSandboxWorkspaceLayout(ownedParams, selected, guard, true),
           );
+          publication = preparedPublication;
           localWorkspace?.assertCurrent();
 
           const docker = await resolveSandboxDockerUser({
@@ -536,6 +569,9 @@ async function resolveSandboxContextWithAuthority(
             browser: browser ?? undefined,
             backend,
           };
+          if (publication) {
+            bindSandboxSkillCatalog(sandboxContext, publication);
+          }
 
           sandboxContext.fsBridge =
             backend.createFsBridge?.({ sandbox: sandboxContext }) ??
@@ -559,6 +595,9 @@ async function resolveSandboxContextWithAuthority(
           });
           return sandboxContext;
         } catch (error) {
+          await publication?.release().catch((cleanupError: unknown) => {
+            sandboxLog.warn(`Sandbox skill catalog cleanup failed: ${String(cleanupError)}`);
+          });
           selected.localWorkspace?.[Symbol.dispose]();
           throw error;
         }
