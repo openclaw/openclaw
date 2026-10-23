@@ -192,7 +192,7 @@ export function assertControlUiE2eOwnership(
     projectsOf(prebuilt)
       .map((project) => ({ name: project.test.name, files: selectedFiles(project.test) }))
       .filter((project) => project.files.length > 0),
-  ).toEqual([{ name: "ui-e2e-serial-standalone", files: [packagedWorkboard] }]);
+  ).toEqual([{ name: "ui-e2e-real-gateway-standalone", files: [packagedWorkboard] }]);
   expect(
     createUiRealGatewayTestShards(createUiTestShardGroups({ uiE2eFiles: [packagedWorkboard] }).e2e)
       .flatMap((shard) => shard.groups.flatMap((group) => group.includePatterns))
