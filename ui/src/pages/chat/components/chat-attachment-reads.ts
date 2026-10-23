@@ -1,7 +1,7 @@
 import type { ApplicationConfigCapability } from "../../../app/config.ts";
 import { t } from "../../../i18n/index.ts";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
-import { createListenerScope } from "../../../lib/reactive/listener.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { showToast } from "../../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../../lib/uploads.ts";
 import {
@@ -243,7 +243,7 @@ export function readChatAttachmentFile(
   }
   const reader = new FileReader();
   let preparedFile = file;
-  const preparation = createListenerScope();
+  const preparation = new AbortController();
   let settled = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const cancel = (outcome: "error" | "aborted") => {
@@ -263,7 +263,7 @@ export function readChatAttachmentFile(
       return;
     }
     settled = true;
-    preparation.dispose();
+    preparation.abort();
     clearTimeout(timer);
     timer = undefined;
     entry.cancel = undefined;
@@ -310,18 +310,24 @@ export function readChatAttachmentFile(
   };
   // This read owns the FileReader and abort subscription through settlement, independent of rendering.
   entry.cancel = abort;
-  preparation.listen(signal, "abort", abort, { once: true });
-  preparation.listen(reader, "error", () => finish("error"));
-  preparation.listen(reader, "abort", () => finish("aborted"));
-  preparation.listen(reader, "load", () => finish("ready"));
-  preparation.listen(reader, "progress", (event) => {
-    if (!settled && event.lengthComputable && event.total > 0) {
-      reads.updateProgress(entry, Math.min(1, Math.max(0, event.loaded / event.total)));
-      if (timer !== undefined) {
-        setProcessing(true);
+  const listenerOptions = { signal: preparation.signal };
+  listen(signal, "abort", abort, { ...listenerOptions, once: true });
+  listen(reader, "error", () => finish("error"), listenerOptions);
+  listen(reader, "abort", () => finish("aborted"), listenerOptions);
+  listen(reader, "load", () => finish("ready"), listenerOptions);
+  listen(
+    reader,
+    "progress",
+    (event) => {
+      if (!settled && event.lengthComputable && event.total > 0) {
+        reads.updateProgress(entry, Math.min(1, Math.max(0, event.loaded / event.total)));
+        if (timer !== undefined) {
+          setProcessing(true);
+        }
       }
-    }
-  });
+    },
+    listenerOptions,
+  );
   entry.destination.onPendingReadsChange?.(1);
   setProcessing(true);
   const readPreparedFile = (prepared: File) => {

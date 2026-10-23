@@ -6,7 +6,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { gatewayWebSocketTransportUrl, uiDevGatewayResourceUrl } from "../dev-gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import { createListenerScope } from "../lib/reactive/listener.ts";
+import { listen } from "../lib/reactive/listener.ts";
 
 const BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR_CODE = "BROWSER_WEBSOCKET_CONSTRUCTOR_ERROR";
 export const BROWSER_WEBSOCKET_SECURITY_ERROR_CODE = "BROWSER_WEBSOCKET_SECURITY_ERROR";
@@ -77,7 +77,8 @@ export function createBrowserGatewaySocket(
   maxPayloadBytes?: () => number | undefined,
 ): GatewayProtocolSocket {
   const socket = new WebSocket(gatewayWebSocketTransportUrl(url));
-  const listeners = createListenerScope();
+  const listeners = new AbortController();
+  const listenerOptions = { signal: listeners.signal };
   let opening = true;
   let openingTimer: ReturnType<typeof setTimeout> | undefined;
   const finishOpening = () => {
@@ -93,20 +94,30 @@ export function createBrowserGatewaySocket(
     }
     finishOpening();
     // The protocol owner can reconnect synchronously from this terminal callback.
-    listeners.dispose();
+    listeners.abort();
     handlers.close(code, reason);
   };
 
-  listeners.listen(socket, "open", () => {
-    finishOpening();
-    handlers.open();
-  });
-  listeners.listen(socket, "message", (event) => handlers.message(String(event.data ?? "")));
-  listeners.listen(socket, "close", (event) => finishClose(event.code, event.reason));
-  listeners.listen(socket, "error", () => {
-    finishOpening();
-    handlers.error(new Error("websocket error"));
-  });
+  listen(
+    socket,
+    "open",
+    () => {
+      finishOpening();
+      handlers.open();
+    },
+    listenerOptions,
+  );
+  listen(socket, "message", (event) => handlers.message(String(event.data ?? "")), listenerOptions);
+  listen(socket, "close", (event) => finishClose(event.code, event.reason), listenerOptions);
+  listen(
+    socket,
+    "error",
+    () => {
+      finishOpening();
+      handlers.error(new Error("websocket error"));
+    },
+    listenerOptions,
+  );
 
   // The protocol challenge timer starts after `open`. Bound the browser's
   // opening phase to the same default preauth budget used by the Node client.

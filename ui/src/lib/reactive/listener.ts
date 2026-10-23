@@ -38,23 +38,3 @@ export function listen<T extends EventTarget, K extends string>(
   target.addEventListener(type, listener, options);
   return () => target.removeEventListener(type, listener, options);
 }
-
-/** One external operation owns these listeners and retires them together. */
-export function createListenerScope() {
-  const controller = new AbortController();
-  return {
-    signal: controller.signal,
-    listen<T extends EventTarget, K extends string>(
-      target: T,
-      type: K,
-      handler: ((event: NativeEventMap<T>[K]) => void) | EventListenerObject,
-      options?: boolean | Omit<AddEventListenerOptions, "signal">,
-    ) {
-      listen(target, type, handler, {
-        ...(typeof options === "boolean" ? { capture: options } : options),
-        signal: controller.signal,
-      });
-    },
-    dispose: () => controller.abort(),
-  };
-}

@@ -1,5 +1,5 @@
 import { base64ToBytes } from "../../../lib/bytes-base64.ts";
-import { createListenerScope } from "../../../lib/reactive/listener.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 
 export function dataImageClipboardFile(
   dataUrl: string,
@@ -93,14 +93,15 @@ export async function resizeChatAttachmentImage(
       const worker = new Worker(new URL("./chat-attachment-image.worker.ts", import.meta.url), {
         type: "module",
       });
-      const listeners = createListenerScope();
+      const listeners = new AbortController();
+      const listenerOptions = { once: true, signal: listeners.signal };
       let settled = false;
       const finish = (result: File | null) => {
         if (settled) {
           return;
         }
         settled = true;
-        listeners.dispose();
+        listeners.abort();
         worker.terminate();
         if (result && !signal.aborted) {
           resolve(result);
@@ -113,22 +114,23 @@ export async function resizeChatAttachmentImage(
         }
       };
       const abort = () => finish(null);
-      listeners.listen(signal, "abort", abort, { once: true });
-      listeners.listen(worker, "message", ({ data }: MessageEvent<File | null>) => finish(data), {
-        once: true,
-      });
-      listeners.listen(
+      listen(signal, "abort", abort, listenerOptions);
+      listen(
+        worker,
+        "message",
+        ({ data }: MessageEvent<File | null>) => finish(data),
+        listenerOptions,
+      );
+      listen(
         worker,
         "error",
         (event) => {
           event.preventDefault();
           finish(null);
         },
-        { once: true },
+        listenerOptions,
       );
-      listeners.listen(worker, "messageerror", () => finish(null), {
-        once: true,
-      });
+      listen(worker, "messageerror", () => finish(null), listenerOptions);
       try {
         worker.postMessage({ file, maxBytes } satisfies ChatAttachmentImageRequest, []);
       } catch {
