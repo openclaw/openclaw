@@ -3449,6 +3449,12 @@ try {
   for (let index = 0; index < clientCount; index++) {
     const client = await connectClient(index);
     if (index === 0) {
+      // Operator-created roots parent to main; a missing root suppresses ancestor envelopes.
+      await rpc(client, "sessions.create", {
+        key: "agent:main:main",
+        visibility: "shared",
+        displayName: "Synthetic broadcast root",
+      });
       if (!historyTurns) {
         const created = await rpc(client, "sessions.create", {
           key: parentKey,

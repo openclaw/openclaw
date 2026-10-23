@@ -2775,6 +2775,8 @@ with and without `--list-interval-ms 30000 --poll-seed roster-polling` to isolat
 staggered roster reads; negotiate `--session-row-deltas --session-envelope-refs`
 for current Control UI clients. A growing wire-payload count with stable audience
 count identifies fragmented delivery histories rather than different permissions.
+The workload creates the main-session root before its synthetic parent and children;
+an incomplete ancestor chain omits ancestor envelopes and cannot prove this effect.
 
 The existing allocation diagnostics include per-kind GC pause `count`, `total`,
 `max`, `p95`, and `p99` under `allocation.diagnostics.gc`, plus event-loop sample
