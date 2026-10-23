@@ -14,6 +14,17 @@ const option = (name, fallback) => {
   const at = process.argv.indexOf(name);
   return at < 0 ? fallback : process.argv[at + 1];
 };
+/**
+ * @param {(request: import("node:http").IncomingMessage, response: import("node:http").ServerResponse) => Promise<void>} handler
+ */
+const createAsyncServer = (handler) =>
+  createServer((request, response) => {
+    void handler(request, response).catch(
+      /** @param {unknown} error */ (error) => {
+        response.destroy(error instanceof Error ? error : new Error(String(error)));
+      },
+    );
+  });
 const repo = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 const label = option("--label", "candidate");
 assert.match(label, /^[a-z0-9-]+$/);
@@ -57,7 +68,7 @@ const deltas = Array.from({ length: Math.ceil(source.length / 4) }, (_, n) =>
 const requests = [];
 const localModelRequests = [];
 const ollamaProxy = withModel
-  ? createServer(async (request, response) => {
+  ? createAsyncServer(async (request, response) => {
       let raw = "";
       for await (const bytes of request) {
         raw += bytes;
@@ -109,7 +120,7 @@ if (ollamaProxy) {
     ollamaProxy.listen(0, "127.0.0.1", resolve);
   });
 }
-const provider = createServer(async (request, response) => {
+const provider = createAsyncServer(async (request, response) => {
   if (request.method === "GET") {
     response.writeHead(200, { "content-type": "application/json" }).end(
       JSON.stringify({
@@ -266,6 +277,8 @@ const gateway = spawn(command[0], command.slice(1), {
     OPENCLAW_XML_PROOF_METRICS: path.join(output, "metrics"),
   },
 });
+const gatewayPid = gateway.pid;
+assert(gatewayPid !== undefined, "Gateway process did not start");
 const log = (bytes) => appendFileSync(path.join(output, "gateway.log"), bytes);
 gateway.stdout.on("data", log);
 gateway.stderr.on("data", log);
@@ -396,7 +409,7 @@ try {
   }
 } finally {
   try {
-    process.kill(-gateway.pid, "SIGTERM");
+    process.kill(-gatewayPid, "SIGTERM");
   } catch {}
   if (gateway.exitCode === null && gateway.signalCode === null) {
     let exitTimer;
