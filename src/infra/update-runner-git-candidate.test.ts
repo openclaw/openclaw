@@ -258,14 +258,17 @@ describe("Git candidate activation", () => {
           checkouts.push(argv.join(" "));
         }
       });
-      const beforeGitStaging = vi.fn(async () => {
-        if (mode === "exact") {
-          throw new Error("incompatible target reached staging");
-        }
-        return {
-          step: { name: "staging", command: "staging", cwd: root, durationMs: 0, exitCode: 0 },
-        };
-      });
+      const beforeGitStaging = vi.fn<NonNullable<UpdateRunnerOptions["beforeGitStaging"]>>(
+        async () => {
+          if (mode === "exact") {
+            throw new Error("incompatible target reached staging");
+          }
+          return {
+            step: { name: "staging", command: "staging", cwd: root, durationMs: 0, exitCode: 0 },
+            failureReason: "snapshot-capacity-insufficient",
+          };
+        },
+      );
       const result = await update({
         ...(mode === "exact" ? { devTarget: { mode: "detached", ref: incompatible } } : {}),
         beforeGitStaging,
