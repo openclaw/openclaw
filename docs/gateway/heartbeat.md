@@ -103,6 +103,12 @@ Doctor supports the heartbeat configuration and task shapes shipped from July
 converted faithfully, Doctor retains it and reports the problem instead of
 silently discarding its scheduling or delivery settings.
 
+A bare `tasks:` line followed by ordinary checklist bullets stays unchanged in
+the monitor's scratch, including scratch imported by an earlier Doctor. It does
+not create scheduled jobs or block retirement. Incomplete task declarations still
+require repair; update admission and Doctor use the same task validation, and
+Doctor leaves an incomplete `HEARTBEAT.md` in place before importing it.
+
 <a id="defaults" />
 <a id="what-the-heartbeat-prompt-is-for" />
 <a id="per-agent-heartbeats" />

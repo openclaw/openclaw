@@ -39,14 +39,17 @@ import {
   convertStoredHeartbeatTask,
   loadHeartbeatTaskPlanningSnapshot,
   planHeartbeatTaskMigration,
-  validateHeartbeatTasks,
   type AgentTaskMigrationPlan,
   type CronPlanningSnapshot,
   type MigrationCommitResult,
 } from "./doctor-heartbeat-task-migration.kernel.js";
 import { readLegacyHeartbeatScratch } from "./doctor-heartbeat-task-scratch.js";
 import { noteDoctorMigrationResult } from "./doctor-migration-notes.js";
-import { analyzeLegacyHeartbeatTasks, type LegacyHeartbeatTask } from "./heartbeat-task-legacy.js";
+import {
+  analyzeLegacyHeartbeatTasks,
+  validateHeartbeatTasks,
+  type LegacyHeartbeatTask,
+} from "./heartbeat-task-legacy.js";
 
 type HeartbeatTaskMigrationResult = { changes: string[]; warnings: string[] };
 
@@ -92,7 +95,7 @@ export async function collectHeartbeatTaskMigrationFindings(
       continue;
     }
     try {
-      validateHeartbeatTasks(document.tasks, document.taskEntryCount);
+      validateHeartbeatTasks(document);
       findings.push({
         ...finding,
         requirement: "heartbeat-tasks-in-scratch",
@@ -270,7 +273,7 @@ export async function maybeMigrateHeartbeatTasksToCron(params: {
     }
     const tasks = document.tasks;
     try {
-      validateHeartbeatTasks(tasks, document.taskEntryCount);
+      validateHeartbeatTasks(document);
     } catch (error) {
       warnings.push(
         `Agent "${agent.agentId}" heartbeat tasks were not migrated: ${errorMessage(error)}.`,
