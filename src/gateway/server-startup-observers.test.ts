@@ -62,7 +62,7 @@ it.each(["rejected", "failed-target"] as const)(
   "holds orphan admission through a config reload after a %s scan",
   async (outcome) => {
     const initial: OpenClawConfig = {};
-    const latest: OpenClawConfig = { agents: { list: [{ id: "added" }] } };
+    const latest: OpenClawConfig = { agents: { entries: { added: {} } } };
     let current = initial;
     const checked = new Set<string>();
     const retryStarted = createDeferred();
