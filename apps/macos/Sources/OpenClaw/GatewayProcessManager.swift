@@ -11,6 +11,16 @@ private struct GatewayHealthProbeTimeout: LocalizedError, Sendable {
     }
 }
 
+private struct GatewayHealthReadiness: Decodable {
+    let coreReady: Bool?
+}
+
+private struct GatewayHealthStartupPending: LocalizedError, Sendable {
+    var errorDescription: String? {
+        "Gateway is still preparing to accept chat"
+    }
+}
+
 @MainActor
 @Observable
 final class GatewayProcessManager {
@@ -1117,6 +1127,7 @@ extension GatewayProcessManager {
     }
 
     private func probeFailureShowsStartupProgress(_ error: Error) -> Bool {
+        if error is GatewayHealthStartupPending { return true }
         if let response = error as? GatewayResponseError {
             return response.code.uppercased() == "UNAVAILABLE"
         }
@@ -1358,7 +1369,7 @@ extension GatewayProcessManager {
         // Startup owns recovery and its monotonic deadline. A normal request can recursively
         // start the Gateway and spend several 30-second connect retries before its RPC timer begins.
         // Disable the inner RPC timer so it cannot race the owner's typed probe timeout.
-        return try await AsyncTimeout.withTimeout(
+        let data = try await AsyncTimeout.withTimeout(
             seconds: max(0.001, timeoutMs / 1000),
             clock: clock,
             onTimeout: { GatewayHealthProbeTimeout(timeoutMs: timeoutMs) },
@@ -1369,6 +1380,11 @@ extension GatewayProcessManager {
                     timeoutMs: 0,
                     retryTransportFailures: false)
             })
+        // Older Gateways omit this field; newer ones distinguish a responsive server from chat readiness.
+        if (try? JSONDecoder().decode(GatewayHealthReadiness.self, from: data))?.coreReady == false {
+            throw GatewayHealthStartupPending()
+        }
+        return data
     }
 
     func clearLog() {

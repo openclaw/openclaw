@@ -65,11 +65,7 @@ it("detects syntax suppressions without counting prose", () => {
 
   expect(report.summary).toMatchObject({
     findingCount: 6,
-    kindCounts: {
-      "as-any": 3,
-      "expect-error": 1,
-      "type-assertion-any": 2,
-    },
+    kindCounts: { "as-any": 3, "expect-error": 1, "type-assertion-any": 2 },
     scannedFileCount: 2,
     touchedFileCount: 1,
   });
@@ -106,6 +102,8 @@ it("keeps unchecked any casts at zero and negative type assertions explicit", ()
       "src/infra/net/fetch-guard.configured-origin-linklocal.test.ts:@ts-expect-error - managedProxyBypass is intentionally not public",
       "src/infra/net/fetch-guard.socks.test.ts:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",
       "src/infra/net/fetch-guard.socks.test.ts:@ts-expect-error Undici's Node TLS intersection rejects its runtime-valid null timeout.",
+      "src/auto-reply/inbound-debounce.test.ts:@ts-expect-error Released plugins return promises instead of the current lifecycle shape.",
+      "src/auto-reply/inbound-debounce.test.ts:@ts-expect-error Released plugins return promises instead of the current lifecycle shape.",
       "src/plugin-sdk/plugin-config-runtime.test.ts:@ts-expect-error Arrays are also invalid persisted plugin config objects.",
       "src/plugin-sdk/plugin-config-runtime.test.ts:@ts-expect-error Exercise malformed persisted config at the runtime boundary.",
       "test/type-contracts/plugin-entry-hook-options.ts:@ts-expect-error Trigger eligibility is only supported for before_agent_reply.",

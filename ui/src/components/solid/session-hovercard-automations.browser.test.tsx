@@ -113,9 +113,10 @@ it.each([1, 2])("keeps inspection focus and retires %i disconnected jobs", async
   expect(controller.card).toBe(card);
   expect(document.activeElement).toBe(anchor);
   source.publish({ ...source.gateway.snapshot, phase: "offline", client: null });
-  flush();
-  expect(card.textContent).not.toContain(instruction);
-  expect(card.textContent).toContain("Automations unavailable for this session.");
+  await vi.waitFor(() => {
+    expect(card.textContent).not.toContain(instruction);
+    expect(card.textContent).toContain("Automations unavailable for this session.");
+  });
   await tabTo(trigger, true);
   expect(controller.card).toBeNull();
 });

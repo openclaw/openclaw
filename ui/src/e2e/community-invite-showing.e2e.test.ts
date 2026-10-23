@@ -1,8 +1,5 @@
-import { writeFile } from "node:fs/promises";
-import nodePath from "node:path";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   createControlUiMockBootstrapConfig,
@@ -29,14 +26,22 @@ const sessions = Array.from({ length: 32 }, (_, index) =>
 suite.define(() => {
   for (const mobile of [false, true]) {
     for (const mode of ["light", "dark"] as const) {
-      it(`keeps the ${mobile ? "mobile" : "desktop"} ${mode} card flush and dismissal persistent`, async () => {
-        await suite.withPage(
+      it(`keeps the ${mobile ? "mobile" : "desktop"} ${mode} card flush and dismissal persistent`, async () =>
+        suite.withPage(
           {
             viewport: mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 },
             hasTouch: mobile,
             colorScheme: mode,
           },
           async ({ page }) => {
+            const resize = (height: number) =>
+              page.setViewportSize({ width: mobile ? 390 : 1280, height });
+            const rail = (view: string) =>
+              page.locator(`.sidebar-rail [data-navigation-view="${view}"]`);
+            const expectDismissed = async () => {
+              await rail("sessions").waitFor({ state: "attached" });
+              expect(await card.count()).toBe(0);
+            };
             await seedChatSettings(page, suite.server.baseUrl, {
               themeMode: mode,
               sidebarAgentsMode: "chip",
@@ -112,28 +117,10 @@ suite.define(() => {
                 .locator(".invite__body")
                 .evaluate((node) => Number.parseFloat(getComputedStyle(node).paddingLeft)),
             ).toBeGreaterThanOrEqual(12);
-            if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-              const frame = await takeControlUiScreenshotFrame(page, shell, [card, close], {
-                elements: [page.locator(".sidebar"), card],
-                animations: "disabled",
-              });
-              const name = `after-${mobile ? "mobile" : "desktop"}-${mode}`;
-              await writeFile(nodePath.join(suite.artifactDir, name + ".png"), frame.png);
-              await writeFile(
-                nodePath.join(suite.artifactDir, name + "-sidebar.png"),
-                frame.elements[0]!.png,
-              );
-              await writeFile(
-                nodePath.join(suite.artifactDir, name + "-card.png"),
-                frame.elements[1]!.png,
-              );
-            }
             for (let index = 0; index < 3; index += 1) {
               await page.getByRole("button", { name: "Show more", exact: true }).click();
             }
-            await page.setViewportSize(
-              mobile ? { width: 390, height: 568 } : { width: 1280, height: 540 },
-            );
+            await resize(mobile ? 568 : 540);
             await page.locator('[data-session-key="agent:main:task-31"]').scrollIntoViewIfNeeded();
             expect(await list.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
             const shortListBounds = (await list.boundingBox())!;
@@ -145,15 +132,13 @@ suite.define(() => {
             expect(shortCardBounds.y + shortCardBounds.height).toBeLessThanOrEqual(
               mobile ? 568 : 540,
             );
-            await page.setViewportSize(
-              mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 },
-            );
+            await resize(mobile ? 844 : 900);
             await list.evaluate((node) => {
               node.scrollTop = 0;
             });
-            await page.locator('.sidebar-rail [data-navigation-view="pages"]').click();
+            await rail("pages").click();
             await close.waitFor();
-            await page.locator('.sidebar-rail [data-navigation-view="sessions"]').click();
+            await rail("sessions").click();
             await page.keyboard.press("Tab");
             await close.focus();
             expect(await close.evaluate((node) => node.matches(":focus-visible"))).toBe(true);
@@ -169,21 +154,13 @@ suite.define(() => {
             expect(
               await page.evaluate((key) => localStorage.getItem(key), dismissalKey),
             ).not.toBeNull();
-            expect(
-              await page
-                .locator('.sidebar-rail [data-navigation-view="sessions"]')
-                .evaluate((node) => node === document.activeElement),
-            ).toBe(true);
+            expect(await rail("sessions").evaluate((node) => node === document.activeElement)).toBe(
+              true,
+            );
             await page.goto(`${suite.server.baseUrl}new`);
-            await page
-              .locator('.sidebar-rail [data-navigation-view="sessions"]')
-              .waitFor({ state: "attached" });
-            expect(await card.count()).toBe(0);
+            await expectDismissed();
             await page.goto(url);
-            await page
-              .locator('.sidebar-rail [data-navigation-view="sessions"]')
-              .waitFor({ state: "attached" });
-            expect(await card.count()).toBe(0);
+            await expectDismissed();
             await page.reload();
             if (mobile) {
               await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
@@ -198,37 +175,13 @@ suite.define(() => {
             }
             await page.locator(".sidebar-shell").waitFor();
             expect(await card.count()).toBe(0);
-            if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-              await page.setViewportSize(
-                mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 },
-              );
-              if (mobile) {
-                const toggle = page.getByRole("button", { name: "Expand sidebar", exact: true });
-                if (await toggle.isVisible()) {
-                  await toggle.click();
-                }
-              }
-              const sidebar = page.locator(".sidebar");
-              const frame = await takeControlUiScreenshotFrame(page, sidebar, [list], {
-                elements: [sidebar],
-                animations: "disabled",
-              });
-              await writeFile(
-                nodePath.join(
-                  suite.artifactDir,
-                  `dismissed-${mobile ? "mobile" : "desktop"}-${mode}.png`,
-                ),
-                frame.png,
-              );
-            }
           },
-        );
-      });
+        ));
     }
   }
 
-  it("honors earlier dismissals and deployment policy when re-enabled", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+  it("honors earlier dismissals and deployment policy when re-enabled", async () =>
+    suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       await installMockGateway(page, { communityInvite: true });
       await page.addInitScript((key) => localStorage.setItem(key, "dismissed"), dismissalKey);
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
@@ -248,6 +201,5 @@ suite.define(() => {
       await page.reload();
       await page.locator(".sidebar-shell").waitFor();
       expect(await page.locator(".community-invite-card").count()).toBe(0);
-    });
-  });
+    }));
 });

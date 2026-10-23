@@ -5,10 +5,12 @@ import {
   type SessionGitHubActionParams,
   type SessionGitHubPullRequestInspectResult,
 } from "../../packages/gateway-protocol/src/schema/session-github-publication.js";
-import { resolveConfiguredGitHubHost } from "../agents/github-host.js";
+import {
+  resolveConfiguredGitHubHost,
+  resolveConfiguredGitHubApiBaseUrl,
+} from "../agents/github-host.js";
 import { getGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import {
   currentGitHubPublicationConfig,
   matchesCurrentGitHubPublicationIdentity,
@@ -19,9 +21,10 @@ import {
   githubPublicationApiArgs,
   runPublicationCommand,
 } from "./github-publication-git-transport.js";
+import { captureOwnGitHubPullRequestReader } from "./github-publication-inspect-reader.js";
 import {
   prepareGitHubPublicationRequesterV2,
-  type GitHubPublicationRequesterV2,
+  type GitHubPublicationRequesterPolicyV2,
 } from "./github-publication-requester.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 
@@ -131,7 +134,7 @@ function refFacts(
 export async function inspectOwnGitHubPullRequest(params: {
   pullRequestUrl: string;
   agentId: string;
-  requester: GitHubPublicationRequesterV2;
+  requester: GitHubPublicationRequesterPolicyV2;
   assertCurrent: () => void;
 }): Promise<{ result: Inspection; assertCurrent: () => void }> {
   params.assertCurrent();
@@ -140,46 +143,51 @@ export async function inspectOwnGitHubPullRequest(params: {
   if (actor.kind !== "operator") {
     throw new Error("Inspecting your PR requires your verified linked GitHub account.");
   }
-  const host = resolveConfiguredGitHubHost(currentGitHubPublicationConfig());
+  const inspected = await readOwnGitHubPullRequest({
+    pullRequestUrl: params.pullRequestUrl,
+    agentId: params.agentId,
+    reader: captureOwnGitHubPullRequestReader(actor.profileId, () =>
+      resolveConfiguredGitHubHost(currentGitHubPublicationConfig()),
+    ),
+    assertCurrent: () => {
+      params.assertCurrent();
+      params.requester.assertCurrent();
+    },
+  });
+  return { result: inspected.result, assertCurrent: inspected.assertCurrent };
+}
+
+/** The same own-PR inspection serves admitted read-only consumers without publication grants. */
+export async function readOwnGitHubPullRequest(params: {
+  pullRequestUrl: string;
+  agentId: string;
+  reader: ReturnType<typeof captureOwnGitHubPullRequestReader>;
+  assertCurrent: () => void;
+}) {
+  const { host, accountIds: admittedIds } = params.reader;
   const target = parsePullRequestUrl(params.pullRequestUrl, host);
-  const profile = captureResidentUserProfileAccess(actor.profileId);
-  const accountIds = () => {
-    const facts = profile.readCurrentFacts();
-    // Enterprise identity comes from the catalog's proof-validated binding; a principal-shaped alias alone never qualifies.
-    return host === "github.com"
-      ? [...(facts.githubAccountIds ?? [])]
-      : (facts.enterpriseGitHubAccounts ?? []).flatMap((account) =>
-          account.host === host ? [account.accountId] : [],
-        );
-  };
-  const admittedIds = accountIds();
-  if (!admittedIds.length) {
-    throw new Error(
-      "Link a verified GitHub account on the configured host before inspecting your PR.",
-    );
-  }
   const assertRequester = () => {
     params.assertCurrent();
-    params.requester.assertCurrent();
-    const currentIds = accountIds();
-    if (
-      resolveConfiguredGitHubHost(currentGitHubPublicationConfig()) !== host ||
-      !admittedIds.every((id) => currentIds.includes(id))
-    ) {
-      throw new Error(
-        "Your linked GitHub identity changed; retry inspection with your current account.",
-      );
-    }
+    params.reader.assertCurrent();
   };
   const identity = await prepareCurrentGitHubPublicationIdentity(params.agentId, assertRequester);
-  const assertCurrent = () => {
-    assertRequester();
+  const config = currentGitHubPublicationConfig();
+  const apiBaseUrl = resolveConfiguredGitHubApiBaseUrl(config);
+  const hasReadEndpoint =
+    host === "github.com" || Boolean(config.gateway?.github?.apiBaseUrl?.trim());
+  const assertIdentityCurrent = () => {
+    params.reader.assertCurrent();
     if (
       (identity.host ?? "github.com") !== host ||
+      resolveConfiguredGitHubApiBaseUrl(currentGitHubPublicationConfig()) !== apiBaseUrl ||
       !matchesCurrentGitHubPublicationIdentity({ agentId: params.agentId, identity })
     ) {
       throw new Error("The GitHub publisher changed; retry inspection.");
     }
+  };
+  const assertCurrent = () => {
+    assertRequester();
+    assertIdentityCurrent();
   };
   assertCurrent();
   const read = async (endpoint: string): Promise<unknown> => {
@@ -282,7 +290,17 @@ export async function inspectOwnGitHubPullRequest(params: {
     head,
   };
   assertCurrent();
-  return { result, assertCurrent };
+  return {
+    result,
+    assertCurrent,
+    assertIdentityCurrent,
+    details: pr,
+    // Enterprise credentials must not inherit the public API's default destination.
+    credential:
+      identity.env.GH_TOKEN && hasReadEndpoint
+        ? { token: identity.env.GH_TOKEN, apiBaseUrl, assertCurrent: assertIdentityCurrent }
+        : undefined,
+  };
 }
 
 export async function performSessionGitHubInspection(

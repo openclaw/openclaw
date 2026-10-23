@@ -17,6 +17,7 @@ import {
 import { Icon } from "./solid/icon.tsx";
 import { Menu, type MenuEntry, type MenuHandle, type MenuProps } from "./solid/menu.tsx";
 import { useScrollState } from "./solid/scroll-state.ts";
+import { createTextOverflow } from "./solid/text-overflow.ts";
 import "./tooltip.ts";
 import "../styles/chat/task-progress-details.css";
 
@@ -357,7 +358,7 @@ function DetailsCard(props: CardProps) {
       }),
     );
   });
-  const currentOverflow = useScrollState(true, false);
+  const currentOverflow = createTextOverflow(() => [view().stepLabel, noteSummary()]);
   const disclosure = createComposerProgressDisclosure(() => [
     props.composerDisclosureContext?.sessionIdentity ?? props.card.sessionKey,
     !props.collapseComposerByDefault,
@@ -551,7 +552,13 @@ function ComposerCard(props: CardProps) {
           />
         </span>
         <span class="session-progress-card__summary-collapsed">
-          <span class="session-progress-card__current">{view().stepLabel}</span>
+          <span
+            ref={createTextOverflow(() => view().stepLabel)}
+            class="session-progress-card__current"
+            title={view().stepLabel}
+          >
+            {view().stepLabel}
+          </span>
         </span>
         <Show when={view().counts}>
           <span

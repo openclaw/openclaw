@@ -7,6 +7,7 @@ import {
 } from "../../../config/gateway-control-ui-origins.js";
 import { getRecord, type LegacyConfigMigrationSpec } from "../../../config/legacy.shared.js";
 import { DEFAULT_GATEWAY_PORT } from "../../../config/paths.js";
+import { deleteRetiredPath } from "./legacy-config-record-shared.js";
 
 const LEGACY_GATEWAY_BIND_HOST_ALIASES = new Map<string, "lan" | "loopback">([
   ["0.0.0.0", "lan"],
@@ -39,14 +40,11 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       },
     ],
     apply: (raw, changes) => {
-      const controlUi = getRecord(getRecord(raw.gateway)?.controlUi);
-      if (!controlUi || !Object.hasOwn(controlUi, "toolTitles")) {
-        return;
+      if (deleteRetiredPath(getRecord(raw.gateway)?.controlUi, ["toolTitles"])) {
+        changes.push(
+          "Removed retired gateway.controlUi.toolTitles; tool activity descriptions are automatic and make no utility-model calls.",
+        );
       }
-      delete controlUi.toolTitles;
-      changes.push(
-        "Removed retired gateway.controlUi.toolTitles; tool activity descriptions are automatic and make no utility-model calls.",
-      );
     },
   },
   {
@@ -113,12 +111,9 @@ export const LEGACY_CONFIG_MIGRATIONS_RUNTIME_GATEWAY: LegacyConfigMigrationSpec
       },
     ],
     apply: (raw, changes) => {
-      const gateway = getRecord(raw.gateway);
-      const controlUi = getRecord(gateway?.controlUi);
-      if (!controlUi || !Object.hasOwn(controlUi, "dangerouslyDisableDeviceAuth")) {
+      if (!deleteRetiredPath(getRecord(raw.gateway)?.controlUi, ["dangerouslyDisableDeviceAuth"])) {
         return;
       }
-      delete controlUi.dangerouslyDisableDeviceAuth;
       changes.push("Removed retired gateway.controlUi.dangerouslyDisableDeviceAuth legacy config.");
     },
   },

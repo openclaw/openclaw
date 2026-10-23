@@ -3,6 +3,7 @@ import type { JSX } from "@solidjs/web";
 import {
   createEffect,
   createMemo,
+  lazy,
   For,
   Match,
   Repeat,
@@ -15,23 +16,26 @@ import {
   useContext,
 } from "solid-js";
 import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
+import { unwrapToolCallForDisplay } from "../../../../../src/agents/tool-display-call.js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
+import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
+import "../../../components/solid/person-reference.tsx";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
-import "../../../components/solid/person-reference.tsx";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
-import { ChatClawHubCard } from "./chat-clawhub-card.tsx";
+import { ChatImportBoundary } from "./chat-import-boundary.tsx";
 import { ActivityOperation } from "./chat-message-activity-operation.tsx";
 import { OmittedMedia } from "./chat-message-attachment-status-solid.tsx";
-import { AssistantAttachments, MessageAttachment } from "./chat-message-attachments-solid.tsx";
 import type {
   ActivityOperationProps,
   GroupedMessageOptions,
@@ -41,7 +45,12 @@ import {
   type GroupedMessagePresentation,
 } from "./chat-message-bubble-presentation.ts";
 import { MessageWorkContext } from "./chat-message-context-view.tsx";
-import { MessageImages } from "./chat-message-images-solid.tsx";
+import {
+  AssistantAttachments,
+  ChatClawHubCard,
+  MessageAttachment,
+  MessageImages,
+} from "./chat-message-deferred.tsx";
 import type { ChatMessageRenderPreparation } from "./chat-message-markdown-view.tsx";
 import type { MarkdownMedia, PositionedMedia } from "./chat-message-media-markdown.ts";
 import { prepareMarkdownMedia } from "./chat-message-media-markdown.ts";
@@ -55,13 +64,9 @@ import { MarkdownText, MessageJson, MessageMarkdown } from "./chat-message-text-
 import { ChatPermissionCard } from "./chat-permission-card.tsx";
 import { ReplyLineView } from "./chat-reply-attribution.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import {
-  ToolApprovalReviews,
-  ChatToolCard,
-  ChatToolIcon,
-  syncToolDisclosureOverflow,
-  type ToolCardOptions,
-} from "./chat-tool-cards.solid.tsx";
+import { ChatToolIcon } from "./chat-tool-card-chrome.tsx";
+import type { ToolCardOptions } from "./chat-tool-card-types.ts";
+import { ToolApprovalReviews, ChatToolCard } from "./chat-tool-cards.solid.tsx";
 import {
   ExpandedToolCardContent,
   RawOutputToggle,
@@ -72,7 +77,14 @@ import { TranscriptMessageElementsContext } from "./chat-transcript-message-elem
 import { WorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.ts";
 import { ToolPreview } from "./widget-card.ts";
 
+registerEnglishCatalog(registerChatComposerEnglish);
+registerEnglishCatalog(registerChatSessionEnglish);
+
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
+
+const ToolMessageSummary = lazy(() => import("./chat-tool-card-row.solid.tsx"), {
+  export: "ToolMessageSummary",
+});
 
 export type GroupedMessageProps = {
   preparation: ChatMessageRenderPreparation;
@@ -487,6 +499,7 @@ function BubbleContents(props: ContentProps) {
         onOpenSidebar={props.onOpenSidebar}
         onAssistantAttachmentLoaded={props.options.onAssistantAttachmentLoaded}
         inlinePlayback={props.state().normalizedRole === "assistant"}
+        inlineComments={props.state().inlineComments}
       />
       <Show when={props.state().isStandaloneToolMessage}>
         <AssistantViews {...props} />
@@ -540,60 +553,58 @@ function BubbleContents(props: ContentProps) {
 }
 
 function ToolMessageFallback(props: ContentProps) {
-  let disclosureContent: HTMLSpanElement | undefined;
-  const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
+  const identity = () => {
+    const card = props.state().singleToolCard;
+    return card ? resolveToolDisplayIdentity(unwrapToolCallForDisplay(card).name) : null;
+  };
+  let host: HTMLDivElement | undefined;
   return (
     <div
+      ref={(element) => (host = element)}
       class={[
         "chat-tool-msg-collapse chat-tool-msg-collapse--manual",
         { "is-open": props.state().toolMessageExpanded },
       ]}
     >
-      <button
-        class="chat-inline-disclosure chat-tool-msg-summary"
-        type="button"
-        aria-expanded={props.state().toolMessageExpanded ? "true" : "false"}
-        onPointerEnter={syncOverflow}
-        onFocus={syncOverflow}
-        onClick={() =>
-          props.options.onToggleToolMessageExpanded?.(
-            props.state().toolMessageDisclosureId,
-            props.state().toolMessageExpanded,
-          )
-        }
-      >
-        <span class="chat-tool-msg-summary__icon">
-          <Show when={props.state().singleToolDisplay} fallback={<Icon name="zap" />}>
-            <ChatToolIcon
-              name={props.state().singleToolDisplay!.icon}
-              tool={{
-                toolName: props.state().singleToolDisplay!.name,
-                pluginToolIcons: props.options.pluginToolIcons,
-              }}
-              style={{ display: "contents" }}
-            />
-          </Show>
-        </span>
-        <span
-          ref={(element) => (disclosureContent = element)}
-          class="chat-tool-disclosure__content"
-        >
-          <span class="chat-tool-msg-summary__label">{props.state().toolMessageLabel}</span>
-          <Show
-            when={props.state().toolSummaryLabel}
-            fallback={
-              <Show when={props.state().toolPreview}>
-                <span class="chat-tool-msg-summary__preview">{props.state().toolPreview}</span>
-              </Show>
-            }
+      <ChatImportBoundary
+        identity={[props.options.sessionKey, props.messageKey]}
+        connected={() => Boolean(host?.isConnected)}
+        fallback={() => (
+          <button
+            class="chat-inline-disclosure chat-tool-msg-summary"
+            type="button"
+            disabled
+            aria-busy="true"
           >
-            <span class="chat-tool-msg-summary__names">{props.state().toolSummaryLabel}</span>
-          </Show>
-        </span>
-        <span class="chat-tool-row__chevron" aria-hidden="true">
-          <Icon name="chevronRight" />
-        </span>
-      </button>
+            <span class="chat-tool-msg-summary__icon">
+              <Show when={identity()} fallback={<Icon name="zap" />}>
+                {(display) => (
+                  <ChatToolIcon
+                    name={display().icon}
+                    tool={{
+                      toolName: display().name,
+                      pluginToolIcons: props.options.pluginToolIcons,
+                    }}
+                    style={{ display: "contents" }}
+                  />
+                )}
+              </Show>
+            </span>
+            <span class="chat-tool-disclosure__content">
+              <span class="chat-tool-msg-summary__label">
+                {identity() && !props.state().markdown && props.state().images.length === 0
+                  ? identity()!.label
+                  : t("chat.toolCards.toolOutput")}
+              </span>
+            </span>
+            <span class="chat-tool-row__chevron" aria-hidden="true">
+              <Icon name="chevronRight" />
+            </span>
+          </button>
+        )}
+      >
+        <ToolMessageSummary state={props.state()} options={props.options} />
+      </ChatImportBoundary>
       <Show
         when={props.state().toolMessageExpanded}
         fallback={<OmittedMedia items={props.state().omittedMedia} />}

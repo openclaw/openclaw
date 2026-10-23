@@ -35,7 +35,6 @@ import type {
 } from "./protocol.js";
 import { resolveCodexAppServerReasoningEffort } from "./reasoning-effort.js";
 import { codexPrewriteRejectionCause } from "./rpc-error.js";
-import type { createIsolatedCodexAppServerClient } from "./shared-client.js";
 import {
   assertCodexManagedRequirementsDoNotOverrideToolPolicy,
   attestCodexRestrictedToolSurfaceMcpServersDisabled,
@@ -68,7 +67,6 @@ const CODEX_SETTLED_FINALIZER_THREAD_CONFIG: JsonObject = {
 
 export type CodexBoundedTurnOptions = {
   pluginConfig?: CodexPluginConfig;
-  clientFactory?: typeof createIsolatedCodexAppServerClient;
 };
 
 type CodexBoundedTurnResult = {
@@ -174,7 +172,6 @@ async function runBoundedCodexAppServerTurnInWorkspace(
         params.requireNoExternalCapabilities === true,
       )
     : appServer.start;
-  const ownsClient = !params.options.clientFactory;
   const authSelection = params.preparedAuth
     ? { preparedAuth: params.preparedAuth }
     : { authProfileId: params.profile };
@@ -188,14 +185,12 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     assertCurrent: params.assertCurrent,
     ...(params.signal ? { abandonSignal: params.signal } : {}),
   };
-  const client = params.options.clientFactory
-    ? await params.options.clientFactory(clientOptions)
-    : await import("./shared-client.js").then(({ createIsolatedCodexAppServerClient }) =>
-        createIsolatedCodexAppServerClient({
-          ...clientOptions,
-          authProfileStore: params.authProfileStore,
-        }),
-      );
+  const client = await import("./shared-client.js").then(({ createIsolatedCodexAppServerClient }) =>
+    createIsolatedCodexAppServerClient({
+      ...clientOptions,
+      authProfileStore: params.authProfileStore,
+    }),
+  );
   const abortController = new AbortController();
   let activeThreadId: string | undefined;
   let activeTurnId = "";
@@ -408,9 +403,7 @@ async function runBoundedCodexAppServerTurnInWorkspace(
     clearTimeout(timeout);
     params.signal?.removeEventListener("abort", abortFromCaller);
     await interruptPromise;
-    if (ownsClient) {
-      await closeCodexStartupClientBestEffort(client);
-    }
+    await closeCodexStartupClientBestEffort(client);
   }
 }
 

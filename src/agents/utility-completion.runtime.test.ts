@@ -1,13 +1,24 @@
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import { FailoverError, recordModelFallbackStop } from "./failover-error.js";
 import * as modelAuth from "./model-auth.js";
+import "./model-fallback-runner.js";
+import { prepareOperatorModelPolicy } from "./operator-model-policy.js";
 import {
+  prepareUtilityCompletionForAgent,
   resolveUtilityCompletionRuntimeForAgent,
+  runUtilityCompletion,
   type UtilityCompletionRuntimeParams,
 } from "./utility-completion.js";
+
+type Defaults = NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>;
+function config(defaults: Defaults, models?: OpenClawConfig["models"]): OpenClawConfig {
+  return { agents: { defaults }, ...(models ? { models } : {}) };
+}
 
 function prepared(runtimeId?: string): UtilityCompletionRuntimeParams {
   const pluginRegistry = createEmptyPluginRegistry();
@@ -21,8 +32,15 @@ function prepared(runtimeId?: string): UtilityCompletionRuntimeParams {
     },
   });
   return {
-    cfg: {
-      models: {
+    cfg: config(
+      {
+        model: { primary: "anthropic/claude-opus-4-6" },
+        utilityModel: "anthropic/claude-haiku-4-5",
+        ...(runtimeId
+          ? { models: { "anthropic/claude-haiku-4-5": { agentRuntime: { id: runtimeId } } } }
+          : {}),
+      },
+      {
         providers: {
           anthropic: {
             api: "anthropic-messages",
@@ -32,16 +50,7 @@ function prepared(runtimeId?: string): UtilityCompletionRuntimeParams {
           },
         },
       },
-      agents: {
-        defaults: {
-          model: { primary: "anthropic/claude-opus-4-6" },
-          utilityModel: "anthropic/claude-haiku-4-5",
-          ...(runtimeId
-            ? { models: { "anthropic/claude-haiku-4-5": { agentRuntime: { id: runtimeId } } } }
-            : {}),
-        },
-      },
-    } as OpenClawConfig,
+    ),
     agentId: "main",
     pluginRegistry,
     metadataSnapshot: createPluginMetadataSnapshotFixture({
@@ -134,13 +143,106 @@ it.each([false, true])(
         key: "synthetic-prepared-key",
       };
     }
-    const credentialLookup = vi.spyOn(modelAuth, "hasAvailableAuthForProvider");
-    try {
-      const runtime = await resolveUtilityCompletionRuntimeForAgent(params);
-      expect(runtime).toEqual({ id: "claude-cli", kind: "cli", label: "Claude CLI" });
-      expect(credentialLookup).not.toHaveBeenCalled();
-    } finally {
-      credentialLookup.mockRestore();
-    }
+    using credentialLookup = vi.spyOn(modelAuth, "hasAvailableAuthForProvider");
+    const runtime = await resolveUtilityCompletionRuntimeForAgent(params);
+    expect(runtime).toEqual({ id: "claude-cli", kind: "cli", label: "Claude CLI" });
+    expect(credentialLookup).not.toHaveBeenCalled();
   },
 );
+
+const complete = vi.fn();
+const cfg = config({
+  model: { primary: "main/large", fallbacks: ["main/expensive"] },
+  utilityModel: { primary: "local/small@local:utility", fallbacks: ["backup", "other/last"] },
+  models: { "other/backup": { alias: "backup" } },
+});
+const answer = {
+  text: "Generated utility answer",
+  provider: "other",
+  model: "backup",
+  owner: { kind: "harness", id: "openclaw" },
+};
+type Request = Parameters<typeof runUtilityCompletion>[0];
+const request = async (overrides: Partial<Request> = {}): Promise<Request> => ({
+  ...(await prepareUtilityCompletionForAgent({
+    cfg,
+    agentId: "main",
+    useUtilityModel: "required",
+  })),
+  prompt: "Synthetic task",
+  systemPrompt: "Return a short result.",
+  timeoutMs: 1000,
+  ...overrides,
+});
+const run = async (overrides: Partial<Request> = {}) =>
+  runUtilityCompletion(await request(overrides), complete);
+const failThenAnswer = (reason: "timeout" | "rate_limit" = "timeout") => {
+  complete
+    .mockRejectedValueOnce(new FailoverError("Provider unavailable", { reason }))
+    .mockResolvedValue(answer);
+};
+beforeEach(() => {
+  complete.mockReset();
+});
+
+it("resolves fallback aliases and keeps credentials and main-model fallbacks independent", async () => {
+  failThenAnswer();
+  await expect(run()).resolves.toEqual(answer);
+  expect(
+    complete.mock.calls.map(([call]) => [call.provider, call.model, call.authProfileId]),
+  ).toEqual([
+    ["local", "small", "local:utility"],
+    ["other", "backup", undefined],
+  ]);
+});
+
+it("preserves operator model restrictions for utility fallbacks", async () => {
+  failThenAnswer("rate_limit");
+  const authority = createAdmittedRunOperatorAuthority({
+    profileId: "fixture",
+    scopes: ["operator.write"],
+    assertCurrent() {},
+    modelPolicy: prepareOperatorModelPolicy({
+      cfg,
+      policy: { allow: ["local/*", "other/*"], deny: ["other/backup"] },
+      manifestPlugins: [],
+    }),
+  });
+  await run({ operatorAuthority: authority });
+  expect(complete.mock.calls.map(([call]) => `${call.provider}/${call.model}`)).toEqual([
+    "local/small",
+    "other/last",
+  ]);
+});
+
+it("reads current fallbacks when reusing a prepared primary and retains its credential owner", async () => {
+  failThenAnswer();
+  await run({
+    config: config({
+      ...cfg.agents?.defaults,
+      utilityModel: { primary: "local/small@local:utility", fallbacks: ["local/backup"] },
+    }),
+  });
+  expect(complete.mock.calls.map(([call]) => [call.model, call.authProfileId])).toEqual([
+    ["small", "local:utility"],
+    ["backup", "local:utility"],
+  ]);
+});
+
+it("does not replay a terminal provider failure", async () => {
+  const error = new Error("Terminal provider failure");
+  recordModelFallbackStop(error);
+  complete.mockRejectedValue(error);
+  await expect(run()).rejects.toBe(error);
+  expect(complete).toHaveBeenCalledOnce();
+});
+
+it("honors cancellation before another utility candidate", async () => {
+  const controller = new AbortController();
+  complete.mockImplementationOnce(() => {
+    controller.abort(new Error("Caller cancelled"));
+    throw new FailoverError("Connection refused", { reason: "timeout" });
+  });
+  await expect(run({ abortSignal: controller.signal })).rejects.toThrow();
+  expect(complete).toHaveBeenCalledOnce();
+});

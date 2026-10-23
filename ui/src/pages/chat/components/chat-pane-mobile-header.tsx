@@ -1,17 +1,20 @@
-import { children, onSettled, Show, type Element } from "solid-js";
+import { onSettled, Show, type Element } from "solid-js";
 import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.ts";
 import { createRouteElementRef } from "../../../app/route-element-ref.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { SessionTitlePlaceholder } from "../../../components/solid/session-title-placeholder.tsx";
 import "../../../components/tooltip.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { GatewayStatus } from "../../../lib/gateway-status.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import "./chat-pane-mobile-header.css";
 import {
   ChatSessionPublicIndicator,
   type ChatSessionSharingProps,
-} from "./chat-session-sharing.solid.tsx";
-import "./chat-pane-mobile-header.css";
+} from "./chat-session-sharing-shared.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 type ChatPaneMobileHeaderNotice =
   | { kind: "gateway"; status: GatewayStatus; onRetry?: () => void }
@@ -22,28 +25,19 @@ type ChatPaneMobileHeaderNotice =
     };
 
 export type ChatPaneMobileHeaderProps = {
-  active?: boolean;
+  active: boolean;
   onHeaderRef?: (element: HTMLElement) => void | (() => void);
   title: string;
-  titlePending?: boolean;
-  /** Mobile ProjectCrumb: menu, full accessible name and overflow fade. */
-  project?: Element;
+  titlePending: boolean;
   publicAccess?: Pick<ChatSessionSharingProps, "state">;
-  incognito?: boolean;
+  incognito: boolean;
   navDrawerOpen: boolean;
   onToggleNavigation: (source: HTMLElement) => void;
   onOpenDetails: (source: HTMLElement) => void;
-  onOpenPanels: (source: HTMLElement) => void;
-  panelsOpen: boolean;
   /** Supplied navigation glyphs, rendered at 20px. */
   navigationIcon: Element;
-  panelsIcon: Element;
-  /** The People control owns its trigger, presence facts and expanded action. */
-  people?: Element;
-  /** Native menu trigger; the owner omits it while disconnected/reconnecting. */
+  /** Native menu trigger; local navigation remains available while disconnected. */
   actions?: Element;
-  /** Supply only for an available session Dashboard; opens/reuses its destination. */
-  onOpenDashboard?: (source: HTMLElement) => void;
   /** One owner-selected notice: Gateway status takes priority over device offline. */
   notice?: ChatPaneMobileHeaderNotice;
 };
@@ -108,7 +102,6 @@ function MobileHeaderNotice(props: { notice: ChatPaneMobileHeaderNotice }) {
 export function ChatPaneMobileHeader(props: ChatPaneMobileHeaderProps) {
   let header!: HTMLDivElement;
   const drawerRef = createRouteElementRef(NAV_DRAWER_TOGGLE_REGISTRATION);
-  const project = children(() => props.project);
   const titleOverflow = useScrollState(true, false);
   const drawerLabel = () => (props.navDrawerOpen ? t("nav.collapse") : t("nav.expand"));
   return (
@@ -120,7 +113,7 @@ export function ChatPaneMobileHeader(props: ChatPaneMobileHeaderProps) {
       tabindex={-1}
     >
       {/* Header registration follows the active layout without remounting its DOM. */}
-      <Show when={props.active !== false ? props.onHeaderRef : undefined} keyed>
+      <Show when={props.active ? props.onHeaderRef : undefined} keyed>
         {(register) => {
           onSettled(() => register(header));
           return undefined;
@@ -154,16 +147,6 @@ export function ChatPaneMobileHeader(props: ChatPaneMobileHeaderProps) {
         </openclaw-tooltip>
       </Show>
       <div class="mobile-header__identity">
-        <Show
-          when={project()}
-          fallback={
-            <Show when={props.publicAccess}>
-              {(access) => <ChatSessionPublicIndicator {...access()} mobile />}
-            </Show>
-          }
-        >
-          <div class="mobile-header__project">{project()}</div>
-        </Show>
         <div class="mobile-header__title-row">
           <button
             type="button"
@@ -177,40 +160,14 @@ export function ChatPaneMobileHeader(props: ChatPaneMobileHeaderProps) {
               </Show>
             </span>
           </button>
-          <Show when={project() ? props.publicAccess : undefined}>
+          <Show when={props.publicAccess}>
             {(access) => <ChatSessionPublicIndicator {...access()} mobile />}
           </Show>
         </div>
       </div>
-      <Show when={props.people}>
-        {(people) => <div class="mobile-header__people">{people()}</div>}
+      <Show when={props.actions}>
+        {(actions) => <div class="mobile-header__actions">{actions()}</div>}
       </Show>
-      <div class="mobile-header__capsule">
-        <Show when={props.onOpenDashboard}>
-          <button
-            type="button"
-            class="mobile-header__control mobile-header__dashboard"
-            aria-label={t("pluginUi.dashboardTitle")}
-            onClick={(event) => props.onOpenDashboard?.(event.currentTarget)}
-          >
-            <Icon name="layoutDashboard" />
-          </button>
-        </Show>
-        <button
-          type="button"
-          class="mobile-header__control"
-          aria-label={t("chat.sessionHeader.panels")}
-          aria-expanded={props.panelsOpen ? "true" : "false"}
-          onClick={(event) => props.onOpenPanels(event.currentTarget)}
-        >
-          <span class="mobile-header__glyph" aria-hidden="true">
-            {props.panelsIcon}
-          </span>
-        </button>
-        <Show when={props.actions}>
-          {(actions) => <div class="mobile-header__actions">{actions()}</div>}
-        </Show>
-      </div>
       <Show when={props.notice}>{(notice) => <MobileHeaderNotice notice={notice()} />}</Show>
     </div>
   );

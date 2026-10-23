@@ -1,5 +1,13 @@
 import Panzoom, { type PanzoomObject } from "@panzoom/panzoom";
-import { createEffect, createMemo, createSignal, onCleanup, Show, useContext } from "solid-js";
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  onCleanup,
+  onSettled,
+  Show,
+  useContext,
+} from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
@@ -16,11 +24,16 @@ import {
   trapLightboxTabFocus,
 } from "./image-lightbox-gallery.ts";
 import { panImageWithKeyboard } from "./image-lightbox-keyboard.ts";
-import { LightboxAction, LightboxChrome, lightboxImageStyle } from "./image-lightbox-view.tsx";
+import {
+  LightboxAction,
+  LightboxChrome,
+  LightboxImage,
+  lightboxImageStyle,
+} from "./image-lightbox-view.tsx";
 import type { ImageLightboxProps } from "./image-lightbox.types.ts";
 import { Icon } from "./solid/icon.tsx";
 import imageLightboxStyles from "./image-lightbox.css?inline";
-import "./modal-dialog.ts";
+import "./modal-dialog.tsx";
 
 const MAX_SCALE = 4;
 const DOUBLE_TAP_SCALE = 2.5;
@@ -34,8 +47,10 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
   const galleryState = gallery.state;
   const hasGallery = () => galleryState().count > 1;
   const currentImage = () => galleryState().current;
-  const [openOriginalUrl, setOpenOriginalUrl] = createSignal("", { ownedWrite: true });
-  const [resolvingOriginal, setResolvingOriginal] = createSignal(false, { ownedWrite: true });
+  const [originalRead, setOriginalRead] = createSignal(
+    { result: Promise.resolve("") },
+    { ownedWrite: true },
+  );
   const [scale, setScale] = createSignal(1, { ownedWrite: true });
   const [canZoom, setCanZoom] = createSignal(false, { ownedWrite: true });
   const focusables = new Set<HTMLElement>();
@@ -337,10 +352,8 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
   async function resolveOriginalUrl(fallbackSrc: string, fallbackOriginalSrc: string) {
     const request = ++originalUrlRequest;
     revokeOriginalBlobUrl();
-    setResolvingOriginal(false);
     if (gallery.peek().current?.kind !== "video" || gallery.peek().current?.loadDisplayImage) {
-      setOpenOriginalUrl("");
-      return;
+      return "";
     }
     const current = gallery.peek().current;
     const source = (
@@ -348,24 +361,15 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
         ? (video()?.getAttribute("src") ?? "")
         : current?.originalSrc || current?.src || fallbackOriginalSrc || fallbackSrc
     ).trim();
-    setOpenOriginalUrl("");
-    setResolvingOriginal(true);
-    try {
-      const prepared = await resolveLightboxOriginalUrl(
-        source,
-        () => host.isConnected && !disposed && request === originalUrlRequest,
-      );
-      if (prepared && request === originalUrlRequest && !disposed) {
-        originalBlobUrl = prepared.blobUrl ?? "";
-        setOpenOriginalUrl(prepared.url);
-      }
-    } catch {
-      // The selected media remains viewable; omit an unusable external link.
-    } finally {
-      if (request === originalUrlRequest && !disposed) {
-        setResolvingOriginal(false);
-      }
+    const prepared = await resolveLightboxOriginalUrl(
+      source,
+      () => host.isConnected && !disposed && request === originalUrlRequest,
+    );
+    if (prepared && request === originalUrlRequest && !disposed) {
+      originalBlobUrl = prepared.blobUrl ?? "";
+      return prepared.url;
     }
+    return "";
   }
 
   const handleKeydown = (event: KeyboardEvent) => {
@@ -491,7 +495,7 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
       const source = video()?.getAttribute("src") ?? gallery.peek().current?.src ?? src;
       if (selectionChanged || displayedSource !== source) {
         displayedSource = source;
-        void resolveOriginalUrl(src, originalSrc);
+        setOriginalRead({ result: resolveOriginalUrl(src, originalSrc) });
         const current = image();
         if (current?.complete && current.naturalWidth > 0) {
           initializePanzoom(current);
@@ -499,20 +503,23 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
       }
     },
   );
-  const stopMotionChange = motionQuery
-    ? listen(motionQuery, "change", handleMotionPreferenceChange)
-    : undefined;
-  onCleanup(() => {
-    disposed = true;
-    cancelSwipe();
-    touchPointers.clear();
-    slideAnimation?.cancel();
-    stopMotionChange?.();
-    destroyPanzoom();
-    originalUrlRequest += 1;
-    revokeOriginalBlobUrl();
+  onSettled(() => {
+    const stopMotionChange = motionQuery
+      ? listen(motionQuery, "change", handleMotionPreferenceChange)
+      : undefined;
+    return () => {
+      disposed = true;
+      cancelSwipe();
+      touchPointers.clear();
+      slideAnimation?.cancel();
+      stopMotionChange?.();
+      destroyPanzoom();
+      originalUrlRequest += 1;
+      revokeOriginalBlobUrl();
+    };
   });
 
+  const description = () => (props.gallery ? undefined : props.imageDescription);
   const title = () =>
     (hasGallery() ? (currentImage()?.title ?? props.imageTitle) : props.imageTitle).trim() ||
     t("chat.imageLightbox.untitled");
@@ -535,9 +542,9 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
         <LightboxChrome
           focusableRef={focusableRef}
           title={title()}
-          originalUrl={openOriginalUrl()}
+          originalUrl={originalRead().result}
           externalImageUrl={externalLightboxImageUrl(currentImage() ?? props)}
-          resolvingOriginal={hasGallery() && resolvingOriginal()}
+          hasGallery={hasGallery()}
           isVideo={props.mediaKind === "video"}
           onDownloadImage={downloadCurrentImage}
           onClose={emitClose}
@@ -590,7 +597,7 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
                     slideElement = element;
                   }}
                 >
-                  <img
+                  <LightboxImage
                     class={["image", { zoomed: scale() > 1 }]}
                     ref={(element) => {
                       imageElement = element;
@@ -598,6 +605,7 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
                     style={lightboxImageStyle(currentImage())}
                     src={currentImage()?.src ?? props.src}
                     alt={title()}
+                    description={description()}
                     referrerpolicy="no-referrer"
                     decoding="async"
                     onLoad={handleImageLoad}

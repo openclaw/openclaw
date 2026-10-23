@@ -79,8 +79,8 @@ function readPackageNameSync(dir: string): string | null {
   }
 }
 
-async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string | null> {
-  for (const current of iterAncestorDirs(startDir, maxDepth)) {
+async function findPackageRoot(startDir: string): Promise<string | null> {
+  for (const current of iterAncestorDirs(startDir)) {
     const name = await readPackageName(current);
     if (name === "openclaw") {
       return current;
@@ -89,8 +89,8 @@ async function findPackageRoot(startDir: string, maxDepth = 12): Promise<string 
   return null;
 }
 
-function findPackageRootSync(startDir: string, maxDepth = 12): string | null {
-  for (const current of iterAncestorDirs(startDir, maxDepth)) {
+function findPackageRootSync(startDir: string): string | null {
+  for (const current of iterAncestorDirs(startDir)) {
     const name = readPackageNameSync(current);
     if (name === "openclaw") {
       return current;
@@ -99,9 +99,9 @@ function findPackageRootSync(startDir: string, maxDepth = 12): string | null {
   return null;
 }
 
-function* iterAncestorDirs(startDir: string, maxDepth: number): Generator<string> {
+function* iterAncestorDirs(startDir: string): Generator<string> {
   let current = path.resolve(startDir);
-  for (let i = 0; i < maxDepth; i += 1) {
+  for (let i = 0; i < 12; i += 1) {
     yield current;
     // Never walk above a node_modules boundary: a package.json up there belongs
     // to the workspace that installed the tooling (for example an enclosing

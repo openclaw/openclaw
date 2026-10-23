@@ -82,27 +82,43 @@ it("omits empty content and removes collapsed activity when the last waiting chi
   expect(view.getByRole("button", { name: "Waiting child Done" })).toBeTruthy();
 });
 
-it("preserves native non-success outcomes and waiting facts in the collection summary", () => {
-  const rows: Row[] = [
-    { key: "a", label: "A", status: "running" },
-    { key: "b", label: "B", status: "waiting" },
-    { key: "c", label: "C", status: "queued" },
-    { key: "d", label: "D", status: "done" },
-    { key: "e", label: "E", status: "failed" },
-    { key: "f", label: "F", status: "stopped" },
-  ];
-  const view = mountSolid(() => (
-    <ChatDetailsSubagents
-      rows={rows}
-      mobile={false}
-      workingLabel="Working"
-      onOpenSubagent={vi.fn()}
-      onOpenSubagents={vi.fn()}
-    />
-  ));
-  expect(
-    view.getByRole("button", {
-      name: "All subagents. 1 Working, 1 Waiting on subagents, 1 Queued, 1 Done, 1 Failed, 1 Stopped",
-    }),
-  ).toBeTruthy();
-});
+it.each([false, true])(
+  "folds failed runs into Done without changing child outcomes (mobile=%s)",
+  (mobile) => {
+    const initial: Row[] = [
+      { key: "a", label: "A", status: "running" },
+      { key: "b", label: "B", status: "waiting" },
+      { key: "c", label: "C", status: "queued" },
+      { key: "d", label: "D", status: "done" },
+      { key: "e", label: "E", status: "failed" },
+      { key: "f", label: "F", status: "stopped" },
+    ];
+    const [rows, setRows] = createSignal<readonly Row[]>(initial);
+    const openChild = vi.fn();
+    const view = mountSolid(() => (
+      <ChatDetailsSubagents
+        rows={rows()}
+        mobile={mobile}
+        workingLabel="Working"
+        onOpenSubagent={openChild}
+        onOpenSubagents={vi.fn()}
+      />
+    ));
+    expect(
+      view.getByRole("button", {
+        name: "All subagents. 1 Working, 1 Waiting on subagents, 1 Queued, 2 Done, 1 Stopped",
+      }),
+    ).toBeTruthy();
+    setRows(initial.map((row) => (row.key === "e" ? { ...row, status: "running" } : row)));
+    flush();
+    expect(
+      view.getByRole("button", {
+        name: "All subagents. 2 Working, 1 Waiting on subagents, 1 Queued, 1 Done, 1 Stopped",
+      }),
+    ).toBeTruthy();
+    setRows([initial[4]!]);
+    flush();
+    view.getByRole("button", { name: "E Failed" }).click();
+    expect(openChild).toHaveBeenCalledExactlyOnceWith("e");
+  },
+);

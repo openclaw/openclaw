@@ -3,8 +3,11 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const createQaScenarioRuntimeApi = vi.hoisted(() => vi.fn());
-const runScenarioFlow = vi.hoisted(() => vi.fn(async (params: { api: unknown }) => params.api));
+const runScenarioFlow = vi.hoisted(() =>
+  vi.fn<(params: Parameters<typeof RunScenarioFlow>[0]) => Promise<unknown>>(
+    async (params) => params.api,
+  ),
+);
 const waitForOutboundMessage = vi.hoisted(() => vi.fn());
 const { webOpenPage, createWebPageOpener } = vi.hoisted(() => {
   const openPageMock = vi.fn(async (_params: { url: string; repoRoot?: string }) => ({
@@ -18,9 +21,6 @@ const { webOpenPage, createWebPageOpener } = vi.hoisted(() => {
   );
   return { webOpenPage: openPageMock, createWebPageOpener: createOpenerMock };
 });
-
-// mock-isolation: provide the synthetic scenario API without loading live runtime owners.
-vi.mock("./scenario-runtime-api.js", () => ({ createQaScenarioRuntimeApi }));
 
 // mock-isolation: observe flow delegation without executing the scenario runner.
 vi.mock("./scenario-flow-runner.js", () => ({ runScenarioFlow }));
@@ -45,7 +45,10 @@ import { inspectQaExecutionIdentityStorage } from "./execution-identity-storage-
 import * as modelSwitchEval from "./model-switch-eval.js";
 import { createQaChannelTransport } from "./qa-channel-transport.js";
 import { runQaCli } from "./qa-cli-process.js";
+import { createQaTransportAdapter } from "./qa-transport-registry.js";
+import { createQaTransportStateMethods } from "./qa-transport.js";
 import * as runtimeToolFixture from "./runtime-tool-fixture.js";
+import type { runScenarioFlow as RunScenarioFlow } from "./scenario-flow-runner.js";
 import * as suiteRuntimeAgentMedia from "./suite-runtime-agent-media.js";
 import * as suiteRuntimeAgentProcess from "./suite-runtime-agent-process.js";
 import * as suiteRuntimeAgentSession from "./suite-runtime-agent-session.js";
@@ -99,11 +102,8 @@ function createQaSuiteRuntimeFlowTestEnv(
 
 type FlowApi = { runScenario: typeof runQaSuiteScenarioSteps; signal?: AbortSignal };
 function mockStepFlow(name: string, steps: QaSuiteStep[] | ((api: FlowApi) => QaSuiteStep[])) {
-  createQaScenarioRuntimeApi.mockImplementationOnce((params: { deps: FlowApi }) => ({
-    runScenario: params.deps.runScenario,
-  }));
   runScenarioFlow.mockImplementationOnce(async ({ api }) => {
-    const flowApi = api as FlowApi;
+    const flowApi = api;
     return flowApi.runScenario(name, typeof steps === "function" ? steps(flowApi) : steps);
   });
 }
@@ -116,6 +116,21 @@ function runDefinition(
     scenario,
     constants: qaSuiteRuntimeFlowTestConstants,
   });
+}
+async function runTransportFlow(
+  env: ReturnType<typeof createQaSuiteRuntimeFlowTestEnv>,
+  actions: Parameters<typeof RunScenarioFlow>[0]["flow"]["steps"][number]["actions"],
+) {
+  const scenario = makeQaSuiteTestScenario("transport-api", { config: { expected: "value" } });
+  if (scenario.execution.kind !== "flow") {
+    throw new Error("expected flow scenario");
+  }
+  scenario.execution.flow = { steps: [{ name: "Transport operations", actions }] };
+  const actual = await vi.importActual<typeof import("./scenario-flow-runner.js")>(
+    "./scenario-flow-runner.js",
+  );
+  runScenarioFlow.mockImplementationOnce(actual.runScenarioFlow);
+  return await runDefinition(env, scenario);
 }
 function flowScenario(id: string, timeoutMs: number) {
   const scenario = makeQaSuiteTestScenario(id, { config: {} });
@@ -137,17 +152,14 @@ async function captureQaGatewayLogDeps(
   const env = createQaSuiteRuntimeFlowTestEnv();
   env.gateway = gateway as QaSuiteRuntimeEnv["gateway"];
   const scenario = makeQaSuiteTestScenario("gateway-log-deps", { config: {} });
-  createQaScenarioRuntimeApi.mockReturnValueOnce({ api: "ok" });
 
   await runDefinition(env, scenario);
 
-  const call = createQaScenarioRuntimeApi.mock.calls.at(-1)?.[0] as
-    | { deps: QaGatewayLogDeps }
-    | undefined;
+  const call = runScenarioFlow.mock.calls.at(-1)?.[0] as { api: QaGatewayLogDeps } | undefined;
   if (!call) {
     throw new Error("expected QA scenario runtime API call");
   }
-  return call.deps;
+  return call.api;
 }
 
 describe("qa suite runtime flow", () => {
@@ -161,6 +173,113 @@ describe("qa suite runtime flow", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.spyOn(runtimeToolFixture, "runRuntimeToolFixture").mockResolvedValue("");
+  });
+
+  it("runs transport aliases with their original receivers through a scenario flow", async () => {
+    const state = createQaBusState();
+    const resetSpy = vi.spyOn(state, "reset");
+    const inboundSpy = vi.spyOn(state, "addInboundMessage");
+    const outboundSpy = vi.spyOn(state, "addOutboundMessage");
+    const readSpy = vi.spyOn(state, "readMessage");
+    const methods = createQaTransportStateMethods({ state, accountId: "qa-channel" });
+    const env = createQaSuiteRuntimeFlowTestEnv(methods);
+    const result = await runTransportFlow(env, [
+      {
+        assert:
+          "lab === env.lab && state === transport.state && config.expected === 'value' && waitForCondition === transport.waitForCondition && waitForChannelReady === waitForTransportReady && waitForQaChannelReady === waitForTransportReady && imageUnderstandingPngBase64 === 'small'",
+      },
+      {
+        call: "injectInboundMessage",
+        args: [
+          {
+            accountId: "qa-channel",
+            conversation: { id: "qa-operator", kind: "direct" },
+            senderId: "qa-operator",
+            text: "hello",
+          },
+        ],
+        saveAs: "inbound",
+      },
+      {
+        call: "injectOutboundMessage",
+        args: [{ accountId: "qa-channel", to: "dm:qa-operator", text: "hi" }],
+        saveAs: "outbound",
+      },
+      { assert: "inbound.id.trim() !== '' && outbound.id.trim() !== ''" },
+      { call: "getTransportSnapshot", saveAs: "snapshot" },
+      { assert: "snapshot.messages.length === 2" },
+      {
+        call: "readTransportMessage",
+        args: [{ accountId: "qa-channel", messageId: { ref: "outbound.id" } }],
+        saveAs: "read",
+      },
+      { assert: "read.id === outbound.id && read.text === 'hi'" },
+      { call: "reset" },
+      { call: "resetBus" },
+      { call: "resetTransport" },
+    ]);
+
+    expect(result.status).toBe("pass");
+    expect(inboundSpy).toHaveBeenCalledTimes(1);
+    expect(outboundSpy).toHaveBeenCalledTimes(1);
+    expect(readSpy).toHaveBeenCalledTimes(1);
+    expect(resetSpy).toHaveBeenCalledTimes(3);
+  });
+
+  it("routes scenario injection through a factory-created transport", async () => {
+    const state = createQaBusState();
+    const providerState = createQaBusState();
+    const sendInbound = vi.fn(
+      async (input: Parameters<typeof providerState.addInboundMessage>[0]) =>
+        providerState.addInboundMessage(input),
+    );
+    const created = await createQaTransportAdapter(
+      {
+        channelId: "discord",
+        driver: "crabline",
+        outputDir: ".artifacts/qa-e2e/transport-api",
+        state,
+      },
+      [
+        {
+          id: "crabline-test",
+          matches: () => true,
+          async create() {
+            return {
+              ...createQaChannelTransport(providerState),
+              id: "discord",
+              label: "Crabline Discord",
+              accountId: "sut",
+              sendInbound,
+            };
+          },
+        },
+      ],
+    );
+    try {
+      const result = await runTransportFlow(createQaSuiteRuntimeFlowTestEnv(created.adapter), [
+        {
+          call: "injectInboundMessage",
+          args: [
+            {
+              accountId: "sut",
+              conversation: { id: "qa-operator", kind: "direct" },
+              senderId: "qa-operator",
+              text: "provider ingress",
+            },
+          ],
+        },
+      ]);
+
+      expect(result.status).toBe("pass");
+      expect(sendInbound).toHaveBeenCalledOnce();
+      expect(providerState.getSnapshot().messages).toEqual([
+        expect.objectContaining({ text: "provider ingress" }),
+      ]);
+      expect(state.getSnapshot().messages).toEqual([]);
+    } finally {
+      await created.cleanupWithoutGateway();
+    }
   });
 
   it("keeps the latest structured RTT measurement when the scenario ends in skip", async () => {
@@ -201,32 +320,28 @@ describe("qa suite runtime flow", () => {
     const scenario = makeQaSuiteTestScenario("session-memory-ranking", {
       config: { expected: "value" },
     });
-    createQaScenarioRuntimeApi.mockReturnValue({ api: "ok" });
 
     const result = await runDefinition(env, scenario);
 
-    expect(result).toMatchObject({ api: "ok", signal: expect.any(AbortSignal) });
-    expect(createQaScenarioRuntimeApi).toHaveBeenCalledTimes(1);
-    const call = createQaScenarioRuntimeApi.mock.calls[0]?.[0] as {
+    expect(result).toMatchObject({ env, scenario, signal: expect.any(AbortSignal) });
+    expect(runScenarioFlow).toHaveBeenCalledTimes(1);
+    const api = runScenarioFlow.mock.calls[0]?.[0]?.api as {
       env: typeof env;
       scenario: typeof scenario;
-      deps: {
-        runScenario: (...args: never[]) => unknown;
-        normalizeModelRef: unknown;
-        waitForOutboundMessage: typeof waitForOutboundMessage;
-        markGatewayLogCursor: () => number;
-        assertNoGatewayLogSentinels: () => void;
-        runRuntimeToolFixture: (
-          envArg: typeof env,
-          configArg: Record<string, unknown>,
-        ) => Promise<unknown>;
-        webOpenPage: (params: { url: string }) => Promise<unknown>;
-      };
-      constants: typeof qaSuiteRuntimeFlowTestConstants;
-    };
-    expect(call.env).toBe(env);
-    expect(call.scenario).toBe(scenario);
-    expect(call.deps.runScenario).toBeTypeOf("function");
+      normalizeModelRef: unknown;
+      waitForOutboundMessage: typeof waitForOutboundMessage;
+      markGatewayLogCursor: () => number;
+      assertNoGatewayLogSentinels: () => void;
+      runRuntimeToolFixture: (
+        envArg: typeof env,
+        configArg: Record<string, unknown>,
+      ) => Promise<unknown>;
+      webOpenPage: (params: { url: string }) => Promise<unknown>;
+    } & Parameters<typeof RunScenarioFlow>[0]["api"] &
+      typeof qaSuiteRuntimeFlowTestConstants;
+    expect(api.env).toBe(env);
+    expect(api.scenario).toBe(scenario);
+    expect(api.runScenario).toBeTypeOf("function");
     const identityDeps = {
       ...suiteRuntimeTransport,
       ...suiteRuntimeAgentMedia,
@@ -253,11 +368,11 @@ describe("qa suite runtime flow", () => {
     };
     for (const [name, helper] of Object.entries(identityDeps)) {
       if (name !== "waitForOutboundMessage") {
-        expect((call.deps as Record<string, unknown>)[name]).toBe(helper);
+        expect((api as Record<string, unknown>)[name]).toBe(helper);
       }
     }
     const canonicalOpus = { provider: "anthropic", model: "claude-opus-5-5" };
-    const normalizeModelRef = call.deps.normalizeModelRef as (
+    const normalizeModelRef = api.normalizeModelRef as (
       raw: string,
     ) => { provider: string; model: string } | null;
     expect(normalizeModelRef("anthropic/opus")).toEqual(canonicalOpus);
@@ -271,22 +386,22 @@ describe("qa suite runtime flow", () => {
       model: "gpt-5.6-luna",
     });
     expect(normalizeModelRef("")).toBeNull();
-    expect(call.deps.waitForOutboundMessage).toBeTypeOf("function");
+    expect(api.waitForOutboundMessage).toBeTypeOf("function");
     const outboundPredicate = vi.fn();
-    call.deps.waitForOutboundMessage(env.transport.state, outboundPredicate, 123);
+    api.waitForOutboundMessage(env.transport.state, outboundPredicate, 123);
     expect(waitForOutboundMessage).toHaveBeenCalledWith(
       env.transport.state,
       outboundPredicate,
       123,
       { accountId: "qa-channel" },
     );
-    expect(call.deps.markGatewayLogCursor()).toBe(-1);
-    expect(() => call.deps.assertNoGatewayLogSentinels()).not.toThrow();
-    await call.deps.runRuntimeToolFixture(env, { toolName: "read" });
+    expect(api.markGatewayLogCursor()).toBe(-1);
+    expect(() => api.assertNoGatewayLogSentinels()).not.toThrow();
+    await api.runRuntimeToolFixture(env, { toolName: "read" });
     expect(runtimeToolFixture.runRuntimeToolFixture).toHaveBeenCalledWith(env, {
       toolName: "read",
     });
-    expect(call.constants).toEqual({
+    expect(api).toMatchObject({
       imageUnderstandingPngBase64: "small",
       imageUnderstandingLargePngBase64: "large",
       imageUnderstandingValidPngBase64: "valid",
@@ -294,7 +409,7 @@ describe("qa suite runtime flow", () => {
 
     const released = createDeferred<{ pageId: string }>();
     webOpenPage.mockReturnValueOnce(released.promise);
-    const opening = call.deps.webOpenPage({ url: "https://openclaw.ai" });
+    const opening = api.webOpenPage({ url: "https://openclaw.ai" });
     expect(createWebPageOpener).toHaveBeenNthCalledWith(
       1,
       env.webSessionIds,

@@ -62,10 +62,6 @@ function resolveHandlerContext(params: ChannelApprovalCapabilityHandlerContext):
   return { accountId, context };
 }
 
-function truncateSlackMrkdwn(text: string, maxChars: number): string {
-  return truncateSlackText(text, Math.max(0, Math.floor(maxChars)), "preserve");
-}
-
 function buildSlackCodeBlock(text: string): string {
   let fence = "```";
   while (text.includes(fence)) {
@@ -88,7 +84,7 @@ function buildSlackMetadataContextBlock(lines: readonly string[]): SlackBlock | 
     lines.length > SLACK_CONTEXT_ELEMENTS_MAX ? SLACK_CONTEXT_ELEMENTS_MAX - 1 : lines.length;
   const elements = lines.slice(0, visibleLineCount).map((line) => ({
     type: "mrkdwn" as const,
-    text: truncateSlackMrkdwn(line, SLACK_TEXT_OBJECT_MAX),
+    text: truncateSlackText(line, SLACK_TEXT_OBJECT_MAX, "preserve"),
   }));
   if (lines.length > SLACK_CONTEXT_ELEMENTS_MAX) {
     elements.push({
@@ -152,13 +148,17 @@ function buildSlackApprovalPayload(input: SlackApprovalRenderInput): SlackPendin
   );
 
   const headerDescription =
-    isPlugin && phase === "pending" ? truncateSlackMrkdwn(description, 2600) : description;
+    isPlugin && phase === "pending"
+      ? truncateSlackText(description, 2600, "preserve")
+      : description;
   const blocks: SlackBlock[] = [
     buildSlackApprovalSection(
       `${heading}\n${headerDescription}`,
       phase === "pending" ? SLACK_APPROVAL_HEADER_BLOCK_ID : undefined,
     ),
-    buildSlackApprovalSection(`${bodyLabel}\n${renderBody(truncateSlackMrkdwn(bodyText, 2600))}`),
+    buildSlackApprovalSection(
+      `${bodyLabel}\n${renderBody(truncateSlackText(bodyText, 2600, "preserve"))}`,
+    ),
   ];
   const metadataBlock = buildSlackMetadataContextBlock(metadataLines);
   if (metadataBlock) {

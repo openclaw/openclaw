@@ -165,21 +165,16 @@ it.each(["ambient", "omitted", "sentinel", "durable"] as const)(
       expectEmpty(explicit, ambient);
 
       const transcriptScope = { ...scope, sessionKey: key, sessionId: original.sessionId };
-      const target = await resolveSessionTranscriptRuntimeTarget(transcriptScope);
-      expect(target).toMatchObject({
+      expect(await resolveSessionTranscriptRuntimeTarget(transcriptScope)).toMatchObject({
         agentId,
         sessionId: original.sessionId,
         sessionKey: key,
         storePath: sentinel,
       });
       await expectHeader(transcriptScope, original.sessionId, { cwd: state.workspaceDir });
-      const candidate = resolveSessionEntryCandidateTarget({
-        agentId,
-        env,
-        cfg: {},
-        candidateKeys: [key],
-      });
-      expect(candidate).toMatchObject({
+      expect(
+        resolveSessionEntryCandidateTarget({ agentId, env, cfg: {}, candidateKeys: [key] }),
+      ).toMatchObject({
         agentId,
         sessionKey: key,
         persisted: true,
@@ -255,38 +250,37 @@ it("rolls back creation after commit authority is revoked", async () => {
   });
 });
 it("reopens incognito turns without writing a durable locator", async () => {
-  const state = explicit;
-  const scope = { agentId: "main", env: state.env, sessionKey };
+  const scope = { agentId: "main", env: explicit.env, sessionKey };
   await withMemory(scope, async () => {
     await create(scope, makeEntry("incognito-session"));
-    const durableStorePath = path.join(state.workspaceDir, "sessions.json");
+    const durableStorePath = path.join(explicit.workspaceDir, "sessions.json");
     expect(loadSessionEntry({ ...scope, storePath: durableStorePath })?.incognito).toBe(true);
     const target = {
       ...scope,
       sessionId: "incognito-session",
-      storePath: resolveSessionStorePathCore(undefined, { agentId: "main", env: state.env }),
+      storePath: resolveSessionStorePathCore(undefined, scope),
     };
-    const firstTurn = await SessionManager.openAsync(target, state.workspaceDir);
+    const firstTurn = await SessionManager.openAsync(target, explicit.workspaceDir);
     await firstTurn.appendMessageAsync(makeUserMessage("first question", 1));
     await firstTurn.appendMessageAsync(
       makeAgentAssistantMessage({ content: [{ type: "text", text: "first answer" }] }),
     );
-    const secondTurn = await SessionManager.openAsync(target, state.workspaceDir);
+    const secondTurn = await SessionManager.openAsync(target, explicit.workspaceDir);
     await secondTurn.appendMessageAsync(makeUserMessage("second question", 3));
-    const messages = secondTurn.buildSessionContext().messages;
-    expect(messages.map((message) => message.role)).toEqual(["user", "assistant", "user"]);
-    expect(messages[0]).toMatchObject({ content: "first question" });
-    expect(messages[2]).toMatchObject({ content: "second question" });
+    expect(secondTurn.buildSessionContext().messages).toMatchObject([
+      { role: "user", content: "first question" },
+      { role: "assistant" },
+      { role: "user", content: "second question" },
+    ]);
     expect(fs.existsSync(durableStorePath)).toBe(false);
-    expectEmpty(state);
+    expectEmpty(explicit);
   });
 });
 
 it("retains archived incognito transcripts until owner close", async () => {
-  const state = explicit;
   const scope = {
     agentId: "main",
-    env: state.env,
+    env: explicit.env,
     sessionKey: "agent:main:dashboard:incognito-archived",
   };
   await withMemory(scope, async (binding) => {
@@ -329,11 +323,7 @@ it("retains archived incognito transcripts until owner close", async () => {
       sessionId: "archived",
       archivedAt: expect.any(Number),
     });
-    const entries = listSessionEntriesCore({
-      agentId: "main",
-      env: state.env,
-      storePath: binding.path,
-    });
+    const entries = listSessionEntriesCore({ ...scope, storePath: binding.path });
     expect(entries).toHaveLength(2);
     expect(
       entries
@@ -346,6 +336,6 @@ it("retains archived incognito transcripts until owner close", async () => {
     memorySessionActorOwners.closeDatabase(binding);
     expect(memorySessionActorOwners.read(binding)).toBeUndefined();
     expect(fs.existsSync(binding.path)).toBe(false);
-    expectEmpty(state);
+    expectEmpty(explicit);
   });
 });

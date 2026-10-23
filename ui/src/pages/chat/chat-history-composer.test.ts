@@ -8,11 +8,11 @@ import { makeChatHost } from "./chat-host.test-support.ts";
 import type { ChatState } from "./chat-state-contract.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import {
-  ChatComposerPersistence,
   loadChatComposerState,
   markChatComposerEdit,
   persistChatComposerState,
-} from "./composer-persistence.ts";
+} from "./composer-draft-storage.ts";
+import { ChatComposerPersistence } from "./composer-persistence.ts";
 import { handleChatDraftChange } from "./input-history.ts";
 
 beforeEach(() => vi.stubGlobal("sessionStorage", createStorageMock()));

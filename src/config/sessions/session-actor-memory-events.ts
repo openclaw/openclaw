@@ -14,6 +14,7 @@ import { isIndexedSessionEntry } from "./session-entry-codec.js";
 import { normalizeSessionContextEntryBoundaries } from "./session-entry-navigation.js";
 import type { SessionMetadataOperations } from "./session-manager-write-contract.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
+import { rewriteSessionPriorWorkspaceBoundary } from "./session-prior-workspace-boundary.js";
 import {
   hasTranscriptMessage,
   shouldProjectActiveEvent,
@@ -270,6 +271,26 @@ export function createSessionActorMemoryEvents(options: {
       ? state.hot.transcript.version.generation
       : randomUUID();
     const updatedAt = Math.max(Date.now(), (state.hot.transcript.version.updatedAt ?? -1) + 1);
+    const entry = requireEntry();
+    if (entry.priorWorkspace) {
+      state.hot.entry = rewriteSessionPriorWorkspaceBoundary(
+        entry,
+        state.hot.transcript.version.generation,
+        generation,
+        {
+          previous: state.events.map((row) => ({
+            id: isRecord(row.event) && typeof row.event.id === "string" ? row.event.id : null,
+            seq: row.rawSeq,
+          })),
+          next: rows.map((row) => ({
+            id: isRecord(row.event) && typeof row.event.id === "string" ? row.event.id : null,
+            seq: row.rawSeq,
+            message: hasTranscriptMessage(row.event),
+          })),
+          unchangedBeforeSeq: 0,
+        },
+      );
+    }
     state.events = rows;
     pruneSessionActorMemoryReactions(state);
     state.hot.transcript.version = { generation, rawSeq: rows.at(-1)?.rawSeq ?? null, updatedAt };

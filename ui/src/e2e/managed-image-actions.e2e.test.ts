@@ -123,30 +123,34 @@ suite.define(() => {
       await screenshot("ticketed-generated-image-subpath.png", true);
 
       const imageFrame = page.locator(".chat-image-frame--managed").filter({ has: image });
-      await imageFrame.hover();
       const imageActions = imageFrame.locator(".chat-image-actions");
-      const trigger = imageActions.getByRole("button", { name: "Image actions" });
-      expect(await trigger.count()).toBe(1);
-      await trigger.waitFor({ state: "visible" });
+      if (failures > 0) {
+        await page.mouse.move(0, 0);
+        expect(await imageActions.evaluate((element) => getComputedStyle(element).opacity)).toBe(
+          "0",
+        );
+        await imageFrame.hover();
+      }
+      expect(await imageActions.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+      const downloadButton = imageActions.getByRole("button", { name: "Download image" });
       const imageBox = await image.boundingBox();
-      const triggerBox = await trigger.boundingBox();
-      expect(triggerBox!.x).toBeGreaterThanOrEqual(imageBox!.x + imageBox!.width);
-      expect(triggerBox).toMatchObject({ width: 44, height: 44 });
-      const openMenu = async () => {
-        await trigger.click();
-        await imageActions.getByRole("menuitem", { name: "Download image" }).waitFor();
-        expect(await page.getByRole("dialog").count()).toBe(0);
-      };
-      await openMenu();
-      await screenshot("image-actions-menu.png");
-      await page.keyboard.press("Escape");
-      await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("false");
-      await expect
-        .poll(() => trigger.evaluate((button) => button === document.activeElement))
-        .toBe(true);
-      const downloadButton = imageActions.getByRole("menuitem", { name: "Download image" });
+      const actionsBox = await imageActions.boundingBox();
+      expect(actionsBox!.x).toBeGreaterThanOrEqual(imageBox!.x);
+      expect(actionsBox!.x + actionsBox!.width).toBeLessThanOrEqual(imageBox!.x + imageBox!.width);
+      expect(actionsBox!.y + actionsBox!.height).toBeLessThanOrEqual(
+        imageBox!.y + imageBox!.height,
+      );
+      await screenshot("image-actions-overlay.png");
+      await page.mouse.move(0, 0);
+      await downloadButton.focus();
+      expect(await imageActions.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
+      await page.keyboard.press("Tab");
+      expect(
+        await imageActions
+          .getByRole("button", { name: "Copy image" })
+          .evaluate((button) => button === document.activeElement),
+      ).toBe(true);
       for (let attempt = 0; attempt < failures; attempt += 1) {
-        await openMenu();
         await downloadButton.click();
         const error = page.getByText("Could not download this image. Try again.", {
           exact: true,
@@ -158,7 +162,6 @@ suite.define(() => {
       }
       const downloadImage = async () => {
         const download = page.waitForEvent("download");
-        await openMenu();
         await downloadButton.click();
         return download;
       };

@@ -10,7 +10,7 @@ import {
   closeOpenClawStateDatabaseByPathAsync,
 } from "../../../state/openclaw-state-db-cache.js";
 import { waitForQueuedSubagentClaim } from "../registry/subagent-registry-queued-registration-wait.js";
-import { activateSwarmRun, closeSwarmScheduler, reserveSwarmRun } from "./swarm-scheduler.js";
+import { closeSwarmScheduler, enqueueSwarmRun } from "./swarm-scheduler.js";
 import { observeSwarmSchedulerWork } from "./swarm-scheduler.lifecycle.test-support.js";
 
 const wakes = vi.hoisted(() => new Set<() => void>());
@@ -56,10 +56,7 @@ it.each(["start", "failure"] as const)(
     const cleanup = createDeferredCore();
     const tails: Promise<void>[] = [];
     let pendingClaim = true;
-    let waitingSignal: AbortSignal | undefined;
-    let failureSignal: AbortSignal | undefined;
-    let cleanupSignal: AbortSignal | undefined;
-    let cleanupEntered = false;
+    const signals: Partial<Record<"waiting" | "failure" | "cleanup", AbortSignal>> = {};
     let closed = false;
     let closing: Promise<void> | undefined;
     const waitForClaim = () =>
@@ -69,19 +66,15 @@ it.each(["start", "failure"] as const)(
         pending: () => pendingClaim,
       });
     const retainPhysicalWork = () => {
-      waitingSignal = getAsyncWorkSignal();
+      signals.waiting = getAsyncWorkSignal();
       tails.push(trackAsyncWork(() => physical.promise));
       entered.resolve();
     };
-    reserveSwarmRun({
+    enqueueSwarmRun({
       groupId: "claim-close",
       runId: "claimed",
       maxConcurrent: 1,
       activeRunIds: [],
-    });
-    activateSwarmRun({
-      groupId: "claim-close",
-      runId: "claimed",
       lifecycleOwner,
       start: async () => {
         if (phase === "failure") {
@@ -91,7 +84,7 @@ it.each(["start", "failure"] as const)(
         await waitForClaim();
       },
       onStartFailure: async () => {
-        failureSignal = getAsyncWorkSignal();
+        signals.failure = getAsyncWorkSignal();
         if (phase === "failure") {
           retainPhysicalWork();
         }
@@ -99,8 +92,7 @@ it.each(["start", "failure"] as const)(
         return true;
       },
       onRemoved: async () => {
-        cleanupEntered = true;
-        cleanupSignal = getAsyncWorkSignal();
+        signals.cleanup = getAsyncWorkSignal();
         await cleanup.promise;
       },
     });
@@ -110,16 +102,14 @@ it.each(["start", "failure"] as const)(
         closed = true;
       });
       await nextTurn();
-      expect(waitingSignal?.aborted).toBe(true);
+      expect(signals.waiting?.aborted).toBe(true);
       expect(pendingClaim).toBe(true);
       expect(closed).toBe(false);
-      expect(cleanupEntered).toBe(false);
+      expect(signals).not.toHaveProperty("cleanup");
       physical.resolve();
       await nextTurn();
-      expect(failureSignal?.aborted).toBe(true);
-      expect(cleanupEntered).toBe(true);
-      expect(cleanupSignal).toBeDefined();
-      expect(cleanupSignal?.aborted).toBe(false);
+      expect(signals.failure?.aborted).toBe(true);
+      expect(signals.cleanup).toMatchObject({ aborted: false });
       expect(closed).toBe(false);
       cleanup.resolve();
       await closing;

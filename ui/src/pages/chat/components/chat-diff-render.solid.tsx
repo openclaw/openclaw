@@ -1,6 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createSignal, For, onSettled, Show, untrack } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import type { ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import {
   projectDiffCodeFolds,
@@ -13,9 +14,11 @@ import {
   type SessionSplitDiffRow,
 } from "../../../lib/chat/session-diff-split.ts";
 import type { DiffFilePaths, DiffLine } from "../../../lib/chat/tool-call-diff.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { DiffHighlightToken } from "./chat-diff-highlight.runtime.ts";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export function createDiffPresentation(props: {
   active?: boolean;
@@ -179,7 +182,6 @@ export function createDiffPresentation(props: {
     });
   return {
     SyntaxLifetime,
-    rows,
     visibility,
     closed,
     toggle,
@@ -253,7 +255,6 @@ export function DiffBlock(props: {
   outcome?: ToolCardOutcome;
   renderSkip?: (line: DiffLine) => JSX.Element;
   file?: DiffFilePaths;
-  rows?: readonly SessionSplitDiffRow[];
   presentation?: DiffPresentation;
 }) {
   const initialPresentation = untrack(() => props.presentation);
@@ -265,9 +266,6 @@ export function DiffBlock(props: {
       },
       get file() {
         return props.file ?? { path: "" };
-      },
-      get rows() {
-        return props.rows;
       },
     });
   const renderLine = presentation.renderLine;

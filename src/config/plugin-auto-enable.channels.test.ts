@@ -76,6 +76,9 @@ function catalogEntry(id: string, label: string, preferOver?: string[]) {
     },
   };
 }
+function writeCatalog(file: string, ...entries: ReturnType<typeof catalogEntry>[]) {
+  fs.writeFileSync(file, JSON.stringify({ entries }), "utf8");
+}
 
 function materializeEnvCatalogCandidates(stateDir: string) {
   return materializePluginAutoEnableCandidates({
@@ -98,22 +101,6 @@ function materializeEnvCatalogCandidates(stateDir: string) {
   });
 }
 
-function makePreferredChannelRegistry() {
-  return makeRegistry([
-    {
-      id: "legacy-bundled-chat",
-      channels: ["legacy-bundled-chat"],
-      origin: "bundled",
-      channelConfigs: {
-        "legacy-bundled-chat": { schema: { type: "object" }, label: "Legacy Bundled Chat" },
-      },
-    },
-    preferredChannel("openclaw-modern-chat", "legacy-bundled-chat", ["legacy-bundled-chat"], {
-      label: "Modern Chat",
-    }),
-  ]);
-}
-
 beforeEach(() => {
   resetPluginAutoEnableTestState();
 });
@@ -127,13 +114,7 @@ describe("applyPluginAutoEnable channels", () => {
   it("shares external catalog preferences with UI reads across auto-enable passes", () => {
     const stateDir = makeTempDir();
     const catalogPath = catalogFile(stateDir);
-    fs.writeFileSync(
-      catalogPath,
-      JSON.stringify({
-        entries: [catalogEntry("env-primary", "Env Primary"), envSecondaryCatalogEntry],
-      }),
-      "utf-8",
-    );
+    writeCatalog(catalogPath, catalogEntry("env-primary", "Env Primary"), envSecondaryCatalogEntry);
 
     const catalog = getChannelPluginCatalogEntry("env-secondary", {
       catalogPaths: [catalogPath],
@@ -143,7 +124,7 @@ describe("applyPluginAutoEnable channels", () => {
       installRecords: {},
     });
     expect(catalog?.channel?.preferOver).toEqual(["env-primary"]);
-    fs.writeFileSync(catalogPath, JSON.stringify({ entries: [] }), "utf8");
+    writeCatalog(catalogPath);
 
     for (let pass = 0; pass < 2; pass += 1) {
       const result = materializeEnvCatalogCandidates(stateDir);
@@ -303,14 +284,22 @@ describe("applyPluginAutoEnable channels", () => {
   });
 
   it("falls back to the bundled channel when the preferred external plugin is disabled", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        channels: { "legacy-bundled-chat": { token: "legacy" } },
-        plugins: { entries: { "openclaw-modern-chat": { enabled: false } } },
-      },
-      env: makeIsolatedEnv(),
-      manifestRegistry: makePreferredChannelRegistry(),
-    });
+    const result = autoEnable(
+      channelConfig(
+        "legacy-bundled-chat",
+        { token: "legacy" },
+        {
+          entries: { "openclaw-modern-chat": { enabled: false } },
+        },
+      ),
+      preferredChannel("legacy-bundled-chat", "legacy-bundled-chat", [], {
+        origin: "bundled",
+        label: "Legacy Bundled Chat",
+      }),
+      preferredChannel("openclaw-modern-chat", "legacy-bundled-chat", ["legacy-bundled-chat"], {
+        label: "Modern Chat",
+      }),
+    );
 
     expect(result.config.plugins?.entries?.["openclaw-modern-chat"]?.enabled).toBe(false);
     expect(result.config.plugins?.entries?.["legacy-bundled-chat"]).toBeUndefined();

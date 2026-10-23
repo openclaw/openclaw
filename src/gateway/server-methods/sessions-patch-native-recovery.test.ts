@@ -1,50 +1,34 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import assert from "node:assert/strict";
+import { afterEach, beforeEach, expect, it, vi, type MockInstance } from "vitest";
 import type { SessionsPatchParams } from "../../../packages/gateway-protocol/src/index.js";
-import type { prepareModelSelectionRuntime } from "../../auto-reply/reply/model-runtime-normalization.js";
-import type * as ModelRuntimeNormalization from "../../auto-reply/reply/model-runtime-normalization.js";
+import * as modelRuntime from "../../auto-reply/reply/model-runtime-normalization.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import type { AgentEntryConfig } from "../../config/types.agents.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { prepareSessionPatchRuntimeSelection as prepareRuntimeSelection } from "./sessions-patch-model-selection.js";
-import type * as SessionsShared from "./sessions-shared.js";
 
 const releaseSelections: Array<() => void> = [];
-afterEach(() => releaseSelections.splice(0).forEach((release) => release()));
-
-const preparation = vi.hoisted(() => {
-  const validate = vi.fn((): string | undefined => undefined);
-  return {
-    validate,
-    prepare: vi.fn<typeof prepareModelSelectionRuntime>(async () => ({
-      status: "ready" as const,
-      runtime: { kind: "set" as const, runtime: "native-fixture" },
-      catalog: [],
-      harness: {
-        id: "native-fixture",
-        label: "Native fixture",
-        executionEnvironment: "host-only" as const,
-        supports: () => ({ supported: true as const }),
-        runAttempt: vi.fn(),
-      },
-      validateRuntimeSelection: validate,
-    })),
-  };
+afterEach(() => {
+  releaseSelections.splice(0).forEach((release) => release());
+  vi.restoreAllMocks();
 });
-vi.mock("../../auto-reply/reply/model-runtime-normalization.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof ModelRuntimeNormalization>()),
-  prepareModelSelectionRuntime: preparation.prepare,
-}));
-vi.mock("./sessions-shared.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof SessionsShared>()),
-  prepareSessionWorkerPlacementPatchValidation: async () => ({
-    validate: () => undefined,
-    release() {},
-  }),
-}));
-
+const validate = vi.fn((): string | undefined => undefined);
+let prepareRuntime: MockInstance<typeof modelRuntime.prepareModelSelectionRuntime>;
 beforeEach(() => {
-  preparation.validate.mockReset();
-  preparation.prepare.mockReset();
+  validate.mockReset();
+  prepareRuntime = vi.spyOn(modelRuntime, "prepareModelSelectionRuntime").mockResolvedValue({
+    status: "ready",
+    runtime: { kind: "set", runtime: "native-fixture" },
+    catalog: [],
+    harness: {
+      id: "native-fixture",
+      label: "Native fixture",
+      executionEnvironment: "host-only",
+      supports: () => ({ supported: true }),
+      runAttempt: vi.fn(),
+    },
+    validateRuntimeSelection: validate,
+  });
 });
 const key = "agent:main:chat";
 const model = "fixture/model";
@@ -140,9 +124,7 @@ it.each([
   "does not offer an escape from %s",
   async (_label, overrides, admin, config, reason) => {
     const result = await prepare({ ...original, ...overrides }, admin, config);
-    if (result.ok) {
-      throw new Error("Expected native refusal");
-    }
+    assert(!result.ok, "Expected native refusal");
     expect(result.error.details).toMatchObject({ code: "AGENT_RUNTIME_RESTRICTED", reason });
     expect(result.error.details).not.toHaveProperty("recovery");
   },
@@ -159,7 +141,7 @@ it.each([
   "preserves only unchanged selections when preparation is unavailable (patch %j)",
   async (patch, overrides, preserved) => {
     const message = "A runtime is not available. Refresh the model catalog and choose again.";
-    preparation.prepare.mockResolvedValue({
+    prepareRuntime.mockResolvedValue({
       status: "rejected",
       reason: "invalid-runtime",
       message,
@@ -175,9 +157,7 @@ it.each([
     });
     if (preserved) {
       expect(entry.agentRuntimeOverride).toBe("native-fixture");
-      if (!result.ok) {
-        throw new Error("Expected the existing selection to be preserved");
-      }
+      assert(result.ok, "Expected the existing selection to be preserved");
       expect(result.validate?.()).toBeUndefined();
     } else {
       expect(result).toMatchObject({ ok: false, error: { message } });
@@ -191,11 +171,9 @@ it.each([false, true])("validates local selection (dormant node=%s)", async (nod
     true,
     node ? { tools: { exec: { host: "node" } } } : cfg,
   );
-  if (!result.ok) {
-    throw new Error("Expected recovery selection");
-  }
+  assert(result.ok, "Expected recovery selection");
   expect(result.validate?.()).toBeUndefined();
-  preparation.validate.mockReturnValue("Runtime owner changed");
+  validate.mockReturnValue("Runtime owner changed");
   expect(result.validate?.()).toMatchObject({ message: "Runtime owner changed" });
   expect(cfg.agents?.defaults?.sandbox?.mode).toBe("all");
 });

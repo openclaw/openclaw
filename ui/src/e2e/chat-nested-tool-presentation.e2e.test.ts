@@ -82,16 +82,14 @@ suite.define(() => {
         methodResponses: {
           "chat.history": prepareChatHistoryFixture([
             { role: "user", content: "Sign in to GitHub so I can authorize access.", timestamp },
-            {
-              role: "assistant",
-              content: textContent("Starting GitHub authentication."),
+            chatMessage("assistant", "Starting GitHub authentication.", {
               openclawStreamFallback: {
                 itemId: "github-commentary",
                 replacementText: "Starting GitHub authentication.",
                 source: "segment",
               },
               timestamp: timestamp + 100,
-            },
+            }),
             toolCall(
               "github-wrapper",
               { title: "Start GitHub authentication", code: wrapperCode },

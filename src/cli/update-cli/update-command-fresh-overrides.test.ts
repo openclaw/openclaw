@@ -13,7 +13,7 @@ import { finishUpdateRun } from "../../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import * as shared from "./shared.js";
 import * as execution from "./update-command-execution.js";
-import { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
+import { installFreshUpdateFixture, writeFreshJson } from "./update-command-fresh.test-support.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
 import * as runtimePlan from "./update-command-runtime-preflight.js";
@@ -44,15 +44,12 @@ it.each([false, true])(
     fs.writeFileSync(path.join(fixture.root, relativeFile), marker, { mode: 0o600 });
     const candidate = path.join(base, "package");
     await writePackageRoot(candidate, "2026.9.4");
-    fs.writeFileSync(
-      path.join(candidate, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version: "2026.9.4",
-        type: "module",
-        openclaw: { schemaVersions: { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: 20 } },
-      }),
-    );
+    writeFreshJson(path.join(candidate, "package.json"), {
+      name: "openclaw",
+      version: "2026.9.4",
+      type: "module",
+      openclaw: { schemaVersions: { state: OPENCLAW_STATE_SCHEMA_VERSION, agent: 20 } },
+    });
     await writePackageDistInventory(candidate);
     const artifact = path.join(base, "candidate.tgz");
     execFileSync("tar", ["-czf", artifact, "-C", base, "package"], {

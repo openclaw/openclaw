@@ -46,16 +46,12 @@ import { fetchChannelMessage, fetchThreadReplies } from "./graph-thread.js";
 import { findGraphUsersByExactIdentity, searchGraphUsers } from "./graph-users.js";
 import {
   deleteGraphRequest,
-  escapeOData,
   fetchAllGraphPages,
   fetchGraphAbsoluteUrl,
   fetchGraphJson,
-  listChannelsForTeam,
   listChannelsForTeamWithPageInfo,
-  listTeamsByName,
   listTeamsByNameWithPageInfo,
   mutateGraphJson,
-  normalizeQuery,
   resolveGraphToken,
 } from "./graph.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
@@ -129,10 +125,6 @@ function fetchCallHeader(index: number, name: string) {
   return new Headers(fetchCallInit(index)?.headers).get(name);
 }
 
-function expectFetchPathContains(index: number, expectedPath: string) {
-  expect(fetchCallUrl(index)).toContain(expectedPath);
-}
-
 function fetchCallSearchParam(index: number, name: string): string | null {
   return new URL(fetchCallUrl(index)).searchParams.get(name);
 }
@@ -180,12 +172,6 @@ describe("msteams graph helpers", () => {
   afterEach(() => {
     globalThis.fetch = originalFetch;
     vi.useRealTimers();
-  });
-
-  it("normalizes queries and escapes OData apostrophes", () => {
-    expect(normalizeQuery("  Team Alpha  ")).toBe("Team Alpha");
-    expect(normalizeQuery("   ")).toBe("");
-    expect(escapeOData("alice.o'hara")).toBe("alice.o''hara");
   });
 
   it("keeps channel parent and reply requests within their Graph query contracts", async () => {
@@ -348,20 +334,12 @@ describe("msteams graph helpers", () => {
       return new Response("denied", { status: 403 });
     });
 
+    const target = { token: graphToken, path: "/teams/team-1/channels" };
     await expect(
-      mutateGraphJson({
-        token: graphToken,
-        path: "/teams/team-1/channels",
-        method: "POST",
-        body: { displayName: "Deployments" },
-      }),
+      mutateGraphJson({ ...target, method: "POST", body: { displayName: "Deployments" } }),
     ).rejects.toThrow("Graph POST /teams/team-1/channels failed (403): denied");
-
     await expect(
-      deleteGraphRequest({
-        token: graphToken,
-        path: "/teams/team-1/channels/channel-1",
-      }),
+      deleteGraphRequest({ ...target, path: `${target.path}/channel-1` }),
     ).rejects.toThrow("Graph DELETE /teams/team-1/channels/channel-1 failed (404): not found");
   });
 
@@ -413,8 +391,7 @@ describe("msteams graph helpers", () => {
     await expect(
       resolveGraphToken(
         tokenConfig({
-          appId: "root-app",
-          appPassword: "root-password",
+          ...accountCredentials("root"),
           tenantId: "root-tenant",
           accounts: {
             secondary: { ...accountCredentials("secondary"), tenantId: "secondary-tenant" },
@@ -457,13 +434,15 @@ describe("msteams graph helpers", () => {
     expect(getAccessToken).toHaveBeenCalledTimes(1);
   });
 
-  it("rejects Graph token resolution when the Teams channel is disabled", async () => {
+  it.each([
+    [{ enabled: false }, "MS Teams account disabled: default"],
+    [
+      { cloud: "China" },
+      "Microsoft Teams Graph operations are not supported for channels.msteams.cloud=China",
+    ],
+  ] as const)("rejects unavailable account %j before loading the SDK", async (config, error) => {
     mockGraphTokenResolution();
-
-    await expect(resolveGraphToken(tokenConfig({ enabled: false }))).rejects.toThrow(
-      "MS Teams account disabled: default",
-    );
-
+    await expect(resolveGraphToken(tokenConfig(config))).rejects.toThrow(error);
     expect(loadMSTeamsSdkWithAuthMock).not.toHaveBeenCalled();
   });
 
@@ -484,16 +463,6 @@ describe("msteams graph helpers", () => {
       clientSecret: "app-password",
       accountId: "secondary",
     });
-    expect(loadMSTeamsSdkWithAuthMock).not.toHaveBeenCalled();
-  });
-
-  it("fails closed for China cloud Graph token resolution", async () => {
-    mockGraphTokenResolution();
-
-    await expect(resolveGraphToken(tokenConfig({ cloud: "China" }))).rejects.toThrow(
-      "Microsoft Teams Graph operations are not supported for channels.msteams.cloud=China",
-    );
-
     expect(loadMSTeamsSdkWithAuthMock).not.toHaveBeenCalled();
   });
 
@@ -518,16 +487,20 @@ describe("msteams graph helpers", () => {
       return Response.json(graphCollection(deploymentsChannel));
     });
 
-    await expect(listTeamsByName(graphToken, "Bob's Team")).resolves.toEqual([opsTeam]);
-    await expect(listChannelsForTeam(graphToken, "team/ops")).resolves.toEqual([
-      deploymentsChannel,
-    ]);
+    await expect(listTeamsByNameWithPageInfo(graphToken, "Bob's Team")).resolves.toEqual({
+      items: [opsTeam],
+      truncated: false,
+    });
+    await expect(listChannelsForTeamWithPageInfo(graphToken, "team/ops")).resolves.toEqual({
+      items: [deploymentsChannel],
+      truncated: false,
+    });
 
     expect(fetchCallSearchParam(0, "$filter")).toBe(
       "resourceProvisioningOptions/Any(x:x eq 'Team') and startsWith(displayName,'Bob''s Team')",
     );
     expect(fetchCallSearchParam(0, "$select")).toBe("id,displayName");
-    expectFetchPathContains(1, "/teams/team%2Fops/channels?$select=id,displayName");
+    expect(fetchCallUrl(1)).toContain("/teams/team%2Fops/channels?$select=id,displayName");
   });
 
   it("exposes pagination completeness for authorization lookups", async () => {
@@ -599,19 +572,17 @@ describe("msteams graph helpers", () => {
     await expectSearchGraphUsers("bob", [bobUser], { token: "token-3", top: 25 });
     await expectSearchGraphUsers("carol", [], { token: "token-4" });
 
-    expectFetchPathContains(
-      0,
+    expect(fetchCallUrl(0)).toContain(
       "/users?$search=%22displayName%3Abob%22&$select=id,displayName,mail,userPrincipalName&$top=25",
     );
     expect(fetchCallHeader(0, "ConsistencyLevel")).toBe("eventual");
-    expectFetchPathContains(
-      1,
+    expect(fetchCallUrl(1)).toContain(
       "/users?$search=%22displayName%3Acarol%22&$select=id,displayName,mail,userPrincipalName&$top=10",
     );
   });
 
   describe("fetchAllGraphPages", () => {
-    type Item = { id: string; name: string };
+    type Item = { id: string };
     const repliesPage2 =
       "https://graph.microsoft.com/v1.0/teams/group/channels/channel/messages/root/replies?$skiptoken=page2";
 
@@ -622,7 +593,6 @@ describe("msteams graph helpers", () => {
     it("fetches the newest Teams thread replies across pages", async () => {
       const replies = Array.from({ length: 60 }, (_, index) => ({
         id: `reply-${index + 1}`,
-        name: `Reply ${index + 1}`,
         createdDateTime: `2026-08-01T00:${String(index).padStart(2, "0")}:00Z`,
       }));
       mockJsonFetchResponse(
@@ -636,8 +606,7 @@ describe("msteams graph helpers", () => {
       expect(result[0]?.id).toBe("reply-11");
       expect(result.at(-1)?.id).toBe("reply-60");
       expect(globalThis.fetch).toHaveBeenCalledTimes(2);
-      expectFetchPathContains(
-        1,
+      expect(fetchCallUrl(1)).toContain(
         "/teams/group/channels/channel/messages/root/replies?$skiptoken=page2",
       );
     });
@@ -649,8 +618,8 @@ describe("msteams graph helpers", () => {
         deadlineAtMs: Date.now() + 10_000,
       };
       mockJsonFetchResponse(
-        pagedResponse([{ id: "reply-1", name: "Reply 1" }], repliesPage2),
-        pagedResponse([{ id: "reply-2", name: "Reply 2" }]),
+        pagedResponse([{ id: "reply-1" }], repliesPage2),
+        pagedResponse([{ id: "reply-2" }]),
       );
 
       await fetchThreadReplies("tok", "group", "channel", "root", deadline);
@@ -663,16 +632,13 @@ describe("msteams graph helpers", () => {
     });
 
     it.each([undefined, false])("findOne early exit (collectItems=%s)", async (collectItems) => {
-      const target = { id: "target", name: "found-it" };
-      const afterTarget = { id: "after", name: "not-visited" };
+      const target = { id: "target" };
+      const afterTarget = { id: "after" };
       const visited: string[] = [];
       mockJsonFetchResponse(
+        pagedResponse([{ id: "1" }], "https://graph.microsoft.com/v1.0/items?$skiptoken=p2"),
         pagedResponse(
-          [{ id: "1", name: "a" }],
-          "https://graph.microsoft.com/v1.0/items?$skiptoken=p2",
-        ),
-        pagedResponse(
-          [{ id: "2", name: "b" }, target, afterTarget],
+          [{ id: "2" }, target, afterTarget],
           "https://graph.microsoft.com/v1.0/items?$skiptoken=p3",
         ),
       );
@@ -692,9 +658,7 @@ describe("msteams graph helpers", () => {
       expect(result.truncated).toBe(false);
       expect(visited).toEqual(["1", "2", "target"]);
       expect(result.items).toEqual(
-        collectItems === false
-          ? []
-          : [{ id: "1", name: "a" }, { id: "2", name: "b" }, target, afterTarget],
+        collectItems === false ? [] : [{ id: "1" }, { id: "2" }, target, afterTarget],
       );
       expect(globalThis.fetch).toHaveBeenCalledTimes(2);
     });
@@ -702,10 +666,7 @@ describe("msteams graph helpers", () => {
     it.each([undefined, false])("findOne with no match (collectItems=%s)", async (collectItems) => {
       mockFetch(async () =>
         Response.json(
-          pagedResponse(
-            [{ id: "x", name: "x" }],
-            "https://graph.microsoft.com/v1.0/items?$skiptoken=more",
-          ),
+          pagedResponse([{ id: "x" }], "https://graph.microsoft.com/v1.0/items?$skiptoken=more"),
         ),
       );
 
@@ -726,10 +687,7 @@ describe("msteams graph helpers", () => {
     it("preserves findOne errors", async () => {
       const failure = new Error("predicate failed");
       mockJsonFetchResponse(
-        pagedResponse(
-          [{ id: "1", name: "a" }],
-          "https://graph.microsoft.com/v1.0/items?$skiptoken=p2",
-        ),
+        pagedResponse([{ id: "1" }], "https://graph.microsoft.com/v1.0/items?$skiptoken=p2"),
       );
 
       await expect(
@@ -761,20 +719,17 @@ describe("msteams graph helpers", () => {
         vi.mocked(globalThis.fetch).mock.calls.length === 1
           ? Response.json(
               pagedResponse(
-                [{ id: "1", name: "a" }],
+                [{ id: "1" }],
                 "https://graph.microsoft.com/v1.0/items?$skiptoken=page2",
               ),
             )
-          : Response.json(pagedResponse([{ id: "2", name: "b" }])),
+          : Response.json(pagedResponse([{ id: "2" }])),
       );
 
       await expect(
         fetchAllGraphPages<Item>({ token: graphToken, path: "/items", maxPages: 2 }),
       ).resolves.toEqual({
-        items: [
-          { id: "1", name: "a" },
-          { id: "2", name: "b" },
-        ],
+        items: [{ id: "1" }, { id: "2" }],
         truncated: false,
       });
       expect(globalThis.fetch).toHaveBeenCalledTimes(2);

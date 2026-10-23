@@ -1,3 +1,4 @@
+import http from "node:http";
 import type {
   RealtimeVoiceBridge,
   RealtimeVoiceProviderPlugin,
@@ -20,6 +21,14 @@ export const createRealtimeConfig = () => ({
   enabled: true,
   instructions: "Be helpful.",
 });
+
+export function makeRequest(url: string, host = "gateway.ts.net"): http.IncomingMessage {
+  const req = new http.IncomingMessage(null as never);
+  req.url = url;
+  req.method = "POST";
+  req.headers = host ? { host } : {};
+  return req;
+}
 
 export function createBridge(
   close: RealtimeVoiceBridge["close"],

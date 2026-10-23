@@ -1,4 +1,4 @@
-import { createMemo, type Accessor } from "solid-js";
+import { createMemo, type Element, type Accessor } from "solid-js";
 import type { ChatAccountSelection } from "../../../../../packages/gateway-protocol/src/index.ts";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import type {
@@ -12,6 +12,7 @@ import {
   resolvePreferredServerChatModelValue,
 } from "../../../lib/chat/model-ref.ts";
 import {
+  prepareChatModelSelectCatalog,
   resolveChatFastModeSelectState,
   resolveChatModelSelectState,
   type ChatFastModeSelectValue,
@@ -62,6 +63,8 @@ export type ChatModelControlsProps = {
   loading: boolean;
   modelCatalog: ModelCatalogEntry[];
   modelCatalogState: ChatModelCatalogState;
+  /** Lets a lazy route wrap catalog status without adding its read to Chat boot. */
+  renderModelCatalogStatus?: (render: () => Element) => Element;
   modelOverrides?: Readonly<Record<string, string | null | undefined>>;
   modelSelectionLocked?: boolean;
   modelSelectionTarget?: SessionsListResult["defaults"]["modelSelectionTarget"];
@@ -225,8 +228,11 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
   model: ChatModelPickerParams;
   effort: ChatEffortPickerParams;
 }> {
+  const catalogEntries = createMemo(() => props.modelCatalog);
+  const catalogIndex = createMemo(() => prepareChatModelCatalog(catalogEntries()));
+  const selectCatalog = createMemo(() => prepareChatModelSelectCatalog(catalogEntries()));
   return createMemo(() => {
-    const catalog = prepareChatModelCatalog(props.modelCatalog);
+    const catalog = catalogIndex();
     const catalogState = props.modelCatalogState;
     const policy = catalogState.modelSelectionPolicy;
     const retired = catalogState.retired === true;
@@ -262,17 +268,20 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
       defaultLabel,
       modelOverrideSource,
       options: selectOptions,
-    } = resolveChatModelSelectState({
-      activeSession: props.selectedSession,
-      agentDefaultModel: props.agentDefaultModel,
-      chatModelCatalog: props.modelCatalog,
-      modelOverrides: props.modelOverrides ?? {},
-      sessionKey: props.sessionKey,
-      sessionsResult: props.sessionsResult,
-      modelSelectionPolicy: policy,
-      catalogRetired: retired,
-      catalogInitialized: catalogState.initialized,
-    });
+    } = resolveChatModelSelectState(
+      {
+        activeSession: props.selectedSession,
+        agentDefaultModel: props.agentDefaultModel,
+        chatModelCatalog: props.modelCatalog,
+        modelOverrides: props.modelOverrides ?? {},
+        sessionKey: props.sessionKey,
+        sessionsResult: props.sessionsResult,
+        modelSelectionPolicy: policy,
+        catalogRetired: retired,
+        catalogInitialized: catalogState.initialized,
+      },
+      selectCatalog(),
+    );
     const currentOverride = catalogModelValue(rawCurrentOverride);
     const thinking = resolveChatThinkingSelectState({
       catalog: props.modelCatalog,
@@ -567,6 +576,7 @@ function createChatModelControls(props: ChatModelControlsProps): Accessor<{
         disabled: modelDisabled,
         disabledReason: props.modelMutationDisabledReason,
         modelCatalogState: catalogState,
+        renderModelCatalogStatus: props.renderModelCatalogStatus,
         open: props.modelPickerOpen,
         modelSelectionLocked: props.modelSelectionLocked === true,
         selectionScopeDescription: policy?.restricted

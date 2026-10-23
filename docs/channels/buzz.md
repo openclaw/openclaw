@@ -301,7 +301,6 @@ workspace, or model while one Gateway and Buzz bot serve all of them:
     ownership: "explicit",
     defaults: {
       authInheritance: { agentId: "support" },
-      heartbeat: { agentId: "support" },
       systemAgent: { agentId: "support" },
     },
     entries: {

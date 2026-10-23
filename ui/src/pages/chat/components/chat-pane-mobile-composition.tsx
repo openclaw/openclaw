@@ -6,7 +6,6 @@ import {
   createMemo,
   createSignal,
   merge,
-  onCleanup,
   onSettled,
   Show,
   type Element,
@@ -26,8 +25,9 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { closeMenusWithin } from "../../../components/solid/menu.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { isSessionTitlePending } from "../../../lib/session-display.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import type { MobileHostDestination } from "../chat-mobile-host.ts";
@@ -36,7 +36,6 @@ import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { chatPaneLayoutModel, ChatPaneLayoutHeaderActions } from "./chat-header-panel-actions.tsx";
 import type { HeaderSessionMenuPage } from "./chat-header-session-menu-mobile.tsx";
 import { ChatHeaderSessionMenu } from "./chat-header-session-menu.tsx";
-import { ChatMobilePeopleGrid } from "./chat-mobile-people-grid.tsx";
 import type { ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 import { ChatPaneMobileHeader } from "./chat-pane-mobile-header.tsx";
 import {
@@ -45,13 +44,14 @@ import {
 } from "./chat-pane-placement.tsx";
 import type { HeaderMenuSessionAction } from "./chat-quick-action.tsx";
 import { createChatSessionSharingMobileAdapter } from "./chat-session-sharing-mobile-adapter.tsx";
-import { ChatSessionSharingOptions } from "./chat-session-sharing-options.tsx";
 import "./chat-pane-mobile-composition.css";
+import { ChatSessionSharingOptions } from "./chat-session-sharing-options.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 /** Composition only: destinations and resources remain owned by the pane's native host. */
 export function ChatPaneMobileComposition(props: {
   header: ChatPaneHeaderProps;
-  project?: Element;
   details: Component<{ placement: ChatPanePlacementProps; onOpenMachine: () => void }>;
   notice: Element;
   fallback: (
@@ -61,9 +61,6 @@ export function ChatPaneMobileComposition(props: {
   ) => Element;
 }) {
   let disposed = false;
-  onCleanup(() => {
-    disposed = true;
-  });
   // The destination's first visit mounts its content under this retained header owner.
   const retainPage = (render: () => Element) => {
     const opened = createMemo<boolean>(
@@ -373,7 +370,10 @@ export function ChatPaneMobileComposition(props: {
       ? request
       : undefined;
   };
-  onCleanup(() => moveRequest()?.cancel());
+  onSettled(() => () => {
+    disposed = true;
+    moveRequest()?.cancel();
+  });
   const layoutProps = merge(
     () => props.header,
     () => ({ mobile: props.header.mergedChrome }),
@@ -396,7 +396,56 @@ export function ChatPaneMobileComposition(props: {
     const source = model.sideHeaderActionView ?? model.mainHeaderActionView;
     return source ? companionClearAction(source) : undefined;
   });
+  const openPeople = () => {
+    const current = host();
+    if (!current) {
+      return;
+    }
+    // Set native expansion before revealing the destination, in the same synchronous intent.
+    // A closed host has no visible dock to reserve behind the expanded page.
+    if (current.mode !== "expanded") {
+      const shell = current.detailsMount?.closest<HTMLElement>(".chat-mobile-host");
+      current.toggleExpanded(
+        current.open && !current.suspended ? (shell?.getBoundingClientRect().height ?? 0) : 0,
+      );
+    }
+    current.navigate(people, actionSource());
+  };
+  const localActions = createMemo((): HeaderMenuSessionAction[] => [
+    {
+      id: "header-panels",
+      label: t("chat.sessionHeader.panels"),
+      icon: "sessionPanels",
+      onActivate: () => host()?.reveal(actionSource()),
+    },
+    ...(!incognito() && props.header.mobilePeople?.header.length
+      ? [
+          {
+            id: "header-people",
+            label: labels.people,
+            icon: "users" as const,
+            onActivate: openPeople,
+          },
+        ]
+      : []),
+    ...(props.header.onOpenDashboard
+      ? [
+          {
+            id: "header-dashboard",
+            label: t("pluginUi.dashboardTitle"),
+            icon: "layoutDashboard" as const,
+            onActivate: () => {
+              const source = actionSource();
+              if (source) {
+                props.header.onOpenDashboard?.(source);
+              }
+            },
+          },
+        ]
+      : []),
+  ]);
   const nativeActions = createMemo((): HeaderMenuSessionAction[] => [
+    ...localActions(),
     ...(clearSideChat() ? [clearSideChat()!] : []),
     ...(props.header.runAction
       ? [
@@ -472,69 +521,62 @@ export function ChatPaneMobileComposition(props: {
   );
   // One native menu also serves desktop/native-command callers. Its page roots
   // outlive the placement of the trigger in either header.
+  const sessionCommandsAvailable = () =>
+    mobile()
+      ? !props.header.gatewayStatus?.kind || props.header.gatewayStatus.kind === "connected"
+      : props.header.gatewayStatus?.kind !== "offline" &&
+        props.header.gatewayStatus?.kind !== "reconnecting";
+  // Keep the trigger mounted as metadata arrives or the connection changes so keyboard focus survives.
+  const sessionMenuAction = () =>
+    sessionCommandsAvailable() ? props.header.sessionMenuAction : undefined;
   const sessionMenu = (
     <Show
       when={
-        (mobile()
-          ? !props.header.gatewayStatus?.kind || props.header.gatewayStatus.kind === "connected"
-          : props.header.gatewayStatus?.kind !== "offline" &&
-            props.header.gatewayStatus?.kind !== "reconnecting") &&
-        (props.header.sessionMenuAction ||
-          (!mobile() &&
-            !props.header.actionsDisabled &&
-            (desktopSessionActions().length > 0 || desktopViewActions().length > 0)))
+        mobile() ||
+        (sessionCommandsAvailable() &&
+          (props.header.sessionMenuAction ||
+            (!props.header.actionsDisabled &&
+              (desktopSessionActions().length > 0 || desktopViewActions().length > 0))))
       }
     >
       <span>
-        <Show
-          when={props.header.sessionMenuAction}
-          fallback={
-            <ChatHeaderSessionMenu
-              ref={elementRef(registerActionsMenu)}
-              paneTitle={props.header.title}
-              mobile={false}
-              sessionActions={desktopSessionActions()}
-              viewActions={desktopViewActions()}
-            />
+        <ChatHeaderSessionMenu
+          ref={elementRef(registerActionsMenu)}
+          {...sessionMenuAction()}
+          paneTitle={sessionMenuAction() ? undefined : props.header.title}
+          sessionActions={
+            mobile()
+              ? sessionCommandsAvailable()
+                ? nativeActions()
+                : localActions()
+              : desktopSessionActions()
           }
-        >
-          {(menu) => (
-            <ChatHeaderSessionMenu
-              ref={elementRef(registerActionsMenu)}
-              {...menu()}
-              sessionActions={mobile() ? nativeActions() : desktopSessionActions()}
-              viewActions={mobile() ? layoutActions() : desktopViewActions()}
-              viewContent={
-                mobile() ? (
-                  <ChatPaneLayoutHeaderActions
-                    model={layoutModel()}
-                    omitMain={props.header.panelActionDestinations?.main}
-                    omitSide={props.header.panelActionDestinations?.side}
-                  />
-                ) : undefined
-              }
-              onAction={(action) => {
-                // Session keys can repeat across panes; retain the originating pane identity.
-                if (mobile() && action.kind === "move-session") {
-                  openMove();
-                } else if (
-                  !mobile() &&
-                  action.kind === "split-right" &&
-                  props.header.onSplitRight
-                ) {
-                  props.header.onSplitRight(props.header.paneId);
-                } else if (!mobile() && action.kind === "split-below" && props.header.onSplitDown) {
-                  props.header.onSplitDown(props.header.paneId);
-                } else {
-                  menu().onAction(action);
-                }
-              }}
-              mobile={mobile() || menu().mobile}
-              mobileHost={mobile() ? menuHost : undefined}
-              mobilePageOpen={actionsPageOpen()}
-            />
-          )}
-        </Show>
+          viewActions={mobile() ? layoutActions() : desktopViewActions()}
+          viewContent={
+            mobile() ? (
+              <ChatPaneLayoutHeaderActions
+                model={layoutModel()}
+                omitMain={props.header.panelActionDestinations?.main}
+                omitSide={props.header.panelActionDestinations?.side}
+              />
+            ) : undefined
+          }
+          onAction={(action) => {
+            // Session keys can repeat across panes; retain the originating pane identity.
+            if (mobile() && action.kind === "move-session") {
+              openMove();
+            } else if (!mobile() && action.kind === "split-right" && props.header.onSplitRight) {
+              props.header.onSplitRight(props.header.paneId);
+            } else if (!mobile() && action.kind === "split-below" && props.header.onSplitDown) {
+              props.header.onSplitDown(props.header.paneId);
+            } else {
+              sessionMenuAction()?.onAction(action);
+            }
+          }}
+          mobile={mobile() || sessionMenuAction()?.mobile}
+          mobileHost={mobile() ? menuHost : undefined}
+          mobilePageOpen={actionsPageOpen()}
+        />
       </span>
     </Show>
   );
@@ -560,7 +602,6 @@ export function ChatPaneMobileComposition(props: {
             (!props.header.catalog &&
               isSessionTitlePending(props.header.session?.key ?? "", props.header.session))
           }
-          project={props.project}
           publicAccess={props.header.publicAccessIndicator}
           incognito={incognito()}
           navDrawerOpen={props.header.navDrawerOpen ?? false}
@@ -572,11 +613,7 @@ export function ChatPaneMobileComposition(props: {
             )
           }
           onOpenDetails={(source) => props.header.onOpenDetails?.(source)}
-          onOpenPanels={(source) => host()?.reveal(source)}
-          panelsOpen={Boolean(host()?.open && !host()?.suspended)}
           navigationIcon={<Icon name="sessionMenu" />}
-          panelsIcon={<Icon name="sessionPanels" />}
-          onOpenDashboard={props.header.onOpenDashboard}
           notice={
             props.header.gatewayStatus?.kind && props.header.gatewayStatus.kind !== "connected"
               ? {
@@ -591,36 +628,6 @@ export function ChatPaneMobileComposition(props: {
                     onOpenMachine: (source) => host()?.navigate(machinePage, source),
                   }
                 : undefined
-          }
-          people={
-            <Show when={!incognito() && props.header.mobilePeople?.header.length}>
-              <ChatMobilePeopleGrid
-                people={props.header.mobilePeople!}
-                label={labels.people}
-                morePeople={labels.morePeople}
-                controls={peopleId()}
-                expanded={Boolean(
-                  host()?.open && !host()?.suspended && host()?.destination === people,
-                )}
-                onOpen={(source) => {
-                  const current = host();
-                  if (!current) {
-                    return;
-                  }
-                  // Set native expansion before revealing the destination, in the same synchronous intent.
-                  // A closed host has no visible dock to reserve behind the expanded page.
-                  if (current.mode !== "expanded") {
-                    const shell = current.detailsMount?.closest<HTMLElement>(".chat-mobile-host");
-                    current.toggleExpanded(
-                      current.open && !current.suspended
-                        ? (shell?.getBoundingClientRect().height ?? 0)
-                        : 0,
-                    );
-                  }
-                  current.navigate(people, source);
-                }}
-              />
-            </Show>
           }
           actions={<Show when={mobile()}>{sessionMenu}</Show>}
         />

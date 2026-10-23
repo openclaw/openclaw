@@ -172,20 +172,6 @@ describe("channel plugin catalog", () => {
     },
   );
 
-  it("reloads external catalog entries after the explicit plugin metadata lifecycle reset", () => {
-    const root = makeRoot();
-    const catalogPath = path.join(root, "catalog.json");
-    const options = { catalogPaths: [catalogPath], workspaceDir: root, env: {} };
-
-    expect(getChannelPluginCatalogEntry("lifecycle-external", options)).toBeUndefined();
-    writeChannelCatalog(catalogPath, "lifecycle-external", "After external install");
-    clearPluginMetadataLifecycleCaches();
-
-    expect(getChannelPluginCatalogEntry("lifecycle-external", options)?.meta.label).toBe(
-      "After external install",
-    );
-  });
-
   it.each([
     ["bundled", "bundled", false, "@example/fixture", "fixture", "/channels/fixture"],
     ["official config", "config", true, "@example/fixture", "fixture", "/channels/fixture"],

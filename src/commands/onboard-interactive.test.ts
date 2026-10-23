@@ -13,7 +13,6 @@ import {
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../plugins/runtime.js";
-import type { RuntimeEnv } from "../runtime.js";
 import type { BoundVerifySetupInferenceResult } from "../system-agent/setup-inference.js";
 import {
   createSystemAgentVerifiedInferenceTestFixture,
@@ -27,6 +26,7 @@ import {
   runInteractiveSetup,
 } from "./onboard-interactive.js";
 import { runSystemAgentWithInference as runSystemAgentWithInferenceImpl } from "./system-agent-with-inference.js";
+import { createTestRuntime as makeRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   createClackPrompter: vi.fn(() => ({ id: "prompter" })),
@@ -160,14 +160,15 @@ describe("runConversationalOnboarding", () => {
       binding: fixture.binding,
     });
     const launchConversation = vi.fn(async () => {});
+    vi.spyOn(
+      await import("../system-agent/tui-backend.js"),
+      "runSystemAgentTui",
+    ).mockImplementation(launchConversation);
     const { runSystemAgent } = await vi.importActual<
       typeof import("../system-agent/system-agent.js")
     >("../system-agent/system-agent.js");
     mocks.runSystemAgent.mockImplementation((opts, runtime) =>
-      runSystemAgent(
-        { ...opts, input: terminal, output: terminal, runInteractiveTui: launchConversation },
-        runtime,
-      ),
+      runSystemAgent({ ...opts, input: terminal, output: terminal }, runtime),
     );
     return {
       binding: fixture.binding,
@@ -284,14 +285,6 @@ describe("runConversationalOnboarding", () => {
   );
 });
 
-function makeRuntime(): RuntimeEnv {
-  return {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn() as unknown as RuntimeEnv["exit"],
-  };
-}
-
 describe("runInteractiveSetup", () => {
   afterEach(() => {
     expect(mocks.restoreTerminalState).toHaveBeenCalledWith("setup finish", {
@@ -300,40 +293,30 @@ describe("runInteractiveSetup", () => {
     vi.clearAllMocks();
   });
 
-  it("restores terminal state without resuming stdin on success", async () => {
-    const runtime = makeRuntime();
-
-    await runInteractiveSetup({} as never, runtime);
-
-    expect(mocks.runSetupWizard).toHaveBeenCalledOnce();
-  });
-
-  it("restores terminal state without resuming stdin on cancel", async () => {
-    const exitError = new Error("exit");
-    const runtime = makeRuntime();
-    vi.mocked(runtime.exit).mockImplementation(() => {
-      throw exitError;
-    });
-    mocks.runSetupWizard.mockRejectedValueOnce(new WizardCancelledError("cancelled"));
-
-    await expect(runInteractiveSetup({} as never, runtime)).rejects.toBe(exitError);
-
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    const restoreOrder =
-      mocks.restoreTerminalState.mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER;
-    const exitOrder =
-      (runtime.exit as unknown as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0] ??
-      Number.MAX_SAFE_INTEGER;
-    expect(restoreOrder).toBeLessThan(exitOrder);
-  });
-
-  it("rethrows non-cancel errors after restoring terminal state", async () => {
-    const runtime = makeRuntime();
-    const err = new Error("boom");
-    mocks.runSetupWizard.mockRejectedValueOnce(err);
-
-    await expect(runInteractiveSetup({} as never, runtime)).rejects.toThrow("boom");
-
-    expect(runtime.exit).not.toHaveBeenCalled();
-  });
+  it.each([undefined, new WizardCancelledError("cancelled"), new Error("boom")])(
+    "restores terminal state without resuming stdin (wizard result: %s)",
+    async (error) => {
+      const runtime = makeRuntime();
+      const cancelled = error instanceof WizardCancelledError;
+      const exitError = new Error("exit");
+      if (cancelled) {
+        runtime.exit.mockImplementation(() => {
+          throw exitError;
+        });
+      }
+      if (error) {
+        mocks.runSetupWizard.mockRejectedValueOnce(error);
+        await expect(runInteractiveSetup({}, runtime)).rejects.toBe(cancelled ? exitError : error);
+      } else {
+        await runInteractiveSetup({}, runtime);
+      }
+      expect(mocks.runSetupWizard).toHaveBeenCalledOnce();
+      if (cancelled) {
+        expect(runtime.exit).toHaveBeenCalledWith(1);
+        expect(mocks.restoreTerminalState).toHaveBeenCalledBefore(runtime.exit);
+      } else {
+        expect(runtime.exit).not.toHaveBeenCalled();
+      }
+    },
+  );
 });

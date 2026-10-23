@@ -139,66 +139,6 @@ const meetingBrowserStatusSchema = z.looseObject({
     .catch(undefined),
 });
 
-function parseMeetingBrowserStatus<Health extends MeetingBrowserHealth>(
-  result: unknown,
-  adapterId: string,
-  options: MeetingPlatformAdapterOptions<
-    never,
-    string,
-    Health,
-    MeetingTranscriptSnapshot
-  >["parsing"],
-): Health | undefined {
-  const raw = browserResultString(result);
-  if (!raw) {
-    return undefined;
-  }
-  let parsed: z.infer<typeof meetingBrowserStatusSchema>;
-  try {
-    parsed = meetingBrowserStatusSchema.parse(JSON.parse(raw));
-  } catch {
-    throw new Error(options.malformedStatusMessage);
-  }
-  return {
-    inCall: parsed.inCall,
-    micMuted: parsed.micMuted,
-    cameraOff: parsed.cameraOff,
-    lobbyWaiting: parsed.lobbyWaiting,
-    captionCaptureRequested: parsed.captionCaptureRequested,
-    captioning: parsed.captioning,
-    captionsEnabledAttempted: parsed.captionsEnabledAttempted,
-    transcriptLines: parsed.transcriptLines,
-    lastCaptionAt: parsed.lastCaptionAt,
-    lastCaptionSpeaker: parsed.lastCaptionSpeaker,
-    lastCaptionText: parsed.lastCaptionText,
-    recentTranscript: parsed.recentTranscript?.map((line) => ({
-      ...line,
-      ...(line.provenance !== undefined
-        ? {
-            provenance: normalizeMeetingObservationProvenance(line.provenance, {
-              observer: adapterId,
-              observedAt: line.at,
-              speaker: line.speaker,
-            }),
-          }
-        : {}),
-    })),
-    audioInputRouted: parsed.audioInputRouted,
-    audioInputDeviceLabel: parsed.audioInputDeviceLabel,
-    audioInputRouteError: parsed.audioInputRouteError,
-    audioOutputRouted: parsed.audioOutputRouted,
-    audioOutputDeviceLabel: parsed.audioOutputDeviceLabel,
-    audioOutputRouteError: parsed.audioOutputRouteError,
-    audioOutputRouteRetryable: parsed.audioOutputRouteRetryable,
-    manualAction: parsed.manualAction,
-    browserUrl: parsed.url,
-    browserTitle: parsed.title,
-    status: "browser-control",
-    notes: parsed.notes,
-    ...options.statusFields?.(parsed),
-  } as unknown as Health;
-}
-
 function parseMeetingLeaveResult(result: unknown): MeetingBrowserLeaveStep {
   const raw = browserResultString(result);
   if (!raw) {
@@ -224,77 +164,6 @@ function parseMeetingLeaveResult(result: unknown): MeetingBrowserLeaveStep {
   } catch {
     return { departed: false };
   }
-}
-
-function parseMeetingTranscript<Transcript extends MeetingTranscriptSnapshot>(
-  result: unknown,
-  adapterId: string,
-  options: MeetingPlatformAdapterOptions<
-    never,
-    string,
-    MeetingBrowserHealth,
-    Transcript
-  >["parsing"],
-): Transcript & { sessionMatched?: boolean; urlMatched?: boolean } {
-  const raw = browserResultString(result);
-  if (!raw) {
-    return { droppedLines: 0, lines: [] } as unknown as Transcript;
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error(options.malformedTranscriptMessage);
-  }
-  if (!parsed || typeof parsed !== "object") {
-    throw new Error(options.invalidTranscriptMessage);
-  }
-  const payload = parsed as Record<string, unknown>;
-  const droppedLines =
-    typeof payload.droppedLines === "number" && Number.isSafeInteger(payload.droppedLines)
-      ? Math.max(0, payload.droppedLines)
-      : 0;
-  const parseLines = (values: unknown): MeetingTranscriptLine[] =>
-    meetingCaptionLinesSchema
-      .catch([])
-      .parse(values)
-      .map((line) => {
-        const source = meetingCaptionSourceSchema.safeParse(line.source);
-        const identity =
-          source.success && source.data.epoch === payload.epoch ? source.data : undefined;
-        // Legacy rows keep their shape; observation facts do not grant action authority.
-        const transcriptLine: MeetingTranscriptLine = { text: line.text };
-        if (line.at !== undefined) {
-          transcriptLine.at = line.at;
-        }
-        if (line.speaker !== undefined) {
-          transcriptLine.speaker = line.speaker;
-        }
-        if (line.provenance !== undefined || line.source !== undefined) {
-          transcriptLine.provenance = normalizeMeetingObservationProvenance(line.provenance, {
-            observer: adapterId,
-            epoch: payload.epoch,
-            observedAt: line.at,
-            speaker: line.speaker,
-          });
-        }
-        if (identity) {
-          transcriptLine.source = identity;
-        }
-        return transcriptLine;
-      });
-  return {
-    droppedLines,
-    ...(typeof payload.epoch === "string" ? { epoch: payload.epoch } : {}),
-    lines: parseLines(payload.lines),
-    ...(Array.isArray(payload.pendingLines)
-      ? { pendingLines: parseLines(payload.pendingLines) }
-      : {}),
-    ...(typeof payload.urlMatched === "boolean" ? { urlMatched: payload.urlMatched } : {}),
-    ...(typeof payload.sessionMatched === "boolean"
-      ? { sessionMatched: payload.sessionMatched }
-      : {}),
-  } as Transcript & { sessionMatched?: boolean; urlMatched?: boolean };
 }
 
 function createMeetingPlatformAdapter<
@@ -333,7 +202,57 @@ function createMeetingPlatformAdapter<
     ...platform,
     browser: {
       ...browser,
-      parseStatus: (result) => parseMeetingBrowserStatus(result, options.id, parsing),
+      parseStatus: (result) => {
+        const adapterId = options.id;
+        const raw = browserResultString(result);
+        if (!raw) {
+          return undefined;
+        }
+        let parsed: z.infer<typeof meetingBrowserStatusSchema>;
+        try {
+          parsed = meetingBrowserStatusSchema.parse(JSON.parse(raw));
+        } catch {
+          throw new Error(parsing.malformedStatusMessage);
+        }
+        return {
+          inCall: parsed.inCall,
+          micMuted: parsed.micMuted,
+          cameraOff: parsed.cameraOff,
+          lobbyWaiting: parsed.lobbyWaiting,
+          captionCaptureRequested: parsed.captionCaptureRequested,
+          captioning: parsed.captioning,
+          captionsEnabledAttempted: parsed.captionsEnabledAttempted,
+          transcriptLines: parsed.transcriptLines,
+          lastCaptionAt: parsed.lastCaptionAt,
+          lastCaptionSpeaker: parsed.lastCaptionSpeaker,
+          lastCaptionText: parsed.lastCaptionText,
+          recentTranscript: parsed.recentTranscript?.map((line) => ({
+            ...line,
+            ...(line.provenance !== undefined
+              ? {
+                  provenance: normalizeMeetingObservationProvenance(line.provenance, {
+                    observer: adapterId,
+                    observedAt: line.at,
+                    speaker: line.speaker,
+                  }),
+                }
+              : {}),
+          })),
+          audioInputRouted: parsed.audioInputRouted,
+          audioInputDeviceLabel: parsed.audioInputDeviceLabel,
+          audioInputRouteError: parsed.audioInputRouteError,
+          audioOutputRouted: parsed.audioOutputRouted,
+          audioOutputDeviceLabel: parsed.audioOutputDeviceLabel,
+          audioOutputRouteError: parsed.audioOutputRouteError,
+          audioOutputRouteRetryable: parsed.audioOutputRouteRetryable,
+          manualAction: parsed.manualAction,
+          browserUrl: parsed.url,
+          browserTitle: parsed.title,
+          status: "browser-control",
+          notes: parsed.notes,
+          ...parsing.statusFields?.(parsed),
+        } as unknown as Health;
+      },
       classifyManualAction: (health) => {
         if (!health.manualAction) {
           return undefined;
@@ -347,7 +266,71 @@ function createMeetingPlatformAdapter<
       parseLeaveResult: parseMeetingLeaveResult,
       captions: {
         ...browser.captions,
-        parseTranscript: (result) => parseMeetingTranscript(result, options.id, parsing),
+        parseTranscript: (result) => {
+          const adapterId = options.id;
+          const raw = browserResultString(result);
+          if (!raw) {
+            return { droppedLines: 0, lines: [] } as unknown as Transcript;
+          }
+          let parsed: unknown;
+          try {
+            parsed = JSON.parse(raw);
+          } catch {
+            throw new Error(parsing.malformedTranscriptMessage);
+          }
+          if (!parsed || typeof parsed !== "object") {
+            throw new Error(parsing.invalidTranscriptMessage);
+          }
+          const payload = parsed as Record<string, unknown>;
+          const droppedLines =
+            typeof payload.droppedLines === "number" && Number.isSafeInteger(payload.droppedLines)
+              ? Math.max(0, payload.droppedLines)
+              : 0;
+          const parseLines = (values: unknown): MeetingTranscriptLine[] =>
+            meetingCaptionLinesSchema
+              .catch([])
+              .parse(values)
+              .map((line) => {
+                const source = meetingCaptionSourceSchema.safeParse(line.source);
+                const identity =
+                  source.success && source.data.epoch === payload.epoch ? source.data : undefined;
+                // Legacy rows keep their shape; observation facts do not grant action authority.
+                const transcriptLine: MeetingTranscriptLine = { text: line.text };
+                if (line.at !== undefined) {
+                  transcriptLine.at = line.at;
+                }
+                if (line.speaker !== undefined) {
+                  transcriptLine.speaker = line.speaker;
+                }
+                if (line.provenance !== undefined || line.source !== undefined) {
+                  transcriptLine.provenance = normalizeMeetingObservationProvenance(
+                    line.provenance,
+                    {
+                      observer: adapterId,
+                      epoch: payload.epoch,
+                      observedAt: line.at,
+                      speaker: line.speaker,
+                    },
+                  );
+                }
+                if (identity) {
+                  transcriptLine.source = identity;
+                }
+                return transcriptLine;
+              });
+          return {
+            droppedLines,
+            ...(typeof payload.epoch === "string" ? { epoch: payload.epoch } : {}),
+            lines: parseLines(payload.lines),
+            ...(Array.isArray(payload.pendingLines)
+              ? { pendingLines: parseLines(payload.pendingLines) }
+              : {}),
+            ...(typeof payload.urlMatched === "boolean" ? { urlMatched: payload.urlMatched } : {}),
+            ...(typeof payload.sessionMatched === "boolean"
+              ? { sessionMatched: payload.sessionMatched }
+              : {}),
+          } as Transcript & { sessionMatched?: boolean; urlMatched?: boolean };
+        },
       },
       permissionNotes:
         browser.permissionNotes ??

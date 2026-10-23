@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expect, it, onTestFinished, vi } from "vitest";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
 import {
@@ -8,10 +9,12 @@ import {
   createPaneHeaderWorkspaceFixture,
   createSessionCapabilityFixture,
   createTestChatPane,
+  getPaneTestRuntime,
 } from "./chat-pane.test-support.ts";
 import {
   chatPaneHeaderSessionMenu,
   mountChatPaneHeader,
+  openNativeMenu,
   renderPaneHeaderInto,
 } from "./components/chat-pane-header.test-support.ts";
 import type { SidebarPanelDefinition } from "./components/chat-sidebar-region-types.ts";
@@ -23,6 +26,44 @@ import {
   setSidebarOpen,
   isSidebarSlotVisible,
 } from "./sidebar-layout.ts";
+
+it("opens Discussion in the current presentation after a retained desktop header becomes mobile", async () => {
+  const { pane, state } = createTestChatPane({
+    client: createGatewayBrowserClientFixture(),
+    sessions: createSessionCapabilityFixture(),
+  });
+  const runtime = getPaneTestRuntime(pane);
+  pane.context.gateway.snapshot.hello = gatewayHelloForMethods([
+    "session.discussion.info",
+    "session.discussion.open",
+  ]);
+  pane.sessionDiscussion.record(state.sessionKey, "available");
+  state.sidebarLayout = ensureSidebarConversation({ columns: [] });
+  const workspace = createPaneHeaderWorkspaceFixture(state);
+  const row = { key: state.sessionKey, kind: "direct" as const, updatedAt: 0 };
+  const definitions = sidebarPanelDefinitions();
+  const renderHeader = () =>
+    pane.renderPaneHeader(workspace, row, false, undefined, false, null, undefined, definitions);
+  const desktop = renderHeader();
+  expect(
+    desktop.header.panelMenuActions?.find((action) => action.id === "discussion"),
+  ).toBeDefined();
+
+  runtime.mergedChrome = true;
+  runtime.mobilePresentation.open = false;
+  runtime.mobilePresentation.suspended = true;
+  const mobile = renderHeader();
+  const discussion = mobile.header.panelMenuActions?.find((action) => action.id === "discussion");
+  if (!discussion || discussion.kind === "status") {
+    throw new Error("expected the Discussion action");
+  }
+  await discussion.onActivate();
+
+  expect(runtime.mobilePresentation.open).toBe(true);
+  expect(runtime.mobilePresentation.suspended).toBe(false);
+  expect(runtime.mobilePresentation.destination).toEqual({ area: "panels", slot: "discussion" });
+  expect(isSidebarSlotVisible(state.sidebarLayout, "discussion")).toBe(true);
+});
 
 it.each([
   { slot: "plugin:fixture/notes", mode: "split" },
@@ -141,10 +182,10 @@ it("retains focused session menu controls through header refresh and restores fo
   const menu = mounted.container.querySelector("openclaw-chat-header-session-menu")!;
   await menu.updateComplete;
   const trigger = menu.querySelector<HTMLButtonElement>(".chat-header-session-menu__trigger")!;
-  trigger.click();
+  await openNativeMenu(menu, "submenu:advanced");
   await waitForSolid(() =>
-    expect(menu.querySelector(".chat-header-session-menu__panel")?.matches(":popover-open")).toBe(
-      true,
+    expect(menu.querySelector<HTMLButtonElement>('[data-value="submenu:advanced"]')?.disabled).toBe(
+      false,
     ),
   );
   menu.querySelector<HTMLButtonElement>('[data-value="submenu:advanced"]')!.click();
@@ -188,7 +229,7 @@ it("renders a native external link in the main panel header", () => {
   const mounted = mountChatPaneHeader([], {
     sidebarLayout: promoteSidebarPanel(openSlot({ columns: [] }, "workspace"), "workspace"),
     panelDefinitions,
-    panelActionDestinations: { main: true, side: false, dashboard: false },
+    panelActionDestinations: { main: true, side: false },
   });
   onTestFinished(mounted.unmount);
   const link = mounted.container.querySelector<HTMLAnchorElement>('a[aria-label="Open panel"]')!;

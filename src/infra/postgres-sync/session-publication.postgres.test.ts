@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
@@ -30,6 +29,7 @@ import { getPostgresPhysicalFactsForPath } from "../database-engine/physical-fac
 import { resolveDatabaseFamilyEngines } from "../database-engine/registry.js";
 import { isPostgresSqlConnection } from "../sql-connection.js";
 import { usePostgresTestHarness } from "./postgres.test-support.js";
+import { failAfterStatement, observeStatementEvents } from "./sql.test-support.js";
 
 const harness = usePostgresTestHarness("publication");
 const { connection, prefix, client, directories } = harness;
@@ -87,19 +87,6 @@ function observeEntries(sessionKey: string) {
     }
   });
   return { entries, stop, [Symbol.dispose]: stop };
-}
-
-function withoutSql(body: () => void) {
-  const statements: unknown[] = [];
-  const sql = channel("openclaw.database.statement");
-  const record = (value: unknown) => statements.push(value);
-  sql.subscribe(record);
-  try {
-    body();
-  } finally {
-    sql.unsubscribe(record);
-  }
-  expect(statements).toEqual([]);
 }
 
 describe.skipIf(!connection)("PostgreSQL committed session publications", () => {
@@ -199,16 +186,32 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
       expect(published.actorPostimage?.writeToken).toBeTypeOf("string");
       expect(published.fullEntry?.skillsSnapshot?.prompt).toBe("Synthetic persisted prompt");
 
-      withoutSql(() => {
+      {
+        using observation = observeStatementEvents();
         expect(isSessionEntryPublicationAdmissionCurrent(published.source)).toBe(true);
         expect(isSessionEntryPublicationSourceCurrent(published.source)).toBe(true);
+        const source = published.source;
+        assert(source.admission);
+        const admission = source.admission;
+        const invalid: SessionEntryPublicationSource[] = [{ ...source, admission: undefined }];
+        for (const field of ["namespace", "storeId", "admissionId"] as const) {
+          invalid.push({ ...source, admission: { ...admission, [field]: `different-${field}` } });
+        }
+        for (const candidate of invalid) {
+          expect(isSessionEntryPublicationAdmissionCurrent(candidate)).toBe(false);
+          expect(isSessionEntryPublicationSourceCurrent(candidate)).toBe(false);
+        }
+        expect(isSessionEntryPublicationSourceCurrent({ ...source, writeToken: undefined })).toBe(
+          false,
+        );
         expect(readSessionActorEntryFacts(target)?.entry?.label).toBe("after");
         expect(
           readSessionActorRowFacts({ path: database.path, sessionKey: scope.sessionKey })?.entry
             .label,
         ).toBe("after");
         expect(currentActor.snapshot(authority)?.entry?.label).toBe("after");
-      });
+        expect(observation.events).toEqual([]);
+      }
 
       await owners.upsertSessionEntryCore(scope, { label: "newer" });
       expect(isSessionEntryPublicationSourceCurrent(published.source)).toBe(false);
@@ -237,16 +240,8 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
       const db = database.db;
       assert(isPostgresSqlConnection(db));
       const failure = new Error(`Synthetic ${outcome}`);
-      const exec = db.exec.bind(db);
       using delivery =
-        outcome === "unknown commit"
-          ? vi.spyOn(db, "exec").mockImplementation((sql) => {
-              exec(sql);
-              if (sql === "COMMIT") {
-                throw failure;
-              }
-            })
-          : undefined;
+        outcome === "unknown commit" ? failAfterStatement(db, "COMMIT", failure) : undefined;
       expect(() =>
         withEngineStoreAdmission(() =>
           owners.runOpenClawAgentWriteTransaction(
@@ -278,36 +273,4 @@ describe.skipIf(!connection)("PostgreSQL committed session publications", () => 
       });
     },
   );
-
-  it("rejects incomplete or mismatched PG admission without querying the database", async () => {
-    const scope = scopeFor("identity");
-    using observed = observeEntries(scope.sessionKey);
-    await owners.upsertSessionEntryCore(scope, {
-      sessionId: "publication-identity",
-      updatedAt: 1,
-      label: "committed",
-    });
-    const published = observed.entries.findLast((entry) => entry.fullEntry?.label === "committed");
-    assert(published?.source.admission);
-    const source = published.source;
-    assert(source.admission);
-    const admission = source.admission;
-    const invalid: SessionEntryPublicationSource[] = [{ ...source, admission: undefined }];
-    for (const field of ["namespace", "storeId", "admissionId"] as const) {
-      invalid.push({
-        ...source,
-        admission: { ...admission, [field]: `different-${field}` },
-      });
-    }
-    withoutSql(() => {
-      expect(isSessionEntryPublicationSourceCurrent(source)).toBe(true);
-      for (const candidate of invalid) {
-        expect(isSessionEntryPublicationAdmissionCurrent(candidate)).toBe(false);
-        expect(isSessionEntryPublicationSourceCurrent(candidate)).toBe(false);
-      }
-      expect(isSessionEntryPublicationSourceCurrent({ ...source, writeToken: undefined })).toBe(
-        false,
-      );
-    });
-  });
 });

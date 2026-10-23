@@ -263,6 +263,22 @@ export async function sendMediaNextcloudTalk(
   };
   const options = { signal: ctx.signal, beforeRequest: assertCurrent };
   assertCurrent();
+  if (ctx.silent) {
+    const data = await client.json("/ocs/v2.php/cloud/capabilities?format=json", {}, options);
+    assertCurrent();
+    const spreed =
+      isRecord(data) && isRecord(data.capabilities) ? data.capabilities.spreed : undefined;
+    // Talk gates silent file metadata on media-caption, not silent-send.
+    if (
+      !isRecord(spreed) ||
+      !Array.isArray(spreed.features) ||
+      !spreed.features.includes("media-caption")
+    ) {
+      throw new Error(
+        "Nextcloud Talk silent attachments require the server's media-caption capability. Upgrade Talk before retrying.",
+      );
+    }
+  }
   const maxBytes =
     resolveChannelMediaMaxBytes({
       cfg: ctx.cfg,
@@ -389,6 +405,7 @@ export async function sendMediaNextcloudTalk(
       referenceId,
       talkMetaData: JSON.stringify({
         caption,
+        ...(ctx.silent ? { silent: true } : {}),
         ...(ctx.replyToId ? { replyTo: Number(ctx.replyToId) } : {}),
       }),
     });

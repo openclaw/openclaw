@@ -9,6 +9,9 @@ const outcomeRef = "refs/openclaw/pr-merge-outcomes/42";
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 type Fixture = ReturnType<typeof createMainRefreshFixture>;
 type Event = ReturnType<Fixture["events"]>[number];
+const eventIndex = (events: Event[], kind: Event["kind"]) =>
+  events.findIndex((event) => event.kind === kind);
+const hasEvent = (events: Event[], kind: Event["kind"]) => eventIndex(events, kind) !== -1;
 const isMerge = (event: Event) =>
   event.kind === "gh" && event.args?.[0] === "pr" && event.args[1] === "merge";
 const isGraphqlMerge = (event: Event) =>
@@ -102,7 +105,7 @@ describePosix("native hosted merge handoff", () => {
     }
     const savedProof = readLocal(f, "gates-hosted-checks.json");
     const { stdout, output, events } = observe(f, () => f.shell("merge_run 42 || exit 1"), 1);
-    expect(events.some((event) => event.kind === "ci-watched")).toBe(false);
+    expect(hasEvent(events, "ci-watched")).toBe(false);
     if (requiredChecks) {
       expect(output).toContain(
         requiredChecks === "api-error"
@@ -111,8 +114,8 @@ describePosix("native hosted merge handoff", () => {
             ? "Required checks are still pending"
             : "Required checks are failing",
       );
-      expect(events.findIndex((event) => event.kind === "required-checks")).toBeGreaterThan(
-        events.findIndex((event) => event.kind === "hosted-gate"),
+      expect(eventIndex(events, "required-checks")).toBeGreaterThan(
+        eventIndex(events, "hosted-gate"),
       );
     } else if (fault === "missing-artifact") {
       expect(stdout).toContain("Missing required artifact: .local/gates.env");
@@ -121,7 +124,7 @@ describePosix("native hosted merge handoff", () => {
       expect(readLocal(f, "gates-hosted-checks.log")).toContain(
         fault === "api-error" ? "Hosted API unavailable" : "Missing successful recent CI workflow",
       );
-      expect(events.some((event) => event.kind === "required-checks")).toBe(false);
+      expect(hasEvent(events, "required-checks")).toBe(false);
       expect(readLocal(f, "gates-hosted-checks.json")).toBe(savedProof);
     }
     expect(existsSync(join(f.local, "merge-output.log"))).toBe(false);
@@ -132,10 +135,10 @@ describePosix("native hosted merge handoff", () => {
     f.configure({ hostedCi: "scheduled" });
     writeGates(f, preparedGates.replace("hosted_exact_or_recent_parent", mode));
     const { events } = observe(f, () => verify(f));
-    const watched = events.findIndex((event) => event.kind === "ci-watched");
+    const watched = eventIndex(events, "ci-watched");
     expect(watched).toBeGreaterThanOrEqual(0);
-    expect(events.findIndex((event) => event.kind === "required-checks")).toBeGreaterThan(watched);
-    expect(events.some((event) => event.kind === "hosted-gate")).toBe(false);
+    expect(eventIndex(events, "required-checks")).toBeGreaterThan(watched);
+    expect(hasEvent(events, "hosted-gate")).toBe(false);
   });
 
   it("dispatches once with the exact prepared head and ordinary server enforcement", () => {
@@ -144,10 +147,10 @@ describePosix("native hosted merge handoff", () => {
     expect(mergeCalls).toHaveLength(1);
     const watchLog = join(f.local, "merge-checks-watch.log");
     expect(existsSync(watchLog) ? readFileSync(watchLog, "utf8") : "").toBe("");
-    const hosted = events.findIndex((event) => event.kind === "hosted-gate");
+    const hosted = eventIndex(events, "hosted-gate");
     expect(hosted).toBeGreaterThanOrEqual(0);
-    expect(events.findIndex((event) => event.kind === "required-checks")).toBeGreaterThan(hosted);
-    expect(events.some((event) => event.kind === "ci-watched")).toBe(false);
+    expect(eventIndex(events, "required-checks")).toBeGreaterThan(hosted);
+    expect(hasEvent(events, "ci-watched")).toBe(false);
     expect(events.some(isMerge)).toBe(false);
     expect(f.git(f.origin, "log", "-1", "--format=%B", "main")).toBe(
       "Fixture squash\n\nReviewed fixture body",
@@ -267,25 +270,16 @@ describePosix("native pending GitHub merge handoff", () => {
       (event) => event.kind === "gh" && event.args?.includes("repos/fixture/repo/pulls/42"),
     );
     const expectedRead = [
-      "api",
-      "--hostname",
-      "github.com",
-      "repos/fixture/repo/pulls/42",
-      "-H",
+      ..."api --hostname github.com repos/fixture/repo/pulls/42 -H".split(" "),
       "Cache-Control: max-age=0",
     ];
     expect(pullReads.map((event) => event.args)).toEqual([expectedRead, expectedRead]);
     const mergeCalls = events.filter(isMerge);
     expect(mergeCalls).toHaveLength(1);
     expect(mergeCalls[0]?.args).toEqual([
-      "pr",
-      "merge",
-      "42",
-      "--repo",
-      "https://github.com/fixture/repo",
-      "--squash",
-      "--auto",
-      "--match-head-commit",
+      ..."pr merge 42 --repo https://github.com/fixture/repo --squash --auto --match-head-commit".split(
+        " ",
+      ),
       f.head,
       "--body-file",
       expect.any(String),
@@ -387,8 +381,8 @@ describePosix("native superseded-only UNSTABLE merge handoff", () => {
     const { events } = observe(f, () => f.run(["merge-run", "42", "--auto-merge"]));
     expect(events.filter(isGraphqlMerge)).toHaveLength(1);
     expect(events.some(isMerge)).toBe(false);
-    expect(events.some((event) => event.kind === "ci-watched")).toBe(true);
-    expect(events.some((event) => event.kind === "rollup-read")).toBe(true);
+    expect(hasEvent(events, "ci-watched")).toBe(true);
+    expect(hasEvent(events, "rollup-read")).toBe(true);
     expect(outcomeRecord(f)).toMatchObject({ head: f.head, route: "immediate", phase: "complete" });
   });
 });

@@ -79,17 +79,16 @@ afterEach(() => {
 function catalogProps(): PluginCatalogResultsProps {
   return {
     connected: true,
-    loading: false,
     result: { items: [entry] },
+    hasCurrentResult: true,
+    reads: { browse: null, categories: null, more: null },
     error: null,
     remoteError: null,
     categories: [],
-    categoriesLoading: false,
     categoriesError: null,
     onRetryCategories: vi.fn(),
     featured: [],
     trending: [],
-    loadingMore: false,
     loadMoreError: null,
     intent: "all",
     category: null,
@@ -108,9 +107,50 @@ function catalogProps(): PluginCatalogResultsProps {
   };
 }
 
-function renderCatalog(props: Partial<PluginCatalogResultsProps>) {
+async function renderCatalog(props: Partial<PluginCatalogResultsProps>) {
   render(() => PluginCatalogResults({ ...catalogProps(), ...props }));
+  await nextFrame();
 }
+
+it("keeps a pinned installation status popup open through catalog refresh", async () => {
+  const initial = catalogProps();
+  const progress = {
+    startedAt: 1,
+    finishedAt: 2,
+    activities: [],
+    failure: {
+      title: "Installation saved",
+      recovery: "Restart to apply",
+      detail: "Startup failed",
+    },
+  } satisfies PluginInstallProgress;
+  const [props, setProps] = createSignal({
+    ...initial,
+    installProgress: new Map([[`install:${entry.id}`, progress]]),
+  });
+  render(() => <PluginCatalogResults {...props()} />);
+  await expect
+    .element(
+      page.getByRole("button", { name: "View status of TencentDB Agent Memory installation" }),
+    )
+    .toBeVisible();
+  await userEvent.click(
+    page.getByRole("button", { name: "View status of TencentDB Agent Memory installation" }),
+  );
+  const status = page.getByText("Installation saved", { exact: true });
+  await expect.element(status).toBeVisible();
+  const pending = Promise.withResolvers<null>();
+  setProps((current) => ({ ...current, reads: { ...current.reads, browse: pending.promise } }));
+  flush();
+  await nextFrame();
+  setProps((current) => ({
+    ...current,
+    result: { items: [{ ...entry, catalog: { ...entry.catalog, name: "Refreshed Memory" } }] },
+  }));
+  pending.resolve(null);
+  await expect.element(page.getByRole("link", { name: "Refreshed Memory" })).toBeVisible();
+  await expect.element(status).toBeVisible();
+});
 
 it.each([263, 362])(
   "keeps long identity text clear of the action within a %ipx card",
@@ -121,7 +161,7 @@ it.each([263, 362])(
       activities: [{ activityId: "dependencies", stage: "dependencies", status: "started" }],
     } satisfies PluginInstallProgress;
     for (const busy of [false, true]) {
-      renderCatalog({
+      await renderCatalog({
         onInstall,
         busy: busy ? { "install:long-title": "install" } : {},
         installProgress: busy ? new Map([["install:long-title", progress]]) : undefined,
@@ -158,9 +198,9 @@ it.each([263, 362])(
   },
 );
 
-it.each([263, 362])("centers installed status dots in a %ipx card header", (width) => {
+it.each([263, 362])("centers installed status dots in a %ipx card header", async (width) => {
   for (const state of ["enabled", "disabled", "needs-setup", "error"] as const) {
-    renderCatalog({
+    await renderCatalog({
       result: { items: [{ ...entry, local: { ...entry.local, installed: true, state } }] },
     });
     find(".plugin-catalog-grid").style.gridTemplateColumns = `${width}px`;
@@ -211,6 +251,7 @@ it.each([
         <PluginCatalogResults {...catalogProps()} result={{ items }} iconUrls={iconUrls()} />
       </>
     ));
+    await nextFrame();
     const images = [...container.querySelectorAll<HTMLImageElement>(".plugins-icon")].filter(
       (image) => image.getAttribute("src") === icon,
     );
@@ -255,7 +296,9 @@ it.each([
 );
 
 it("fills the remaining viewport with card-sized placeholders across resizes", async () => {
-  renderCatalog({ loading: true });
+  await renderCatalog({
+    reads: { browse: Promise.withResolvers<null>().promise, categories: null, more: null },
+  });
   const errors: string[] = [];
   const onError = (event: ErrorEvent) => errors.push(event.message);
   window.addEventListener("error", onError);

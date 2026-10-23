@@ -98,7 +98,7 @@ export async function createAttachedBrowserToolRuntime(
       allowHostControl: false,
       ...(params.agentSessionKey !== undefined ? { agentSessionKey: params.agentSessionKey } : {}),
       ...(params.agentDir !== undefined ? { agentDir: params.agentDir } : {}),
-      ...(params.workspaceDir !== undefined ? { workspaceDir: params.workspaceDir } : {}),
+      workspaceDir: params.workspaceDir,
       // Worker transcript frames are bounded and inference is Gateway-proxied.
       // Persist proof in the managed workspace, then return only a bounded receipt.
       screenshotResultMode: "path",

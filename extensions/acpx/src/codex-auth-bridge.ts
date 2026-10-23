@@ -245,7 +245,6 @@ async function writeAdapterWrapper(
   fileName: string,
   script: string,
 ): Promise<string> {
-  await fs.mkdir(baseDir, { recursive: true });
   const wrapperPath = path.join(baseDir, fileName);
   await fs.writeFile(wrapperPath, script, {
     encoding: "utf8",
@@ -438,8 +437,6 @@ function buildClaudeAcpWrapperCommand(
 export async function prepareAcpxCodexAuthConfig(params: {
   pluginConfig: ResolvedAcpxPluginConfig;
   stateDir: string;
-  resolveInstalledCodexAcpBinPath?: () => Promise<string | undefined>;
-  resolveInstalledClaudeAcpBinPath?: () => Promise<string | undefined>;
 }): Promise<ResolvedAcpxPluginConfig> {
   const codexBaseDir = path.join(params.stateDir, "acpx");
   const configuredCodexCommand = params.pluginConfig.agents.codex;
@@ -450,21 +447,17 @@ export async function prepareAcpxCodexAuthConfig(params: {
     workspaceDir: params.pluginConfig.cwd,
     migratedConfig: codexLaunch?.migratedConfig,
   });
-  const installedCodexBinPath = await (params.resolveInstalledCodexAcpBinPath
-    ? params.resolveInstalledCodexAcpBinPath()
-    : resolveInstalledAcpPackageBinPath(CODEX_ACP_PACKAGE, CODEX_ACP_BIN));
-  const installedClaudeBinPath = await (params.resolveInstalledClaudeAcpBinPath
-    ? params.resolveInstalledClaudeAcpBinPath()
-    : resolveInstalledAcpPackageBinPath(CLAUDE_ACP_PACKAGE, CLAUDE_ACP_BIN));
+  const codexBinPath = await resolveInstalledAcpPackageBinPath(CODEX_ACP_PACKAGE, CODEX_ACP_BIN);
+  const claudeBinPath = await resolveInstalledAcpPackageBinPath(CLAUDE_ACP_PACKAGE, CLAUDE_ACP_BIN);
   const wrapperPath = await writeAdapterWrapper(
     codexBaseDir,
     "codex-acp-wrapper.mjs",
-    buildCodexAcpWrapperScript(installedCodexBinPath),
+    buildCodexAcpWrapperScript(codexBinPath),
   );
   const claudeWrapperPath = await writeAdapterWrapper(
     codexBaseDir,
     "claude-agent-acp-wrapper.mjs",
-    buildClaudeAcpWrapperScript(installedClaudeBinPath),
+    buildClaudeAcpWrapperScript(claudeBinPath),
   );
 
   return {

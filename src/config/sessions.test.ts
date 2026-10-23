@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { withEnv } from "../test-utils/env.js";
 import {
   deriveSessionKey,
@@ -13,22 +13,9 @@ import {
 import { buildGroupDisplayName } from "./sessions/group-display.js";
 
 describe("sessions", () => {
-  let fixtureRoot = "";
-  let fixtureCount = 0;
-
-  const createCaseDir = async (prefix: string) => {
-    const dir = path.join(fixtureRoot, `${prefix}-${fixtureCount++}`);
-    await fs.mkdir(dir, { recursive: true });
-    return dir;
-  };
-
-  beforeAll(async () => {
-    fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-suite-"));
-  });
-
-  afterAll(async () => {
-    await fs.rm(fixtureRoot, { recursive: true, force: true });
-  });
+  const dirs = createSuiteTempRootTracker({ prefix: "openclaw-sessions-suite-" });
+  beforeAll(dirs.setup);
+  afterAll(dirs.cleanup);
 
   const withStateDir = <T>(stateDir: string, fn: () => T): T =>
     withEnv({ OPENCLAW_STATE_DIR: stateDir }, fn);
@@ -37,7 +24,7 @@ describe("sessions", () => {
     path.join(path.resolve(root), "agents", agent, "sessions", file);
 
   async function createAgentSessionsLayout(label: string) {
-    const stateDir = await createCaseDir(label);
+    const stateDir = await dirs.make(label);
     for (const agent of ["main", "bot1", "bot2"]) {
       await fs.mkdir(sessionPath(stateDir, agent, ""), { recursive: true });
     }
@@ -63,7 +50,7 @@ describe("sessions", () => {
     ).toBe("discord:friends-of-openclaw#general");
   });
 
-  const resolveSessionKeyCases = [
+  it.each([
     [
       "per-sender",
       { From: "discord:group:12345", ChatType: "group" },
@@ -77,12 +64,9 @@ describe("sessions", () => {
       "main",
       "agent:main:demo-chat:group:room-123",
     ],
-  ] as const;
-  for (const [scope, ctx, mainKey, expected] of resolveSessionKeyCases) {
-    it(`resolves ${scope} context ${JSON.stringify(ctx)}`, () => {
-      expect(resolveSessionKey(scope, ctx, mainKey, "main")).toBe(expected);
-    });
-  }
+  ] as const)("resolves %s context %j", (scope, ctx, mainKey, expected) => {
+    expect(resolveSessionKey(scope, ctx, mainKey, "main")).toBe(expected);
+  });
 
   it("includes topic ids in session transcript filenames", () => {
     withStateDir("/custom/state", () => {

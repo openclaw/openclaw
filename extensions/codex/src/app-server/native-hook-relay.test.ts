@@ -77,9 +77,7 @@ describe("Codex native hook relay managed policy", () => {
     "qualifies the actual warm/cold provider before native input (%s, projected=%s, accepted=%s, System=%s)",
     async (status, projected, accepted, system) => {
       const client = createClient();
-      const monitor = new CodexNativeSubagentMonitor(client.client, createRuntime(), {
-        recoveryPollDelaysMs: [],
-      });
+      const monitor = new CodexNativeSubagentMonitor(client.client, createRuntime());
       const oldConfiguration = {
         assertCurrent: () => {},
         hasProvider: (provider: string) => provider === "provider-q",
@@ -153,9 +151,7 @@ describe("Codex native hook relay managed policy", () => {
     "refuses an unqualified receiver read after %s",
     async (change) => {
       const client = createClient();
-      const monitor = new CodexNativeSubagentMonitor(client.client, createRuntime(), {
-        recoveryPollDelaysMs: [],
-      });
+      const monitor = new CodexNativeSubagentMonitor(client.client, createRuntime());
       const qualification = { assertCurrent: () => {}, hasProvider: () => true };
       let targetQualification: typeof qualification | undefined;
       const source = modelSource(["model-b"]);
@@ -317,9 +313,7 @@ describe("Codex native hook relay managed policy", () => {
     expect(source.release).toHaveBeenCalledOnce();
     expect(() => captured.assertCurrent()).toThrow("released");
 
-    const monitor = new CodexNativeSubagentMonitor(client.client, createRuntime(), {
-      recoveryPollDelaysMs: [],
-    });
+    const monitor = new CodexNativeSubagentMonitor(client.client, createRuntime());
     const unknown = await monitor.registerParent({ parentThreadId: "unknown" });
     unknown.bindTurn("unknown-turn");
     expect(
@@ -419,13 +413,7 @@ describe("Codex native hook relay managed policy", () => {
         nativeModel: { provider: "test-provider", model: "wire-b" },
         authorizedModel: { provider: "test-provider", model: "catalog-b" },
       };
-      const monitor = new codexNativeSubagentMonitorRuntime.Monitor(
-        client.client,
-        createRuntime(),
-        {
-          recoveryPollDelaysMs: [],
-        },
-      );
+      const monitor = new codexNativeSubagentMonitorRuntime.Monitor(client.client, createRuntime());
       const first = await monitor.registerParent({
         parentThreadId: "parent-thread",
         modelSource: a,

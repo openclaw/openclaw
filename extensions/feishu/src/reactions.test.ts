@@ -17,9 +17,12 @@ import { listReactionsFeishu } from "./reactions.js";
 function list(emojiType?: string) {
   return listReactionsFeishu({ cfg: {}, messageId: "om_message", emojiType });
 }
-type Operator = { operator_type: string; operator_id: string };
-function item(id: string, emoji: string, operator?: Operator) {
-  return { reaction_id: id, reaction_type: { emoji_type: emoji }, operator };
+function item(id: string, emoji: string, type?: string, operator_id = "") {
+  return {
+    reaction_id: id,
+    reaction_type: { emoji_type: emoji },
+    operator: type ? { operator_type: type, operator_id } : undefined,
+  };
 }
 function reaction(reactionId: string, emojiType: string, operatorType: string, operatorId: string) {
   return { reactionId, emojiType, operatorType, operatorId };
@@ -37,16 +40,12 @@ function page(items: ReturnType<typeof item>[] = [], more?: string | true) {
 
 describe("listReactionsFeishu", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
     listMock.mockReset();
   });
 
   it("fails closed for missing or unrecognized operator metadata", async () => {
     listMock.mockResolvedValue(
-      page([
-        item("r-missing", "THUMBSUP"),
-        item("r-unknown", "HEART", { operator_type: "tenant", operator_id: "tenant-1" }),
-      ]),
+      page([item("r-missing", "THUMBSUP"), item("r-unknown", "HEART", "tenant", "tenant-1")]),
     );
 
     expect(await list()).toEqual([
@@ -57,15 +56,8 @@ describe("listReactionsFeishu", () => {
 
   it("drains every reaction page while retaining the requested emoji filter", async () => {
     listMock
-      .mockResolvedValueOnce(
-        page(
-          [item("r-first", "HEART", { operator_type: "user", operator_id: "ou_user" })],
-          "page-2",
-        ),
-      )
-      .mockResolvedValueOnce(
-        page([item("r-bot", "HEART", { operator_type: "app", operator_id: "cli_main" })]),
-      );
+      .mockResolvedValueOnce(page([item("r-first", "HEART", "user", "ou_user")], "page-2"))
+      .mockResolvedValueOnce(page([item("r-bot", "HEART", "app", "cli_main")]));
 
     expect(await list("HEART")).toEqual([
       reaction("r-first", "HEART", "user", "ou_user"),

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { readToolAllowlistIntersection } from "../agents/tool-policy.js";
@@ -10,7 +10,10 @@ import {
   createMockPluginRegistry,
   TEST_PLUGIN_AGENT_CTX,
 } from "./hooks.test-fixtures.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { createEmptyPluginRegistry } from "./registry.js";
+import { createPluginRecord } from "./status.test-helpers.js";
 import type {
   PluginHookBeforeAgentFinalizeResult,
   PluginHookBeforePromptBuildResult,
@@ -22,6 +25,107 @@ type PromptHook = Pick<
   "handler" | "requiresToolAuthority" | "priority"
 >;
 const phaseEvent = { prompt: "test", messages: [] };
+
+describe("pre-durable channel ingress policy", () => {
+  const context = () => ({
+    channelId: "discord",
+    accountId: "account",
+    signal: new AbortController().signal,
+  });
+  const raw = { id: "event", channel_id: "room", content: "private" };
+
+  function ownedPolicy(allowConversationAccess: boolean) {
+    const builder = createTestPluginRegistry();
+    const record = createPluginRecord({ id: "ingress-policy", origin: "global" });
+    builder.registry.plugins.push(record);
+    const api = builder.createApi(record, { config: {}, hookPolicy: { allowConversationAccess } });
+    const instance = getPluginInstance(record)!;
+    onTestFinished(async () => {
+      await instance.dispose();
+    });
+    return { api, instance, registry: builder.registry };
+  }
+
+  it.each([false, true])("requires the existing conversation-access grant (%s)", (allowed) => {
+    const owner = ownedPolicy(allowed);
+    owner.api.on("before_channel_ingress", () => undefined);
+    expect(owner.registry.typedHooks.map((entry) => entry.hookName)).toEqual(
+      allowed ? ["before_channel_ingress"] : [],
+    );
+  });
+
+  it("chains isolated transformed events and retains the earlier replacement on a later decline", async () => {
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_channel_ingress",
+          priority: 2,
+          handler: () => ({ event: { ...raw, content: "[redacted]" } }),
+        },
+        {
+          hookName: "before_channel_ingress",
+          handler: (value) => {
+            expect(value).toEqual({ event: { ...raw, content: "[redacted]" } });
+            return {};
+          },
+        },
+      ]),
+    );
+    const result = await runner.runBeforeChannelIngress({ event: raw }, context());
+    expect(result?.event).toEqual({ ...raw, content: "[redacted]" });
+    result?.assertCurrent();
+    expect(raw.content).toBe("private");
+  });
+
+  it("does not fail open or expose policy error contents after a timeout", async () => {
+    const release = createDeferred();
+    const error = vi.fn();
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_channel_ingress",
+          timeoutMs: 2,
+          handler: async () => {
+            await release.promise;
+            throw new Error("PRIVATE_ERROR_SENTINEL");
+          },
+        },
+      ]),
+      {
+        logger: { error, warn: vi.fn() },
+        failurePolicyByHook: { before_channel_ingress: "fail-open" },
+      },
+    );
+    try {
+      await expect(runner.runBeforeChannelIngress({ event: raw }, context())).rejects.toThrow(
+        "Channel ingress transform failed",
+      );
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+    }
+  });
+
+  it("rejects a result from an actual registered instance retired during its awaited policy", async () => {
+    const owner = ownedPolicy(true);
+    const entered = createDeferred();
+    const release = createDeferred();
+    owner.api.on("before_channel_ingress", async () => {
+      entered.resolve();
+      await release.promise;
+      return { event: { ...raw, content: "[redacted]" } };
+    });
+    const promise = createHookRunner(owner.registry).runBeforeChannelIngress(
+      { event: raw },
+      context(),
+    );
+    await entered.promise;
+    const disposing = owner.instance.dispose();
+    release.resolve();
+    await expect(promise).rejects.toThrow(/Channel ingress transform/);
+    await disposing;
+  });
+});
 function promptRunner(hooks: PromptHook[]) {
   const registry = createEmptyPluginRegistry();
   registry.typedHooks.push(

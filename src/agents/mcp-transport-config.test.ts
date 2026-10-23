@@ -4,6 +4,14 @@ import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
 vi.mock("../logger.js", () => ({ logWarn: vi.fn() }));
 
+const defaults = {
+  connectionTimeoutMs: 30_000,
+  requestTimeoutMs: 60_000,
+  supportsParallelToolCalls: false,
+};
+const warning = (server: string, key: string) =>
+  `bundle-mcp: server "${server}": env "${key}" is blocked for stdio startup safety and was ignored.`;
+
 describe("resolveMcpTransportConfig", () => {
   beforeEach(() => {
     vi.mocked(logWarn).mockClear();
@@ -36,9 +44,7 @@ describe("resolveMcpTransportConfig", () => {
       args: undefined,
       cwd: undefined,
       description: "node",
-      connectionTimeoutMs: 30_000,
-      requestTimeoutMs: 60_000,
-      supportsParallelToolCalls: false,
+      ...defaults,
       env: {
         SAFE_VALUE: "ok",
         PORT: "3000",
@@ -48,9 +54,7 @@ describe("resolveMcpTransportConfig", () => {
       },
     });
     for (const key of Object.keys(blocked)) {
-      expect(logWarn).toHaveBeenCalledWith(
-        `bundle-mcp: server "probe": env "${key}" is blocked for stdio startup safety and was ignored.`,
-      );
+      expect(logWarn).toHaveBeenCalledWith(warning("probe", key));
     }
   });
 
@@ -68,12 +72,9 @@ describe("resolveMcpTransportConfig", () => {
       ).toEqual(expect.objectContaining({ env: {} }));
     }
     expect(logWarn).toHaveBeenCalledTimes(5);
-    warnings.forEach(([server, key], index) => {
-      expect(logWarn).toHaveBeenNthCalledWith(
-        index + 1,
-        `bundle-mcp: server "${server}": env "${key}" is blocked for stdio startup safety and was ignored.`,
-      );
-    });
+    expect(vi.mocked(logWarn).mock.calls).toEqual(
+      warnings.map(([server, key]) => [warning(server, key)]),
+    );
   });
 
   it("sanitizes config-controlled names in stdio env warnings", () => {
@@ -101,9 +102,7 @@ describe("resolveMcpTransportConfig", () => {
     expect(resolved).toEqual({
       kind: "http",
       transportType: "sse",
-      connectionTimeoutMs: 30_000,
-      requestTimeoutMs: 60_000,
-      supportsParallelToolCalls: false,
+      ...defaults,
       url: "https://mcp.example.com/sse",
       headers: {
         Authorization: "Bearer token",

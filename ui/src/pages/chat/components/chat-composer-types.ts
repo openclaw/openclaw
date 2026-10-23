@@ -36,7 +36,7 @@ import type { ComposerMicrophoneOwner } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";
 import type { ChatRunError, ChatRunUiStatus } from "../run-lifecycle.ts";
 import type { FallbackStatus } from "../tool-stream-contract.ts";
-import type { ChatActivityPillsProps } from "./chat-activity-pills.tsx";
+import type { ChatActivityPillsProps } from "./chat-activity-pills-types.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import type { ComposerEmojiMenu } from "./chat-composer-emoji.tsx";
 import type {
@@ -63,10 +63,7 @@ type ChatQueuedEditProps = {
 /** Destinations and owner facts not already carried by ChatProps. */
 type ChatMobileActivities = {
   onOpenSubagents?: NonNullable<ChatActivityPillsProps["subagents"]>["onOpen"];
-  goal?: Pick<
-    NonNullable<ChatActivityPillsProps["goal"]>,
-    "executionConfirmed" | "hidden" | "onOpen"
-  >;
+  goal?: Pick<NonNullable<ChatActivityPillsProps["goal"]>, "executionConfirmed" | "onOpen">;
   onOpenProgress?: NonNullable<ChatActivityPillsProps["progress"]>["onOpen"];
   onOpenPullRequest?: NonNullable<ChatActivityPillsProps["pullRequests"]>["onOpen"];
   /** Eligibility is decided by the publication owner, including retained outcomes. */
@@ -177,6 +174,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   sendShortcut?: ChatSendShortcut;
   followUpMode?: ControlUiFollowUpMode;
   pendingAttachmentReads?: number;
+  attachmentReadRevision?: number;
   getPendingAttachmentReads?: () => number;
   replyTarget?: ChatReplyTarget | null;
   gatewayClient?: GatewayBrowserClient | null;

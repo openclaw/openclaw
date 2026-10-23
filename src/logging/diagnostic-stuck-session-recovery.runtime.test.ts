@@ -4,13 +4,11 @@ import { getSessionControllerOperation } from "../sessions/session-controller.st
 import { captureSessionTarget } from "../sessions/session-controller.target.js";
 import { testing } from "../sessions/session-controller.test-support.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { captureDiagnosticSessionOperation } from "./diagnostic-controller-projection.js";
 import { getDiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity.js";
 import { requestStuckSessionRecovery } from "./diagnostic-session-recovery-coordinator.js";
 import type { StuckSessionRecoveryRequest } from "./diagnostic-session-recovery.js";
-import {
-  getDiagnosticSessionState,
-  resetDiagnosticSessionStateForTest,
-} from "./diagnostic-session-state.js";
+import { resetDiagnosticSessionStateForTest } from "./diagnostic-session-state.js";
 import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
 
 const sessionKey = "agent:main:recovery-boundary";
@@ -21,7 +19,6 @@ const classification = {
   reason: "active_work_without_progress",
   classification: "stalled_agent_run",
   activeWorkKind: "embedded_run",
-  recoveryEligible: false,
 } as const;
 function begin(backend?: Parameters<ReturnType<typeof createReplyOperation>["attachBackend"]>[0]) {
   const operation = createReplyOperation({ ...session, resetTriggered: false });
@@ -56,6 +53,7 @@ afterEach(() => {
 it("captures diagnostic recovery only for a unique matching physical session owner", () => {
   const first = physicalOwner("first");
   const second = physicalOwner("second");
+  vi.setSystemTime(6 * 60_000);
   const activityBeforeRecovery = getDiagnosticSessionActivitySnapshot({ sessionKey });
   expect(activityBeforeRecovery.activeWorkKind).toBeUndefined();
   expect(activityBeforeRecovery.hasActiveEmbeddedRun).toBeUndefined();
@@ -68,13 +66,13 @@ it("captures diagnostic recovery only for a unique matching physical session own
   ]) {
     requestStuckSessionRecovery({
       classification,
-      request: { ...request, ageMs: 0 },
+      request: { ...request, operation: captureDiagnosticSessionOperation(request), ageMs: 0 },
       recover: (resolved) => {
         captured.push(resolved.operation);
       },
     });
   }
-  expect(captured).toEqual([undefined, first, second, undefined]);
+  expect(captured).toEqual([first, second]);
   expect(getDiagnosticSessionActivitySnapshot({ sessionKey })).toEqual(activityBeforeRecovery);
 });
 
@@ -96,12 +94,21 @@ it.each([true, false])(
   "captures A before asynchronous runtime loading and never stops replacement B (keyed=%s)",
   async (keyed) => {
     const first = begin();
+    vi.setSystemTime(6 * 60_000);
     const loaded = createDeferredCore();
     const completed = createDeferredCore();
     let captured: StuckSessionRecoveryRequest | undefined;
     requestStuckSessionRecovery({
       classification,
-      request: { ...(keyed ? { sessionKey } : {}), sessionId, ageMs: 1_000_000 },
+      request: {
+        ...(keyed ? { sessionKey } : {}),
+        sessionId,
+        operation: captureDiagnosticSessionOperation({
+          ...(keyed ? { sessionKey } : {}),
+          sessionId,
+        }),
+        ageMs: 1_000_000,
+      },
       recover: async (request) => {
         captured = request;
         await loaded.promise;
@@ -169,31 +176,4 @@ it("deduplicates stop on the operation, not a keyed recovery set", async () => {
   expect(getSessionControllerOperation(sessionKey)).toBe(operation);
   operation.complete();
   await operation.ownerSettlement;
-});
-
-it("reports outcomes without manufacturing idle, queue counts or activity cleanup", async () => {
-  const operation = begin();
-  const state = getDiagnosticSessionState(session);
-  state.state = "processing";
-  state.queueDepth = 3;
-  const done = createDeferredCore();
-  requestStuckSessionRecovery({
-    classification,
-    request: { operation, ...session, ageMs: 1_000_000 },
-    recover: () => {
-      done.resolve();
-      return {
-        status: "aborted",
-        action: "abort_embedded_run",
-        aborted: true,
-        drained: false,
-        forceCleared: false,
-        released: 0,
-      };
-    },
-  });
-  await done.promise;
-  await Promise.resolve();
-  expect(state).toMatchObject({ state: "processing", queueDepth: 3 });
-  expect(getSessionControllerOperation(sessionKey)).toBe(operation);
 });

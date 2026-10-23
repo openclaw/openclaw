@@ -186,6 +186,8 @@ suite.define(() => {
           ).waitFor({ state: "visible" });
           expect(await primary.getAttribute("aria-expanded")).toBe("true");
           expect(await primary.textContent()).toContain("GPT-5.5");
+          // Close the open list first; it can drop down over the Decision row.
+          await page.keyboard.press("Escape");
           await openPicker(decision);
           expect(await option(decision, "openai/account-new").count()).toBe(0);
           expect(await decision.locator(".picker-select__trigger").textContent()).toContain("Jev");

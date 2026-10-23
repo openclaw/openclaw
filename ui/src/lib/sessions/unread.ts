@@ -45,9 +45,10 @@ export class SessionUnreadPatchGuard {
       this.activationObserved = true;
       this.activationMarkedUnreadAt = marker;
     }
-    this.observedRead = unread === false && marker === undefined;
+    // Preserve the read observation when newer activity arrives before settlement.
     // Optimistic reads and rollback publish synchronously before the request settles.
     if (this.pending) {
+      this.observedRead ||= unread === false && marker === undefined;
       return false;
     }
     if (unread === false) {
@@ -69,6 +70,7 @@ export class SessionUnreadPatchGuard {
       return false;
     }
     this.requested = true;
+    this.observedRead = false;
     this.pending = {};
     return true;
   }
@@ -78,7 +80,7 @@ export class SessionUnreadPatchGuard {
     const pending = this.pending;
     return (succeeded: boolean, error?: unknown) => {
       if (pending !== this.pending) {
-        return;
+        return false;
       }
       this.pending = null;
       this.requested = succeeded ? !this.observedRead : isPermanentUnreadAckFailure(error);
@@ -89,6 +91,7 @@ export class SessionUnreadPatchGuard {
         const delay = resolveGatewayReadRetryDelayMs(error, this.failures++);
         this.retryAt = Date.now() + Math.ceil(delay * (1 + Math.random() * 0.2));
       }
+      return true;
     };
   }
 }

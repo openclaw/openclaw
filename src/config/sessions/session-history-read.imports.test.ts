@@ -78,6 +78,21 @@ it("keeps lazy readers independent of unrelated runtime barrels", () => {
   ]);
 });
 
+it("keeps transcript target and exact-entry readers independent of entry mutation facades", () => {
+  expect(
+    findSourceImportBackedges(
+      [
+        "src/config/sessions/session-accessor.transcript-target.ts",
+        "src/config/sessions/session-entry-read-result.worker.ts",
+      ],
+      [
+        "src/config/sessions/session-accessor.entry.ts",
+        "src/config/sessions/session-accessor.sqlite-entry.ts",
+      ],
+    ),
+  ).toEqual([]);
+});
+
 const prewarm = vi.hoisted(() => ({
   read: vi.fn<(input: SessionTranscriptWorkerRequest) => Promise<unknown>>(),
   modules: Array.from({ length: 4 }, () => vi.fn(() => ({}))),

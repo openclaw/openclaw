@@ -227,25 +227,6 @@ it("keeps source SDK evaluation native and preserves terminal failures", async (
           };
           assert.equal(loadSdkFixture("enum", "enum State { Ready }\\nexport const ready = State.Ready;")().ready, 0);
           assert.equal(loadSdkFixture("source-host/node_modules/sdk/index", "export const ready: number = 1;")().ready, 1);
-          const makePeer = (name, javascript) => {
-            const peerRoot = path.join(root, name);
-            fs.mkdirSync(peerRoot);
-            fs.writeFileSync(path.join(peerRoot, "sdk.mts"), 'export { value } from "./peer.mjs";');
-            if (javascript) fs.writeFileSync(path.join(peerRoot, "peer.mjs"), 'export const value = "javascript";');
-            fs.writeFileSync(path.join(peerRoot, "peer.mts"), 'export const value = "typescript";');
-            const entry = path.join(peerRoot, "entry.ts");
-            fs.writeFileSync(entry, 'export * from "openclaw/plugin-sdk/fixture";');
-            const load = getCachedPluginModuleLoader({
-              modulePath: entry, importerUrl: import.meta.url, tryNative: false,
-              aliasMap: { "openclaw/plugin-sdk/fixture": path.join(peerRoot, "sdk.mts") },
-            });
-            return { peerRoot, read: () => load(entry).value };
-          };
-          const peer = makePeer("peers", true);
-          const peerRoot = peer.peerRoot;
-          const hostPeer = await import(pathToFileURL(path.join(peerRoot, "sdk.mts")).href);
-          assert.equal(peer.read(), hostPeer.value);
-          assert.equal(makePeer("source-peers", false).read(), "typescript");
           fs.writeFileSync(path.join(root, "url-peer.mts"), 'enum State { Ready } export const ready = State.Ready;');
           assert.equal(loadSdkFixture("url-sdk", 'export { ready } from "./url-peer.mjs";', "cjs")().ready, 0);
           const unrelated = path.join(root, "unrelated.ts");

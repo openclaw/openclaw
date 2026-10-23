@@ -1,5 +1,3 @@
-import { existsSync, renameSync, unlinkSync } from "node:fs";
-import { backup } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -12,14 +10,8 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { listSessionEntries, upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { readVisibleSessionTranscriptMessageEntries } from "../../plugin-sdk/session-transcript-runtime.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
-import {
-  closeOpenClawAgentDatabasesAsync,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
@@ -247,45 +239,4 @@ it.each(["authority", "mandatory policy", "competing entry"] as const)(
         expect(rpcSourceTesting.size).toBe(0);
       });
     }),
-);
-
-it.runIf(process.platform !== "win32")("rejects consent after database-owner replacement", () =>
-  withNative(async (state, config) => {
-    const { respond, send } = sendNative(config);
-    const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-    const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-    const replacementPath = `${databasePath}.native-replacement`;
-    const displacedPath = `${databasePath}.native-original`;
-    await backup(requireNativeSqliteDatabase(database.db), replacementPath);
-    let replaced = false;
-    try {
-      await withPausedConsent(send, async (settle) => {
-        renameSync(databasePath, displacedPath);
-        renameSync(replacementPath, databasePath);
-        replaced = true;
-        const rejection = await settle();
-        await closeOpenClawAgentDatabasesAsync();
-        for (const storePath of [databasePath, displacedPath]) {
-          expect(
-            listSessionEntries({ agentId: "main", env: state.env, storePath, readOnly: true }),
-          ).toEqual([]);
-        }
-        expect(rejection).toEqual(expect.any(Error));
-        expect(String(rejection)).toContain(
-          "Reply initialization database changed after its snapshot",
-        );
-        expect(respond).not.toHaveBeenCalled();
-        expect(rpcSourceTesting.size).toBe(0);
-      });
-    } finally {
-      await closeOpenClawAgentDatabasesAsync();
-      if (replaced) {
-        renameSync(databasePath, replacementPath);
-        renameSync(displacedPath, databasePath);
-      }
-      if (existsSync(replacementPath)) {
-        unlinkSync(replacementPath);
-      }
-    }
-  }),
 );

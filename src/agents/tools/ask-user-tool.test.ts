@@ -109,6 +109,28 @@ function ask(signal?: AbortSignal) {
   return createAskUserTool({ sessionKey: SESSION_KEY }).execute(TOOL_CALL_ID, validArgs, signal);
 }
 
+function settleOnCleanup(pending: Promise<unknown>, release: () => void) {
+  const settled = Promise.allSettled([pending]);
+  onTestFinished(async () => {
+    release();
+    await settled;
+  });
+}
+
+function steerReply(
+  steer: Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[0]["steer"],
+  text: string,
+  options: Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[2],
+  sessionKey = SESSION_KEY,
+) {
+  return steerActiveSessionWithOptionalDeliveryWait(
+    { steer, subscribe: vi.fn(() => () => undefined) },
+    text,
+    options,
+    sessionKey,
+  );
+}
+
 function expectCancelled(
   gateway: ReturnType<typeof gatewayStub>,
   questionId: string,
@@ -144,11 +166,11 @@ function requestedQuestionId(mock: ReturnType<typeof gatewayStub>["mock"]): stri
   return questionId;
 }
 
-beforeEach(() => {
+beforeEach(() =>
   onTestFinished(() => {
     vi.restoreAllMocks();
-  });
-});
+  }),
+);
 
 describe("ask_user", () => {
   it("reserves duplicate bare keys independently per agent", () => {
@@ -168,60 +190,37 @@ describe("ask_user", () => {
     expect(research?.questionId).not.toBe(ops?.questionId);
   });
 
-  it("uses the Gateway record when the executor has isolated runtime state", async () => {
-    const questions = normalizeAskUserParams(validArgs).questions;
-    const reservation = reservePrompt();
-    const gateway = gatewayStub({
-      "question.list": async (params) => {
-        expect(params).toEqual({});
-        return { questions: [{ id: reservation.questionId, status: "pending" }] };
-      },
-    });
-
-    await expect(waitForAskUserPromptReady(reservation.questionId, gateway.call)).resolves.toEqual(
-      questions,
-    );
-    await expect(isAskUserPromptPending(reservation.questionId, gateway.call)).resolves.toBe(true);
-  });
-
-  it("rejects prompt delivery after the Gateway question terminalizes", async () => {
-    const reservation = reservePrompt();
-    const gateway = gatewayStub({
-      "question.list": async () => ({
-        questions: [{ id: reservation.questionId, status: "expired" }],
-      }),
-    });
-
-    await expect(isAskUserPromptPending(reservation.questionId, gateway.call)).resolves.toBe(false);
-  });
-
-  it("retries a transient Gateway revalidation failure before delivering", async () => {
+  it.each([
+    ["isolated executor", "pending", true],
+    ["remote terminalization", "expired", false],
+    ["transient failure", "pending", true],
+    ["local terminalization", "pending", false],
+  ] as const)("revalidates prompt delivery: %s", async (scenario, status, expected) => {
     const reservation = reservePrompt();
     let attempts = 0;
     const gateway = gatewayStub({
-      "question.list": async () => {
-        attempts += 1;
-        if (attempts === 1) {
+      "question.list": async (params) => {
+        expect(params).toEqual({});
+        if (++attempts === 1 && scenario === "transient failure") {
           throw new Error("temporary Gateway disconnect");
         }
-        return { questions: [{ id: reservation.questionId, status: "pending" }] };
+        if (scenario === "local terminalization") {
+          cancelAskUserPromptDelivery(TOOL_CALL_ID, SESSION_KEY);
+        }
+        return { questions: [{ id: reservation.questionId, status }] };
       },
     });
-
-    await expect(isAskUserPromptPending(reservation.questionId, gateway.call)).resolves.toBe(true);
-    expect(attempts).toBe(2);
-  });
-
-  it("drops a prompt when local terminalization wins during Gateway revalidation", async () => {
-    const reservation = reservePrompt();
-    const gateway = gatewayStub({
-      "question.list": async () => {
-        cancelAskUserPromptDelivery(TOOL_CALL_ID, SESSION_KEY);
-        return { questions: [{ id: reservation.questionId, status: "pending" }] };
-      },
-    });
-
-    await expect(isAskUserPromptPending(reservation.questionId, gateway.call)).resolves.toBe(false);
+    if (scenario === "isolated executor") {
+      await expect(
+        waitForAskUserPromptReady(reservation.questionId, gateway.call),
+      ).resolves.toEqual(normalizeAskUserParams(validArgs).questions);
+    }
+    await expect(isAskUserPromptPending(reservation.questionId, gateway.call)).resolves.toBe(
+      expected,
+    );
+    if (scenario === "transient failure") {
+      expect(attempts).toBe(2);
+    }
   });
 
   it("expires prompt revalidation while the Gateway lookup remains stalled", async () => {
@@ -262,11 +261,7 @@ describe("ask_user", () => {
         sessionKey: "agent:main:executor-session",
       })
       .execute(toolCallId, validArgs);
-    const toolSettlement = Promise.allSettled([pending]);
-    onTestFinished(async () => {
-      finishWait.resolve({ status: "cancelled" });
-      await toolSettlement;
-    });
+    settleOnCleanup(pending, () => finishWait.resolve({ status: "cancelled" }));
     await vi.waitFor(() =>
       expect(gateway.mock.mock.calls.some(([method]) => method === "question.request")).toBe(true),
     );
@@ -382,11 +377,9 @@ describe("ask_user", () => {
           },
         },
       }).execute("call-direct-dispatch-abort", validArgs);
-      const toolSettlement = Promise.allSettled([pending]);
-      onTestFinished(async () => {
+      settleOnCleanup(pending, () => {
         finishWait.resolve(result);
         promptReleased.resolve();
-        await toolSettlement;
       });
       await promptStarted.promise;
       finishWait.resolve(result);
@@ -399,14 +392,11 @@ describe("ask_user", () => {
 
   it("leaves the prompt to a harness that already reserved one", async () => {
     const sessionKey = "agent:main:reserved-prompt";
-    const normalized = normalizeAskUserParams(validArgs);
-    const reservation = reserveAskUserPromptDelivery({
+    const reservation = reservePrompt({
       toolCallId: "call-reserved",
       sessionKey,
-      questions: normalized.questions,
-      timeoutSeconds: normalized.timeoutSeconds,
+      timeoutSeconds: normalizeAskUserParams(validArgs).timeoutSeconds,
     });
-    onTestFinished(() => cancelAskUserPromptDelivery("call-reserved", sessionKey));
     const sent: SentPrompt[] = [];
     registeredGateway({
       "question.waitAnswer": async () => ({ status: "expired" }),
@@ -464,11 +454,7 @@ describe("ask_user", () => {
       sessionKey: "agent:main:serialized",
     });
     const first = tool.execute("call-first", validArgs);
-    const toolSettlement = Promise.allSettled([first]);
-    onTestFinished(async () => {
-      finishWait.resolve({ status: "cancelled" });
-      await toolSettlement;
-    });
+    settleOnCleanup(first, () => finishWait.resolve({ status: "cancelled" }));
     await gateway.waitForCall("question.waitAnswer");
 
     await expect(tool.execute("call-second", validArgs)).rejects.toThrow(
@@ -493,11 +479,7 @@ describe("ask_user", () => {
       "question.resolve": async () => ({ status: "cancelled" }),
     });
     const pending = ask(controller.signal);
-    const toolSettlement = Promise.allSettled([pending]);
-    onTestFinished(async () => {
-      controller.abort();
-      await toolSettlement;
-    });
+    settleOnCleanup(pending, () => controller.abort());
     await gateway.waitForCall(method);
     expect(gateway.mock.mock.calls.some((call) => call[0] === method)).toBe(true);
     const questionId = requestedQuestionId(gateway.mock);
@@ -515,11 +497,9 @@ describe("ask_user", () => {
     });
     const controller = new AbortController();
     const pending = ask(controller.signal);
-    const toolSettlement = Promise.allSettled([pending]);
-    onTestFinished(async () => {
+    settleOnCleanup(pending, () => {
       controller.abort();
       finishRegistration.resolve({ id: reservation.questionId });
-      await toolSettlement;
     });
     await gateway.waitForCall("question.request");
 
@@ -551,21 +531,12 @@ describe("ask_user", () => {
       },
     });
     const pending = ask();
-    const toolSettlement = Promise.allSettled([pending]);
-    onTestFinished(async () => {
-      finishRegistration.resolve({ id: registeredQuestionId });
-      await toolSettlement;
-    });
+    settleOnCleanup(pending, () => finishRegistration.resolve({ id: registeredQuestionId }));
     await gateway.waitForCall("question.request");
     const questionId = requestedQuestionId(gateway.mock);
     const steer = vi.fn(async () => undefined);
 
-    await steerActiveSessionWithOptionalDeliveryWait(
-      { steer, subscribe: vi.fn(() => () => undefined) },
-      "Use this image",
-      { isInboundUserMessage: true, images: IMAGE_REPLY },
-      SESSION_KEY,
-    );
+    await steerReply(steer, "Use this image", { isInboundUserMessage: true, images: IMAGE_REPLY });
     finishRegistration.resolve({ id: questionId });
 
     expectSteered(steer, "Use this image", IMAGE_REPLY);
@@ -602,11 +573,7 @@ describe("ask_user", () => {
       },
     });
     const pending = ask();
-    const toolSettlement = Promise.allSettled([pending]);
-    onTestFinished(async () => {
-      finishWait.resolve({ status: "cancelled" });
-      await toolSettlement;
-    });
+    settleOnCleanup(pending, () => finishWait.resolve({ status: "cancelled" }));
     await gateway.waitForCall("question.waitAnswer");
 
     const foreignModule = (await import(
@@ -646,11 +613,7 @@ describe("ask_user", () => {
       },
     });
     const pending = ask();
-    const toolSettlement = Promise.allSettled([pending]);
-    onTestFinished(async () => {
-      firstWait.resolve({ status: "cancelled" });
-      await toolSettlement;
-    });
+    settleOnCleanup(pending, () => firstWait.resolve({ status: "cancelled" }));
     await vi.waitFor(() => expect(waitCalls).toBe(1));
 
     settleAskUserPromptDelivery(
@@ -681,11 +644,9 @@ describe("ask_user", () => {
     });
     const controller = new AbortController();
     const pending = ask(controller.signal);
-    const toolSettlement = Promise.allSettled([pending]);
-    onTestFinished(async () => {
+    settleOnCleanup(pending, () => {
       controller.abort();
       finishWait.resolve({ status: "cancelled" });
-      await toolSettlement;
     });
     await vi.waitFor(() =>
       expect(gateway.mock.mock.calls.some((call) => call[0] === "question.request")).toBe(true),
@@ -715,21 +676,16 @@ describe("ask_user", () => {
     const pending = createAskUserTool({
       sessionKey: "agent:main:claim",
     }).execute("call-claim", validArgs);
-    const toolSettlement = Promise.allSettled([pending]);
-    onTestFinished(async () => {
-      answer.resolve({ status: "cancelled" });
-      await toolSettlement;
-    });
+    settleOnCleanup(pending, () => answer.resolve({ status: "cancelled" }));
     await gateway.waitForCall("question.waitAnswer");
     expect(finishWait).toBeTypeOf("function");
     const questionId = requestedQuestionId(gateway.mock);
     const steer = vi.fn(async () => undefined);
-    const activeSession = { steer, subscribe: vi.fn(() => () => undefined) };
     const persistApproved = vi.fn(async () => undefined);
     const recorder = { persistApproved } as unknown as UserTurnTranscriptRecorder;
 
-    await steerActiveSessionWithOptionalDeliveryWait(
-      activeSession,
+    await steerReply(
+      steer,
       "A custom destination",
       {
         isInboundUserMessage: true,
@@ -775,32 +731,18 @@ describe("ask_user", () => {
       },
     });
     const pending = ask();
-    const toolSettlement = Promise.allSettled([pending]);
-    onTestFinished(async () => {
-      finishWait.resolve({ status: "cancelled" });
-      await toolSettlement;
-    });
+    settleOnCleanup(pending, () => finishWait.resolve({ status: "cancelled" }));
     await gateway.waitForCall("question.waitAnswer");
     const questionId = requestedQuestionId(gateway.mock);
     const steer = vi.fn(async () => undefined);
 
-    await steerActiveSessionWithOptionalDeliveryWait(
-      { steer, subscribe: vi.fn(() => () => undefined) },
-      "Use this image",
-      { isInboundUserMessage: true, images: IMAGE_REPLY },
-      SESSION_KEY,
-    );
+    await steerReply(steer, "Use this image", { isInboundUserMessage: true, images: IMAGE_REPLY });
 
     expectSteered(steer, "Use this image", IMAGE_REPLY);
     expectCancelled(gateway, questionId, "image-reply");
     if (cancelFails) {
       const followUpSteer = vi.fn(async () => undefined);
-      await steerActiveSessionWithOptionalDeliveryWait(
-        { steer: followUpSteer, subscribe: vi.fn(() => () => undefined) },
-        "Follow-up after image",
-        { isInboundUserMessage: true },
-        SESSION_KEY,
-      );
+      await steerReply(followUpSteer, "Follow-up after image", { isInboundUserMessage: true });
       expect(followUpSteer).not.toHaveBeenCalled();
     }
     await expect(pending).resolves.toMatchObject({
@@ -830,24 +772,15 @@ describe("ask_user", () => {
       },
     });
     const pending = ask();
-    const toolSettlement = Promise.allSettled([pending]);
-    onTestFinished(async () => {
-      finishWait.resolve({ status: "cancelled" });
-      await toolSettlement;
-    });
+    settleOnCleanup(pending, () => finishWait.resolve({ status: "cancelled" }));
     await gateway.waitForCall("question.waitAnswer");
     const steer = vi.fn(async () => undefined);
     const persistApproved = vi.fn(async () => undefined);
 
-    await steerActiveSessionWithOptionalDeliveryWait(
-      { steer, subscribe: vi.fn(() => () => undefined) },
-      "1",
-      {
-        isInboundUserMessage: true,
-        userTurnTranscriptRecorder: { persistApproved } as unknown as UserTurnTranscriptRecorder,
-      },
-      SESSION_KEY,
-    );
+    await steerReply(steer, "1", {
+      isInboundUserMessage: true,
+      userTurnTranscriptRecorder: { persistApproved } as unknown as UserTurnTranscriptRecorder,
+    });
 
     expect(steer).not.toHaveBeenCalled();
     expect(persistApproved).toHaveBeenCalledOnce();
@@ -866,20 +799,11 @@ describe("ask_user", () => {
       },
     });
     const pending = ask();
-    const toolSettlement = Promise.allSettled([pending]);
-    onTestFinished(async () => {
-      finishWait.resolve({ status: "cancelled" });
-      await toolSettlement;
-    });
+    settleOnCleanup(pending, () => finishWait.resolve({ status: "cancelled" }));
     await gateway.waitForCall("question.waitAnswer");
     const steer = vi.fn(async () => undefined);
 
-    await steerActiveSessionWithOptionalDeliveryWait(
-      { steer, subscribe: vi.fn(() => () => undefined) },
-      "Follow-up message",
-      { isInboundUserMessage: true },
-      SESSION_KEY,
-    );
+    await steerReply(steer, "Follow-up message", { isInboundUserMessage: true });
 
     expectSteered(steer, "Follow-up message");
     finishWait.resolve({ status: "cancelled" });

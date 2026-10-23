@@ -3,7 +3,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo, Show } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { pathForRoute } from "../../app-route-paths.ts";
-import type { SolidRouteProps } from "../../app-route-types.ts";
+import type { SolidRouteProps } from "../../app-route-types.tsx";
 import { hasNativeBrowserBridge } from "../../app/native-browser-host.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
@@ -138,6 +138,9 @@ function ConfigBody(props: {
           nowMs={props.state.nowMs()}
           configBusy={props.state.mutationDisabled()}
           updateBusy={props.state.updateBusy()}
+          statusRead={props.state.updates.read()}
+          onCheckStatus={props.state.updates.refresh}
+          captureCommandPresentation={props.state.updates.captureCommandPresentation}
         />
       </Show>
       <Show when={props.pageId === "memory"}>
@@ -155,6 +158,7 @@ function ConfigBody(props: {
       </Show>
       <Show when={props.pageId === "talk"}>
         <TalkSettingsPage
+          presentationRetired={props.config.presentationRetired}
           configObject={props.configObject}
           mutationDisabled={props.state.mutationDisabled()}
           buildEditor={() => editor("talk", t("tabs.talk"))}
@@ -208,7 +212,7 @@ export function ConfigPage(props: ConfigPageProps) {
     <openclaw-config-page ref={(element) => (host = element)}>
       <Show when={props.pageId !== "memory"}>
         <SettingsPageHeader
-          title={titleForRoute(props.pageId)}
+          title={titleForRoute(props.pageId, t)}
           subtitle={renderConfigPageSubtitle(props.pageId)}
         />
       </Show>

@@ -16,7 +16,6 @@ type CanvasDocumentCreateInput = {
   id?: string;
   html: string;
   title?: string;
-  surface?: "assistant_message" | "tool_card" | "sidebar";
   retentionScope?: string;
   /** Serve with a CSP sandbox header so direct opens get an opaque origin. */
   cspSandbox?: "scripts";
@@ -194,7 +193,7 @@ export async function createCanvasDocument(
     id,
     kind: "html_bundle",
     ...(input.title?.trim() ? { title: input.title.trim() } : {}),
-    ...(input.surface ? { surface: input.surface } : {}),
+    surface: "assistant_message",
     ...(input.retentionScope ? { retentionScope: input.retentionScope } : {}),
     ...(input.cspSandbox ? { cspSandbox: input.cspSandbox } : {}),
     createdAt: new Date().toISOString(),

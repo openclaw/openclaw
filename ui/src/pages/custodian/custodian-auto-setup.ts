@@ -59,6 +59,10 @@ export class CustodianAutoSetup {
 
   constructor(private readonly changed: () => void) {}
 
+  get operationEpoch(): number {
+    return this.epoch;
+  }
+
   get ready(): boolean {
     return this.result?.status === "configured" || this.result?.status === "activated";
   }
@@ -216,10 +220,14 @@ export class CustodianAutoSetup {
       await this.wizard.requestCancellation();
     } catch (error) {
       if (epoch === this.epoch) {
-        this.error = formatUiError(error, t("custodian.autoSetup.failed"));
-        this.changed();
+        this.reportError(error);
       }
     }
+  }
+
+  reportError(error: unknown): void {
+    this.error = formatUiError(error, t("custodian.autoSetup.failed"));
+    this.changed();
   }
 
   setWizardValue(value: unknown): void {

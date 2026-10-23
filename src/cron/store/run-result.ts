@@ -7,8 +7,7 @@ import {
 } from "../run-history-detail.js";
 import { createCronExecutionId } from "../run-id.js";
 import { failureNotificationDeliveryFromJobState } from "../service/failure-alerts.js";
-import type { CronEvent } from "../service/state.js";
-import type { CronJob } from "../types.js";
+import type { CronEvent, CronJob } from "../types.js";
 import type { CronRunHistoryWrite } from "./run-history.types.js";
 import type { CronRunFinalizationOutcome } from "./runtime-worker.types.js";
 

@@ -33,7 +33,6 @@ it("keeps Details in the mobile host through opening, parking, and returning", a
       resize() {},
       keyboardVisible: false,
       onComposerEditingChange() {},
-      onViewportChange() {},
     });
     updateHost = (patch) => setHost((previous) => ({ ...previous, ...patch }));
     return createComponent(ChatDetails, {

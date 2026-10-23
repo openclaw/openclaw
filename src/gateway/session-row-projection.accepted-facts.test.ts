@@ -25,7 +25,6 @@ import {
 import { applySessionEntryExactReplacements } from "../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
 import { removeSessionMember } from "../config/sessions/session-sharing-store.native.js";
-import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { InternalSessionEntry, SessionAcpMeta } from "../config/sessions/types.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -34,7 +33,6 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { registerOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   emitSessionsChanged,
   flushPendingSessionsChangedEvents,
@@ -48,14 +46,14 @@ import { setSessionActivitySummaryState } from "./session-activity-summary-state
 import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import { defaultPersistDigest } from "./session-observer-model.js";
 import * as projectionWork from "./session-projection-work.js";
-import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import * as databaseFactsRead from "./session-row-database-facts.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { isColdArchivedSessionRow } from "./session-row-projection-archive.js";
 import { ready } from "./session-row-projection-record.js";
 import { withAcceptedSuffix } from "./session-row-projection.accepted-facts.test-support.js";
-import { createSessionRowProjection } from "./session-row-projection.js";
+import { watchRowFacts } from "./session-row-projection.read-fixture.test-support.js";
+import { withSessionRowProjectionState } from "./session-row-projection.test-support.js";
 import { prepareSessionMutationFacts } from "./session-sharing-preparation.js";
 import * as rowInputs from "./session-utils-row.js";
 
@@ -94,7 +92,7 @@ function sharedFactReads(reads: {
 }
 
 it("keeps Board and shared facts while transcript receipts advance summary freshness", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  await withSessionRowProjectionState(async (create) => {
     const cfg = {
       agents: {
         entries: { main: {} },
@@ -139,85 +137,65 @@ it("keeps Board and shared facts while transcript receipts advance summary fresh
       name: "status",
       content: { kind: "html", html: "<p>Current</p>" },
     });
-    const release = retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({
+    const projection = await create({
       cfg,
       modelCatalog: [],
     });
     const query = { agentId: scope.agentId, key: scope.sessionKey };
-    try {
-      await projection.ensureMaterialized();
-      const rowReads: string[] = [];
-      const readDatabases = history.withSessionHistoryWorkerDatabases;
-      vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-        (databases, consume, lane) =>
-          readDatabases(
-            databases,
-            (owners) =>
-              consume(
-                owners.map((owner) => ({
-                  ...owner,
-                  readRowFacts(input) {
-                    rowReads.push(...input.sessionKeys);
-                    return owner.readRowFacts(input);
-                  },
-                })),
-              ),
-            lane,
-          ),
-      );
-      const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-      await persistSessionTranscriptTurn(scope, {
-        ...transcriptMessage("user", "First input"),
-        touchSessionEntry: false,
-      });
-      await projection.ensureMaterialized();
-      const watermark = readSessionTranscriptWatermark(scope);
-      replaceSessionEntrySync(scope, {
-        ...entry,
-        label: "Published label",
-        activitySummary: activitySummary(scope.sessionId, "First input", watermark, 2, {
-          lifecycleRevision: entry.lifecycleRevision,
-          coveredMessages: 2,
-          totalMessages: 2,
-        }),
-      });
-      await projection.ensureMaterialized();
-      expect(projection.snapshot(query).row).toMatchObject({
-        label: "Published label",
-        activitySummary: { text: "First input", state: "current" },
-      });
-      emitSessionTranscriptUpdate({ target: scope });
-      await projection.ensureMaterialized();
-      expect(projection.snapshot(query).row?.activitySummary?.state).toBe("current");
-      expect(rowReads).toEqual([]);
-      await persistSessionTranscriptTurn(scope, {
-        ...transcriptMessage("assistant", "Second message"),
-        touchSessionEntry: false,
-      });
-      await projection.ensureMaterialized();
-      expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
-      expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
-        hasBoard: true,
-        acpMeta: acp,
-        activitySummaryWatermark: readSessionTranscriptWatermark(scope),
-      });
-      await persistSessionTranscriptTurn(scope, {
-        ...transcriptMessage("assistant", "Combined entry and transcript"),
-      });
-      await projection.ensureMaterialized();
-      expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
-      expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
-        hasBoard: true,
-        activitySummaryWatermark: readSessionTranscriptWatermark(scope),
-      });
-      expect(rowReads).toEqual([]);
-      expect(sharedFactReads(sharedReads)).toEqual([]);
-    } finally {
-      projection.dispose();
-      release();
-    }
-  });
+    await projection.ensureMaterialized();
+    const rowReads: string[] = [];
+    watchRowFacts((owner) => (input) => {
+      rowReads.push(...input.sessionKeys);
+      return owner.readRowFacts(input);
+    });
+    const sharedReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+    await persistSessionTranscriptTurn(scope, {
+      ...transcriptMessage("user", "First input"),
+      touchSessionEntry: false,
+    });
+    await projection.ensureMaterialized();
+    const watermark = readSessionTranscriptWatermark(scope);
+    replaceSessionEntrySync(scope, {
+      ...entry,
+      label: "Published label",
+      activitySummary: activitySummary(scope.sessionId, "First input", watermark, 2, {
+        lifecycleRevision: entry.lifecycleRevision,
+        coveredMessages: 2,
+        totalMessages: 2,
+      }),
+    });
+    await projection.ensureMaterialized();
+    expect(projection.snapshot(query).row).toMatchObject({
+      label: "Published label",
+      activitySummary: { text: "First input", state: "current" },
+    });
+    emitSessionTranscriptUpdate({ target: scope });
+    await projection.ensureMaterialized();
+    expect(projection.snapshot(query).row?.activitySummary?.state).toBe("current");
+    expect(rowReads).toEqual([]);
+    await persistSessionTranscriptTurn(scope, {
+      ...transcriptMessage("assistant", "Second message"),
+      touchSessionEntry: false,
+    });
+    await projection.ensureMaterialized();
+    expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
+    expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
+      hasBoard: true,
+      acpMeta: acp,
+      activitySummaryWatermark: readSessionTranscriptWatermark(scope),
+    });
+    await persistSessionTranscriptTurn(scope, {
+      ...transcriptMessage("assistant", "Combined entry and transcript"),
+    });
+    await projection.ensureMaterialized();
+    expect(projection.snapshot(query).row?.activitySummary?.state).toBe("stale");
+    expect(projection.describe(query)?.retainedDatabaseFacts).toMatchObject({
+      hasBoard: true,
+      activitySummaryWatermark: readSessionTranscriptWatermark(scope),
+    });
+    expect(rowReads).toEqual([]);
+    expect(sharedFactReads(sharedReads)).toEqual([]);
+  }, true);
 });
 
 it("refreshes activity state without rematerializing accepted rows or reading databases", async () => {
@@ -407,10 +385,9 @@ it.each([
 it.each(["projection retirement", "ACP read failure"] as const)(
   "does not accept facts after an awaited %s",
   async (change) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    await withSessionRowProjectionState(async (create) => {
       const scope = { agentId: "main", sessionKey: "agent:main:acp:late-facts" };
-      const releaseForeground = retainSessionListForegroundWork();
-      const projection = await createSessionRowProjection({
+      const projection = await create({
         cfg: { agents: { entries: { main: {} } } },
         modelCatalog: [],
       });
@@ -464,19 +441,16 @@ it.each(["projection retirement", "ACP read failure"] as const)(
       } finally {
         release.resolve();
         await Promise.allSettled(reading ? [reading] : []);
-        projection.dispose();
-        releaseForeground();
       }
-    });
+    }, true);
   },
 );
 
 it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as const)(
   "handles an exact cold archive suffix during %s",
   async (mode) => {
-    await withOpenClawTestState(
-      { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
-      async () => {
+    await withSessionRowProjectionState(
+      async (create) => {
         const cfg = {
           agents: {
             entries: { main: {} },
@@ -525,7 +499,6 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
           };
           replaceSessionEntrySync(suffixScope, entries[1]);
         }
-        const releaseForeground = retainSessionListForegroundWork();
         const releaseBulk = createDeferredCore();
         const registryPending = createDeferredCore();
         const releaseRegistry = createDeferredCore();
@@ -544,7 +517,7 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
             },
           }),
         );
-        const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+        const projection = await create({ cfg, modelCatalog: [] });
         let recovery: Promise<unknown> | undefined;
         let page: Promise<string[]> | undefined;
         let bulk: Promise<void> | undefined;
@@ -585,22 +558,11 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
               .map((row) => row.entry.updatedAt),
           ).toEqual([2, 2]);
           const reads: SessionRowDatabaseFacts[][] = [];
-          const readDatabases = history.withSessionHistoryWorkerDatabases;
-          vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-            (databases, consume) =>
-              readDatabases(databases, (owners) =>
-                consume(
-                  owners.map((owner) => ({
-                    ...owner,
-                    async readRowFacts(input) {
-                      const result = await owner.readRowFacts(input);
-                      reads.push(structuredClone(result.rows));
-                      return result;
-                    },
-                  })),
-                ),
-              ),
-          );
+          watchRowFacts((owner) => async (input) => {
+            const result = await owner.readRowFacts(input);
+            reads.push(structuredClone(result.rows));
+            return result;
+          });
           let elapsed = 0;
           const clock = vi.spyOn(performance, "now").mockImplementation(() => elapsed);
           const readInputs = rowInputs.readSessionRowInputs;
@@ -717,10 +679,10 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
           releaseExact.resolve();
           releaseBulk.resolve();
           await Promise.allSettled([recovery, page, bulk, projection.ensureMaterialized()]);
-          projection.dispose();
-          releaseForeground();
         }
       },
+      true,
+      { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
     );
   },
 );

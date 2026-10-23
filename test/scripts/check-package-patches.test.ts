@@ -1,23 +1,18 @@
 import { execFileSync } from "node:child_process";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { collectPackagePatchViolations } from "../../scripts/check-package-patches.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createNestedGitEnv, writeJsonFile } from "../helpers/temp-repo.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function write(root: string, file: string, content: string) {
-  const target = path.join(root, file);
-  mkdirSync(path.dirname(target), { recursive: true });
-  writeFileSync(target, content, "utf8");
-}
 
 function writePatches(root: string, file: string, patches: readonly (readonly [string, string])[]) {
   const header = file === "pnpm-workspace.yaml" ? "packages:\n  - ." : "lockfileVersion: '9.0'";
   const rows = patches.map(([key, value]) => `  "${key}": "${value}"`);
-  write(root, file, `${header}\npatchedDependencies:\n${rows.join("\n")}\n`);
+  fixtureFiles(root).write(file, `${header}\npatchedDependencies:\n${rows.join("\n")}\n`);
 }
 
 function violation(file: string, kind: string, detail: string) {
@@ -52,7 +47,7 @@ it("allows approved pnpm patches together", () => {
   const hashes = approvedPatches.map(([specifier]) => [specifier, hash] as const);
   writePatches(dir, "pnpm-lock.yaml", hashes);
   for (const [, patchPath] of approvedPatches) {
-    write(dir, patchPath, "diff\n");
+    fixtureFiles(dir).write(patchPath, "diff\n");
   }
   git(dir, ["add", "pnpm-workspace.yaml", "pnpm-lock.yaml", "patches"]);
 
@@ -66,8 +61,8 @@ it.each([
 ])("rejects unapproved workspace patch %s -> %s", (specifier, patchPath) => {
   const dir = makeRepo();
   writePatches(dir, "pnpm-workspace.yaml", [[specifier, patchPath]]);
-  write(dir, patchPath, "diff\n");
-  write(dir, "fixtures/fixture.patch", "diff\n");
+  fixtureFiles(dir).write(patchPath, "diff\n");
+  fixtureFiles(dir).write("fixtures/fixture.patch", "diff\n");
   git(dir, ["add", "pnpm-workspace.yaml", "patches", "fixtures"]);
 
   expect(collectPackagePatchViolations(dir)).toEqual([
@@ -84,8 +79,7 @@ it.each([false, true])(
     writeJsonFile(path.join(dir, "package.json"), {
       pnpm: { patchedDependencies: { "nested@1.0.0": "patches/nested.patch" } },
     });
-    write(
-      dir,
+    fixtureFiles(dir).write(
       "pnpm-lock.yaml",
       `${withToolchain ? "---\nlockfileVersion: '9.0'\npatchedDependencies:\n  toolchain@1.0.0: toolhash\n---\n" : ""}lockfileVersion: '9.0'
 patchedDependencies:

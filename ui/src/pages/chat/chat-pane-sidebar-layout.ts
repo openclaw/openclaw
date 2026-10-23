@@ -36,7 +36,7 @@ type LazyElementKey = "region" | "detail-panel" | SidebarSlotId;
 type LazyElement = readonly [tagName: string, loadModule: () => Promise<unknown>];
 
 const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
-  dashboard: ["openclaw-board-view", () => import("../../components/board/board-view.ts")],
+  dashboard: ["openclaw-board-view", () => import("../../components/board/board-view.tsx")],
   region: [
     "openclaw-chat-sidebar-region",
     () => import("./components/chat-sidebar-region.runtime.tsx"),
@@ -50,14 +50,17 @@ const LAZY_SIDEBAR_ELEMENTS: Partial<Record<LazyElementKey, LazyElement>> = {
   workspace: ["openclaw-chat-files-panel", () => import("./components/chat-files-panel.tsx")],
   terminal: [
     "openclaw-terminal-panel",
-    () => import("../../components/terminal/terminal-panel-registration.ts"),
+    () => import("../../components/terminal/terminal-panel-registration.tsx"),
   ],
   "link-reader": [
     "openclaw-link-reader-panel",
     () => import("../../components/link-reader-panel.tsx"),
   ],
   browser: ["openclaw-browser-panel", () => import("../../components/browser/browser-panel.ts")],
-  desktop: ["openclaw-desktop-panel", () => import("../../components/desktop/desktop-panel.ts")],
+  desktop: [
+    "openclaw-desktop-panel",
+    () => import("../../components/desktop/desktop-panel-solid.tsx"),
+  ],
   portal: ["openclaw-portals-page", () => import("../portals/portals-page.tsx")],
   companion: ["openclaw-chat-session-rail", () => import("./components/chat-session-rail.tsx")],
   processes: [

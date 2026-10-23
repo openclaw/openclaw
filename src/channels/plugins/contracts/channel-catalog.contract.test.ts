@@ -1,8 +1,9 @@
-// Channel catalog contract tests cover bundled and registry-backed channel catalog invariants.
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createOpenClawCodingToolsInternalAsync } from "../../../agents/agent-tools.js";
+import { resolveRuntimeChannelPromptContext } from "../../../agents/runtime-capabilities.js";
+import { buildAgentSystemPrompt } from "../../../agents/system-prompt.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../../config/io.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isPrereleaseSemverVersion } from "../../../infra/npm-registry-spec.js";
@@ -18,20 +19,14 @@ import {
   describeOfficialFallbackChannelCatalogContract,
 } from "./test-helpers/channel-catalog-contract.js";
 
-describeChannelCatalogEntryContract({
-  channelId: "msteams",
-  npmSpec: "@openclaw/msteams",
-  alias: "teams",
-});
-
-const whatsappMeta = {
-  id: "whatsapp",
-  label: "WhatsApp",
-  selectionLabel: "WhatsApp (QR link)",
-  detailLabel: "WhatsApp Web",
-  docsPath: "/channels/whatsapp",
-  blurb: "works with your own number; recommend a separate phone + eSIM.",
-};
+for (const [channelId, npmSpec, alias] of [
+  ["msteams", "@openclaw/msteams", "teams"],
+  ["wecom", "@wecom/wecom-openclaw-plugin@2026.7.2", "wework"],
+  ["yuanbao", "openclaw-plugin-yuanbao@2.18.2", "yb"],
+  ["openclaw-zaloclawbot", "@zalo-platforms/openclaw-zaloclawbot@0.1.4", "zaloclawbot"],
+] as const) {
+  describeChannelCatalogEntryContract({ channelId, npmSpec, alias });
+}
 
 const whatsappPackageJson = JSON.parse(
   fs.readFileSync(path.join(process.cwd(), "extensions", "whatsapp", "package.json"), "utf8"),
@@ -45,43 +40,28 @@ const whatsappVersion = whatsappPackageJson.version;
 if (!whatsappNpmSpec || !whatsappVersion) {
   throw new Error("missing package metadata for whatsapp");
 }
-const whatsappOfficialFallbackNpmSpec = isPrereleaseSemverVersion(whatsappVersion)
-  ? `${whatsappNpmSpec}@${whatsappVersion}`
-  : whatsappNpmSpec;
-
-describeBundledMetadataOnlyChannelCatalogContract({
+const whatsappCatalog = {
   pluginId: "whatsapp",
+  channelId: "whatsapp",
   packageName: "@openclaw/whatsapp",
   npmSpec: "@openclaw/whatsapp",
-  meta: whatsappMeta,
-  defaultChoice: "npm",
-});
-
+  meta: {
+    id: "whatsapp",
+    label: "WhatsApp",
+    selectionLabel: "WhatsApp (QR link)",
+    detailLabel: "WhatsApp Web",
+    docsPath: "/channels/whatsapp",
+    blurb: "works with your own number; recommend a separate phone + eSIM.",
+  },
+};
+describeBundledMetadataOnlyChannelCatalogContract({ ...whatsappCatalog, defaultChoice: "npm" });
 describeOfficialFallbackChannelCatalogContract({
-  channelId: "whatsapp",
-  npmSpec: whatsappOfficialFallbackNpmSpec,
-  meta: whatsappMeta,
-  packageName: "@openclaw/whatsapp",
+  ...whatsappCatalog,
+  npmSpec: isPrereleaseSemverVersion(whatsappVersion)
+    ? `${whatsappNpmSpec}@${whatsappVersion}`
+    : whatsappNpmSpec,
   externalNpmSpec: "@vendor/whatsapp-fork",
   externalLabel: "WhatsApp Fork",
-});
-
-describeChannelCatalogEntryContract({
-  channelId: "wecom",
-  npmSpec: "@wecom/wecom-openclaw-plugin@2026.7.2",
-  alias: "wework",
-});
-
-describeChannelCatalogEntryContract({
-  channelId: "yuanbao",
-  npmSpec: "openclaw-plugin-yuanbao@2.18.2",
-  alias: "yb",
-});
-
-describeChannelCatalogEntryContract({
-  channelId: "openclaw-zaloclawbot",
-  npmSpec: "@zalo-platforms/openclaw-zaloclawbot@0.1.4",
-  alias: "zaloclawbot",
 });
 
 describe("ask_user channel catalogs", () => {
@@ -93,21 +73,18 @@ describe("ask_user channel catalogs", () => {
 
   beforeEach(async () => {
     setRuntimeConfigSnapshot(config);
-    setActivePluginRegistry(
-      createTestRegistry(
-        await Promise.all(
-          ["discord", "imessage", "mattermost", "signal", "slack", "telegram", "whatsapp"].map(
-            async (pluginId) => {
-              const plugin = await getBundledChannelPluginAsync(pluginId);
-              if (!plugin) {
-                throw new Error(`Missing bundled channel plugin for ${pluginId}`);
-              }
-              return { pluginId, plugin, source: "test" };
-            },
-          ),
-        ),
+    const channels = await Promise.all(
+      ["discord", "imessage", "mattermost", "signal", "slack", "telegram", "whatsapp"].map(
+        async (pluginId) => {
+          const plugin = await getBundledChannelPluginAsync(pluginId);
+          if (!plugin) {
+            throw new Error(`Missing bundled channel plugin for ${pluginId}`);
+          }
+          return { pluginId, plugin, source: "test" };
+        },
       ),
     );
+    setActivePluginRegistry(createTestRegistry(channels));
   });
 
   afterEach(() => {
@@ -143,6 +120,49 @@ describe("ask_user channel catalogs", () => {
         },
       });
       expect(tools.some((tool) => tool.name === "ask_user")).toBe(available);
+    },
+  );
+});
+
+describe("Feishu system prompt button guidance", () => {
+  beforeEach(async () => {
+    const plugin = await getBundledChannelPluginAsync("feishu");
+    if (!plugin) {
+      throw new Error("Missing bundled Feishu channel plugin");
+    }
+    setActivePluginRegistry(createTestRegistry([{ pluginId: "feishu", plugin, source: "test" }]));
+  });
+
+  afterEach(() => resetPluginRuntimeStateForTest());
+
+  it.each([{ capabilities: undefined }, { capabilities: ["inlineButtons"] }])(
+    "does not advertise unsupported callbacks with capabilities $capabilities",
+    ({ capabilities }) => {
+      const cfg: OpenClawConfig = {
+        channels: {
+          feishu: {
+            enabled: true,
+            appId: "cli_test",
+            appSecret: "synthetic-secret",
+            ...(capabilities ? { capabilities } : {}),
+          },
+        },
+      };
+      const context = resolveRuntimeChannelPromptContext({ cfg, channel: "feishu" });
+      const prompt = buildAgentSystemPrompt({
+        workspaceDir: "/workspace",
+        toolNames: ["message"],
+        runtimeInfo: {
+          channel: context.runtimeChannel,
+          capabilities: context.runtimeCapabilities,
+          customInlineButtonHint: context.customInlineButtonHint,
+        },
+        messageToolHints: context.messageToolHints,
+      });
+
+      expect(prompt).not.toContain("feishu.capabilities.inlineButtons");
+      expect(prompt).not.toContain('"action":{"type":"callback"');
+      expect(prompt).toContain("ask questions in plain text");
     },
   );
 });

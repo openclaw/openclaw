@@ -76,7 +76,6 @@ type ResolvePairingSetupOptions = {
   forceSecure?: boolean;
   bootstrapProfile?: DeviceBootstrapProfileInput;
   issuedBootstrap?: { token: string; expiresAtMs: number; setupId: string };
-  pairingBaseDir?: string;
   runCommandWithTimeout?: PairingSetupCommandRunner;
   networkInterfaces?: () => ReturnType<typeof os.networkInterfaces>;
   localTlsFingerprint?: string;
@@ -556,7 +555,6 @@ export async function resolvePairingSetupFromConfig(
   const issued =
     options.issuedBootstrap ??
     (await issueDevicePairSetupBootstrapToken({
-      baseDir: options.pairingBaseDir,
       profile: issuedBootstrapProfile,
     }));
 

@@ -594,7 +594,8 @@ suite.define(() => {
     );
     const pinnedSessionKey = "agent:main:session-pinned";
     const createdOrder = [pinnedSessionKey, ...createdSessionKeys];
-    const updatedOrder = [...createdSessionKeys.toReversed(), pinnedSessionKey];
+    // Personal pins lead the list in their Pinned section regardless of sort mode.
+    const updatedOrder = [pinnedSessionKey, ...createdSessionKeys.toReversed()];
     const sessions = {
       count: createdSessionKeys.length + 1,
       defaults: { contextTokens: null, model: "gpt-5.5", modelProvider: "openai" },
@@ -628,12 +629,12 @@ suite.define(() => {
     await page
       .locator('.sidebar-recent-session[data-session-key="agent:main:session-a"]')
       .waitFor({ timeout: 10_000 });
-    // Personal shortcuts do not add a row to the ten-row Sessions page.
+    // Pinned rows sit above, and do not occupy, the ten-row Sessions page.
     const pinnedLink = page.locator(
-      `.sidebar-rail [data-sidebar-entry="session:${pinnedSessionKey}"] a`,
+      `[data-session-section="pinned"] .sidebar-recent-session[data-session-key="${pinnedSessionKey}"] a.sidebar-recent-session__link`,
     );
     await pinnedLink.waitFor();
-    await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 10));
+    await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder.slice(0, 11));
     await page.getByRole("button", { name: "Show more" }).click();
     await expect.poll(() => sidebarSessionOrder(page)).toEqual(createdOrder);
 

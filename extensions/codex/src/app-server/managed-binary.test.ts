@@ -2,6 +2,7 @@ import { access, chmod, mkdir, symlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { embeddedAgentLog as log } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import * as pathExistence from "openclaw/plugin-sdk/path-existence-runtime";
 import * as runner from "openclaw/plugin-sdk/process-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { SemVer } from "semver";
@@ -31,7 +32,10 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   root = tempDirs.make("openclaw-codex-");
 });
-afterEach(() => setPluginRoot(undefined));
+afterEach(() => {
+  setPluginRoot(undefined);
+  vi.restoreAllMocks();
+});
 function startOptions(managedCommandOrder?: StartOptions["managedCommandOrder"]): StartOptions {
   return {
     transport: "stdio",
@@ -186,9 +190,9 @@ describe("managed Codex app-server binary", () => {
       codexConfigToml: null,
       requirementsToml: null,
     }).start;
-    const pathExists = vi.fn(async () => false);
+    const pathExists = vi.spyOn(pathExistence, "canAccess").mockResolvedValue(false);
     expect(explicit).toMatchObject({ commandSource: "config", command: "/operator/config-codex" });
-    await expect(resolveOptions(explicit, { pathExists })).resolves.toBe(explicit);
+    await expect(resolveOptions(explicit)).resolves.toBe(explicit);
     expect(pathExists).not.toHaveBeenCalled();
   });
 
@@ -211,17 +215,18 @@ describe("managed Codex app-server binary", () => {
     async ({ order, desktopCommands }) => {
       const launcher = await writePackageLauncher(root);
       const commands = order === "package-only" ? [launcher] : [...desktopCommands, launcher];
+      vi.spyOn(pathExistence, "canAccess").mockImplementation(async (candidate) =>
+        candidate.startsWith("/Applications/")
+          ? desktopCommands.some((command) => command === candidate)
+          : access(candidate).then(
+              () => true,
+              () => false,
+            ),
+      );
       await expect(
         resolveOptions(startOptions(order), {
           platform: "darwin",
           pluginRoot: root,
-          pathExists: async (candidate) =>
-            candidate.startsWith("/Applications/")
-              ? desktopCommands.some((command) => command === candidate)
-              : access(candidate).then(
-                  () => true,
-                  () => false,
-                ),
         }),
       ).resolves.toEqual({
         ...startOptions(order),
@@ -481,7 +486,8 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
       const missing = availability === "missing";
       const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
       const pathExists = async (command: string) => !missing || command !== selected.nativeCommand;
-      await expect(resolveStart({ pathExists })).resolves.toMatchObject(
+      vi.spyOn(pathExistence, "canAccess").mockImplementation(pathExists);
+      await expect(resolveStart()).resolves.toMatchObject(
         missing
           ? { command: packaged }
           : {
@@ -499,7 +505,7 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
         );
       } else {
         expect(nativeCommand(selected.command)).toBe(selected.nativeCommand);
-        await expect(resolveStart({ pathExists, preferInstalled: false })).resolves.toMatchObject({
+        await expect(resolveStart({ preferInstalled: false })).resolves.toMatchObject({
           command: packaged,
         });
       }
@@ -510,12 +516,12 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
     const packaged = await writePackageLauncher(root);
     const desktopInstalled = async (command: string) =>
       command.includes("Codex.app") || command === packaged;
+    const accessPath = vi.spyOn(pathExistence, "canAccess").mockImplementation(desktopInstalled);
 
     await expect(
       resolveStart(
         {
           platform: "darwin",
-          pathExists: desktopInstalled,
         },
         "desktop-first",
       ),
@@ -526,7 +532,6 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
     await expect(
       resolveVersion("desktop-first", {
         platform: "darwin",
-        pathExists: desktopInstalled,
       }),
     ).resolves.toBe(VERSION);
     // Neither the start nor discovery began a PATH selection.
@@ -536,10 +541,10 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
     await installNpmCodex();
     vi.stubEnv("PATH", bin);
     vi.spyOn(installedProbe, "probeCodexAppServerHandshake").mockResolvedValue(NEWER);
+    accessPath.mockResolvedValue(false);
     await expect(
       resolveVersion("desktop-first", {
         platform: "darwin",
-        pathExists: async () => false,
       }),
     ).resolves.toBe(NEWER);
   });
@@ -558,12 +563,12 @@ describe.skipIf(process.platform === "win32")("installed Codex selection", () =>
       installedState.selected = selected;
       const warn = vi.spyOn(log, "warn").mockImplementation(() => undefined);
       const gone = missing === "launcher" ? selected.command : selected.nativeCommand;
+      vi.spyOn(pathExistence, "canAccess").mockImplementation(async (command) => command !== gone);
 
       await expect(
         resolveOptions(startOptions(), {
           platform: "linux",
           pluginRoot,
-          pathExists: async (command) => command !== gone,
         }),
       ).resolves.toMatchObject({ command: packaged });
       await expect(resolveVersion("package-first")).resolves.toBe(VERSION);

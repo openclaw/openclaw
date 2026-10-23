@@ -9,11 +9,7 @@ import {
 import type { ChatQueueItem, ChatQueueDisplayItem } from "../../../lib/chat/chat-types.ts";
 import { updateHumanMentions, type HumanMentionInput } from "../../../lib/chat/human-mentions.ts";
 import { formatSenderLabel } from "../../../lib/chat/sender-label.ts";
-import {
-  clearCompositionEnd,
-  isComposingKeyboardEvent,
-  recordCompositionEnd,
-} from "../../../lib/ime.ts";
+import { clearCompositionEnd, recordCompositionEnd } from "../../../lib/ime.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { getChatAttachmentPreviewUrl } from "../attachment-payload-store.ts";
@@ -21,6 +17,7 @@ import { isQueuedSendInlineState } from "../chat-progress.ts";
 import { isSteerableQueuedMessage } from "../chat-queue.ts";
 import { isChatSendReconnecting } from "../chat-send-presentation.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
+import { handleQueueEditKeydown } from "./chat-composer-keydown.ts";
 import type { ChatComposerProps } from "./chat-composer-types.ts";
 
 type ChatQueueProps = {
@@ -503,6 +500,7 @@ function ChatQueueItem(rowProps: {
       {editing() ? (
         <textarea
           class="chat-queue__edit-input"
+          enterkeyhint="enter"
           rows="1"
           ref={[
             (element) => mountQueueEditInput(element, edit()?.editingText ?? item().text),
@@ -536,19 +534,7 @@ function ChatQueueItem(rowProps: {
             }
             queueMentionInputs.delete(textarea);
           }}
-          onKeyDown={(event: KeyboardEvent) => {
-            if (isComposingKeyboardEvent(event)) {
-              return;
-            }
-            if (event.key === "Escape") {
-              event.preventDefault();
-              event.stopPropagation();
-              edit()?.onCancel();
-            } else if (event.key === "Enter" && !event.shiftKey) {
-              event.preventDefault();
-              edit()?.onEditSubmit?.();
-            }
-          }}
+          onKeyDown={(event) => handleQueueEditKeydown(event, edit())}
           onCompositionEnd={recordCompositionEnd}
           onKeyUp={clearCompositionEnd}
           onBlur={clearCompositionEnd}

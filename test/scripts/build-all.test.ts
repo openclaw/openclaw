@@ -181,6 +181,15 @@ function buildCacheFixture(cache: Partial<BuildCache> = {}, label = "cached") {
   return { rootDir, inputPath, outputPath, step, params, lookup, publish };
 }
 
+function expectChildEnv(
+  invocations: ReturnType<typeof resolveBuildAllStep>[],
+  env: NodeJS.ProcessEnv,
+) {
+  for (const invocation of invocations) {
+    expect(invocation.options.env).toMatchObject(env);
+  }
+}
+
 describe("resolveBuildAllStep", () => {
   it("pins one generated timestamp across every child build", () => {
     const commit = "0123456789abcdef0123456789abcdef01234567";
@@ -189,12 +198,8 @@ describe("resolveBuildAllStep", () => {
       () => new Date("2026-07-10T12:34:56.789Z"),
       () => commit,
     );
-    const uiInvocation = resolveBuildAllStep(getBuildAllStep(STEP.ui), {
-      env: buildEnv,
-    });
-    const buildInfoInvocation = resolveBuildAllStep(getBuildAllStep(STEP.info), {
-      env: buildEnv,
-    });
+    const uiInvocation = resolveBuildAllStep(getBuildAllStep(STEP.ui), { env: buildEnv });
+    const buildInfoInvocation = resolveBuildAllStep(getBuildAllStep(STEP.info), { env: buildEnv });
     expect(uiInvocation.options.env).toMatchObject({
       FOO: "bar",
       GIT_COMMIT: commit,
@@ -217,9 +222,7 @@ describe("resolveBuildAllStep", () => {
           ...getBuildAllStep(STEP.compile),
           args: ["--import", importUrl, ...getBuildAllStep(STEP.compile).args.slice(2)],
         },
-        {
-          env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: heapMb },
-        },
+        { env: { OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: heapMb } },
         ["--import", importUrl, "scripts/tsdown-build.mts", "--concurrency", concurrency],
       );
     },
@@ -401,22 +404,15 @@ describe("resolveBuildAllSteps", () => {
         memoryLimit: buildMemoryLimit(16),
       });
       expect(result.exitCode).toBe(0);
-      expect(
-        JSON.parse(fs.readFileSync(path.join(cwd, "dist/.runtime-postbuildstamp"), "utf8"))
-          .staticAssets,
-      ).toBe(false);
+      expect(readJson(path.join(cwd, "dist/.runtime-postbuildstamp")).staticAssets).toBe(false);
     },
   );
 
   it("invalidates old runtime stamps before a failed declaration-cache restoration", async () => {
     const cwd = tempDirs.make("openclaw-restore-stamps-");
-    fs.mkdirSync(path.join(cwd, "dist"));
     const stamps = [".buildstamp", ".runtime-postbuildstamp"].map((name) =>
-      path.join(cwd, "dist", name),
+      writeFixture(cwd, `dist/${name}`, "previous valid generation"),
     );
-    for (const stamp of stamps) {
-      fs.writeFileSync(stamp, "previous valid generation");
-    }
     await expect(
       runBuildAllSteps("pluginSdkStrictSmoke", {
         cwd,
@@ -480,10 +476,10 @@ describe("resolveBuildAllSteps", () => {
 
     expect(result.exitCode).toBe(0);
     expect(tsdownInvocations).toHaveLength(4);
-    for (const invocation of tsdownInvocations) {
-      expect(invocation.options.env.OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB).toBe("4352");
-      expect(invocation.options.env.NODE_OPTIONS).toBe("--max-old-space-size=4352");
-    }
+    expectChildEnv(tsdownInvocations, {
+      OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: "4352",
+      NODE_OPTIONS: "--max-old-space-size=4352",
+    });
     expect(restoreCache).toHaveBeenCalledOnce();
     expect(executionOrder).toEqual([
       "cache:tsdown-ai",
@@ -555,10 +551,10 @@ describe("resolveBuildAllSteps", () => {
       expect(actual.status, actual.stderr).toBe(0);
       expect(expected.status, expected.stderr).toBe(0);
       expect(Number(actual.stdout)).toBe(Number(expected.stdout));
-      for (const invocation of invocations) {
-        expect(invocation.options.env.NODE_OPTIONS).toBe(nodeOptions);
-        expect(invocation.options.env.OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB).toBe(String(heapMb));
-      }
+      expectChildEnv(invocations, {
+        NODE_OPTIONS: nodeOptions,
+        OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB: String(heapMb),
+      });
       expect(logger.warn).toHaveBeenCalledTimes(warns ? 1 : 0);
     },
   );
@@ -732,46 +728,38 @@ describe("resolveBuildAllSteps", () => {
         "runtime-postbuild-stamp",
       ]);
       expect(postbuild).not.toHaveBeenCalled();
-      expect(fs.existsSync(path.join(cwd, ".artifacts/run-node-build.lock"))).toBe(false);
-      expect(fs.existsSync(path.join(cwd, ".artifacts/dist-artifacts.lock/owner.json"))).toBe(
-        false,
-      );
+      expect(
+        ["run-node-build.lock", "dist-artifacts.lock/owner.json"].map((file) =>
+          fs.existsSync(path.join(cwd, ".artifacts", file)),
+        ),
+      ).toEqual([false, false]);
     },
   );
   it.each([
-    { name: "ordinary build", profile: "full", env: {}, runtimeOnly: false, skipDts: undefined },
-    {
-      name: "explicit runtime build overrides ambient declarations",
-      profile: "runtime",
-      env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
-      runtimeOnly: true,
-      skipDts: "1",
-    },
-    {
-      name: "runtime override",
-      profile: "package",
-      env: { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" },
-      runtimeOnly: true,
-      skipDts: "1",
-    },
-    {
-      name: "legacy updater marker",
-      profile: "full",
-      env: { OPENCLAW_UPDATE_IN_PROGRESS: "1" },
-      runtimeOnly: false,
-      skipDts: undefined,
-    },
-    {
-      name: "explicit declarations during update",
-      profile: "package",
-      env: { OPENCLAW_UPDATE_IN_PROGRESS: "1", OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
-      runtimeOnly: false,
-      skipDts: "0",
-    },
-  ])(
-    "honors $name in selected steps and compiler children",
-    async ({ profile, env: overrides, runtimeOnly, skipDts }) => {
-      const env = { OPENCLAW_DEV_SOURCE_ROOT: "/serving-checkout", ...overrides };
+    ["ordinary build", "full", {}, false, undefined],
+    [
+      "explicit runtime build overrides ambient declarations",
+      "runtime",
+      { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
+      true,
+      "1",
+    ],
+    ["runtime override", "package", { OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "1" }, true, "1"],
+    ["legacy updater marker", "full", { OPENCLAW_UPDATE_IN_PROGRESS: "1" }, false, undefined],
+    [
+      "explicit declarations during update",
+      "package",
+      { OPENCLAW_UPDATE_IN_PROGRESS: "1", OPENCLAW_RUN_NODE_SKIP_DTS_BUILD: "0" },
+      false,
+      "0",
+    ],
+  ] as const)(
+    "honors %s in selected steps and compiler children",
+    async (_name, profile, overrides, runtimeOnly, skipDts) => {
+      const env: NodeJS.ProcessEnv = {
+        OPENCLAW_DEV_SOURCE_ROOT: "/serving-checkout",
+        ...overrides,
+      };
       const originalEnv = { ...env };
       const runner = buildRunner();
       const result = await runner.run(profile, { cacheEnabled: false, env });
@@ -800,11 +788,10 @@ describe("resolveBuildAllSteps", () => {
           compiler === runtimeCompiler ? "1" : skipDts,
         );
       }
-      for (const invocation of invocations) {
-        expect(invocation.options.env.OPENCLAW_DEV_SOURCE_ROOT).toBe(
+      expectChildEnv(invocations, {
+        OPENCLAW_DEV_SOURCE_ROOT:
           env.OPENCLAW_UPDATE_IN_PROGRESS === "1" ? process.cwd() : "/serving-checkout",
-        );
-      }
+      });
       expect(env).toEqual(originalEnv);
     },
   );
@@ -1032,9 +1019,7 @@ describe("resolveBuildStepCacheState", () => {
     const cachedFile = path.join(restore.outputRoot!, "dist/plugin-sdk/current.d.ts");
     const restoredFile = path.join(target.rootDir, "dist/plugin-sdk/current.d.ts");
     expect(fs.statSync(restoredFile).ino).not.toBe(fs.statSync(cachedFile).ino);
-    expect(fs.readFileSync(path.join(target.rootDir, "dist/plugin-sdk/current.d.ts"), "utf8")).toBe(
-      "export declare const current: true;",
-    );
+    expect(readText(restoredFile)).toBe("export declare const current: true;");
     expect(fs.existsSync(removedDts)).toBe(false);
     expect(readText(removedJs)).toBe("runtime");
     writeBuildCacheInputs(target.rootDir);

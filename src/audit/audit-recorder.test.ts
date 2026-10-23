@@ -56,59 +56,34 @@ function emitMessage(conversationKind: "direct" | "group") {
 }
 
 describe("message audit recorder", () => {
-  it("keeps message events off by default policy", async () => {
+  it.each([
+    ["off", ["direct"], []],
+    ["direct", ["group", "direct"], ["direct"]],
+    ["all", ["group"], ["group"]],
+  ] as const)("filters messages in %s mode", async (messages, conversations, accepted) => {
     const inputs: AuditEventInput[] = [];
     const recorder = createAuditEventRecorder({
       scheduler: createTestGatewayScheduler(),
-      getConfig: () => ({ logging: { audit: { messages: "off" } } }),
+      getConfig: () => ({ logging: { audit: { messages } } }),
       writer: captureWriter(inputs),
     });
     const unsubscribe = onTrustedMessageAuditEvent(recorder.recordMessage);
-
-    emitMessage("direct");
-
-    unsubscribe();
-    await recorder.stop();
-    expect(inputs).toEqual([]);
-  });
-
-  it("records only known direct conversations in direct mode", async () => {
-    const inputs: AuditEventInput[] = [];
-    const recorder = createAuditEventRecorder({
-      scheduler: createTestGatewayScheduler(),
-      getConfig: () => ({ logging: { audit: { messages: "direct" } } }),
-      writer: captureWriter(inputs),
-    });
-    const unsubscribe = onTrustedMessageAuditEvent(recorder.recordMessage);
-
-    emitMessage("group");
-    emitMessage("direct");
-
-    unsubscribe();
-    await recorder.stop();
-    expect(inputs).toHaveLength(1);
-    expect(inputs[0]).toMatchObject({
-      kind: "message",
-      conversationKind: "direct",
-      sourceId: expect.stringMatching(/^message:/u),
-      sourceSequence: 1,
-    });
-  });
-
-  it("records group metadata only in all mode", async () => {
-    const inputs: AuditEventInput[] = [];
-    const recorder = createAuditEventRecorder({
-      scheduler: createTestGatewayScheduler(),
-      getConfig: () => ({ logging: { audit: { messages: "all" } } }),
-      writer: captureWriter(inputs),
-    });
-    const unsubscribe = onTrustedMessageAuditEvent(recorder.recordMessage);
-
-    emitMessage("group");
-
-    unsubscribe();
-    await recorder.stop();
-    expect(inputs[0]).toMatchObject({ kind: "message", conversationKind: "group" });
+    try {
+      conversations.forEach(emitMessage);
+    } finally {
+      unsubscribe();
+      await recorder.stop();
+    }
+    expect(inputs).toEqual(
+      accepted.map((conversationKind, index) =>
+        expect.objectContaining({
+          kind: "message",
+          conversationKind,
+          sourceId: expect.stringMatching(/^message:/u),
+          sourceSequence: index + 1,
+        }),
+      ),
+    );
   });
 });
 

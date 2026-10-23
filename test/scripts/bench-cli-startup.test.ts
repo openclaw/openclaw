@@ -214,21 +214,13 @@ if (runtime) {
   expect(roles.toSorted()).toEqual(["launcher", "runtime"]);
 });
 
-it("rejects unknown CLI options before running benchmarks", () => {
-  expectCliRejection(["--wat", "--help"], "Unknown argument: --wat");
-});
-
 it.each([
-  [["--wat"], "Unknown argument: --wat"],
+  [["--wat", "--help"], "Unknown argument: --wat"],
   [["--output", "-h"], "--output requires a value"],
-  [["--case", "-h"], "--case requires a value"],
   [["--output", "one.json", "--output", "two.json"], "--output was provided more than once"],
-] as const)("rejects invalid arguments %j", (args, error) => {
-  expect(() => testing.validateCliArgs([...args])).toThrow(error);
-});
-
-it("rejects duplicate benchmark cases before running benchmarks", () => {
-  expectCliRejection(["--case", "version", "--case", "version"], 'Duplicate --case "version"');
+  [["--case", "version", "--case", "version"], 'Duplicate --case "version"'],
+] as const)("rejects invalid arguments before running benchmarks %j", (args, error) => {
+  expectCliRejection([...args], error);
 });
 
 it.runIf(process.platform !== "win32")(

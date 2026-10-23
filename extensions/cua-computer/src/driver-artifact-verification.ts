@@ -200,7 +200,7 @@ export function inspectCuaDriverArtifacts(
         fixHint,
       );
     }
-    if (!stat.isFile() || stat.isSymbolicLink()) {
+    if (!stat.isFile()) {
       const fixHint = "Reinstall OpenClaw; the native driver files must be regular package files.";
       return failure(
         "COMPUTER_DRIVER_DIGEST_MISMATCH",

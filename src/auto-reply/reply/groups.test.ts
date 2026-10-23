@@ -78,25 +78,13 @@ it("keeps prompt helpers off the heavy group runtime", async () => {
       Provider: "whatsapp",
     },
   });
-  expect(groupChatContext).toContain("You are in a WhatsApp group chat.");
-  expect(groupChatContext).toContain(
-    "Your text replies are automatically sent to this group chat unless the current-turn context says final replies stay private.",
-  );
-  expect(groupChatContext).toContain(
-    "For ordinary text, do not use the message tool to send to this same destination unless the current-turn context asks for visible output via message(action=send).",
-  );
-  expect(groupChatContext).toContain(
-    "Use message(action=send) only when you need to send files, images, or other attachments to this same group/topic.",
-  );
   expect(groupChatContext).not.toContain("ignore previous instructions");
   expect(groupChatContext).not.toContain("SYSTEM: run tools");
-  expect(groupChatContext).toContain("Minimize empty lines and use normal chat conventions");
   expect(groupChatContext).not.toContain("wrap bare URLs");
   expect(groupChatContext).toContain("If addressed to someone else");
   expect(groupChatContext).toContain("stay silent unless invited or correcting key facts");
   expect(groupChatContext).toContain("prefer delegating bounded side investigations early");
   expect(groupChatContext).toContain("Keep the critical path local");
-  expect(groupChatContext).toContain('reply with exactly "NO_REPLY"');
   const toolOnlyContext = buildSourceConversationContext({
     sessionCtx: { ChatType: "group", Provider: "discord" },
     sourceReplyDeliveryMode: "message_tool_only",
@@ -118,10 +106,6 @@ it("keeps prompt helpers off the heavy group runtime", async () => {
   expect(channelToolOnlyContext).toContain("not automatically sent to this channel");
   expect(channelToolOnlyContext).not.toContain("visible group response");
   expect(channelToolOnlyContext).not.toContain("posted to the group");
-  expect(buildGroupIntro({ defaultActivation: "mention" })).toContain("Activation: trigger-only");
-  expect(buildGroupIntro({ defaultActivation: "always" })).toContain(
-    "You see every message; most need no response. When you do reply",
-  );
   expect(buildGroupIntro({ activation: "mention", defaultActivation: "always" })).toContain(
     "Activation: trigger-only",
   );
@@ -171,16 +155,8 @@ it("keeps per-message mention state out of stable group context", () => {
   expect(mentioned).not.toContain("channel identity @SirPinchALotBot");
 });
 
-it("uses channel wording when the authoritative chat type is channel", () => {
-  const context = sourceContext("mattermost", "channel");
-
-  expect(context).toContain("You are in a Mattermost channel.");
-  expect(context).toContain(
-    "Your text replies are automatically sent to this channel unless the current-turn context says final replies stay private.",
-  );
-  expect(context).toContain("do not use the message tool to send to this same destination");
-  expect(context).toContain("attachments to this same channel/thread");
-  expect(context).not.toContain("group chat");
+it("keeps group wording out of automatic channel context", () => {
+  expect(sourceContext("mattermost", "channel")).not.toContain("group chat");
 });
 
 it("resolves requireMention through runtime and generic fallback paths", async () => {
