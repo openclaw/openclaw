@@ -1391,6 +1391,28 @@ pair. Compare paired differences; keep outside load samples with the results.
 This isolates the worker-rotation mechanism; it does not replay model streaming
 or establish which historical operation started or ended a production episode.
 
+## Measure managed workspace reuse at turn startup
+
+The workspace computation driver's `startup` scenario calls the managed sandbox
+workspace owner again for each sample, including both directions of checkpoint
+synchronization. It uses 32 tracked files per directory, changes the requested
+number of guest files before each sample, and verifies their canonical contents
+and settled recovery state afterward.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/bench-workspace-computation.ts \
+  --scenarios startup --sizes 10000 --concurrency 1 --file-bytes 128 \
+  --changed-files 1 --runs 10 --warmup 1 --output /path/to/report.json
+```
+
+Prepare matching fixtures sequentially with `--prepare-root`, then measure them
+with `--reuse-root`. Use the shared quiet-slot lock and guard for concurrent
+baseline/candidate pairs, swap CPU assignments, and pass the same `--start-at`
+timestamp. The driver reports latency, CPU, RSS, event-loop delay and GC samples.
+Initial projection creation happens before measurement: this measures reuse,
+not cold container provisioning or chat time to first model request. Use the
+Gateway chat workload separately for those end-to-end timings.
+
 ## Measure history pages and checkout diffs
 
 Prepare a team-shape fixture offline, then add this workload's small synthetic

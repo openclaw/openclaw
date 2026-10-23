@@ -346,7 +346,7 @@ export async function scanActualWorkspaceManifest(
   };
   const addIncludedPath = async (
     relative: string,
-    includedNodes: ReadonlySet<string>,
+    includedParents: ReadonlySet<string>,
     derivedOnlyDirectories: ReadonlySet<string>,
   ): Promise<"included" | "derived-only" | "absent"> => {
     if (
@@ -370,12 +370,10 @@ export async function scanActualWorkspaceManifest(
       return "absent";
     }
     if (stats.isDirectory() && !stats.isSymbolicLink()) {
-      if (params.preserveDirectories?.has(relative)) {
+      if (params.preserveDirectories?.has(relative) || includedParents.has(relative)) {
         addEntry({ path: relative, type: "directory" });
         return "included";
       }
-      let hasDerivedEntry = false;
-      let hasIncludedEntry = false;
       for await (const entry of await fs.opendir(absolute)) {
         scanSignal.throwIfAborted();
         const child = `${relative}/${entry.name}`;
@@ -387,16 +385,11 @@ export async function scanActualWorkspaceManifest(
           ) ||
           derivedOnlyDirectories.has(child)
         ) {
-          hasDerivedEntry = true;
-        } else if (includedNodes.has(child)) {
-          hasIncludedEntry = true;
+          return "derived-only";
         }
       }
-      if (hasIncludedEntry || !hasDerivedEntry) {
-        addEntry({ path: relative, type: "directory" });
-        return "included";
-      }
-      return "derived-only";
+      addEntry({ path: relative, type: "directory" });
+      return "included";
     }
     return (await addLeaf(relative, absolute, stats)) ? "included" : "absent";
   };
@@ -448,7 +441,7 @@ export async function scanActualWorkspaceManifest(
     };
   };
   if (params.includePaths) {
-    const includedNodes = new Set<string>();
+    const includedParents = new Set<string>();
     const derivedOnlyDirectories = new Set<string>();
     const paths = [...params.includePaths]
       .map((relative) => ({ relative, depth: relative.split("/").length }))
@@ -464,9 +457,9 @@ export async function scanActualWorkspaceManifest(
       }
       await runScans(start, end, async (index) => {
         const { relative } = paths[index]!;
-        const state = await addIncludedPath(relative, includedNodes, derivedOnlyDirectories);
+        const state = await addIncludedPath(relative, includedParents, derivedOnlyDirectories);
         if (state === "included") {
-          includedNodes.add(relative);
+          includedParents.add(path.posix.dirname(relative));
         } else if (state === "derived-only") {
           derivedOnlyDirectories.add(relative);
         }
