@@ -31,6 +31,8 @@ export function parseTeamShapeOptions(argv: string[]) {
       "long-transcript-entries": { type: "string" },
       "long-transcript-sessions": { type: "string" },
       "worktree-files": { type: "string" },
+      "worktree-install-failure": { type: "boolean" },
+      "worktree-cold-commits": { type: "string" },
       "nested-repository": { type: "boolean" },
       "github-options-connected": { type: "boolean" },
       port: { type: "string" },
@@ -77,11 +79,18 @@ export function parseTeamShapeOptions(argv: string[]) {
   }
   const projects = integer("projects", 12);
   const worktreeFiles = integer("worktree-files", 0);
+  const worktreeColdCommits = integer("worktree-cold-commits", 0);
   if (worktreeFiles > 500_000) {
     throw new Error("--worktree-files must not exceed 500000 files");
   }
-  if ((worktreeFiles > 0 || values["nested-repository"]) && projects === 0) {
-    throw new Error("--worktree-files and --nested-repository require at least one project");
+  if (
+    (worktreeFiles > 0 ||
+      worktreeColdCommits > 0 ||
+      values["nested-repository"] ||
+      values["worktree-install-failure"]) &&
+    projects === 0
+  ) {
+    throw new Error("Worktree fixture options require at least one project");
   }
   if (values["github-options-connected"] && projects === 0) {
     throw new Error("--github-options-connected requires at least one project");
@@ -101,6 +110,8 @@ export function parseTeamShapeOptions(argv: string[]) {
     longTranscriptEntries,
     longTranscriptSessions,
     worktreeFiles,
+    worktreeColdCommits,
+    worktreeInstallFailure: values["worktree-install-failure"] ?? false,
     nestedRepository: values["nested-repository"] ?? false,
     githubOptionsConnected: values["github-options-connected"] ?? false,
     port,
@@ -215,6 +226,8 @@ async function main() {
   --seed 967 --now <epoch-ms> --transcript-mib 64
   --long-transcript-entries 0 --long-transcript-sessions 4
   --worktree-files 0 --nested-repository
+  --worktree-cold-commits 0  Add same-tree commits for cold dependency-template measurements.
+  --worktree-install-failure  Add a synthetic pnpm package that cannot install in the probe image.
   --github-options-connected  Register synthetic GitHub origins for dashboard measurements.
   --launch --port 40967    Start an isolated loopback dev Gateway after generation.
 State is synthetic and must not exist. Existing state is never overwritten.

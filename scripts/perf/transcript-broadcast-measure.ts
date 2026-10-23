@@ -27,6 +27,7 @@ import { prepareSessionEventMetrics } from "../../src/gateway/session-event-metr
 import { encodePngRgba } from "../../src/media/png-encode.js";
 import { GatewaySessionRowEvents } from "../../ui/src/api/gateway-session-row-events.ts";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
+import { writeProbeMcpServer } from "../e2e/lib/mcp-code-mode-probe-server.js";
 import {
   readMockUserText,
   summarizeMockInferenceRequest,
@@ -76,6 +77,8 @@ const { values } = parseArgs({
     "worker-snapshots": { type: "boolean", default: false },
     "baseline-owners": { type: "boolean", default: false },
     "stress-tools": { type: "boolean", default: false },
+    "attempt-setup-image": { type: "string" },
+    "cold-session-rounds": { type: "string", default: "0" },
     "stress-session-store": { type: "boolean", default: false },
     "transcript-hydration-counts": { type: "boolean", default: false },
     "operator-access-policy": { type: "boolean", default: false },
@@ -358,6 +361,21 @@ if (
   );
 }
 const rounds = integer(values.rounds, "--rounds");
+const coldSessionRounds = integer(values["cold-session-rounds"], "--cold-session-rounds", 0);
+if (
+  (coldSessionRounds || values["attempt-setup-image"]) &&
+  (scenario !== "chat.send" ||
+    values["stress-tools"] ||
+    values["session-event-wake"] ||
+    historyTurns)
+) {
+  throw new Error(
+    "Attempt setup measurements require direct chat.send without stress tools or seeded history",
+  );
+}
+if (coldSessionRounds > rounds) {
+  throw new Error("--cold-session-rounds must not exceed --rounds");
+}
 const durationMs = integer(values["duration-ms"], "--duration-ms");
 const warmupMs = integer(values["warmup-ms"], "--warmup-ms", 0);
 const roundIntervalMs = integer(values["round-interval-ms"], "--round-interval-ms");
@@ -601,6 +619,13 @@ if (values["github-options-connected"] && fixture.githubOptionsConnected !== tru
 const output = path.join(root, `broadcast-measure-${Date.now()}`);
 mkdirSync(output);
 const project = Array.isArray(fixture.projectWorktrees) ? fixture.projectWorktrees[0] : undefined;
+const coldBaseRefs =
+  isRecord(project) && Array.isArray(project.coldBaseRefs)
+    ? project.coldBaseRefs.filter((ref: unknown): ref is string => typeof ref === "string")
+    : [];
+if (values["attempt-setup-image"] && coldBaseRefs.length < coldSessionRounds) {
+  throw new Error("Regenerate the fixture with --worktree-cold-commits >= --cold-session-rounds");
+}
 const fixtureSessionCount = typeof fixture.sessionCount === "number" ? fixture.sessionCount : 0;
 const patchKeys =
   scenario === "sessions.patch"
@@ -618,7 +643,7 @@ if (values["mixed-rpc"] && fixtureSessionCount < 1) {
 }
 let stressWorktree: string | undefined;
 let diffControlOriginal: string | undefined;
-if (values["stress-tools"] || values["mixed-rpc"]) {
+if (values["stress-tools"] || values["mixed-rpc"] || values["attempt-setup-image"]) {
   if (!isRecord(project) || typeof project.path !== "string") {
     throw new Error("stress tools and mixed RPCs require a fixture generated with --projects >= 1");
   }
@@ -865,6 +890,51 @@ module.exports = { id, register(api) {
     load: { paths: [plugin.pluginsDir] },
   };
 }
+if (values["attempt-setup-image"]) {
+  cfg.tools.toolSearch = { enabled: false };
+  cfg.tools.sandbox = { tools: { allow: ["*"] } };
+  cfg.agents.defaults.sandbox = {
+    mode: "all",
+    backend: "podman",
+    scope: "session",
+    workspaceAccess: "rw",
+    workspaceRoot: path.join(root, "sandboxes"),
+    docker: {
+      image: values["attempt-setup-image"],
+      containerPrefix: `bench-attempt-${port}-`,
+      network: "none",
+      cpus: 1,
+      memory: "512m",
+    },
+  };
+  const plugin = writePluginFixtures(output, { count: 1, activationOnStartup: true });
+  writeFileSync(
+    path.join(plugin.pluginsDir, plugin.pluginIds[0]!, "index.cjs"),
+    `module.exports = { id: ${JSON.stringify(plugin.pluginIds[0])}, register(api) {
+      api.registerTool({ name: "benchmark_probe", label: "Benchmark probe",
+        description: "Read a synthetic benchmark fact.", parameters: { type: "object", properties: {} },
+        execute: async () => ({ content: [{ type: "text", text: "synthetic-plugin-ready" }] }) });
+    } };\n`,
+  );
+  cfg.plugins = {
+    ...cfg.plugins,
+    enabled: true,
+    allow: [...new Set([...(cfg.plugins?.allow ?? []), ...plugin.pluginIds])],
+    load: { paths: [plugin.pluginsDir] },
+  };
+  const serverPath = path.join(output, "attempt-setup-mcp.mjs");
+  await writeProbeMcpServer(serverPath);
+  cfg.mcp = {
+    servers: {
+      benchmark: {
+        transport: "stdio",
+        command: process.execPath,
+        args: [serverPath],
+        enabled: true,
+      },
+    },
+  };
+}
 const authorityPreload = path.join(output, "authority-counts-preload.mjs");
 if (values["authority-counts"]) {
   // Source observation belongs to the rig; the production owners expose no benchmark hooks.
@@ -1080,6 +1150,9 @@ if (trustedProxyScenario) {
   };
 }
 const toolPaths = Array.from({ length: retentionScenario ? 3 : 1 }, (_, index) => {
+  if (values["attempt-setup-image"]) {
+    return "README.md";
+  }
   const file = path.join(root, "workspace", `synthetic-tool-input-${index}.txt`);
   writeFileSync(
     file,
@@ -1402,6 +1475,7 @@ const expectedHistoricalReasoning =
           ),
       )
     : [];
+const attemptSetupCatalog = new Set<string>();
 const mock = createServer((req, res) => {
   if (req.url === "/health") {
     res.end("ok");
@@ -1467,6 +1541,24 @@ const mock = createServer((req, res) => {
               .split("\n")
               .some((line) => stripInboundMetadata(line).trim() === primaryMessage)
           : stripInboundMetadata(lastUser).trim().split("\n")[0] === primaryMessage);
+    if (primary && values["attempt-setup-image"]) {
+      const tools = isRecord(body) && Array.isArray(body.tools) ? body.tools : [];
+      const names = new Set(
+        tools.flatMap((tool: unknown) => {
+          if (!isRecord(tool)) {
+            return [];
+          }
+          const name = tool.name ?? (isRecord(tool.function) ? tool.function.name : undefined);
+          return typeof name === "string" ? [name] : [];
+        }),
+      );
+      for (const expected of ["benchmark_probe", "benchmark__lookup_note"]) {
+        if (!names.has(expected)) {
+          throw new Error(`Attempt setup did not expose synthetic tool ${expected}`);
+        }
+        attemptSetupCatalog.add(expected);
+      }
+    }
     const requestPhase = primary
       ? `primary:${index}`
       : continuation
@@ -1503,7 +1595,11 @@ const mock = createServer((req, res) => {
         toolOutputs.some(
           (toolResult) =>
             typeof toolResult.output !== "string" ||
-            !toolResult.output.includes("Synthetic allocation benchmark tool result.") ||
+            !toolResult.output.includes(
+              values["attempt-setup-image"]
+                ? "# Synthetic project "
+                : "Synthetic allocation benchmark tool result.",
+            ) ||
             (values["stress-tools"] && !toolResult.output.includes("synthetic-code-exec-verified")),
         )
       ) {
@@ -1870,6 +1966,12 @@ const ownedListeners = new Set<ChildProcess>();
 const env = {
   ...createGatewayBenchEnv(path.join(root, "home"), configPath, { startupTrace: false }),
   OPENCLAW_STATE_DIR: root,
+  ...(values["attempt-setup-image"] && process.env.CONTAINERS_STORAGE_CONF
+    ? { CONTAINERS_STORAGE_CONF: process.env.CONTAINERS_STORAGE_CONF }
+    : {}),
+  ...(values["attempt-setup-image"] && process.env.CONTAINERS_CONF
+    ? { CONTAINERS_CONF: process.env.CONTAINERS_CONF }
+    : {}),
   TMPDIR: path.join(root, "tmp"),
   OPENAI_API_KEY: "synthetic-fixture",
   ...(values["github-options-connected"]
@@ -3060,14 +3162,15 @@ async function runRound(
           }
         })()
       : undefined;
+  const providerTimeoutMs = values["attempt-setup-image"] ? 170_000 : 45_000;
   const timeout = setTimeout(
     () =>
       current.reject(
         new Error(
-          `only ${current.arrivals.size}/${current.expectedCount} primary model requests arrived in 45s`,
+          `only ${current.arrivals.size}/${current.expectedCount} primary model requests arrived in ${providerTimeoutMs}ms`,
         ),
       ),
-    45_000,
+    providerTimeoutMs,
   );
   const turnLatencies: number[] = [];
   let subagentWork: Awaited<ReturnType<typeof startStressSubagent>> | undefined;
@@ -3789,6 +3892,9 @@ try {
           ...(stressWorktree ? { cwd: stressWorktree } : {}),
           ...(values["activity-summaries"] ? {} : { parentSessionKey: parentKey, spawnDepth: 1 }),
           fork: false,
+          ...(values["attempt-setup-image"]
+            ? { worktree: true, worktreeBaseRef: "refs/heads/main" }
+            : {}),
           visibility: "shared",
           displayName: "Synthetic broadcast child",
         });
@@ -4372,6 +4478,31 @@ try {
       : round < (idleScenario ? 2 : rounds);
     round++
   ) {
+    if (scenario === "chat.send" && round < coldSessionRounds) {
+      for (const [index, previous] of keys.entries()) {
+        const key = `agent:main:transcript-broadcast-cold-${port}-${round}-${index}`;
+        await rpc(sender, "sessions.create", {
+          key,
+          ...(stressWorktree ? { cwd: stressWorktree } : {}),
+          ...(values["attempt-setup-image"]
+            ? { worktree: true, worktreeBaseRef: coldBaseRefs[round] }
+            : {}),
+          parentSessionKey: parentKey,
+          spawnDepth: 1,
+          fork: false,
+          visibility: "shared",
+          displayName: "Synthetic cold setup",
+        });
+        for (const client of clients.slice(0, exactClients)) {
+          await rpc(client, "sessions.messages.unsubscribe", {
+            key: previous,
+            subscriptionId: previous,
+          });
+          await rpc(client, "sessions.messages.subscribe", { key, subscriptionId: key });
+        }
+        keys[index] = key;
+      }
+    }
     const roundStartedAt = Date.now();
     if (
       soakScenario &&
@@ -5429,6 +5560,22 @@ try {
                 },
               }
             : {}),
+          attemptSetupImage: values["attempt-setup-image"],
+          attemptSetupCatalog: [...attemptSetupCatalog].toSorted(),
+          coldSessionRounds,
+          firstModelRequest: Object.fromEntries(
+            ["cold-session", "warm-session"].map((temperature) => [
+              temperature,
+              latencySummary(
+                samples
+                  .filter(
+                    (sample) =>
+                      sample.round < coldSessionRounds === (temperature === "cold-session"),
+                  )
+                  .flatMap((sample) => sample.streamStart?.providerRequestMs.latencies ?? []),
+              ),
+            ]),
+          ),
         }
       : {}),
     ...(scenario === "sessions.cleanup" ? { sessionMaintenanceMode: "warn" } : {}),

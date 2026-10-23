@@ -3142,6 +3142,39 @@ node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
   --start-at <shared-future-epoch-ms> --revision <measured-commit-sha>
 ```
 
+For workspace/sandbox setup attribution, add `--attempt-setup-image <local-image-id>`
+and generate the fixture with at least one project, `--worktree-files 5000`, and
+`--worktree-install-failure --worktree-cold-commits 30`. The install-failure option commits a minimal pnpm package with a
+failing preinstall script, exercising source-only template recovery after an
+installer failure (the Python probe image fails earlier because pnpm is absent).
+This uses the real Podman backend with a network-disabled session container,
+creates managed session worktrees, and prepares one synthetic plugin tool plus
+the existing stdio MCP probe server. Every first provider request must contain
+both tool definitions; the completed turn must read the committed project README
+through the sandbox. The image must already be available in an isolated Podman
+store selected by `CONTAINERS_STORAGE_CONF`; prepare it outside measurement.
+The image needs the normal sandbox shell, core utilities, and Python filesystem
+bridge dependencies. Keep the store, HOME, temporary files, and fixture under the
+approved sandbox directory.
+
+`--cold-session-rounds 30 --rounds 230 --runs 1` measures 30 new sessions,
+worktrees, and containers, followed by 200 turns on the final session. Each cold
+session selects a distinct pre-generated commit with identical tree contents;
+this invalidates the dependency template even after Gateway warmup. Confirm the
+managed-worktree log reports cold fallback for these turns before claiming a
+cold-template comparison. These are
+**cold templates/sessions in a resident Gateway**, not cold process starts: Gateway and
+plugin/MCP startup are warmed before measurement. Session/worktree creation RPCs
+finish before each measured send. `firstModelRequest` pools the actual wire-send
+to first model HTTP request samples by `cold-session` and `warm-session`, including
+counts, raw samples, p50/p95/p99, and max; no provider response delay is included.
+Per-round `streamStart.providerRequestMs` retains the same underlying samples.
+Use separate matching fixtures, concurrent guarded pairs, and swapped interleaved
+CPU sets. p99 with 30 or 200 observations is context under the campaign's
+1,000-sample rule; it cannot gate. Remove only the task-owned containers and store
+after inspecting the results. This workload raises the provider-arrival deadline
+to 170 seconds so a slow setup is measured rather than rejected at 45 seconds.
+
 Each fresh send must return `started` with its requested run ID, then complete
 successfully through `agent.wait`. The existing model-arrival barrier verifies
 eight overlapping turns, and tool-completion and subscriber checks remain active.
