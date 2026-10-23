@@ -1370,8 +1370,7 @@ describe("scheduleRestartSentinelWake", () => {
 
   function lastAgentDispatch() {
     const call = mocks.dispatchGatewayMethodInProcess.mock.calls.at(-1);
-    expect(call?.[0]).toBe("agent");
-    return { request: call?.[1] as Record<string, unknown>, options: call?.[2] };
+    return { request: call?.[0] as Record<string, unknown>, options: call?.[1] };
   }
 
   it("sends generated media from the host before one ordinary completion turn", async () => {
@@ -1776,7 +1775,6 @@ describe("scheduleRestartSentinelWake", () => {
       reserved.resolve(input);
       await delivery;
       expect(mocks.dispatchGatewayMethodInProcess).toHaveBeenCalledWith(
-        "agent",
         expect.any(Object),
         expect.objectContaining({ controllerInput: input }),
       );
