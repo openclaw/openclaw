@@ -1373,6 +1373,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/infra/heartbeat-summary-snapshot.test.ts",
   "src/gateway/server-cron.projection.test.ts",
   "src/infra/database-engine/plugin-lifecycle-lease.postgres.test.ts",
+  "src/infra/database-engine/session-path-alias.conformance.test.ts",
 ];
 
 const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);
