@@ -10,9 +10,14 @@ const home = String.raw`C:\Users\Administrator`;
 const programFiles = String.raw`C:\Program Files`;
 const node = path.win32.join(programFiles, "nodejs", "node.exe");
 const leaseId = "cbx_windows_replay_fixture";
-const stateDir = path.win32.join(home, ".openclaw", "cloud-workers", leaseId);
-const runtimeDir = path.win32.join(home, ".openclaw-worker", "node-runtimes", "a".repeat(64));
-const cli = path.win32.join(runtimeDir, "node_modules", "openclaw", "openclaw.mjs");
+const defaultStateDir = path.win32.join(home, ".openclaw", "cloud-workers", leaseId);
+const defaultRuntimeDir = path.win32.join(
+  home,
+  ".openclaw-worker",
+  "node-runtimes",
+  "a".repeat(64),
+);
+const defaultCli = path.win32.join(defaultRuntimeDir, "node_modules", "openclaw", "openclaw.mjs");
 const launcher = path.win32.join(programFiles, "Crabbox/bin/Start-CrabboxDetachedProcess.ps1");
 const startTime = "2026-09-09T12:00:00.1234567Z";
 const session = { sessionId: 2, userSid: "S-1-5-21-1001" };
@@ -92,7 +97,7 @@ async function replay(options: ReplayOptions = {}) {
       if (!options.shortState || directory === stateDir) {
         return;
       }
-      for (const [file, content] of [...files]) {
+      for (const [file, content] of Array.from(files)) {
         if (file.startsWith(stateDir + path.win32.sep)) {
           files.delete(file);
           files.set(path.win32.join(directory, path.win32.basename(file)), content);
@@ -247,7 +252,7 @@ describe("native Windows node enrollment replay", () => {
         "CRABBOX_PHASE:openclaw-bootstrap-preparation\nCRABBOX_PHASE:openclaw-bootstrap-complete",
     });
     expect(result.spawnSync).toHaveBeenCalledOnce();
-    expect(result.fs.mkdirSync).toHaveBeenCalledWith(stateDir, { recursive: true });
+    expect(result.fs.mkdirSync).toHaveBeenCalledWith(defaultStateDir, { recursive: true });
   });
 
   it.each<[string, ReplayOptions]>([
@@ -264,7 +269,7 @@ describe("native Windows node enrollment replay", () => {
     ["title without invocation", { processEntry: { commandLine: "openclaw-connect" } }],
     [
       "CLI path in a later argument",
-      { processEntry: { commandLine: `"${node}" other-script.cjs "${cli}"` } },
+      { processEntry: { commandLine: `"${node}" other-script.cjs "${defaultCli}"` } },
     ],
     ["unavailable CIM probe", { probeFailure: true }],
     ["malformed CIM probe", { processOutput: "invalid JSON" }],
