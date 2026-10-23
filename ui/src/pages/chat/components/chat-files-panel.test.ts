@@ -538,8 +538,15 @@ describe("workspace file tabs", () => {
         kind: "file",
         content: "File contents",
       });
+      selectSessionWorkspacePreview(state, null);
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(true);
+      selectSessionWorkspacePreview(state, "file:first.txt");
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(false);
       createSessionWorkspaceProps(state).onTreeVisibleChange(true);
       await openSessionWorkspaceFile(state, { path: "second.txt" }, disposition);
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(true);
+      selectSessionWorkspacePreview(state, null);
+      selectSessionWorkspacePreview(state, "file:second.txt");
       expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(true);
       createSessionWorkspaceProps(state).onTreeVisibleChange(false);
       await openSessionWorkspaceFile(state, { path: "third.txt" }, disposition);
