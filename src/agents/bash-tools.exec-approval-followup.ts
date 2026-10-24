@@ -248,11 +248,14 @@ async function waitForAgentFollowupRun(params: {
   | { status: "completed" }
   | { status: "observation_ended"; reason: "deadline"; transportErrors: number }
 > {
-  const observationDeadline = Date.now() + AGENT_FOLLOWUP_OBSERVATION_TIMEOUT_MS;
+  // The observation budget is consumed by sleepWithAbort and gateway round-trips
+  // on the monotonic clock; a wall-clock step (NTP correction, VM resume) must not
+  // inflate or shrink it, so the deadline lives on performance.now().
+  const observationDeadline = performance.now() + AGENT_FOLLOWUP_OBSERVATION_TIMEOUT_MS;
   let consecutiveTransportErrors = 0;
   let transportErrors = 0;
   for (;;) {
-    const remainingMs = observationDeadline - Date.now();
+    const remainingMs = observationDeadline - performance.now();
     if (remainingMs <= 0) {
       return { status: "observation_ended", reason: "deadline", transportErrors };
     }
@@ -270,7 +273,7 @@ async function waitForAgentFollowupRun(params: {
       transportErrors += 1;
       const retryDelayMs = Math.min(
         AGENT_FOLLOWUP_WAIT_RETRY_DELAY_MS,
-        observationDeadline - Date.now(),
+        observationDeadline - performance.now(),
       );
       if (retryDelayMs <= 0) {
         return { status: "observation_ended", reason: "deadline", transportErrors };

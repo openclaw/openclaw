@@ -208,33 +208,89 @@ describe("exec approval followup", () => {
     expectCalls(3, 0);
   });
 
-  it("ends observation at its deadline without competing direct delivery", async () => {
-    const events = diagnostics(true);
-    const startedAt = new Date("2026-08-01T00:00:00Z").getTime();
-    const clock = vi.spyOn(Date, "now").mockReturnValue(startedAt);
-    acceptRun().mockImplementationOnce(async () => {
-      clock.mockReturnValue(startedAt + 10 * 60_000);
-      throw new Error("gateway permanently unreachable");
-    });
-    await expect(send(pending)).resolves.toBe(true);
-    clock.mockRestore();
-    await waitForDiagnosticEventsDrained();
-    expectCalls(2, 0);
-    expect(events).toContainEqual(
-      expect.objectContaining({
-        type: "log.record",
-        level: "WARN",
-        message: "Exec approval followup observation ended",
-        loggerName: "agents/exec-approval-followup",
-        attributes: {
-          approvalId,
-          runId,
-          reason: "deadline",
-          transportErrors: 1,
-          deliveryOwner: "accepted_agent_run",
+  it("ends observation at its monotonic deadline when the wall clock rewinds", async () => {
+    vi.useFakeTimers();
+    try {
+      const events = diagnostics(true);
+      const startedAt = new Date("2026-08-01T00:00:00Z").getTime();
+      vi.setSystemTime(startedAt);
+      const gateway = acceptRun();
+      gateway
+        .mockImplementationOnce(async () => {
+          // NTP correction or VM resume rewinds the wall clock mid-observation.
+          vi.setSystemTime(startedAt - 60 * 60_000);
+          throw new Error("gateway reconnecting");
+        })
+        .mockImplementation(async () => {
+          throw new Error("gateway unreachable");
+        });
+      // Settlement observer is attached before fake time advances, so the
+      // recorded outcome can be asserted without leaving real timers behind.
+      let outcome: string | undefined;
+      const followup = send(pending).then(
+        () => {
+          outcome = "settled";
         },
-      }),
-    );
+        () => {
+          outcome = "rejected";
+        },
+      );
+      await vi.advanceTimersByTimeAsync(6 * 60_000 + 10_000);
+      expect(outcome).toBe("settled");
+      await followup;
+      vi.useRealTimers();
+      await waitForDiagnosticEventsDrained();
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "log.record",
+          level: "WARN",
+          message: "Exec approval followup observation ended",
+          loggerName: "agents/exec-approval-followup",
+          attributes: expect.objectContaining({
+            approvalId,
+            runId,
+            reason: "deadline",
+            deliveryOwner: "accepted_agent_run",
+          }),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("ends observation at its deadline without competing direct delivery", async () => {
+    vi.useFakeTimers();
+    try {
+      const events = diagnostics(true);
+      acceptRun().mockImplementation(async () => {
+        throw new Error("gateway permanently unreachable");
+      });
+      const followup = send(pending);
+      await vi.advanceTimersByTimeAsync(6 * 60_000 + 5_000);
+      await expect(followup).resolves.toBe(true);
+      vi.useRealTimers();
+      await waitForDiagnosticEventsDrained();
+      expect(sendMessage).not.toHaveBeenCalled();
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "log.record",
+          level: "WARN",
+          message: "Exec approval followup observation ended",
+          loggerName: "agents/exec-approval-followup",
+          attributes: expect.objectContaining({
+            approvalId,
+            runId,
+            reason: "deadline",
+            transportErrors: expect.any(Number),
+            deliveryOwner: "accepted_agent_run",
+          }),
+        }),
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it.each([
