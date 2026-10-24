@@ -623,7 +623,7 @@ describe("before_prompt_build dispatch", () => {
               first.content = [{ type: "text", text: "local replacement" }];
               const second = input.messages[1] as typeof unowned;
               second.content[0]!.text = "local unowned mutation";
-              input.messages.push({ role: "user", content: [] });
+              input.messages.push({ content: [] });
             },
           },
           {
