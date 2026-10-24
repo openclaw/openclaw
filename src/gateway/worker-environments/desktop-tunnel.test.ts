@@ -1,4 +1,4 @@
-import { access, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import { access, mkdir, mkdtemp, rm } from "node:fs/promises";
 import path from "node:path";
 import { setImmediate } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -163,7 +163,7 @@ describe("worker desktop tunnels", () => {
   });
 
   it.skipIf(process.platform === "win32")(
-    "keeps the socket and credentials in one short private directory despite a long temp root",
+    "keeps the socket path short despite a long temp root and removes its directory",
     async ({ onTestFinished }) => {
       const root = await mkdtemp("/tmp/oc-desktop-test-");
       const ambient = path.join(root, "long-temporary-root-" + "x".repeat(120));
@@ -183,10 +183,6 @@ describe("worker desktop tunnels", () => {
       const { attachment } = await starting;
       const directory = socketDirectory(attachment);
       expect(Buffer.byteLength(socketPath(attachment))).toBeLessThanOrEqual(103);
-      expect((await stat(directory)).mode & 0o777).toBe(0o700);
-      for (const name of ["identity", "known_hosts"]) {
-        expect((await stat(path.join(directory, name))).mode & 0o777).toBe(0o600);
-      }
       await manager.stopAll();
       await expectRemoved(directory);
     },

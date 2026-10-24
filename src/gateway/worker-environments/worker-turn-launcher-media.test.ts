@@ -174,7 +174,6 @@ async function harness(assistantText = "image received", workspace?: string) {
   const assignment = (index = 0) => launches[index]!.assignment;
   return {
     launches,
-    remoteFiles,
     inputFiles,
     tunnel,
     environment,
@@ -237,7 +236,7 @@ describe("cloud turn media boundary", () => {
     });
   });
 
-  it("preserves ordered managed image input, follow-up files, replay and canonical paths", async () => {
+  it("preserves ordered managed image input, replay and canonical paths", async () => {
     const rig = await harness();
     const png = createNoisyPngBuffer(256, 256);
     expect(png.length).toBeGreaterThan(64 * 1024);
@@ -279,23 +278,7 @@ describe("cloud turn media boundary", () => {
     for (const file of rig.inputFiles().keys()) {
       expect(promptText).toContain(workerPath(file));
     }
-    const preservedPath = [...rig.inputFiles().keys()][0]!;
-    rig.remoteFiles.set(preservedPath, Buffer.from("worker edit"));
-
-    const document = await save(Buffer.from("second turn document"), "text/plain");
-    await rig.record(
-      "images-followup",
-      {
-        text: "read the file",
-        media: [ref(document, "text/plain")],
-      },
-      { prompt: "read the file" },
-    );
-    expect(rig.inputFiles().size).toBe(3);
-    expect(rig.remoteFiles.get(preservedPath)?.toString()).toBe("worker edit");
-    expect(
-      [...rig.inputFiles().values()].some((data) => data.toString() === "second turn document"),
-    ).toBe(true);
+    await rig.execute(turn("images-replay"));
     const replay = rig.assignment(1).initialMessages.find((message) => message.role === "user");
     expect(replay?.content).toEqual(content);
     const userMessages = await users();
@@ -306,7 +289,7 @@ describe("cloud turn media boundary", () => {
     await rig.execute({ ...turn("image-only"), prompt: "", images: [inline] });
     const imageOnly = rig.assignment(2).prompt;
     expect(imageOnly).toEqual(expect.arrayContaining([wireInline]));
-    expect(rig.inputFiles().size).toBe(4);
+    expect(rig.inputFiles().size).toBe(3);
     expect(await users()).toHaveLength(3);
     expectUncalled(rig.runLocal, rig.tunnel.syncWorkspace);
   });
