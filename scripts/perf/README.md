@@ -4704,3 +4704,36 @@ replay checks run after measurement. `--expect-released` asserts no request grap
 survives; `--snapshot <path>` captures the synthetic heap with non-enumerable
 `__forkClosureProbe` markers for tracing strong retainers. This is owner retention
 evidence, not a Gateway latency, CPU, allocation-rate, or promotion measurement.
+
+## Plugin invocation scope allocation
+
+`plugin-invocation-scope-measure.ts` loads 44 synthetic plugins and exercises the
+production context-engine factory, retained invocation scope, assembly, and
+cleanup owners with one selected engine. `--gateway` runs the same workload in
+an isolated loopback Gateway, explicitly acquiring its full fixture registry
+because startup can defer unrelated tools. It does not measure chat transport or model latency.
+Use a dedicated `HOME`, `OPENCLAW_HOME`, and `TMPDIR`, and a fresh `--state-dir`.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs \
+  scripts/perf/plugin-invocation-scope-measure.ts \
+  --gateway --port 41665 --state-dir /path/to/synthetic-state \
+  --mode timing --operations 4000 --plugins 44 --calls 16 --output timing.json
+```
+
+Run `--mode count --operations 10` separately to count registry views, weak
+collections, and async-store entries; its spies retain call records. Use
+`--mode allocation` for sampled bytes including collected objects. Untraced
+`--mode timing` reports CPU, per-kind GC totals/tails/maxima, event-loop delay,
+and turn latency with sample counts. Promotion uses a separate
+`--mode promotion --gc-log /path/to/trace.log` run with `--trace-gc-nvp` and stdout
+redirected to that log. The workload checks exact plugin identity and registry,
+factory/assembly/disposal counts, and rejection of callbacks after scope closure.
+
+For concurrent comparisons, pass separate `--ready-file` paths and one shared
+`--start-file`, then atomically publish a future epoch in milliseconds after both
+sides are ready. `--warm-ready-file` and `--warm-start-file` provide the same
+barrier before warmup. Use identical work counts, the shared quiet-slot lock and guard,
+and swap the interleaved CPU placements in the second pair. Keep maintenance
+settings identical. Apply the campaign's absolute-delta and sample-count rules;
+run matched identical-source controls before interpreting adverse GC or promotion.

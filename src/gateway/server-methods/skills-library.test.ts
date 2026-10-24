@@ -34,6 +34,7 @@ import {
 } from "../../test-utils/session-state-cleanup.js";
 import { createGatewayMethodRegistry } from "../methods/registry.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import * as sessionAuthorization from "../session-sharing-authorization-async.js";
 import type { GatewayClient } from "./client-types.js";
 import { skillsLibraryHandlers } from "./skills-library.js";
@@ -86,14 +87,12 @@ function retainedFilesHarness() {
   );
   const call = async (method: string, params: Record<string, unknown>, profileId = alice.id) => {
     const client: GatewayClient = {
-      authenticatedUserProfile: { profileId, displayName: null, hasAvatar: false, updatedAt: 1 },
-      connect: {
-        minProtocol: 1,
-        maxProtocol: 1,
-        role: "operator",
-        scopes: ["operator.read", "operator.write"],
-        client: { id: "test", mode: "test", platform: "test", version: "1" },
-      },
+      authenticatedUserProfile: gatewayProfile(profileId),
+      connect: gatewayConnect(["operator.read", "operator.write"], {
+        id: "test",
+        mode: "test",
+        version: "1",
+      }),
     };
     const respond = vi.fn<GatewayRequestHandlerOptions["respond"]>();
     await handleGatewayRequest({

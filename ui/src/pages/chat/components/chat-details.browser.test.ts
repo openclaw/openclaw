@@ -131,14 +131,16 @@ afterEach(() => {
 });
 
 describe("chat Details presentation", () => {
-  it("does not synchronously measure a closed desktop frame during mounting", async () => {
-    const measurement = vi.spyOn(Element.prototype, "getBoundingClientRect");
+  it("reserves automatic desktop Details before the first resize delivery", async () => {
+    vi.stubGlobal("ResizeObserver", undefined);
     try {
-      const { frame, panel } = await fixture(props(), 600, false, "desktop");
-      expect(panel.hidden).toBe(true);
-      expect(measurement.mock.contexts.filter((target) => target === frame)).toHaveLength(0);
+      await page.viewport(1700, 900);
+      const { conversation, panel } = await fixture(props(), 1320, false, "desktop", true);
+      expect(panel.hidden).toBe(false);
+      expect(getComputedStyle(conversation).right).toBe("313px");
+      expect(panel.querySelector(".chat-details-session")).toBeNull();
     } finally {
-      measurement.mockRestore();
+      vi.unstubAllGlobals();
     }
   });
 

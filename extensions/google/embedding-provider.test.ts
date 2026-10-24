@@ -601,7 +601,7 @@ describe("Gemini embedding provider", () => {
     });
   });
 
-  it("formats stable Gemini retrieval requests without unsupported task types", async () => {
+  it("formats stable Gemini retrieval requests and honors explicit query instructions", async () => {
     const fetchMock = installFetchMock((input) => {
       const url = input instanceof URL ? input.href : typeof input === "string" ? input : input.url;
       return url.endsWith(":batchEmbedContents")
@@ -618,13 +618,30 @@ describe("Gemini embedding provider", () => {
     });
 
     await provider.embed("find this", { inputType: "query" });
-    await provider.embedBatch(["remember this"], { inputType: "document" });
+    await provider.embed("custom: find this", {
+      inputType: "query",
+      queryInstructionApplied: true,
+    });
+    await provider.embedBatch(["custom: find this"], {
+      inputType: "query",
+      queryInstructionApplied: true,
+    });
+    await provider.embedBatch(["remember this"], {
+      inputType: "document",
+      queryInstructionApplied: true,
+    });
 
     expect(fetchJsonBody(fetchMock, 0)).toEqual({
       content: { parts: [{ text: "task: search result | query: find this" }] },
       outputDimensionality: 768,
     });
-    expect(fetchJsonBody(fetchMock, 1)).toEqual({
+    for (const index of [1, 2]) {
+      expect(fetchJsonBody(fetchMock, index)).toEqual({
+        content: { parts: [{ text: "custom: find this" }] },
+        outputDimensionality: 768,
+      });
+    }
+    expect(fetchJsonBody(fetchMock, 3)).toEqual({
       requests: [
         {
           content: { parts: [{ text: "title: none | text: remember this" }] },

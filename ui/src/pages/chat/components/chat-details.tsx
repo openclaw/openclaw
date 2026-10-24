@@ -510,8 +510,13 @@ export function ChatDetails(props: ChatDetailsViewProps) {
     if (pane && desktop()) {
       layout.observe(pane, { attributes: true, attributeFilter: ["class", "style"] });
     }
-    // Initial ResizeObserver delivery discovers docking width after layout.
-    mountSurface(readLayout());
+    // Resolve automatic desktop docking before paint so a visible boot frame
+    // never widens for one frame before the first ResizeObserver delivery.
+    if (desktop()) {
+      reposition();
+    } else {
+      mountSurface(readLayout());
+    }
     const stop = [
       listen(window, "resize", reposition),
       listen(document, "pointerdown", outside),

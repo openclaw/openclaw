@@ -39,6 +39,7 @@ import {
   registerGatewayModelCatalogPrivateAccess,
   type PreparedGatewayModelCatalogSnapshot,
 } from "../server-model-catalog-auth.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { buildGatewaySessionSnapshot } from "../session-event-payload.js";
 import { buildGatewaySessionRow } from "../session-utils-row.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
@@ -95,19 +96,8 @@ function fixture(state: OpenClawTestState) {
   };
   const client: NonNullable<GatewayRequestHandlerOptions["client"]> & { connId: string } = {
     connId: "catalog-reader-connection",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.read"],
-    },
-    authenticatedUserProfile: {
-      profileId: person.id,
-      displayName: person.displayName,
-      hasAvatar: false,
-      updatedAt: person.updatedAt,
-    },
+    connect: gatewayConnect(["operator.read"]),
+    authenticatedUserProfile: gatewayProfile(person.id, person.displayName, person.updatedAt),
   };
   const clients = new Set([client]);
   const readPrepared = vi.fn(async () => snapshot);
@@ -630,12 +620,11 @@ it.each(["foreign admin", "anonymous", "synthetic", "forged locator"] as const)(
     if (caller === "foreign admin") {
       const other = ensureProfileForEmail("other-reader@example.test");
       f.client.connect.scopes = ["operator.admin"];
-      f.client.authenticatedUserProfile = {
-        profileId: other.id,
-        displayName: other.displayName,
-        hasAvatar: false,
-        updatedAt: other.updatedAt,
-      };
+      f.client.authenticatedUserProfile = gatewayProfile(
+        other.id,
+        other.displayName,
+        other.updatedAt,
+      );
     } else if (caller === "synthetic") {
       f.client.internal = { syntheticClient: true };
     } else if (caller === "forged locator") {

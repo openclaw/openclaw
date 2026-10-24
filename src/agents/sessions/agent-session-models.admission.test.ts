@@ -25,6 +25,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../../state/openclaw-agent-write-admission-state.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { hasModelFallbackStop } from "../failover-error.js";
 import {
   createModelSelectionSession,
@@ -180,18 +181,12 @@ describe("model transitions after SQLite write admission", () => {
   }
 
   async function holdAdmission(options: Parameters<typeof runOpenClawAgentWriteAdmission>[0]) {
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    releases.push(release.resolve);
-    const done = track(
-      runOpenClawAgentWriteAdmission(options, async () => {
-        entered.resolve();
-        await release.promise;
-      }),
-    );
-    await entered.promise;
+    const gate = createEnteredGate();
+    releases.push(gate.release);
+    const done = track(runOpenClawAgentWriteAdmission(options, gate.wait));
+    await gate.entered;
     // Callers resume in their own async context, not the reserved owner's reentrant context.
-    return { release: release.resolve, done };
+    return { release: gate.release, done };
   }
 
   it("keeps captured storage environment out of metadata command payloads", async () => {
@@ -320,19 +315,13 @@ describe("model transitions after SQLite write admission", () => {
 
   it("refuses detached queued metadata after its session identity changes", async () => {
     const manager = SessionManager.inMemory();
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    releases.push(release.resolve);
-    const held = track(
-      withSessionManagerWrite(manager, async () => {
-        entered.resolve();
-        await release.promise;
-      }),
-    );
-    await entered.promise;
+    const gate = createEnteredGate();
+    releases.push(gate.release);
+    const held = track(withSessionManagerWrite(manager, gate.wait));
+    await gate.entered;
     const change = track(manager.appendThinkingLevelChange("high"));
     manager.newSession({ id: "replacement-detached-session" });
-    release.resolve();
+    gate.release();
     await expect(change).rejects.toThrow("Session manager identity changed");
     await held;
     expect(manager.getEntries()).toEqual([]);

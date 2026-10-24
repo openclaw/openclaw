@@ -33,6 +33,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createGatewayRequestContext } from "../server-request-context.js";
 import { makeContextParams } from "../server-request-context.test-support.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import * as chatDispatch from "./chat-send-agent-dispatch.js";
 import { handleChatSend } from "./chat-send-handler.js";
@@ -98,19 +99,11 @@ it.each([
 
       const client: GatewayClient = {
         connId: "compaction-handoff-client",
-        authenticatedUserProfile: {
-          profileId: profile.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: 1,
-        },
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          role: "operator",
-          scopes: ["operator.read", "operator.write", "operator.admin"],
-          client: { id: "cli", version: "test", platform: "test", mode: "cli" },
-        },
+        authenticatedUserProfile: gatewayProfile(profile.id),
+        connect: gatewayConnect(["operator.read", "operator.write", "operator.admin"], {
+          id: "cli",
+          mode: "cli",
+        }),
       };
       const context = createGatewayRequestContext(makeContextParams());
       const prepared = createDeferred();

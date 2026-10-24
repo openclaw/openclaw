@@ -8,6 +8,7 @@ import type { AgentSandboxConfig } from "../config/types.agents-shared.js";
 import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { registerSandboxBackend, type SandboxBackendHandle } from "./sandbox/backend.js";
+import { createConfig as createCustodyConfig } from "./sandbox/context-custody.test-support.js";
 import { ensureSandboxWorkspaceForSession, resolveSandboxContext } from "./sandbox/context.js";
 import { isSandboxProvisioningError } from "./sandbox/provisioning-error.js";
 import { resolveWorkspaceMounts } from "./sandbox/workspace-mounts.js";
@@ -77,20 +78,7 @@ function createBackend(
 }
 
 function sandboxConfig(backend: string, overrides: AgentSandboxConfig = {}): OpenClawConfig {
-  return {
-    agents: {
-      defaults: {
-        sandbox: {
-          mode: "all",
-          backend,
-          scope: "session",
-          workspaceAccess: "rw",
-          prune: { idleHours: 0, maxAgeDays: 0 },
-          ...overrides,
-        },
-      },
-    },
-  };
+  return createCustodyConfig({ backend, scope: "session", ...overrides });
 }
 
 let sandboxFixtureRoot = "";

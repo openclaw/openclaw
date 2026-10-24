@@ -17,6 +17,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import {
   seedHistorySession as seedSession,
@@ -47,19 +48,8 @@ function createPersonalMetadataFixture() {
   const authProfileId = connectChatMetadataAccount(owner.id);
   const client: NonNullable<GatewayRequestHandlerOptions["client"]> & { connId: string } = {
     connId: "metadata-owner-connection",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.read"],
-    },
-    authenticatedUserProfile: {
-      profileId: owner.id,
-      displayName: owner.displayName,
-      hasAvatar: false,
-      updatedAt: owner.updatedAt,
-    },
+    connect: gatewayConnect(["operator.read"]),
+    authenticatedUserProfile: gatewayProfile(owner.id, owner.displayName, owner.updatedAt),
   };
   const config = {
     gateway: {

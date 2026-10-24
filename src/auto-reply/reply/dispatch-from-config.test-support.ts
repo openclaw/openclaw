@@ -39,6 +39,7 @@ import {
   hookMocks,
   internalHookMocks,
   messageAuditMocks,
+  mockPluginBinding,
   mocks,
   noAbortResult,
   parseGenericThreadSessionInfo,
@@ -561,6 +562,16 @@ export const describe0BeforeEach0 = () => {
     () => getActivePluginRegistry() ?? runtimePluginMocks.pluginRegistry,
   );
 };
+
+export function mockPluginBoundDiscordBinding({
+  conversationId = "channel:1481858418548412579",
+  ...params
+}: Omit<Parameters<typeof mockPluginBinding>[0], "conversation"> & { conversationId?: string }) {
+  return mockPluginBinding({
+    ...params,
+    conversation: { channel: "discord", accountId: "default", conversationId },
+  });
+}
 
 export const createHookCtx = (overrides: Partial<MsgContext> = {}) =>
   buildTestCtx({

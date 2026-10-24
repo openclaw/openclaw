@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import type { RuntimeEnv } from "../runtime.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { withMockedPlatform as onPlatform } from "../test-utils/vitest-spies.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import type { DoctorRepairMode } from "./doctor-repair-mode.js";
@@ -290,14 +291,7 @@ describe("sandbox health", () => {
         }
         throw new Error(`Unexpected sandbox probe: ${command} ${args.join(" ")}`);
       });
-      runCommandWithTimeout.mockResolvedValue({
-        stdout: "",
-        stderr: "",
-        code: 0,
-        signal: null,
-        killed: false,
-        termination: "exit",
-      });
+      runCommandWithTimeout.mockResolvedValue(createCommandResult());
       vi.mocked(mockPrompter.confirmRuntimeRepair).mockResolvedValue(true);
     });
 

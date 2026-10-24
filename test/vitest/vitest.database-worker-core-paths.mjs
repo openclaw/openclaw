@@ -399,6 +399,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/channels/message/ingress-monitor.admission.test.ts",
   "src/channels/message/ingress-monitor.idle-admission.test.ts",
   "src/channels/message/ingress-monitor.restart-drain.test.ts",
+  "src/channels/message/ingress-monitor.scheduling.test.ts",
   "src/channels/message/ingress-monitor.test.ts",
   "src/channels/message/ingress-queue-health.test.ts",
   "src/channels/message/ingress-queue.claim-ownership.test.ts",

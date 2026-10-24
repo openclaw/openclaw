@@ -229,6 +229,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Use this optional provider-specific `input_type` value only when the same label should apply to both query and document embedding requests. For asymmetric providers, prefer queryInputType and documentInputType.",
   "memory.search.queryInputType":
     "Optional provider-specific `input_type` value for query-time memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a query label.",
+  "memory.search.queryInstruction":
+    'Optional literal prefix for query embeddings, such as "search_query: ". Include required spaces or newlines. Non-empty values replace automatic query formatting; unset or empty values preserve provider defaults. Documents and index identity are unchanged, so no reindex is needed. An empty per-agent override clears the inherited instruction.',
   "memory.search.documentInputType":
     "Optional provider-specific `input_type` value for document and indexing memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a passage or document label.",
   "memory.search.outputDimensionality":

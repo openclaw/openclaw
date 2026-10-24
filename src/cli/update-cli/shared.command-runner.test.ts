@@ -8,6 +8,7 @@ import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
 } from "../../process/exec-result.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import {
   ensureGitCheckout,
@@ -38,14 +39,7 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
   runCommandBuffered,
 }));
 
-const successfulCommandResult = {
-  stdout: "",
-  stderr: "",
-  code: 0,
-  signal: null,
-  killed: false,
-  termination: "exit" as const,
-};
+const successfulCommandResult = createCommandResult();
 
 function cloneTarget(argv: string[]): string {
   const target = argv.at(-1);

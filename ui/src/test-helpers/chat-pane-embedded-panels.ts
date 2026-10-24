@@ -16,17 +16,18 @@ import {
 } from "../pages/chat/chat-pane.test-support.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { createPageState } from "../pages/chat/chat-state-page.ts";
+import { createChatProps } from "../pages/chat/chat-view.test-helpers.ts";
 import "../pages/chat/components/chat-detail-panel.tsx";
 import "../pages/chat/components/chat-files-panel.tsx";
-import { createChatProps } from "../pages/chat/chat-view.test-helpers.ts";
-import "../pages/chat/components/chat-sidebar-region.runtime.tsx";
 import { createSessionWorkspaceProps } from "../pages/chat/components/chat-session-workspace.ts";
+import "../pages/chat/components/chat-sidebar-region.runtime.tsx";
 import {
   isSidebarSlotVisible,
   type SidebarLayout,
   type SidebarSlotId,
 } from "../pages/chat/sidebar-layout.ts";
 import { installResizeObserverStub } from "./resize-observer.ts";
+import { createSidebarRegionCallbackMocks } from "./sidebar-region-callbacks.ts";
 import { mountSolid } from "./solid-render.tsx";
 import { waitForSolid } from "./solid-settle.ts";
 
@@ -57,16 +58,7 @@ export async function renderPanelFixture(
   const props = renderSidebarRegion({
     presentationId: "sidebar-layout-fixture",
     availableWidth: 1400,
-    callbacks: {
-      activatePanel: vi.fn(),
-      togglePanelExpanded: vi.fn(),
-      setDock: vi.fn(),
-      closeSlot: closePanelSlot,
-      openSlot: vi.fn(),
-      reorderPanel: vi.fn(),
-      resizePanel: vi.fn(),
-      setOpen: vi.fn(),
-    },
+    callbacks: createSidebarRegionCallbackMocks({ closeSlot: closePanelSlot }),
     layout,
     narrow: false,
     panelDefinitions: definitions,

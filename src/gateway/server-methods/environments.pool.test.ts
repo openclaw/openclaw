@@ -4,6 +4,7 @@ import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src
 import { readDevicePairingNodeSnapshot } from "../../infra/device-pairing-store-readonly.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import {
   createContext,
@@ -180,15 +181,10 @@ it.each(["environments.list", "environments.status"] as const)(
     });
     const respond = vi.fn();
     const pending = handleGatewayRequest({
-      req: {
-        type: "req",
-        id: `prepared-details-${method}`,
-        method,
-        params: {
-          includePreparedDetails: true,
-          ...(method === "environments.status" ? { environmentId: worker.environmentId } : {}),
-        },
-      },
+      req: gatewayRequest(`prepared-details-${method}`, method, {
+        includePreparedDetails: true,
+        ...(method === "environments.status" ? { environmentId: worker.environmentId } : {}),
+      }),
       client,
       context: Object.assign(createContext(), mockContext(service)),
       respond,

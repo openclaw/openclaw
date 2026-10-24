@@ -36,11 +36,7 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
   function expectNoSyntheticCompletionForSession(sessionKey: string) {
     expectNoPayloads({
       sessionKey,
-      lastAssistant: makeAssistant({
-        stopReason: "stop",
-        errorMessage: undefined,
-        content: [],
-      }),
+      lastAssistant: makeStoppedAssistant(),
     });
   }
 
@@ -77,11 +73,7 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
     expectNoPayloads({
       sessionKey: "agent:main:discord:direct:u123",
       didSendViaMessagingTool: true,
-      lastAssistant: makeAssistant({
-        stopReason: "stop",
-        errorMessage: undefined,
-        content: [],
-      }),
+      lastAssistant: makeStoppedAssistant(),
     });
   });
 

@@ -116,6 +116,13 @@ describe("standalone build interface", () => {
       openclaw: { version: "2026.10.3", commit: "b".repeat(40) },
       embedded: { modules: 4, plugins: 1, workers: 2, inlineWorkers: 0 },
       plugins: { embedded: ["slack", "codex"], omitted: ["signal", "matrix"] },
+      pluginContract: {
+        schemaVersion: 1,
+        sdk: {
+          "openclaw/plugin-sdk/core": { source: "dist/plugin-sdk/core.js", entry: "/image/core" },
+        },
+        plugins: {},
+      },
       sqlite: { version: "3.53.4" },
       pruning: { categories: {}, sidecarPlugins: [] },
     });
@@ -127,7 +134,17 @@ describe("standalone build interface", () => {
         fileCount: 1,
         symlinkCount: 1,
       },
-      plugins: { embedded: ["codex", "slack"], omitted: ["matrix", "signal"] },
+      plugins: {
+        embedded: ["codex", "slack"],
+        omitted: ["matrix", "signal"],
+        contract: {
+          schemaVersion: 1,
+          sdk: {
+            "openclaw/plugin-sdk/core": { source: "dist/plugin-sdk/core.js", entry: "/image/core" },
+          },
+          plugins: {},
+        },
+      },
     });
     expect(manifest.runtime.sha256).toBe(
       "c1763658d97365c3501098c7326f9a049ec6107223baaea9f96cdb19e7c6cf9a",

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import { createAttemptNestedToolActivityState } from "./attempt-nested-tool-activity.js";
 
 const mocks = vi.hoisted(() => ({
@@ -474,10 +475,7 @@ describe("runEmbeddedAttemptSettledPhase stream finalization", () => {
   it("re-drains queued events when the run-budget timeout fires during the abort-aware join", async () => {
     // Timeout during the abort-aware join must re-drain before salvaging the suffix.
     const abortController = new AbortController();
-    let releaseJoin!: () => void;
-    const joinGate = new Promise<void>((resolve) => {
-      releaseJoin = resolve;
-    });
+    const { promise: joinGate, resolve: releaseJoin } = createDeferredCore();
     const fixture = createFixture({
       runAbortController: abortController,
       waitForPendingEvents: vi.fn(async (options) => {

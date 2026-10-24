@@ -61,6 +61,16 @@ import { admitReplyTurn } from "./reply-turn-admission.js";
 import { buildChannelSourceTurnId } from "./source-turn-id.js";
 import { buildTestCtx } from "./test-ctx.js";
 
+function createSlackChannelCtx(fields: Partial<MsgContext>) {
+  return buildTestCtx({
+    Provider: "slack",
+    Surface: "slack",
+    OriginatingChannel: "slack",
+    OriginatingTo: "channel:C123",
+    ...fields,
+  });
+}
+
 beforeAll(dispatchHarness.globalBeforeAll0);
 
 describe("dispatchReplyFromConfig", () => {
@@ -407,11 +417,7 @@ describe("dispatchReplyFromConfig", () => {
     mocks.routeReply.mockClear();
     installThreadingTestPlugin({ id: "slack" });
     const dispatcher = createReplyDispatcher({ deliver: vi.fn() });
-    const ctx = buildTestCtx({
-      Provider: "slack",
-      Surface: "slack",
-      OriginatingChannel: "slack",
-      OriginatingTo: "channel:C123",
+    const ctx = createSlackChannelCtx({
       ChatType: "group",
       SessionKey: "agent:main:slack:channel:C123",
       MessageSid: "slack-message-1",
@@ -602,13 +608,7 @@ describe("dispatchReplyFromConfig", () => {
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
     const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        OriginatingTo: "channel:C123",
-        SessionKey: "agent:main:slack:channel:C123",
-      }),
+      ctx: createSlackChannelCtx({ SessionKey: "agent:main:slack:channel:C123" }),
       cfg: emptyConfig,
       dispatcher,
       replyResolver: async () => payload(),
@@ -762,11 +762,7 @@ describe("dispatchReplyFromConfig", () => {
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        OriginatingTo: "channel:C123",
+      ctx: createSlackChannelCtx({
         SessionKey: "agent:main:slack:channel:C123",
         MessageSid: "slack-message-2",
       }),
@@ -795,13 +791,7 @@ describe("dispatchReplyFromConfig", () => {
     transcriptMocks.appendAssistantMessageToSessionTranscript.mockClear();
 
     await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "slack",
-        Surface: "slack",
-        OriginatingChannel: "slack",
-        OriginatingTo: "channel:C123",
-        SessionKey: "agent:main:slack:channel:C123",
-      }),
+      ctx: createSlackChannelCtx({ SessionKey: "agent:main:slack:channel:C123" }),
       cfg: emptyConfig,
       dispatcher,
       replyResolver: async () => ({ text: "Hidden Slack reply" }),

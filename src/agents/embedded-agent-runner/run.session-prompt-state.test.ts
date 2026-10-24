@@ -26,6 +26,7 @@ import {
   waitForExecSession,
   type ProcessSession,
 } from "../bash-process-registry.js";
+import { createEnteredGate } from "../entered-gate.test-support.js";
 import { createLazyExecTool } from "../lazy-exec-tool.js";
 import {
   buildEmbeddedRunnerAssistant,
@@ -114,6 +115,15 @@ function createState(overrides: Partial<PreparedEmbeddedRunInput["runParams"]> =
     resolvedSessionKey: BASE_RUN_PARAMS.sessionKey,
     lifecycleGeneration: "test-generation",
     onInterrupt: () => {},
+  });
+}
+
+function replaySafeAttempt(assistant: ReturnType<typeof buildEmbeddedRunnerAssistant> | undefined) {
+  return makeEmbeddedRunnerAttempt({
+    assistantTexts: [],
+    lastAssistant: assistant,
+    currentAttemptAssistant: assistant,
+    currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
   });
 }
 
@@ -368,12 +378,7 @@ describe("embedded run session prompt state", () => {
       persisted: true,
       internal: true,
     };
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: [],
-      lastAssistant: undefined,
-      currentAttemptAssistant: undefined,
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
+    const attempt = replaySafeAttempt(undefined);
 
     const resolved = await resolveEmbeddedRunTerminal({
       ...makeTerminalInput({
@@ -404,12 +409,7 @@ describe("embedded run session prompt state", () => {
         baseUrlHash: "base-url-hash",
       },
     });
-    const compactionAttempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: [],
-      lastAssistant: compactionAssistant,
-      currentAttemptAssistant: compactionAssistant,
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
+    const compactionAttempt = replaySafeAttempt(compactionAssistant);
     await expect(
       resolveEmbeddedRunTerminal({
         ...makeTerminalInput({
@@ -430,12 +430,7 @@ describe("embedded run session prompt state", () => {
         },
       ],
     });
-    const reasoningAttempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: [],
-      lastAssistant: reasoningAssistant,
-      currentAttemptAssistant: reasoningAssistant,
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
+    const reasoningAttempt = replaySafeAttempt(reasoningAssistant);
     await expect(
       resolveEmbeddedRunTerminal({
         ...makeTerminalInput({
@@ -454,15 +449,7 @@ describe("embedded run session prompt state", () => {
       resolveEmbeddedRunTerminal({
         ...makeTerminalInput({
           retryState,
-          attempt: makeEmbeddedRunnerAttempt({
-            assistantTexts: [],
-            lastAssistant: emptyResponseAssistant,
-            currentAttemptAssistant: emptyResponseAssistant,
-            currentAttemptReplayMetadata: {
-              hadPotentialSideEffects: false,
-              replaySafe: true,
-            },
-          }),
+          attempt: replaySafeAttempt(emptyResponseAssistant),
         }),
         sessionPromptState: state,
       }),
@@ -488,14 +475,10 @@ describe("embedded run session prompt state", () => {
 
   it("keeps a draft revision pending until its owned projection is ready", async () => {
     const reconcile = await import("../../config/sessions/session-transcript-reconcile.js");
-    const projection = createDeferred();
-    const projectionStarted = createDeferred();
+    const projectionGate = createEnteredGate();
     const waitForProjection = vi
       .spyOn(reconcile, "waitForSessionTranscriptProjection")
-      .mockImplementation(async () => {
-        projectionStarted.resolve();
-        await projection.promise;
-      });
+      .mockImplementation(projectionGate.wait);
     await using state = await createState();
     try {
       state.activateCompactionContinuation("continue after compaction");
@@ -532,17 +515,17 @@ describe("embedded run session prompt state", () => {
         });
       await expect(
         Promise.race([
-          projectionStarted.promise.then(() => "projection"),
+          projectionGate.entered.then(() => "projection"),
           retryReady.then(() => "retry"),
         ]),
       ).resolves.toBe("projection");
       await Promise.resolve();
       expect(resumed).toBe(false);
-      projection.resolve();
+      projectionGate.release();
       await retryReady;
       expect(resumed).toBe(true);
     } finally {
-      projection.resolve();
+      projectionGate.release();
       waitForProjection.mockRestore();
     }
   });

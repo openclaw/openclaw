@@ -15,6 +15,13 @@ function timeoutError(message: string): Error {
   return Object.assign(new Error(message), { name: "TimeoutError" });
 }
 
+function failThenSucceed(error: Error) {
+  return vi
+    .fn<(apiKey: string) => Promise<string>>()
+    .mockRejectedValueOnce(error)
+    .mockResolvedValueOnce("ok");
+}
+
 describe("executeWithApiKeyRotation", () => {
   it("keeps transient retry disabled by default for single-key 500", async () => {
     const execute = vi.fn(async () => {
@@ -35,10 +42,7 @@ describe("executeWithApiKeyRotation", () => {
 
   it("retries the same key once for transient 500 when attempts is 2", async () => {
     const sleep = vi.fn(async () => undefined);
-    const execute = vi
-      .fn<(apiKey: string) => Promise<string>>()
-      .mockRejectedValueOnce(new Error("Audio transcription failed (HTTP 500)"))
-      .mockResolvedValueOnce("ok");
+    const execute = failThenSucceed(new Error("Audio transcription failed (HTTP 500)"));
 
     await expect(
       executeWithApiKeyRotation({
@@ -57,10 +61,7 @@ describe("executeWithApiKeyRotation", () => {
 
   it("uses the shared default transient retry policy when enabled with true", async () => {
     vi.useFakeTimers();
-    const execute = vi
-      .fn<(apiKey: string) => Promise<string>>()
-      .mockRejectedValueOnce(new Error("Audio transcription failed (HTTP 500)"))
-      .mockResolvedValueOnce("ok");
+    const execute = failThenSucceed(new Error("Audio transcription failed (HTTP 500)"));
 
     try {
       const result = executeWithApiKeyRotation({
@@ -81,10 +82,7 @@ describe("executeWithApiKeyRotation", () => {
   it("retries the same key for a bare transient HTTP status", async () => {
     const status = 503;
     const sleep = vi.fn(async () => undefined);
-    const execute = vi
-      .fn<(apiKey: string) => Promise<string>>()
-      .mockRejectedValueOnce(new Error(`gemini embeddings failed (${status})`))
-      .mockResolvedValueOnce("ok");
+    const execute = failThenSucceed(new Error(`gemini embeddings failed (${status})`));
 
     await expect(
       executeWithApiKeyRotation({
@@ -145,10 +143,7 @@ describe("executeWithApiKeyRotation", () => {
 
   it("retries timeout-like AbortError when the caller signal is not aborted", async () => {
     const sleep = vi.fn(async () => undefined);
-    const execute = vi
-      .fn<(apiKey: string) => Promise<string>>()
-      .mockRejectedValueOnce(abortError("request timeout"))
-      .mockResolvedValueOnce("ok");
+    const execute = failThenSucceed(abortError("request timeout"));
 
     await expect(
       executeWithApiKeyRotation({
@@ -164,10 +159,7 @@ describe("executeWithApiKeyRotation", () => {
 
   it("retries timeout-named provider errors", async () => {
     const sleep = vi.fn(async () => undefined);
-    const execute = vi
-      .fn<(apiKey: string) => Promise<string>>()
-      .mockRejectedValueOnce(timeoutError("The operation was aborted due to timeout"))
-      .mockResolvedValueOnce("ok");
+    const execute = failThenSucceed(timeoutError("The operation was aborted due to timeout"));
 
     await expect(
       executeWithApiKeyRotation({
@@ -183,10 +175,7 @@ describe("executeWithApiKeyRotation", () => {
 
   it("does not retry generic AbortError without timeout evidence", async () => {
     const sleep = vi.fn(async () => undefined);
-    const execute = vi
-      .fn<(apiKey: string) => Promise<string>>()
-      .mockRejectedValueOnce(abortError("This operation was aborted"))
-      .mockResolvedValueOnce("ok");
+    const execute = failThenSucceed(abortError("This operation was aborted"));
 
     await expect(
       executeWithApiKeyRotation({
@@ -288,10 +277,7 @@ describe("executeWithApiKeyRotation", () => {
   it("does not expose apiKey to the transient retry classifier", async () => {
     const sleep = vi.fn(async () => undefined);
     const shouldRetry = vi.fn((_params: TransientProviderRetryParams) => true);
-    const execute = vi
-      .fn<(apiKey: string) => Promise<string>>()
-      .mockRejectedValueOnce(new Error("Audio transcription failed (HTTP 500)"))
-      .mockResolvedValueOnce("ok");
+    const execute = failThenSucceed(new Error("Audio transcription failed (HTTP 500)"));
 
     await expect(
       executeWithApiKeyRotation({

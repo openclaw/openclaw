@@ -333,6 +333,13 @@ export function expectPersistedRuntimeModel(params: {
   }
 }
 
+type SpawnTestConversation = {
+  channel: string;
+  accountId?: string;
+  conversationId: string;
+  parentConversationId?: string;
+};
+
 /** Load subagent-spawn with runtime dependencies replaced by test doubles. */
 export async function loadSubagentSpawnModuleForTest(params: {
   callGatewayMock: MockFn;
@@ -369,33 +376,18 @@ export async function loadSubagentSpawnModuleForTest(params: {
     bind?: (params: {
       targetSessionKey: string;
       targetKind?: string;
-      conversation: {
-        channel: string;
-        accountId?: string;
-        conversationId: string;
-        parentConversationId?: string;
-      };
+      conversation: SpawnTestConversation;
       placement: "current" | "child";
       metadata?: Record<string, unknown>;
     }) => Promise<{
       targetSessionKey: string;
       targetKind?: string;
       status?: string;
-      conversation: {
-        channel: string;
-        accountId?: string;
-        conversationId: string;
-        parentConversationId?: string;
-      };
+      conversation: SpawnTestConversation;
     }>;
     listBySession: (targetSessionKey: string) => Array<{
       status?: string;
-      conversation: {
-        channel: string;
-        accountId?: string;
-        conversationId: string;
-        parentConversationId?: string;
-      };
+      conversation: SpawnTestConversation;
     }>;
   };
   workspaceDir?: string;

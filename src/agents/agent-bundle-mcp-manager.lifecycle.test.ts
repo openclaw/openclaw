@@ -35,6 +35,7 @@ import type {
   SessionMcpRuntime,
   SessionMcpRuntimeLease,
 } from "./agent-bundle-mcp-types.js";
+import { createEnteredGate } from "./entered-gate.test-support.js";
 import { createMcpProofPluginRegistry } from "./mcp-connection-resolver.test-fixtures.js";
 import { createAgentCleanupScope } from "./run-cleanup-timeout.js";
 
@@ -115,14 +116,10 @@ function holdFactory() {
 }
 
 function holdDisposal(runtime: SessionMcpRuntime) {
-  const started = createDeferred();
-  const released = createDeferred();
-  releaseHeldWork.push(() => released.resolve());
-  runtime.dispose = vi.fn(async () => {
-    started.resolve();
-    await released.promise;
-  });
-  return { started: started.promise, release: () => released.resolve() };
+  const gate = createEnteredGate();
+  releaseHeldWork.push(gate.release);
+  runtime.dispose = vi.fn(gate.wait);
+  return { started: gate.entered, release: gate.release };
 }
 
 afterEach(async () => {

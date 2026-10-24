@@ -8,7 +8,10 @@ import {
   createFeishuCardInteractionEnvelope as envelope,
   type FeishuCardInteractionEnvelope,
 } from "./card-interaction.js";
-import { expectFirstSentCardUsesFillWidthOnly } from "./card-test-helpers.js";
+import {
+  expectFeishuCardButtonRow,
+  expectFirstSentCardUsesFillWidthOnly,
+} from "./card-test-helpers.js";
 import {
   FEISHU_APPROVAL_CANCEL_ACTION as CANCEL,
   FEISHU_APPROVAL_CONFIRM_ACTION as CONFIRM,
@@ -92,18 +95,47 @@ describe("Feishu Card Action Handler", () => {
     getChat.mockResolvedValueOnce({ code: 0, data: { chat_mode: "p2p" } });
     await dispatch(cardEvent(approvalAction()), { accountId: "main" });
     const expected = { u: "u123", h: "chat1", t: "p2p", s: "session", e: expect.any(Number) };
-    const button = expect.objectContaining({ value: expect.objectContaining({ c: expected }) });
-    const actions = { tag: "action", actions: [button, expect.anything()] };
-    const card = {
-      header: { title: { content: "Confirm action" } },
-      body: { elements: expect.arrayContaining([actions]) },
-    };
     const sent = sendCard.mock.calls[0]?.[0];
-    expect(sent).toMatchObject({ to: "chat:chat1", accountId: "main", card });
+    expect(sent).toMatchObject({
+      to: "chat:chat1",
+      accountId: "main",
+      card: { header: { title: { content: "Confirm action" } } },
+    });
+    const buttons = expectFeishuCardButtonRow(sent?.card);
+    expect(buttons.map((button) => button.value)).toEqual([
+      expect.objectContaining({ a: CONFIRM, q: "/new", c: expected }),
+      expect.objectContaining({ a: CANCEL, c: expected }),
+    ]);
     expectFirstSentCardUsesFillWidthOnly(sendCard);
     expect(createClient).toHaveBeenCalledTimes(1);
     expect(handleFeishuMessage).not.toHaveBeenCalled();
   });
+
+  it.each(["confirm", "cancel"] as const)(
+    "dispatches the emitted approval %s button",
+    async (action) => {
+      await dispatch(cardEvent(approvalAction()));
+      const buttons = expectFeishuCardButtonRow(sendCard.mock.calls[0]?.[0]?.card);
+      const button = buttons[action === "confirm" ? 0 : 1];
+      const event = cardEvent(button?.value as Record<string, unknown>, {
+        token: "approval-callback",
+      });
+      await dispatch(event, { botOpenId: "ou_bot" });
+      await dispatch(event, { botOpenId: "ou_bot" });
+      if (action === "confirm") {
+        expect(message()).toMatchObject({
+          chat_id: "chat1",
+          chat_type: "group",
+          content: '{"text":"/new"}',
+        });
+        expect(handleFeishuMessage).toHaveBeenCalledTimes(1);
+      } else {
+        expectNotice("Cancelled.");
+        expect(sendMessage).toHaveBeenCalledTimes(1);
+        expect(handleFeishuMessage).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("does not open approval cards when the expiry would exceed a valid Date", async () => {
     vi.useFakeTimers({ now: maxDate });
@@ -131,19 +163,28 @@ describe("Feishu Card Action Handler", () => {
     ]);
   });
 
-  it.each([
-    ["expired", () => ({ e: Date.now() - 1 })],
-    ["different user", () => ({ u: "u999" })],
-  ] as const)("safely rejects actions belonging to %s", async (reason, overrides) => {
-    await dispatch(cardEvent(quickAction({ c: { ...context(), t: "group", ...overrides() } })));
-    expectNotice(expect.stringContaining(reason));
-    expect(handleFeishuMessage).not.toHaveBeenCalled();
-  });
-
-  it("sends a lightweight cancellation notice", async () => {
-    await dispatch(cardEvent(quickAction({ k: "button", a: CANCEL, q: undefined })));
-    expectNotice("Cancelled.");
-  });
+  it.each(["expired", "different user", "different conversation"] as const)(
+    "rejects an emitted approval belonging to %s",
+    async (reason) => {
+      vi.useFakeTimers({ now: 100 });
+      await dispatch(cardEvent(approvalAction()));
+      const [button] = expectFeishuCardButtonRow(sendCard.mock.calls[0]?.[0]?.card);
+      if (reason === "expired") {
+        await vi.advanceTimersByTimeAsync(5 * 60_000 + 1);
+      }
+      const event = cardEvent(button?.value as Record<string, unknown>, {
+        token: "rejected-approval",
+        ...(reason === "different user" ? { operator: { open_id: "u999" } } : {}),
+        ...(reason === "different conversation" ? { context: { chat_id: "chat2" } } : {}),
+      });
+      await dispatch(event);
+      expect(sendMessage.mock.calls[0]?.[0]).toMatchObject({
+        to: reason === "different conversation" ? "chat:chat2" : "chat:chat1",
+        text: expect.stringContaining(reason),
+      });
+      expect(handleFeishuMessage).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves p2p callbacks for DM quick actions", async () => {
     await dispatch(cardEvent(quickAction({ c: { ...context(), t: "p2p" } })), {

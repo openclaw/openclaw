@@ -23,6 +23,16 @@ import {
   loadSharedRunIntegrationHarness,
 } from "./run.shared-integration-harness.test-support.js";
 
+function makeRetryAssistant(failed: boolean, errorMessage: string) {
+  return makeAssistantMessageFixture({
+    provider: "mock",
+    model: "model",
+    stopReason: failed ? "error" : "stop",
+    content: failed ? [] : [{ type: "text", text: "Recovered reply" }],
+    errorMessage: failed ? errorMessage : undefined,
+  });
+}
+
 describe("direct embedded retry lifecycle", () => {
   let run: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
   let session: Awaited<ReturnType<typeof createSharedRunIntegrationSession>>;
@@ -299,13 +309,10 @@ describe("direct embedded retry lifecycle", () => {
             nowMs += 130_000;
           }
           const failed = attempts < 3;
-          const assistant = makeAssistantMessageFixture({
-            provider: "mock",
-            model: "model",
-            stopReason: failed ? "error" : "stop",
-            content: failed ? [] : [{ type: "text", text: "Recovered reply" }],
-            errorMessage: failed ? "An error occurred while processing the request." : undefined,
-          });
+          const assistant = makeRetryAssistant(
+            failed,
+            "An error occurred while processing the request.",
+          );
           return session.makeAttemptResult({
             providerRetryMaxRetries: budget,
             hasSuccessfulModelResponse: attempts === 2 ? progress : false,
@@ -356,13 +363,7 @@ describe("direct embedded retry lifecycle", () => {
       mockedRunEmbeddedAttempt.mockImplementation(async () => {
         attempts += 1;
         const failed = attempts < 40;
-        const assistant = makeAssistantMessageFixture({
-          provider: "mock",
-          model: "model",
-          stopReason: failed ? "error" : "stop",
-          content: failed ? [] : [{ type: "text", text: "Recovered reply" }],
-          errorMessage: failed ? providerError : undefined,
-        });
+        const assistant = makeRetryAssistant(failed, providerError);
         return session.makeAttemptResult({
           // Three failures per outage also exercise the outer run-loop guard.
           hasSuccessfulModelResponse: progress && attempts > 1 && attempts % 3 === 1,
@@ -599,13 +600,7 @@ describe("direct embedded retry lifecycle", () => {
       mockedRunEmbeddedAttempt.mockImplementation(async (params) => {
         expect(params).not.toHaveProperty("onAttemptStart");
         const failed = ++attempts === 1 || outcome === "exhausted";
-        const assistant = makeAssistantMessageFixture({
-          provider: "mock",
-          model: "model",
-          stopReason: failed ? "error" : "stop",
-          content: failed ? [] : [{ type: "text", text: "Recovered reply" }],
-          errorMessage: failed ? "provider failure" : undefined,
-        });
+        const assistant = makeRetryAssistant(failed, "provider failure");
         await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
         // Harnesses defer their attempt terminal when the logical-run owner requests it.
         await params.onAgentEvent?.({

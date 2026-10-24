@@ -77,9 +77,11 @@ async function fixture(existingState = false) {
 }
 
 it.each(["set", "batch", "patch", "unset", "fast unset"] as const)(
-  "repairs through %s without creating or opening shared state",
+  "repairs through %s with plugin entries without opening shared state",
   async (command) => {
-    const f = await fixture(command === "patch");
+    const f = await fixture(true);
+    const plugins = { entries: { brave: { enabled: true } } };
+    await writeJson(f.configPath, { database, gateway: { mode: "local" }, plugins });
     const connection = "database.postgres.connection.id";
     const repaired = "OPENCLAW_REPAIRED_DSN";
     const patchPath = path.join(f.root, "patch.json");
@@ -104,6 +106,7 @@ it.each(["set", "batch", "patch", "unset", "fast unset"] as const)(
       expect(config.database.postgres.connection.id).toBe(repaired);
     }
     expect(config.gateway).toEqual({ mode: "local" });
+    expect(config.plugins).toEqual(plugins);
     await f.checkState();
   },
 );

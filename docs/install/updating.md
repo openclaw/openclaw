@@ -1358,9 +1358,18 @@ progress report remains available through that Gateway's restart.
 
 Ask the agent to update OpenClaw, or send `/update` from Discord or another
 connected chat. Natural-language requests use the existing `gateway` tool's
-`update.run` action. The minimal, coding, and messaging profiles expose that update
-action without granting configuration reads or other Gateway controls. Explicit tool
-restrictions still apply.
+`update.run` action. The same tool exposes `restart` for a runtime-coordinated safe
+restart and `update.cleanup` for explicit recovery cleanup without stopping the
+Gateway. The minimal, coding, and messaging profiles expose these maintenance
+actions without granting configuration reads. Explicit tool restrictions still apply.
+
+On an explicit owner request, the agent performs the supported action itself; it
+does not send the owner to a slash command or terminal. Restart requests can be
+deferred until active work settles; an accepted schedule is not a completed restart.
+Cleanup uses the serving Gateway's owner-bound worker and the existing manual
+verification, eligibility, and dependency checks. It permanently removes eligible
+rollback copies, so it requires a cleanup request. Set `dryRun: true` to preview.
+It does not select unmanifested paths or stop/restart the Gateway.
 
 Operator-created scheduled automations can also call `gateway` → `update.run`
 without a chat owner identity. The Gateway uses the active scheduled run's
@@ -1450,9 +1459,11 @@ External-chat updates through `/update` or the tool require `commands.restart`
 (enabled by default), including managed installations. The slash command also
 follows command-access restrictions; tool calls follow tool policy. Chat updates use the hosting installation's
 configured update channel and install method.
-Agents must never run `npm install -g openclaw` or stop the Gateway service
-from a chat shell; use `/update` or the update action so restart and notification
-stay coordinated.
+Agents use runtime-supervised maintenance rather than an unsupervised shell
+stop/update/start sequence or package swap. The runtime retains restart ownership
+before stopping the Gateway. Non-owner requests remain refused, and chat restarts
+honor `commands.restart` just like chat updates. Cleanup does not depend on that
+flag because it does not restart the Gateway.
 
 ## Inspect FreeBSD service discovery
 
@@ -1546,8 +1557,12 @@ is not required for this ledger defect. See [Update run history](/cli/update#run
 
 ## Retire update recovery data
 
-Once you have verified the update and your conversations, preview retained
-migration originals:
+Once you have verified the update and your conversations, ask the agent to clean
+up update recovery copies. The `gateway` tool's `update.cleanup` action runs under
+the serving Gateway's ownership; no stop is needed. It also accepts `dryRun: true`
+for a preview. The standalone CLI keeps its offline apply requirement below.
+
+To preview retained migration originals from a terminal:
 
 ```bash
 openclaw update cleanup --dry-run
