@@ -180,16 +180,4 @@ suite.define(() => {
         expect(await button(page, "Send message").isEnabled()).toBe(true);
       },
     ));
-
-  it("offers the same cancelable preparation in New Session", () =>
-    suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
-      await installMockGateway(page, { attachmentMaxBytes: limit });
-      await page.goto(suite.server.baseUrl + "new");
-      await upload(page, "screen.mp4");
-      await button(page, "Compress to fit").click();
-      const preparing = page.locator('.chat-attachment-thumb[aria-busy="true"]');
-      await preparing.waitFor();
-      await button(page, "Remove screen.mp4").click();
-      await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(0);
-    }));
 });

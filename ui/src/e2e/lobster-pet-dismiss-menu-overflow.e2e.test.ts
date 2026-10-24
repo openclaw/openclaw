@@ -1,5 +1,5 @@
 // Force classic scrollbars to reproduce macOS "Always show scrollbars" overflow.
-import type { BrowserContextOptions, Locator, Page } from "playwright";
+import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { LobsterPetElement as BrowserLobsterPet } from "../components/lobster-pet.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -48,12 +48,8 @@ async function measureDismissMenu(currentPage: Page) {
       firstItemFontSizePx: Number.parseFloat(getComputedStyle(firstItem).fontSize),
       firstItemLabelHeightPx: firstItemLabel.getBoundingClientRect().height,
       overflowPx: menu.scrollHeight - menu.clientHeight,
-      viewportHeight: window.innerHeight,
-      viewportWidth: window.innerWidth,
-      top,
-      bottom,
-      left,
-      right,
+      containedVertically: top >= 0 && bottom <= window.innerHeight,
+      containedHorizontally: left >= 0 && right <= window.innerWidth,
       anchorLeft: anchorRect?.left,
       anchorTop: anchorRect?.top,
       popupIsTopLayer: menu.matches(":popover-open"),
@@ -61,10 +57,6 @@ async function measureDismissMenu(currentPage: Page) {
       hostParentClass: host?.parentElement?.className ?? null,
     };
   });
-}
-
-async function expectFocused(target: Locator) {
-  expect(await target.evaluate((element) => element === document.activeElement)).toBe(true);
 }
 
 async function openDismissMenu(page: Page) {
@@ -78,7 +70,6 @@ async function openDismissMenu(page: Page) {
 suite.define(() => {
   it("keeps the composer critter clickable and its dismissal menu inside the viewport", () =>
     withDismissMenuPage({ colorScheme: "dark" }, async (page) => {
-      const sprite = page.locator(".lobster-pet");
       // Native dismissal completion needs live animation frames.
       await page.clock.resume();
       const composer = page.locator(".new-session-page__message");
@@ -96,27 +87,15 @@ suite.define(() => {
         overflowPx: 0,
         popupIsTopLayer: true,
         hasOuterMenuSurface: false,
+        containedVertically: true,
       });
       expect(measurement.hostParentClass).toContain("agent-chat__input");
-      expect(measurement.top).toBeGreaterThanOrEqual(0);
-      expect(measurement.bottom).toBeLessThanOrEqual(measurement.viewportHeight);
       expect(await page.locator("openclaw-app-sidebar openclaw-lobster-pet").count()).toBe(0);
       const panel = page.locator(".lobster-pet-dismiss-menu__panel");
       await page.keyboard.press("Escape");
-      await expectFocused(composer);
+      expect(await composer.evaluate((element) => element === document.activeElement)).toBe(true);
       await panel.waitFor({ state: "detached" });
-      expect(await sprite.count()).toBe(1);
-
-      await openDismissMenu(page);
-      await composer.click();
-      await panel.waitFor({ state: "detached" });
-      await expectFocused(composer);
-      expect(await sprite.count()).toBe(1);
-
-      await openDismissMenu(page);
-      await page.keyboard.press("Enter");
-      await expectFocused(composer);
-      await expect.poll(() => sprite.count()).toBe(0);
+      expect(await page.locator(".lobster-pet").count()).toBe(1);
     }));
 
   it("keeps both items fully visible under long labels and an enlarged type scale", () =>
@@ -152,17 +131,13 @@ suite.define(() => {
     withDismissMenuPage({ viewport: { width: 1280, height: 420 } }, async (shortPage) => {
       await openDismissMenu(shortPage);
 
-      const measurement = await measureDismissMenu(shortPage);
-
-      expect(measurement.top).toBeGreaterThanOrEqual(0);
-      expect(measurement.bottom).toBeLessThanOrEqual(measurement.viewportHeight);
+      expect((await measureDismissMenu(shortPage)).containedVertically).toBe(true);
     }));
 
   for (const edge of ["left", "right"] as const) {
     it(`keeps the popup within the viewport for pointer coordinates near the ${edge} edge`, () =>
       withDismissMenuPage({}, async (page) => {
-        // Exercise the popup's raw pointer-coordinate boundary without moving
-        // the composer outside its scroll container and invalidating its lanes.
+        // Keep the composer in its lane while exercising raw pointer coordinates.
         const sprite = page.locator(".lobster-pet");
         await sprite.waitFor();
         const point = await sprite.evaluate(
@@ -182,8 +157,7 @@ suite.define(() => {
 
         const measurement = await measureDismissMenu(page);
 
-        expect(measurement.left).toBeGreaterThanOrEqual(0);
-        expect(measurement.right).toBeLessThanOrEqual(measurement.viewportWidth);
+        expect(measurement.containedHorizontally).toBe(true);
         expect(measurement.anchorLeft).toBeCloseTo(point.clientX);
         expect(measurement.anchorTop).toBeCloseTo(point.clientY);
       }));

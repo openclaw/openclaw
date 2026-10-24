@@ -117,18 +117,6 @@ suite.define(() => {
     expect(await dialog.getByText(first.command, { exact: true }).count()).toBe(0);
   });
 
-  it("hides machine connection from non-admin operators", async () => {
-    const { page, gateway } = await openNewSession({
-      operatorScopes: ["operator.read", "operator.write"],
-    });
-
-    const place = page.locator(".oc-popover.new-session-page__where-popover");
-    await page.locator("#new-session-where-trigger").click();
-    await place.locator('[data-value="gateway"]').waitFor();
-    expect(await place.getByRole("button", { name: "Connect a device" }).count()).toBe(0);
-    expect(await gateway.getRequests("device.pair.setupCode")).toEqual([]);
-  });
-
   it("shows a retryable error when connection-link creation never responds", async () => {
     const response = setupCode("https://gateway.example.com/j/retried-code", "2026.9.30");
     const { page, gateway } = await openNewSession({

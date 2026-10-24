@@ -9,7 +9,6 @@ const suite = createControlUiE2eSuite({
   name: "Control UI community card E2E",
   startServerBeforeBrowser: true,
 });
-const dismissalKey = "openclaw:control-ui:community-invite:v2";
 const sessions = Array.from({ length: 32 }, (_, index) =>
   createControlUiSessionRow(
     index === 0 ? "agent:main:main" : `agent:main:task-${index}`,
@@ -19,159 +18,148 @@ const sessions = Array.from({ length: 32 }, (_, index) =>
 );
 
 suite.define(() => {
-  for (const mobile of [false, true]) {
-    for (const mode of ["light", "dark"] as const) {
-      it(`keeps the ${mobile ? "mobile" : "desktop"} ${mode} card flush and dismissal persistent`, async () =>
-        suite.withPage(
-          {
-            viewport: mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 },
-            hasTouch: mobile,
-            colorScheme: mode,
-          },
-          async ({ page }) => {
-            const resize = (height: number) =>
-              page.setViewportSize({ width: mobile ? 390 : 1280, height });
-            const rail = (view: string) =>
-              page.locator(`.sidebar-rail [data-navigation-view="${view}"]`);
-            const expectDismissed = async () => {
-              await rail("sessions").waitFor({ state: "attached" });
-              expect(await card.count()).toBe(0);
+  for (const [mobile, mode] of [
+    [false, "dark"],
+    [true, "light"],
+  ] as const) {
+    it(`keeps the ${mobile ? "mobile" : "desktop"} ${mode} card flush and dismissal persistent`, async () =>
+      suite.withPage(
+        {
+          viewport: mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 },
+          hasTouch: mobile,
+          colorScheme: mode,
+        },
+        async ({ page }) => {
+          const resize = (height: number) =>
+            page.setViewportSize({ width: mobile ? 390 : 1280, height });
+          const rail = (view: string) =>
+            page.locator(`.sidebar-rail [data-navigation-view="${view}"]`);
+          await seedChatSettings(page, suite.server.baseUrl, {
+            themeMode: mode,
+            sidebarAgentsMode: "chip",
+            navWidth: 320,
+          });
+          await installMockGateway(page, { communityInvite: true, sessions });
+          const url = controlUiSessionUrl(suite.server.baseUrl, "agent:main:main");
+          await page.goto(url);
+          if (mobile) {
+            await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+            await waitForMobileSidebarDrawerOpen(page);
+          }
+          const card = page.locator(".community-invite-card");
+          const close = card.getByRole("button", { name: "Dismiss and don't show again" });
+          await close.waitFor();
+          const closeAppearance = await close.evaluate((node) => {
+            const target = node.getBoundingClientRect();
+            const backdrop = getComputedStyle(node, "::before");
+            const header = node.closest(".invite__header")!.getBoundingClientRect();
+            const glyph = node.querySelector("svg")!.getBoundingClientRect();
+            const backdropInset = (Number.parseFloat(backdrop.width) - glyph.width) / 2;
+            return {
+              targetWidth: target.width,
+              targetHeight: target.height,
+              background: getComputedStyle(node).backgroundColor,
+              backdropWidth: Number.parseFloat(backdrop.width),
+              backdropHeight: Number.parseFloat(backdrop.height),
+              visibleTop: glyph.top - header.top - backdropInset,
+              visibleRight: header.right - glyph.right - backdropInset,
+              contained:
+                target.left >= header.left &&
+                target.top >= header.top &&
+                target.right <= header.right &&
+                target.bottom <= header.bottom,
             };
-            await seedChatSettings(page, suite.server.baseUrl, {
-              themeMode: mode,
-              sidebarAgentsMode: "chip",
-              navWidth: 320,
-            });
-            await installMockGateway(page, { communityInvite: true, sessions });
-            const url = controlUiSessionUrl(suite.server.baseUrl, "agent:main:main");
-            await page.goto(url);
-            if (mobile) {
-              await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
-              await waitForMobileSidebarDrawerOpen(page);
-            }
-            const card = page.locator(".community-invite-card");
-            const close = card.getByRole("button", { name: "Dismiss and don't show again" });
-            await close.waitFor();
-            const closeAppearance = await close.evaluate((node) => {
-              const target = node.getBoundingClientRect();
-              const backdrop = getComputedStyle(node, "::before");
-              const header = node.closest(".invite__header")!.getBoundingClientRect();
-              const glyph = node.querySelector("svg")!.getBoundingClientRect();
-              const backdropInset = (Number.parseFloat(backdrop.width) - glyph.width) / 2;
-              return {
-                targetWidth: target.width,
-                targetHeight: target.height,
-                background: getComputedStyle(node).backgroundColor,
-                backdropWidth: Number.parseFloat(backdrop.width),
-                backdropHeight: Number.parseFloat(backdrop.height),
-                visibleTop: glyph.top - header.top - backdropInset,
-                visibleRight: header.right - glyph.right - backdropInset,
-                contained:
-                  target.left >= header.left &&
-                  target.top >= header.top &&
-                  target.right <= header.right &&
-                  target.bottom <= header.bottom,
-              };
-            });
-            expect(closeAppearance.background).toBe("rgba(0, 0, 0, 0)");
-            expect(closeAppearance.visibleTop).toBeCloseTo(8, 0);
-            expect(closeAppearance.visibleRight).toBeCloseTo(8, 0);
-            expect(closeAppearance.contained).toBe(true);
-            expect(closeAppearance.backdropWidth).toBeLessThanOrEqual(24);
-            expect(closeAppearance.backdropHeight).toBeLessThanOrEqual(24);
-            expect(closeAppearance.targetWidth).toBeGreaterThanOrEqual(mobile ? 44 : 24);
-            expect(closeAppearance.targetHeight).toBeGreaterThanOrEqual(mobile ? 44 : 24);
-            const shell = page.locator(".sidebar-shell");
-            const list = page.locator(".sidebar-shell__body");
-            const cardBounds = (await card.boundingBox())!;
-            const shellBounds = (await shell.boundingBox())!;
-            const listBounds = (await list.boundingBox())!;
-            expect(cardBounds.x).toBeCloseTo(shellBounds.x, 0);
-            expect(cardBounds.width).toBeCloseTo(shellBounds.width, 0);
-            expect(cardBounds.y + cardBounds.height).toBeCloseTo(
-              shellBounds.y + shellBounds.height,
-              0,
-            );
-            expect(listBounds.y + listBounds.height).toBeLessThanOrEqual(cardBounds.y);
-            expect(listBounds.height).toBeGreaterThan(120);
-            const artwork = card.locator(".invite__art");
-            await expect
-              .poll(() =>
-                artwork.evaluate(
-                  (node) =>
-                    node instanceof HTMLImageElement && node.complete && node.naturalWidth === 1024,
-                ),
-              )
-              .toBe(true);
-            expect(await artwork.getAttribute("src")).toContain(`community-invite-${mode}.webp`);
-            const artworkBounds = (await artwork.boundingBox())!;
-            expect(artworkBounds.height).toBeGreaterThan(80);
-            expect(cardBounds.height - artworkBounds.height).toBeLessThan(190);
-            expect(
-              await card
-                .locator(".invite__body")
-                .evaluate((node) => Number.parseFloat(getComputedStyle(node).paddingLeft)),
-            ).toBeGreaterThanOrEqual(12);
-            for (let index = 0; index < 3; index += 1) {
-              await page.getByRole("button", { name: "Show more", exact: true }).click();
-            }
-            await resize(mobile ? 568 : 540);
-            await page.locator('[data-session-key="agent:main:task-31"]').scrollIntoViewIfNeeded();
-            expect(await list.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
-            const shortListBounds = (await list.boundingBox())!;
-            const shortCardBounds = (await card.boundingBox())!;
-            expect(shortListBounds.height).toBeGreaterThan(80);
-            expect(shortListBounds.y + shortListBounds.height).toBeLessThanOrEqual(
-              shortCardBounds.y,
-            );
-            expect(shortCardBounds.y + shortCardBounds.height).toBeLessThanOrEqual(
-              mobile ? 568 : 540,
-            );
-            await resize(mobile ? 844 : 900);
-            await list.evaluate((node) => {
-              node.scrollTop = 0;
-            });
-            await rail("pages").click();
-            await close.waitFor();
-            await rail("sessions").click();
-            await page.keyboard.press("Tab");
-            await close.focus();
-            expect(await close.evaluate((node) => node.matches(":focus-visible"))).toBe(true);
-            expect(
-              await close.evaluate((node) => getComputedStyle(node, "::before").outlineStyle),
-            ).toBe("solid");
-            if (mobile && mode === "light") {
-              await close.tap({ position: { x: 2, y: 2 } });
-            } else {
-              await page.keyboard.press("Enter");
-            }
-            await card.waitFor({ state: "detached" });
-            expect(
-              await page.evaluate((key) => localStorage.getItem(key), dismissalKey),
-            ).not.toBeNull();
-            expect(await rail("sessions").evaluate((node) => node === document.activeElement)).toBe(
-              true,
-            );
-            await page.goto(`${suite.server.baseUrl}new`);
-            await expectDismissed();
-            await page.goto(url);
-            await expectDismissed();
-            await page.reload();
-            if (mobile) {
-              await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
-            }
-            await page.locator(".sidebar-shell").waitFor();
-            expect(await card.count()).toBe(0);
-            await page.setViewportSize(
-              mobile ? { width: 1280, height: 700 } : { width: 390, height: 568 },
-            );
-            if (!mobile) {
-              await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
-            }
-            await page.locator(".sidebar-shell").waitFor();
-            expect(await card.count()).toBe(0);
-          },
-        ));
-    }
+          });
+          expect(closeAppearance).toMatchObject({
+            background: "rgba(0, 0, 0, 0)",
+            contained: true,
+          });
+          expect(closeAppearance.visibleTop).toBeCloseTo(8, 0);
+          expect(closeAppearance.visibleRight).toBeCloseTo(8, 0);
+          expect(closeAppearance.backdropWidth).toBeLessThanOrEqual(24);
+          expect(closeAppearance.backdropHeight).toBeLessThanOrEqual(24);
+          expect(closeAppearance.targetWidth).toBeGreaterThanOrEqual(mobile ? 44 : 24);
+          expect(closeAppearance.targetHeight).toBeGreaterThanOrEqual(mobile ? 44 : 24);
+          const list = page.locator(".sidebar-shell__body");
+          const cardBounds = (await card.boundingBox())!;
+          const shellBounds = (await page.locator(".sidebar-shell").boundingBox())!;
+          const listBounds = (await list.boundingBox())!;
+          expect(cardBounds.x).toBeCloseTo(shellBounds.x, 0);
+          expect(cardBounds.width).toBeCloseTo(shellBounds.width, 0);
+          expect(cardBounds.y + cardBounds.height).toBeCloseTo(
+            shellBounds.y + shellBounds.height,
+            0,
+          );
+          expect(listBounds.y + listBounds.height).toBeLessThanOrEqual(cardBounds.y);
+          expect(listBounds.height).toBeGreaterThan(120);
+          const artwork = card.locator(".invite__art");
+          await expect
+            .poll(() =>
+              artwork.evaluate(
+                (node) =>
+                  node instanceof HTMLImageElement && node.complete && node.naturalWidth === 1024,
+              ),
+            )
+            .toBe(true);
+          const artworkBounds = (await artwork.boundingBox())!;
+          expect(artworkBounds.height).toBeGreaterThan(80);
+          expect(cardBounds.height - artworkBounds.height).toBeLessThan(190);
+          expect(
+            await card
+              .locator(".invite__body")
+              .evaluate((node) => Number.parseFloat(getComputedStyle(node).paddingLeft)),
+          ).toBeGreaterThanOrEqual(12);
+          for (let index = 0; index < 3; index += 1) {
+            await page.getByRole("button", { name: "Show more", exact: true }).click();
+          }
+          await resize(mobile ? 568 : 540);
+          await page.locator('[data-session-key="agent:main:task-31"]').scrollIntoViewIfNeeded();
+          expect(await list.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
+          const shortListBounds = (await list.boundingBox())!;
+          const shortCardBounds = (await card.boundingBox())!;
+          expect(shortListBounds.height).toBeGreaterThan(80);
+          expect(shortListBounds.y + shortListBounds.height).toBeLessThanOrEqual(shortCardBounds.y);
+          expect(shortCardBounds.y + shortCardBounds.height).toBeLessThanOrEqual(
+            mobile ? 568 : 540,
+          );
+          await resize(mobile ? 844 : 900);
+          await list.evaluate((node) => {
+            node.scrollTop = 0;
+          });
+          await rail("pages").click();
+          await close.waitFor();
+          await rail("sessions").click();
+          await page.keyboard.press("Tab");
+          await close.focus();
+          expect(await close.evaluate((node) => node.matches(":focus-visible"))).toBe(true);
+          expect(
+            await close.evaluate((node) => getComputedStyle(node, "::before").outlineStyle),
+          ).toBe("solid");
+          if (mobile) {
+            await close.tap({ position: { x: 2, y: 2 } });
+          } else {
+            await page.keyboard.press("Enter");
+          }
+          await card.waitFor({ state: "detached" });
+          expect(await rail("sessions").evaluate((node) => node === document.activeElement)).toBe(
+            true,
+          );
+          // The component browser suite owns persistence; retain app remount/resize proof here.
+          await page.reload();
+          if (mobile) {
+            await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+          }
+          await page.locator(".sidebar-shell").waitFor();
+          expect(await card.count()).toBe(0);
+          await page.setViewportSize(
+            mobile ? { width: 1280, height: 700 } : { width: 390, height: 568 },
+          );
+          if (!mobile) {
+            await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
+          }
+          await page.locator(".sidebar-shell").waitFor();
+          expect(await card.count()).toBe(0);
+        },
+      ));
   }
 });
