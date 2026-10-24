@@ -94,3 +94,76 @@ it.each(
   expect(state.chatRunId).toBe(runId);
   expect(state.chatStream).toBe("Continuing the current reply.");
 });
+
+it.each([
+  { label: "without an envelope run id", envelope: {} },
+  { label: "with a matching envelope run id", envelope: { runId: "cli-run-1" } },
+])("clears the live stream when a cli assistant row persists mid-run ($label)", ({ envelope }) => {
+  const currentUser = {
+    role: "user",
+    content: [{ type: "text", text: "Run the CLI" }],
+    __openclaw: { id: "current-user", idempotencyKey: "cli-run-1:user", seq: 1 },
+  };
+  const persistedRow = {
+    role: "assistant",
+    api: "cli",
+    content: [{ type: "text", text: "Partial answer" }],
+    __openclaw: { id: "cli-row-1", seq: 2, idempotencyKey: "cli-assistant:cli-run-1" },
+  };
+  const { state } = createSessionEventState({
+    chatMessages: [currentUser],
+    chatRunId: "cli-run-1",
+    chatStream: "Partial answer",
+  });
+
+  emitGatewayEvent(state, "session.message", {
+    sessionKey: state.sessionKey,
+    ...envelope,
+    hasActiveRun: true,
+    messageId: "cli-row-1",
+    messageSeq: 2,
+    message: persistedRow,
+  });
+
+  expect(state.chatStream).toBeNull();
+  expect(state.chatMessages).toEqual([
+    currentUser,
+    {
+      ...persistedRow,
+      __openclaw: {
+        id: "cli-row-1",
+        seq: 2,
+        idempotencyKey: "cli-assistant:cli-run-1",
+        runId: "cli-run-1",
+      },
+    },
+  ]);
+});
+
+it("keeps the live stream for mid-run persisted rows without cli provenance", () => {
+  const currentUser = {
+    role: "user",
+    content: [{ type: "text", text: "Current prompt" }],
+    __openclaw: { id: "current-user", idempotencyKey: "cli-run-1:user", seq: 1 },
+  };
+  const persistedRow = {
+    role: "assistant",
+    content: [{ type: "text", text: "Different answer" }],
+    __openclaw: { id: "other-row", seq: 2, runId: "cli-run-1" },
+  };
+  const { state } = createSessionEventState({
+    chatMessages: [currentUser],
+    chatRunId: "cli-run-1",
+    chatStream: "Partial answer",
+  });
+
+  emitGatewayEvent(state, "session.message", {
+    sessionKey: state.sessionKey,
+    hasActiveRun: true,
+    messageId: "other-row",
+    messageSeq: 2,
+    message: persistedRow,
+  });
+
+  expect(state.chatStream).toBe("Partial answer");
+});

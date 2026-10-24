@@ -6,6 +6,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import type { SessionProjectionScope } from "@openclaw/gateway-client/browser";
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { extractText } from "../../lib/chat/message-extract.ts";
 import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
@@ -82,8 +83,19 @@ export function applySessionMessagePayload(
   // Interim tool-use rows retain producer ownership in transcript metadata;
   // the outer run ID is only published for terminal assistant rows.
   // Client correlation keys cannot establish ownership, nor override a conflict.
+  // CLI assistant rows are their own producer proof: the Gateway stamps the run
+  // id into the persisted idempotency key, and the mid-run transcript publish
+  // can omit the envelope run id this comparison otherwise requires.
+  const isCliAssistantRow =
+    incoming.role === "assistant" &&
+    normalizeNullableString(sourceRecord.api)?.toLowerCase() === "cli";
   const explicitRunId = normalizeSessionProjectionRunId(event.runId ?? sourceMetadata.runId);
-  const producerRunId = incoming.runId === explicitRunId ? incoming.runId : null;
+  const producerRunId =
+    incoming.runId === explicitRunId
+      ? incoming.runId
+      : isCliAssistantRow && !explicitRunId && incoming.runId
+        ? incoming.runId
+        : null;
   const assistantOwnerRunId =
     incoming.role === "assistant" &&
     incoming.id &&
@@ -150,10 +162,13 @@ export function applySessionMessagePayload(
     prunePersistedAssistantStreamSegments(state, message);
     // Terminal persistence can precede the run's final event. Keyed commentary
     // replaces only its segment, so it must leave a later reply stream intact.
+    // A CLI row whose canonical producer run matches the pane's run replaces the
+    // live stream even when the mid-run publish omitted the envelope run id.
     if (
       assistantOwnerRunId &&
       (runActive === false ||
-        (normalizeSessionProjectionRunId(event.runId) === assistantOwnerRunId &&
+        ((normalizeSessionProjectionRunId(event.runId) === assistantOwnerRunId ||
+          isCliAssistantRow) &&
           !readAssistantStreamSegmentIdentity(message)))
     ) {
       state.chatStream = null;
