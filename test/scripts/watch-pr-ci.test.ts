@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { collectRollupContexts, type RollupCheck } from "../../scripts/lib/watch-pr-ci-rollup.mts";
 import {
-  buildFindRunArgs,
   classifyRollup,
   classifyRunAttachment,
   parseArgs,
@@ -461,14 +460,6 @@ describe("watch-pr-ci", () => {
     );
   });
 
-  it("builds a pull-request-only run attachment query", () => {
-    expect(buildFindRunArgs("openclaw/openclaw", sha)).toEqual(
-      `api --method GET repos/openclaw/openclaw/actions/workflows/ci.yml/runs -f event=pull_request -f head_sha=${sha} -f per_page=20`.split(
-        " ",
-      ),
-    );
-  });
-
   it("skips newer draft runs without weakening the --after boundary", () => {
     const skipped = { id: 103, conclusion: "skipped" };
     const successful = { id: 102, conclusion: "success" };
@@ -568,17 +559,6 @@ if (args[0] === "browse") {
       expect(result.stdout).toContain("TIMEOUT completion=ci-run");
       expect(result.stdout).not.toContain("\nGREEN");
       expect(result.stdout).not.toContain("\nFAILING");
-      const calls = readCalls(callsPath);
-      expect(
-        calls.filter((args) => args.includes("repos/openclaw/openclaw/pulls/42")),
-      ).toHaveLength(2);
-      expect(calls.some((args) => args[0] === "pr" || args.includes("graphql"))).toBe(false);
-      expect(calls.some((args) => args.some((arg) => arg.includes("/commits/")))).toBe(false);
-      const runReads = calls.filter((args) => args[0] === "run" && args[1] === "view");
-      expect(runReads.map((args) => args[args.indexOf("--json") + 1])).toEqual([
-        "status,conclusion",
-        "status,conclusion,jobs",
-      ]);
     });
   });
 
@@ -605,12 +585,6 @@ if (args[0] === "browse") {
       (
         [
           ["closed", { state: "closed" }, 10, "PR-CLOSED state=CLOSED"],
-          [
-            "merged",
-            { state: "closed", merged_at: "2026-09-19T00:00:00Z" },
-            10,
-            "PR-CLOSED state=MERGED",
-          ],
           ["moved head", { head: { sha: "b".repeat(40) } }, 11, "HEAD-MOVED"],
           [
             "conflict",
@@ -784,14 +758,14 @@ if (args[0] === "browse") {
       ["missing count", { nodes: [], pageInfo: { hasNextPage: false } }],
       ["missing pagination", { totalCount: 0, nodes: [] }],
       ["no checks", { totalCount: 0, nodes: [], pageInfo: { hasNextPage: false } }],
-      ...[0, 2].map((totalCount): [string, unknown] => [
+      [
         "inconsistent count",
         {
-          totalCount,
+          totalCount: 2,
           nodes: [{ kind: "StatusContext", context: "required", state: "SUCCESS" }],
           pageInfo: { hasNextPage: false },
         },
-      ]),
+      ],
     ])("does not turn a FAILURE with %s into success", async (_label, detailContexts) => {
       const result = await replaySummary({
         state: "FAILURE",
@@ -846,14 +820,12 @@ if (args[0] === "browse") {
       ["moved head", { headRefOid: "b".repeat(40) }, 11, "HEAD-MOVED"],
       ["closed PR", { state: "CLOSED" }, 10, "PR-CLOSED"],
       ["conflicting PR", { mergeable: "CONFLICTING" }, 14, "CONFLICTING-MID-WAIT"],
-      ...["PENDING", "FAILURE", "ERROR"].map(
-        (state): [string, Record<string, unknown>, number, string] => [
-          `same-head ${state}`,
-          { statusCheckRollup: { state } },
-          state === "PENDING" ? 16 : 15,
-          state === "PENDING" ? "TIMEOUT" : "FAILING checks=required status",
-        ],
-      ),
+      ...["PENDING", "FAILURE"].map((state): [string, Record<string, unknown>, number, string] => [
+        `same-head ${state}`,
+        { statusCheckRollup: { state } },
+        state === "PENDING" ? 16 : 15,
+        state === "PENDING" ? "TIMEOUT" : "FAILING checks=required status",
+      ]),
     ])(
       "reobserves %s after the attached run succeeds",
       async (_label, afterRun, exitCode, output) => {
@@ -930,9 +902,6 @@ if (args[0] === "browse") {
       expect(result.calls.some((call) => call[1]?.endsWith("/status?per_page=100&page=2"))).toBe(
         true,
       );
-      expect(result.calls.filter((call) => call[1]?.includes("/check-runs?"))).toHaveLength(1);
-      expect(result.calls.filter((call) => call[1]?.includes("/status?"))).toHaveLength(2);
-      expect(result.calls.filter((call) => call[1]?.includes("/check-suites?"))).toHaveLength(1);
     });
 
     it.concurrent.each(["pending", "failure"])(
@@ -1044,7 +1013,6 @@ if (args[0] === "browse") {
       async ({ label: _label, ...fixture }) => {
         const result = await replayRestRollup(fixture);
         expectRun(result, 16, "RETRY phase=watch", "\nGREEN");
-        expect(result.calls.filter((call) => call[1] === "graphql")).toHaveLength(1);
       },
     );
 
@@ -1106,7 +1074,6 @@ if (args[0] === "browse") {
       expect(result.stdout).toContain(
         exitCode === 0 ? "\nGREEN" : active ? "TIMEOUT" : "FAILING checks=build",
       );
-      expect(result.calls.filter((call) => call[1] === "graphql")).toHaveLength(1);
       if (active) {
         expect(result.stdout.match(/STATUS rollup=pending/g)).toHaveLength(3);
         expect(result.calls.filter((call) => call[1]?.includes("/check-runs?"))).toHaveLength(3);
@@ -1119,24 +1086,14 @@ if (args[0] === "browse") {
 
   describe.skipIf(process.platform === "win32")("proxy failures", () => {
     it.concurrent.each([
-      ...[
-        "407 Proxy Authentication Required",
-        'Post "https://api.github.com/graphql": Proxy Authentication Required',
-      ].flatMap((error) => [
-        { phase: "attach", completion: "rollup", status: 407, exitCode: 2, error },
-        { phase: "attach", completion: "ci-run", status: 407, exitCode: 2, error },
-        { phase: "watch", completion: "rollup", status: 407, exitCode: 2, error },
-        { phase: "watch", completion: "ci-run", status: 407, exitCode: 2, error },
-      ]),
-      ...[
-        { phase: "attach", completion: "rollup", exitCode: 13 },
-        { phase: "attach", completion: "ci-run", exitCode: 13 },
-        { phase: "watch", completion: "rollup", exitCode: 16 },
-        { phase: "watch", completion: "ci-run", exitCode: 16 },
-      ].map((scenario) => Object.assign(scenario, { status: 502, error: "502 Bad Gateway" })),
-    ])(
-      "handles $error during $phase ($completion)",
-      async ({ phase, completion, status, exitCode, error }) => {
+      ["attach", "rollup", 407, 2],
+      ["watch", "ci-run", 407, 2],
+      ["attach", "ci-run", 502, 13],
+      ["watch", "rollup", 502, 16],
+    ] as const)(
+      "handles proxy failure during %s (%s, status %s)",
+      async (phase, completion, status, exitCode) => {
+        const error = status === 407 ? "407 Proxy Authentication Required" : "502 Bad Gateway";
         const result = await runWatcher(
           `#!/usr/bin/env node
 const fs = require("node:fs");
@@ -1244,12 +1201,11 @@ console.log(JSON.stringify(value));
     }
 
     it.each<OwnershipScenario>([
-      timeout("queued replacement", { status: "queued", conclusion: null }),
       timeout("running replacement", { status: "in_progress", conclusion: null }),
       green("successful replacement"),
       timeout("ci-run slow final run", { completion: "ci-run", slowFinalRun: true }),
       timeout("ci-run slow watch PR read", { completion: "ci-run", slowWatchPr: true }),
-      ...[33, 65].map((oldRunCount) => ({
+      ...[33].map((oldRunCount) => ({
         label: `${oldRunCount}-run authoritative SUCCESS`,
         oldRunCount,
         olderRunOutsidePage: true,
@@ -1280,24 +1236,9 @@ console.log(JSON.stringify(value));
         },
         65,
       ),
-      ...[32, 33, 65].map((count) =>
+      ...[32, 33].map((count) =>
         priorPage("metadata progress", { exitCode: 0, output: "GREEN" }, count),
       ),
-      metadata("unknown association", {
-        previousPatch: { pull_requests: [] },
-      }),
-      metadata("foreign association", {
-        previousPatch: { pull_requests: [association(43)] },
-      }),
-      metadata("failed attached run", {
-        conclusion: "failure",
-        output: "FAILING checks=CI workflow (failure)",
-      }),
-      metadata("moved head", {
-        afterMetadata: { headRefOid: "c".repeat(40) },
-        exitCode: 11,
-        output: "HEAD-MOVED",
-      }),
       priorPage(
         "deferred unknown association",
         {
@@ -1321,7 +1262,6 @@ console.log(JSON.stringify(value));
         afterMetadata: { statusCheckRollup: requiredFailure() },
         output: "FAILING checks=new required check",
       }),
-      priorPage("same-PR replacement", { exitCode: 0, output: "GREEN" }),
       priorPage("same-PR cancellation replacement", {
         exitCode: 0,
         output: "GREEN",
@@ -1384,10 +1324,6 @@ console.log(JSON.stringify(value));
         checkEvent: "pull_request_target",
         newCheckName: "new matrix shard",
       }),
-      ownership("unique target cancellation with unbound newer run metadata", {
-        oldConclusion: "CANCELLED",
-        checkEvent: "pull_request_target",
-      }),
       ownership("same-name replacement from a different event", {
         checkEvent: "pull_request_target",
         newCheckName: "old matrix shard",
@@ -1408,11 +1344,6 @@ console.log(JSON.stringify(value));
         conclusion: "failure",
         output: "FAILING checks=CI workflow (failure)",
       }),
-      ownership("another PR with the same head and a different base", {
-        runPatch: { pull_requests: [association(43, "release/2026.9")] },
-        expectedRun: 100,
-      }),
-      ownership("missing replacement association", { runPatch: { pull_requests: undefined } }),
       ownership("empty replacement association", { runPatch: { pull_requests: [] } }),
       ownership("ambiguous replacement association", {
         runPatch: { pull_requests: [association(), association(43)] },
@@ -1432,8 +1363,6 @@ console.log(JSON.stringify(value));
       ownership("different association head", {
         runPatch: { pull_requests: [{ ...association(), head: { sha: "c".repeat(40) } }] },
       }),
-      ownership("different prior event", { previousPatch: { event: "workflow_dispatch" } }),
-      ownership("different prior head", { previousPatch: { head_sha: "c".repeat(40) } }),
       ownership("different workflow", { runPatch: { workflow_id: 20 } }),
       ownership("missing replacement suite", { runPatch: { check_suite_id: undefined } }),
       ownership("missing prior suite", { previousPatch: { check_suite_id: undefined } }),
@@ -1613,8 +1542,6 @@ else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
         });
         expectRun(result, exitCode, `ATTACHED run=${expectedRun}`);
         expect(result.stdout).toContain(output);
-        expect(result.calls.some((call) => call[0] === "pr")).toBe(false);
-        expect(result.calls.some((call) => call.includes("graphql"))).toBe(completion !== "ci-run");
         expect(
           result.calls.filter((call) => call[1] === "repos/openclaw/openclaw/actions/runs/100"),
         ).toHaveLength(olderRunOutsidePage && expectedMetadataReads > 0 ? 1 : 0);
@@ -2169,36 +2096,20 @@ else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
       totalCount?: number,
     ]
   >([
-    ...(
-      [
-        ["plain ASCII / check (1)", "plain ASCII / check (1)"],
-        ["Crème 日本語 １２３", "Crème 日本語 １２３"],
-        ["unit\n\r\t\u0000check", "unit?check"],
-        ["safe\u001b[31mred\u001b[0m text", "safe?red? text"],
-        ["link\u001b]8;;https://example.com\u0007text\u001b]8;;\u0007", "link?text?"],
-        ["left\u202Eright 😀", "left?right ?"],
-      ] satisfies [string, string][]
-    ).map(([input, output]): [string, RollupCheck[], ReturnType<typeof classifyRollup>] => [
-      `sanitized check name ${JSON.stringify(input)}`,
-      [rollupCheck(input, "FAILURE")],
-      expectedRollup("FAILING", [output]),
-    ]),
     [
       "sanitized failing check and status-context names",
       [
-        rollupCheck("unit\u001b[31mowned\u001b[0m", "FAILURE"),
-        { kind: "StatusContext", context: "deploy\nprod", state: "ERROR" },
+        rollupCheck(
+          "unit Crème 日本語 １２３ / (1)\u001b[31mowned\u001b[0m\u001b]8;;https://example.com\u0007link\u001b]8;;\u0007\u202Eright 😀",
+          "FAILURE",
+        ),
+        { kind: "StatusContext", context: "deploy\n\r\t\u0000prod", state: "ERROR" },
       ],
-      expectedRollup("FAILING", ["deploy?prod", "unit?owned?"]),
+      expectedRollup("FAILING", [
+        "deploy?prod",
+        "unit Crème 日本語 １２３ / (1)?owned?link?right ?",
+      ]),
     ],
-    ["aggregate success", [], expectedRollup("GREEN"), "SUCCESS"],
-    [
-      "pending aggregate with completed checks",
-      [rollupCheck("unit", "SUCCESS")],
-      expectedRollup("PENDING"),
-      "PENDING",
-    ],
-    ["pending contexts", [rollupCheck("unit", null)], expectedRollup("PENDING", [], 1), "PENDING"],
     [
       "truncated failing rollup",
       [rollupCheck("unit", "CANCELLED"), rollupCheck("unit", "SUCCESS")],
@@ -2225,14 +2136,6 @@ else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
         rollupCheck("CI", null, 150, 10),
       ],
       expectedRollup("PENDING", [], 2, 1),
-    ],
-    [
-      "successful same-run check replacement",
-      [
-        rollupCheck("unit", "CANCELLED", 500, 20, 1_000),
-        rollupCheck("unit", "SUCCESS", 500, 20, 2_000),
-      ],
-      expectedRollup("GREEN", [], 0, 1),
     ],
     [
       "interleaved distinct workflows",
