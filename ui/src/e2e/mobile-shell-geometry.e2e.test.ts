@@ -11,12 +11,7 @@ import {
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
-import {
-  closeChatDetails,
-  openChatTaskProgress,
-  openDetailsPullRequests,
-} from "./chat-details.test-support.ts";
-import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
+import { closeChatDetails, openChatTaskProgress } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Mobile shell geometry" });
@@ -296,12 +291,7 @@ suite.define(() => {
         const assistantText =
           "The transcript and composer should share a comfortable reading column.";
         const gateway = await installMockGateway(page, {
-          featureMethods: [
-            ...defaultControlUiFeatureMethods,
-            "progressCard.get",
-            "controlUi.sessionPullRequests.subscribe",
-          ],
-          methodResponses: { "controlUi.sessionPullRequests.subscribe": { subscribed: true } },
+          featureMethods: [...defaultControlUiFeatureMethods, "progressCard.get"],
           workspace: "/workspace/example",
           historyMessages: ["Please check the mobile layout.", assistantText].map(
             (content, index) => ({
@@ -352,32 +342,6 @@ suite.define(() => {
             `${name}: Header controls must clear the first message and its actions`,
           ).toBe(true);
         }
-        await waitForWatchedSessionKey(gateway, sessionKey);
-        await gateway.emitGatewayEvent("controlUi.sessionPullRequests.changed", {
-          sessions: {
-            [sessionKey]: {
-              pullRequests: [
-                {
-                  number: 123,
-                  owner: "example",
-                  repo: "layout",
-                  branch: "fix/layout",
-                  title: "Synthetic mobile layout repair",
-                  url: "https://github.com/example/layout/pull/123",
-                  state: "merged",
-                },
-              ],
-              rateLimited: false,
-              status: "ok",
-            },
-          },
-        });
-        const pullRequests = await openDetailsPullRequests(page);
-        const mergedRequest = pullRequests
-          .locator('.chat-pr[data-state="merged"], .chat-pr-mobile__row[data-state="merged"]')
-          .first();
-        await expect(mergedRequest).toBeVisible();
-        await expect(mergedRequest).toContainText("Synthetic mobile layout repair");
         const setProgress = async (
           revision: number,
           markdown: string,

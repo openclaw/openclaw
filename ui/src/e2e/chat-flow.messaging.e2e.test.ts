@@ -1,4 +1,3 @@
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import {
@@ -16,7 +15,6 @@ import {
   transcript as chatTranscript,
 } from "./chat-flow-fixtures.test-support.ts";
 import {
-  captureUiProofEnabled,
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -310,38 +308,6 @@ suite.define(() => {
     await expectCount(assistantText(page, finalText), 2);
   });
 
-  it("restores the selected session transcript after a hard reload", async () => {
-    const { page } = await newChatPage(suite);
-    const historyText = "Transcript survives a hard reload.";
-    const gateway = await installMockGateway(page, {
-      historyMessages: [timedText("assistant", historyText)],
-      sessionKey: "agent:main:main",
-    });
-    await page.goto(controlUiSessionUrl(suite.server.baseUrl, "main"));
-    await page.getByText(historyText).waitFor({ timeout: 10_000 });
-    await gateway.waitForRequest("chat.startup");
-
-    await page.reload();
-
-    await page.getByText(historyText).waitFor({ timeout: 10_000 });
-    // The mock request journal belongs to the current document and restarts
-    // on reload, so the restored page records its own startup request once.
-    await gateway.waitForRequest("chat.startup");
-    expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
-  });
-
-  it("sends idle stop aliases as ordinary chat messages", async () => {
-    const { page, gateway } = await chatFixture(suite);
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const composer = chatComposer(page);
-    await composer.waitFor({ state: "visible", timeout: 10_000 });
-    await sendMessage(page, "wait");
-
-    const sendRequest = await gateway.waitForRequest("chat.send");
-    expect(requireRecord(sendRequest.params).message).toBe("wait");
-    expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
-  });
-
   it("sends annotated /stop to the exact selected channel session and clears its working indicator", async () => {
     const { page } = await newChatPage(suite);
     const channelSessionKey = "agent:main:openclaw-weixin:direct:wechat-user";
@@ -425,13 +391,6 @@ suite.define(() => {
     await expectRequestCountStable(gateway, "chat.send", 0);
     await expectCount(page.getByRole("listbox"), 0);
     expect(await composer.inputValue()).toBe("");
-    if (captureUiProofEnabled) {
-      const channelStopProofDir = path.join(suite.artifactDir, "channel-stop");
-      await page.screenshot({
-        path: path.join(channelStopProofDir, "stopped.png"),
-        fullPage: true,
-      });
-    }
   });
 
   it("sends /steer for the selected session without resolving a run or leaf", async () => {

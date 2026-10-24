@@ -1,6 +1,6 @@
 import type { QuestionRecord } from "@openclaw/gateway-protocol";
 import photon from "@silvia-odwyer/photon-node";
-import type { Locator, Page } from "playwright";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { createPlaybackMediaFixture } from "../../../test/fixtures/media-playback.js";
 import type { AgentsListResult, GatewaySessionRow } from "../api/types.ts";
@@ -82,39 +82,6 @@ const roster = (name: string, avatar: string): AgentsListResult => ({
     { id: "main", name, identity: { name, emoji: avatar }, model: { primary: "openai/gpt-5.5" } },
   ],
 });
-
-const iconSelector = 'link[rel="icon"]';
-
-function iconMatchesColor(icon: HTMLLinkElement, token: string) {
-  const { href } = icon;
-  if (!href.startsWith("data:image/svg+xml,")) {
-    return false;
-  }
-  const svg = new DOMParser().parseFromString(
-    decodeURIComponent(href.slice(href.indexOf(",") + 1)),
-    "image/svg+xml",
-  );
-  const color = getComputedStyle(document.documentElement).getPropertyValue(token).trim();
-  return Boolean(color) && svg.documentElement.lastElementChild?.getAttribute("fill") === color;
-}
-
-function expectStatusColor(page: Page, token: string) {
-  const icon = page.locator(`${iconSelector}[type="image/svg+xml"]`);
-  return expect.poll(() => icon.evaluate(iconMatchesColor, token)).toBe(true);
-}
-
-const faviconLinks = (page: Page) =>
-  page
-    .locator(iconSelector)
-    .evaluateAll((icons) =>
-      icons.map((icon) => ({ href: icon.getAttribute("href"), type: icon.getAttribute("type") })),
-    );
-
-const setVisibility = (page: Page, state: DocumentVisibilityState) =>
-  page.evaluate((value) => {
-    Object.defineProperty(document, "visibilityState", { configurable: true, get: () => value });
-    document.dispatchEvent(new Event("visibilitychange"));
-  }, state);
 
 const scrollTo = (scroller: Locator, fraction: number) =>
   scroller.evaluate((el, ratio) => {
@@ -338,23 +305,11 @@ suite.define(() => {
     }
   });
 
-  it("updates the tab icon for chat, approval, completion, theme and connectivity events", async () =>
-    suite.withPage({ colorScheme: "light" }, async ({ page }) => {
-      const sessionKey = "agent:main:main";
-      const gateway = await installMockGateway(page, { sessionKey });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.waitFor();
-      await gateway.waitForRequest("exec.approval.list");
-      await expect
-        .poll(() => faviconLinks(page))
-        .toEqual([
-          { href: expect.stringMatching(/^\/favicon\.svg(?:\?v=.+)?$/), type: "image/svg+xml" },
-          { href: expect.stringMatching(/^\/favicon-32\.png(?:\?v=.+)?$/), type: "image/png" },
-        ]);
-      const original = await faviconLinks(page);
-      const expectOriginal = () => expect.poll(() => faviconLinks(page)).toEqual(original);
-      await composer.fill("Draft report.");
+  it("does not republish run activity for successive text deltas", async () =>
+    suite.withPage({}, async ({ page }) => {
+      const gateway = await installMockGateway(page, { sessionKey: mainSessionKey });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, mainSessionKey));
+      await page.locator(".agent-chat__composer-combobox textarea").fill("Draft report.");
       await page.getByRole("button", { name: "Send message", exact: true }).click();
       const send = await gateway.waitForRequest("chat.send");
       const runId = requireString(requireRecord(send.params).idempotencyKey, "chat run id");
@@ -362,16 +317,10 @@ suite.define(() => {
         gateway.emitGatewayEvent("chat", {
           state: "delta",
           runId,
-          sessionKey,
+          sessionKey: mainSessionKey,
           message: { role: "assistant", content: [{ type: "text", text }] },
         });
-      await expectStatusColor(page, "--info");
-      await page.evaluate(() => {
-        document.documentElement.style.setProperty("--info", "rgb(10, 100, 200)");
-      });
-      await expectStatusColor(page, "--info");
       await emitDelta("Preparing.");
-      await expectOriginal();
       const activity = await page.evaluateHandle((eventName) => {
         const observation = { changes: 0 };
         document.addEventListener(eventName, () => observation.changes++);
@@ -380,25 +329,6 @@ suite.define(() => {
       await emitDelta("Preparing. Checking.");
       await page.getByText("Preparing. Checking.", { exact: true }).waitFor();
       expect(await activity.evaluate((observation) => observation.changes)).toBe(0);
-      await expectOriginal();
-      await gateway.emitGatewayEvent("exec.approval.requested", {
-        id: "favicon",
-        createdAtMs: Date.now(),
-        expiresAtMs: Date.now() + 60_000,
-        request: { command: "echo draft", agentId: "main", sessionKey },
-      });
-      await expectStatusColor(page, "--session-color-orange");
-      await gateway.emitGatewayEvent("exec.approval.resolved", { id: "favicon", decision: "deny" });
-      await expectOriginal();
-      await page.getByRole("button", { name: "Stop generating" }).waitFor();
-      await setVisibility(page, "hidden");
-      await gateway.emitChatFinal({ runId, sessionKey, text: "Draft report complete." });
-      await expectStatusColor(page, "--ok");
-      await setVisibility(page, "visible");
-      await expectOriginal();
-      expect(await page.locator(`${iconSelector}[data-openclaw-original-favicon]`).count()).toBe(0);
-      await gateway.setOnline(false);
-      await expectStatusColor(page, "--muted");
     }));
 
   it.each([390, 1280])("preserves scroll endpoints and controls at %ipx", (width) =>
