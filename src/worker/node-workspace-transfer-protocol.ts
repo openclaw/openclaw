@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { NODE_WORKSPACE_RESULT_VERSION } from "../infra/node-runner-inventory.js";
 import { workerProtocolObject } from "./protocol-record.js";
 
 export const NODE_WORKSPACE_EMPTY_MANIFEST = JSON.stringify({
@@ -10,14 +11,7 @@ export const NODE_WORKSPACE_EMPTY_MANIFEST = JSON.stringify({
 export const NODE_WORKSPACE_EMPTY_MANIFEST_REF = `sha256:${createHash("sha256").update(NODE_WORKSPACE_EMPTY_MANIFEST).digest("hex")}`;
 
 export const NODE_WORKSPACE_TRANSFER_PATH = "/__openclaw__/worker-transfer/v1";
-export const NODE_WORKSPACE_RESULT_VERSION = 2;
 export const MAX_WORKSPACE_RESULT_GIT_PACK_BYTES = 256 * 1024 * 1024;
-export const WorkerWorkspaceGitHistorySchema = workerProtocolObject({
-  baseCommit: z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u),
-  headCommit: z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u),
-  descendsFromBase: z.boolean(),
-});
-export type WorkerWorkspaceGitHistory = z.infer<typeof WorkerWorkspaceGitHistorySchema>;
 
 /** Shared by native and SSH transfers; only the dispatch base is borrowed from the receiver. */
 export const NODE_WORKSPACE_GIT_HISTORY_SCRIPT = String.raw`

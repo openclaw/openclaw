@@ -6,8 +6,6 @@ import { writeFileWindowFully } from "../../infra/file-descriptor.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import {
   MAX_WORKSPACE_RESULT_GIT_PACK_BYTES,
-  WorkerWorkspaceGitHistorySchema,
-  type WorkerWorkspaceGitHistory,
   type NodeWorkspaceTransferInvalidReason,
 } from "../../worker/node-workspace-transfer-protocol.js";
 import { nodeWorkspaceTransferEntryPath } from "./node-workspace-transfer-snapshot.js";
@@ -23,6 +21,10 @@ import {
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
 import { assertWorkspaceMatchesManifest } from "./workspace-reconcile.js";
+import {
+  WorkerWorkspaceGitHistorySchema,
+  type WorkerWorkspaceGitHistory,
+} from "./workspace-result-inventory.js";
 
 const MAX_UPLOAD_BYTES =
   MAX_WORKSPACE_MANIFEST_BYTES * 2 +

@@ -17,11 +17,11 @@ import {
   NODE_WORKER_PROMPT_CONTEXT_VERSION,
   NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  NODE_WORKSPACE_RESULT_VERSION,
   type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
 import { redactSensitiveText } from "../logging/redact.js";
 import { NODE_HOST_STATS_EVENT, NODE_HOST_STATS_INTERVAL_MS } from "../shared/node-host-stats.js";
-import { NODE_WORKSPACE_RESULT_VERSION } from "../worker/node-workspace-transfer-protocol.js";
 import type { NodeHostClient } from "./client.js";
 import { sampleNodeHostStats } from "./host-stats.js";
 import { buildNodeEventParams } from "./node-event-params.js";

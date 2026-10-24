@@ -1,4 +1,3 @@
-import type { WorkerWorkspaceGitHistory } from "../../worker/node-workspace-transfer-protocol.js";
 import { selectLocalWorkspaceCanonicalPaths } from "./local-workspace-inventory.js";
 import type {
   WorkerLocalWorkspaceReconcileRequest,
@@ -15,6 +14,7 @@ import {
   inspectAcceptedWorkerWorkspace,
   recoverWorkerWorkspaceReconciliation,
 } from "./workspace-reconcile.js";
+import type { WorkerWorkspaceGitHistory } from "./workspace-result-inventory.js";
 import { workerWorkspaceResultStaging } from "./workspace-result-staging.js";
 
 /** Accepts authenticated transport snapshots through one local journal and result owner. */

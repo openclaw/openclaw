@@ -5,10 +5,12 @@ import type { SpawnResult } from "../../process/exec.js";
 import {
   MAX_WORKSPACE_RESULT_GIT_PACK_BYTES,
   NODE_WORKSPACE_GIT_HISTORY_SCRIPT,
-  WorkerWorkspaceGitHistorySchema,
-  type WorkerWorkspaceGitHistory,
 } from "../../worker/node-workspace-transfer-protocol.js";
 import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
+import {
+  WorkerWorkspaceGitHistorySchema,
+  type WorkerWorkspaceGitHistory,
+} from "./workspace-result-inventory.js";
 import {
   workerWorkspaceCommandSucceeded as success,
   workspaceSyncError,

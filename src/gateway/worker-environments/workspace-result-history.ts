@@ -1,10 +1,7 @@
 import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import { runCommandWithTimeout, runExec } from "../../process/exec.js";
-import {
-  MAX_WORKSPACE_RESULT_GIT_PACK_BYTES,
-  type WorkerWorkspaceGitHistory,
-} from "../../worker/node-workspace-transfer-protocol.js";
+import { MAX_WORKSPACE_RESULT_GIT_PACK_BYTES } from "../../worker/node-workspace-transfer-protocol.js";
 import { loadStagedWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
   requireWorkspaceResultGit as git,
@@ -12,6 +9,7 @@ import {
   workspaceResultGitCommand,
   WORKSPACE_RESULT_GIT_TIMEOUT_MS,
 } from "./workspace-result-git.js";
+import type { WorkerWorkspaceGitHistory } from "./workspace-result-inventory.js";
 
 export async function importWorkerWorkspaceHistory(params: {
   root: string;

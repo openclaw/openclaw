@@ -3,6 +3,7 @@ import { sleepWithAbort } from "../../infra/backoff.js";
 import { NODE_WORKER_WORKSPACE_EXEC_COMMAND } from "../../infra/node-commands.js";
 import {
   NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
+  NODE_WORKSPACE_RESULT_VERSION,
   resolveNodeWorkerLaunchToolNames,
 } from "../../infra/node-runner-inventory.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -17,7 +18,6 @@ import {
 } from "../../worker/node-workspace-protocol.js";
 import {
   NODE_WORKSPACE_TRANSFER_ERROR_CODE,
-  NODE_WORKSPACE_RESULT_VERSION,
   NodeWorkerWorkspaceTransferError,
 } from "../../worker/node-workspace-transfer-protocol.js";
 import { sameWorkerBuild } from "../../worker/worker-build-identity.js";

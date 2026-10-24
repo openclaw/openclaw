@@ -1,9 +1,17 @@
+import { z } from "zod";
 import type { SessionDiffFile } from "../../../packages/gateway-protocol/src/index.js";
-import type { WorkerWorkspaceGitHistory } from "../../worker/node-workspace-transfer-protocol.js";
+import { workerProtocolObject } from "../../worker/protocol-record.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
+
+export const WorkerWorkspaceGitHistorySchema = workerProtocolObject({
+  baseCommit: z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u),
+  headCommit: z.string().regex(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u),
+  descendsFromBase: z.boolean(),
+});
+export type WorkerWorkspaceGitHistory = z.infer<typeof WorkerWorkspaceGitHistorySchema>;
 
 // Deleting the owning ref releases its objects to ordinary Git garbage collection.
 export const WORKER_RESULT_REF_PREFIX = "refs/openclaw/worker-results";

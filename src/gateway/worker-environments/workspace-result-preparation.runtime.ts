@@ -1,5 +1,4 @@
 import { createHash } from "node:crypto";
-import type { WorkerWorkspaceGitHistory } from "../../worker/node-workspace-transfer-protocol.js";
 import {
   parseGitHubRepositoryPublicationSnapshot,
   readGitHubRepositoryPublicationBlob,
@@ -17,6 +16,7 @@ import {
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
 import { readWorkspaceTreeFile } from "./workspace-reconcile-fs.js";
+import type { WorkerWorkspaceGitHistory } from "./workspace-result-inventory.js";
 import {
   requireWorkerResultStorageRef,
   STAGED_RESULT_MESSAGE,

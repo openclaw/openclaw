@@ -1,7 +1,6 @@
 import { z } from "zod";
 import { WORKER_BUNDLE_PREWARM_VERSION } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { parseWorkerCapacity } from "../../packages/gateway-protocol/src/worker-capacity.js";
-import { NODE_WORKSPACE_RESULT_VERSION } from "../worker/node-workspace-transfer-protocol.js";
 import { workerProtocolObject } from "../worker/protocol-record.js";
 
 export const NODE_RUNNER_INVENTORY_UPDATE_METHOD = "node.runnerInventory.update";
@@ -27,6 +26,7 @@ export const NODE_WORKER_INFERENCE_SETUP_ERROR =
   "If the node runs an older OpenClaw version, update it first.";
 export const NODE_WORKER_PROMPT_CONTEXT_VERSION = 1;
 export const NODE_WORKER_HOST_DISABLED_REASON_MAX_LENGTH = 1_024;
+export const NODE_WORKSPACE_RESULT_VERSION = 2;
 // Couples the lease owner with foreground tree ownership; neither rolls out alone.
 export const NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION = 1;
 

@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { runGitBuffered } from "../../agents/worktrees/git.js";
 import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
 import { isStagedInputPath, stagedInputDirectoriesFromEntries } from "../../media/staged-inputs.js";
-import { WorkerWorkspaceGitHistorySchema } from "../../worker/node-workspace-transfer-protocol.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import { parseChangedWorkspaceResult } from "./workspace-manifest-comparison.js";
 import {
@@ -20,6 +19,7 @@ import {
   STAGED_WORKSPACE_READ_MAX_BYTES,
   STAGED_WORKSPACE_READ_MAX_ENTRIES,
   STAGED_RESULT_MESSAGE,
+  WorkerWorkspaceGitHistorySchema,
   type StagedWorkerArtifactInventory,
   type StagedWorkerWorkspaceInventory,
   type StagedWorkerWorkspaceReadEntry,

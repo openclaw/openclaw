@@ -5,7 +5,6 @@ import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js"
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout, runExec } from "../../process/exec.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
-import type { WorkerWorkspaceGitHistory } from "../../worker/node-workspace-transfer-protocol.js";
 import type { WorkerLocalWorkspaceReconcileRequest } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
 import {
@@ -39,6 +38,7 @@ import {
   WORKSPACE_RESULT_GIT_TIMEOUT_MS as PATCH_TIMEOUT_MS,
 } from "./workspace-result-git.js";
 import { importWorkerWorkspaceHistory } from "./workspace-result-history.js";
+import type { WorkerWorkspaceGitHistory } from "./workspace-result-inventory.js";
 import {
   requireWorkerResultStorageRef,
   WORKER_RESULT_CANDIDATE_REF_PREFIX,

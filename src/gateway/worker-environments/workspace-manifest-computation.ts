@@ -1,4 +1,3 @@
-import type { WorkerWorkspaceGitHistory } from "../../worker/node-workspace-transfer-protocol.js";
 import type {
   readActualWorkspaceManifestImpl,
   readWorkspaceFileSnapshotWithLimit,
@@ -12,6 +11,7 @@ import type {
 import type {
   StagedWorkerWorkspaceInventory,
   StagedWorkerWorkspaceReadEntry,
+  WorkerWorkspaceGitHistory,
 } from "./workspace-result-inventory.js";
 
 export type WorkspaceComputationHashes = {

@@ -2,11 +2,9 @@ import fsp from "node:fs/promises";
 import path from "node:path";
 import { MAX_WORKSPACE_MANIFEST_BYTES } from "../gateway/worker-environments/workspace-inventory-limits.js";
 import type { WorkerWorkspaceManifestEntry } from "../gateway/worker-environments/workspace-manifest.js";
+import { WorkerWorkspaceGitHistorySchema } from "../gateway/worker-environments/workspace-result-inventory.js";
 import { runExec } from "../process/exec.js";
-import {
-  NODE_WORKSPACE_GIT_HISTORY_SCRIPT,
-  WorkerWorkspaceGitHistorySchema,
-} from "../worker/node-workspace-transfer-protocol.js";
+import { NODE_WORKSPACE_GIT_HISTORY_SCRIPT } from "../worker/node-workspace-transfer-protocol.js";
 import {
   runWorkspaceCommand,
   TRANSFER_TIMEOUT_MS,
