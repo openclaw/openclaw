@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getSentNoticeBodies, installMatrixMonitorTestRuntime } from "../../test-runtime.js";
@@ -30,29 +31,6 @@ const rocketSas: NonNullable<MatrixVerificationSummary["sas"]> = {
 
 function strictRooms(...roomIds: string[]) {
   return Object.fromEntries(roomIds.map((id) => [id, [ALICE, BOT]]));
-}
-
-function createVerificationSummary(
-  overrides: Partial<MatrixVerificationSummary>,
-): MatrixVerificationSummary {
-  return {
-    id: "verification",
-    otherUserId: ALICE,
-    isSelfVerification: false,
-    initiatedByMe: false,
-    phase: 3,
-    phaseName: "started",
-    pending: true,
-    methods: ["m.sas.v1"],
-    canAccept: false,
-    hasSas: true,
-    sas: giftSas,
-    hasReciprocateQr: false,
-    completed: false,
-    createdAt: "2026-02-25T21:42:54.000Z",
-    updatedAt: "2026-02-25T21:42:55.000Z",
-    ...overrides,
-  };
 }
 
 type EventFixture = Pick<MatrixRawEvent, "event_id" | "type"> & Partial<MatrixRawEvent>;
@@ -127,7 +105,7 @@ function createHarness(params?: {
   verifications?: VerificationFixture[];
   sasNoticeRetryDelayMs?: number;
 }) {
-  const listeners = new Map<string, (...args: unknown[]) => void>();
+  const events = new EventEmitter();
   const pendingTasks = new Set<Promise<void>>();
   const runDetachedTask = vi.fn((_label: string, task: () => Promise<void>) => {
     const promise = Promise.resolve()
@@ -153,16 +131,8 @@ function createHarness(params?: {
   const logVerboseMessage = vi.fn();
   const readStoreAllowFrom = vi.fn(async () => params?.storeAllowFrom ?? []);
   const client = {
-    on: vi.fn((eventName: string, listener: (...args: unknown[]) => void) => {
-      listeners.set(eventName, listener);
-      return client;
-    }),
-    off: vi.fn((eventName: string, listener: (...args: unknown[]) => void) => {
-      if (listeners.get(eventName) === listener) {
-        listeners.delete(eventName);
-      }
-      return client;
-    }),
+    on: events.on.bind(events),
+    off: events.off.bind(events),
     sendMessage,
     getUserId: vi.fn(async () => {
       if (params?.selfUserIdError) {
@@ -225,7 +195,7 @@ function createHarness(params?: {
   });
 
   function getListener(name: string) {
-    return expectDefined(listeners.get(name), name);
+    return expectDefined(events.listeners(name)[0], name);
   }
 
   function eventListener(name: string) {
@@ -258,7 +228,7 @@ function createHarness(params?: {
       await flushTasks();
     },
     summary: async (overrides: Partial<MatrixVerificationSummary>) => {
-      verificationSummary(createVerificationSummary(overrides));
+      verificationSummary(activeVerification(overrides));
       await flushTasks();
     },
     decrypt: async (event: Pick<MatrixRawEvent, "event_id"> & Partial<MatrixRawEvent>) => {
@@ -274,7 +244,7 @@ function createHarness(params?: {
     roomMessageListener: eventListener("room.message"),
     failedDecryptListener,
     roomInviteListener: eventListener("room.invite"),
-    listenerCount: () => listeners.size,
+    listenerCount: () => events.eventNames().length,
   };
 }
 
@@ -601,22 +571,36 @@ describe("registerMatrixMonitorEvents verification routing", () => {
     },
   );
 
-  it("adds account-specific self-device guidance to decrypt failures", async () => {
-    const sender = "@gumadeiras:matrix.example.org";
-    const f = createHarness({ accountId: "ops", selfUserId: sender });
-    await f.decrypt({ event_id: "$self", sender });
-    expectWarnContextFields(f.logger, 1, "Failed to decrypt message", {
-      roomId: ROOM,
-      eventId: "$self",
-      sender,
-      senderMatchesOwnUser: true,
-    });
-    expect(f.logger.warn).toHaveBeenNthCalledWith(
-      2,
-      "matrix: failed to decrypt a message from this same Matrix user. This usually means another Matrix device did not share the room key, or another OpenClaw runtime is using the same account. Check 'openclaw matrix verify status --verbose --account ops' and 'openclaw matrix devices list --account ops'.",
-      { roomId: ROOM, eventId: "$self", sender },
-    );
-  });
+  it.each([true, false])(
+    "resolves self-device decrypt guidance (lookup succeeds=%s)",
+    async (found) => {
+      const sender = "@gumadeiras:matrix.example.org";
+      const f = createHarness({
+        accountId: "ops",
+        selfUserId: sender,
+        ...(!found ? { selfUserIdError: new Error("lookup failed") } : {}),
+      });
+      await f.decrypt({ event_id: "$self", sender });
+      expectWarnContextFields(f.logger, 1, "Failed to decrypt message", {
+        roomId: ROOM,
+        eventId: "$self",
+        sender,
+        senderMatchesOwnUser: found,
+      });
+      if (found) {
+        expect(f.logger.warn).toHaveBeenNthCalledWith(
+          2,
+          "matrix: failed to decrypt a message from this same Matrix user. This usually means another Matrix device did not share the room key, or another OpenClaw runtime is using the same account. Check 'openclaw matrix verify status --verbose --account ops' and 'openclaw matrix devices list --account ops'.",
+          { roomId: ROOM, eventId: "$self", sender },
+        );
+      } else {
+        expect(f.logger.warn).toHaveBeenCalledTimes(1);
+        expect(f.logVerboseMessage).toHaveBeenCalledWith(
+          "matrix: failed resolving self user id for decrypt warning: Error: lookup failed",
+        );
+      }
+    },
+  );
 
   it("distinguishes pre-sync from fresh post-sync decrypt failures", async () => {
     const f = healthySyncHarness(false);
@@ -673,18 +657,4 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       expectAggregateWarning(f.logger, 8, "second");
     },
   );
-
-  it("keeps generic decrypt guidance when self-user lookup fails", async () => {
-    const f = createHarness({ accountId: "ops", selfUserIdError: new Error("lookup failed") });
-    await f.decrypt({ event_id: "$lookup", sender: "@gumadeiras:matrix.example.org" });
-    expect(f.logger.warn).toHaveBeenCalledTimes(1);
-    expectWarnContextFields(f.logger, 1, "Failed to decrypt message", {
-      roomId: ROOM,
-      eventId: "$lookup",
-      senderMatchesOwnUser: false,
-    });
-    expect(f.logVerboseMessage).toHaveBeenCalledWith(
-      "matrix: failed resolving self user id for decrypt warning: Error: lookup failed",
-    );
-  });
 });
