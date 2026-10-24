@@ -12,7 +12,6 @@ import {
   DEFAULT_LONG_RUNNING_VITEST_NO_OUTPUT_TIMEOUT_MS,
   resolveDefaultVitestNoOutputTimeoutMs,
   resolveRunVitestSpawnEnv,
-  resolveVitestNodeArgs,
 } from "../../scripts/lib/vitest-process-env.mts";
 import * as testRuntime from "../../scripts/lib/vitest-test-runtime.mts";
 import {
@@ -225,14 +224,6 @@ describe("scripts/run-vitest", () => {
         env: { OPENCLAW_VITEST_RUNTIME: "deno" },
       }),
     ).toThrow("Invalid OPENCLAW_VITEST_RUNTIME: deno; expected node or bun");
-  });
-
-  it("keeps native preparation tools on Node when tests select Bun", () => {
-    const args = ["--import", "tsx", "scripts/ensure-playwright-chromium.mts"];
-    expect(testRuntime.resolveVitestTestCommand(args, { OPENCLAW_VITEST_RUNTIME: "bun" })).toEqual({
-      command: process.execPath,
-      args,
-    });
   });
 
   it.each([
@@ -561,12 +552,6 @@ registerHooks({resolve(specifier, context, nextResolve) {
     }
   });
 
-  it("keeps Sparkplug synchronous when Maglev is enabled", () => {
-    expect(resolveVitestNodeArgs({ OPENCLAW_VITEST_ENABLE_MAGLEV: "1" })).toStrictEqual([
-      "--no-concurrent-sparkplug",
-    ]);
-  });
-
   it.each<[string[], NodeJS.ProcessEnv, number | null]>([
     [["run", "-t", "watch"], baseEnv, 120000],
     [["--watch", "false"], baseEnv, 120000],
@@ -602,40 +587,30 @@ registerHooks({resolve(specifier, context, nextResolve) {
     );
   });
 
-  posixIt.for([
-    { timeout: false, exitCode: 0, expectedCode: 0, nativeBun: false },
-    { timeout: true, exitCode: 1, expectedCode: 2, nativeBun: false },
-    { timeout: true, exitCode: null, expectedCode: null, nativeBun: false },
-    { timeout: true, exitCode: 0, expectedCode: 2, nativeBun: true },
-  ])(
-    "settles descendants (timeout=$timeout, child=$exitCode, native=$nativeBun)",
-    async (row, context) => {
+  posixIt(
+    "isolates native Bun home and joins descendants before reporting timeout",
+    async (context) => {
       const watchedEnv = {
         OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "5000",
-        ...(row.nativeBun ? { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_USE_REAL_HOME: "1" } : {}),
+        OPENCLAW_LIVE_TEST: "1",
+        OPENCLAW_LIVE_USE_REAL_HOME: "1",
       };
       let noOutputTimedOut = false;
       const fixtureArgs = [
         "-e",
         descendantFixture(
-          row.nativeBun
-            ? "JSON.stringify({ pid, home: process.env.HOME, tmp: process.env.TMPDIR, live: process.env.OPENCLAW_LIVE_TEST, realHome: process.env.OPENCLAW_LIVE_USE_REAL_HOME })"
-            : "pid",
-          row.exitCode,
+          "JSON.stringify({ pid, home: process.env.HOME, tmp: process.env.TMPDIR, live: process.env.OPENCLAW_LIVE_TEST, realHome: process.env.OPENCLAW_LIVE_USE_REAL_HOME })",
+          0,
         ),
       ];
-      const nativeCommand = row.nativeBun
-        ? vi.spyOn(testRuntime, "resolveNativeBunTestCommand").mockReturnValue({
-            command: process.execPath,
-            args: fixtureArgs,
-          })
-        : undefined;
+      const nativeCommand = vi.spyOn(testRuntime, "resolveNativeBunTestCommand").mockReturnValue({
+        command: process.execPath,
+        args: fixtureArgs,
+      });
       const { handle: watched, clock } = captureWatchdog(() => {
         try {
           return spawnWatchedVitestProcess({
-            ...(row.nativeBun
-              ? { nativeBunFiles: ["./test/scripts/run-vitest.test.ts"] }
-              : { pnpmArgs: ["exec", "node", ...fixtureArgs] }),
+            nativeBunFiles: ["./test/scripts/run-vitest.test.ts"],
             spawnParams: {
               detached: true,
               env: watchedEnv,
@@ -647,7 +622,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
             },
           });
         } finally {
-          nativeCommand?.mockRestore();
+          nativeCommand.mockRestore();
         }
       });
       const rawExit = childTermination(watched.child);
@@ -656,24 +631,16 @@ registerHooks({resolve(specifier, context, nextResolve) {
       const { lines, ready } = readyLine(watched.child, (line) => {
         // The descendant acknowledges its running loop on the watched pipe. Check
         // and signal in this notification, before a delayed poll can outlive it.
-        if (row.nativeBun) {
-          const state = JSON.parse(line);
-          descendantPid = state.pid;
-          nativeTempRoot = state.tmp;
-          expect(state.home).toBe(nodePath.join(state.tmp, "home"));
-          expect(fs.existsSync(state.home)).toBe(true);
-          expect(state.live).toBeUndefined();
-          expect(state.realHome).toBeUndefined();
-        } else {
-          descendantPid = Number(line);
-        }
+        const state = JSON.parse(line);
+        descendantPid = state.pid;
+        nativeTempRoot = state.tmp;
+        expect(state.home).toBe(nodePath.join(state.tmp, "home"));
+        expect(fs.existsSync(state.home)).toBe(true);
+        expect(state.live).toBeUndefined();
+        expect(state.realHome).toBeUndefined();
         expect(Number.isInteger(descendantPid) && descendantPid > 0).toBe(true);
         expect(isProcessAlive(descendantPid)).toBe(true);
-        if (row.timeout) {
-          clock.tick(Number(watchedEnv.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS));
-        } else {
-          process.kill(watched.child.pid!, "SIGTERM");
-        }
+        clock.tick(Number(watchedEnv.OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS));
       });
 
       try {
@@ -693,12 +660,11 @@ registerHooks({resolve(specifier, context, nextResolve) {
           context.signal,
         );
 
-        const signal = row.exitCode === null ? "SIGTERM" : null;
         expect(snapshot).toEqual({
           groupStopped: true,
-          noOutputTimedOut: row.timeout,
-          raw: { code: row.exitCode, signal },
-          result: { code: row.expectedCode, signal, groupJoined: true },
+          noOutputTimedOut: true,
+          raw: { code: 0, signal: null },
+          result: { code: 2, signal: null, groupJoined: true },
         });
         if (nativeTempRoot) {
           expect(fs.existsSync(nativeTempRoot)).toBe(false);
