@@ -84,7 +84,7 @@ it("buffers installers before execution and cleans up timed-out downloads", asyn
       windows
         ? scripts.join("\nif (-not $?) { throw 'Healthy installer command failed' }\n")
         : // Each POSIX installer owns an EXIT trap; subshells keep their cleanup separate.
-          scripts.map((script) => `(\n${script}\n)`).join(" && "),
+          ["set -e", ...scripts.map((script) => `(\n${script}\n)`)].join("\n"),
       dir,
       env,
       logPath,
