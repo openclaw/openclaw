@@ -169,6 +169,14 @@ export function stubAnimationFrames() {
   };
 }
 
+export function stubSettledAnimationFrames() {
+  const frame = stubAnimationFrames();
+  return () => {
+    frame();
+    flush();
+  };
+}
+
 export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
   const transcript = overrides.transcript ?? createTestTranscript();
   const sessionKey = overrides.sessionKey ?? "main";

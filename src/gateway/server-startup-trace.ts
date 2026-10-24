@@ -15,7 +15,6 @@ import { withDiagnosticPhase } from "../logging/diagnostic-phase.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { recordGatewayRestartTraceDetail, recordGatewayRestartTraceSpan } from "./restart-trace.js";
 
-type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
 type Awaitable<T> = T | Promise<T>;
 const TIMELINE_NAMES = new Map([
   ["config.snapshot", "config.load"],
@@ -100,7 +99,7 @@ export async function measureStartup<T>(
 }
 
 export function createGatewayStartupTrace(
-  log: GatewayLogger,
+  log: ReturnType<typeof createSubsystemLogger>,
   startedAt = performance.now(),
   updateCanary = false,
 ) {

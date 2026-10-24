@@ -172,6 +172,7 @@ export function registerBrowserAgentSnapshotRoutes(
             targetId: tab.targetId,
             url,
             timeoutMs,
+            signal,
             ...(assertCurrent ? { assertCurrent } : {}),
             ...(resolveRelayTarget
               ? {

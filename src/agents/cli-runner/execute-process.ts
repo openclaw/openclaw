@@ -618,7 +618,6 @@ export async function executeCliProcess(params: {
       context: failoverContext,
       classifyErrorCode: context.backendResolved.classifyErrorCode,
       candidates: [stderr, readStdout(), stderrDiagnostic, stdoutDiagnostic],
-      fallbackMessage: "CLI failed.",
       retryEmptyFailure,
       resumeAtArg: retryEmptyFailure ? resumeAtArg : undefined,
     });

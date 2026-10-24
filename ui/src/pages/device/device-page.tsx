@@ -242,7 +242,8 @@ export function DevicePage() {
             </>
           }
           checked={props.app.keepGatewayRunning ?? false}
-          disabled={props.app.keepGatewayRunningAvailable !== true || gatewayHostingPending()}
+          disabled={props.app.keepGatewayRunningAvailable !== true}
+          saving={gatewayHostingPending()}
           onChange={(value) => {
             if (!capability || disposed || finishGatewayHosting) {
               return;

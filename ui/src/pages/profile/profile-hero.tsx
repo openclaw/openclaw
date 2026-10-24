@@ -10,13 +10,11 @@ import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 
-export type ProfileHeroProps = {
+export function ProfileHero(props: {
   user?: AuthenticatedUser | null;
   row: AgentsListResult["agents"][number];
   identity: AgentIdentityResult | null | undefined;
-};
-
-export function ProfileHero(props: ProfileHeroProps) {
+}) {
   const branding = projectSource(currentThemeBranding, {
     read: (read) => read(),
     subscribe: (_read, notify) => subscribeThemeBranding(notify),

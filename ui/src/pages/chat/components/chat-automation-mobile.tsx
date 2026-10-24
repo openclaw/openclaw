@@ -1,9 +1,10 @@
 import { createMemo, For, isPending, Loading } from "solid-js";
 import { pathForRoute } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerCronEnglish } from "../../../i18n/locales/en-cron.ts";
-import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../../lib/navigation-click.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import {
   SessionAutomationRead,
@@ -84,11 +85,12 @@ export function SessionAutomationMobileList(props: SessionAutomationMobileListPr
           !inventory().error() &&
           !isPending(inventory().read) &&
           inventory().total() === 0 && (
-            <div class="session-automation-mobile__empty">
-              <Icon name="clock" />
-              <strong>{t("chat.sessionDetails.automationEmpty")}</strong>
-              <p>{t("chat.sessionAutomation.emptyHint")}</p>
-            </div>
+            <PanelEmptyState
+              presentation="mobile"
+              icon={<Icon name="clock" />}
+              heading={t("chat.sessionDetails.automationEmpty")}
+              description={t("chat.sessionAutomation.emptyHint")}
+            />
           )}
         <div class="session-automation-mobile__group">
           <For each={inventory().jobs()} keyed={(job) => job.id}>
@@ -101,12 +103,9 @@ export function SessionAutomationMobileList(props: SessionAutomationMobileListPr
                 <a
                   class="session-automation-mobile__list-row"
                   href={`${pathForRoute("cron", props.basePath)}?${new URLSearchParams({ job: job().id })}`}
-                  onClick={(event) => {
-                    if (shouldHandleNavigationClick(event)) {
-                      event.preventDefault();
-                      props.onOpenAutomation(job().id);
-                    }
-                  }}
+                  onClick={(event) =>
+                    handleNavigationClick(event, () => props.onOpenAutomation(job().id))
+                  }
                 >
                   <span class="session-automation-mobile__list-icon">
                     <Icon name="clock" />

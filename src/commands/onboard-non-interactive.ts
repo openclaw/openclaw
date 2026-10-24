@@ -28,74 +28,6 @@ function isMigrationImport(opts: OnboardOptions): boolean {
   );
 }
 
-/** Runs a setup migration import with non-interactive prompt failures. */
-async function runNonInteractiveMigrationImport(params: {
-  opts: OnboardOptions;
-  runtime: RuntimeEnv;
-  baseConfig: OpenClawConfig;
-}) {
-  const providerId = params.opts.importFrom?.trim();
-  if (!providerId) {
-    // Migration import cannot safely prompt in non-interactive mode; require the
-    // provider id so the import path is deterministic.
-    rejectOnboardingOption(
-      params.opts,
-      params.runtime,
-      `--import-from is required for non-interactive migration import. Run ${formatCliCommand("openclaw migrate list")} to choose a provider.`,
-    );
-    return;
-  }
-  const { detectSetupMigrationSources, runSetupMigrationImport } =
-    await import("../wizard/setup.migration-import.js");
-  const discovery = await detectSetupMigrationSources({
-    config: params.baseConfig,
-    runtime: params.runtime,
-  });
-  const readValidSnapshot = async () => {
-    const snapshot = await readConfigFileSnapshot();
-    if (!snapshot.valid) {
-      throw new Error(
-        "Migration target config became invalid. Run `openclaw doctor --fix` to apply supported repairs.",
-      );
-    }
-    return snapshot;
-  };
-  const outcome = await runSetupMigrationImport({
-    opts: { ...params.opts, importFrom: providerId, nonInteractive: true },
-    baseConfig: params.baseConfig,
-    ...discovery,
-    prompter: createNonInteractiveLoggingPrompter(
-      params.runtime,
-      (message) =>
-        `Non-interactive migration import needs explicit flags before prompting: ${message}`,
-    ),
-    runtime: params.runtime,
-    async readConfigFile() {
-      const snapshot = await readValidSnapshot();
-      return snapshot.exists ? (snapshot.sourceConfig ?? snapshot.config) : {};
-    },
-    async commitConfigFile(config, expectedConfig) {
-      const latest = await readValidSnapshot();
-      const latestConfig = latest.exists ? (latest.sourceConfig ?? latest.config) : {};
-      if (!isDeepStrictEqual(latestConfig, expectedConfig)) {
-        throw new ConfigMutationConflictError("config changed during migration promotion");
-      }
-      const committed = await replaceConfigFile({
-        sourceConfig: config,
-        snapshot: latest,
-        ...(latest.hash !== undefined ? { baseHash: latest.hash } : {}),
-        writeOptions: { allowConfigSizeDrop: true },
-      });
-      logConfigUpdated(params.runtime);
-      return committed.nextConfig;
-    },
-  });
-  if (outcome.kind === "back") {
-    throw new Error("Non-interactive migration import cannot navigate back.");
-  }
-  await outcome.acknowledgePromotion?.();
-}
-
 async function runNonInteractiveSetupExclusive(opts: OnboardOptions, runtime: RuntimeEnv) {
   const snapshot = await readConfigFileSnapshot();
   if (snapshot.exists && !snapshot.valid) {
@@ -116,7 +48,66 @@ async function runNonInteractiveSetupExclusive(opts: OnboardOptions, runtime: Ru
   if (isMigrationImport(opts)) {
     // Import flow owns its own commit path because migrations may intentionally
     // shrink legacy config after extracting credentials.
-    await runNonInteractiveMigrationImport({ opts, runtime, baseConfig });
+    /** Runs a setup migration import with non-interactive prompt failures. */
+    const providerId = opts.importFrom?.trim();
+    if (!providerId) {
+      // Migration import cannot safely prompt in non-interactive mode; require the
+      // provider id so the import path is deterministic.
+      rejectOnboardingOption(
+        opts,
+        runtime,
+        `--import-from is required for non-interactive migration import. Run ${formatCliCommand("openclaw migrate list")} to choose a provider.`,
+      );
+      return;
+    }
+    const { detectSetupMigrationSources, runSetupMigrationImport } =
+      await import("../wizard/setup.migration-import.js");
+    const discovery = await detectSetupMigrationSources({ config: baseConfig, runtime });
+    const readValidSnapshot = async () => {
+      const currentSnapshot = await readConfigFileSnapshot();
+      if (!currentSnapshot.valid) {
+        throw new Error(
+          "Migration target config became invalid. Run `openclaw doctor --fix` to apply supported repairs.",
+        );
+      }
+      return currentSnapshot;
+    };
+    const outcome = await runSetupMigrationImport({
+      opts: { ...opts, importFrom: providerId, nonInteractive: true },
+      baseConfig,
+      ...discovery,
+      prompter: createNonInteractiveLoggingPrompter(
+        runtime,
+        (message) =>
+          `Non-interactive migration import needs explicit flags before prompting: ${message}`,
+      ),
+      runtime,
+      async readConfigFile() {
+        const currentSnapshot = await readValidSnapshot();
+        return currentSnapshot.exists
+          ? (currentSnapshot.sourceConfig ?? currentSnapshot.config)
+          : {};
+      },
+      async commitConfigFile(config, expectedConfig) {
+        const latest = await readValidSnapshot();
+        const latestConfig = latest.exists ? (latest.sourceConfig ?? latest.config) : {};
+        if (!isDeepStrictEqual(latestConfig, expectedConfig)) {
+          throw new ConfigMutationConflictError("config changed during migration promotion");
+        }
+        const committed = await replaceConfigFile({
+          sourceConfig: config,
+          snapshot: latest,
+          ...(latest.hash !== undefined ? { baseHash: latest.hash } : {}),
+          writeOptions: { allowConfigSizeDrop: true },
+        });
+        logConfigUpdated(runtime);
+        return committed.nextConfig;
+      },
+    });
+    if (outcome.kind === "back") {
+      throw new Error("Non-interactive migration import cannot navigate back.");
+    }
+    await outcome.acknowledgePromotion?.();
     return;
   }
 

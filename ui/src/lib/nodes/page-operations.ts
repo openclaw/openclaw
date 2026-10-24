@@ -16,11 +16,6 @@ type GatewayRequestClient = {
   request<T = unknown>(method: string, params?: unknown): Promise<T>;
 };
 
-type NodesGatewaySnapshot = {
-  client: GatewayRequestClient | null;
-  connected: boolean;
-};
-
 type WireExecApprovalsFile = GatewayExecApprovalsSnapshot["file"];
 type WireExecApprovalsAgent = NonNullable<WireExecApprovalsFile["agents"]>[string];
 
@@ -32,13 +27,11 @@ export type ExecAsk = ExecApprovalsResolvedDefaults["ask"];
 // Editor choices stay closed even though the wire accepts policy strings for host normalization.
 type ExecApprovalsDefaults = Partial<ExecApprovalsResolvedDefaults>;
 
-type ExecApprovalsAgent = ExecApprovalsDefaults & Pick<WireExecApprovalsAgent, "allowlist">;
-
 export type ExecApprovalsFile = {
   version?: number;
   socket?: Pick<NonNullable<WireExecApprovalsFile["socket"]>, "path">;
   defaults?: ExecApprovalsDefaults;
-  agents?: Record<string, ExecApprovalsAgent>;
+  agents?: Record<string, ExecApprovalsDefaults & Pick<WireExecApprovalsAgent, "allowlist">>;
 };
 
 type FileExecApprovalsSnapshot = Omit<GatewayExecApprovalsSnapshot, "file"> & {
@@ -98,7 +91,7 @@ type ExecApprovalsState = NodesRequestState & {
 export type DevicesPageDataState = InventoryState & ExecApprovalsState;
 
 export function createInitialDevicesState(
-  snapshot: Partial<NodesGatewaySnapshot> = {},
+  snapshot: Partial<{ client: GatewayRequestClient | null; connected: boolean }> = {},
 ): DevicesPageDataState {
   return {
     client: snapshot.client ?? null,

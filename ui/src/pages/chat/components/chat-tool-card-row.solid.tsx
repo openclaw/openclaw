@@ -3,6 +3,7 @@ import { dynamic } from "@solidjs/web";
 import { createMemo, Match, Show, Switch } from "solid-js";
 import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
 import { resolveToolCallView, type ToolCallView } from "../../../lib/chat/tool-call-view.ts";
 import {
@@ -15,7 +16,7 @@ import {
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
 import { resolveSpawnedSubagent, type SpawnedSubagent } from "../chat-spawned-subagent.ts";
 import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
@@ -26,6 +27,8 @@ import type { ToolCardProps } from "./chat-tool-card-types.ts";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { toolWorkspacePath, type ToolRenderOptions } from "./chat-tool-render-model.ts";
 import { resolveToolRowVerb } from "./chat-tool-row-presentation.ts";
+
+registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 const TOOL_ROW_ICONS: Partial<Record<ToolCallView["kind"], string>> = {
   command: "squareTerminal",

@@ -86,6 +86,7 @@ it("keeps host shared imports available to bundled Workers across recovery and d
   fs.mkdirSync(plugin, { recursive: true });
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
   fs.writeFileSync(shared, sharedBytes);
+  fs.symlinkSync(plugin, path.join(root, "dist/extensions/alias"), "junction");
   fs.writeFileSync(workerPath, workerBytes);
   fs.writeFileSync(
     path.join(root, "dist/runtime-dependency-ownership.json"),
@@ -104,6 +105,7 @@ it("keeps host shared imports available to bundled Workers across recovery and d
     import { readFileSync } from "node:fs";
     export default { increment: () => ++shared.count,
       sharedSource: readFileSync(new URL("../../shared.cjs", import.meta.url), "utf8"),
+      directory: new URL("../", import.meta.url),
       workerUrl: new URL("../../owned.worker.mjs", import.meta.url) };`,
   );
   const host = createRequire(import.meta.url)(shared);
@@ -123,7 +125,7 @@ it("keeps host shared imports available to bundled Workers across recovery and d
   const load = (instance: PluginInstance) =>
     (
       instance.loadModule(entry) as {
-        default: { increment(): number; sharedSource: string; workerUrl: URL };
+        default: { increment(): number; sharedSource: string; directory: URL; workerUrl: URL };
       }
     ).default;
   const runWorker = async (url: URL) => {
@@ -138,6 +140,8 @@ it("keeps host shared imports available to bundled Workers across recovery and d
   const instance = create();
   expect(load(instance).increment()).toBe(1);
   expect(load(instance).sharedSource).toBe(sharedBytes);
+  expect(fs.readdirSync(fileURLToPath(load(instance).directory.href))).toContain("demo");
+  expect(fs.readdirSync(fileURLToPath(load(instance).directory.href))).toContain("alias");
   expect(host.count).toBe(1);
   await runWorker(load(instance).workerUrl);
   const recovery = withPluginSourceCaptureDirectory(captures, () =>
@@ -151,10 +155,70 @@ it("keeps host shared imports available to bundled Workers across recovery and d
   withPluginSourceCaptureDirectory(captures, () => recovery.bind(restored));
   expect(load(restored).increment()).toBe(2);
   expect(load(restored).sharedSource).toBe(sharedBytes);
+  expect(fs.readdirSync(fileURLToPath(load(restored).directory.href))).toContain("demo");
+  expect(fs.readdirSync(fileURLToPath(load(restored).directory.href))).toContain("alias");
   expect(host.count).toBe(2);
   await runWorker(load(restored).workerUrl);
   await restored.dispose();
   expect(fs.readFileSync(shared, "utf8")).toBe(sharedBytes);
+});
+
+it.each([false, true])("rejects filesystem directory cycles (directory asset: %s)", (asset) => {
+  const root = temp.make("bundled-reload-cycle-");
+  const plugin = path.join(root, "plugin");
+  fs.mkdirSync(plugin);
+  fs.symlinkSync(plugin, path.join(plugin, "loop"), "junction");
+  const entry = path.join(root, "index.mjs");
+  fs.writeFileSync(entry, 'export const directory = new URL("./plugin/", import.meta.url);');
+  expect(() => capturePluginGenerationArtifact(root, asset ? entry : plugin)).toThrow(
+    "directory cycle",
+  );
+});
+
+it("captures bundled WebAssembly libraries without requiring their bundled-away engine", async () => {
+  const root = temp.make("bundled-reload-wasm-");
+  const captures = temp.make("bundled-reload-wasm-captures-");
+  const plugin = path.join(root, "dist/extensions/demo");
+  const entry = path.join(plugin, "index.mjs");
+  fs.mkdirSync(path.join(plugin, "assets"), { recursive: true });
+  fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ type: "module" }));
+  fs.writeFileSync(
+    path.join(plugin, "package.json"),
+    JSON.stringify({ type: "module", dependencies: { "bundled-away-engine": "1.0.0" } }),
+  );
+  fs.writeFileSync(
+    path.join(root, "dist/runtime-dependency-ownership.json"),
+    JSON.stringify({ chunks: {} }),
+  );
+  fs.writeFileSync(path.join(plugin, "assets/encoding.so"), Buffer.from("0061736d01000000", "hex"));
+  fs.writeFileSync(
+    entry,
+    `import { readFileSync } from "node:fs";
+     export default () => WebAssembly.validate(readFileSync(new URL("./assets/encoding.so", import.meta.url)));`,
+  );
+  const instance = new PluginInstance("demo");
+  instances.push(instance);
+  withPluginSourceCaptureDirectory(captures, () =>
+    bindPluginInstanceModuleLoader({
+      instance,
+      origin: "bundled",
+      source: entry,
+      rootDir: plugin,
+      reloadBundledCode: true,
+    }),
+  );
+  const load = (owner: PluginInstance) =>
+    (owner.loadModule(entry) as { default(): boolean }).default();
+  expect(load(instance)).toBe(true);
+  const recovery = withPluginSourceCaptureDirectory(captures, () =>
+    instance.captureModuleLoaderRecovery(),
+  );
+  await instance.dispose();
+  fs.rmSync(plugin, { recursive: true });
+  const restored = new PluginInstance("demo");
+  instances.push(restored);
+  withPluginSourceCaptureDirectory(captures, () => recovery.bind(restored));
+  expect(load(restored)).toBe(true);
 });
 
 it.each([

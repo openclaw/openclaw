@@ -41,11 +41,6 @@ export type EnvelopeFormatOptions = {
   userTimezone?: string;
 };
 
-type ResolvedEnvelopeTimezone =
-  | { mode: "utc" }
-  | { mode: "local" }
-  | { mode: "iana"; timeZone: string };
-
 function sanitizeEnvelopeHeaderPart(value: string): string {
   // Header parts are metadata and must not be able to break the bracketed prefix.
   // Keep ASCII; collapse newlines/whitespace; neutralize brackets.
@@ -64,7 +59,9 @@ export function resolveEnvelopeFormatOptions(cfg?: OpenClawConfig): EnvelopeForm
   };
 }
 
-function resolveEnvelopeTimezone(options?: EnvelopeFormatOptions): ResolvedEnvelopeTimezone {
+function resolveEnvelopeTimezone(
+  options?: EnvelopeFormatOptions,
+): { mode: "utc" } | { mode: "local" } | { mode: "iana"; timeZone: string } {
   const trimmed = normalizeOptionalString(options?.timezone);
   if (!trimmed) {
     return { mode: "local" };
@@ -114,13 +111,6 @@ export function formatAgentEnvelopeTimestamp(
   } catch {
     return formatted;
   }
-}
-
-function resolveDirectEnvelopeBodyLabel(from: string | undefined): string {
-  const label = sanitizeEnvelopeHeaderPart(from || "");
-  const idMarkerIndex = label.search(/\s+id:/i);
-  const displayLabel = idMarkerIndex > 0 ? label.slice(0, idMarkerIndex).trim() : label;
-  return displayLabel.includes(":") ? "(sender)" : displayLabel;
 }
 
 /** Formats the generic bracketed envelope prepended to agent-visible messages. */
@@ -180,7 +170,10 @@ export function formatInboundEnvelope(params: {
   const resolvedSenderRaw =
     normalizeOptionalString(params.senderLabel) || resolveSenderLabel(params.sender ?? {});
   const resolvedSender = resolvedSenderRaw ? sanitizeEnvelopeHeaderPart(resolvedSenderRaw) : "";
-  const directSender = resolveDirectEnvelopeBodyLabel(normalizeOptionalString(params.from));
+  const label = sanitizeEnvelopeHeaderPart(normalizeOptionalString(params.from) || "");
+  const idMarkerIndex = label.search(/\s+id:/i);
+  const displayLabel = idMarkerIndex > 0 ? label.slice(0, idMarkerIndex).trim() : label;
+  const directSender = displayLabel.includes(":") ? "(sender)" : displayLabel;
   const bodyLabel = isDirect ? (params.fromMe ? "(self)" : directSender) : resolvedSender;
   return formatAgentEnvelope({
     channel: params.channel,

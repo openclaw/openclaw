@@ -58,6 +58,7 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
     ...chatPanePropertyKeys,
     "paneWidth",
     "desktopFocus",
+    "deferredSessionHydration",
     "dashboardControls",
     "replyNavigationSessionKey",
     "replyNavigationId",

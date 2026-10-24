@@ -259,17 +259,15 @@ function createPluginGenerationArtifact(
       resolveDependency,
       (name, dependency) => linkDependency(name, dependency, true),
     );
+    // References share a capture destination; real paths track filesystem ancestry.
     const scannedDirectories = new Set<string>();
-    const captureFile = (source: string): void => {
+    const captureFile = (source: string, directoryAncestors?: Set<string>): void => {
       const existingSource = capturedPaths.get(path.resolve(source));
       if (existingSource) {
         assertModuleAvailable(existingSource);
-      }
-      if (
-        existingSource &&
-        (!/\.[cm]?[jt]sx?$/.test(source) || moduleCaptures.has(existingSource))
-      ) {
-        return;
+        if (!/\.[cm]?[jt]sx?$/.test(source) || moduleCaptures.has(existingSource)) {
+          return;
+        }
       }
       const target = existingSource ?? path.join(destination, path.relative(root, source));
       if (hostModuleLinks.has(target)) {
@@ -288,16 +286,21 @@ function createPluginGenerationArtifact(
           return;
         }
         if (fs.statSync(real).isDirectory()) {
-          if (scannedDirectories.has(real)) {
+          if (directoryAncestors?.has(real)) {
             throw new Error("Standalone plugin input contains a directory cycle");
           }
-          scannedDirectories.add(real);
-          for (const name of fs.readdirSync(real).toSorted()) {
-            if (isPluginSourceEntry(name)) {
-              captureFile(path.join(source, name));
+          if (!scannedDirectories.has(target)) {
+            const ancestors = directoryAncestors ?? new Set<string>();
+            ancestors.add(real);
+            scannedDirectories.add(target);
+            for (const name of fs.readdirSync(real).toSorted()) {
+              if (isPluginSourceEntry(name)) {
+                captureFile(path.join(source, name), ancestors);
+              }
             }
+            ancestors.delete(real);
+            scannedDirectories.delete(target);
           }
-          scannedDirectories.delete(real);
           return;
         }
         copy(source, target);

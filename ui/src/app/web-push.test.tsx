@@ -308,9 +308,7 @@ describe("web push Gateway reconciliation", () => {
       );
       const controls = container.querySelectorAll(".settings-stack input, .settings-stack select");
       expect(controls.length).toBeGreaterThan(0);
-      expect(
-        [...controls].every((control) => control.matches(':disabled, [aria-disabled="true"]')),
-      ).toBe(true);
+      expect([...controls].every((control) => control.matches(":disabled"))).toBe(true);
       container.querySelector<HTMLInputElement>(".settings-stack input")?.click();
       expect(changePreferences).not.toHaveBeenCalled();
       expect(container.textContent).not.toContain("Send test");

@@ -114,5 +114,5 @@ it("explains personal GitHub sign-in for the shared owner without email or retry
   expect(container.textContent).not.toContain("Refresh to retry");
   const toggle = container.querySelector<HTMLInputElement>("input.settings-toggle__input");
   expect(toggle?.checked).toBe(false);
-  expect(toggle?.hasAttribute("aria-disabled")).toBe(true);
+  expect(toggle?.disabled).toBe(true);
 });

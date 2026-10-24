@@ -36,12 +36,8 @@ import { readChatSendDiagnostics, startChatSendDiagnostics } from "./chat-send-d
 import { handleChatSendSetupError } from "./chat-send-dispatch-errors.js";
 import type { ChatSendExternalAuthorityAdmission } from "./chat-send-external-authority-contract.js";
 import { acknowledgeWorkerGoal } from "./chat-send-goal-ack.js";
-import {
-  createChatSendMessageInjectionStarter,
-  settleChatSendPreAckMessageInjection,
-} from "./chat-send-message-injection.js";
+import { createChatSendMessageInjectionStarter } from "./chat-send-message-injection.js";
 import type { ChatSendInternalOptions } from "./chat-send-options.js";
-import { applyChatSendReplyContextFields } from "./chat-send-reply-context.js";
 import { createChatSendSessionInitialization } from "./chat-send-session-binding.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
 import { prepareChatSendUserTurn } from "./chat-send-user-turn.js";
@@ -109,7 +105,7 @@ export async function handleChatSendWithStorage(
       }
     },
   };
-  const { p, systemInputProvenance, reconnectResumeRequested } = request;
+  const { systemInputProvenance, reconnectResumeRequested } = request;
   const { clientRunId, cfg, storePath, entry, sessionKey, sessionRoutingChanged, selectedAgent } =
     session;
   const {
@@ -550,32 +546,6 @@ export async function handleChatSendWithStorage(
           ? undefined
           : assertInputAdmissionCurrent,
     });
-    const preAckReplyContextPromise =
-      messageInjectionTarget && !isInternalTextSlashCommandTurn
-        ? replyContextFieldsPromise
-        : undefined;
-    phase?.mark("replyContext");
-    if (preAckReplyContextPromise) {
-      applyChatSendReplyContextFields(ctx, await preAckReplyContextPromise);
-      if (settleInterruptedPreparation()) {
-        return;
-      }
-    }
-    assertInputAdmissionCurrent();
-    let messageInjectionAttempt =
-      !p.replyToId || preAckReplyContextPromise ? await beginCapturedMessageInjection() : undefined;
-    phase?.mark("runAdmission");
-    const preAckInjection = await settleChatSendPreAckMessageInjection({
-      attempt: messageInjectionAttempt,
-      isAborted: () => activeRunAbort.controller.signal.aborted,
-      sessionRoutingChanged: () => sessionRoutingChanged(context.getRuntimeConfig()),
-      onAborted: finishAbortedChatSend,
-      onSessionRoutingChanged: admission.rejectSessionRoutingChanged,
-    });
-    if (preAckInjection.status === "handled") {
-      return;
-    }
-    messageInjectionAttempt = preAckInjection.attempt;
     phase?.mark("effects");
     const { serverTiming, chatSendTiming, ackReadyEvent } = prepareChatSendAckTiming({
       client,
@@ -624,7 +594,7 @@ export async function handleChatSendWithStorage(
       respond(true, ackPayload, undefined, { runId: clientRunId });
     }
     phase?.finish();
-    diagnostics.acknowledge(messageInjectionAttempt ? "steer" : "startup");
+    diagnostics.acknowledge();
     context.recordClientActivity?.(client);
     const chatSendAckedAtMs = chatSendTiming?.ackedAtMs ?? performance.now();
     // Dispatch owns execution from this point, including deferred and collected turns.
@@ -666,9 +636,6 @@ export async function handleChatSendWithStorage(
       externalAuthorityAdmission,
       injection: {
         beginCapturedMessageInjection,
-        messageInjectionAttempt,
-        messageInjectionDisposition: preAckInjection.disposition,
-        preAckReplyContextPromise,
         replyContextFieldsPromise,
       },
       terminalizeRestartSafeAdmission,

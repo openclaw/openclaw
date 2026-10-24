@@ -519,6 +519,25 @@ describe("sessions_send communication boundary", () => {
     receive.resolve();
     (await pending).close();
   });
+  it("rechecks temporary controller access at final admission without claiming task completion", async () => {
+    const source = endpoint("source");
+    const parent = endpoint("original-parent");
+    const target = endpoint("target", {
+      spawnedBy: parent.sessionKey,
+      parentSessionId: parent.entry?.sessionId,
+    });
+    state.task = {
+      runId: "controlled-task",
+      requesterSessionKey: source.sessionKey,
+      requesterAgentId: "main",
+    };
+    await withGate({ ...operation(source, target), access: { controllerOnly: true } }, (gate) => {
+      expect(gate.ownedTask).toBe(false);
+      state.task = undefined;
+      expect(gate.assertCurrent).toThrow("controller access changed");
+    });
+  });
+
   it("only live exact owned tasks get the guidance exception", async () => {
     const source = endpoint("source", neverSend);
     const target = endpoint("target", {

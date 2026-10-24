@@ -274,10 +274,7 @@ export class ComposerDictationOwner extends EventTarget {
     }
   };
 
-  private readonly handleWindowBlur = (): void => {
-    this.clearClickSuppression();
-    void this.stop({ commit: false });
-  };
+  private readonly handleWindowBlur = (): void => this.cancel();
 
   private canHold(): boolean {
     return (
@@ -407,10 +404,8 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   private clearPointerGesture(): void {
-    if (this.holdTimer !== null) {
-      globalThis.clearTimeout(this.holdTimer);
-      this.holdTimer = null;
-    }
+    globalThis.clearTimeout(this.holdTimer ?? undefined);
+    this.holdTimer = null;
     this.pointerListeners?.abort();
     this.pointerListeners = null;
     if (this.pointerId !== null) {
@@ -433,10 +428,8 @@ export class ComposerDictationOwner extends EventTarget {
   }
 
   private clearClickSuppression(): void {
-    if (this.suppressClickTimer !== null) {
-      globalThis.clearTimeout(this.suppressClickTimer);
-      this.suppressClickTimer = null;
-    }
+    globalThis.clearTimeout(this.suppressClickTimer ?? undefined);
+    this.suppressClickTimer = null;
     this.suppressionListeners?.abort();
     this.suppressionListeners = null;
     this.suppressedPointerId = null;

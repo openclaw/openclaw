@@ -1,23 +1,78 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import type { WebSearchStatusResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { createWebSearchTestProvider } from "../../test-utils/web-provider-runtime.test-helpers.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
-  prepare: vi.fn(),
+  catalog: vi.fn(),
+  runtime: vi.fn(),
+  prepareProfile: vi.fn(),
   search: vi.fn(),
   assertSecret: vi.fn(),
   profile: vi.fn(),
   assertProfile: vi.fn(),
 }));
+// mock-isolation: Control requester revocation without opening the live identity database.
 vi.mock("./users-profile-access.js", () => ({
-  prepareAuthenticatedProfile: async () => ({
-    profileId: mocks.profile(),
-    assertCurrent: mocks.assertProfile,
-  }),
+  prepareAuthenticatedProfile: mocks.prepareProfile,
 }));
-vi.mock("./web-search-status.js", () => ({ prepareWebSearchStatus: mocks.prepare }));
-vi.mock("../../web-search/runtime.js", () => ({ runWebSearch: mocks.search }));
+// mock-isolation: Search projection uses synthetic prepared auth without reading machine stores.
+vi.mock("../../agents/auth-profiles/store.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/auth-profiles/store.js")>()),
+  getPreparedRuntimeAuthProfileStoreSnapshot: () => undefined,
+}));
+// mock-isolation: The synthetic Gateway request has one fixed agent, not machine agent state.
+vi.mock("./model-auth-agent-scope.js", () => ({
+  resolveModelAuthAgentScope: () => ({ ok: true, agentId: "main", agentDir: "/synthetic/agent" }),
+}));
+// mock-isolation: Fix model selection before exercising real search status projection.
+vi.mock("../../agents/model-selection.js", () => ({
+  resolveDefaultModelForAgent: () => ({ provider: "local", model: "local-model" }),
+}));
+// mock-isolation: This request fixture does not load the provider discovery registry.
+vi.mock("../../config/io.plugin-metadata.js", () => ({
+  resolveConfigWidePluginMetadataSnapshotAsync: async () => ({ byPluginId: new Map() }),
+}));
+// mock-isolation: Discovery policy is an input, not machine state under test here.
+vi.mock("../../plugins/bundled-discovery-state.js", () => ({
+  prepareBundledDiscoveryMode: async () => () => {},
+  readBundledDiscoveryModeMemoized: () => undefined,
+}));
+vi.mock("../../config/runtime-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/runtime-snapshot.js")>()),
+  getRuntimeConfigSourceSnapshot: () => undefined,
+  selectLiveRuntimeConfig: (config?: OpenClawConfig) => config,
+}));
+// mock-isolation: Tool eligibility is fixed input; projection and handler authority stay real.
+vi.mock("../../agents/web-search-tool-policy.js", () => ({
+  resolveWebSearchToolPolicy: () => ({ allowed: true }),
+}));
+// mock-isolation: Catalog publication is fixed input; no credential/catalog initialization runs.
+vi.mock("../server-model-catalog-auth.js", () => ({ readPreparedCatalog: mocks.catalog }));
+// mock-isolation: Fixed catalog decisions select a runtime without initializing model accounts.
+vi.mock("../../agents/model-catalog-decisions.js", () => ({
+  prepareModelCatalogDecisions: async () => ({
+    evaluateEntry: () => ({}),
+    evaluateNative: () => ({}),
+  }),
+  resolveCatalogDecisionRuntime: mocks.runtime,
+}));
+// mock-isolation: Use a managed model route while retaining real service probing.
+vi.mock("../../agents/native-web-search.js", () => ({
+  resolveNativeWebSearchRoute: () => ({ kind: "managed" }),
+}));
+// mock-isolation: Synthetic provider discovery is input to the real status projection.
+vi.mock("../../flows/search-setup.js", () => ({
+  listSearchProviderOptions: () => [exampleProvider],
+}));
+// mock-isolation: Fix provider inputs while retaining the existing search-effect spy.
+vi.mock("../../web-search/runtime.js", () => ({
+  runWebSearch: mocks.search,
+  isWebSearchProviderConfigured: () => true,
+  listConfiguredWebSearchProviders: () => [exampleProvider],
+  resolveWebSearchProviderId: () => "example",
+}));
 vi.mock("../../secrets/runtime-degraded-state.js", () => ({
   assertSecretOwnerAvailable: mocks.assertSecret,
 }));
@@ -29,7 +84,23 @@ const source = { title: "A source", url: "https://example.com/source" };
 const citation = { url: source.url, title: "Source" };
 const sourceResult = { results: [{ ...source, description: "A snippet" }] };
 const answer = { content: "A grounded answer", citations: [citation] };
-const prepared = () => ({ status: searchStatus, config, agentDir: "/synthetic/agent" });
+const exampleProvider = {
+  ...createWebSearchTestProvider({
+    id: "example",
+    pluginId: "example",
+    credentialPath: "plugins.entries.example.config.webSearch.apiKey",
+    getConfiguredCredentialValue: () => "synthetic",
+  }),
+  label: "Example Search",
+  envVars: [],
+};
+const preparedCatalog = () => ({
+  entries: [{ provider: "local", id: "local-model" }],
+  routeVariants: [],
+  metadataSnapshot: {},
+  authStore: { version: 1, profiles: {} },
+  isCurrent: () => true,
+});
 function request(
   method: "webSearch.status" | "webSearch.test",
   params: Record<string, unknown> = {},
@@ -69,11 +140,39 @@ beforeEach(() => {
     enabled: true,
     provider: "example",
     agentId: "main",
-    model: { provider: "local", id: "local-model", runtime: "openclaw" },
-    providers: [],
+    model: {
+      provider: "local",
+      id: "local-model",
+      runtime: "openclaw",
+      runtimeLabel: "OpenClaw embedded agent",
+    },
+    providers: [
+      {
+        id: "example",
+        pluginId: "example",
+        label: "Example Search",
+        hint: "example runtime provider",
+        configured: true,
+        installed: false,
+        available: true,
+        requiresCredential: true,
+        credentialSource: "config",
+        configPath: ["plugins", "entries", "example", "config", "webSearch"],
+        credentialPath: "plugins.entries.example.config.webSearch.apiKey",
+        credential: undefined,
+        docsUrl: undefined,
+        signupUrl: "https://example.com/example",
+      },
+    ],
+    testProvider: { id: "example", label: "Example Search" },
     route: { kind: "managed", provider: "example", label: "Example Search", testable: true },
   };
-  mocks.prepare.mockImplementation(async () => prepared());
+  mocks.prepareProfile.mockImplementation(async () => ({
+    profileId: mocks.profile(),
+    assertCurrent: mocks.assertProfile,
+  }));
+  mocks.catalog.mockImplementation(async () => preparedCatalog());
+  mocks.runtime.mockReturnValue({ id: "openclaw" });
   mocks.search.mockResolvedValue({ provider: "example", result: sourceResult });
 });
 
@@ -125,14 +224,7 @@ it.each([
 });
 
 it("probes only the configured service beside an external harness", async () => {
-  searchStatus.route = {
-    kind: "external",
-    provider: "custom-harness",
-    label: "Harness controls search",
-    testable: false,
-    reason: "Test this route in chat.",
-  };
-  searchStatus.testProvider = { id: "example", label: "Example Search" };
+  mocks.runtime.mockReturnValue({ id: "custom-harness" });
   await expectFailure(probe(), "INVALID_REQUEST");
   expect(mocks.search).not.toHaveBeenCalled();
   await expectFailure(probe({ providerId: "other" }), "INVALID_REQUEST");
@@ -145,7 +237,8 @@ it.each(["read", "profile", "admin"])("rechecks %s authority", async (authority)
     const readOnly = probe();
     readOnly.client!.connect.scopes = ["operator.read"];
     await invoke(readOnly);
-    expect(mocks.prepare).not.toHaveBeenCalled();
+    expect(mocks.catalog).not.toHaveBeenCalled();
+    expect(mocks.prepareProfile).not.toHaveBeenCalled();
   }
   if (authority === "profile") {
     mocks.profile.mockReturnValue("original");
@@ -154,7 +247,7 @@ it.each(["read", "profile", "admin"])("rechecks %s authority", async (authority)
     authority === "read" ? "webSearch.status" : "webSearch.test",
     authority === "read" ? {} : { query: "query" },
   );
-  mocks.prepare.mockImplementationOnce(async () => {
+  mocks.catalog.mockImplementationOnce(async () => {
     if (authority === "profile") {
       mocks.assertProfile.mockImplementation(() => {
         throw new Error("profile authority changed");
@@ -162,7 +255,7 @@ it.each(["read", "profile", "admin"])("rechecks %s authority", async (authority)
     } else {
       revoked.client!.invalidated = true;
     }
-    return prepared();
+    return preparedCatalog();
   });
   await expectFailure(revoked, "UNAVAILABLE");
   expect(mocks.search).not.toHaveBeenCalled();
@@ -170,12 +263,13 @@ it.each(["read", "profile", "admin"])("rechecks %s authority", async (authority)
 
 it("rejects config drift before search and revocation after search", async () => {
   const original = config;
-  mocks.prepare.mockImplementationOnce(async () => {
+  mocks.catalog.mockImplementationOnce(async () => {
     config = { tools: { web: { search: { enabled: false } } } };
-    return { ...prepared(), config: original };
+    return preparedCatalog();
   });
   await expectFailure(probe(), "UNAVAILABLE");
   expect(mocks.search).not.toHaveBeenCalled();
+  config = original;
   const revoked = probe();
   mocks.search.mockImplementationOnce(async () => {
     revoked.client!.invalidated = true;

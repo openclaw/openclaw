@@ -520,13 +520,9 @@ export async function createChildAdapter(
     // the tracked root (libuv owns that ChildProcess).
     scheduleAdoptedChildZombieReapAfterExit(child, useDetached);
   };
-  const signalProcessTreeForChild = (pid: number, signal: "SIGTERM" | "SIGKILL") => {
-    signalProcessTree(pid, signal, { detached: useDetached });
-    scheduleAdoptedReapForChild();
-  };
-  const signalProcessTreeForChildAndWait = (pid: number, signal: "SIGTERM" | "SIGKILL") =>
+  const signalProcessTreeForChildAndWait = (pid: number) =>
     new Promise<void>((resolve) => {
-      signalProcessTree(pid, signal, {
+      signalProcessTree(pid, "SIGKILL", {
         detached: useDetached,
         onComplete: () => {
           scheduleAdoptedReapForChild();
@@ -567,7 +563,7 @@ export async function createChildAdapter(
         const previousSignal = treeSignaling;
         treeSignaling = (async () => {
           try {
-            await signalProcessTreeForChildAndWait(pid, "SIGKILL");
+            await signalProcessTreeForChildAndWait(pid);
             signalChild("SIGKILL");
             windowsTreeKillCompleted = true;
             if (childCloseState) {
@@ -591,7 +587,8 @@ export async function createChildAdapter(
       return;
     }
     if (signal === "SIGTERM" && pid) {
-      signalProcessTreeForChild(pid, "SIGTERM");
+      signalProcessTree(pid, "SIGTERM", { detached: useDetached });
+      scheduleAdoptedReapForChild();
       return;
     }
     signalChild(signal);

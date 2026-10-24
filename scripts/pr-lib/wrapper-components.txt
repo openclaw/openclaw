@@ -64,7 +64,6 @@ packages/llm-core/src/usage-cost.ts
 packages/llm-core/src/utils/assistant-message-events.ts
 packages/llm-core/src/utils/diagnostics.ts
 packages/llm-core/src/utils/event-stream.ts
-packages/llm-core/src/utils/provider-refusal.ts
 packages/llm-core/src/validation.ts
 packages/media-core/src/constants.ts
 packages/media-core/src/file-name.ts
@@ -1226,6 +1225,7 @@ src/infra/sqlite-worker-input-admission.ts
 src/infra/sqlite-worker-client.ts
 src/infra/sqlite-worker-contract.ts
 src/infra/sqlite-worker-database-admission-relay.ts
+src/infra/sqlite-worker-error.ts
 src/infra/sqlite-worker-identity.ts
 src/infra/sqlite-worker-operation-admission.ts
 src/infra/sqlite-worker-operation-scope.ts
@@ -1315,6 +1315,7 @@ src/infra/worker-native-lifecycle.worker.ts
 src/infra/worker-native-port.ts
 src/infra/worker-native-task-port.ts
 src/infra/worker-pool-sizing.ts
+src/infra/worker-postgres-bridge-census.ts
 src/infra/worker-request-diagnostics.ts
 src/infra/worker-request-kind.ts
 src/infra/worker-task-capacity.ts
@@ -1766,6 +1767,7 @@ src/sessions/transcript-terminal-model.ts
 src/sessions/user-turn-transcript-admission.ts
 src/secrets/store/secret-store-validation-error.ts
 src/shared/assistant-error-format.ts
+src/shared/async-context.ts
 src/shared/async-store.ts
 src/shared/async-work-scope.ts
 src/shared/avatar-limits.ts
@@ -1804,6 +1806,7 @@ src/shared/settle-within.ts
 src/shared/store-writer-acquisitions.ts
 src/shared/store-writer-queue.ts
 src/shared/tool-block-contract.ts
+src/shared/update-outcome-classification.ts
 src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts
 src/skills/discovery/chat-command-invocation.ts
@@ -1828,6 +1831,7 @@ src/state/agent-deletion-journal-recovery.ts
 src/state/agent-deletion-journal-status.ts
 src/state/agent-deletion-journal.read.ts
 src/state/agent-deletion-journal.ts
+src/state/agent-input-recovery-context.ts
 src/state/agent-provenance.kernel.ts
 src/state/agent-provenance-publication.ts
 src/state/agent-provenance.schema.ts
@@ -1922,6 +1926,7 @@ src/state/openclaw-agent-transcript-fts-schema.ts
 src/state/openclaw-agent-transcript-payload-migration.ts
 src/state/openclaw-agent-write-layout-migration.ts
 src/state/openclaw-agent-index-retirement-migration.ts
+src/state/openclaw-agent-vector-decoder-migration.ts
 src/state/openclaw-agent-write-admission.ts
 src/state/openclaw-agent-write-admission-state.ts
 src/state/openclaw-database-preflight-agent-scheduler.ts
@@ -2557,6 +2562,7 @@ packages/markdown-core/package.json
 src/state/openclaw-agent-db-worker-admission.ts
 src/config/sessions/legacy-compaction-history.ts
 src/config/sessions/session-accessor.sqlite-references.ts
+src/config/sessions/session-accessor.sqlite-reference-projection.ts
 src/config/sessions/session-actor-memory-conversation-owner.ts
 src/config/sessions/session-actor-memory-lifecycle-artifacts.ts
 src/config/sessions/session-actor-memory-message-rewrite.ts
@@ -2598,6 +2604,7 @@ src/chat/canvas-render.ts
 src/chat/tool-content.ts
 src/gateway/chat-display-projection.canvas.ts
 src/gateway/chat-display-projection.commentary.ts
+src/gateway/chat-display-projection.inline-view.ts
 src/gateway/chat-display-projection.sanitize.ts
 src/gateway/worker-environments/workspace-conflicts.ts
 src/infra/sibling-temp-file.ts
@@ -2608,6 +2615,7 @@ src/media/store.ts
 src/sessions/session-run-error-presentation.ts
 src/sessions/user-turn-media.ts
 src/shared/channel-read-authority.ts
+src/shared/plugin-inline-view.ts
 src/shared/tool-approval-reviews.ts
 src/agents/agent-lifecycle-parent-state.ts
 src/agents/agent-run-terminal-error.ts
@@ -2657,6 +2665,7 @@ src/plugins/api-lifecycle.ts
 src/plugins/cli-backend-registration.ts
 src/plugins/cli-backends.runtime.ts
 src/plugins/cli-callback-binding.ts
+src/plugins/inline-view.ts
 src/plugins/service-scheduler-binding.ts
 src/plugins/setup-registry.ts
 src/shared/map-nested-strings.ts

@@ -57,8 +57,10 @@ function decodeSessionEntryCurrentFacts(
     ...(value.repositoryWorkspaceId === undefined
       ? {}
       : { repositoryWorkspaceId: value.repositoryWorkspaceId }),
+    goal: value.goal,
     lifecycleRevision: value.lifecycleRevision,
     lifecycleRunId: value.lifecycleRunId,
+    lastRunId: value.lastRunId,
     activeWriterRunId: value.activeWriterRunId,
     skillLibrarySelections: value.skillLibrarySelections,
     executionPolicy: value.executionPolicy,

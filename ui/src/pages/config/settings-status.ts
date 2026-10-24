@@ -1,4 +1,4 @@
-import { createMemo, createSignal, isPending, latest, onCleanup, onSettled } from "solid-js";
+import { createMemo, createSignal, isPending, latest, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import type { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
@@ -71,10 +71,10 @@ export function createSettingsStatus<T>(
     const snapshot = context.gateway.snapshot;
     return [snapshot.client, snapshot.phase, snapshot.hello, snapshot.hello?.auth] as const;
   };
-  let connection = connectionKey();
-  onCleanup(
+  onSettled(() => {
+    let connection = connectionKey();
     // Every connection receipt retires requests before a same-turn reconnect can settle them.
-    gatewayProjection.subscribe(() => {
+    const stopGateway = gatewayProjection.subscribe(() => {
       const next = connectionKey();
       if (connection.some((value, index) => value !== next[index])) {
         const identityChanged =
@@ -91,8 +91,17 @@ export function createSettingsStatus<T>(
         options.onConnectionChange?.(identityChanged);
         scheduleRefresh();
       }
-    }),
-  );
+    });
+    // Config receipts admit a new status read after the current write has settled.
+    const stopConfig = configProjection.subscribe(scheduleRefresh);
+    refreshIfChanged();
+    return () => {
+      disposed = true;
+      stopGateway();
+      stopConfig();
+      abortRequest?.();
+    };
+  });
   function capture() {
     const owner = context.gateway;
     // Mutation authority captures this connection once, then checks it at settlement.
@@ -169,13 +178,6 @@ export function createSettingsStatus<T>(
     const promise = Promise.race([response, retired.promise]);
     setIssued({ scope, promise });
   }
-  // Config receipts admit a new status read after the current write has settled.
-  onCleanup(configProjection.subscribe(scheduleRefresh));
-  onSettled(refreshIfChanged);
-  onCleanup(() => {
-    disposed = true;
-    abortRequest?.();
-  });
   return {
     client,
     pending,

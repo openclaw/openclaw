@@ -172,12 +172,16 @@ export function prepareSessionEventProjection(
         audiences.set(audienceKey, audience);
       }
       const { row } = audience;
+      const rowDeltas = hasGatewayClientCap(
+        client.connect.caps,
+        GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS,
+      );
       const references = connection.references(client);
       for (const key of audience.hiddenAncestors) {
         references.forget(key);
       }
       const ancestorDelivery =
-        audience.ancestors && references.prepare(audience.ancestors, ancestorRevision);
+        audience.ancestors && references.prepare(audience.ancestors, ancestorRevision, rowDeltas);
       if (!ancestorDelivery) {
         connection.forgetConnectionAncestors(client);
       }
@@ -207,10 +211,7 @@ export function prepareSessionEventProjection(
         }
         audience.payloads.set(deliveryKey, projected);
       }
-      const rowDelivery = hasGatewayClientCap(
-        client.connect.caps,
-        GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS,
-      )
+      const rowDelivery = rowDeltas
         ? references.prepareRows([row, ...(projected.ancestorSessions ?? [])], diff)
         : undefined;
       let wirePayload: Record<string, unknown> = projected;

@@ -9,6 +9,8 @@ import { createBundledStaticCatalogModelResolver } from "./embedded-agent-runner
 export type BundledModelIdentityFacts = {
   compat?: Pick<ModelCompatConfig, "codeMode" | "supportsTemperature">;
   mediaInput?: ModelMediaInputConfig;
+  /** Canonical developer lineage the bundled catalog declares for this exact model. */
+  family?: string;
 };
 
 export type BundledModelIdentityLookup = {
@@ -47,6 +49,7 @@ export function createBundledModelIdentityFactsResolver(): (
     const facts: BundledModelIdentityFacts = {
       ...(Object.keys(compat).length > 0 ? { compat } : {}),
       ...(model.mediaInput ? { mediaInput: model.mediaInput } : {}),
+      ...(model.family ? { family: model.family } : {}),
     };
     return Object.keys(facts).length > 0 ? facts : undefined;
   };

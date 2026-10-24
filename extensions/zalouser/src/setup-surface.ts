@@ -107,7 +107,6 @@ async function promptZalouserAllowFrom(params: {
     const resolvedEntries = await resolveZaloAllowFromEntries({
       profile: resolved.profile,
       entries: parts,
-      credentialPersistence: "read-only",
     });
 
     const unresolved = resolvedEntries.filter((item) => !item.resolved).map((item) => item.input);
@@ -356,7 +355,6 @@ export const zalouserSetupWizard: ChannelSetupWizard = {
         const resolved = await resolveZaloGroupsByEntries({
           profile: updatedAccount.profile,
           entries,
-          credentialPersistence: "read-only",
         });
         const resolvedIds = resolved
           .filter((entry) => entry.resolved && entry.id)

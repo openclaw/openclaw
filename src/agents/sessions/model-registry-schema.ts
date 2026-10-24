@@ -146,6 +146,8 @@ const ModelDefinitionSchema = Type.Object({
   contextWindow: Type.Optional(Type.Number()),
   contextTokens: Type.Optional(Type.Number()),
   parameterCount: Type.Optional(Type.Integer({ minimum: 1 })),
+  // Normalized when read: an unusable family drops only that fact, never the registry.
+  family: Type.Optional(Type.String()),
   maxTokens: Type.Optional(Type.Number()),
   params: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
   headers: Type.Optional(Type.Record(Type.String(), Type.String())),

@@ -1210,6 +1210,7 @@ describe("FRV same-parent recovery", () => {
 
   it("reports waiting transitions, bounded heartbeats, and exact started attempts on stderr", async () => {
     vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-22T07:08:09.000Z"));
     const started = Date.now();
     const selected = child("normalCi", "101");
     const childRuns = new Map<string, { attempt: number; conclusion: string | null }>([
@@ -1253,6 +1254,14 @@ describe("FRV same-parent recovery", () => {
       const result = continueFailed(plan([selected]), "77", client);
       await Promise.all([result, vi.advanceTimersByTimeAsync(480_000)]);
       const lines = stderr.mock.calls.map(([line]) => String(line));
+      expect(lines).not.toHaveLength(0);
+      expect(
+        lines.every((line) =>
+          /^\[frv continue\] 2026-08-22T07:\d{2}:\d{2}\.000Z \/ 2026-08-22 00:\d{2}:\d{2} PDT /.test(
+            line,
+          ),
+        ),
+      ).toBe(true);
       expect(
         lines.filter((line) => line.includes("waiting for normalCi run 101 attempt 1 in_progress")),
       ).toHaveLength(1);
@@ -2362,6 +2371,9 @@ describe("FRV watch", () => {
       try {
         await expect(poll()).resolves.toMatchObject({ complete: false });
         expect(messages).toEqual([expect.stringContaining("rate limited")]);
+        expect(messages[0]).toMatch(
+          /next check at 2026-10-08T22:5[45]:20\.000Z \/ 2026-10-08 15:5[45]:20 PDT/,
+        );
         const firstNotification = [...messages];
         clock.mockReturnValue(start + waitMs - 1);
         await poll();

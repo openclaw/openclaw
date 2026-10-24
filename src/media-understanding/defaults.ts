@@ -163,11 +163,8 @@ export function providerSupportsNativePdfDocument(params: {
   providerId: string;
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  providerRegistry?: Map<string, MediaUnderstandingProvider>;
 }): boolean {
-  const registry =
-    params.providerRegistry ??
-    buildMediaUnderstandingManifestMetadataRegistry(params.cfg, params.workspaceDir);
+  const registry = buildMediaUnderstandingManifestMetadataRegistry(params.cfg, params.workspaceDir);
   const provider = registry.get(normalizeMediaProviderId(params.providerId));
   return provider?.nativeDocumentInputs?.includes("pdf") ?? false;
 }
@@ -175,17 +172,13 @@ export function providerSupportsNativePdfDocument(params: {
 /** Resolves provider-specific document model hints, preserving explicit unsupported markers. */
 export function resolveDocumentMediaModel(params: {
   providerId: string;
-  document: "pdf";
   mode: "textExtraction" | "image";
   cfg?: OpenClawConfig;
   workspaceDir?: string;
-  providerRegistry?: Map<string, MediaUnderstandingProvider>;
 }): string | false | undefined {
-  const registry =
-    params.providerRegistry ??
-    buildMediaUnderstandingManifestMetadataRegistry(params.cfg, params.workspaceDir);
+  const registry = buildMediaUnderstandingManifestMetadataRegistry(params.cfg, params.workspaceDir);
   const provider = registry.get(normalizeMediaProviderId(params.providerId));
-  const value = provider?.documentModels?.[params.document]?.[params.mode];
+  const value = provider?.documentModels?.pdf?.[params.mode];
   if (value === false) {
     return false;
   }

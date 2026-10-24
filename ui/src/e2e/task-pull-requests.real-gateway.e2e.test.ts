@@ -33,6 +33,7 @@ import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-d
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { recordTaskPrDiagnostics } from "./task-pull-requests.diagnostics.test-support.ts";
 
 const parentKey = "agent:main:task-pr-parent";
 const selectedKey = "agent:main:release-planning";
@@ -184,6 +185,12 @@ suite.define(() => {
     };
     gitOperationChannel.subscribe(recordGitOperation);
     test.onTestFinished(() => gitOperationChannel.unsubscribe(recordGitOperation));
+    const diagnostics = recordTaskPrDiagnostics(
+      [parentKey, ...numbers.map((_, index) => "agent:main:subagent:task-pr-child-" + index)],
+      numbers,
+      branch,
+    );
+    test.onTestFinished(diagnostics.stop);
     await suite.runScenario(test, {
       retainedState: () => state?.root,
       async run() {
@@ -327,6 +334,7 @@ suite.define(() => {
         // Browser WebSocket traffic is never replaced: only external GitHub HTTP is fixture-backed.
         for (const stage of ["initial", "restarted"] as const) {
           const stageStartedAt = performance.now();
+          diagnostics.beginStage();
           for (const operation of gitOperations) {
             operation.count = operation.errors = operation.elapsedMs = 0;
           }
@@ -357,9 +365,12 @@ suite.define(() => {
               let foregroundAcknowledged = false;
               let foregroundRejected = false;
               page.on("websocket", (socket) => {
+                const trace = diagnostics.socket();
+                socket.on("close", trace.close);
                 const pending = new Map<string, Subscription>();
                 socket.on("framesent", ({ payload }) => {
                   const frame: unknown = JSON.parse(String(payload));
+                  trace.sent(frame);
                   if (
                     !isRecord(frame) ||
                     frame.type !== "req" ||
@@ -384,6 +395,7 @@ suite.define(() => {
                 });
                 socket.on("framereceived", ({ payload }) => {
                   const frame: unknown = JSON.parse(String(payload));
+                  trace.received(frame);
                   if (isRecord(frame) && frame.type === "res" && typeof frame.id === "string") {
                     const subscription = pending.get(frame.id);
                     if (subscription) {
@@ -470,9 +482,7 @@ suite.define(() => {
                   .poll(() => row.locator(".session-row-badge--pull-request").count())
                   .toBe(1);
                 expect(
-                  await card
-                    .getByRole("link", { name: "Create a pull request for " + branch })
-                    .count(),
+                  await card.getByRole("link", { name: "Create PR for " + branch }).count(),
                 ).toBe(1);
                 for (const number of numbers) {
                   expect(
@@ -484,6 +494,7 @@ suite.define(() => {
                   ).toBe(1);
                 }
               } catch (error) {
+                await diagnostics.capture(page, stage);
                 const hydratedCount = (snapshot: Record<string, unknown> | undefined) =>
                   Array.isArray(snapshot?.taskPullRequests)
                     ? snapshot.taskPullRequests.filter(

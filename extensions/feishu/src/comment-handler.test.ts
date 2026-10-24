@@ -148,7 +148,6 @@ describe("handleFeishuCommentEvent", () => {
       messageId: "drive-comment:evt_1",
       commentId: "comment_1",
       replyId: "reply_1",
-      noticeType: "add_comment",
       fileToken: "doc_token_1",
       fileType: "docx",
       isWholeComment: false,

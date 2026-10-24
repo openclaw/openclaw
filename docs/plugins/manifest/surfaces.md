@@ -438,16 +438,17 @@ plugin code.
 }
 ```
 
-| Value         | Contribution                                         |
-| ------------- | ---------------------------------------------------- |
-| `page`        | A dedicated plugin page.                             |
-| `navigation`  | A navigation entry that opens a plugin page.         |
-| `panel`       | A panel within an existing view.                     |
-| `action`      | A user-facing action in an existing view.            |
-| `accessory`   | A small addition such as a session-header accessory. |
-| `widget`      | A dashboard widget.                                  |
-| `replacement` | A replacement for a supported host UI surface.       |
-| `link-reader` | A reader or preview for supported links.             |
+| Value         | Contribution                                                   |
+| ------------- | -------------------------------------------------------------- |
+| `page`        | A dedicated plugin page.                                       |
+| `navigation`  | A navigation entry that opens a plugin page.                   |
+| `panel`       | A panel within an existing view.                               |
+| `action`      | A user-facing action in an existing view.                      |
+| `accessory`   | A small addition such as a session-header accessory.           |
+| `widget`      | A dashboard widget.                                            |
+| `inline`      | A native view populated by tool-result data in a conversation. |
+| `replacement` | A replacement for a supported host UI surface.                 |
+| `link-reader` | A reader or preview for supported links.                       |
 
 The field is optional. Omission means unspecified; `[]` explicitly declares no
 UI contributions. OpenClaw ignores an invalid declaration (unknown values or a

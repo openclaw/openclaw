@@ -155,6 +155,8 @@ async function createPage(
   return { page, source };
 }
 
+type PageSource = Awaited<ReturnType<typeof createPage>>["source"];
+
 function operator(scopes: string[]): ApplicationGatewaySnapshot["hello"] {
   return { auth: { role: "operator", scopes } } as ApplicationGatewaySnapshot["hello"];
 }
@@ -664,6 +666,164 @@ describe("ApprovalPage", () => {
     document.dispatchEvent(new Event("visibilitychange"));
     await settle(page);
     expect(request).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps one approval.get in flight across repeated visibility refreshes", async () => {
+    const pending = pendingApproval();
+    const { promise: heldLookup, resolve: releaseLookup } =
+      Promise.withResolvers<ApprovalGetResult>();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ approval: pending } satisfies ApprovalGetResult)
+      .mockReturnValueOnce(heldLookup)
+      .mockResolvedValue({ approval: pending } satisfies ApprovalGetResult);
+    const { page } = await createPage(request);
+    for (let cycle = 0; cycle < 5; cycle += 1) {
+      visibilityState = "hidden";
+      document.dispatchEvent(new Event("visibilitychange"));
+      visibilityState = "visible";
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+    await settle(page);
+    expect(request).toHaveBeenCalledTimes(2);
+    releaseLookup({ approval: pending });
+    await settle(page);
+    await settle(page);
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(text(page, ".approval-page__preview")).toBe("printf safe");
+  });
+
+  it.each<
+    [string, (page: TestApprovalPage, source: PageSource, request: GatewayRequestHandler) => void]
+  >([
+    ["the approval ID changes", (page) => (page.approvalId = "exec:approval-2")],
+    [
+      "the client changes",
+      (_, source, request) => source.update({ client: createTestGatewayClient(request) }),
+    ],
+  ])("drops the queued follow-up when %s", async (_, retire) => {
+    const pending = pendingApproval();
+    const { promise: heldLookup, resolve: releaseLookup } =
+      Promise.withResolvers<ApprovalGetResult>();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ approval: pending } satisfies ApprovalGetResult)
+      .mockReturnValueOnce(heldLookup)
+      .mockImplementation(async (_method: string, params: unknown) => {
+        if (!isRecord(params) || typeof params.id !== "string") {
+          throw new Error("Expected an approval ID");
+        }
+        return { approval: pendingApproval({ id: params.id }) } satisfies ApprovalGetResult;
+      });
+    const { page, source } = await createPage(request, { hello: operator(["operator.approvals"]) });
+    // The first refresh sends the held lookup; the second queues its follow-up.
+    document.dispatchEvent(new Event("visibilitychange"));
+    document.dispatchEvent(new Event("visibilitychange"));
+    retire(page, source, request);
+    await settle(page);
+    expect(request).toHaveBeenCalledTimes(3);
+    releaseLookup({ approval: pending });
+    await settle(page);
+    await settle(page);
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(text(page, ".approval-page__preview")).toBe("printf safe");
+    expect(decision(page).disabled).toBe(false);
+  });
+
+  it.each<[string, number, (lookup: PromiseWithResolvers<ApprovalGetResult>) => void]>([
+    [
+      "the tab is hidden again",
+      2,
+      ({ resolve }) => {
+        visibilityState = "hidden";
+        document.dispatchEvent(new Event("visibilitychange"));
+        resolve({ approval: pendingApproval() });
+      },
+    ],
+    ["the approval has expired", 2, ({ resolve }) => resolve({ approval: expiredApproval() })],
+    ["the lookup fails", 3, ({ reject }) => reject(new Error("temporary Gateway failure"))],
+  ])("runs the queued follow-up only when a poll would run after %s", async (_, calls, finish) => {
+    const lookup = Promise.withResolvers<ApprovalGetResult>();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ approval: pendingApproval() } satisfies ApprovalGetResult)
+      .mockReturnValueOnce(lookup.promise)
+      .mockResolvedValue({ approval: pendingApproval() } satisfies ApprovalGetResult);
+    const { page } = await createPage(request);
+    document.dispatchEvent(new Event("visibilitychange"));
+    document.dispatchEvent(new Event("visibilitychange"));
+    finish(lookup);
+    await settle(page);
+    await settle(page);
+    expect(request).toHaveBeenCalledTimes(calls);
+  });
+
+  it.each(["applied", "reconciled"] as const)(
+    "retires a queued lookup when a decision is %s",
+    async (outcome) => {
+      const staleLookup = Promise.withResolvers<ApprovalGetResult>();
+      const pending = pendingApproval();
+      const request = vi
+        .fn()
+        .mockResolvedValueOnce({ approval: pending } satisfies ApprovalGetResult)
+        .mockReturnValueOnce(staleLookup.promise)
+        .mockResolvedValueOnce({
+          applied: true,
+          approval: allowedApproval(),
+        } satisfies ApprovalResolveResult)
+        .mockResolvedValue({ approval: expiredApproval() } satisfies ApprovalGetResult);
+      const { page } = await createPage(request);
+      document.dispatchEvent(new Event("visibilitychange"));
+      document.dispatchEvent(new Event("visibilitychange"));
+      expect(request).toHaveBeenCalledTimes(2);
+      decision(page, outcome === "applied" ? "allow-once" : "deny").click();
+      const title = outcome === "applied" ? "Approved here" : "Expired";
+      await waitForSolid(() => expect(text(page, "h1")).toBe(title));
+      const calls = outcome === "applied" ? 3 : 4;
+      expect(request).toHaveBeenCalledTimes(calls);
+      expect(request.mock.calls.filter(([method]) => method === "approval.resolve")).toHaveLength(
+        1,
+      );
+      staleLookup.resolve({ approval: pending });
+      await settle(page);
+      await settle(page);
+      expect(request).toHaveBeenCalledTimes(calls);
+      expect(text(page, "h1")).toBe(title);
+      expect(page.querySelectorAll("[data-decision]")).toHaveLength(0);
+    },
+  );
+
+  it("shows Retry progress while joining a background lookup", async () => {
+    const pending = pendingApproval();
+    const lookup = Promise.withResolvers<ApprovalGetResult>();
+    const followUp = Promise.withResolvers<ApprovalGetResult>();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ approval: pending } satisfies ApprovalGetResult)
+      .mockRejectedValueOnce(new Error("temporary Gateway failure"))
+      .mockReturnValueOnce(lookup.promise)
+      .mockReturnValueOnce(followUp.promise);
+    const { page } = await createPage(request);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitForSolid(() => expect(page.querySelector(".approval-page__callout")).not.toBeNull());
+    document.dispatchEvent(new Event("visibilitychange"));
+    await settle(page);
+    const retry = page.querySelector<HTMLButtonElement>(".approval-page__callout button")!;
+    expect(retry.disabled).toBe(false);
+    expect(page.querySelector(".approval-page__card")?.getAttribute("aria-busy")).toBe("false");
+    retry.click();
+    await waitForSolid(() => expect(retry.disabled).toBe(true));
+    expect(page.querySelector(".approval-page__card")?.getAttribute("aria-busy")).toBe("true");
+    expect(request).toHaveBeenCalledTimes(3);
+    lookup.resolve({ approval: pending });
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(4));
+    await waitForSolid(() =>
+      expect(page.querySelector(".approval-page__card")?.getAttribute("aria-busy")).toBe("false"),
+    );
+    followUp.resolve({ approval: pending });
+    await settle(page);
+    expect(request).toHaveBeenCalledTimes(4);
+    expect(decision(page).disabled).toBe(false);
   });
 
   it("keeps one connection alert and disabled decisions across failed background polls", async () => {

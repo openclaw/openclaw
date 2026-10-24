@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
@@ -15,6 +16,8 @@ import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   archiveConfirmedSessionsWithUndo,
   archiveSessionWithUndo,
+  confirmSessionArchive,
+  captureSessionArchivePins,
 } from "./session-organizer-archive.runtime.ts";
 import {
   createHarness,
@@ -27,11 +30,17 @@ vi.mock("../lib/toast.ts", async (importOriginal) => ({
   showToast: vi.fn(),
 }));
 
-function prepareArchiveTree(harness: ReturnType<typeof createHarness>, rows: GatewaySessionRow[]) {
+function prepareArchiveTree(
+  harness: ReturnType<typeof createHarness>,
+  rows: GatewaySessionRow[],
+  childrenByParent?: ReadonlyMap<string, GatewaySessionRow[]>,
+) {
   let children: GatewaySessionRow[] = [];
   const describeSession = vi.fn(async () => ({ session: rows[0]! }));
   const refreshList = vi.fn(async (query?: SessionRefreshOptions) => {
-    children = rows.filter((row) => row.parentSessionKey === query?.spawnedBy);
+    children = childrenByParent
+      ? (childrenByParent.get(query?.spawnedBy ?? "") ?? [])
+      : rows.filter((row) => row.parentSessionKey === query?.spawnedBy);
   });
   harness.scope.sessions.describe = describeSession;
   harness.scope.sessions.refreshList = refreshList;
@@ -58,6 +67,80 @@ function guardedTarget(index: number) {
 }
 
 describe("session organizer nested archive choice", () => {
+  it("includes unexpanded persistent descendants through workers but excludes independent branches", async () => {
+    const modal = createModalDialogTestFixture();
+    onTestFinished(() => modal.cleanup());
+    const harness = createHarness();
+    const root = gatewayRow(0);
+    const worker = gatewayRow(1, { key: "agent:main:subagent:worker" });
+    const child = gatewayRow(2);
+    const grandchild = gatewayRow(3);
+    const children = new Map([
+      [
+        root.key,
+        [
+          worker,
+          gatewayRow(4, { sidebarRoot: true }),
+          gatewayRow(5, { category: "Work" }),
+          gatewayRow(6, { archived: true }),
+        ],
+      ],
+      [worker.key, [child]],
+      [child.key, [grandchild]],
+      [grandchild.key, [root]],
+    ]);
+    const reads = prepareArchiveTree(harness, [root], children);
+    const pending = modal.track(
+      confirmSessionArchive(
+        { ...sessionRow(0), hasArchiveDescendants: true },
+        harness.scope,
+        () => true,
+      ),
+    );
+    const actions = await waitForConfirmDialogActions();
+    expect(actions.textContent).toContain("Archive all (3)");
+    expect(harness.patch).not.toHaveBeenCalled();
+    expect(harness.request).not.toHaveBeenCalled();
+    answerConfirmDialog(actions, "confirm");
+    expect(await pending).toMatchObject({
+      kind: "tree",
+      rows: [
+        {
+          key: grandchild.key,
+          archiveGuard: { expectedSidebarAncestors: [guardedTarget(2), guardedTarget(0)] },
+        },
+        { key: child.key, archiveGuard: { expectedSidebarAncestors: [guardedTarget(0)] } },
+        { key: root.key, archiveGuard: { expectedSidebarAncestors: [] } },
+      ],
+    });
+    expect(reads.refreshList.mock.calls.map(([query]) => query?.spawnedBy)).toEqual([
+      root.key,
+      worker.key,
+      child.key,
+      grandchild.key,
+    ]);
+  });
+
+  it("does not return a partial tree when a child read fails or the connection changes", async () => {
+    const harness = createHarness();
+    const root = { ...sessionRow(0), hasArchiveDescendants: true };
+    const reads = prepareArchiveTree(harness, [gatewayRow(0)]);
+    const isCurrent = () => harness.host.sessionData.isSessionMutationScopeCurrent(harness.scope);
+    reads.refreshList.mockImplementation(async () => {
+      throw new Error("unavailable");
+    });
+    await expect(confirmSessionArchive(root, harness.scope, isCurrent)).rejects.toThrow(
+      "unavailable",
+    );
+    expect(await confirmSessionArchive(root, harness.scope, () => false)).toBeNull();
+    expect(reads.describeSession).toHaveBeenCalledOnce();
+    reads.refreshList.mockImplementation(async () => harness.retireScope());
+    expect(await confirmSessionArchive(root, harness.scope, isCurrent)).toBeNull();
+    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(harness.patch).not.toHaveBeenCalled();
+    expect(harness.request).not.toHaveBeenCalled();
+  });
+
   it("returns a partial archive failure while retaining successful-only Undo after navigation", async () => {
     const rows = [sessionRow(1), sessionRow(2), sessionRow(3)];
     const undoError = new Error("Undo denied after navigation");
@@ -168,4 +251,82 @@ describe("session organizer nested archive choice", () => {
       expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
     },
   );
+});
+
+describe("personal pin archive Undo", () => {
+  it.each(["success", "failure", "profile", "manual"] as const)(
+    "settles a personal pin receipt without replacing newer intent (%s)",
+    async (outcome) => {
+      const h = createHarness();
+      const key = sessionRow(1).key;
+      const pin = "session:" + key;
+      const retained = ["session-rail:" + key, "session:agent:main:other"];
+      const navigation = h.scope.context.navigation;
+      navigation.update({ sidebarEntries: [pin, ...retained] });
+      const undoPins = captureSessionArchivePins(h.scope, [key]);
+      navigation.update({ sidebarEntries: retained });
+      const reply = createDeferred<readonly string[]>();
+      const operation = undoPins(() => reply.promise);
+      expect(navigation.snapshot.sidebarEntries).toEqual(retained);
+      if (outcome === "profile") {
+        h.retireScope();
+        navigation.update({ sidebarEntries: ["session:agent:main:another-profile"] });
+      } else if (outcome === "manual") {
+        navigation.update({ sidebarEntries: [...retained, pin] });
+        navigation.update({ sidebarEntries: retained });
+      } else if (outcome === "success") {
+        navigation.update({ sidebarEntries: [...retained, "route:usage"] });
+      }
+      if (outcome === "failure") {
+        reply.reject(new Error("Undo rejected"));
+        await expect(operation).rejects.toThrow("Undo rejected");
+      } else {
+        reply.resolve([key]);
+        await operation;
+      }
+      expect(navigation.snapshot.sidebarEntries).toEqual(
+        outcome === "success"
+          ? [...retained, "route:usage", pin]
+          : outcome === "profile"
+            ? ["session:agent:main:another-profile"]
+            : retained,
+      );
+    },
+  );
+
+  it("repins only originally pinned sessions whose bulk Undo succeeds", async () => {
+    const h = createHarness();
+    const rows = [sessionRow(1), sessionRow(2), sessionRow(3)];
+    const pins = rows.slice(0, 2).map((row) => "session:" + row.key);
+    const rail = "session-rail:" + rows[0]!.key;
+    const navigation = h.scope.context.navigation;
+    navigation.update({ sidebarEntries: [...pins, rail] });
+    h.host.pruneSidebarSessionEntry = (key) =>
+      navigation.update({
+        sidebarEntries: navigation.snapshot.sidebarEntries.filter(
+          (entry) => entry !== "session:" + key,
+        ),
+      });
+    h.scope.sessions.invalidate = vi.fn();
+    h.scope.sessions.refreshReplacement = vi.fn(async () => sessionsResult([], 1));
+    await archiveConfirmedSessionsWithUndo(h.host, rows, h.scope);
+    expect(navigation.snapshot.sidebarEntries).toEqual([rail]);
+    h.request.mockResolvedValueOnce({
+      outcomes: rows.map((row, index) =>
+        index === 1
+          ? {
+              key: row.key,
+              ok: false as const,
+              error: { code: "INVALID_REQUEST" as const, message: "Restore rejected" },
+            }
+          : { key: row.key, ok: true as const },
+      ),
+    });
+    vi.mocked(showToast).mock.calls.at(-1)![0].onAction!();
+    await waitForFast(() => expect(navigation.snapshot.sidebarEntries).toEqual([rail, pins[0]]));
+    expect(h.publishSessionMutationError).toHaveBeenCalledWith(
+      h.scope,
+      expect.stringContaining("Restore rejected"),
+    );
+  });
 });

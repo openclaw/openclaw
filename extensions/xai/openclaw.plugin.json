@@ -50,6 +50,7 @@
       "xai": {
         "baseUrl": "https://api.x.ai/v1",
         "api": "openai-responses",
+        "family": "xai",
         "models": [
           {
             "id": "grok-4.7",

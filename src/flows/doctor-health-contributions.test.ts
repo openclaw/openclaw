@@ -163,7 +163,6 @@ const mocks = vi.hoisted(() => ({
   maybeMigrateHeartbeatCadenceToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
   collectHeartbeatScratchMigrationFindings: vi.fn(async () => [] as unknown[]),
   collectToolsMdMigrationFindings: vi.fn(async () => [] as unknown[]),
-  maybeMigrateHeartbeatFilesToScratch: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
   maybeMigrateToolsMd: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
   collectHeartbeatTaskMigrationFindings: vi.fn(async () => [] as unknown[]),
   maybeMigrateHeartbeatTasksToCron: vi.fn().mockResolvedValue({ changes: [], warnings: [] }),
@@ -535,14 +534,19 @@ vi.mock("../commands/doctor-disk-space.js", () => ({
   collectDiskSpaceHealthFindings: mocks.collectDiskSpaceHealthFindings,
 }));
 
-vi.mock("../commands/doctor-heartbeat-cadence-migration.js", () => ({
+vi.mock("../commands/doctor-heartbeat-cadence-migration.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/doctor-heartbeat-cadence-migration.js")>()),
   collectHeartbeatCadenceMigrationFindings: mocks.collectHeartbeatCadenceMigrationFindings,
+}));
+
+vi.mock("../commands/doctor-heartbeat-retirement.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/doctor-heartbeat-retirement.js")>()),
   maybeMigrateHeartbeatCadenceToCron: mocks.maybeMigrateHeartbeatCadenceToCron,
 }));
 
-vi.mock("../commands/doctor-heartbeat-scratch-migration.js", () => ({
+vi.mock("../commands/doctor-heartbeat-scratch-migration.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/doctor-heartbeat-scratch-migration.js")>()),
   collectHeartbeatScratchMigrationFindings: mocks.collectHeartbeatScratchMigrationFindings,
-  maybeMigrateHeartbeatFilesToScratch: mocks.maybeMigrateHeartbeatFilesToScratch,
 }));
 
 vi.mock("../commands/doctor-tools-md-migration.js", () => ({
@@ -587,13 +591,10 @@ vi.mock("../channels/plugins/package-state-probes.js", async (importOriginal) =>
     mocks.collectBundledChannelPackageStateLoadFailures,
 }));
 
-vi.mock("./doctor-startup-channel-maintenance.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./doctor-startup-channel-maintenance.js")>();
-  return {
-    ...actual,
-    collectChannelPreviewWarningHealthFindings: mocks.collectChannelPreviewWarningHealthFindings,
-  };
-});
+vi.mock("./doctor-startup-channel-maintenance.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./doctor-startup-channel-maintenance.js")>()),
+  collectChannelPreviewWarningHealthFindings: mocks.collectChannelPreviewWarningHealthFindings,
+}));
 
 vi.mock("../commands/onboard-helpers.js", () => ({
   applyWizardMetadata: mocks.applyWizardMetadata,
@@ -736,7 +737,6 @@ describe("doctor health contributions", () => {
     mocks.resolveGatewayService.mockReturnValue({ isLoaded: mocks.gatewayServiceIsLoaded });
     mocks.collectWorkspaceStatusHealthFindings.mockReturnValue([]);
     mocks.maybeMigrateHeartbeatCadenceToCron.mockResolvedValue({ changes: [], warnings: [] });
-    mocks.maybeMigrateHeartbeatFilesToScratch.mockResolvedValue({ changes: [], warnings: [] });
     mocks.maybeMigrateToolsMd.mockResolvedValue({ changes: [], warnings: [] });
     mocks.maybeMigrateHeartbeatTasksToCron.mockResolvedValue({ changes: [], warnings: [] });
     mocks.maybeRepairLegacyCronStore.mockResolvedValue(undefined);
@@ -1556,20 +1556,18 @@ describe("doctor health contributions", () => {
     expect(scratchIndex).toBeLessThan(ids.indexOf("doctor:write-config"));
 
     const contribution = requireDoctorContribution("doctor:heartbeat-cadence-migration");
-    const cfg = { agents: { defaults: { heartbeat: { every: "15m" } } } };
-    await contribution.run(
-      createDoctorHealthFlowContext({
-        cfg,
-        prompter: createDoctorPrompterFixture(true),
-        env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
-      }),
-    );
-
-    expect(mocks.maybeMigrateHeartbeatCadenceToCron).toHaveBeenCalledWith({
-      cfg,
-      shouldRepair: true,
+    const source = { agents: { defaults: { heartbeat: { every: "0m" } } } };
+    const ctx = createDoctorHealthFlowContext({
+      cfg: {},
+      configResult: { heartbeatMigrationSource: source },
+      prompter: createDoctorPrompterFixture(true),
       env: { OPENCLAW_STATE_DIR: "/tmp/openclaw-state" },
     });
+    await contribution.run(ctx);
+    await requireDoctorContribution("doctor:heartbeat-scratch-migration").run(ctx);
+
+    const migration = { cfg: source, shouldRepair: true, env: ctx.env };
+    expect(mocks.maybeMigrateHeartbeatCadenceToCron.mock.calls).toEqual([[migration], [migration]]);
   });
 
   it("forwards the health-check environment to heartbeat cadence detection", async () => {

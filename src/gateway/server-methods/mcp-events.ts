@@ -4,6 +4,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { MCP_EVENTS_PROTOCOL_VERSION, requestMcpEvent } from "../../agents/mcp-event-request.js";
 import {
   prepareMcpEventConnection,
+  projectMcpEventRequester,
   type McpEventPrincipal,
 } from "../../plugins/service-mcp-events.js";
 import { operatorScopeSatisfied } from "../../shared/operator-scope-compat.js";
@@ -117,15 +118,7 @@ export const mcpEventsHandlers: GatewayRequestHandlers = {
             },
           }
         : {}),
-      ...(requester
-        ? {
-            requester: {
-              requesterSenderId: requester.senderId,
-              messageChannel: requester.channel,
-              agentAccountId: requester.accountId,
-            },
-          }
-        : {}),
+      ...(requester ? { requester: projectMcpEventRequester(requester) } : {}),
     };
     // UI callers without native channel provenance may browse shared connectors,
     // but never borrow another user's requester-scoped OAuth/resolver connection.

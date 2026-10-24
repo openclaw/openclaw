@@ -3,6 +3,8 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import type { GatewayClient } from "../../../src/gateway/client.ts";
+import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -35,9 +37,45 @@ async function startGateway(owner: OpenClawTestInstance, prepare?: () => Promise
 }
 
 let instance: OpenClawTestInstance | undefined;
+let seedClient: GatewayClient | undefined;
 const suite = createControlUiE2eSuite({
   name: "Control UI exact stagger with a real Gateway",
   startServerBeforeBrowser: true,
+  resources: {
+    async run(signal) {
+      if (!instance) {
+        throw new Error("Gateway fixture was not started");
+      }
+      seedClient = await acquireGatewayTestClient(
+        {
+          url: instance.url,
+          token: instance.gatewayToken,
+          env: instance.env,
+          clientName: "cli",
+          mode: "cli",
+          scopes: ["operator.admin"],
+          deviceIdentity: null,
+          deviceAuthScope: instance.url,
+          sharedStateMode: "read-only",
+          requestTimeoutMs: 10_000,
+        },
+        {
+          signal,
+          timeoutMs: 10_000,
+          timeoutMessage: "Automation seed client did not connect",
+          closeMessage: "Automation seed client closed during connect",
+        },
+      );
+      await withGatewayCommands("real-fixture-setup-commands.json", async (cliJson) => {
+        expect(await cliJson(["automations", "status", "--json"])).toMatchObject({
+          enabled: false,
+        });
+      });
+    },
+    async close() {
+      await seedClient?.stopAndWait();
+    },
+  },
   async startServer() {
     const owner = await createOpenClawTestInstance({
       name: "control-ui-exact-stagger",
@@ -323,10 +361,7 @@ async function withGatewayCommands(artifactName: string, run: (cliJson: CliJson)
     return requireRecord(JSON.parse(result.stdout));
   };
   await runQaGatewayFixture(
-    async () => {
-      expect(await cliJson(["automations", "status", "--json"])).toMatchObject({ enabled: false });
-      await run(cliJson);
-    },
+    () => run(cliJson),
     async () => {
       if (captureEnabled) {
         await fs.writeFile(
@@ -427,7 +462,6 @@ async function submitCronForm(
 
 async function seedAlertJob(cliJson: CliJson, name: string, failureAlert: CronJob["failureAlert"]) {
   const result = await seedPausedAgentJob(
-    cliJson,
     name,
     {
       kind: "agentTurn",
@@ -458,18 +492,16 @@ function seedCliAutomation(cliJson: CliJson, name: string, flags: Record<string,
   ]);
 }
 
-function seedPausedAgentJob(
-  cliJson: CliJson,
+async function seedPausedAgentJob(
   name: string,
   payload: CronJob["payload"],
   overrides: Pick<CronJob, "failureAlert"> = {},
 ) {
-  return cliJson([
-    "gateway",
-    "call",
-    "cron.add",
-    "--params",
-    JSON.stringify({
+  if (!seedClient) {
+    throw new Error("Automation seed client was not started");
+  }
+  return requireRecord(
+    await seedClient.request("cron.add", {
       name,
       agentId: "main",
       enabled: false,
@@ -480,8 +512,7 @@ function seedPausedAgentJob(
       delivery: { mode: "none" },
       ...overrides,
     }),
-    "--json",
-  ]);
+  );
 }
 
 async function choosePicker(picker: Locator, value: string) {
@@ -744,7 +775,7 @@ suite.define(() => {
           allowUnsafeExternalContent: variant.allowUnsafeExternalContent,
           timeoutSeconds: 0,
         };
-        const created = await seedPausedAgentJob(cliJson, sourceName, payload);
+        const created = await seedPausedAgentJob(sourceName, payload);
         const sourceId = cronJobId(created);
         const original = await cliJson(["automations", "get", sourceId, "--json"]);
         expect(original).toMatchObject({ id: sourceId, enabled: false });

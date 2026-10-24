@@ -19,6 +19,7 @@ import {
   type ShortTermAuditSummary,
 } from "../plugin-sdk/memory-core-bundled-runtime.js";
 import { loadPluginRegistryHandle } from "../plugins/loader.js";
+import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
 import {
   getActiveMemorySearchManagerCore,
   resolveActiveMemoryBackendConfig,
@@ -209,6 +210,11 @@ async function runMemoryRecallHealth(
           dreaming.enabled &&
           loadPluginRegistryHandle({
             config: cfg,
+            registrationConfigOrigin: cfg,
+            manifestRegistry: loadPluginManifestRegistryCore({
+              config: cfg,
+              workspaceDir: scope.workspaceDir,
+            }),
             workspaceDir: scope.workspaceDir,
             loadModules: false,
             onlyPluginIds: [resolveMemoryDreamingPluginId(cfg)],

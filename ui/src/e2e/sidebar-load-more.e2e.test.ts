@@ -53,11 +53,19 @@ suite.define(() => {
       const sidebar = page.locator("openclaw-app-sidebar");
       const more = sidebar.getByRole("button", { name: "Load more sessions", exact: true });
       if (retry) {
-        await gateway.deferNext("sessions.list", { offset: limit * 2 });
+        // Child lists share these cursors; keep their competing read ahead of the roster request.
+        await gateway.deferNext("sessions.list", { offset: limit * 2, includeGlobal: true });
+        await gateway.waitForRequest("sessions.list", {
+          match: { offset: limit * 2, includeGlobal: false },
+        });
       }
       await more.click();
-      await gateway.waitForRequest("sessions.list", { match: { offset: limit } });
-      await gateway.waitForRequest("sessions.list", { match: { offset: limit * 2 } });
+      await gateway.waitForRequest("sessions.list", {
+        match: { offset: limit, includeGlobal: true },
+      });
+      await gateway.waitForRequest("sessions.list", {
+        match: { offset: limit * 2, includeGlobal: true },
+      });
       if (retry) {
         await gateway.resolveDeferred("sessions.list", {
           __mockError: { code: "UNAVAILABLE", message: "Older sessions temporarily unavailable" },

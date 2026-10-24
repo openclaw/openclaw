@@ -16,14 +16,13 @@ const BACKUP_STALE_AFTER_MS = 14 * 24 * 60 * 60 * 1_000;
 
 export function buildBackupStatusValue(params: {
   freshness: BackupRunFreshness;
-  now?: number;
   formatTimeAgo: (ageMs: number) => string;
 }): string {
   const latest = params.freshness.latest;
   if (!latest) {
     return "none recorded";
   }
-  const age = params.formatTimeAgo(Math.max(0, (params.now ?? Date.now()) - latest.createdAt));
+  const age = params.formatTimeAgo(Math.max(0, Date.now() - latest.createdAt));
   return latest.status === "ok"
     ? `last ok ${age} (${latest.kind}${latest.pushFailed ? ", push failing" : ""})`
     : `last attempt failed ${age} (${latest.kind})`;

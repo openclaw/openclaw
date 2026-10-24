@@ -94,6 +94,9 @@ export function createInternalAgentTurnFacade(
         client: options.client,
         context,
         methodRegistry,
+        recoveryInput: dispatchOptions.recoveryInput,
+        controllerInput: dispatchOptions.controllerInput,
+        assertPreparationCurrent: dispatchOptions.assertAdmissionCurrent,
       });
       // Turn admission owns its own authority; this pre-dispatch check transfers no custody.
       authorization.sessionMutationAuthorization?.release?.();

@@ -16,6 +16,7 @@ import { updateHumanMentions } from "../../../lib/chat/human-mentions.ts";
 import { clearCompositionEnd, recordCompositionEnd } from "../../../lib/ime.ts";
 import { isSessionRunVisuallyActive } from "../../../lib/session-run-state.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import { chatGoalCreationObjective } from "../chat-goals.ts";
 import {
   hasTerminalRunStatus,
   isChatRunWorking,
@@ -534,6 +535,11 @@ export function createChatComposerContext(
       }
     }
   };
+  const replacingRunningGoal =
+    isBusy &&
+    props.selectedSession?.goal?.status === "active" &&
+    (goalComposer.mode?.action === "start" ||
+      chatGoalCreationObjective(visibleDraft) !== undefined);
   const runControlsProps = {
     canAbort: showAbortableUi,
     canSend: canSubmitDraft(visibleDraft),
@@ -548,8 +554,8 @@ export function createChatComposerContext(
     followUpMode: props.followUpMode,
     alternateFollowUpMode,
     suggestionComposer: props.suggestionComposer,
-    submissionLabel: goalComposer.submissionLabel,
-    sending: props.sending,
+    submissionLabel: replacingRunningGoal ? t("chat.goals.replace") : goalComposer.submissionLabel,
+    sending: props.sending && !replacingRunningGoal,
     voiceActive: props.realtimeTalkActive,
     voiceStatus: props.realtimeTalkStatus,
     voiceDetail: props.realtimeTalkDetail,

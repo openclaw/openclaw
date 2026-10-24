@@ -18,7 +18,8 @@ export function needsRequesterSettleFindings(entry: SubagentRunRecord): boolean 
   // Earlier delivery cannot discharge reconciliation of restart-interrupted work.
   return (
     entry.delivery?.status !== "delivered" ||
-    entry.execution.interruptionReason === "gateway-restart"
+    (entry.execution.interruptionReason === "gateway-restart" &&
+      (entry.delivery.deliveredAt ?? 0) < (entry.execution.endedAt ?? Infinity))
   );
 }
 

@@ -415,14 +415,13 @@ function Region(props: RegionProps, host: RegionElement) {
         }
       >
         {(type) => (
-          <div class="side-panel-empty side-panel-empty--type">
-            <PanelEmptyState
-              icon={<Icon name={type().icon} />}
-              heading={type().label}
-              description={type().empty.description}
-              action={type().empty.action}
-            />
-          </div>
+          <PanelEmptyState
+            presentation={props.presentation}
+            icon={<Icon name={type().icon} />}
+            heading={type().label}
+            description={type().empty.description}
+            action={type().empty.action}
+          />
         )}
       </Show>
     );

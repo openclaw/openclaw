@@ -11,6 +11,7 @@ import {
 import { KEYBOARD_SHORTCUT_COMBOS } from "../../../lib/keyboard-shortcut-contract.ts";
 import { createTestGatewayClient } from "../../../test-helpers/gateway-client.ts";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createChatMobileHostFixture } from "../chat-mobile-host.test-support.ts";
 import type { ChatMobileHost } from "../chat-mobile-host.ts";
 import {
   activePlacementSession,
@@ -161,6 +162,11 @@ describe("chat pane header", () => {
         session: { ...sessionMenuAction.session, target: { key: "agent:main:test" } },
       },
     });
+    const close = container.querySelector<HTMLButtonElement>(".chat-pane__close")!;
+    expect(close?.getAttribute("aria-label")).toBe("Close pane");
+    close.click();
+    expect(onClosePane).toHaveBeenCalledExactlyOnceWith("pane-1");
+    onClosePane.mockClear();
     const menu = container.querySelector("openclaw-chat-header-session-menu")!;
     await menu.updateComplete;
     expect(container.querySelector(".chat-pane__layout-menu")).toBeNull();
@@ -184,12 +190,16 @@ describe("chat pane header", () => {
       expect(callback).toHaveBeenCalledExactlyOnceWith("pane-1");
     }
     update({ actionsDisabled: true });
+    expect(close.disabled).toBe(true);
+    close.click();
+    expect(onClosePane).toHaveBeenCalledOnce();
     await openNativeMenu(menu);
     const split = menu.querySelector<HTMLButtonElement>('[data-value="quick:open-split-view"]')!;
     expect(split.disabled).toBe(true);
     split.click();
     expect(onOpenSplitView).toHaveBeenCalledOnce();
     update({ onClosePane: undefined });
+    expect(container.querySelector(".chat-pane__close")).toBeNull();
     await selectNativeMenu(menu, "compact:open-view");
     expect(menu.querySelector('[data-value="layout:close-pane"]')).toBeNull();
   });
@@ -900,25 +910,7 @@ it("publishes the active header while retaining mobile chrome across desktop tra
     false,
     null,
   ).header;
-  const mobileHost: ChatMobileHost = {
-    scopeKey: "header-registration",
-    open: false,
-    suspended: false,
-    mode: "dock",
-    height: undefined,
-    reservedHeight: 0,
-    destination: { area: "panels" },
-    detailsMount: null,
-    setDetailsMount: vi.fn(),
-    navigate: vi.fn(),
-    reveal: vi.fn(),
-    close: vi.fn(),
-    back: vi.fn(),
-    toggleExpanded: vi.fn(),
-    resize: vi.fn(),
-    keyboardVisible: false,
-    onComposerEditingChange: vi.fn(),
-  };
+  const mobileHost: ChatMobileHost = createChatMobileHostFixture("header-registration");
   const mounted = mountHeader({
     mergedChrome: false,
     onHeaderRef: nativeHeader.onHeaderRef,

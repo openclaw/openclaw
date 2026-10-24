@@ -35,11 +35,13 @@ it("shows pending coauthor consent and restores the accepted value after failure
   await waitForSolid(() => {
     expect(toggle()?.checked).toBe(true);
     expect(toggle()?.getAttribute("aria-disabled")).toBeNull();
+    expect(toggle()?.disabled).toBe(false);
   });
   toggle()!.click();
   await waitForSolid(() => {
     expect(toggle()?.checked).toBe(false);
     expect(toggle()?.getAttribute("aria-disabled")).toBe("true");
+    expect(toggle()?.disabled).toBe(false);
   });
   toggle()!.click();
   expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1);
@@ -73,6 +75,7 @@ it.each(["identity", "navigation"])(
     await waitForSolid(() => {
       expect(toggle()?.checked).toBe(true);
       expect(toggle()?.getAttribute("aria-disabled")).toBeNull();
+      expect(toggle()?.disabled).toBe(false);
     });
     toggle()!.click();
     await waitForSolid(() =>

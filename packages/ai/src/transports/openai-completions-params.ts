@@ -66,10 +66,6 @@ import {
 } from "./openai-transport-shared.js";
 import { supportsModelTools } from "./transport-utils.js";
 
-type OpenAIThinkingProvenanceOptions = OpenAICompletionsOptions & {
-  openclawThinkingExplicit?: boolean;
-};
-
 function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolean {
   if (!model.baseUrl.trim() || isNativeOpenAIEndpoint(model)) {
     return true;
@@ -223,10 +219,6 @@ export function buildOpenAICompletionsParams(
   return buildOpenAICompletionsRequest(model, context, options, { mode: "managed" });
 }
 
-type CompletionsRequestPolicy =
-  | { mode: "managed" }
-  | { mode: "direct"; compat: ResolvedOpenAICompletionsCompat; cacheRetention: CacheRetention };
-
 type CompletionsRequest = Record<string, unknown> & {
   model: string;
   messages: unknown[];
@@ -274,8 +266,10 @@ export function resolveCompletionsContextOutputBudget(
 export function buildOpenAICompletionsRequest(
   model: OpenAIModeModel,
   context: ProviderContext,
-  options: OpenAIThinkingProvenanceOptions | undefined,
-  policy: CompletionsRequestPolicy,
+  options: (OpenAICompletionsOptions & { openclawThinkingExplicit?: boolean }) | undefined,
+  policy:
+    | { mode: "managed" }
+    | { mode: "direct"; compat: ResolvedOpenAICompletionsCompat; cacheRetention: CacheRetention },
 ): CompletionsRequest {
   let contextOutputCap: number | undefined;
   const resolvedPolicy =

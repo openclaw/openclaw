@@ -160,6 +160,8 @@ it.each([false, true])(
     if (gallery) {
       expect(pendingLink?.getAttribute("aria-disabled")).toBe("true");
       expect(pendingLink?.hasAttribute("href")).toBe(false);
+      expect(pendingLink?.tabIndex).toBe(-1);
+      expectFocusCycle(button(modal, ".close"), button(modal, ".next"), { composed: true });
     } else {
       expect(pendingLink).toBeNull();
     }
@@ -177,6 +179,7 @@ it.each([false, true])(
       const link = modal.querySelector<HTMLAnchorElement>(".open-original");
       expect(link?.getAttribute("href")).toBe("blob:lightbox-original");
       expect(link?.getAttribute("aria-disabled")).toBe("false");
+      expectFocusCycle(button(modal, ".close"), link!, { composed: true });
     });
     modal.remove();
     await Promise.resolve();

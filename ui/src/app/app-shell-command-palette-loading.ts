@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onCleanup } from "solid-js";
+import { createMemo, createSignal, onSettled } from "solid-js";
 import {
   COMMAND_PALETTE_OPEN_EVENT,
   isCommandPaletteShortcut,
@@ -183,7 +183,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
     attachmentFiles = [];
     mentionTrigger = undefined;
   }
-  onCleanup(reset);
+  onSettled(() => reset);
   function snapshot(): CommandPaletteInputSnapshot | undefined {
     return input
       ? {

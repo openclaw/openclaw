@@ -86,8 +86,15 @@ test.each(["separate", "shared"] as const)(
         "registered Gateway resident session projection",
       );
       const originalRead = projection.selectEntries;
+      let updatedAt = 300;
+      const changeResidentSession = async () => {
+        // These scenarios exercise fresh selection; unchanged health reads reuse preparation.
+        writeSession("fleet0", "session0", updatedAt++);
+        await projection.prepareSelection();
+      };
       let inserted = false;
       for (const method of ["health", "status"] as const) {
+        await changeResidentSession();
         let reads = 0;
         let httpAtRead: number | undefined;
         let traffic: Promise<void> | undefined;
@@ -146,6 +153,7 @@ test.each(["separate", "shared"] as const)(
         using read = vi.spyOn(projection, "selectEntries");
         const busy = Object.assign(new Error("database is locked"), { code: "SQLITE_BUSY" });
         const failRead = async <T>(request: () => Promise<T>, error: Error) => {
+          await changeResidentSession();
           read.mockClear().mockImplementationOnce(() => {
             throw error;
           });
@@ -164,6 +172,7 @@ test.each(["separate", "shared"] as const)(
         expect((await statusSummary()).payload?.sessions.count).toBe(146);
       }
       if (layout === "separate") {
+        await changeResidentSession();
         const read = vi.spyOn(projection, "selectEntries").mockImplementation((...args) => {
           const rows = originalRead(...args);
           readWorkMs += 20;
@@ -200,6 +209,7 @@ test.each(["separate", "shared"] as const)(
           read.mockRestore();
           recordAgentDatabaseAdmissions([], { source: "startup" });
         }
+        await changeResidentSession();
         const lifecycle: string[] = [];
         vi.mocked(collector.collectGatewayHealthSnapshot).mockImplementation(async (params) => {
           try {

@@ -176,13 +176,10 @@ export function markActiveEmbeddedRunAbandoned(params: {
 }
 
 export function resolveEmbeddedRunAbandonment(
-  params: AbandonmentQuery,
+  params: Omit<AbandonmentQuery, "sessionFile">,
 ): AbandonedEmbeddedRun["reason"] | undefined {
-  const query = { ...params, sessionFile: normalizeSessionFileRegistryKey(params.sessionFile) };
-  const matches = [...ABANDONED_EMBEDDED_RUNS].filter(
-    ([owner, abandoned]) =>
-      (!query.sessionFile || abandoned.sessionFile === query.sessionFile) &&
-      matchesAbandonment(owner, abandoned, query),
+  const matches = [...ABANDONED_EMBEDDED_RUNS].filter(([owner, abandoned]) =>
+    matchesAbandonment(owner, abandoned, params),
   );
   return matches.length === 1 ? matches[0]![1].reason : undefined;
 }

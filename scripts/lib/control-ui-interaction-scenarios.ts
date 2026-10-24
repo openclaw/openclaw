@@ -1,5 +1,5 @@
 import type { Locator, Page } from "playwright";
-import type { CronJob } from "../../ui/src/api/types.ts";
+import type { ConfigSchemaResponse, CronJob } from "../../ui/src/api/types.ts";
 import { pathForRoute } from "../../ui/src/app-route-paths.ts";
 import type { MockGatewayControls } from "../../ui/src/test-helpers/control-ui-e2e-contract.ts";
 import {
@@ -91,6 +91,12 @@ export function createInteractionFixture(buildId: string, version: string) {
       contextWindow: 128_000,
     })),
     methodResponses: {
+      "config.schema": {
+        schema: { type: "object", properties: {} },
+        uiHints: {},
+        version: "interaction-config",
+        generatedAt: "2026-10-23T00:00:00.000Z",
+      } satisfies ConfigSchemaResponse,
       "progressCard.get": { card: null },
       "cron.list": cronListResponseFixture([
         ...cronCases,
@@ -384,10 +390,15 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       await page.keyboard.press("Escape");
       await waitForControlUiRoute(page, { routeId: "new-session" });
     },
-    run: async (page) => {
+    run: async (page, gateway) => {
+      const schemaReads = (await gateway.getRequests("config.schema")).length;
       await page.keyboard.press("ControlOrMeta+Shift+,");
       await waitForControlUiRoute(page, { routeId: "appearance" });
       await page.locator(".settings-page").waitFor();
+      await frames(page);
+      if ((await gateway.getRequests("config.schema")).length !== schemaReads) {
+        throw new Error("Warm Settings must retain the loaded config schema");
+      }
     },
   },
   {
@@ -399,10 +410,15 @@ export const interactionScenarios: readonly InteractionScenario[] = [
       await settingsSection(page, "/settings/connection", "connection");
       await settingsSection(page, "/settings/appearance", "appearance");
     },
-    run: async (page) => {
+    run: async (page, gateway) => {
+      const schemaReads = (await gateway.getRequests("config.schema")).length;
       await settingsSection(page, "/settings/notifications", "notifications");
       await settingsSection(page, "/settings/connection", "connection");
       await settingsSection(page, "/settings/appearance", "appearance");
+      await frames(page);
+      if ((await gateway.getRequests("config.schema")).length !== schemaReads) {
+        throw new Error("Warm Settings tabs must retain the loaded config schema");
+      }
     },
   },
   {

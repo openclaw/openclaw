@@ -21,15 +21,17 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerChatToolLabelsEnglish } from "../../../i18n/locales/en-chat-tool-labels.ts";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { resolveToolDisplayIdentity } from "../../../lib/chat/tool-display-identity.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
+import { PluginInlineView } from "../../../plugins/control-ui-inline-view.tsx";
 import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
-import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import "../../../components/solid/person-reference.tsx";
+import { assistantMessageIsInterrupted } from "../chat-assistant-reply.ts";
 import { usePanePresentation } from "../chat-pane-presentation.ts";
 import { AsyncQuestionSummary } from "./chat-async-question-summary.tsx";
 import { ChatBubbleActivity } from "./chat-bubble-activity-view.tsx";
@@ -76,6 +78,8 @@ import {
 import { toolResultSurfaceProps } from "./chat-tool-render-model.ts";
 import { TranscriptMessageElementsContext } from "./chat-transcript-message-elements.ts";
 import { WorkspaceConflictTranscriptMessage } from "./chat-workspace-conflict.tsx";
+
+registerEnglishCatalog(registerChatToolLabelsEnglish);
 
 registerEnglishCatalog(registerChatComposerEnglish);
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -522,6 +526,16 @@ function BubbleContents(props: ContentProps) {
           </div>
         </Show>
       </Show>
+      <For each={props.state().inlineViewBlocks} keyed={(block) => block.toolCallId}>
+        {(block) => (
+          <PluginInlineView
+            block={block()}
+            sessionKey={props.options.sessionKey ?? ""}
+            agentId={props.options.agentId}
+            presented={props.options.presented}
+          />
+        )}
+      </For>
       <Show when={props.state().hasToolCards}>
         <Show
           when={

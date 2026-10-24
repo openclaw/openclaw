@@ -132,7 +132,7 @@ it("locks every global dreaming control when config mutation is unavailable", ()
 
   expect(
     [...container.querySelectorAll<HTMLInputElement>("input")].every((input) =>
-      input.matches(':disabled, [aria-disabled="true"]'),
+      input.matches(":disabled"),
     ),
   ).toBe(true);
 });

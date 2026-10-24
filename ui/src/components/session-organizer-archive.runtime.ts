@@ -1,10 +1,10 @@
+import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { registerSessionOrganizationEnglish } from "../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { fetchChildSessionRows } from "../lib/sessions/child-session-data.ts";
 import { customSnoozeStorageKey, rememberCustomSnooze } from "../lib/sessions/custom-snooze.ts";
-import { collectSessionArchiveTree } from "../lib/sessions/session-archive-tree.ts";
 import { resolveUiSessionRowAgentId, isSubagentSessionKey } from "../lib/sessions/session-key.ts";
 import { formatSessionSnoozeWakeTime } from "../lib/sessions/session-snooze.ts";
 import { showToast } from "../lib/toast.ts";
@@ -87,16 +87,44 @@ export async function confirmSessionArchive(
     if (isSubagentSessionKey(root.key)) {
       throw new Error(t("sessionsView.archiveTreeRootRequired"));
     }
-    const tree = await collectSessionArchiveTree({
-      root,
-      isCurrent,
-      readChildren: (parentKey) =>
-        fetchChildSessionRows({ sessions: scope.sessions, parentKey, isCurrent }),
-    });
-    if (!tree || !isCurrent()) {
+    // A tree action snapshots complete child windows, never just expanded sidebar rows.
+    const rows: GatewaySessionRow[] = [];
+    const ancestorsByKey = new Map<string, readonly GatewaySessionRow[]>();
+    const visited = new Set<string>();
+    const pending: Array<{ row: GatewaySessionRow; ancestors: readonly GatewaySessionRow[] }> = [
+      { row: root, ancestors: [] },
+    ];
+    while (pending.length > 0) {
+      const { row, ancestors } = pending.shift()!;
+      if (visited.has(row.key)) {
+        continue;
+      }
+      visited.add(row.key);
+      const persistent = !isSubagentSessionKey(row.key);
+      if (
+        row.archived ||
+        (persistent && row !== root && (row.sidebarRoot || row.category?.trim()))
+      ) {
+        continue;
+      }
+      if (persistent) {
+        rows.push(row);
+        ancestorsByKey.set(row.key, ancestors);
+      }
+      const children = await fetchChildSessionRows({
+        sessions: scope.sessions,
+        parentKey: row.key,
+        isCurrent,
+      });
+      if (!isCurrent() || children === null) {
+        return null;
+      }
+      const nextAncestors = persistent ? [row, ...ancestors] : ancestors;
+      pending.push(...children.map((child) => ({ row: child, ancestors: nextAncestors })));
+    }
+    if (!isCurrent()) {
       return null;
     }
-    const { rows, ancestorsByKey } = tree;
     if (rows.some((row) => !row.sessionId)) {
       throw new Error(t("sessionsView.archiveTreeChanged"));
     }
@@ -222,6 +250,7 @@ export async function archiveSessionWithUndo(
   if (!finishArchive) {
     return;
   }
+  const undoPins = captureSessionArchivePins(scope, [session.key]);
   let result: SidebarSessionMutationResult;
   try {
     result = await patchSession(host, session, { archived: true }, scope, { sessionScope: true });
@@ -234,7 +263,7 @@ export async function archiveSessionWithUndo(
   showToast({
     message: t("sessionsView.sessionArchived"),
     actionLabel: t("common.undo"),
-    onAction: archiveUndoAction(host, [{ session, pinned: session.pinned }], scope),
+    onAction: archiveUndoAction(host, [{ session, pinned: session.pinned }], scope, undoPins),
   });
 }
 
@@ -270,6 +299,10 @@ export async function archiveConfirmedSessionsWithUndo(
     return;
   }
   const pendingRows = pending.map(({ row }) => row);
+  const undoPins = captureSessionArchivePins(
+    scope,
+    pendingRows.map((row) => row.key),
+  );
   let failure: { status: "failed"; error: unknown } | undefined;
   const initialHost: SessionActionHost = {
     ...outcomeHost,
@@ -301,7 +334,7 @@ export async function archiveConfirmedSessionsWithUndo(
         ? t("sessionsView.sessionArchived")
         : t("sessionsView.sessionsArchived", { count: String(archived.length) }),
     actionLabel: t("common.undo"),
-    onAction: archiveUndoAction(outcomeHost, archived, scope),
+    onAction: archiveUndoAction(outcomeHost, archived, scope, undoPins),
     // Keep a partial-failure notice readable before presenting successful-only Undo.
     fifo: true,
   });
@@ -312,9 +345,59 @@ function archiveUndoAction(
   host: SessionActionHost,
   archived: readonly { session: SessionActionRow; pinned: boolean }[],
   scope: SidebarSessionMutationScope,
+  undoPins: ReturnType<typeof captureSessionArchivePins>,
 ): () => void {
   const undoHost = sessionUndoHost(host, scope);
-  return () => void restoreArchivedSessions(undoHost, archived, scope);
+  return () => {
+    void undoPins(() => restoreArchivedSessions(undoHost, archived, scope)).catch(
+      (error: unknown) => {
+        undoHost.sessionData.publishSessionMutationError(scope, error);
+      },
+    );
+  };
+}
+
+/** The toast alone retains this receipt; ordinary Unarchive never restores personal pins. */
+export function captureSessionArchivePins(
+  scope: Pick<SidebarSessionMutationScope, "context" | "sessions">,
+  keys: readonly string[],
+) {
+  const { navigation } = scope.context;
+  const connection = scope.sessions.captureConnectionScope();
+  const pins = keys.filter((key) => navigation.snapshot.sidebarEntries.includes("session:" + key));
+  return async (restore: () => Promise<readonly string[]>): Promise<void> => {
+    if (!connection || !scope.sessions.isConnectionScopeCurrent(connection)) {
+      return;
+    }
+    const changed = new Set<string>();
+    const initial = new Set(navigation.snapshot.sidebarEntries);
+    // A manual pin/unpin during the request is newer intent, even if its final value matches.
+    const stop = navigation.subscribe(({ sidebarEntries }) => {
+      for (const key of pins) {
+        const entry = "session:" + key;
+        if (sidebarEntries.includes(entry) !== initial.has(entry)) {
+          changed.add(key);
+        }
+      }
+    });
+    try {
+      const restored = await restore();
+      if (!scope.sessions.isConnectionScopeCurrent(connection)) {
+        return;
+      }
+      const entries = navigation.snapshot.sidebarEntries;
+      const additions = pins.filter(
+        (key) => restored.includes(key) && !changed.has(key) && !entries.includes("session:" + key),
+      );
+      if (additions.length > 0) {
+        navigation.update({
+          sidebarEntries: [...entries, ...additions.map((key) => "session:" + key)],
+        });
+      }
+    } finally {
+      stop();
+    }
+  };
 }
 
 function sessionUndoHost(
@@ -348,7 +431,8 @@ async function restoreArchivedSessions(
   host: SessionActionHost,
   archived: readonly { session: SessionActionRow; pinned: boolean }[],
   scope: SidebarSessionMutationScope,
-) {
+): Promise<readonly string[]> {
+  let restoredKeys: string[];
   const rows = archived.map((entry) => entry.session);
   if (archived.length === 1) {
     const { session, pinned } = archived[0]!;
@@ -359,17 +443,19 @@ async function restoreArchivedSessions(
       scope,
       { deferListRefresh: true, sessionScope: true },
     );
-    if (restored === "stale") {
-      return;
+    if (restored !== "completed") {
+      return [];
     }
+    restoredKeys = [session.key];
   } else {
     const restored = await patchSessionRows(host, rows, { archived: false }, scope, {
       deferListRefresh: true,
       sessionScope: true,
     });
     if (!restored) {
-      return;
+      return [];
     }
+    restoredKeys = restored.map((session) => session.key);
     const repinRows = archived.flatMap(({ session, pinned }) =>
       pinned && restored.includes(session) ? [session] : [],
     );
@@ -379,18 +465,18 @@ async function restoreArchivedSessions(
         sessionScope: true,
       });
       if (!repinned && !host.sessionData.isSessionMutationScopeCurrent(scope)) {
-        return;
+        return [];
       }
     }
   }
   if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-    return;
+    return [];
   }
   scope.sessions.invalidate();
   try {
     const result = await scope.sessions.refreshReplacement();
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
-      return;
+      return [];
     }
     if (!result && scope.sessions.state.error) {
       host.sessionData.publishSessionMutationError(scope, scope.sessions.state.error);
@@ -400,4 +486,5 @@ async function restoreArchivedSessions(
       host.sessionData.publishSessionMutationError(scope, error);
     }
   }
+  return restoredKeys;
 }

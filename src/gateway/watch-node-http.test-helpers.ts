@@ -4,7 +4,7 @@ import {
   type ClientRequest,
   type ServerResponse,
 } from "node:http";
-import { expect, vi } from "vitest";
+import { afterEach, expect, vi } from "vitest";
 import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.js";
 import {
   GATEWAY_CLIENT_IDS,
@@ -12,20 +12,91 @@ import {
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION, type ConnectParams } from "../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { issueDevicePairSetupBootstrapToken } from "../infra/device-bootstrap.js";
 import {
   loadOrCreateDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../infra/device-identity.js";
+import { withDevicePairingLock } from "../infra/device-pairing-lock.js";
 import { listNodePairing } from "../infra/device-pairing-node.js";
 import { getPairedDevice, resolveNodePairingState } from "../infra/device-pairing.js";
+import {
+  NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  type DeviceBootstrapProfile,
+} from "../shared/device-bootstrap-profile.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import { NodeRegistry } from "./node-registry.js";
 import { createWatchNodeHttpRuntime } from "./watch-node-http.js";
 
+const tempDirs = createTrackedTempDirs();
+export const cleanups: Array<() => Promise<void>> = [];
+const databasePaths = new Set<string>();
+
+export function registerWatchNodeFixtureCleanup(): void {
+  afterEach(async () => {
+    const errors: unknown[] = [];
+    for (const cleanup of cleanups) {
+      try {
+        await cleanup();
+      } catch (error) {
+        errors.push(error);
+      }
+    }
+    if (errors.length === 1) {
+      throw errors[0];
+    }
+    if (errors.length > 1) {
+      throw new AggregateError(errors, "Watch node fixture cleanup failed", { cause: errors[0] });
+    }
+    // Handlers enqueue connection history; drain that writer before closing its database.
+    await withDevicePairingLock(async () => {});
+    for (const databasePath of databasePaths) {
+      await closeOpenClawStateDatabaseByPathAsync(databasePath);
+    }
+    await tempDirs.cleanup();
+    cleanups.length = 0;
+    databasePaths.clear();
+    vi.unstubAllEnvs();
+  });
+}
+
+export async function makeWatchNodeDir(prefix: string): Promise<string> {
+  const baseDir = await tempDirs.make(prefix);
+  databasePaths.add(
+    resolveOpenClawStateSqlitePath({ ...process.env, OPENCLAW_STATE_DIR: baseDir }),
+  );
+  return baseDir;
+}
+
+export async function createWatchNodeFixture(
+  prefix: string,
+  options?: Parameters<typeof startWatchNodeHttpRuntime>[2] & {
+    bootstrapProfile?: DeviceBootstrapProfile;
+  },
+) {
+  const baseDir = await makeWatchNodeDir(prefix);
+  const identity = loadOrCreateDeviceIdentity({
+    env: { ...process.env, OPENCLAW_STATE_DIR: baseDir },
+  });
+  const issued = await issueDevicePairSetupBootstrapToken({
+    baseDir,
+    profile: options?.bootstrapProfile ?? NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  });
+  return {
+    baseDir,
+    identity,
+    issued,
+    ...(await startWatchNodeHttpRuntime(baseDir, cleanups, options)),
+  };
+}
+
 export async function startWatchNodeHttpRuntime(
   baseDir: string,
-  cleanups: Array<() => Promise<void>>,
+  runtimeCleanups: Array<() => Promise<void>>,
   options?: {
     rateLimiter?: AuthRateLimiter;
     abortConnectResponse?: boolean;
@@ -100,17 +171,20 @@ export async function startWatchNodeHttpRuntime(
       ]),
     );
   });
-  cleanups.push(async () => {
-    runtime.close();
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+  const settleRequests = async () => {
     const results = (await Promise.all(requests)).flat();
     for (const result of results) {
       if (result.status === "rejected") {
         throw result.reason;
       }
     }
+  };
+  runtimeCleanups.push(async () => {
+    runtime.close();
+    await new Promise<void>((resolve) => {
+      server.close(() => resolve());
+    });
+    await settleRequests();
   });
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", resolve);
@@ -126,6 +200,7 @@ export async function startWatchNodeHttpRuntime(
     disconnectedNodes,
     runtime,
     connectHandled,
+    settleRequests,
     baseUrl: `http://127.0.0.1:${address.port}/api/nodes/watch`,
   };
 }

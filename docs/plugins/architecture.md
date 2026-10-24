@@ -267,6 +267,10 @@ available; captured Workers that need these shared imports retain that limitatio
 Rebuild before reload when the
 installation loads compiled output. Changes to host or SDK code require a Gateway restart.
 
+WebAssembly libraries remain ordinary captured assets even when they use a `.so`
+filename. Directory asset references reuse an active capture walk; filesystem
+directory cycles still fail capture.
+
 Source preparation workers wake synchronous host readers after posting results,
 callback requests, and consumption acknowledgements. The shared sequence is a
 progress hint only: the host still services the transport and checks the actual

@@ -40,7 +40,7 @@ the resident creator index. Adding a member does not wait for unrelated session
 display or worker-placement refreshes; sharing management permissions are still
 checked after preparation and at the write boundary.
 
-GitHub publication options read independent account status and publication receipts concurrently. The response still checks current session access and personal account authority after those reads settle.
+GitHub publication options read independent account status and publication receipts concurrently. Cold receipt reads load the publication reader without initializing unrelated shared-state commands. The response still checks current session access and personal account authority after those reads settle. A publication that failed before capturing its workspace snapshot remains visible without waiting for pull-request discovery; there is no accepted snapshot to compare with published work.
 
 ## Session control
 

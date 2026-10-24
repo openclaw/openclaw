@@ -192,6 +192,10 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   idle. `requesterTurnRunId` identifies the spawning cohort. Whether that turn
   still owns its children is read from the session controller, so a turn that
   ended without transferring them no longer holds their completions.
+  Failed announcement preparation retains only the durable obligation; prompt
+  assembly does not drain those records into a separate steering queue. Recovery
+  retries the same controller reservation, whose confirmed consumption settles
+  delivery. An unconsumed input remains owed across requester or Gateway failure.
 - **Retirement is an event.** Kill, Stop of a paused or queued child, child
   session deletion, and requester reset or deletion retire the child's owed
   inputs. A retired member is terminal, so it never holds its siblings'
@@ -210,7 +214,8 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   payloads. An explicit `sessions_yield` still owes one continuation, using the
   same rule even when every result was already delivered, but that continuation may finish silently without missing-answer recovery when no member still needs delivery or restart reconciliation.
   Restart-interrupted children still need reconciliation: their retained partial
-  results remain in the continuation even if an earlier result was delivered.
+  results remain in the continuation if delivery predates the interruption. A
+  confirmed delivery of the interruption notice satisfies that obligation.
   The unfinished-child roster is independent of result delivery and includes
   only children whose captured requester identity still matches.
   A Stop, reset, or deletion

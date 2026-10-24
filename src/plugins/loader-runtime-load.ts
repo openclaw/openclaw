@@ -1,5 +1,6 @@
 /** Native composition entry for ordinary, restricted, and cold provider-hook loading. */
 import { setImmediate as nextTurn } from "node:timers/promises";
+import { resolveAgentDir } from "../agents/agent-scope-config.js";
 import { createExternalAuthRuntime } from "../agents/auth-profiles/external-auth.js";
 import { resolveAuthProfileOrder } from "../agents/auth-profiles/order.js";
 import { listProfilesForProvider } from "../agents/auth-profiles/profile-list.js";
@@ -8,9 +9,22 @@ import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection-config.js";
 import { resolveAllowedModelRefCore } from "../agents/model-selection-resolve.js";
 import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
+import {
+  createProviderHttpError,
+  readProviderJsonResponse,
+  readProviderTextResponse,
+} from "../agents/provider-http-errors.js";
+import { resolveProviderRequestHeaders } from "../agents/provider-request-config.js";
+import { warn } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
+import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
+import { redactSensitiveText } from "../logging/redact.js";
+import { createDebugProxyWebSocketAgent, resolveDebugProxySettings } from "../proxy-capture/env.js";
+import { captureWsEvent, captureWsEventAsync } from "../proxy-capture/runtime.js";
+import { createRealtimeTranscriptionWebSocketSession } from "../realtime-transcription/websocket-session.js";
 import { createLazyRuntimeMethod, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { resolveCompatibleRuntimePluginRegistry } from "./active-runtime-registry.js";
-import { createPluginCapabilityCatalogContext } from "./capability-catalog-context.js";
+import type { PluginCapabilityCatalogHostContext } from "./capability-catalog-context.types.js";
 import { isPluginRegistryLoadInFlight } from "./loader-cache.js";
 import {
   loadOpenClawPluginsCore,
@@ -132,7 +146,33 @@ const loaderBindings: NativePluginLoadBindings = {
     });
   },
   get capabilityCatalogContext() {
-    return (capabilityCatalogContext ??= createPluginCapabilityCatalogContext(authAvailability));
+    return (capabilityCatalogContext ??= Object.freeze({
+      isProviderApiKeyConfigured: authAvailability.isProviderApiKeyConfigured,
+      isProviderApiKeyConfiguredAsync: authAvailability.isProviderApiKeyConfiguredAsync,
+      isProviderAuthProfileConfigured: authAvailability.isProviderAuthProfileConfigured,
+      isProviderAuthProfileConfiguredAsync: authAvailability.isProviderAuthProfileConfiguredAsync,
+      resolveAgentDir,
+      createRealtimeTranscriptionWebSocketSession,
+      resolveProviderRequestHeaders,
+      resolveProviderAuthProfileApiKey: authAvailability.resolveProviderAuthProfileApiKey,
+      resolveApiKeyForProvider: async (
+        params: Parameters<PluginCapabilityCatalogHostContext["resolveApiKeyForProvider"]>[0],
+      ) =>
+        (await import("./runtime/runtime-model-auth.runtime.js")).resolveProviderRuntimeApiKey(
+          params,
+        ),
+      captureWsEvent,
+      captureWsEventAsync,
+      createDebugProxyWebSocketAgent,
+      resolveDebugProxySettings,
+      fetchWithSsrFGuard,
+      createProviderHttpError,
+      readProviderJsonResponse,
+      readProviderTextResponse,
+      formatErrorMessage,
+      warn,
+      redactSensitiveText,
+    }));
   },
 };
 

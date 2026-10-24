@@ -69,6 +69,9 @@ import { createSessionConversationTestRegistry } from "../test-utils/session-con
 import { clearTestEmbeddedRun as clearActiveEmbeddedRun } from "./embedded-agent-runner/runs.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import {
+  deliveredRequesterReply,
+  endChildRun,
+  expectChildCleanupSettled,
   observeSubagentChange,
   seedDeliveredChild,
   childDeliverySettled,
@@ -89,6 +92,7 @@ import {
   resetSubagentRegistryForTests,
   settleRequesterAfterSessionSpawns,
 } from "./subagents/registry/subagent-registry.test-helpers.js";
+import { holdLiveRequesterTurns } from "./subagents/registry/subagent-requester-turn-liveness.test-support.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import * as sendDelivery from "./tools/sessions-send-tool.delivery.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
@@ -162,16 +166,6 @@ function yieldTool(
       requesterTurnRunId,
     }),
   });
-}
-function deliveredReply(text: string) {
-  return {
-    status: "ok",
-    inputProcessingCompleted: true,
-    result: {
-      payloads: [{ text }],
-      deliveryStatus: { status: "sent", resultCount: 1 },
-    },
-  };
 }
 function requesterCalls(requesterSessionKey: string) {
   return calls.filter(
@@ -470,7 +464,7 @@ it.each([
         };
       }
       if (request.method === "agent") {
-        return deliveredReply("Follow-up reached the requester");
+        return deliveredRequesterReply("Follow-up reached the requester");
       }
       return {};
     });
@@ -587,6 +581,8 @@ it.each(["ok", "error", "timeout"] as const)(
       if (request.method === "agent.wait" && request.params?.runId === runId) {
         if (status === "ok") {
           await writeFinal(childSessionKey, runId, terminalReply.text);
+          // The real child ends while its requester still holds the inline claim.
+          await endChildRun(runId, childSessionKey, terminalReply);
         }
         return {
           runId,
@@ -597,11 +593,13 @@ it.each(["ok", "error", "timeout"] as const)(
         };
       }
       if (request.method === "agent") {
-        return deliveredReply("Unexpected second delivery");
+        return deliveredRequesterReply("Unexpected second delivery");
       }
       return {};
     });
     announceTesting.setDepsForTest({ callGateway: callGatewayMock });
+    // The fixture requester has no controller operation; model its live inline claim.
+    const requesterTurn = holdLiveRequesterTurns(requesterTurnRunId);
     try {
       const result = await sendTool(requesterSessionKey, requesterTurnRunId).execute("inline", {
         sessionKey: childSessionKey,
@@ -631,7 +629,11 @@ it.each(["ok", "error", "timeout"] as const)(
       });
       await settleSessionWork();
       expect(requesterCalls(requesterSessionKey)).toHaveLength(0);
+      if (status === "ok") {
+        await expectChildCleanupSettled(runId, requesterSessionKey);
+      }
     } finally {
+      requesterTurn.restore();
       await closeRequester();
       await settleSessionWork();
       await resetSubagentRegistryForTests();
@@ -732,7 +734,7 @@ it("yields two watched followups when the first settles during yield preparation
         };
       }
     }
-    return deliveredReply("Both replies reviewed");
+    return deliveredRequesterReply("Both replies reviewed");
   });
   announceTesting.setDepsForTest({ callGateway: callGatewayMock });
   const enteredPreparation = createDeferredCore();
@@ -838,7 +840,7 @@ registerSessionsSendRequesterRetirementTests({
   writePair,
   sendTool,
   yieldTool,
-  deliveredReply,
+  deliveredReply: deliveredRequesterReply,
   requesterCalls,
   settleSessionWork,
   drainRootWork: () => settleRootWork(true),

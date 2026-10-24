@@ -589,6 +589,13 @@ html.openclaw-native-desktop .shell:not(.shell--mobile-nav) {
   box-shadow: var(--focus-ring);
 }
 
+/* Forced colors suppress the normal shadow-only focus indicator. */
+@media (forced-colors: active) {
+  .settings-sidebar__search-input:focus-visible {
+    outline: 2px solid Highlight;
+  }
+}
+
 .settings-sidebar__search-input::-webkit-search-cancel-button {
   appearance: none;
 }

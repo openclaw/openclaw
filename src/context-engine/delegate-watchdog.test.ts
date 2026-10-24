@@ -12,6 +12,7 @@ import {
 } from "./registry.js";
 import {
   captureContextEngineRegistryStateForTests,
+  contextEngineConfig,
   resetContextEngineRuntimeQuarantineForTests,
 } from "./registry.test-support.js";
 import type { ContextEngine } from "./types.js";
@@ -67,7 +68,7 @@ async function resolvePlugin(
   await registerContextEngineForOwner(engineId, createEngine, "plugin:delegating-plugin", {
     allowSameOwnerRefresh: true,
   });
-  const config = { plugins: { slots: { contextEngine: engineId } } };
+  const config = contextEngineConfig(engineId, "delegating-plugin");
   return logicalTurn
     ? (await resolveLogicalTurnContextEngines(config)).configured.engine
     : await resolveContextEngine(config);

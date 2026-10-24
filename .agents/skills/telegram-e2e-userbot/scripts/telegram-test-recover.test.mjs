@@ -178,6 +178,11 @@ test("cleanup recovers a restored archive after TDLib and uv wrote ordinary mode
   const f = await fixture();
   try {
     const restored = restoreCredential(f.root, f.directory);
+    fs.writeFileSync(
+      path.join(restored.userDriverDir, "owned-test-dm-topic.json"),
+      JSON.stringify({ status: "mode-disabled", chatId: "100", forumTopicId: 777 }),
+      { mode: 0o600 },
+    );
     assert.equal(fs.statSync(path.join(restored.userDriverDir, "db")).mode & 0o777, 0o755);
     // TDLib 1.8.67 creates its database with the inherited umask (0644 under 022).
     const database = path.join(restored.userDriverDir, "db", "db_test.sqlite");
@@ -193,7 +198,7 @@ test("cleanup recovers a restored archive after TDLib and uv wrote ordinary mode
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
-const command = ["cleanup-forum", "cleanup-group"].find((name) => process.argv.includes(name));
+const command = ["cleanup-dm-topic", "cleanup-forum", "cleanup-group"].find((name) => process.argv.includes(name));
 assert.ok(command);
 assert.equal(fs.readFileSync(path.join(process.env.TELEGRAM_USER_DRIVER_STATE_DIR, "db", "td_test.binlog"), "utf8"), "tdlib-session");
 console.log(JSON.stringify({ ok: true, command }));
@@ -204,6 +209,7 @@ console.log(JSON.stringify({ ok: true, command }));
     assert.equal(result.code, 0, result.stderr);
     assert.deepEqual(JSON.parse(result.stdout), {
       ok: true,
+      dmTopic: { ok: true, command: "cleanup-dm-topic" },
       forum: { ok: true, command: "cleanup-forum" },
       group: { ok: true, command: "cleanup-group" },
       leaseReleased: true,

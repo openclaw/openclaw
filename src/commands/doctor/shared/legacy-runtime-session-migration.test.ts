@@ -107,7 +107,7 @@ describe("legacy runtime session model migration", () => {
         env: state.env,
         shouldRepair: true,
       });
-      expect(repaired.repairedSessions).toBe(1);
+      expect(repaired.changes[0]).toContain("in 1 session across ");
       expect(loadSessionEntry({ ...scope, sessionKey })).toMatchObject({
         modelProvider: "openai",
         model: "current-model",
@@ -142,7 +142,7 @@ describe("legacy runtime session model migration", () => {
       const before = read(sessionId);
       await repair(false);
       expect(read(sessionId)).toEqual(before);
-      expect((await repair()).repairedSessions).toBe(1);
+      expect((await repair()).changes[0]).toContain("in 1 session across ");
       const entry = read(sessionId);
       expect(entry).toMatchObject({
         ...overrides,
@@ -157,7 +157,7 @@ describe("legacy runtime session model migration", () => {
       if (sessionId === "retired-runtime") {
         expect(entry?.agentHarnessId).toBeUndefined();
       }
-      expect((await repair()).repairedSessions).toBe(0);
+      expect((await repair()).changes).toEqual([]);
       expect(read(sessionId)).toEqual(entry);
     },
   );
@@ -189,7 +189,7 @@ describe("legacy CLI session binding migration", () => {
     const reopened = read("legacy-binding");
     expect(reuse(reopened)).toEqual({ mode: "reuse", sessionId: "Remote-MixedCase-Session/Alpha" });
     expect(reopened?.sessionId).toBe("local-binding-session");
-    expect((await repair()).repairedSessions).toBe(0);
+    expect((await repair()).changes).toEqual([]);
     expect(read("legacy-binding")).toEqual(reopened);
   });
 
@@ -231,7 +231,7 @@ describe("legacy CLI session binding migration", () => {
     });
 
     const repaired = await repair();
-    expect(repaired.repairedSessions).toBe(2);
+    expect(repaired.changes[0]).toContain("in 2 sessions across ");
     await reopen();
     const savedCanonical = read("canonical");
     const savedMap = read("map");
@@ -287,7 +287,7 @@ describe("legacy CLI session binding migration", () => {
     expect(read("safe")).toEqual(before.safe);
 
     const repaired = await repair();
-    expect(repaired.repairedSessions).toBe(2);
+    expect(repaired.changes[0]).toContain("in 2 sessions across ");
     for (const key of ["ambiguous", "empty", "malformed"]) {
       expect(repaired.warnings.join("\n")).toContain(`agent:main:${key}`);
     }
@@ -309,7 +309,7 @@ describe("legacy CLI session binding migration", () => {
       expect(read(key)).toEqual(before[key]);
     }
     const repeated = await repair();
-    expect(repeated.repairedSessions).toBe(0);
+    expect(repeated.changes).toEqual([]);
     expect(repeated.warnings).toEqual(repaired.warnings);
   });
 });

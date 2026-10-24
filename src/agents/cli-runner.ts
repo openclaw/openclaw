@@ -29,7 +29,6 @@ import {
   formatCliTerminalInterruption,
   isClaudeCliBackend,
   settleCliPreparationError,
-  settlePreparedCliRun,
 } from "./cli-runner/cli-run-settlement.js";
 import {
   buildCliHookAssistantMessage,
@@ -53,6 +52,7 @@ import {
   loadCliSessionHistoryMessages,
 } from "./cli-runner/session-history.js";
 import { prepareCliRunTerminalReply } from "./cli-runner/terminal-reply.js";
+import { settlePreparedCliRunWithTrajectory } from "./cli-runner/trajectory.js";
 import { runWithCliTurn } from "./cli-runner/turn-admission.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "./cli-runner/types.js";
 import { claudeCliSessionTranscriptHasContent } from "./command/attempt-execution.helpers.js";
@@ -206,14 +206,11 @@ export async function runPreparedCliAgent(
       watchdogAttempt: context.params.diagnosticOwner?.watchdogAttempt,
     },
     () =>
-      settlePreparedCliRun({
-        context,
-        diagnosticLifecycle,
-        run: (complete) =>
-          runWithCliHistoryWriter(context.cliHistoryWriter, () =>
-            runPreparedCliAgentOwned(context, complete, diagnosticLifecycle),
-          ),
-      }),
+      settlePreparedCliRunWithTrajectory(context, diagnosticLifecycle, (complete) =>
+        runWithCliHistoryWriter(context.cliHistoryWriter, () =>
+          runPreparedCliAgentOwned(context, complete, diagnosticLifecycle),
+        ),
+      ),
   );
 }
 

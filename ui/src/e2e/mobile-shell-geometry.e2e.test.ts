@@ -1,7 +1,10 @@
-import { expect, type Page } from "playwright/test";
+import { expect, type Locator, type Page } from "playwright/test";
 import { it } from "vitest";
 import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import {
+  waitForControlUiFrameLayout,
+  waitForControlUiProofSurface,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -18,6 +21,14 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Mobile shell geometry" });
 const sessionKey = "agent:main:main";
+
+async function waitForMessageGeometry(surface: Locator, content: readonly Locator[]) {
+  const targets = [surface, ...content];
+  await Promise.all(targets.map((target) => waitForControlUiProofSurface(target, [target])));
+  await waitForControlUiFrameLayout(targets);
+  await Promise.all(targets.map((target) => expect(target).toBeInViewport()));
+}
+
 function viewportScenario(
   name: string,
   width: number,
@@ -324,15 +335,11 @@ suite.define(() => {
           )
           .filter({ visible: true })
           .first();
-        await takeControlUiScreenshotFrame(page, bubble, [details, textarea], {
-          animations: "disabled",
-        });
+        await waitForMessageGeometry(bubble, [details, textarea]);
         await (mobile ? bubble.tap() : bubble.hover());
         const actions = firstMessage.locator(".chat-group-footer-actions");
         await expect(actions.locator(".chat-copy-btn")).toBeVisible();
-        await takeControlUiScreenshotFrame(page, bubble, [details, actions], {
-          animations: "disabled",
-        });
+        await waitForMessageGeometry(bubble, [details, actions]);
         const detailsBox = (await details.boundingBox())!;
         const transcriptBoxes = await Promise.all([bubble.boundingBox(), actions.boundingBox()]);
         for (const box of transcriptBoxes) {

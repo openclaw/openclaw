@@ -214,6 +214,12 @@ type OpenClawPluginLifecycleApi = Partial<
  * @see https://docs.openclaw.ai/plugins/sdk-overview#api-stability
  */
 export type OpenClawPluginApi = {
+  /** Data for an installed native view, with a portable text summary. */
+  inlineView: (
+    viewId: string,
+    payload: import("./host-hook-json.js").PluginJsonValue,
+    options: { version: number; summary: string },
+  ) => import("./inline-view.js").PluginInlineViewResult;
   id: string;
   name: string;
   version?: string;

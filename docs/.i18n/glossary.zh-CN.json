@@ -64,6 +64,22 @@
     "target": "radius"
   },
   {
+    "source": "Requesty",
+    "target": "Requesty"
+  },
+  {
+    "source": "Requesty (unified router)",
+    "target": "Requesty（统一路由）"
+  },
+  {
+    "source": "Requesty plugin reference",
+    "target": "Requesty 插件参考"
+  },
+  {
+    "source": "requesty",
+    "target": "requesty"
+  },
+  {
     "source": "Omarchy",
     "target": "Omarchy"
   },

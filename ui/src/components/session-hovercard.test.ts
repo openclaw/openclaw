@@ -633,7 +633,8 @@ describe("session hovercard", () => {
       expect(container.querySelector(".session-hovercard__files")).toBeNull();
       expect(createLink?.textContent).toBe("Create PR");
       expect(createLink?.href).toBe(branch.createUrl);
-      expect(createLink?.title).toBe("Create a pull request for feature");
+      expect(createLink?.getAttribute("aria-label")).toBe("Create PR for feature");
+      expect(createLink?.title).toBe("Create PR for feature");
     } else {
       expect(createLink).toBeNull();
       expect(container.querySelector(".session-hovercard__branch-label")?.textContent).toBe(

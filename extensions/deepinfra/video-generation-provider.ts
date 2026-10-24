@@ -39,11 +39,9 @@ const MAX_POLL_ATTEMPTS = 120;
 
 // /v1/openai/videos is async: POST returns a job, GET /{id} polls until the
 // job succeeds or fails, then the result contains downloadable video URLs.
-type DeepInfraVideoStatus = "queued" | "processing" | "succeeded" | "failed";
-
 type DeepInfraVideoJob = {
   id?: string;
-  status?: DeepInfraVideoStatus;
+  status?: "queued" | "processing" | "succeeded" | "failed";
   model?: string | null;
   data?: Array<{ url?: unknown } | null> | null;
   error?: string | null;

@@ -24,6 +24,7 @@ import type {
   TrustedAgentToolCaller,
 } from "../../gateway/server-methods/types.js";
 import {
+  captureOperatorToolGatewayContinuationContext,
   dispatchGatewayMethodInProcess,
   getInProcessGatewayRequestContext,
   runWithOperatorToolGatewayCleanupContext,
@@ -129,8 +130,24 @@ export function runWithGatewayToolCleanupContext<T>(
 }
 
 /** Transfers accepted reply work to a bounded source-authority hold, not the tool lifetime. */
-export function runWithGatewayToolContinuationContext<T>(run: () => Promise<T>): Promise<T> {
+export async function runWithGatewayToolContinuationContext<T>(
+  run: () => Promise<T>,
+  options?: { retainRequester?: true },
+): Promise<T> {
   const resolveGatewayContext = callerGatewayContextResolver();
+  if (options?.retainRequester) {
+    const preparation = captureOperatorToolGatewayContinuationContext(undefined, {
+      retainRequester: true,
+    });
+    if (preparation) {
+      const captured = await preparation;
+      try {
+        return await captured.runWithRequester(run);
+      } finally {
+        captured.release();
+      }
+    }
+  }
   return runWithOperatorToolGatewayContinuationContext(() =>
     withoutGatewayToolCallerIdentity(() =>
       resolveGatewayContext

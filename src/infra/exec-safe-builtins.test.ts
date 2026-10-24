@@ -1,6 +1,6 @@
 // Tests shell builtin detection for safe execution policy.
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   evaluateExecAllowlist,
   evaluateShellAllowlistWithAuthorization,
@@ -226,7 +226,8 @@ describe.skipIf(process.platform === "win32")(
     });
 
     it("does not auto-allow safe builtin tokens in direct argv evaluation", () => {
-      const analysis = analyzeArgvCommand({ argv: ["pwd"], cwd: "/tmp", platform: "linux" });
+      using _ = vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+      const analysis = analyzeArgvCommand({ argv: ["pwd"], cwd: "/tmp" });
       const result = evaluateExecAllowlist({
         analysis,
         allowlist: [],

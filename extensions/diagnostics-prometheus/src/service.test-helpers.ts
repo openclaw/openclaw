@@ -53,7 +53,7 @@ export function scrapeMetrics(handler: OpenClawPluginHttpRouteHandler): string {
   expect(handler(response.req, response)).toBe(true);
   expect(response.statusCode).toBe(200);
   expect(response.headersSent).toBe(true);
-  return expectDefined(response.body, "Prometheus scrape body");
+  return response.body?.toString() ?? "";
 }
 
 export function createMetricsHarness(

@@ -18,7 +18,7 @@ import {
   isGatewayRestartDraining,
 } from "../process/gateway-work-admission.js";
 import { isPidAlive } from "../shared/pid-alive.js";
-import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome.js";
+import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome-classification.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { resolveExecutableFromPathEnv } from "./executable-path.js";

@@ -59,13 +59,15 @@ const controlUiPerformanceBudgets = {
   // Initial shell plus shared route styles and the route's own stylesheet.
   chatBootCssRequests: 3,
   newBootCssRequests: 3,
-  // Optional motion: 1,345,727 B Chat and 821,070 B New Session.
-  // Preserve main's relative headroom against the matched 0f6a build.
-  chatBootJsGzipBytes: 1_396_218,
-  newBootJsGzipBytes: 831_382,
+  // Defer optional root English: matched bf93c438 1,269,817 to 1,268,099 B Chat.
+  // New Session 763,598 to 761,956 B; preserve each surface's relative headroom.
+  chatBootJsGzipBytes: 1_357_842,
+  newBootJsGzipBytes: 797_395,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
-  startupJsGzipBytes: 325_081,
+  // Jacob Tomlinson approved +50 B for native inline views (#173135, 2026-10-22).
+  // The separate 512 B growth and 64 B build-variance allowances are unchanged.
+  startupJsGzipBytes: 325_131,
   // Keep 45 KiB advisory: tiny integrated changes must not exhaust the budget.
   // The fixed 50 KiB ceiling bounds accumulation of small changes.
   startupCssGzipBytes: 50 * KIB,
@@ -805,10 +807,10 @@ async function main(argv: string[] = process.argv.slice(2)): Promise<void> {
   if (moduleAttribution) {
     const { collectControlUiModuleAttribution, formatControlUiModuleAttribution } =
       await import("./lib/control-ui-module-attribution.mts");
-    if (!result.metrics.routeBoot) {
-      throw new Error("Module attribution requires a build with route preload templates");
-    }
-    attribution = collectControlUiModuleAttribution(distDir, result.metrics.routeBoot);
+    attribution = collectControlUiModuleAttribution(distDir, {
+      startup: result.metrics.startup,
+      ...result.metrics.routeBoot,
+    });
     result.report += `\n${formatControlUiModuleAttribution(attribution)}`;
   }
   if (json) {
