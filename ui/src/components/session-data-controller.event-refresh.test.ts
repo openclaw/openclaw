@@ -586,7 +586,12 @@ describe("filtered sidebar session event refresh", () => {
 
     parents.mockReturnValue(new Set());
     selectStatusFilter("all");
-    childPage.resolve(sessionPage(["agent:main:stale-child"], 2));
+    childPage.resolve({
+      ...sessionPage(["agent:main:stale-child"], 2),
+      totalCount: 1,
+      nextOffset: null,
+      hasMore: false,
+    });
     await pendingChildren;
 
     expect(controller.childSessionRowsByParent).toEqual({});

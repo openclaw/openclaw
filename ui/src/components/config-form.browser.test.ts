@@ -39,8 +39,16 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
   return element;
 }
 
-function query<T extends Element = HTMLElement>(selector: string, root: Element = container): T {
-  return expectElement(root.querySelector<T>(selector), selector);
+function query<T extends Element>(
+  selector: string,
+  elementType: new () => T,
+  root: Element = container,
+): T {
+  const element = expectElement(root.querySelector(selector), selector);
+  if (!(element instanceof elementType)) {
+    throw new Error(`unexpected element type for ${selector}`);
+  }
+  return element;
 }
 function all<T extends Element = HTMLElement>(selector: string, root: Element = container): T[] {
   return Array.from(root.querySelectorAll<T>(selector));
@@ -105,10 +113,10 @@ describe("config form renderer", () => {
         );
       renderRaw(props);
       const disclosure = expectElement(findDisclosure(), label);
-      const input = query<HTMLInputElement>('input[type="number"]');
+      const input = query('input[type="number"]', HTMLInputElement);
       expect(input.value).toBe("443");
       expect(disclosure.open).toBe(initiallyOpen);
-      query("summary", disclosure).click();
+      query("summary", HTMLElement, disclosure).click();
       expect(disclosure.open).toBe(!initiallyOpen);
 
       renderRaw({
@@ -232,7 +240,7 @@ describe("config form renderer", () => {
     });
 
     for (const label of ["Encrypt Key", "Private Key", "FOO"]) {
-      const input = query<HTMLInputElement>(`input[aria-label='${label}']`);
+      const input = query(`input[aria-label='${label}']`, HTMLInputElement);
       expect(input).toMatchObject({ readOnly: true, value: "" });
       expect(input.classList.contains("cfg-redacted")).toBe(true);
     }
@@ -266,7 +274,7 @@ describe("config form renderer", () => {
           draw();
         },
       });
-    const token = () => query<HTMLInputElement>("input[aria-label='Token']");
+    const token = () => query("input[aria-label='Token']", HTMLInputElement);
 
     draw();
     await userEvent.click(token());
@@ -361,7 +369,7 @@ describe("config form renderer", () => {
         ? { plugins: { entries: { "voice-call": { enabled: true } } } }
         : { features: { beta: false } },
     });
-    const checkbox = query<HTMLInputElement>('.settings-toggle__input[role="switch"]');
+    const checkbox = query('.settings-toggle__input[role="switch"]', HTMLInputElement);
     const row = expectElement(checkbox.closest(".settings-row"), "toggle row");
     const label = wildcard ? "Plugin Enabled" : "Beta";
     expect(row.tagName).toBe("DIV");
@@ -387,7 +395,7 @@ describe("config form renderer", () => {
     });
 
     expect(container.querySelector('.settings-toggle__input[role="switch"]')).toBeNull();
-    const select = query<HTMLSelectElement>('select[aria-label="Automations Enabled"]');
+    const select = query('select[aria-label="Automations Enabled"]', HTMLSelectElement);
     expect(select.selectedOptions[0]?.textContent?.trim()).toBe("Default: On");
     expect(onPatch).not.toHaveBeenCalled();
     edit(select, "1", "change");
@@ -412,7 +420,7 @@ describe("config form renderer", () => {
         value: { [key]: value },
         disabled,
       });
-      const remove = query<HTMLButtonElement>(".cfg-map button[aria-label^='Remove entry: ']");
+      const remove = query(".cfg-map button[aria-label^='Remove entry: ']", HTMLButtonElement);
       expect(remove.disabled).toBe(disabled);
       remove.click();
       if (disabled) {
@@ -482,9 +490,9 @@ describe("config form renderer", () => {
   });
 
   it.each([
-    [{ lastTouchedAt: { anyOf: [{ type: "string" }, {}] } }, ["lastTouchedAt"]],
+    [{ lastTouchedAt: { anyOf: [{ type: "string" }, {}] } }, ["lastTouchedAt"], false],
     [{ note: { anyOf: [{ type: "string", nullable: true }] } }, [], true],
-  ] satisfies Array<[Record<string, JsonSchema>, string[], boolean?]>)(
+  ] satisfies Array<[Record<string, JsonSchema>, string[], boolean]>)(
     "analyzes unconstrained and nullable union shapes: %j",
     (properties, unsupported, nullable) => {
       const analysis = analyze(properties);
@@ -529,11 +537,11 @@ describe("config form renderer", () => {
       expect(container.querySelector(".settings-section__help-button")).toBeNull();
       return;
     }
-    const button = query<HTMLButtonElement>(".settings-section__help-button");
+    const button = query(".settings-section__help-button", HTMLButtonElement);
     expect(button.getAttribute("aria-label")).toBe("Help for Gateway");
     const tooltip = expectElement(button.closest("openclaw-tooltip"), "section help tooltip");
     expect((tooltip as HTMLElement & { content: string }).content).toBe("Help for Gateway");
-    const link = query<HTMLAnchorElement>(".settings-section__help-popover a");
+    const link = query(".settings-section__help-popover a", HTMLAnchorElement);
     expect(link.textContent?.trim()).toBe("Learn more");
     const popover = expectElement(link.closest('[role="dialog"]'), "section help popover");
     expect(button.getAttribute("aria-controls")).toBe(popover.id);

@@ -261,7 +261,7 @@ describe("loadPluginRegistrySnapshotWithMetadata", () => {
   it.each(["current", "persisted", "explicit"])("selects the %s metadata source", async (mode) => {
     const { tempRoot, env } = isolatedRegistry();
     const params = { config: {}, env, workspaceDir: path.join(tempRoot, "workspace") };
-    const snapshot = {
+    const snapshot: ReturnType<typeof loadPluginMetadataSnapshot> = {
       ...loadPluginMetadataSnapshot({ ...params, preferPersisted: false }),
       registryDiagnostics: [
         { level: "info" as const, code: "persisted-registry-missing", message: "missing" },
