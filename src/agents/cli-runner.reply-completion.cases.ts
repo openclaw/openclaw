@@ -54,8 +54,11 @@ export function registerCliReplyCompletionTests({
     const { buildGatewayDeliveryPayload } =
       await import("../gateway/server-methods/message-operation-result.js");
     const channelRuntimeContext = await import("../infra/channel-runtime-context.js");
-    const { getActivePluginRegistry, setActivePluginRegistry } =
-      await import("../plugins/runtime.js");
+    const {
+      captureActivePluginRegistrySnapshot,
+      restoreActivePluginRegistrySnapshot,
+      setActivePluginRegistry,
+    } = await import("../plugins/runtime.js");
     const { createTestRegistry } = await import("../test-utils/channel-plugins.js");
     const { whatsappPlugin } = await import("../../extensions/whatsapp/channel-plugin-api.js");
     const to = "+15551234567";
@@ -90,13 +93,13 @@ export function registerCliReplyCompletionTests({
       .mockImplementation(({ channelId, accountId }) =>
         channelId === "whatsapp" && accountId === "default" ? controller : undefined,
       );
-    const previousRegistry = getActivePluginRegistry();
+    const registrySnapshot = captureActivePluginRegistrySnapshot();
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: whatsappPlugin }]),
     );
     onTestFinished(() => {
       runtimeContext.mockRestore();
-      setActivePluginRegistry(previousRegistry ?? createTestRegistry([]));
+      restoreActivePluginRegistrySnapshot(registrySnapshot);
     });
     const handler = await createChannelHandler({
       cfg,
