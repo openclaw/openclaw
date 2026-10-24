@@ -3,24 +3,24 @@ import { en } from "./en.ts";
 
 const enChatToolLabels = {
   chat: {
-    delegation: {
-      task: "Delegated task",
-      tasks: "{count} delegated tasks",
-      parallel: "{count} parallel tasks",
-      progress: "{complete} of {total} completed",
-      unknown: "Outcome unavailable",
-      attention: "{count} needing attention",
-      more: "{count} more tasks",
-      completedTasks: "Completed tasks",
-      accepted: "Started",
-      queued: "Queued",
-      running: "Running",
-      done: "Completed",
-      failed: "Failed",
-      killed: "Stopped",
-      timeout: "Timed out",
-    },
     toolCards: {
+      delegation: {
+        task: "Delegated task",
+        tasks: "{count} delegated tasks",
+        parallel: "{count} parallel tasks",
+        progress: "{complete} of {total} completed",
+        unknown: "Outcome unavailable",
+        attention: "{count} needing attention",
+        more: "{count} more tasks",
+        completedTasks: "Completed tasks",
+        accepted: "Started",
+        queued: "Queued",
+        running: "Running",
+        done: "Completed",
+        failed: "Failed",
+        killed: "Stopped",
+        timeout: "Timed out",
+      },
       tool: "Tool",
       canvas: "Canvas",
       summary: "Summary",
@@ -117,7 +117,6 @@ const enChatToolLabels = {
 
 export const registerChatToolLabelsEnglish = Object.assign(
   () => {
-    Object.assign(en.chat, { delegation: enChatToolLabels.chat.delegation });
     const { activity, review, verbs, ...labels } = enChatToolLabels.chat.toolCards;
     Object.assign(en.chat.toolCards, labels);
     Object.assign(en.chat.toolCards.activity, activity);

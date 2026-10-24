@@ -59,7 +59,8 @@ const completionMessage = (count: number, failure: boolean) => ({
       phase: "end",
       status: "completed",
       delegation: launches.slice(0, count).map((receipt, index) => ({
-        ...receipt,
+        runId: receipt.runId,
+        childSessionKey: receipt.childSessionKey,
         status: failure && index === count - 1 ? "timeout" : "done",
       })),
     },
@@ -83,8 +84,10 @@ suite.define(() => {
         swarmGroupId: groupId,
         status: index < 4 ? "done" : "running",
         runtimeMs: 42000,
+        updatedAt: 1,
       }));
       const parent = {
+        updatedAt: 1,
         key: sessionKey,
         kind: "direct",
         label: "Review and publish",
@@ -152,6 +155,7 @@ suite.define(() => {
       ];
       // Reload with only durable history. Registry summaries and child sessions have expired.
       const retiredParent = {
+        updatedAt: 1,
         key: sessionKey,
         kind: "direct",
         label: "Review and publish",

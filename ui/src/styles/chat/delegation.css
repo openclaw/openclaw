@@ -45,8 +45,7 @@
   display: inline-flex;
   flex-shrink: 0;
 }
-.chat-delegation__icon svg,
-.chat-delegation__chevron svg {
+.chat-delegation svg {
   width: 14px;
   height: 14px;
 }
@@ -77,7 +76,6 @@
   display: block;
   height: 100%;
   background: var(--ok);
-  border-radius: inherit;
 }
 .chat-delegation__tasks {
   display: grid;
@@ -106,7 +104,6 @@ button.chat-delegation__name {
   border: 0;
   padding: 0;
   background: transparent;
-  cursor: pointer;
 }
 button.chat-delegation__name:hover {
   color: var(--text);

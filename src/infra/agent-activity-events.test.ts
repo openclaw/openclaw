@@ -1,5 +1,5 @@
 import { Value } from "typebox/value";
-import { expect, expectTypeOf, onTestFinished, test } from "vitest";
+import { assert, expect, expectTypeOf, onTestFinished, test } from "vitest";
 import { AgentActivityItemSchema } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { capToolResultForPersistence } from "../agents/session-tool-result-guard.payload.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
@@ -418,6 +418,7 @@ test("only bounded structured delegation outcomes become activity receipts", () 
     role: "toolResult" as const,
     toolName: "agents_wait",
     toolCallId: "id",
+    isError: false,
     timestamp: 1,
     content: [{ type: "text" as const, text: "x".repeat(40000) }],
     details: {
@@ -442,6 +443,7 @@ test("only bounded structured delegation outcomes become activity receipts", () 
     toolCallId: "id",
     result,
   }).message;
+  assert(ordinary.role === "toolResult");
   for (const [message, saved, limit] of [
     [ordinary, ordinary.details, 8192],
     [nested, nested.details.result, 32768],

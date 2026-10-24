@@ -185,7 +185,6 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
           composerFooter(
             "Composer",
             `<div class="chat-footer__context">
-                <div class="chat-inline-approval">Approval</div>
                 <div class="chat-prs"><article class="chat-pr">Pull request</article></div>
                 <div class="session-suggestions">Suggestion</div>
                 <div class="chat-inline-approval">Approval context</div>
@@ -194,12 +193,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
           ),
         )}</section>`);
       const composer = await getRect(page, ".agent-chat__input");
-      for (const selector of [
-        ".chat-prs",
-        ".chat-inline-approval",
-        ".session-suggestions",
-        ".chat-inline-approval",
-      ]) {
+      for (const selector of [".chat-prs", ".session-suggestions", ".chat-inline-approval"]) {
         const card = await getRect(page, selector);
         expect(card.left, selector).toBeCloseTo(composer.left, 0);
         expect(card.right, selector).toBeCloseTo(composer.right, 0);

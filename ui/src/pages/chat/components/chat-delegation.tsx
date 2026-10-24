@@ -59,20 +59,25 @@ function TaskGroup(props: { group: DelegatedTaskGroup; onOpen: (key: string) => 
   const open = () => expanded() ?? (tasks().length > 5 && !settled());
   const title = () =>
     tasks().length === 1
-      ? tasks()[0]!.label || t("chat.delegation.task")
-      : t(tasks().length > 5 ? "chat.delegation.parallel" : "chat.delegation.tasks", {
-          count: String(tasks().length),
-        });
+      ? tasks()[0]!.label || t("chat.toolCards.delegation.task")
+      : t(
+          tasks().length > 5
+            ? "chat.toolCards.delegation.parallel"
+            : "chat.toolCards.delegation.tasks",
+          {
+            count: String(tasks().length),
+          },
+        );
   const status = () =>
     counts().failed
-      ? t("chat.delegation.attention", { count: String(counts().failed) })
+      ? t("chat.toolCards.delegation.attention", { count: String(counts().failed) })
       : counts().unknown
-        ? t("chat.delegation.unknown")
+        ? t("chat.toolCards.delegation.unknown")
         : settled()
           ? t("common.completed")
           : tasks().length === 1
-            ? t("chat.delegation." + tasks()[0]!.status)
-            : t("chat.delegation.progress", {
+            ? t("chat.toolCards.delegation." + tasks()[0]!.status)
+            : t("chat.toolCards.delegation.progress", {
                 complete: String(counts().complete),
                 total: String(tasks().length),
               });
@@ -113,7 +118,7 @@ function TaskGroup(props: { group: DelegatedTaskGroup; onOpen: (key: string) => 
         <div
           class="chat-delegation__progress"
           role="progressbar"
-          aria-label={t("chat.delegation.completedTasks")}
+          aria-label={t("chat.toolCards.delegation.completedTasks")}
           aria-valuemin={0}
           aria-valuemax={tasks().length}
           aria-valuenow={counts().complete}
@@ -142,7 +147,7 @@ function TaskGroup(props: { group: DelegatedTaskGroup; onOpen: (key: string) => 
                   when={task().listed}
                   fallback={
                     <span class="chat-delegation__name">
-                      {task().label || t("chat.delegation.task")}
+                      {task().label || t("chat.toolCards.delegation.task")}
                     </span>
                   }
                 >
@@ -151,10 +156,12 @@ function TaskGroup(props: { group: DelegatedTaskGroup; onOpen: (key: string) => 
                     class="chat-delegation__name"
                     onClick={() => props.onOpen(task().childSessionKey)}
                   >
-                    {task().label || t("chat.delegation.task")}
+                    {task().label || t("chat.toolCards.delegation.task")}
                   </button>
                 </Show>
-                <span class="chat-delegation__status">{t("chat.delegation." + task().status)}</span>
+                <span class="chat-delegation__status">
+                  {t("chat.toolCards.delegation." + task().status)}
+                </span>
                 <span class="chat-delegation__duration">
                   {formatDurationCompact(task().runtimeMs) ?? ""}
                 </span>
@@ -163,7 +170,9 @@ function TaskGroup(props: { group: DelegatedTaskGroup; onOpen: (key: string) => 
           </For>
           <Show when={tasks().length > visibleTasks().length}>
             <li class="chat-delegation__status">
-              {t("chat.delegation.more", { count: String(tasks().length - visibleTasks().length) })}
+              {t("chat.toolCards.delegation.more", {
+                count: String(tasks().length - visibleTasks().length),
+              })}
             </li>
           </Show>
         </ul>

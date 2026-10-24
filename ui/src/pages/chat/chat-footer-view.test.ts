@@ -6,10 +6,16 @@ import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { resetChatViewState } from "./chat-view-state.test-support.ts";
-import { renderChatInto, renderChatView, requireElement } from "./chat-view.test-helpers.ts";
+import {
+  createTestTranscript,
+  renderChatInto,
+  renderChatView,
+  requireElement,
+} from "./chat-view.test-helpers.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
+  resizeObservers,
 } from "./components/chat-transcript.test-support.ts";
 
 beforeEach(() => installTranscriptDomMocks());
@@ -117,7 +123,9 @@ it("keeps delegated work with its launching turn and leaves the composer alone",
       __openclaw: { id: "input-2", runId: "later-run" },
     },
   ];
+  const transcript = createTestTranscript();
   const props = {
+    transcript,
     sessionKey,
     messages,
     showToolCalls: true,
@@ -126,6 +134,11 @@ it("keeps delegated work with its launching turn and leaves the composer alone",
     draft: "Keep the draft while progress arrives",
   };
   const container = renderChatView(props);
+  const viewport = transcript.scrollElement!;
+  Object.defineProperty(viewport, "clientHeight", { configurable: true, value: 600 });
+  for (const observer of resizeObservers) {
+    observer.emitTarget(viewport, 800, 600);
+  }
   const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
   textarea.focus();
   await vi.dynamicImportSettled();
@@ -142,9 +155,14 @@ it("keeps delegated work with its launching turn and leaves the composer alone",
   expect(later).toBeDefined();
   expect(activity.compareDocumentPosition(later!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   expect(container.querySelector(".chat-footer [data-test-id=chat-swarm]")).toBeNull();
-  renderChatInto(container, { ...props, runId: "later-run", runWorking: true });
-  expect(container.querySelectorAll("[data-test-id=chat-delegation]")).toHaveLength(1);
-  expect(activity.textContent).not.toContain("processing");
+  renderChatInto(container, { ...props, runId: "later-run", runActive: true });
+  await waitForSolid(() =>
+    expect(container.querySelectorAll("[data-test-id=chat-delegation]")).toHaveLength(1),
+  );
+  expect(
+    requireElement(container, "[data-test-id=chat-delegation]", "inline delegated work")
+      .textContent,
+  ).not.toContain("processing");
   expect(container.querySelector("textarea")).toBe(textarea);
   expect(textarea.value).toBe(props.draft);
   expect(document.activeElement).toBe(textarea);
