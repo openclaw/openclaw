@@ -50,7 +50,7 @@ describe("execScheduledTaskEnabledChange", () => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("execSchtasks", () => {
-  it("runs schtasks with bounded timeouts", async () => {
+  it("runs schtasks with a bounded timeout", async () => {
     vi.stubEnv("BOUNDARY_PARENT_ONLY", "synthetic");
     runCommandWithTimeout.mockResolvedValue({
       stdout: "ok",
@@ -69,7 +69,6 @@ describe("execSchtasks", () => {
     expect(runCommandWithTimeout).toHaveBeenCalledWith(["schtasks", "/Query"], {
       baseEnv: expect.any(Object),
       timeoutMs: 15_000,
-      noOutputTimeoutMs: 30_000,
     });
     expect(runCommandWithTimeout.mock.calls[0]?.[1].baseEnv).not.toHaveProperty(
       "BOUNDARY_PARENT_ONLY",
@@ -78,10 +77,6 @@ describe("execSchtasks", () => {
 
   it.each([
     { termination: "timeout", detail: "schtasks /Change /DISABLE timed out after 15000ms" },
-    {
-      termination: "no-output-timeout",
-      detail: "schtasks /Change /DISABLE produced no output for 30000ms",
-    },
     {
       termination: "signal",
       detail: "schtasks /Change /DISABLE terminated before confirmed completion",
@@ -114,7 +109,7 @@ describe("execSchtasks", () => {
     await expect(isRegisteredScheduledTask({})).resolves.toBe(false);
     expect(runCommandWithTimeout).toHaveBeenCalledExactlyOnceWith(
       ["schtasks", "/Query", "/TN", "OpenClaw Gateway"],
-      expect.objectContaining({ timeoutMs: 15_000, noOutputTimeoutMs: 30_000 }),
+      expect.objectContaining({ timeoutMs: 15_000 }),
     );
   });
 

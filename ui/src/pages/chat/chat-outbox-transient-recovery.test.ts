@@ -83,6 +83,40 @@ function expectUnconfirmed(host: ReturnType<typeof makeChatHost>, sendRunId: str
 }
 
 describe("transient outbox delivery recovery", () => {
+  it.each([undefined, "steer"] as const)(
+    "parks %s delivery until Gateway work resumes",
+    async (queueMode) => {
+      const host = makeChatHost({
+        chatMessage: "Keep this input while the Gateway is suspended",
+        ...(queueMode ? { chatRunId: "active-run", chatFollowUpMode: queueMode } : {}),
+        requestHandlers: {
+          "chat.history": idleChatHistory(),
+          "chat.send": (params: unknown) => ({
+            runId: requireRecord(params, "resumed payload").idempotencyKey,
+            status: "started",
+            messageSeq: 1,
+          }),
+        },
+      });
+      host.gatewayWorkPaused = true;
+      await handleSendChat(host);
+      expect(requestCalls(host.request, "chat.send")).toHaveLength(0);
+      expect(host.chatQueue).toHaveLength(1);
+      const queuedRunId = host.chatQueue[0]?.sendRunId;
+      expect(host.chatMessage).toBe("");
+      await resumeStoredChatOutboxes(host);
+      expect(requestCalls(host.request, "chat.history")).toHaveLength(0);
+      host.gatewayWorkPaused = false;
+      await resumeStoredChatOutboxes(host);
+      expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
+      expect(requestCalls(host.request, "chat.send")[0]?.[1]).toMatchObject({
+        idempotencyKey: queuedRunId,
+      });
+      await resumeStoredChatOutboxes(host);
+      expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
+    },
+  );
+
   it.each(["receipt", "legacy"] as const)(
     "rechecks each outbox by cursor and retires newly delivered %s proof",
     async (proof) => {
@@ -381,7 +415,7 @@ describe("transient outbox delivery recovery", () => {
     },
   );
 
-  it.each(["backoff", "reconnect"])(
+  it.each(["backoff", "reconnect", "suspension"])(
     "retries a retryable send rejection after %s",
     async (trigger) => {
       const sendRunIds: string[] = [];
@@ -395,7 +429,15 @@ describe("transient outbox delivery recovery", () => {
             sendRunIds.push(String(payload.idempotencyKey));
             sendAttempts += 1;
             if (sendAttempts === 1) {
-              throw unavailable("Gateway is temporarily busy");
+              throw trigger === "suspension"
+                ? new GatewayRequestError({
+                    code: "UNAVAILABLE",
+                    message: "chat.send unavailable during gateway suspension",
+                    retryable: true,
+                    retryAfterMs: 100,
+                    details: { reason: "gateway-suspending" },
+                  })
+                : unavailable("Gateway is temporarily busy");
             }
             return { runId: payload.idempotencyKey, status: "started", messageSeq: 1 };
           },
@@ -412,7 +454,15 @@ describe("transient outbox delivery recovery", () => {
         sendState: "waiting-reconnect",
       });
       expect(sendAttempts).toBe(1);
-      if (trigger === "reconnect") {
+      if (trigger === "suspension") {
+        expect(host.chatQueue[0]?.sendError).toBeUndefined();
+        expect(host.chatError).toBeNull();
+        host.gatewayWorkPaused = true;
+        await vi.advanceTimersByTimeAsync(100);
+        expect(sendAttempts).toBe(1);
+        host.gatewayWorkPaused = false;
+        await resumeStoredChatOutboxes(host);
+      } else if (trigger === "reconnect") {
         host.connectionEpoch += 1;
         await resumeStoredChatOutboxes(host);
       } else {

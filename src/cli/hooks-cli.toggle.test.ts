@@ -456,6 +456,23 @@ describe("hooks CLI metadata config keys", () => {
     expect(mocks.requestExitAfterOneShotOutput).not.toHaveBeenCalled();
   });
 
+  it("keeps multi-line remote failures on separate human lines without controls", async () => {
+    mocks.getRuntimeConfig.mockReturnValue({ ...sourceConfig, gateway: { mode: "remote" } });
+    const message = [
+      "gateway remote mode misconfigured: gateway.remote.url missing",
+      "Fix: set gateway.remote.url\u001b]0;untrusted-title\u0007",
+    ].join("\n");
+    mocks.callGateway.mockRejectedValue(new Error(message));
+
+    await expect(runHooks("list", "--json")).rejects.toMatchObject({
+      humanOutput: [
+        "Error: gateway remote mode misconfigured: gateway.remote.url missing",
+        "Fix: set gateway.remote.url",
+      ].join("\n"),
+      machineOutput: message,
+    });
+  });
+
   it.each([
     {
       label: "request validation",

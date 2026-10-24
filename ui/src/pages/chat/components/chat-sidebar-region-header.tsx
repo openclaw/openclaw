@@ -22,7 +22,7 @@ import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { TabFocus } from "../../../lib/tabs.ts";
 import { showToast } from "../../../lib/toast.ts";
-import { readLinkFavicon } from "../link-favicon-cache.ts";
+import { createLinkFaviconReader } from "../link-favicon-cache.ts";
 import {
   sidebarActivePanel,
   sidebarSidePanels,
@@ -269,19 +269,28 @@ function TypeMenu(props: SidebarRegionHeaderProps) {
   );
 }
 function HostedIcon(props: SidebarRegionHeaderProps & { tab: PanelHostedTab }) {
+  const favicons = createLinkFaviconReader(() => props.refreshHostedTabs());
+  onSettled(() => () => favicons.dispose());
   const favicon = () => {
     props.hostedRevision();
     if (props.tab.favicon) {
       return props.tab.favicon;
     }
     const hostname = props.tab.url ? URL.parse(props.tab.url)?.hostname : "";
-    return hostname && props.fetchFavicon
-      ? readLinkFavicon(hostname, props.fetchFavicon, props.refreshHostedTabs)
-      : null;
+    return hostname && props.fetchFavicon ? favicons.read(hostname, props.fetchFavicon) : null;
   };
   return (
     <Show when={favicon()} fallback={props.tab.icon}>
-      {(src) => <img class="tabstrip-tab__favicon" src={src()} alt="" />}
+      {(src) => (
+        <img
+          class="tabstrip-tab__favicon"
+          src={src()}
+          width="16"
+          height="16"
+          decoding="async"
+          alt=""
+        />
+      )}
     </Show>
   );
 }

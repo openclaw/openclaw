@@ -16,7 +16,7 @@
     ],
     "schemaVersions": {
       "state": 31,
-      "agent": 32
+      "agent": 33
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -1809,6 +1809,7 @@
     "check:static-import-sccs": "pnpm check:madge-import-cycles",
     "check:temp-path-guardrails": "node --import ./scripts/tsx.mjs scripts/check-temp-path-guardrails.ts",
     "check:wrapper-shadowing": "node --import ./scripts/tsx.mjs scripts/check-wrapper-shadowing.mts",
+    "check:test-lines-ratchet": "node --import ./scripts/tsx.mjs scripts/check-test-lines-ratchet.mts",
     "check:test-mock-exports": "node --import ./scripts/tsx.mjs scripts/check-test-mock-exports.mts",
     "check:test-timeout-race-ratchet": "node --import ./scripts/tsx.mjs scripts/check-test-timeout-race-ratchet.mts",
     "check:test-types": "pnpm tsgo:test",
@@ -2356,7 +2357,7 @@
     "@modelcontextprotocol/server": "2.3.1",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.26.11",
+    "@openclaw/fs-safe": "0.26.13",
     "@openclaw/proc-safe": "0.4.2",
     "@openclaw/proxyline": "0.4.0",
     "@opentelemetry/semantic-conventions": "1.43.0",

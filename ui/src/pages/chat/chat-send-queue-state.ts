@@ -1,4 +1,8 @@
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
+import {
+  isGatewayRestartUnavailableError,
+  isGatewaySuspendUnavailableError,
+} from "../../../../packages/gateway-protocol/src/restart-unavailable.ts";
 import { GatewayPayloadLimitError, GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../i18n/locales/en-chat-message-metadata.ts";
@@ -52,9 +56,11 @@ import { hasDirectSessionRun, isChatBusy } from "./run-lifecycle.ts";
 registerChatMessageMetadataEnglish();
 
 export function reconnectSafeQueuedSendState(
-  host: Pick<ChatHost, "client" | "connected">,
+  host: Pick<ChatHost, "client" | "connected" | "gatewayWorkPaused">,
 ): "waiting-idle" | "waiting-reconnect" {
-  return host.connected && host.client ? "waiting-idle" : "waiting-reconnect";
+  return host.connected && host.client && !host.gatewayWorkPaused
+    ? "waiting-idle"
+    : "waiting-reconnect";
 }
 
 export function resolveQueuedChatLeaf(
@@ -201,6 +207,7 @@ export function canSendVolatileQueueItem(
 ): boolean {
   return (
     host.connected &&
+    !host.gatewayWorkPaused &&
     Boolean(host.client) &&
     !host.chatLoading &&
     !isInitialChatHistoryUnavailable(host) &&
@@ -306,10 +313,12 @@ export function settleQueuedChatSendFailure(
       reportFailure(restore ? error : OFFLINE_QUEUE_STORAGE_ERROR);
       return restore ? "failed" : "pending";
     }
+    const awaitingGateway =
+      isGatewayRestartUnavailableError(err) || isGatewaySuspendUnavailableError(err);
     const waiting = updateQueuedMessage(host, id, (item) => ({
       ...item,
       ...rollbackAttempt,
-      sendError: error,
+      sendError: awaitingGateway ? undefined : error,
       sendState: "waiting-reconnect",
     }));
     if (!waiting) {
@@ -324,7 +333,7 @@ export function settleQueuedChatSendFailure(
       reportFailure(OFFLINE_QUEUE_STORAGE_ERROR);
       return restore ? "failed" : "pending";
     }
-    if (visibleSessionMatches(host, sessionKey, prepared.agentId)) {
+    if (!awaitingGateway && visibleSessionMatches(host, sessionKey, prepared.agentId)) {
       setChatError(
         host,
         retryDelayMs === null
