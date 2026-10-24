@@ -63,6 +63,28 @@ export function throwSqliteLifecycleErrors(errors: unknown[], message: string): 
   }
 }
 
+/** Settle an accepted operation and its close, preserving failures in that order. */
+export async function runWithSqliteAsyncCleanup<T>(
+  resource: { close(): unknown },
+  message: string,
+  operation: () => T | Promise<T>,
+): Promise<T> {
+  const errors: unknown[] = [];
+  try {
+    return await operation();
+  } catch (error) {
+    errors.push(error);
+    throw error;
+  } finally {
+    try {
+      await resource.close();
+    } catch (error) {
+      errors.push(error);
+    }
+    throwSqliteLifecycleErrors(errors, message);
+  }
+}
+
 /** Settle a synchronous SQLite operation and preserve both operation and cleanup failures. */
 export function runWithSqliteCleanup<T>(
   resource: { release: () => void },

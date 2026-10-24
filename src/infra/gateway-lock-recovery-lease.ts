@@ -8,7 +8,7 @@ import {
 import { gatewayOwnerKey, decodeGatewayOwnerLease } from "./gateway-owner-lease.read.js";
 import type { StateDatabaseSchemaLease } from "./gateway-state-owner.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
-import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
+import { runWithSqliteAsyncCleanup } from "./sqlite-lifecycle-errors.js";
 import { prepareSqliteReadOnlyLocation } from "./sqlite-snapshot-source.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
@@ -28,29 +28,26 @@ export async function inspectGatewayRecoveryLease(
     allowLiveOwner: true,
     preserveSourceArtifacts: true,
   });
-  let result: RecoveryLease | null = null;
-  const errors: unknown[] = [];
-  try {
-    const db = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
-    try {
-      result = tableExists(db, "state_leases")
-        ? (readOpenClawStateLease(db, gatewayOwnerKey) ?? null)
-        : null;
-    } finally {
-      db.close();
-    }
-  } catch (error) {
-    errors.push(error);
-  }
-  try {
-    if (!(await snapshot.cleanupAsync())) {
-      errors.push(new Error("Gateway recovery inspection snapshot cleanup did not finish."));
-    }
-  } catch (error) {
-    errors.push(error);
-  }
-  throwSqliteLifecycleErrors(errors, "Gateway recovery inspection or cleanup failed.");
-  return result;
+  return runWithSqliteAsyncCleanup(
+    {
+      async close() {
+        if (!(await snapshot.cleanupAsync())) {
+          throw new Error("Gateway recovery inspection snapshot cleanup did not finish.");
+        }
+      },
+    },
+    "Gateway recovery inspection or cleanup failed.",
+    () => {
+      const db = openNodeSqliteDatabase(snapshot.location, { readOnly: true });
+      try {
+        return tableExists(db, "state_leases")
+          ? (readOpenClawStateLease(db, gatewayOwnerKey) ?? null)
+          : null;
+      } finally {
+        db.close();
+      }
+    },
+  );
 }
 
 export function assertGatewayRecoveryLeaseNotLive(lease: RecoveryLease | null): void {

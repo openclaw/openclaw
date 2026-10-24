@@ -1,5 +1,8 @@
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
+import {
+  runWithSqliteAsyncCleanup,
+  throwSqliteLifecycleErrors,
+} from "../infra/sqlite-lifecycle-errors.js";
 import { SqliteWorkerError, isSqliteWorkerStoreAvailable } from "../infra/sqlite-worker-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { captureOpenClawDatabaseMaintenanceResource } from "./openclaw-state-db-async-lifecycle.js";
@@ -75,18 +78,11 @@ export function retainOpenClawStateWorkerLease(
     retirement ??= (async () => {
       await admitted.promise.catch(() => undefined);
       released.resolve();
-      const errors: unknown[] = [];
-      try {
-        await retained;
-      } catch (error) {
-        errors.push(error);
-      }
-      try {
-        await releaseOperation?.();
-      } catch (error) {
-        errors.push(error);
-      }
-      throwSqliteLifecycleErrors(errors, "Shared-state worker lease retirement failed");
+      await runWithSqliteAsyncCleanup(
+        { close: () => releaseOperation?.() },
+        "Shared-state worker lease retirement failed",
+        () => retained,
+      );
     })();
     void retirement.catch(() => undefined);
     return retirement;
