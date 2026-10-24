@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,11 +19,13 @@ import {
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { journalOwner } from "./placement-suite.test-support.js";
 import {
   advancePlacementFixtureToActive,
   seedAttachedPlacementEnvironment,
 } from "./placement-test-fixtures.js";
 import { deriveEnvironmentIntent } from "./service-contract.js";
+import { workspaceJournal } from "./workspace-manifest-fixtures.test-support.js";
 
 describe("worker placement dispatch", () => {
   let root: string;
@@ -748,23 +749,10 @@ describe("worker placement dispatch", () => {
       return;
     }
     await placementStore.beginWorkspaceReconciliation(
-      {
-        sessionId: active.sessionId,
-        environmentId: active.environmentId,
-        ownerEpoch: active.activeOwnerEpoch,
-        placementGeneration: active.generation,
-      },
-      {
-        version: 1,
+      journalOwner(active),
+      workspaceJournal(active.workspaceBaseManifestRef, harness.reconciledManifestRef, {
         temporaryNonce: "f".repeat(32),
-        baseManifestRef: active.workspaceBaseManifestRef,
-        currentManifestRef: harness.reconciledManifestRef,
-        baseEntries: [],
-        appliedEntries: [],
-        baseTree: "f".repeat(40),
-        basePackSha256: createHash("sha256").update("").digest("hex"),
-        basePack: Buffer.alloc(0),
-      },
+      }),
     );
     harness.markEnvironmentDestroyed();
     harness.log.length = 0;

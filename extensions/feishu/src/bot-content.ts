@@ -8,10 +8,20 @@ import type { FeishuMessageEvent } from "./event-types.js";
 import { normalizeFeishuExternalKey } from "./external-keys.js";
 import { parseInteractiveCardContent } from "./interactive-message-content.js";
 import { saveMessageResourceFeishu } from "./media.js";
-import { isFeishuBroadcastMention } from "./mention.js";
+import {
+  extractMentionTargets,
+  isFeishuBroadcastMention,
+  isMentionForwardRequest,
+  normalizeMentions,
+} from "./mention.js";
 import { formatFeishuMediaContent } from "./message-content.js";
 import { parsePostContent } from "./post.js";
-import type { FeishuChatType, FeishuConfig, FeishuMediaInfo } from "./types.js";
+import type {
+  FeishuChatType,
+  FeishuConfig,
+  FeishuMediaInfo,
+  FeishuMessageContext,
+} from "./types.js";
 
 type FeishuMessageLike = {
   message: Pick<FeishuMessageEvent["message"], "content" | "message_type" | "mentions">;
@@ -68,6 +78,58 @@ export function resolveFeishuGroupSession(params: {
     replyInThread,
     threadReply,
   };
+}
+
+export function parseFeishuMessageEvent(
+  event: FeishuMessageEvent,
+  botOpenId?: string,
+  preparedContent?: string,
+): FeishuMessageContext {
+  const mentionedBot = checkBotMentioned(event, botOpenId);
+  const hasAnyMention = (event.message.mentions?.length ?? 0) > 0;
+  // Strip bot addressing for commands (#35994); debounced content already expanded
+  // each message's own keys, so never reinterpret placeholder-like display names.
+  const content =
+    preparedContent ??
+    normalizeMentions(
+      parseMessageContent(event.message.content, event.message.message_type),
+      event.message.mentions,
+      botOpenId,
+    );
+  const senderOpenId = event.sender.sender_id.open_id?.trim();
+  const senderUserId = event.sender.sender_id.user_id?.trim();
+  const senderFallbackId = senderOpenId || senderUserId || "";
+
+  const ctx: FeishuMessageContext = {
+    chatId: event.message.chat_id,
+    messageId: event.message.message_id,
+    replyTargetMessageId: event.message.reply_target_message_id?.trim() || undefined,
+    typingTargetMessageId: event.message.typing_target_message_id?.trim() || undefined,
+    suppressReplyTarget: event.message.suppress_reply_target === true,
+    senderId: senderUserId || senderOpenId || "",
+    // Keep the historical field name, but fall back to user_id when open_id is unavailable
+    // (common in some mobile app deliveries).
+    senderOpenId: senderFallbackId,
+    senderType: event.sender.sender_type === "bot" ? "bot" : "user",
+    chatType: event.message.chat_type,
+    mentionedBot,
+    hasAnyMention,
+    rootId: event.message.root_id || undefined,
+    parentId: event.message.parent_id || undefined,
+    threadId: event.message.thread_id || undefined,
+    content,
+    contentType: event.message.message_type,
+  };
+
+  const mentionForwardBotOpenId = botOpenId?.trim();
+  if (mentionForwardBotOpenId && isMentionForwardRequest(event, mentionForwardBotOpenId)) {
+    const mentionTargets = extractMentionTargets(event, mentionForwardBotOpenId);
+    if (mentionTargets.length > 0) {
+      ctx.mentionTargets = mentionTargets;
+    }
+  }
+
+  return ctx;
 }
 
 export function parseMessageContent(content: string, messageType: string): string {

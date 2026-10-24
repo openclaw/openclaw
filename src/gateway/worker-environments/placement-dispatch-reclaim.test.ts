@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 import { beforeEach, describe, expect, vi } from "vitest";
 import { createCommandTest } from "../../../test/helpers/command-fixture.js";
@@ -20,7 +19,9 @@ import {
 import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerPlacementMoveService } from "./placement-move-service.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import { journalOwner } from "./placement-suite.test-support.js";
 import { prepareSessionWorkerPlacementStop } from "./session-placement-lifecycle.js";
+import { workspaceJournal } from "./workspace-manifest-fixtures.test-support.js";
 import * as workspaceResultStaging from "./workspace-result-staging.js";
 
 const tempDirs = useStateDatabaseTempDirs();
@@ -679,23 +680,12 @@ describe("worker placement dispatch reclaim", () => {
 
       const basePack = Buffer.from("retirement workspace base pack");
       await placementStore.beginWorkspaceReconciliation(
-        {
-          sessionId: active.sessionId,
-          environmentId: active.environmentId,
-          ownerEpoch: active.activeOwnerEpoch,
-          placementGeneration: active.generation,
-        },
-        {
-          version: 1,
+        journalOwner(active),
+        workspaceJournal(active.workspaceBaseManifestRef, `sha256:${"d".repeat(64)}`, {
           temporaryNonce: "c".repeat(32),
-          baseManifestRef: active.workspaceBaseManifestRef,
-          currentManifestRef: `sha256:${"d".repeat(64)}`,
-          baseEntries: [],
-          appliedEntries: [],
           baseTree: "e".repeat(40),
-          basePackSha256: createHash("sha256").update(basePack).digest("hex"),
           basePack,
-        },
+        }),
       );
       const draining = await placementStore.startDrain({
         sessionId: active.sessionId,

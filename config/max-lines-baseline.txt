@@ -55,7 +55,6 @@ extensions/feishu/src/outbound.test.ts
 extensions/feishu/src/outbound.ts
 extensions/feishu/src/reply-dispatcher.test.ts
 extensions/feishu/src/reply-dispatcher.ts
-extensions/feishu/src/streaming-card.test.ts
 extensions/google-meet/index.test.ts
 extensions/google/realtime-voice-provider.test.ts
 extensions/google/realtime-voice-provider.ts
@@ -184,7 +183,6 @@ src/agents/embedded-agent-runner/compact.hooks.test.ts
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts
 src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts
 src/agents/embedded-agent-runner/runs.ts
-src/agents/embedded-agent-runner/tool-result-truncation.test.ts
 src/agents/embedded-agent-runner/tool-result-truncation.ts
 src/agents/embedded-agent-subscribe.handlers.tools.test.ts
 src/agents/harness/native-hook-relay.test.ts

@@ -16,6 +16,7 @@ import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolveRuntimeWorkerThreadExecArgv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import type * as TelegramProcessingOutcome from "./bot-processing-outcome.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { asTelegramClientFetch, createTelegramClientFetch } from "./client-fetch.js";
@@ -278,14 +279,8 @@ async function withTempSpool<T>(fn: (stateDir: string) => Promise<T>): Promise<T
 }
 
 async function listen(server: Server) {
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected a loopback Bot API listener");
-  }
-  return `http://127.0.0.1:${address.port}`;
+  const port = await listenOnLoopback(server);
+  return `http://127.0.0.1:${port}`;
 }
 
 async function closeServer(server: Server) {
@@ -1136,10 +1131,7 @@ describe("TelegramPollingSession", () => {
       const createTelegramTransport = vi.fn(() => replacement);
       createTelegramBotMock.mockReturnValue(makeIsolatedBot());
 
-      let firstWorkerDone: (() => void) | undefined;
-      const firstWorkerTask = new Promise<void>((resolve) => {
-        firstWorkerDone = resolve;
-      });
+      const { promise: firstWorkerTask, resolve: firstWorkerDone } = createDeferred<void>();
       const firstWorkerStop = vi.fn(async () => {
         firstWorkerDone?.();
       });

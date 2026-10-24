@@ -1,6 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 /** Admitted parent, worker, and registered spawn fixtures shared by recursive boundary proofs. */
 import { expect, vi, type Mock } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader } from "../../../config/config.js";
 import {
   appendTranscriptMessage,
@@ -44,8 +45,24 @@ import {
 } from "../../tools/gateway-caller-context.js";
 import { createSessionsSpawnTool } from "../../tools/sessions-spawn-tool.js";
 import { writeSubagentSessionEntry } from "../registry/subagent-registry.persistence.test-support.js";
+import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import { readBoundExecutionState } from "./subagent-spawn.production-boundary.diagnostics.test-support.js";
 import { testing as spawnTesting } from "./subagent-spawn.test-support.js";
+
+export function holdSpawnCapacity(groupId: string, runId: string): Promise<void> {
+  const started = createDeferred();
+  enqueueSwarmRun({
+    groupId,
+    runId,
+    maxConcurrent: 1,
+    activeRunIds: [],
+    start: async () => {
+      started.resolve();
+    },
+    onStartFailure: () => true,
+  });
+  return started.promise;
+}
 
 export async function recordSpawnBoundaryFinal(params: {
   storePath: string;

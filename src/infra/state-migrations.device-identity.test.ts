@@ -19,7 +19,6 @@ import {
 } from "./device-identity-legacy.js";
 import { readStoredDeviceIdentity } from "./device-identity-store.js";
 import { deriveDeviceIdFromPublicKey } from "./device-identity.js";
-import { acquireGatewayLock } from "./gateway-lock.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
@@ -31,6 +30,7 @@ import {
   detectLegacyDeviceIdentity,
   migrateLegacyDeviceIdentity,
 } from "./state-migrations.device-identity.js";
+import { withGatewayLockHeld } from "./state-migrations.gateway-lock.test-support.js";
 
 type MigrationDatabase = Pick<ClientCredentialDatabase, "device_auth_tokens" | "device_identities">;
 
@@ -533,22 +533,7 @@ describe("legacy device identity Doctor migration", () => {
   });
   it("requires exclusive state ownership", async () => {
     const sourcePath = await writeLegacy();
-    const gatewayLock = await acquireGatewayLock({
-      allowInTests: true,
-      env,
-      pollIntervalMs: 10,
-      port: 18_790,
-      timeoutMs: 100,
-    });
-    if (!gatewayLock) {
-      throw new Error("expected test Gateway lock");
-    }
-    let result: Awaited<ReturnType<typeof migrateLegacyDeviceIdentity>>;
-    try {
-      result = await migrate();
-    } finally {
-      await gatewayLock.release();
-    }
+    const result = await withGatewayLockHeld(env, 18_790, () => migrate());
     expect(result.warnings.join("\n")).toContain("OpenClaw state database is busy");
     expect(fs.existsSync(sourcePath)).toBe(true);
   });

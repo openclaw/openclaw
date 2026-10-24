@@ -32,7 +32,6 @@ description: Investigate request routing
 Handle the supplied task.
 `,
       );
-      cfg.session = { store: storePath };
       testState.agentConfig = cfg.agents!.defaults;
       const context = {
         getRuntimeConfig: () => cfg,

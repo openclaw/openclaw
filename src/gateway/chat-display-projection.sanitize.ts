@@ -15,6 +15,7 @@ import {
   readTerminalSourceReplyDeliveryMirror,
   resolveAssistantMessagePhase,
 } from "../shared/chat-message-content.js";
+import { findNativeToolMarkerTextBlocks } from "../shared/text/native-tool-marker.js";
 import {
   isToolHistoryBlockType,
   isToolResultHistoryBlockType,
@@ -138,10 +139,7 @@ function projectChatHistoryMediaBlock(entry: Record<string, unknown>, fact = fal
 }
 
 function projectChatHistoryAttachmentBlock(entry: Record<string, unknown>): boolean {
-  if (entry.type !== "attachment") {
-    return false;
-  }
-  const attachment = readRecord(entry.attachment);
+  const attachment = entry.type === "attachment" ? readRecord(entry.attachment) : undefined;
   if (!attachment) {
     return false;
   }
@@ -149,11 +147,9 @@ function projectChatHistoryAttachmentBlock(entry: Record<string, unknown>): bool
   for (const field of MEDIA_PRIVATE_FIELDS) {
     delete projected[field];
   }
-  const url = projectChatHistoryMediaReference(projected.url);
-  if (!url) {
+  projected.url = projectChatHistoryMediaReference(projected.url);
+  if (!projected.url) {
     delete projected.url;
-  } else {
-    projected.url = url;
   }
   entry.attachment = projected;
   return true;
@@ -463,9 +459,17 @@ export function sanitizeChatHistoryMessage(
   const prepared = prepareAssistantHistoryMessage(message);
   const entry = { ...(prepared as Record<string, unknown>) };
   let changed = prepared !== message;
+  const nativeToolMarkerBlocks = findNativeToolMarkerTextBlocks(message);
+  if (nativeToolMarkerBlocks.size && Array.isArray(entry.content)) {
+    entry.content = entry.content.map((block, index) =>
+      nativeToolMarkerBlocks.has(index) ? { ...readRecord(block), text: "" } : block,
+    );
+    changed = true;
+  }
   let truncated = false;
-  if ("providerReplay" in entry) {
+  if ("providerReplay" in entry || "openclawResponsesInputReplay" in entry) {
     delete entry.providerReplay;
+    delete entry.openclawResponsesInputReplay;
     changed = true;
   }
   const openClawMeta = readRecord(entry["__openclaw"]);
@@ -675,9 +679,7 @@ function hasAssistantMixedToolVisibleText(message: unknown): boolean {
     if (!entry) {
       continue;
     }
-    if (isToolHistoryBlockType(entry.type)) {
-      hasToolHistoryBlock = true;
-    }
+    hasToolHistoryBlock ||= isToolHistoryBlockType(entry.type);
     if (
       isAssistantTextContentType(entry.type) &&
       typeof entry.text === "string" &&

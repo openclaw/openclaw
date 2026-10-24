@@ -699,19 +699,12 @@ describe("Codex app-server terminal settlement", () => {
             }),
           ]);
           if (termination === "timeout") {
-            expect(assistantRows[0]).toMatchObject({
-              message: {
-                __openclaw: {
-                  settlementWarning: expect.objectContaining({
-                    timeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
-                  }),
-                },
-              },
-            });
+            expect(assistantRows[0]).toHaveProperty(
+              "message.__openclaw.settlementWarning.timeoutMs",
+              TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
+            );
             if (queuedNetworkResult) {
-              expect(assistantRows[0]).toMatchObject({
-                message: { __openclaw: { turnTainted: true } },
-              });
+              expect(assistantRows[0]).toHaveProperty("message.__openclaw.turnTainted", true);
             }
           }
           if (boundary === "publication") {

@@ -14,6 +14,7 @@ import {
 import type { ChatAttachmentControlsProps } from "./components/chat-attachment-controls.types.ts";
 import { AttachmentPreview } from "./components/chat-attachments.tsx";
 import { ChatGoal } from "./components/chat-composer-goal.tsx";
+import { makeCapabilities } from "./components/chat-composer-menu.test-support.ts";
 import { ComposerMenu } from "./components/chat-composer-menu.tsx";
 import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { resetChatComposerState } from "./components/chat-composer-state.ts";
@@ -122,7 +123,7 @@ describe("composer overflow presentation", () => {
       container.className = "";
       container.style.cssText = `position: fixed; bottom: 24px; left: 16px; width: ${Math.min(width - 32, 760)}px`;
       const props = createComposerProps({
-        capabilityMenu: {
+        capabilityMenu: makeCapabilities({
           basePath: "",
           skills: [
             "apple-notes",
@@ -137,20 +138,7 @@ describe("composer overflow presentation", () => {
             baseEnabled: false,
             missingDeps: true,
           })),
-          skillsRead: null,
-          mcpServers: [],
-          toolsEffectiveResult: null,
-          toolsEffectiveLoading: false,
-          toolsEffectiveError: false,
-          toolAccessMutationBlockedReason: null,
-          webSearchBaseEnabled: true,
-          mutationBlockedReason: null,
-          canAdmin: true,
-          adminBlockedReason: null,
-          onLoadSkills: vi.fn(),
-          onPatchToolOverrides: vi.fn(),
-          onNavigate: vi.fn(),
-        },
+        }),
       });
       drawComposer(props);
       await page

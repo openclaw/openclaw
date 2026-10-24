@@ -2,6 +2,7 @@
 import http from "node:http";
 import https from "node:https";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { captureEnv } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
@@ -30,9 +31,7 @@ beforeEach(() => {
 });
 
 async function withIsolatedNoProxyEnv(fn: () => Promise<void>) {
-  const origNoProxy = process.env.NO_PROXY;
-  const origNoProxyLower = process.env.no_proxy;
-  const origHttpProxy = process.env.HTTP_PROXY;
+  const env = captureEnv(["HTTP_PROXY", "NO_PROXY", "no_proxy"]);
   delete process.env.NO_PROXY;
   delete process.env.no_proxy;
   process.env.HTTP_PROXY = "http://proxy:8080";
@@ -40,21 +39,7 @@ async function withIsolatedNoProxyEnv(fn: () => Promise<void>) {
   try {
     await fn();
   } finally {
-    if (origHttpProxy !== undefined) {
-      process.env.HTTP_PROXY = origHttpProxy;
-    } else {
-      delete process.env.HTTP_PROXY;
-    }
-    if (origNoProxy !== undefined) {
-      process.env.NO_PROXY = origNoProxy;
-    } else {
-      delete process.env.NO_PROXY;
-    }
-    if (origNoProxyLower !== undefined) {
-      process.env.no_proxy = origNoProxyLower;
-    } else {
-      delete process.env.no_proxy;
-    }
+    env.restore();
   }
 }
 
@@ -91,23 +76,14 @@ describe("cdp-proxy-bypass", () => {
   });
 
   describe("withNoProxyForCdpUrl loopback", () => {
-    const saved: Record<string, string | undefined> = {};
-    const vars = ["HTTP_PROXY", "NO_PROXY", "no_proxy"];
+    let env: ReturnType<typeof captureEnv>;
 
     beforeEach(() => {
-      for (const v of vars) {
-        saved[v] = process.env[v];
-      }
+      env = captureEnv(["HTTP_PROXY", "NO_PROXY", "no_proxy"]);
     });
 
     afterEach(() => {
-      for (const v of vars) {
-        if (saved[v] !== undefined) {
-          process.env[v] = saved[v];
-        } else {
-          delete process.env[v];
-        }
-      }
+      env.restore();
     });
 
     it("skips when no proxy env is set", async () => {

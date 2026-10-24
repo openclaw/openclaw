@@ -9,6 +9,7 @@ import { getSessionMcpRuntimeTestManager } from "../../agents/agent-bundle-mcp-m
 import { waitForSessionMaintenance } from "../../agents/session-maintenance/coordinator.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAssistantMessageFixture } from "../../agents/test-helpers/assistant-message-fixtures.js";
+import { createUsageFixture } from "../../agents/test-helpers/usage-fixtures.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../../config/sessions.js";
 import {
@@ -132,14 +133,7 @@ it("answers through a timed-out compaction summary and does not re-run it next t
             content: [{ type: "text", text: `Earlier answer ${turn}.` }],
             stopReason: "stop",
             errorMessage: undefined,
-            usage: {
-              input: 30_000,
-              output: 5,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 30_005,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
+            usage: createUsageFixture(30_000, 5, 30_005),
           }),
         );
       }

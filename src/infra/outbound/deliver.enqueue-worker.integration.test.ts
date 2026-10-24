@@ -19,11 +19,11 @@ import {
   useOutboundFixture,
 } from "./deliver.custody.test-support.js";
 import { drainMatrixReconnect } from "./deliver.queue-integration.test-support.js";
-import { holdEnqueueReply } from "./delivery-queue-enqueue.worker.test-support.js";
 import { DELIVERY_QUEUE_MEDIA_STAGING_QUEUE_NAME } from "./delivery-queue-namespaces.js";
 import { StableDeliveryPreparationLostError } from "./delivery-queue-preparation.js";
 import { drainPendingDeliveriesCore, recoverPendingDeliveries } from "./delivery-queue-recovery.js";
 import * as queueStorage from "./delivery-queue-storage.js";
+import { holdEnqueueReply } from "./delivery-queue-worker-reply.test-support.js";
 import {
   createRecoveryLog,
   loadPendingDeliveries,

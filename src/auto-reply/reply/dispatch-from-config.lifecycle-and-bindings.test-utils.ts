@@ -54,7 +54,12 @@ import {
 } from "./dispatch-from-config.test-support.js";
 import { withDispatchProcessedOutcomeSink } from "./dispatch-processed-outcome.js";
 import { finalizeInboundContextForSdk } from "./inbound-context.js";
-import { buildTestCtx } from "./test-ctx.js";
+import {
+  buildTestCtx,
+  createDiscordPluginBindingCtx,
+  createRemoteImessageMediaCtx,
+  createRoutedTestCtx,
+} from "./test-ctx.js";
 
 function mockPendingPluginClaim(params: {
   bindingId: string;
@@ -101,13 +106,7 @@ describe("dispatchReplyFromConfig", () => {
     hookMocks.runner.runInboundClaim.mockResolvedValue({ handled: true } as never);
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "telegram",
-      Surface: "telegram",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:-10099",
-      To: "telegram:-10099",
-      AccountId: "default",
+    const ctx = createRoutedTestCtx("telegram", "telegram:-10099", {
       SenderId: "user-9",
       SenderUsername: "ada",
       MessageThreadId: 77,
@@ -782,24 +781,10 @@ describe("dispatchReplyFromConfig", () => {
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:channel:1481858418548412579",
-      To: "discord:channel:1481858418548412579",
-      AccountId: "default",
-      SenderId: "user-9",
-      SenderUsername: "ada",
+    const ctx = createDiscordPluginBindingCtx({
       OwnerAllowFrom: ["user-9"],
       GatewayClientScopes: ["operator.write"],
-      CommandAuthorized: true,
-      WasMentioned: false,
-      CommandBody: "who are you",
-      RawBody: "who are you",
-      Body: "who are you",
       MessageSid: "msg-claim-plugin-1",
-      SessionKey: "agent:main:discord:channel:1481858418548412579",
     });
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
@@ -884,13 +869,7 @@ describe("dispatchReplyFromConfig", () => {
       pluginRoot: "/plugins/test-plugin",
     });
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:channel:null-rejection",
-      To: "discord:channel:null-rejection",
-      AccountId: "default",
+    const ctx = createRoutedTestCtx("discord", "discord:channel:null-rejection", {
       Body: "keep the rejection",
       MessageSid: "msg-claim-null-rejection",
       SessionKey: "agent:main:discord:channel:null-rejection",
@@ -1547,24 +1526,11 @@ describe("dispatchReplyFromConfig", () => {
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "imessage",
-      Surface: "imessage",
-      OriginatingChannel: "imessage",
-      OriginatingTo: "imessage:chat:abc",
-      To: "imessage:chat:abc",
-      AccountId: "default",
-      SenderId: "user-9",
-      CommandAuthorized: true,
-      WasMentioned: false,
-      CommandBody: "what is this?",
-      RawBody: "what is this?",
-      Body: "what is this?",
-      MessageSid: "msg-claim-imessage-media",
-      SessionKey: "agent:main:imessage:direct:user",
-      media: [{ path: rawPath, url: rawPath, contentType: "image/jpeg" }],
-      MediaRemoteHost: "user@gateway-host",
-    });
+    const ctx = createRemoteImessageMediaCtx(
+      "imessage:chat:abc",
+      "msg-claim-imessage-media",
+      rawPath,
+    );
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
     const result = await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
@@ -1592,24 +1558,11 @@ describe("dispatchReplyFromConfig", () => {
     const rawPath = "/Users/demo/Library/Messages/Attachments/ab/cd/photo.jpg";
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "imessage",
-      Surface: "imessage",
-      OriginatingChannel: "imessage",
-      OriginatingTo: "imessage:chat:ordinary",
-      To: "imessage:chat:ordinary",
-      AccountId: "default",
-      SenderId: "user-9",
-      CommandAuthorized: true,
-      WasMentioned: false,
-      CommandBody: "what is this?",
-      RawBody: "what is this?",
-      Body: "what is this?",
-      MessageSid: "msg-ordinary-imessage-media",
-      SessionKey: "agent:main:imessage:direct:user",
-      media: [{ path: rawPath, url: rawPath, contentType: "image/jpeg" }],
-      MediaRemoteHost: "user@gateway-host",
-    });
+    const ctx = createRemoteImessageMediaCtx(
+      "imessage:chat:ordinary",
+      "msg-ordinary-imessage-media",
+      rawPath,
+    );
     const replyResolver = vi.fn(async (receivedCtx: MsgContext) => {
       expect(receivedCtx.media).toEqual([
         expect.objectContaining({ path: rawPath, url: rawPath, contentType: "image/jpeg" }),
@@ -1636,24 +1589,11 @@ describe("dispatchReplyFromConfig", () => {
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = finalizeInboundContextForSdk(
-      buildTestCtx({
-        Provider: "imessage",
-        Surface: "imessage",
-        OriginatingChannel: "imessage",
-        OriginatingTo: "imessage:chat:ordinary-hook",
-        To: "imessage:chat:ordinary-hook",
-        AccountId: "default",
-        SenderId: "user-9",
-        CommandAuthorized: true,
-        WasMentioned: false,
-        CommandBody: "what is this?",
-        RawBody: "what is this?",
-        Body: "what is this?",
-        MessageSid: "msg-ordinary-imessage-hook-media",
-        SessionKey: "agent:main:imessage:direct:user",
-        media: [{ path: rawPath, url: rawPath, contentType: "image/jpeg" }],
-        MediaRemoteHost: "user@gateway-host",
-      }),
+      createRemoteImessageMediaCtx(
+        "imessage:chat:ordinary-hook",
+        "msg-ordinary-imessage-hook-media",
+        rawPath,
+      ),
     );
     const replyResolver = vi.fn(async (receivedCtx: MsgContext) => {
       expect(receivedCtx.media).toEqual([
@@ -1777,13 +1717,7 @@ describe("dispatchReplyFromConfig", () => {
           : null,
     );
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "channel:1510164477642014740",
-      To: "channel:1510164477642014740",
-      AccountId: "default",
+    const ctx = createRoutedTestCtx("discord", "channel:1510164477642014740", {
       SenderId: "user-9",
       CommandAuthorized: true,
       WasMentioned: false,
@@ -1854,22 +1788,8 @@ describe("dispatchReplyFromConfig", () => {
     abortController.abort();
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:channel:1481858418548412579",
-      To: "discord:channel:1481858418548412579",
-      AccountId: "default",
-      SenderId: "user-9",
-      SenderUsername: "ada",
-      CommandAuthorized: true,
-      WasMentioned: false,
-      CommandBody: "who are you",
-      RawBody: "who are you",
-      Body: "who are you",
+    const ctx = createDiscordPluginBindingCtx({
       MessageSid: "msg-claim-plugin-aborted-1",
-      SessionKey: "agent:main:discord:channel:1481858418548412579",
     });
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 
@@ -1928,23 +1848,12 @@ describe("dispatchReplyFromConfig", () => {
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:channel:1481858418548412579",
-      To: "discord:channel:1481858418548412579",
-      AccountId: "default",
-      SenderId: "user-9",
-      SenderUsername: "ada",
-      CommandAuthorized: true,
-      WasMentioned: false,
+    const ctx = createDiscordPluginBindingCtx({
       CommandBody: "/codex detach",
       BodyForCommands: "/codex detach",
       RawBody: "/codex detach",
       Body: "/codex detach",
       MessageSid: "msg-claim-plugin-command-escape",
-      SessionKey: "agent:main:discord:channel:1481858418548412579",
     });
     const replyResolver = vi.fn(async () => ({ text: "detached" }) satisfies ReplyPayload);
 
@@ -1986,23 +1895,12 @@ describe("dispatchReplyFromConfig", () => {
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "discord",
-      Surface: "discord",
-      OriginatingChannel: "discord",
-      OriginatingTo: "discord:channel:1481858418548412579",
-      To: "discord:channel:1481858418548412579",
-      AccountId: "default",
-      SenderId: "user-9",
-      SenderUsername: "ada",
+    const ctx = createDiscordPluginBindingCtx({
       CommandSource: "text",
-      CommandAuthorized: true,
-      WasMentioned: false,
       CommandBody: "/notes keep this with the bound plugin",
       RawBody: "/notes keep this with the bound plugin",
       Body: "/notes keep this with the bound plugin",
       MessageSid: "msg-claim-plugin-command-unknown-slash",
-      SessionKey: "agent:main:discord:channel:1481858418548412579",
     });
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
 

@@ -2571,6 +2571,7 @@ src/shared/text/escape-markdown.ts
 src/shared/text/final-tags.ts
 src/shared/text/glm-arg-key-payload.ts
 src/shared/text/model-special-tokens.ts
+src/shared/text/native-tool-marker.ts
 src/shared/text/reasoning-tags.ts
 src/shared/text/tag-name-probe.ts
 src/shared/text/text-projection.ts
