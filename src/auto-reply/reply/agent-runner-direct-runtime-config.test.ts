@@ -62,6 +62,7 @@ const {
   runEmbeddedAgentMock: vi.fn(),
 }));
 
+// mock-isolation: keep provider execution fixture-controlled while exercising real reply admission.
 vi.mock("../../agents/embedded-agent.js", () => ({
   compactEmbeddedAgentSession: compactEmbeddedAgentSessionMock,
   runEmbeddedAgent: runEmbeddedAgentMock,
@@ -72,6 +73,7 @@ vi.mock("./agent-runner-utils.js", async (importOriginal) => ({
   resolveQueuedReplyExecutionConfig: resolveQueuedReplyExecutionConfigMock,
 }));
 
+// mock-isolation: drive preflight checkpoints without running compaction or memory flushes.
 vi.mock("./agent-runner-memory.js", () => ({
   runSessionCompactionIfNeeded: runSessionCompactionIfNeededMock,
   runMemoryFlushIfNeeded: runMemoryFlushIfNeededMock,
