@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
@@ -9,6 +10,7 @@ import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
 import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as stateSchemas from "../../infra/update-candidate-state.js";
+import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import { DoctorMaintenanceRefusalError } from "../../infra/update-doctor-result.js";
 import {
   createUpdateRun,
@@ -30,6 +32,7 @@ import { registerCurrentCoreRuntimeRefreshTests } from "./update-command-post-up
 import { finishUpdate } from "./update-command-post-update.js";
 import { successfulPluginUpdate, taskRecovery } from "./update-command-post-update.test-support.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
+import { inspectManagedGatewayServiceBeforeUpdate } from "./update-command-service-plan.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
@@ -38,6 +41,7 @@ const { revalidateManagedGatewayServiceAfterUpdate } = await vi.importActual<
 >("./update-command-service-revalidation.js");
 
 const mocks = vi.hoisted(() => ({
+  repair: vi.fn<typeof import("../../infra/update-repair-agent.js").runUpdateRepairLoop>(),
   rollback: vi.fn<typeof import("./update-command-rollback.js").rollbackFailedUpdate>(),
   restart: vi.fn<typeof import("./update-command-service.js").maybeRestartService>(),
   restartCommand:
@@ -59,6 +63,10 @@ vi.mock("../../daemon/schtasks-exec.js", () => ({
   execSchtasks: mocks.execSchtasks,
   execScheduledTaskEnabledChange: (taskName: string, enabled: boolean) =>
     mocks.execSchtasks(["/Change", "/TN", taskName, enabled ? "/ENABLE" : "/DISABLE"]),
+}));
+vi.mock("../../infra/update-repair-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/update-repair-agent.js")>()),
+  runUpdateRepairLoop: mocks.repair,
 }));
 vi.mock("./update-command-rollback.js", () => ({ rollbackFailedUpdate: mocks.rollback }));
 vi.mock("./progress.js", async (importOriginal) => ({
@@ -146,29 +154,6 @@ afterEach(() => {
 
 const fixture = (profile?: string) =>
   createPostUpdateRepairFixture(dirs.make("post-update-repair-"), profile);
-const { objectContaining: partial } = expect;
-
-function stoppedService(
-  root: string,
-  env: NodeJS.ProcessEnv,
-  managerUid?: number,
-): GatewayServiceState {
-  return {
-    installed: true,
-    loadState: { status: "loaded" },
-    running: false,
-    runtime: {
-      status: "stopped",
-      ...(managerUid === undefined ? {} : { systemd: { managerUid } }),
-    },
-    env,
-    command: { programArguments: ["node", path.join(root, "dist/entry.js"), "gateway"] },
-  };
-}
-
-function expectNoInferredRepair() {
-  expect(mocks.restartCommand).not.toHaveBeenCalled();
-}
 
 describe("post-activation failure settlement without inference", () => {
   beforeEach(async () => {
@@ -192,7 +177,14 @@ describe("post-activation failure settlement without inference", () => {
       .mockImplementation(verification.verifyUpdatedGateway);
     mocks.healthy = false;
     mocks.version = "2026.9.3";
-    mocks.readService.mockResolvedValue(stoppedService("/candidate", process.env));
+    mocks.readService.mockResolvedValue({
+      installed: true,
+      loadState: { status: "loaded" },
+      running: false,
+      runtime: { status: "stopped" },
+      env: process.env,
+      command: { programArguments: ["node", "/candidate/dist/entry.js", "gateway"] },
+    });
     mocks.converge.mockImplementation(async (params: { result: unknown }) => ({
       resultWithPostUpdate: params.result,
     }));
@@ -240,6 +232,7 @@ describe("post-activation failure settlement without inference", () => {
       const windowsRecovery = taskRecovery();
       params.preManagedServiceStop!.windowsTaskAutoStartRecovery = windowsRecovery;
       params.preManagedServiceStop!.stoppedAtMs = Date.now() - 90_000;
+      const complete = vi.spyOn(transaction, "complete");
       const observation =
         "Gateway readiness exceeded 90000ms; service running (PID 7376), waiting for Gateway listener. Gateway left starting.";
       mocks.restart.mockImplementationOnce(async ({ result, onVerified }) => {
@@ -280,10 +273,14 @@ describe("post-activation failure settlement without inference", () => {
       expect(classifyUpdateOutcome(result)).toBe(ready ? "succeeded" : "noop");
       expect(result.recovery).toBeUndefined();
 
+      expect(mocks.restart).toHaveBeenCalledOnce();
       expect(mocks.rollback).not.toHaveBeenCalled();
-      expectNoInferredRepair();
+      expect(mocks.repair).not.toHaveBeenCalled();
       expect(mocks.stop).not.toHaveBeenCalled();
+      expect(mocks.restartCommand).not.toHaveBeenCalled();
       expect(windowsRecovery.complete).toHaveBeenCalledWith(true);
+      expect(windowsRecovery.complete).not.toHaveBeenCalledWith(false);
+      expect(complete).toHaveBeenCalledTimes(ready ? 1 : 0);
       if (ready) {
         await expect(fs.stat(transaction.backupRoot)).rejects.toMatchObject({ code: "ENOENT" });
       } else {
@@ -298,13 +295,15 @@ describe("post-activation failure settlement without inference", () => {
       expect(recorded).toMatchObject({
         status: ready ? "succeeded" : "skipped",
         reason: ready ? null : reason,
+        phase: "finished",
+        finishedAtMs: expect.any(Number),
         confirmedAtMs: ready ? expect.any(Number) : null,
         downtimeMs: ready ? expect.any(Number) : null,
-        verification: { serviceRunning: true, settled: ready, readyz: ready },
+        verification: { serviceRunning: true, pid: 7376, settled: ready, readyz: ready },
       });
       if (!ready) {
         expect(recorded?.steps).toContainEqual(
-          partial({ step: "warning:gateway verification", detail: observation }),
+          expect.objectContaining({ step: "warning:gateway verification", detail: observation }),
         );
         expect(recorded?.origin.nextAction).not.toContain("Keep the gateway stopped");
         if (outcome === "still-starting" && recorded) {
@@ -322,23 +321,174 @@ describe("post-activation failure settlement without inference", () => {
     mocks,
   });
 
-  it("records a skipped rollback when no previous package was retained", async () => {
-    const params = fixture();
-    const root = dirs.make("rollback-unavailable-");
-    await writeOpenClawPackageFixture(root, "2026.9.3");
-    params.result.root = root;
-    params.result.mode = "git";
-    params.rollbackBlockedReason = undefined;
-    params.schemaVersions = [];
-    const run = params.opts.run!;
-    await expect(finishUpdate(params)).rejects.toMatchObject({
-      result: { status: "error", reason: "readyz-unhealthy" },
-    });
-    expect(mocks.rollback).not.toHaveBeenCalled();
-    expect(getUpdateRun(run.runId, { env: run.env })?.steps).toContainEqual(
-      partial({ step: "package rollback", status: "skipped" }),
-    );
-  });
+  it.each([
+    { rollback: "blocked", restoredHealthy: false },
+    { rollback: "failed", restoredHealthy: false },
+    { rollback: "unavailable", restoredHealthy: false },
+    { rollback: "restored", restoredHealthy: false },
+    { rollback: "restored", restoredHealthy: true },
+  ])(
+    "settles $rollback rollback before allowing post-failure triage (restoredHealthy=$restoredHealthy)",
+    async ({ rollback, restoredHealthy }) => {
+      const params = fixture();
+      const installedRoot = dirs.make("repair-installed-runtime-");
+      await writeOpenClawPackageFixture(installedRoot, "2026.9.3");
+      params.result.root = installedRoot;
+      if (rollback === "unavailable") {
+        params.result.mode = "git";
+        params.rollbackBlockedReason = undefined;
+        params.schemaVersions = [];
+      }
+      if (rollback === "failed") {
+        params.rollbackBlockedReason = undefined;
+        params.packageTransaction = {
+          backupRoot: "/backup",
+          rollback: vi.fn(),
+          complete: vi.fn(async () => {}),
+        };
+      }
+      const run = params.opts.run!;
+      const completeRecovery = vi.fn(async () => {});
+      if (rollback === "restored") {
+        const candidateRoot = await fs.realpath(dirs.make("repair-candidate-runtime-"));
+        const previousRoot = await fs.realpath(dirs.make("repair-previous-runtime-"));
+        for (const [root, version] of [
+          [candidateRoot, "2026.9.3"],
+          [previousRoot, "2026.9.1"],
+        ] as const) {
+          await fs.writeFile(
+            path.join(root, "package.json"),
+            JSON.stringify({ name: "openclaw", type: "module", version }),
+          );
+          await fs.mkdir(path.join(root, "dist"), { recursive: true });
+          await fs.writeFile(path.join(root, "dist", "entry.js"), "// fixture entrypoint\n");
+        }
+        const worker = "dist/infra/update-candidate-state.worker.js";
+        await fs.mkdir(path.dirname(path.join(candidateRoot, worker)), { recursive: true });
+        await fs.writeFile(
+          path.join(candidateRoot, worker),
+          `import ${JSON.stringify(pathToFileURL(path.resolve(worker)).href)};\n`,
+        );
+        params.result.root = candidateRoot;
+        params.root = previousRoot;
+        const originalService: GatewayServiceState = {
+          installed: true,
+          loadState: { status: "loaded" },
+          running: false,
+          runtime: { status: "stopped", systemd: { managerUid: 2001 } },
+          env: run.env,
+          command: {
+            programArguments: ["node", path.join(previousRoot, "dist", "entry.js"), "gateway"],
+          },
+        };
+        const originalVerdict = await inspectManagedGatewayServiceBeforeUpdate({
+          root: previousRoot,
+          state: originalService,
+        });
+        expect(originalVerdict.kind).toBe("owned");
+        if (originalVerdict.kind !== "owned") {
+          throw new Error("Original service fixture must belong to the previous installation.");
+        }
+        mocks.readService.mockResolvedValue(originalService);
+        params.preManagedServiceStop = {
+          ...params.preManagedServiceStop!,
+          serviceManagerUid: 2001,
+          serviceUpdateVerdict: { ...originalVerdict, refreshDefinition: false },
+        };
+        const actual = await vi.importActual<typeof import("./update-command-rollback.js")>(
+          "./update-command-rollback.js",
+        );
+        mocks.rollback.mockImplementation(async (rollbackParams) => {
+          // Real rollback must inspect the restored generation, not the candidate-phase fixture.
+          mocks.revalidate.mockImplementation(revalidateManagedGatewayServiceAfterUpdate);
+          return await actual.rollbackFailedUpdate(rollbackParams);
+        });
+        mocks.stop.mockResolvedValue({
+          ...params.preManagedServiceStop!,
+          windowsTaskAutoStartRecovery: { ...taskRecovery(), complete: completeRecovery },
+        });
+        params.rollbackBlockedReason = undefined;
+        params.previousVerified = true;
+        params.schemaVersions = await readUpdateStateSchemaVersions({
+          stateDir: run.env.OPENCLAW_STATE_DIR!,
+          config: {},
+          env: run.env,
+        });
+        params.packageTransaction = {
+          backupRoot: "/backup",
+          complete: vi.fn(async () => {}),
+          rollback: async () => {
+            mocks.version = "2026.9.1";
+            mocks.healthy = restoredHealthy;
+            return {
+              name: "package rollback",
+              activePackageRoot: previousRoot,
+              command: "restore",
+              cwd: previousRoot,
+              exitCode: 0,
+              durationMs: 1,
+            };
+          },
+        };
+      }
+      const activeRoot = rollback === "restored" ? params.root : params.result.root;
+      const reason =
+        rollback === "blocked"
+          ? "state-migrated-no-rollback"
+          : rollback === "failed"
+            ? "source-rollback-failed"
+            : "readyz-unhealthy";
+      await expect(finishUpdate(params)).rejects.toMatchObject({
+        exitCode: 1,
+        result: {
+          status: "error",
+          reason,
+          root: activeRoot,
+          after: { version: rollback === "restored" ? "2026.9.1" : "2026.9.3" },
+        },
+      });
+      // Plugin writes remain in the original stopped interval and never rerun after restoration.
+      expect(mocks.converge).toHaveBeenCalledOnce();
+      expect(mocks.converge.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.restart.mock.invocationCallOrder[0]!,
+      );
+      expect(mocks.repair).not.toHaveBeenCalled();
+      if (rollback === "restored") {
+        expect(mocks.print.mock.calls.at(-1)?.[0]).toMatchObject({
+          recovery: {
+            serviceRestartSafe: true,
+            packageRollbackVerified: true,
+            version: "2026.9.1",
+            service: restoredHealthy ? "healthy" : "failed",
+            ...(!restoredHealthy ? { reason: "stopped-free" } : {}),
+          },
+        });
+        expect(completeRecovery).toHaveBeenCalled();
+        if (restoredHealthy) {
+          expect(completeRecovery).not.toHaveBeenCalledWith(false);
+        } else {
+          expect(completeRecovery).toHaveBeenCalledWith(false);
+        }
+      }
+      expect(mocks.rollback).toHaveBeenCalledTimes(rollback === "unavailable" ? 0 : 1);
+      if (rollback === "unavailable") {
+        expect(getUpdateRun(run.runId, { env: run.env })?.steps).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ step: "package rollback", status: "skipped" }),
+          ]),
+        );
+      }
+      expect(mocks.restart).toHaveBeenCalledTimes(rollback === "restored" ? 2 : 1);
+      expect(mocks.restartCommand).not.toHaveBeenCalled();
+      expect(getUpdateRun(run.runId, { env: run.env })).toMatchObject({
+        status: restoredHealthy ? "rolled-back" : "failed",
+        phase: "finished",
+        after: { version: rollback === "restored" ? "2026.9.1" : "2026.9.3" },
+        reason,
+        repair: [],
+      });
+    },
+  );
 
   it.each([true, false])(
     "settles Windows recovery after plugin activation without inference (healthy=%s)",
@@ -350,9 +500,15 @@ describe("post-activation failure settlement without inference", () => {
       const root = await fs.realpath(dirs.make("repair-plugin-windows-candidate-"));
       await writeOpenClawPackageFixture(root, "2026.9.3");
       const state: GatewayServiceState = {
-        ...stoppedService(root, run.env, 2001),
+        installed: true,
+        loadState: { status: "loaded" },
+        running: false,
+        runtime: { status: "stopped" },
+        env: run.env,
+        command: { programArguments: ["node", path.join(root, "dist/entry.js"), "gateway"] },
         definitionMutationCapability: { kind: "sealed", reason: "system-owned" },
       };
+      state.runtime!.systemd = { managerUid: 2001 };
       params.preManagedServiceStop!.serviceManagerUid = 2001;
       params.root = root;
       params.result.root = root;
@@ -380,13 +536,31 @@ describe("post-activation failure settlement without inference", () => {
         enabled = args.at(-1) === "/ENABLE";
         return { code: 0, stdout: "", stderr: "" };
       });
-      const originalRecovery = createWindowsTaskAutoStartRecovery({ serviceEnv: run.env });
+      const startTask = async () => {
+        const launched = await mocks.execSchtasks(["/Run", "/TN", "repair-plugin-fixture"]);
+        expect(launched.code).toBe(0);
+      };
+      const signals = ["SIGINT", "SIGTERM", "SIGBREAK"] as const;
+      const baselineListeners = signals.map((signal) => process.listenerCount(signal));
+      const recoveries: ReturnType<typeof createWindowsTaskAutoStartRecovery>[] = [];
+      const createRecovery = () => {
+        const recovery = createWindowsTaskAutoStartRecovery({ serviceEnv: run.env });
+        recoveries.push(recovery);
+        return recovery;
+      };
+      const originalRecovery = createRecovery();
       try {
         await originalRecovery.suspended;
         originalRecovery.beginMutation();
         params.preManagedServiceStop!.windowsTaskAutoStartRecovery = originalRecovery;
+        mocks.stop.mockImplementation(async () => {
+          const recovery = createRecovery();
+          await recovery.suspended;
+          mocks.healthy = false;
+          return { ...params.preManagedServiceStop!, windowsTaskAutoStartRecovery: recovery };
+        });
         mocks.restart.mockImplementation(async (restart) => {
-          expect((await mocks.execSchtasks(["/Run", "/TN", "repair-plugin-fixture"])).code).toBe(0);
+          await startTask();
           mocks.healthy = activated;
           recordUpdateRunPhase(run.runId, "verifying", undefined, { env: run.env });
           if (!mocks.healthy) {
@@ -402,6 +576,7 @@ describe("post-activation failure settlement without inference", () => {
             requireRunningService: true,
             onVerified: restart.onVerified,
           });
+          expect(verification, JSON.stringify(verification)).toMatchObject({ ok: activated });
           if (!verification.ok) {
             restart.onVerificationFailure?.(verification.summary);
           }
@@ -437,12 +612,16 @@ describe("post-activation failure settlement without inference", () => {
         await originalRecovery.restore();
         await originalRecovery.complete();
         expect(mocks.rollback).toHaveBeenCalledTimes(activated ? 0 : 1);
-        expectNoInferredRepair();
+        expect(mocks.repair).not.toHaveBeenCalled();
         expect(mocks.restart).toHaveBeenCalledOnce();
+        expect(mocks.restartCommand).not.toHaveBeenCalled();
         expect(mocks.stop).not.toHaveBeenCalled();
         expect(enabled).toBe(activated);
+        expect(signals.map((signal) => process.listenerCount(signal))).toEqual(baselineListeners);
       } finally {
-        await originalRecovery.complete(false);
+        for (const recovery of recoveries) {
+          await recovery.complete(false);
+        }
       }
     },
   );
@@ -454,7 +633,8 @@ describe("post-activation failure settlement without inference", () => {
       result: { status: "error", reason: "state-migrated-no-rollback" },
     });
     expect(mocks.restart).not.toHaveBeenCalled();
-    expectNoInferredRepair();
+    expect(mocks.restartCommand).not.toHaveBeenCalled();
+    expect(mocks.repair).not.toHaveBeenCalled();
     const run = params.opts.run!;
     expect(getUpdateRun(run.runId, { env: run.env })).toMatchObject({
       status: "failed",
@@ -751,7 +931,7 @@ describe("post-activation failure settlement without inference", () => {
         expect(failure.result.recovery, JSON.stringify(failure.result)).toEqual(
           untouched
             ? undefined
-            : partial(
+            : expect.objectContaining(
                 recovered
                   ? {
                       serviceRestartSafe: true,
@@ -789,12 +969,12 @@ describe("post-activation failure settlement without inference", () => {
         expect(report?.status).toBe("failed");
         if (receipt === "migration-verified") {
           expect(report?.steps).toContainEqual(
-            partial({ step: "package-backup-retention", exitCode: 1 }),
+            expect.objectContaining({ step: "package-backup-retention", exitCode: 1 }),
           );
         } else {
           expect(
             report?.steps.find((step) => step.step === "post-install verification")?.failureFacts,
-          ).toContainEqual(partial({ code: "authority-check-failed" }));
+          ).toContainEqual(expect.objectContaining({ code: "authority-check-failed" }));
         }
       }
       if (localVersionOnly && !recovered) {
