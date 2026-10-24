@@ -26,7 +26,6 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -35,10 +34,9 @@ import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { prepareMcpAppExtensionRuntime } from "../mcp-app-extension-runtime.js";
 import * as approvalStore from "../operator-approval-store.js";
 import { createGatewayAuxHandlers } from "../server-aux-handlers.js";
+import { createGatewayAuxHandlerTestParams } from "../server-aux-handlers.test-support.js";
 import { createGatewayBroadcaster } from "../server-broadcast.js";
 import { makeClient } from "../server-broadcast.test-helpers.js";
-import { SharedGatewaySessionGenerationState } from "../server-shared-auth-generation.js";
-import { createTestRuntimeSecretsActivator } from "../server-startup-config.test-support.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import { mcpAppHandlers } from "./mcp-app.js";
 import { appCatalog } from "./mcp-app.test-support.js";
@@ -287,25 +285,7 @@ function releaseViews() {
 
 beforeAll(async () => {
   state = await createOpenClawTestState({ label: "mcp-app-view-grants" });
-  aux = createGatewayAuxHandlers({
-    scheduler: createTestGatewayScheduler(),
-    log: {},
-    getNativeApprovalRouteCoordinator: () => undefined,
-    activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
-    sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
-      current: undefined,
-      required: null,
-    }),
-    resolveSharedGatewaySessionGenerationForConfig: () => undefined,
-    clients: [],
-    channelManager: {
-      startChannel: async () => new Map(),
-      stopChannel: async () => {},
-      isManuallyStopped: () => false,
-      resolveRuntimeAccountId: (_channel, accountId) => accountId,
-    },
-    logChannels: { info: () => {} },
-  });
+  aux = createGatewayAuxHandlers(createGatewayAuxHandlerTestParams());
 });
 
 beforeEach(() => {

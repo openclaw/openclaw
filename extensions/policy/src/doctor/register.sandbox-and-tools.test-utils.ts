@@ -1,20 +1,21 @@
 // Imported by register.test.ts to keep its mocked suite in one Vitest module graph.
-import { runDoctorLintChecks } from "openclaw/plugin-sdk/health";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { collectPolicyEvidence } from "../policy-state.js";
-import { registerPolicyDoctorChecks } from "./register.js";
 import {
   cfgWithPolicy,
+  createReleaseAgentPolicyConfig,
   cfgWithPolicyOverrides,
-  ctx,
-  runPolicyChecks,
+  cfgWithPolicySandbox,
+  runPolicyChecksFixture,
+  runGlobalPolicyDoctorFixture,
   setupPolicyDoctorTest,
   teardownPolicyDoctorTest,
-  writePolicyFixture,
 } from "./register.test-harness.js";
 
-function writeLoopbackOnlyPolicyFixture(): Promise<string> {
-  return writePolicyFixture({ gateway: { exposure: { allowNonLoopbackBind: false } } });
+function runLoopbackOnlyPolicyFixture(cfg: Parameters<typeof runGlobalPolicyDoctorFixture>[0]) {
+  return runGlobalPolicyDoctorFixture(cfg, {
+    gateway: { exposure: { allowNonLoopbackBind: false } },
+  });
 }
 
 describe("registerPolicyDoctorChecks", () => {
@@ -118,13 +119,14 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const configPath = await writePolicyFixture({
-      sandbox: {
-        browser: { requireCdpSourceRange: true },
+    const result = await runPolicyChecksFixture(
+      {
+        sandbox: {
+          browser: { requireCdpSourceRange: true },
+        },
       },
-    });
-
-    const result = await runPolicyChecks(ctx(configPath, cfg));
+      cfg,
+    );
 
     expect(result.findings).toContainEqual(
       expect.objectContaining({
@@ -135,33 +137,28 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports enabled container posture rules that the backend cannot observe", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            backend: "openshell",
-            docker: {
-              network: "host",
-              binds: ["/var/run/docker.sock:/var/run/docker.sock:rw"],
-              seccompProfile: "unconfined",
-            },
+    const cfg = cfgWithPolicySandbox({
+      mode: "all",
+      backend: "openshell",
+      docker: {
+        network: "host",
+        binds: ["/var/run/docker.sock:/var/run/docker.sock:rw"],
+        seccompProfile: "unconfined",
+      },
+    });
+    const result = await runPolicyChecksFixture(
+      {
+        sandbox: {
+          allowBackends: ["openshell"],
+          containers: {
+            denyHostNetwork: true,
+            denyContainerRuntimeSocketMounts: true,
+            denyUnconfinedProfiles: true,
           },
         },
       },
-    });
-    const configPath = await writePolicyFixture({
-      sandbox: {
-        allowBackends: ["openshell"],
-        containers: {
-          denyHostNetwork: true,
-          denyContainerRuntimeSocketMounts: true,
-          denyUnconfinedProfiles: true,
-        },
-      },
-    });
-
-    const result = await runPolicyChecks(ctx(configPath, cfg));
+      cfg,
+    );
     const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.sandboxPosture).toContainEqual(
@@ -206,34 +203,29 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("evaluates inherited container mounts for browser containers on non-Docker backends", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            backend: "openshell",
-            docker: {
-              binds: ["/var/run/docker.sock:/var/run/docker.sock:rw"],
-            },
-            browser: {
-              enabled: true,
-              cdpSourceRange: "172.21.0.1/32",
-            },
+    const cfg = cfgWithPolicySandbox({
+      mode: "all",
+      backend: "openshell",
+      docker: {
+        binds: ["/var/run/docker.sock:/var/run/docker.sock:rw"],
+      },
+      browser: {
+        enabled: true,
+        cdpSourceRange: "172.21.0.1/32",
+      },
+    });
+    const result = await runPolicyChecksFixture(
+      {
+        sandbox: {
+          allowBackends: ["openshell"],
+          containers: {
+            requireReadOnlyMounts: true,
+            denyContainerRuntimeSocketMounts: true,
           },
         },
       },
-    });
-    const configPath = await writePolicyFixture({
-      sandbox: {
-        allowBackends: ["openshell"],
-        containers: {
-          requireReadOnlyMounts: true,
-          denyContainerRuntimeSocketMounts: true,
-        },
-      },
-    });
-
-    const result = await runPolicyChecks(ctx(configPath, cfg));
+      cfg,
+    );
     const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.sandboxPosture).toContainEqual(
@@ -259,33 +251,28 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("normalizes mixed-case Docker backend before collecting container posture", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            backend: "Docker",
-            docker: {
-              network: "host",
-              binds: ["/var/run/docker.sock:/var/run/docker.sock:rw"],
-              seccompProfile: "unconfined",
-            },
+    const cfg = cfgWithPolicySandbox({
+      mode: "all",
+      backend: "Docker",
+      docker: {
+        network: "host",
+        binds: ["/var/run/docker.sock:/var/run/docker.sock:rw"],
+        seccompProfile: "unconfined",
+      },
+    });
+    const result = await runPolicyChecksFixture(
+      {
+        sandbox: {
+          allowBackends: ["docker"],
+          containers: {
+            denyHostNetwork: true,
+            denyContainerRuntimeSocketMounts: true,
+            denyUnconfinedProfiles: true,
           },
         },
       },
-    });
-    const configPath = await writePolicyFixture({
-      sandbox: {
-        allowBackends: ["docker"],
-        containers: {
-          denyHostNetwork: true,
-          denyContainerRuntimeSocketMounts: true,
-          denyUnconfinedProfiles: true,
-        },
-      },
-    });
-
-    const result = await runPolicyChecks(ctx(configPath, cfg));
+      cfg,
+    );
     const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.sandboxPosture).toEqual(
@@ -310,33 +297,28 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("evaluates Podman container posture without reporting it as unobservable", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            backend: "podman",
-            docker: {
-              network: "host",
-              binds: ["/run/podman/podman.sock:/run/podman/podman.sock:rw"],
-              seccompProfile: "unconfined",
-            },
+    const cfg = cfgWithPolicySandbox({
+      mode: "all",
+      backend: "podman",
+      docker: {
+        network: "host",
+        binds: ["/run/podman/podman.sock:/run/podman/podman.sock:rw"],
+        seccompProfile: "unconfined",
+      },
+    });
+    const result = await runPolicyChecksFixture(
+      {
+        sandbox: {
+          allowBackends: ["podman"],
+          containers: {
+            denyHostNetwork: true,
+            denyContainerRuntimeSocketMounts: true,
+            denyUnconfinedProfiles: true,
           },
         },
       },
-    });
-    const configPath = await writePolicyFixture({
-      sandbox: {
-        allowBackends: ["podman"],
-        containers: {
-          denyHostNetwork: true,
-          denyContainerRuntimeSocketMounts: true,
-          denyUnconfinedProfiles: true,
-        },
-      },
-    });
-
-    const result = await runPolicyChecks(ctx(configPath, cfg));
+      cfg,
+    );
 
     expect(result.findings).toEqual(
       expect.arrayContaining([
@@ -413,38 +395,33 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("accepts configured sandbox posture that matches policy", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            backend: "docker",
-            docker: {
-              network: "none",
-              binds: ["/data:/data:ro"],
-              seccompProfile: "runtime/default",
-            },
-            browser: { enabled: true, cdpSourceRange: "172.21.0.1/32" },
+    const cfg = cfgWithPolicySandbox({
+      mode: "all",
+      backend: "docker",
+      docker: {
+        network: "none",
+        binds: ["/data:/data:ro"],
+        seccompProfile: "runtime/default",
+      },
+      browser: { enabled: true, cdpSourceRange: "172.21.0.1/32" },
+    });
+    const result = await runPolicyChecksFixture(
+      {
+        sandbox: {
+          requireMode: ["all", "non-main"],
+          allowBackends: ["docker"],
+          containers: {
+            denyHostNetwork: true,
+            denyContainerNamespaceJoin: true,
+            requireReadOnlyMounts: true,
+            denyContainerRuntimeSocketMounts: true,
+            denyUnconfinedProfiles: true,
           },
+          browser: { requireCdpSourceRange: true },
         },
       },
-    });
-    const configPath = await writePolicyFixture({
-      sandbox: {
-        requireMode: ["all", "non-main"],
-        allowBackends: ["docker"],
-        containers: {
-          denyHostNetwork: true,
-          denyContainerNamespaceJoin: true,
-          requireReadOnlyMounts: true,
-          denyContainerRuntimeSocketMounts: true,
-          denyUnconfinedProfiles: true,
-        },
-        browser: { requireCdpSourceRange: true },
-      },
-    });
-
-    const result = await runPolicyChecks(ctx(configPath, cfg));
+      cfg,
+    );
 
     expect(result.findings).toEqual([]);
   });
@@ -458,21 +435,22 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const configPath = await writePolicyFixture({
-      sandbox: {
-        requireMode: ["all"],
-      },
-      scopes: {
-        sebby: {
-          agentIds: ["sebby"],
-          sandbox: {
-            allowBackends: ["docker"],
+    const result = await runPolicyChecksFixture(
+      {
+        sandbox: {
+          requireMode: ["all"],
+        },
+        scopes: {
+          sebby: {
+            agentIds: ["sebby"],
+            sandbox: {
+              allowBackends: ["docker"],
+            },
           },
         },
       },
-    });
-
-    const result = await runPolicyChecks(ctx(configPath, cfg));
+      cfg,
+    );
 
     expect(result.findings).toEqual(
       expect.arrayContaining([
@@ -504,19 +482,20 @@ describe("registerPolicyDoctorChecks", () => {
         entries: { sebby: { sandbox: { mode: "off" } } },
       },
     });
-    const configPath = await writePolicyFixture({
-      scopes: {
-        sebby: {
-          agentIds: ["sebby"],
-          channels: { allow: ["discord"] },
-          sandbox: {
-            requireMode: ["all"],
+    const result = await runPolicyChecksFixture(
+      {
+        scopes: {
+          sebby: {
+            agentIds: ["sebby"],
+            channels: { allow: ["discord"] },
+            sandbox: {
+              requireMode: ["all"],
+            },
           },
         },
       },
-    });
-
-    const result = await runPolicyChecks(ctx(configPath, cfg));
+      cfg,
+    );
 
     expect(result.findings).toContainEqual(
       expect.objectContaining({
@@ -535,37 +514,20 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports scoped container posture rules that a non-Docker agent group cannot observe", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            backend: "docker",
-            docker: {
-              network: "none",
-              binds: ["/workspace:/workspace:rw"],
+    const cfg = createReleaseAgentPolicyConfig();
+    const result = await runPolicyChecksFixture(
+      {
+        scopes: {
+          release: {
+            agentIds: ["release-agent"],
+            sandbox: {
+              containers: { requireReadOnlyMounts: true },
             },
           },
         },
-        entries: {
-          "release-agent": {
-            sandbox: { mode: "all", backend: "openshell" },
-          },
-        },
       },
-    });
-    const configPath = await writePolicyFixture({
-      scopes: {
-        release: {
-          agentIds: ["release-agent"],
-          sandbox: {
-            containers: { requireReadOnlyMounts: true },
-          },
-        },
-      },
-    });
-
-    const result = await runPolicyChecks(ctx(configPath, cfg));
+      cfg,
+    );
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -577,37 +539,20 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("allows scoped non-Docker agent groups when container posture rules are off", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      agents: {
-        defaults: {
-          sandbox: {
-            mode: "all",
-            backend: "docker",
-            docker: {
-              network: "none",
-              binds: ["/workspace:/workspace:rw"],
+    const cfg = createReleaseAgentPolicyConfig();
+    const result = await runPolicyChecksFixture(
+      {
+        scopes: {
+          release: {
+            agentIds: ["release-agent"],
+            sandbox: {
+              containers: { requireReadOnlyMounts: false },
             },
           },
         },
-        entries: {
-          "release-agent": {
-            sandbox: { mode: "all", backend: "openshell" },
-          },
-        },
       },
-    });
-    const configPath = await writePolicyFixture({
-      scopes: {
-        release: {
-          agentIds: ["release-agent"],
-          sandbox: {
-            containers: { requireReadOnlyMounts: false },
-          },
-        },
-      },
-    });
-
-    const result = await runPolicyChecks(ctx(configPath, cfg));
+      cfg,
+    );
 
     expect(result.findings).toEqual([]);
   });
@@ -629,19 +574,20 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const configPath = await writePolicyFixture({
-      scopes: {
-        release: {
-          agentIds: ["release-agent"],
-          sandbox: {
-            containers: { denyHostNetwork: true },
-            browser: { requireCdpSourceRange: true },
+    const result = await runPolicyChecksFixture(
+      {
+        scopes: {
+          release: {
+            agentIds: ["release-agent"],
+            sandbox: {
+              containers: { denyHostNetwork: true },
+              browser: { requireCdpSourceRange: true },
+            },
           },
         },
       },
-    });
-
-    const result = await runPolicyChecks(ctx(configPath, cfg));
+      cfg,
+    );
     const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.sandboxPosture).toEqual(
@@ -674,16 +620,17 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const configPath = await writePolicyFixture({
-      scopes: {
-        mainSandbox: {
-          agentIds: ["main"],
-          sandbox: { requireMode: ["all"] },
+    const result = await runPolicyChecksFixture(
+      {
+        scopes: {
+          mainSandbox: {
+            agentIds: ["main"],
+            sandbox: { requireMode: ["all"] },
+          },
         },
       },
-    });
-
-    const result = await runPolicyChecks(ctx(configPath, cfg));
+      cfg,
+    );
 
     expect(result.findings).toContainEqual(
       expect.objectContaining({
@@ -717,7 +664,7 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       tools: {
         profiles: { allow: ["messaging", "minimal"] },
         fs: { requireWorkspaceOnly: true },
@@ -730,9 +677,6 @@ describe("registerPolicyDoctorChecks", () => {
         denyTools: ["exec", "write", "edit", "apply_patch"],
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
     const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.toolPosture).toEqual(
@@ -817,7 +761,7 @@ describe("registerPolicyDoctorChecks", () => {
         elevated: { enabled: false },
       },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       tools: {
         profiles: { allow: ["messaging", "minimal"] },
         fs: { requireWorkspaceOnly: true },
@@ -831,9 +775,6 @@ describe("registerPolicyDoctorChecks", () => {
       },
     });
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
-
     expect(result.findings).toEqual([]);
   });
 
@@ -843,7 +784,7 @@ describe("registerPolicyDoctorChecks", () => {
         entries: { reviewer: { tools: { exec: { mode: "ask" } } } },
       },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       scopes: {
         reviewer: {
           agentIds: ["reviewer"],
@@ -856,9 +797,6 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual([]);
   });
@@ -875,7 +813,7 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       tools: {
         exec: { allowHosts: ["sandbox", "gateway"] },
       },
@@ -888,9 +826,6 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual(
       expect.arrayContaining([
@@ -924,7 +859,7 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       scopes: {
         sebby: {
           agentIds: ["sebby"],
@@ -934,9 +869,6 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual([]);
   });
@@ -951,7 +883,7 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       tools: {
         alsoAllow: { expected: ["read", "message"] },
       },
@@ -964,9 +896,6 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual(
       expect.arrayContaining([
@@ -1006,14 +935,11 @@ describe("registerPolicyDoctorChecks", () => {
     const cfg = cfgWithPolicyOverrides({
       tools: { alsoAllow: ["read"] },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       tools: {
         alsoAllow: { expected: [] },
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -1030,7 +956,7 @@ describe("registerPolicyDoctorChecks", () => {
         deny: ["exec", "apply_patch"],
       },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       tools: {
         exec: {
           allowSecurity: ["deny"],
@@ -1040,9 +966,6 @@ describe("registerPolicyDoctorChecks", () => {
         denyTools: ["bash", "apply-patch"],
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual(
       expect.arrayContaining([
@@ -1081,7 +1004,7 @@ describe("registerPolicyDoctorChecks", () => {
         ],
       },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       tools: {
         exec: {
           allowSecurity: ["full"],
@@ -1092,9 +1015,6 @@ describe("registerPolicyDoctorChecks", () => {
       },
     });
 
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
-
     expect(result.findings).toEqual([]);
   });
 
@@ -1104,14 +1024,11 @@ describe("registerPolicyDoctorChecks", () => {
         deny: ["web_*"],
       },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       tools: {
         denyTools: ["web_search"],
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual([]);
   });
@@ -1122,14 +1039,11 @@ describe("registerPolicyDoctorChecks", () => {
         deny: ["group:openclaw"],
       },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       tools: {
         denyTools: ["message"],
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
     const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.toolPosture).toContainEqual(
@@ -1158,14 +1072,11 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       tools: {
         elevated: { allow: false },
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
     const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.toolPosture).toContainEqual(
@@ -1181,14 +1092,11 @@ describe("registerPolicyDoctorChecks", () => {
 
   it("treats omitted tool profile as full posture for profile allow policy", async () => {
     const cfg = cfgWithPolicy();
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       tools: {
         profiles: { allow: ["messaging"] },
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -1205,7 +1113,7 @@ describe("registerPolicyDoctorChecks", () => {
         exec: { host: "sandbox" },
       },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       tools: {
         exec: {
           allowSecurity: ["deny"],
@@ -1213,9 +1121,6 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
     const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.toolPosture).toContainEqual(
@@ -1230,14 +1135,8 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("uses deny as the omitted exec security default for auto host when sandbox can apply", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      agents: {
-        defaults: {
-          sandbox: { mode: "all" },
-        },
-      },
-    });
-    const configPath = await writePolicyFixture({
+    const cfg = cfgWithPolicySandbox({ mode: "all" });
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       tools: {
         exec: {
           allowSecurity: ["deny"],
@@ -1245,9 +1144,6 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
     const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.toolPosture).toContainEqual(
@@ -1262,14 +1158,8 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("keeps omitted auto-host exec security full when sandbox is non-main only", async () => {
-    const cfg = cfgWithPolicyOverrides({
-      agents: {
-        defaults: {
-          sandbox: { mode: "non-main" },
-        },
-      },
-    });
-    const configPath = await writePolicyFixture({
+    const cfg = cfgWithPolicySandbox({ mode: "non-main" });
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       tools: {
         exec: {
           allowSecurity: ["deny"],
@@ -1277,9 +1167,6 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
     const evidence = collectPolicyEvidence(cfg);
 
     expect(evidence.toolPosture).toContainEqual(
@@ -1327,7 +1214,7 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       gateway: {
         exposure: {
           allowNonLoopbackBind: false,
@@ -1352,9 +1239,6 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual(
       expect.arrayContaining([
@@ -1422,16 +1306,13 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       gateway: {
         nodes: {
           denyCommands: ["system.run"],
         },
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual([]);
   });
@@ -1442,16 +1323,13 @@ describe("registerPolicyDoctorChecks", () => {
         nodes: {},
       },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       gateway: {
         nodes: {
           denyCommands: ["system.run"],
         },
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -1467,10 +1345,7 @@ describe("registerPolicyDoctorChecks", () => {
     const cfg = cfgWithPolicyOverrides({
       gateway: {},
     });
-    const configPath = await writeLoopbackOnlyPolicyFixture();
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+    const result = await runLoopbackOnlyPolicyFixture(cfg);
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -1488,10 +1363,7 @@ describe("registerPolicyDoctorChecks", () => {
         tailscale: { mode: "serve" },
       },
     });
-    const configPath = await writeLoopbackOnlyPolicyFixture();
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+    const result = await runLoopbackOnlyPolicyFixture(cfg);
 
     expect(result.findings).toEqual([]);
   });
@@ -1502,16 +1374,13 @@ describe("registerPolicyDoctorChecks", () => {
         tailscale: { mode: "serve", preserveFunnel: true },
       },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       gateway: {
         exposure: {
           allowTailscaleFunnel: false,
         },
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -1524,16 +1393,13 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports missing gateway rate limits when gateway config is omitted", async () => {
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfgWithPolicy(), {
       gateway: {
         auth: {
           requireExplicitRateLimit: true,
         },
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfgWithPolicy()));
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -1552,10 +1418,7 @@ describe("registerPolicyDoctorChecks", () => {
         customBindHost: "0.0.0.0",
       },
     });
-    const configPath = await writeLoopbackOnlyPolicyFixture();
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+    const result = await runLoopbackOnlyPolicyFixture(cfg);
 
     expect(result.findings).toEqual([]);
   });
@@ -1567,10 +1430,7 @@ describe("registerPolicyDoctorChecks", () => {
         customBindHost: "127.0.0.1",
       },
     });
-    const configPath = await writeLoopbackOnlyPolicyFixture();
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+    const result = await runLoopbackOnlyPolicyFixture(cfg);
 
     expect(result.findings).toEqual([]);
   });
@@ -1582,10 +1442,7 @@ describe("registerPolicyDoctorChecks", () => {
         customBindHost: "192.168.1.20",
       },
     });
-    const configPath = await writeLoopbackOnlyPolicyFixture();
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+    const result = await runLoopbackOnlyPolicyFixture(cfg);
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -1604,10 +1461,7 @@ describe("registerPolicyDoctorChecks", () => {
         customBindHost: "   ",
       },
     });
-    const configPath = await writeLoopbackOnlyPolicyFixture();
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
+    const result = await runLoopbackOnlyPolicyFixture(cfg);
 
     expect(result.findings).toEqual([]);
   });
@@ -1621,10 +1475,7 @@ describe("registerPolicyDoctorChecks", () => {
           customBindHost,
         },
       });
-      const configPath = await writeLoopbackOnlyPolicyFixture();
-
-      registerPolicyDoctorChecks();
-      const result = await runDoctorLintChecks(ctx(configPath, cfg));
+      const result = await runLoopbackOnlyPolicyFixture(cfg);
 
       expect(result.findings).toEqual([]);
     },
@@ -1639,16 +1490,13 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       gateway: {
         remote: {
           allow: false,
         },
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -1674,16 +1522,13 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       gateway: {
         remote: {
           allow: false,
         },
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual([]);
   });
@@ -1700,16 +1545,13 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       gateway: {
         http: {
           requireUrlAllowlists: true,
         },
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual(
       expect.arrayContaining([
@@ -1744,16 +1586,13 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     });
-    const configPath = await writePolicyFixture({
+    const result = await runGlobalPolicyDoctorFixture(cfg, {
       gateway: {
         http: {
           requireUrlAllowlists: true,
         },
       },
     });
-
-    registerPolicyDoctorChecks();
-    const result = await runDoctorLintChecks(ctx(configPath, cfg));
 
     expect(result.findings).toEqual(
       expect.arrayContaining([

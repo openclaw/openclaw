@@ -3,6 +3,7 @@ import type { SessionSystemPromptReport } from "../../../src/config/sessions/ses
 import { waitForControlUiFrameLayout } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
+import { dockChatSidePanel } from "./chat-side-panel.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -148,11 +149,13 @@ suite.define(() => {
       await summary.waitFor({ state: "hidden" });
       const panel = page.locator("openclaw-chat-context-panel");
       const context = panel.locator(".chat-context-panel");
+      await context.locator('[data-context-category="files"]').click();
       await context
         .locator('[data-context-section="files"] .chat-context__entry')
         .first()
         .waitFor();
-      expect(await context.locator("meter").getAttribute("aria-valuetext")).toContain("50%");
+      expect(await context.getByRole("meter").getAttribute("aria-valuenow")).toBe("50000");
+      expect(await context.getByRole("meter").getAttribute("aria-valuemax")).toBe("100000");
       expect(
         await context
           .locator(".chat-context__segment")
@@ -173,38 +176,55 @@ suite.define(() => {
       await expect
         .poll(() => context.locator('[data-context-category="messages"]').textContent())
         .toContain("37k");
-      await context.getByText("AGENTS.md", { exact: true }).first().waitFor();
-      expect(await context.getByText("AGENTS.md", { exact: true }).count()).toBe(2);
+      await context.locator('[title="/workspace/AGENTS.md"]').waitFor();
+      expect(
+        await context.locator('[data-context-section="files"] .chat-context__entry').count(),
+      ).toBe(3);
       await context.getByText("Agent workspace", { exact: true }).waitFor();
       await context.getByText("Project · openclaw", { exact: true }).waitFor();
-      await context.getByText("/projects/openclaw/AGENTS.md", { exact: true }).waitFor();
-      await context.getByText("On-demand tools", { exact: true }).waitFor();
-      await context.getByRole("button", { name: "Compact session", exact: true }).waitFor();
-      await context.getByText("AGENTS.md", { exact: true }).first().scrollIntoViewIfNeeded();
+      await context.locator('[title="/projects/openclaw/AGENTS.md"]').waitFor();
+      await context.locator('[data-context-details="deferred"]').waitFor();
+      await context.getByRole("button", { name: "Compact", exact: true }).waitFor();
+      await context.locator('[title="/workspace/AGENTS.md"]').scrollIntoViewIfNeeded();
       await page.evaluate(() => document.fonts.ready.then(() => undefined));
       await waitForControlUiFrameLayout([context]);
       expect(await context.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(
         true,
       );
+      await context.locator('[data-context-category="tools"]').click();
+      expect(await context.locator('[data-context-section="files"]').count()).toBe(0);
       await context.getByText("System tools", { exact: true }).waitFor();
       await context
         .locator('[data-context-section="tools"]')
         .getByText("MCP tools · Docs", { exact: true })
         .waitFor();
+      await context.locator('[data-context-category="skills"]').click();
+      expect(await context.locator('[data-context-section="tools"]').count()).toBe(0);
+      expect(
+        await context.locator('[data-context-section="skills"] .chat-context__entry').count(),
+      ).toBe(8);
+      await context.getByRole("button", { name: "Show all 98", exact: true }).click();
       expect(
         await context.locator('[data-context-section="skills"] .chat-context__entry').count(),
       ).toBe(98);
       expect(
         await context
-          .locator(".chat-context__entries")
+          .locator(".chat-context__accordion")
           .evaluateAll((lists) =>
             lists.every((list) => !["auto", "scroll"].includes(getComputedStyle(list).overflowY)),
           ),
       ).toBe(true);
       const finalSkill = context.getByText("project-skill-98", { exact: true });
+      const header = context.locator(".chat-context-page__header");
+      const headerTop = (await header.boundingBox())!.y;
       await finalSkill.scrollIntoViewIfNeeded();
+      expect((await header.boundingBox())!.y).toBeCloseTo(headerTop, 0);
       expect(await finalSkill.isVisible()).toBe(true);
-      expect(await context.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+      expect(
+        await context
+          .locator(".chat-context-panel__scroll")
+          .evaluate((element) => element.scrollTop),
+      ).toBeGreaterThan(0);
       if (width > 900) {
         const sideHeader = page.locator('[data-region-header="side"]');
         await sideHeader.getByRole("button", { name: "New tab", exact: true }).click();
@@ -214,12 +234,14 @@ suite.define(() => {
         expect(
           await finalSkill.evaluate((element) => {
             const row = element.getBoundingClientRect();
-            const viewport = element.closest(".chat-context-panel")!.getBoundingClientRect();
+            const viewport = element
+              .closest(".chat-context-panel__scroll")!
+              .getBoundingClientRect();
             return row.top >= viewport.top && row.bottom <= viewport.bottom;
           }),
         ).toBe(true);
       }
-      await context.locator('[data-context-details="deferred"] > summary').click();
+      await context.locator('[data-context-details="deferred"]').click();
       await context.getByText("search_docs", { exact: true }).waitFor();
       expect(await context.locator('[data-context-category="tools"]').textContent()).toContain(
         "3k",
@@ -230,13 +252,13 @@ suite.define(() => {
         );
         await draft.fill("Keep this unsent draft");
         const beforeCompact = await gateway.deferNext("sessions.compact", { key: sessionKey });
-        await context.getByRole("button", { name: "Compact session", exact: true }).click();
+        await context.getByRole("button", { name: "Compact", exact: true }).click();
         const compact = await gateway.waitForRequest("sessions.compact", {
           after: beforeCompact,
           match: { key: sessionKey },
         });
         expect(compact.params).toMatchObject({ key: sessionKey });
-        const compacting = context.getByRole("button", { name: "Compacting…", exact: true });
+        const compacting = context.getByRole("button", { name: "Compacting", exact: true });
         await compacting.waitFor();
         expect(await compacting.isDisabled()).toBe(true);
         expect(await draft.inputValue()).toBe("Keep this unsent draft");
@@ -245,11 +267,13 @@ suite.define(() => {
           { ok: true, compacted: true },
           { match: { key: sessionKey } },
         );
-        await context.getByRole("button", { name: "Compact session", exact: true }).waitFor();
+        await context.getByRole("button", { name: "Compact", exact: true }).waitFor();
         expect(await draft.inputValue()).toBe("Keep this unsent draft");
         await gateway.setMethodResponse("sessions.usage", { sessions: [] });
         await context.getByRole("button", { name: "Refresh", exact: true }).click();
         await context.getByText("No matching context report.", { exact: false }).waitFor();
+        expect(await context.getByRole("button", { name: "Refresh", exact: true }).count()).toBe(0);
+        expect(await context.getByRole("button", { name: "Compact", exact: true }).count()).toBe(0);
         const nativeReport: SessionSystemPromptReport = {
           ...report,
           injectedWorkspaceFiles: [
@@ -269,15 +293,53 @@ suite.define(() => {
             { key: sessionKey, sessionId: "context-instance", contextWeight: nativeReport },
           ],
         });
-        await context.getByRole("button", { name: "Refresh", exact: true }).click();
+        await gateway.emitGatewayEvent("sessions.changed", {
+          sessionKey,
+          key: sessionKey,
+          sessionId: "context-instance",
+          reason: "patch",
+          model: "demo-model",
+          modelProvider: "example",
+          contextTokens: 100000,
+          totalTokens: 50001,
+          totalTokensFresh: true,
+          updatedAt: 2,
+        });
+        await context.locator('[data-context-category="files"]').click();
         await context
           .locator('[data-context-section="files"] .chat-context__entry')
           .first()
           .waitFor();
-        await context.getByText("Unverified", { exact: true }).waitFor();
+        await context.locator('[title="Unverified"]').first().waitFor();
         await expect
           .poll(() => context.locator('[data-context-category="messages"]').textContent())
           .toContain("—");
+        await page.setViewportSize({ width: 1440, height: 450 });
+        await dockChatSidePanel(page, "bottom");
+        await page.locator(".sidebar-region").evaluate(async (element) => {
+          const animations = element
+            .getAnimations({ subtree: true })
+            .filter(
+              (animation) =>
+                animation.playState === "running" &&
+                Number.isFinite(animation.effect?.getComputedTiming().endTime),
+            );
+          await Promise.all(
+            animations.map((animation) => animation.finished.catch(() => undefined)),
+          );
+        });
+        expect((await panel.boundingBox())!.height).toBeLessThanOrEqual(320);
+        const deferred = context.locator('[data-context-details="deferred"]');
+        await deferred.scrollIntoViewIfNeeded();
+        const panelBounds = (await panel.boundingBox())!;
+        const rowBounds = (await deferred.boundingBox())!;
+        expect(rowBounds.y).toBeGreaterThanOrEqual(panelBounds.y);
+        expect(rowBounds.y + rowBounds.height).toBeLessThanOrEqual(
+          panelBounds.y + panelBounds.height,
+        );
+        expect((await header.boundingBox())!.y).toBeLessThan(panelBounds.y);
+        await deferred.click();
+        await context.getByText("search_docs", { exact: true }).waitFor();
       }
     });
   });

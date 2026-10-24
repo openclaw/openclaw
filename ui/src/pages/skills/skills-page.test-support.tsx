@@ -7,6 +7,7 @@ import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import type { SkillsState } from "../../lib/skills/index.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -35,17 +36,15 @@ export function mountSkills(
   surface: "discovery" | "settings" = "discovery",
 ) {
   const client = { request } as unknown as GatewayBrowserClient;
-  const connection = createApplicationGateway({
-    client,
-    phase: "connected",
-    offlineStable: false,
-    hello: gatewayHelloForMethods(["skills.install", "skills.update"]),
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: "main",
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  });
+  const connection = createApplicationGateway(
+    createApplicationGatewaySnapshot({
+      client,
+      phase: "connected",
+      hello: gatewayHelloForMethods(["skills.install", "skills.update"]),
+      assistantAgentId: "main",
+      sessionKey: "main",
+    }),
+  );
   const agentsList = {
     defaultId: "main",
     mainKey: "main",

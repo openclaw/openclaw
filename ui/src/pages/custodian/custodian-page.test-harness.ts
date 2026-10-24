@@ -11,6 +11,7 @@ import type {
   ApplicationGateway,
   ApplicationGatewaySnapshot,
 } from "../../app/context.ts";
+import { createApplicationGatewaySnapshot } from "../../test-helpers/application-context-fixtures.ts";
 import {
   createApplicationContextProvider,
   type ApplicationContextProvider,
@@ -56,11 +57,9 @@ export function createContext(
           ? Promise.resolve({ turns: [] })
           : request(method, ...args),
   } as unknown as GatewayBrowserClient;
-  let snapshot: ApplicationGatewaySnapshot = {
+  let snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     client,
     phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello: {
       type: "hello-ok" as const,
       protocol: 1,
@@ -74,9 +73,7 @@ export function createContext(
     },
     assistantAgentId: "main",
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
+  });
   const listeners = new Set<(snapshot: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();
   const connection = {

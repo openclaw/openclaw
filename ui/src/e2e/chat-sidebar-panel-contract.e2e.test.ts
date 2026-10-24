@@ -51,7 +51,6 @@ const offeredSlotLabels = [
   "Files",
   "Browser",
   "Review",
-  "Context",
   "Subagents",
   "Processes",
   "Terminal",
@@ -108,7 +107,6 @@ function coldOpenScenario(populated = false): ControlUiMockGatewayScenario {
       "sessions.companion.state",
       "sessions.diff",
       "sessions.files.list",
-      "sessions.usage",
       "terminal.open",
     ],
     ...(populated
@@ -136,22 +134,6 @@ function coldOpenScenario(populated = false): ControlUiMockGatewayScenario {
         }
       : {}),
     methodResponses: {
-      "sessions.usage": {
-        sessions: rows({
-          key: "agent:main:main",
-          sessionId: "main-session",
-          contextWeight: {
-            source: "run",
-            generatedAt: 1,
-            sessionId: "main-session",
-            sessionKey: "agent:main:main",
-            systemPrompt: { chars: 4000, projectContextChars: 0, nonProjectContextChars: 4000 },
-            injectedWorkspaceFiles: [],
-            skills: { promptChars: 0, entries: [] },
-            tools: { listChars: 0, schemaChars: 0, entries: [] },
-          },
-        }),
-      },
       "sessions.processes.list": {
         sessionId: "main-session",
         truncated: false,
@@ -346,21 +328,7 @@ async function readSlotColdOpenOutcome(
     } finally {
       held?.release();
     }
-    if (label === "Context") {
-      const panel = page.locator("openclaw-chat-context-panel");
-      if (expectedOutcome === "content") {
-        await panel
-          .locator('[data-context-category="system"]')
-          .getByText("~1k", { exact: true })
-          .waitFor();
-        expect(await panel.locator("meter").getAttribute("aria-valuetext")).toContain("2%");
-      } else {
-        await panel
-          .getByText("Send a message to capture context usage.", { exact: true })
-          .waitFor();
-        expect(await panel.locator("meter").count()).toBe(0);
-      }
-    }
+
     if (label === "Processes") {
       const processes = page.locator("openclaw-chat-processes-panel");
       await processes

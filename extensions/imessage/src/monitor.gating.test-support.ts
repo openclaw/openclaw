@@ -10,7 +10,9 @@ type DecisionParams = Parameters<InboundProcessingModule["resolveIMessageInbound
 let buildIMessageInboundContext: InboundProcessingModule["buildIMessageInboundContext"];
 let resolveIMessageInboundDecision: InboundProcessingModule["resolveIMessageInboundDecision"];
 
-function baseCfg(): OpenClawConfig {
+function baseCfg(
+  imessage: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["imessage"]>> = {},
+): OpenClawConfig {
   return {
     channels: {
       imessage: {
@@ -18,6 +20,7 @@ function baseCfg(): OpenClawConfig {
         allowFrom: ["*"],
         groupPolicy: "open",
         groups: { "*": { requireMention: true } },
+        ...imessage,
       },
     },
     session: { mainKey: "main" },
@@ -230,11 +233,10 @@ describe("imessage monitor gating + envelope builders", () => {
   );
 
   it("drops group reply context from non-allowlisted senders in allowlist mode", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "allowlist";
-    cfg.channels.imessage.contextVisibility = "allowlist";
+    const cfg = baseCfg({
+      groupPolicy: "allowlist",
+      contextVisibility: "allowlist",
+    });
 
     const message: IMessagePayload = {
       id: 6,
@@ -262,11 +264,10 @@ describe("imessage monitor gating + envelope builders", () => {
   });
 
   it("keeps group reply context when the group allowlist matches the chat target", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "allowlist";
-    cfg.channels.imessage.contextVisibility = "allowlist";
+    const cfg = baseCfg({
+      groupPolicy: "allowlist",
+      contextVisibility: "allowlist",
+    });
 
     const message: IMessagePayload = {
       id: 8,
@@ -294,11 +295,10 @@ describe("imessage monitor gating + envelope builders", () => {
   });
 
   it("keeps group reply context when the group allowlist matches an access group", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "allowlist";
-    cfg.channels.imessage.contextVisibility = "allowlist";
+    const cfg = baseCfg({
+      groupPolicy: "allowlist",
+      contextVisibility: "allowlist",
+    });
     cfg.accessGroups = {
       oncall: {
         type: "message.senders",
@@ -332,11 +332,10 @@ describe("imessage monitor gating + envelope builders", () => {
   });
 
   it("keeps group reply context in allowlist_quote mode", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "allowlist";
-    cfg.channels.imessage.contextVisibility = "allowlist_quote";
+    const cfg = baseCfg({
+      groupPolicy: "allowlist",
+      contextVisibility: "allowlist_quote",
+    });
 
     const message: IMessagePayload = {
       id: 7,
@@ -364,10 +363,7 @@ describe("imessage monitor gating + envelope builders", () => {
   });
 
   it("treats configured chat_id as a group session even when is_group is false", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groups = { "2": { requireMention: false } };
+    const cfg = baseCfg({ groups: { "2": { requireMention: false } } });
 
     const groupHistories = new Map();
     const message: IMessagePayload = {
@@ -406,10 +402,7 @@ describe("imessage monitor gating + envelope builders", () => {
   });
 
   it("blocks group messages when imessage.groups is set without a wildcard", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groups = { "99": { requireMention: false } };
+    const cfg = baseCfg({ groups: { "99": { requireMention: false } } });
 
     const decision = await resolveDecision({
       cfg,
@@ -428,10 +421,7 @@ describe("imessage monitor gating + envelope builders", () => {
   });
 
   it("honors group allowlist and ignores pairing-store senders in groups", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "allowlist";
+    const cfg = baseCfg({ groupPolicy: "allowlist" });
 
     const groupHistories = new Map();
     const denied = await resolveDecision({
@@ -474,10 +464,7 @@ describe("imessage monitor gating + envelope builders", () => {
   });
 
   it("uses legacy conversation allowFrom entries for group admission", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "allowlist";
+    const cfg = baseCfg({ groupPolicy: "allowlist" });
 
     const { decision } = await resolveDispatchDecision({
       cfg,
@@ -499,10 +486,7 @@ describe("imessage monitor gating + envelope builders", () => {
   });
 
   it("does not use legacy conversation allowFrom entries when groupAllowFrom is explicitly empty", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "allowlist";
+    const cfg = baseCfg({ groupPolicy: "allowlist" });
 
     const decision = await resolveDecision({
       cfg,
@@ -527,10 +511,7 @@ describe("imessage monitor gating + envelope builders", () => {
   });
 
   it("does not merge legacy conversation allowFrom entries when groupAllowFrom is configured", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "allowlist";
+    const cfg = baseCfg({ groupPolicy: "allowlist" });
 
     const decision = await resolveDecision({
       cfg,
@@ -552,10 +533,7 @@ describe("imessage monitor gating + envelope builders", () => {
   });
 
   it("does not authorize group control commands from conversation allowlist entries", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "allowlist";
+    const cfg = baseCfg({ groupPolicy: "allowlist" });
 
     const decision = await resolveDecision({
       cfg,
@@ -577,10 +555,7 @@ describe("imessage monitor gating + envelope builders", () => {
   });
 
   it("does not authorize group control commands from legacy conversation allowFrom entries", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "allowlist";
+    const cfg = baseCfg({ groupPolicy: "allowlist" });
 
     const decision = await resolveDecision({
       cfg,
@@ -603,10 +578,7 @@ describe("imessage monitor gating + envelope builders", () => {
   });
 
   it("blocks group messages when groupPolicy is disabled", async () => {
-    const cfg = baseCfg();
-    cfg.channels ??= {};
-    cfg.channels.imessage ??= {};
-    cfg.channels.imessage.groupPolicy = "disabled";
+    const cfg = baseCfg({ groupPolicy: "disabled" });
 
     const decision = await resolveDecision({
       cfg,

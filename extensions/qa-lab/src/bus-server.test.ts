@@ -3,20 +3,9 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { QaBusPollResult } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { closeQaHttpServer, startQaBusServer } from "./bus-server.js";
 import { createQaBusState } from "./bus-state.js";
-
-async function listenOnLoopback(server: ReturnType<typeof createServer>): Promise<number> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected server to bind a TCP port");
-  }
-  return address.port;
-}
 
 async function requestOnce(params: { port: number; agent: Agent }): Promise<void> {
   await new Promise<void>((resolve, reject) => {

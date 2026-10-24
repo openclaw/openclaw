@@ -264,9 +264,6 @@
     .chat-pr__number,
     .chat-pr__state,
     .chat-pr__stale,
-    .chat-details__context-budget,
-    .chat-details__context-budget strong,
-    .chat-details__stats,
     .chat-details__muted,
     .chat-outputs__status,
     .task-progress-details__count
@@ -378,9 +375,7 @@
   border-color: var(--details-surface);
 }
 
-.chat-details
-  .chat-details-desktop-body
-  :is(.task-progress-details__count, .chat-details__context-budget strong) {
+.chat-details .chat-details-desktop-body .task-progress-details__count {
   color: var(--muted);
 }
 

@@ -5,6 +5,8 @@ import { collectPolicyEvidence } from "../policy-state.js";
 import { registerPolicyDoctorChecks } from "./register.js";
 import {
   cfgWithPolicy,
+  createNamedAllowlistAccounts,
+  createInheritedAgentPolicyConfig,
   cfgWithPolicyOverrides as configWithPolicy,
   ctx,
   rawCfgWithPolicy,
@@ -304,13 +306,7 @@ describe("registerPolicyDoctorChecks", () => {
         dmPolicy: "open",
         groupPolicy: "allowlist",
         requireMention: true,
-        accounts: {
-          work: {
-            dmPolicy: "allowlist",
-            groupPolicy: "allowlist",
-            requireMention: true,
-          },
-        },
+        accounts: createNamedAllowlistAccounts(),
       },
     });
 
@@ -353,13 +349,7 @@ describe("registerPolicyDoctorChecks", () => {
   it("does not evaluate channel root defaults as a named account", async () => {
     const { cfg, result } = await runIngressPolicyScenario({
       slack: {
-        accounts: {
-          work: {
-            dmPolicy: "allowlist",
-            groupPolicy: "allowlist",
-            requireMention: true,
-          },
-        },
+        accounts: createNamedAllowlistAccounts(),
       },
     });
     const evidence = scanPolicyIngress(cfg);
@@ -383,13 +373,7 @@ describe("registerPolicyDoctorChecks", () => {
         dmPolicy: "open",
         groupPolicy: "allowlist",
         requireMention: true,
-        accounts: {
-          work: {
-            dmPolicy: "allowlist",
-            groupPolicy: "allowlist",
-            requireMention: true,
-          },
-        },
+        accounts: createNamedAllowlistAccounts(),
       },
     });
 
@@ -582,13 +566,7 @@ describe("registerPolicyDoctorChecks", () => {
         dmPolicy: "open",
         groupPolicy: "allowlist",
         requireMention: true,
-        accounts: {
-          work: {
-            dmPolicy: "allowlist",
-            groupPolicy: "allowlist",
-            requireMention: true,
-          },
-        },
+        accounts: createNamedAllowlistAccounts(),
       },
     });
 
@@ -1397,20 +1375,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("applies main agent-scoped claims to implicit default agent posture", async () => {
-    const cfg = configWithPolicy({
-      tools: { exec: { host: "node" } },
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", workspaceAccess: "rw" },
-        },
-        entries: {
-          support: {
-            sandbox: { mode: "all", workspaceAccess: "ro" },
-            tools: { exec: { host: "sandbox" } },
-          },
-        },
-      },
-    });
+    const cfg = createInheritedAgentPolicyConfig();
     const policy = {
       scopes: {
         main: policyAgentScope(["main"], ["ro"], ["sandbox"]),
@@ -1436,20 +1401,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("applies non-main agent-scoped claims to inherited default posture", async () => {
-    const cfg = configWithPolicy({
-      tools: { exec: { host: "node" } },
-      agents: {
-        defaults: {
-          sandbox: { mode: "all", workspaceAccess: "rw" },
-        },
-        entries: {
-          support: {
-            sandbox: { mode: "all", workspaceAccess: "ro" },
-            tools: { exec: { host: "sandbox" } },
-          },
-        },
-      },
-    });
+    const cfg = createInheritedAgentPolicyConfig();
     const policy = {
       scopes: {
         "release-lockdown": policyAgentScope(["release-agent"], ["ro"], ["sandbox"]),

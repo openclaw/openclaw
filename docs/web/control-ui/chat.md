@@ -178,8 +178,9 @@ Open the context ring beside the composer's model picker to see current usage an
 an estimated breakdown of messages and other context, workspace memory, tool schemas,
 skills, and the remaining system prompt. The popover also shows latest-run tokens
 and provider plan limits, or estimated cost for API-billed sessions. Select
-**View context** to open one native Context panel. Workspace files, tool schemas, and skills appear in flat sections
-with a single scroll area. The report loads only while its surface is visible;
+**View context** to open one native Context panel. Open a category to inspect its entries below the fixed usage header. Only one
+category opens at a time. Lists longer than 20 entries initially show eight;
+**Show all** reveals the complete list and local search. The report loads only while its surface is visible;
 **Refresh** reloads the saved report without starting an agent turn.
 
 Contributor sizes use character-based token estimates from the last matching
@@ -187,13 +188,13 @@ run report, not the provider's tokenizer. Workspace memory and skills are
 subtracted from the system prompt so they are not counted twice. **Messages &
 other** is the estimated remainder, including context the report does not track
 separately. Unverified injection sizes stay unknown rather than showing zero.
-MCP tools remain grouped by source. The secondary **On-demand tools** section
+MCP tools remain grouped by source. The secondary **Tools loaded on use** section
 shows potential schema sizes for catalog tools outside the direct tool surface,
 not current usage; it does not add those sizes to the breakdown.
 
 When a matching last-run prompt budget is available, the Context panel shows
 remaining space and the reserve outside the budget. These are estimates, not a promise
-of the exact auto-compaction point. **Compact session** uses the existing
+of the exact auto-compaction point. **Compact** uses the existing
 compaction command and appears only with the required permissions; it is
 disabled while a run is active. Latest input/output token counts appear in the
 same panel. Compaction preserves the composer draft.

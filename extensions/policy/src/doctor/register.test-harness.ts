@@ -11,6 +11,11 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/health";
 import { clearHealthChecksForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  collectPolicyEvidence,
+  createPolicyAttestation,
+  type PolicyEvidence,
+} from "../policy-state.js";
 import { registerPolicyDoctorChecks } from "./register.js";
 
 export let workspaceDir: string;
@@ -48,6 +53,100 @@ export function cfgWithPolicyOverrides(
   overrides: Partial<RawLegacyDoctorConfig> = {},
 ): PolicyConfigFixture {
   return { ...cfgWithPolicy(), ...overrides };
+}
+
+export function cfgWithPolicySandbox(
+  sandbox: NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["sandbox"],
+) {
+  return cfgWithPolicyOverrides({ agents: { defaults: { sandbox } } });
+}
+
+export function collectChannelOnlyPolicyEvidence(cfg: Record<string, unknown> = {}) {
+  return collectPolicyEvidence(cfg, {
+    includeIngress: false,
+    includeGatewayExposure: false,
+    includeAgentWorkspace: false,
+    includeDataHandling: false,
+    includeToolPosture: false,
+    includeSandboxPosture: false,
+    includeSecrets: false,
+    includeAuthProfiles: false,
+  });
+}
+
+export function createAcceptedPolicyAttestationHash(policyHash: string, evidence: PolicyEvidence) {
+  return createPolicyAttestation({
+    ok: true,
+    checkedAt: "2026-05-10T20:00:00.000Z",
+    policyPath: "policy.jsonc",
+    policyHash,
+    evidence,
+    findings: [],
+  }).attestationHash;
+}
+
+export function createReleaseAgentPolicyConfig() {
+  return cfgWithPolicyOverrides({
+    agents: {
+      defaults: {
+        sandbox: {
+          mode: "all",
+          backend: "docker",
+          docker: {
+            network: "none",
+            binds: ["/workspace:/workspace:rw"],
+          },
+        },
+      },
+      entries: {
+        "release-agent": {
+          sandbox: { mode: "all", backend: "openshell" },
+        },
+      },
+    },
+  });
+}
+
+export function createCanonicalModelPolicyConfig() {
+  return rawCfgWithPolicy({
+    models: {
+      providers: {
+        "aws-bedrock": {},
+      },
+    },
+    agents: {
+      defaults: {
+        model: "OpenRouter/openai/gpt-5.5",
+      },
+    },
+  });
+}
+
+export function createInheritedAgentPolicyConfig() {
+  return cfgWithPolicyOverrides({
+    tools: { exec: { host: "node" } },
+    agents: {
+      defaults: {
+        sandbox: { mode: "all", workspaceAccess: "rw" },
+      },
+      entries: {
+        support: {
+          sandbox: { mode: "all", workspaceAccess: "ro" },
+          tools: { exec: { host: "sandbox" } },
+        },
+      },
+    },
+  });
+}
+
+export function createNamedAllowlistAccounts() {
+  return {
+    work: {
+      dmPolicy: "allowlist",
+      groupPolicy: "allowlist",
+      requireMention: true,
+    },
+  };
 }
 
 export function rawCfgWithPolicy(overrides: Record<string, unknown>): Record<string, unknown> {
@@ -121,6 +220,12 @@ export async function runPolicyDoctorLint(
   checkCtx: HealthCheckContext,
 ): Promise<Awaited<ReturnType<typeof runDoctorLintChecks>>> {
   return runDoctorLintChecks(checkCtx, { checks: registerChecks() });
+}
+
+export async function runGlobalPolicyDoctorFixture(cfg: OpenClawConfig, policy: unknown) {
+  const checkContext = ctx(await writePolicyFixture(policy), cfg);
+  registerPolicyDoctorChecks();
+  return runDoctorLintChecks(checkContext);
 }
 
 export async function runDeniedChannelRepair(repairCheckCtx: HealthRepairContext) {

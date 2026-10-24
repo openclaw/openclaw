@@ -1353,22 +1353,26 @@ const config = {
       "src/mxc-spawn-launcher.mjs!",
     ]),
     [`${BUNDLED_PLUGIN_ROOT_DIR}/nvidia`]: bundledPluginWorkspace(),
-    [`${BUNDLED_PLUGIN_ROOT_DIR}/openai`]: bundledPluginWorkspace([
-      // OpenAI exposes provider, OAuth, overlay, media, usage, and realtime
-      // contracts to runtime/plugin integration paths that Knip cannot trace.
-      "embedding-batch.ts!",
-      "media-understanding-provider.ts!",
-      "model-route-contract.ts!",
-      "native-web-search.ts!",
-      "openai-chatgpt-oauth-flow.runtime.ts!",
-      "openai-chatgpt-oauth.runtime.ts!",
-      "openai-chatgpt-provider.runtime.ts!",
-      "openai-provider.ts!",
-      "prompt-overlay.ts!",
-      "realtime-provider-shared.ts!",
-      "tts.ts!",
-      "usage.ts!",
-    ]),
+    [`${BUNDLED_PLUGIN_ROOT_DIR}/openai`]: {
+      ...bundledPluginWorkspace([
+        // OpenAI exposes provider, OAuth, overlay, media, usage, and realtime
+        // contracts to runtime/plugin integration paths that Knip cannot trace.
+        "embedding-batch.ts!",
+        "media-understanding-provider.ts!",
+        "model-route-contract.ts!",
+        "native-web-search.ts!",
+        "openai-chatgpt-oauth-flow.runtime.ts!",
+        "openai-chatgpt-oauth.runtime.ts!",
+        "openai-chatgpt-provider.runtime.ts!",
+        "openai-provider.ts!",
+        "prompt-overlay.ts!",
+        "realtime-provider-shared.ts!",
+        "tts.ts!",
+        "usage.ts!",
+      ]),
+      // Werift loads the packaged binary codec through its runtime dependency graph.
+      ignoreDependencies: [...bundledPluginIgnoredRuntimeDependencies, "@shinyoshiaki/binary-data"],
+    },
     [`${BUNDLED_PLUGIN_ROOT_DIR}/onepassword`]: bundledPluginWorkspace([
       // Shipped resolver child process declared as a static plugin artifact.
       "onepassword-secret-ref-resolver.js!",

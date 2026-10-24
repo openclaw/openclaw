@@ -9,6 +9,7 @@ import {
   testing as extraParamsTesting,
   type WrapProviderStreamFnParams,
 } from "./embedded-agent-runner/extra-params.test-support.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 import { createZeroUsageFixture } from "./test-helpers/usage-fixtures.js";
 
 vi.mock("../plugins/provider-hook-runtime.js", () => ({
@@ -164,24 +165,16 @@ describe("applyExtraParamsToAgent", () => {
     id: string;
     baseUrl: string;
     compat?: OpenAIResponsesWrapperCompat;
-  }): Model<"openai-responses"> => ({
-    api: "openai-responses",
-    provider: params.provider,
-    id: params.id,
-    name: params.id,
-    baseUrl: params.baseUrl,
-    reasoning: true,
-    input: ["text"],
-    cost: {
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-    },
-    contextWindow: 128_000,
-    maxTokens: 4096,
-    ...(params.compat ? { compat: params.compat } : {}),
-  });
+  }): Model<"openai-responses"> =>
+    makeProviderModelFixture<"openai-responses">({
+      api: "openai-responses",
+      provider: params.provider,
+      id: params.id,
+      baseUrl: params.baseUrl,
+      reasoning: true,
+      contextWindow: 128_000,
+      ...(params.compat ? { compat: params.compat } : {}),
+    });
 
   const captureOpenAIResponsesWrapperReplay = (params: {
     model: Model<"openai-responses">;

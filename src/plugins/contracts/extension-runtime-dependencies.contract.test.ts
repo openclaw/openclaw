@@ -45,6 +45,11 @@ const INDIRECT_RUNTIME_DEPENDENCIES = new Map<string, Set<string>>([
     new Set(["json5"]),
   ],
   [
+    "extensions/openai",
+    // Werift loads the packaged binary codec through its runtime dependency graph.
+    new Set(["@shinyoshiaki/binary-data"]),
+  ],
+  [
     "extensions/slack",
     // Bolt loads Socket Mode, whose Undici 7 peer must be provided by the plugin package.
     new Set(["undici"]),

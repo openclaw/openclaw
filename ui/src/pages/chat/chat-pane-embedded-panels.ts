@@ -56,11 +56,9 @@ export function sidebarPanelDefinitions(
               "portal.list",
               "operator.read",
             )
-          : slot === "context"
-            ? Boolean(params?.contextDetails?.selectedSession)
-            : slot === "subagents" || slot === "processes"
-              ? panelContext.subagentsAvailable
-              : SIDEBAR_PANEL_SHORTCUTS[slot]?.available(panelContext)),
+          : slot === "subagents" || slot === "processes"
+            ? panelContext.subagentsAvailable
+            : SIDEBAR_PANEL_SHORTCUTS[slot]?.available(panelContext)),
       ),
       content: null,
       view: hasContent ? data : undefined,
