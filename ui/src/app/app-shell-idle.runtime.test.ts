@@ -6,10 +6,12 @@ import { connectShellIdle } from "./app-shell-idle.runtime.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
 import { connectNavigationPrefetch } from "./navigation-prefetch.ts";
 
-vi.mock("./control-ui-favicon-status.runtime.ts", () => ({
+vi.mock("./control-ui-favicon-status.runtime.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./control-ui-favicon-status.runtime.ts")>()),
   connectControlUiFavicon: () => () => {},
 }));
-vi.mock("./navigation-prefetch.ts", () => ({
+vi.mock("./navigation-prefetch.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./navigation-prefetch.ts")>()),
   connectNavigationPrefetch: vi.fn(() => () => {}),
 }));
 
