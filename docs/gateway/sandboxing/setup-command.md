@@ -25,10 +25,14 @@ Paths:
     - Default `docker.network` is `"none"` (no egress), so package installs will fail.
     - `docker.network: "container:<id>"` requires `dangerouslyAllowContainerNamespaceJoin: true` and is break-glass only.
     - `readOnlyRoot: true` prevents writes; set `readOnlyRoot: false` or bake a custom image.
-    - `user` must be root for package installs. Docker can omit `user` or set
-      `user: "0:0"`; rootful Podman must set `user: "0:0"` because its default
-      preserves workspace ownership. Rootless Podman rejects zero-valued users;
-      bake packages into the image or use rootful Podman.
+    - `user` must be root for package installs. When `user` is unset, Docker
+      and rootful Podman run as the workspace owner's `uid:gid`, which is not
+      root under a non-root Gateway (see
+      [Container user](/gateway/sandboxing/docker-backend#container-user)), so
+      set `user: "0:0"`. With the default `capDrop: ["ALL"]`, root may then lose
+      access to a workspace owned by the Gateway user; prefer baking packages
+      into a custom image. Rootless Podman rejects zero-valued users; bake
+      packages into the image or use rootful Podman.
     - Sandbox exec does **not** inherit host `process.env`. Use `agents.defaults.sandbox.docker.env` (or a custom image) for skill API keys.
     - Values in `agents.defaults.sandbox.docker.env` remain visible through container metadata commands such as `docker inspect` or `podman inspect`. Docker and Podman require portable environment names and single-line, non-NUL values because secure engine environment files are line-delimited; config validation and `openclaw doctor` reject invalid entries before sandbox use. Rename invalid keys, use single-line values, or deliver multiline material through a mounted file or custom image; this requires manual remediation because `doctor --fix` cannot safely preserve the original value. SSH and OpenShell backends still support multiline values. Use a custom image, mounted secret file, or another secret delivery path if metadata exposure is not acceptable.
 
