@@ -248,6 +248,9 @@ it("shares immutable catalog skills across interleaved agent selections and unch
   expect(Object.isFrozen(shared.sourceInfo)).toBe(true);
   expect(Object.isFrozen(shared.discoveryRoot)).toBe(true);
 
+  await refreshSkillsDiscovery({ workspaceDir, reason: "config-change" });
+  expect((await read("reader")).snapshot.resolvedSkills![0]).toBe(shared);
+
   await writeDemo(skillDir, "Shared", "Changed instructions");
   await refreshSkillsDiscovery({ workspaceDir });
   const edited = await read("reader");

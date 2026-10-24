@@ -556,7 +556,9 @@ async function resetSkillsDiscoverySources(
   }
   state.sources.clear();
   state.plans.clear();
-  state.catalog.clear();
+  if (retireWorker) {
+    state.catalog.clear();
+  }
   state.closing = Promise.allSettled([
     state.pending?.catch(() => {}),
     activePool?.close(),
