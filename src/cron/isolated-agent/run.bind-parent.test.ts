@@ -77,13 +77,13 @@ const DEVICE: PairedDevice = {
 
 const channelOwnerTurn = (runId: string): GatewayCronCreatorAuthorityAdmission => ({
   runId,
-  callerOrigin: { kind: "external", channel: "telegram" },
+  callerOrigin: { kind: "unknown" },
   managementEntitlement: { source: "channel-owner", isCurrent: () => true },
 });
 
 const groupMemberTurn = (runId: string): GatewayCronCreatorAuthorityAdmission => ({
   runId,
-  callerOrigin: { kind: "external", channel: "telegram" },
+  callerOrigin: { kind: "unknown" },
 });
 
 beforeEach(() => {
