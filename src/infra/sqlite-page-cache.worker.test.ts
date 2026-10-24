@@ -200,18 +200,31 @@ describe.skipIf(process.platform !== "linux")("SQLite page-cache worker", () => 
     expect(initial.complete).toBe(false);
     expect(first.complete).toBe(false);
     expect(progress.length).toBeLessThanOrEqual(5);
-    expect(first.readBytes).toBeGreaterThan(0);
-    expect(readerOpenDuringWarm).toBe(true);
+    if (first.ioCountersUnavailable) {
+      expect(first.readBytes).toBe(0);
+      expect(first.estimatedReadBytes).toBeGreaterThan(0);
+    } else {
+      expect(first.readBytes).toBeGreaterThan(0);
+    }
+    if (!first.ioCountersUnavailable) {
+      expect(readerOpenDuringWarm).toBe(true);
+    }
     expect(checkpointBusy).toBe(0);
     expect(replacedReaderClosed).toBe(true);
-    expect(result).toMatchObject({
-      complete: true,
-      limited: false,
-      payloadMessages: 32,
-      payloadBytes,
-    });
-    expect(result.readBytes).toBeGreaterThan(MiB);
-    expect(result.readBytes).toBeLessThan(3 * MiB);
+    if (result.ioCountersUnavailable) {
+      // Conservative estimates consume this artificial 3 MiB budget before payloads.
+      expect(result).toMatchObject({ complete: true, limited: true });
+      expect(result.estimatedReadBytes).toBeGreaterThanOrEqual(3 * MiB);
+    } else {
+      expect(result).toMatchObject({
+        complete: true,
+        limited: false,
+        payloadMessages: 32,
+        payloadBytes,
+      });
+      expect(result.readBytes).toBeGreaterThan(MiB);
+      expect(result.readBytes).toBeLessThan(3 * MiB);
+    }
     expect(result.queryBeforeMs).toBeGreaterThanOrEqual(0);
     expect(result.queryAfterMs).toBeGreaterThanOrEqual(0);
     expect(observed.readers.every((database) => !database.isOpen)).toBe(true);
@@ -235,13 +248,92 @@ describe.skipIf(process.platform !== "linux")("SQLite page-cache worker", () => 
       ),
     );
     expect(progress.length).toBeGreaterThan(2);
+    const readStat = (value: PageCacheProgress) =>
+      value.ioCountersUnavailable
+        ? value.estimatedReadBytes
+        : Math.max(value.readBytes, value.diskBytes);
     for (let index = 1; index < progress.length; index++) {
-      expect(progress[index]!.readBytes - progress[index - 1]!.readBytes).toBeLessThan(1.1 * MiB);
+      expect(readStat(progress[index]!) - readStat(progress[index - 1]!)).toBeLessThan(1.1 * MiB);
     }
     const result = progress.at(-1)!;
     expect(result).toMatchObject({ complete: true, limited: true });
-    expect(result.readBytes).toBeGreaterThanOrEqual(2 * MiB);
-    expect(result.readBytes).toBeLessThan(3 * MiB);
-    expect(result.readBytes).toBeLessThan(fs.statSync(pathname).size);
+    expect(readStat(result)).toBeGreaterThanOrEqual(2 * MiB);
+    expect(readStat(result)).toBeLessThan(3 * MiB);
+    expect(readStat(result)).toBeLessThan(fs.statSync(pathname).size);
+  });
+
+  it("completes an agent warm when /proc/self/io is unavailable, using bounded estimates", () => {
+    const originalReadFileSync = fs.readFileSync;
+    const procfsSpy = vi.spyOn(fs, "readFileSync").mockImplementation(((
+      filePath: unknown,
+      ...args: unknown[]
+    ) => {
+      if (filePath === "/proc/self/io") {
+        const error = new Error(
+          `ENOENT: no such file or directory, open '${filePath}'`,
+        ) as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        throw error;
+      }
+      return (originalReadFileSync as (...args: unknown[]) => unknown)(filePath, ...args);
+    }) as typeof fs.readFileSync);
+    try {
+      const { pathname } = createAgentDatabase();
+      const context = { path: pathname, env: {} };
+      const input = { kind: "agent" as const, maxBytes: 256 * MiB, now };
+      const initial = pageCacheReadOperations["pageCache.begin"](input, context);
+      expect(initial.ioCountersUnavailable).toBe(true);
+      expect(initial.readBytes).toBe(0);
+      expect(initial.estimatedReadBytes).toBeGreaterThan(0);
+      const result = finish(pathname, initial).at(-1)!;
+      expect(result).toMatchObject({ complete: true, ioCountersUnavailable: true });
+      expect(result.readBytes).toBe(0);
+      expect(result.estimatedReadBytes).toBeGreaterThan(0);
+      expect(observed.readers.every((database) => !database.isOpen)).toBe(true);
+    } finally {
+      procfsSpy.mockRestore();
+    }
+  });
+
+  it("enforces the state byte budget via estimates when /proc/self/io is unavailable", () => {
+    const originalReadFileSync = fs.readFileSync;
+    const procfsSpy = vi.spyOn(fs, "readFileSync").mockImplementation(((
+      filePath: unknown,
+      ...args: unknown[]
+    ) => {
+      if (filePath === "/proc/self/io") {
+        const error = new Error(
+          `ENOENT: no such file or directory, open '${filePath}'`,
+        ) as NodeJS.ErrnoException;
+        error.code = "ENOENT";
+        throw error;
+      }
+      return (originalReadFileSync as (...args: unknown[]) => unknown)(filePath, ...args);
+    }) as typeof fs.readFileSync);
+    try {
+      const pathname = path.join(tempDirs.make("sqlite-state-warm-noio-"), "state.sqlite");
+      const database = openNodeSqliteDatabase(pathname);
+      try {
+        database.exec("CREATE TABLE payload (value BLOB);");
+        database.prepare("INSERT INTO payload VALUES (zeroblob(?))").run(6 * MiB);
+      } finally {
+        database.close();
+      }
+      const progress = finish(
+        pathname,
+        pageCacheReadOperations["pageCache.begin"](
+          { kind: "state", maxBytes: 2 * MiB, now },
+          { path: pathname, env: {} },
+        ),
+      );
+      const result = progress.at(-1)!;
+      expect(progress.every((value) => value.ioCountersUnavailable)).toBe(true);
+      expect(result).toMatchObject({ complete: true, limited: true });
+      expect(result.estimatedReadBytes).toBeGreaterThanOrEqual(2 * MiB);
+      expect(result.estimatedReadBytes).toBeLessThan(3 * MiB);
+      expect(result.estimatedReadBytes).toBeLessThan(fs.statSync(pathname).size);
+    } finally {
+      procfsSpy.mockRestore();
+    }
   });
 });
