@@ -60,6 +60,9 @@ type ScopedSeedRow = Pick<SeedRow, "key" | "value"> & Partial<SeedRow>;
 const seedScope = (pluginId: string, namespace: string, rows: ScopedSeedRow[]) =>
   seedPluginStateEntriesForTests(rows.map((row) => ({ pluginId, namespace, ...row })));
 const entryOf = <T>(key: string, value: T, createdAt: number) => ({ key, value, createdAt });
+const invalidWrite = { code: "PLUGIN_STATE_INVALID_INPUT", operation: "register" };
+const limitExceeded = { code: "PLUGIN_STATE_LIMIT_EXCEEDED" };
+const invalidLookup = { code: "PLUGIN_STATE_INVALID_INPUT", operation: "lookup" };
 
 const defaults = { namespace: "test", maxEntries: 10 };
 function syncStore<T>(options: Partial<OpenKeyedStoreOptions> = {}, pluginId = "discord") {
@@ -73,6 +76,13 @@ function stores<T>(options: Partial<OpenKeyedStoreOptions>, pluginId = "discord"
 }
 function throws(action: () => unknown, expected: object) {
   expect(action).toThrowError(expect.objectContaining(expected));
+}
+function replaceJson(pluginId: string, namespace: string, key: string, json: string) {
+  openOpenClawStateDatabase()
+    .db.prepare(
+      "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
+    )
+    .run(json, pluginId, namespace, key);
 }
 function maintenance(namespace: string) {
   const scope = { pluginId: "codex", namespace };
@@ -100,12 +110,6 @@ describe("plugin-state-store", () => {
     rmSync(dirname(resolveOpenClawStateSqlitePath()), { recursive: true, force: true });
   });
 
-  const expectPluginStateStoreError = (
-    promise: Promise<unknown>,
-    code: string,
-    operation?: string,
-  ) => expect(promise).rejects.toMatchObject({ code, ...(operation ? { operation } : {}) });
-
   it("round-trips nested VM realm values across store instances", async () => {
     const options = { namespace: "components", maxEntries: 10 };
     const store = openAsyncStore(options);
@@ -120,13 +124,12 @@ describe("plugin-state-store", () => {
     }
     closePluginStateDatabase();
 
-    const reopened = syncStore(options);
-    expect(reopened.lookup("interaction:1")).toEqual({
+    expect(syncStore(options).lookup("interaction:1")).toEqual({
       nested: [{ count: 1, labels: ["retained", null] }],
     });
   });
 
-  it("updates a key from the current stored value", async () => {
+  it("updates a key from the current stored value", () => {
     const store = syncStore<{ count: number }>();
     const update = store.update;
 
@@ -147,7 +150,7 @@ describe("plugin-state-store", () => {
     vi.setSystemTime(2000);
     expect(store.registerIfAbsent("second", 2)).toBe(true);
 
-    const limit = { code: "PLUGIN_STATE_LIMIT_EXCEEDED", operation: "register" };
+    const limit = { ...limitExceeded, operation: "register" };
     throws(() => store.register("third", 3), limit);
     expect(store.registerIfAbsent("first", 99)).toBe(false);
     vi.setSystemTime(3000);
@@ -172,18 +175,11 @@ describe("plugin-state-store", () => {
   it("rejects plugin state ttl when expiry cannot fit in a Date timestamp", async () => {
     const store = openAsyncStore();
 
-    await expectPluginStateStoreError(
-      store.register("huge", true, { ttlMs: Number.MAX_VALUE }),
-      "PLUGIN_STATE_INVALID_INPUT",
-      "register",
+    await expect(store.register("huge", true, { ttlMs: Number.MAX_VALUE })).rejects.toMatchObject(
+      invalidWrite,
     );
-
     vi.spyOn(Date, "now").mockReturnValue(MAX_DATE_TIMESTAMP_MS);
-    const sync = syncStore();
-    throws(() => sync.register("overflow", true, { ttlMs: 60_000 }), {
-      code: "PLUGIN_STATE_INVALID_INPUT",
-      operation: "register",
-    });
+    throws(() => syncStore().register("overflow", true, { ttlMs: 60_000 }), invalidWrite);
   });
 
   it("validates namespaces, keys, options, and JSON values before writes", async () => {
@@ -221,10 +217,12 @@ describe("plugin-state-store", () => {
     for (let i = 0; i < 65; i += 1) {
       deep = { nested: deep };
     }
-    await expectPluginStateStoreError(store.register("deep", deep), "PLUGIN_STATE_LIMIT_EXCEEDED");
-
-    await expectPluginStateStoreError(store.lookup(" "), "PLUGIN_STATE_INVALID_INPUT", "lookup");
-    await expectPluginStateStoreError(store.delete(" "), "PLUGIN_STATE_INVALID_INPUT", "delete");
+    await expect(store.register("deep", deep)).rejects.toMatchObject(limitExceeded);
+    await expect(store.lookup(" ")).rejects.toMatchObject(invalidLookup);
+    await expect(store.delete(" ")).rejects.toMatchObject({
+      ...invalidLookup,
+      operation: "delete",
+    });
   });
 
   it("enforces the 1 MiB boundary across writes", async () => {
@@ -241,7 +239,7 @@ describe("plugin-state-store", () => {
       () => store.registerIfAbsent("rejected", oversize),
       () => store.update("updated", () => oversize),
     ]) {
-      await expect(write()).rejects.toMatchObject({ code: "PLUGIN_STATE_LIMIT_EXCEEDED" });
+      await expect(write()).rejects.toMatchObject(limitExceeded);
     }
     resetPluginStateStoreForTests();
     for (const key of ["registered", "claimed", "updated"]) {
@@ -328,21 +326,12 @@ describe("plugin-state-store", () => {
   it("bulk reads exact keys positionally with sync/async parity across reopen", async () => {
     const options = { namespace: "bulk", maxEntries: 20 };
     const { sync, store } = stores<{ index: number }>(options);
-    const keys = [
-      "ten:10",
-      "two:2",
-      "nul\0tail",
-      "literal\\u0000",
-      "lone\ud800",
-      "__proto__",
-    ] as const;
+    const keys = ["10", "2", "nul\0tail", "\\u0000", "\ud800", "__proto__"] as const;
     keys.forEach((key, index) => sync.register(key, { index }));
     createPluginStateSyncKeyedStore("telegram", options).register(keys[0], { index: 99 });
     syncStore({ ...options, namespace: "other" }).register(keys[0], { index: 98 });
     const now = Date.now();
-    seedPluginStateEntriesForTests([
-      { pluginId: "discord", namespace: "bulk", key: "expired", value: {}, expiresAt: now },
-    ]);
+    seedScope("discord", "bulk", [{ key: "expired", value: {}, expiresAt: now }]);
     const request = [keys[3], "missing", keys[0], "expired", ...keys, ` ${keys[1]} `];
     const expected = [
       { index: 3 },
@@ -380,12 +369,10 @@ describe("plugin-state-store", () => {
     );
     try {
       expect(sync.lookupMany([])).toEqual([]);
-      expect(() => sync.lookupMany(["key", " "])).toThrowError(
-        expect.objectContaining({ code: "PLUGIN_STATE_INVALID_INPUT", operation: "lookup" }),
-      );
+      throws(() => sync.lookupMany(["key", " "]), invalidLookup);
       await expect(
         store.lookupMany(Array.from({ length: 10_001 }, () => "key")),
-      ).rejects.toMatchObject({ code: "PLUGIN_STATE_INVALID_INPUT", operation: "lookup" });
+      ).rejects.toMatchObject(invalidLookup);
       expect(reads.counts.reads).toBe(0);
       expect(sync.lookupMany(Array.from({ length: 10_000 }, () => "key"))).toEqual(
         Array.from({ length: 10_000 }, () => ok(1)),
@@ -404,7 +391,7 @@ describe("plugin-state-store", () => {
         key: `binding:${String(index).padStart(4, "0")}`,
         value: { generation: 1 },
       })),
-      { pluginId: "codex", namespace: "other", key: "binding:0000", value: { keep: true } },
+      { namespace: "other", key: "binding:0000", value: { keep: true } },
       { pluginId: "other", namespace, key: "binding:0000", value: { keep: true } },
     ]);
     const observed = page(MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES);
@@ -437,21 +424,18 @@ describe("plugin-state-store", () => {
   });
 
   it("pages past malformed rows and compares siblings' original JSON bytes", async () => {
-    const namespace = "raw-doctor-bindings";
+    const namespace = "raw";
     const { seed, page, remove, range } = maintenance(namespace);
     seed([
       { key: "binding:a", value: { corrupt: true } },
-      { key: "binding:b", value: { generation: 1 } },
-      { key: "binding:c", value: { generation: 1 } },
-      { key: "binding:d", value: { generation: 1 }, createdAt: -1 },
+      { key: "binding:b", value: { n: 1 } },
+      { key: "binding:c", value: { n: 1 } },
+      { key: "binding:d", value: { n: 1 }, createdAt: -1 },
     ]);
-    const database = openOpenClawStateDatabase().db;
-    const replaceJson = database.prepare(
-      "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = ? AND namespace = ? AND entry_key = ?",
-    );
-    replaceJson.run("{malformed", "codex", namespace, "binding:a");
-    replaceJson.run('{ "generation" : 1 }', "codex", namespace, "binding:b");
-    replaceJson.run('{ "generation" : 1 }', "codex", namespace, "binding:c");
+    replaceJson("codex", namespace, "binding:a", "{malformed");
+    for (const key of ["binding:b", "binding:c"]) {
+      replaceJson("codex", namespace, key, '{ "n" : 1 }');
+    }
 
     const first = page(1);
     expect(first).toEqual([
@@ -463,14 +447,10 @@ describe("plugin-state-store", () => {
     const siblings = page(2, first[0]!.key);
     expect(siblings).toEqual(
       ["binding:b", "binding:c"].map((key) =>
-        expect.objectContaining({
-          key,
-          value: { generation: 1 },
-          valueJson: '{ "generation" : 1 }',
-        }),
+        expect.objectContaining({ key, value: { n: 1 }, valueJson: '{ "n" : 1 }' }),
       ),
     );
-    replaceJson.run('{"generation":1}', "codex", namespace, "binding:c");
+    replaceJson("codex", namespace, "binding:c", '{"n":1}');
 
     expect(() =>
       remove(siblings, () => {
@@ -493,10 +473,7 @@ describe("plugin-state-store", () => {
       await store.register("retained", "original");
       const onAccess = vi.fn();
       const value: unknown = runInNewContext(`({ nested: [${expression}] })`, { onAccess });
-      await expect(store.register("retained", value)).rejects.toMatchObject({
-        code: "PLUGIN_STATE_INVALID_INPUT",
-        operation: "register",
-      });
+      await expect(store.register("retained", value)).rejects.toMatchObject(invalidWrite);
       expect(onAccess).not.toHaveBeenCalled();
       await expect(store.lookup("retained")).resolves.toBe("original");
     },
@@ -518,10 +495,7 @@ describe("plugin-state-store.errors", () => {
         store.register("a", 1);
         store.register("b", 2);
         const { db, path } = openOpenClawStateDatabase();
-        db.prepare("UPDATE plugin_state_entries SET value_json = ? WHERE entry_key = ?").run(
-          "invalid first JSON",
-          "a",
-        );
+        replaceJson("discord", "cursor", "a", "invalid first JSON");
         if (failure === "sqlite-step") {
           // The second native step must take precedence over the first row's decode failure.
           db.exec(`ALTER TABLE plugin_state_entries RENAME TO plugin_state_source;
