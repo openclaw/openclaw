@@ -277,20 +277,6 @@ export type ChannelTurnDroppedHistoryOptions = {
   shouldRecord?: () => boolean;
 };
 
-type ChannelTurnDispatcherOptions = Omit<
-  ReplyDispatcherWithTypingOptions,
-  "deliver" | "deliverPrepared" | "onError"
->;
-
-/** Reply options plus the opaque native command ownership decision carried by channel turns. */
-type ChannelTurnReplyOptions = Omit<GetReplyOptions, "onBlockReply" | "onPreparedBlockReply"> &
-  PluginCommandReplyOptions;
-
-type ChannelTurnReplyPipelineOptions = Omit<
-  CreateChannelReplyPipelineParams,
-  "cfg" | "agentId" | "channel" | "accountId"
->;
-
 type ChannelTurnContext = {
   channel: string;
   accountId?: string;
@@ -316,10 +302,18 @@ export type AssembledChannelTurn = ChannelTurnContext & {
   agentId: string;
   dispatchReplyWithBufferedBlockDispatcher: DispatchReplyWithBufferedBlockDispatcher;
   delivery: ChannelEventDeliveryAdapter;
-  replyPipeline?: ChannelTurnReplyPipelineOptions;
-  dispatcherOptions?: ChannelTurnDispatcherOptions;
+  replyPipeline?: Omit<
+    CreateChannelReplyPipelineParams,
+    "cfg" | "agentId" | "channel" | "accountId"
+  >;
+  dispatcherOptions?: Omit<
+    ReplyDispatcherWithTypingOptions,
+    "deliver" | "deliverPrepared" | "onError"
+  >;
   toolsAllow?: string[];
-  replyOptions?: ChannelTurnReplyOptions;
+  /** Reply options plus the opaque native command ownership decision carried by channel turns. */
+  replyOptions?: Omit<GetReplyOptions, "onBlockReply" | "onPreparedBlockReply"> &
+    PluginCommandReplyOptions;
   replyResolver?: GetReplyFromConfig;
   /** Instance-bound reply dispatcher supplied by the owning plugin runtime. */
   dispatchReplyFromConfig?: DispatchReplyFromConfig;
@@ -349,14 +343,12 @@ export type PreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> = Ch
   observeOnlyDispatchResult?: TDispatchResult;
 };
 
-type ChannelTurnRoute = {
-  agentId: string;
-  dmScope?: DmScope;
-  sessionKey: string;
-};
-
 type RoutedChannelTurn<T> = Omit<T, "routeSessionKey" | "storePath" | "recordInboundSession"> & {
-  route: ChannelTurnRoute;
+  route: {
+    agentId: string;
+    dmScope?: DmScope;
+    sessionKey: string;
+  };
 };
 
 type InboundPreparedChannelTurn<TDispatchResult = DispatchFromConfigResult> =
@@ -390,19 +382,17 @@ export type ChannelTurnResolved<
   | AssembledChannelTurn
   | InboundPreparedChannelTurn<TDispatchResult>;
 
-type ChannelTurnStage =
-  | "ingest"
-  | "classify"
-  | "preflight"
-  | "resolve"
-  | "authorize"
-  | "assemble"
-  | "record"
-  | "dispatch"
-  | "finalize";
-
 export type ChannelTurnLogEvent = {
-  stage: ChannelTurnStage;
+  stage:
+    | "ingest"
+    | "classify"
+    | "preflight"
+    | "resolve"
+    | "authorize"
+    | "assemble"
+    | "record"
+    | "dispatch"
+    | "finalize";
   event: "start" | "done" | "drop" | "handled" | "error" | "warning";
   channel: string;
   accountId?: string;

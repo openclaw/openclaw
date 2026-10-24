@@ -4,6 +4,7 @@ import { once } from "node:events";
 import {
   appendFileSync,
   createWriteStream,
+  existsSync,
   mkdirSync,
   readFileSync,
   realpathSync,
@@ -69,6 +70,7 @@ const { values } = parseArgs({
     "cpu-profile": { type: "boolean", default: false },
     "workload-cpu-profile": { type: "boolean", default: false },
     "capture-responses": { type: "boolean", default: false },
+    "list-filter-churn": { type: "boolean", default: false },
     "trace-gc": { type: "boolean", default: false },
     "worker-memory": { type: "boolean", default: false },
     "baseline-owners": { type: "boolean", default: false },
@@ -134,6 +136,7 @@ const { values } = parseArgs({
     "presence-deltas": { type: "boolean", default: false },
     "session-envelope-refs": { type: "boolean", default: false },
     "start-at": { type: "string" },
+    "start-file": { type: "string" },
     "list-interval-ms": { type: "string", default: "0" },
     "list-profile-reference": { type: "string" },
     "poll-seed": { type: "string" },
@@ -183,13 +186,18 @@ if (
     "memory-soak",
     "plugins.reload",
     "plugin.scope",
+    "cron.list",
+    "board.get",
   ].includes(scenario)
 ) {
   throw new Error(
-    "--scenario must be sessions.list, sessions.describe, sessions.patch, sessions.cleanup, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, plugins.reload, or plugin.scope",
+    "--scenario must be sessions.list, sessions.describe, sessions.patch, sessions.cleanup, connect, reconnect, subscribe, chat.send, transcript-broadcast, attempt-retention, session-idle-retention, memory-soak, plugins.reload, plugin.scope, cron.list, or board.get",
   );
 }
 const retentionScenario = scenario === "attempt-retention";
+if (values["list-filter-churn"] && scenario !== "sessions.list") {
+  throw new Error("--list-filter-churn requires --scenario sessions.list");
+}
 const idleScenario = scenario === "session-idle-retention";
 const soakScenario = scenario === "memory-soak";
 const historyTurns = integer(values["history-turns"], "--history-turns", 0);
@@ -261,7 +269,7 @@ if (
   !values["stream-start-allocations"] &&
   !values["workload-cpu-profile"] &&
   !values["operator-access-policy"] &&
-  !(scenario === "chat.send" && values.diagnostics) &&
+  !values.diagnostics &&
   !(["sessions.list", "sessions.patch"].includes(scenario) && values["capture-responses"]) &&
   scenario !== "transcript-broadcast" &&
   scenario !== "plugin.scope" &&
@@ -270,7 +278,7 @@ if (
   !soakScenario
 ) {
   throw new Error(
-    "--scenario requires --allocations, --workload-cpu-profile, --diagnostics for chat.send, or --capture-responses for sessions.list/sessions.patch",
+    "--scenario requires --allocations, --workload-cpu-profile, --diagnostics, or --capture-responses for sessions.list/sessions.patch",
   );
 }
 const operations = integer(
@@ -551,7 +559,10 @@ const recordListRequests =
   values["stream-start-diagnostics"] ||
   values["cpu-profile"] ||
   values["poll-seed"] !== undefined;
-const startAt = values["start-at"] ? integer(values["start-at"], "--start-at") : undefined;
+let startAt = values["start-at"] ? integer(values["start-at"], "--start-at") : undefined;
+if (startAt !== undefined && values["start-file"]) {
+  throw new Error("Use only one of --start-at and --start-file");
+}
 if (values["session-envelope-refs"] && !values["session-row-deltas"]) {
   throw new Error("--session-envelope-refs requires --session-row-deltas");
 }
@@ -3935,8 +3946,30 @@ try {
       throw new Error(`stress cron did not complete its real agent turn: ${JSON.stringify(run)}`);
     }
   }
+  if (scenario === "cron.list" && (fixture.cronJobs !== 40 || fixture.cronAnnounceLast !== true)) {
+    throw new Error("cron.list requires a fixture generated with --cron 40 --cron-announce-last");
+  }
+  if (scenario === "board.get") {
+    for (let index = 0; index < 3; index++) {
+      await rpc(sender, "board.widget.put", {
+        sessionKey: parentKey,
+        name: `synthetic-gc-audit-${index}`,
+        content: { kind: "html", html: `<p>Synthetic widget ${index}</p>` },
+      });
+    }
+  }
   console.log("PHASE subscribed-and-reset");
   let idleTurnCohorts: Awaited<ReturnType<typeof runRound>>[] = [];
+  const listFilterShapes = [
+    {},
+    { archived: false },
+    { archived: true },
+    { search: "team-shape" },
+    { agentId: "main" },
+    { excludeSubagents: true },
+    { excludeSystem: true, excludeCron: true },
+  ];
+  let listChurnSequence = 0;
   const runScenario = async (measuredRound?: number, operationCount = operations) => {
     if (idleScenario) {
       idleTurnCohorts = [];
@@ -4002,10 +4035,19 @@ try {
               }
             } else if (scenario === "sessions.list" || scenario === "subscribe") {
               const method = scenario === "subscribe" ? "sessions.subscribe" : "sessions.list";
+              if (values["list-filter-churn"] && (offset + index) % 10 === 0) {
+                const params = {
+                  key: parentKey,
+                  label: `Synthetic list filter churn ${listChurnSequence++}`,
+                };
+                assertSessionPatch(params, await rpc(workerClient, "sessions.patch", params));
+              }
               const result = await rpc(workerClient, method, {
                 limit,
                 rowMode,
-                archived: "all",
+                ...(values["list-filter-churn"]
+                  ? listFilterShapes[(offset + index) % listFilterShapes.length]
+                  : { archived: "all" }),
               });
               assertListPage(
                 scenario === "subscribe"
@@ -4047,6 +4089,57 @@ try {
                 result.afterCount !== result.beforeCount
               ) {
                 throw new Error("sessions.cleanup did not preserve the warning-mode fixture");
+              }
+            } else if (scenario === "cron.list") {
+              const result = await rpc(workerClient, "cron.list", {
+                includeDisabled: true,
+                compact: false,
+                limit: 200,
+              });
+              if (
+                !isRecord(result) ||
+                !Array.isArray(result.jobs) ||
+                result.jobs.length !== 40 ||
+                !isRecord(result.deliveryPreviews) ||
+                Object.keys(result.deliveryPreviews).length !== 40
+              ) {
+                throw new Error(
+                  "cron.list did not return all 40 disabled jobs with delivery previews",
+                );
+              }
+              const jobIds = new Set<string>();
+              for (const job of result.jobs) {
+                if (!isRecord(job) || typeof job.id !== "string" || job.enabled !== false) {
+                  throw new Error("cron.list returned an unexpected job");
+                }
+                jobIds.add(job.id);
+                const preview = result.deliveryPreviews[job.id];
+                if (
+                  !isRecord(preview) ||
+                  preview.label !== "announce -> last" ||
+                  typeof preview.detail !== "string" ||
+                  !preview.detail.startsWith("last -> no route, will be blocked:")
+                ) {
+                  throw new Error(
+                    "cron.list omitted the synthetic job's unresolved last-route preview",
+                  );
+                }
+              }
+              if (
+                !Array.from({ length: 40 }, (_, jobIndex) => `team-shape-cron-${jobIndex}`).every(
+                  (id) => jobIds.has(id),
+                )
+              ) {
+                throw new Error("cron.list changed the synthetic job inventory");
+              }
+            } else if (scenario === "board.get") {
+              const result = await rpc(workerClient, "board.get", { sessionKey: parentKey });
+              if (
+                !isRecord(result) ||
+                !Array.isArray(result.widgets) ||
+                result.widgets.length !== 3
+              ) {
+                throw new Error("board.get did not return all three synthetic widgets");
               }
             } else if (scenario === "plugin.scope") {
               const sequence = offset + index;
@@ -4117,6 +4210,13 @@ try {
     );
   }
   console.log("PHASE warmed");
+  if (values["start-file"]) {
+    while (!existsSync(values["start-file"])) {
+      assertGatewayAlive();
+      await delay(250);
+    }
+    startAt = integer(readFileSync(values["start-file"], "utf8").trim(), "--start-file epoch");
+  }
   if (startAt !== undefined) {
     if (Date.now() >= startAt) {
       throw new Error("--start-at passed before fixture readiness and warmup");
@@ -4296,7 +4396,7 @@ try {
     activeWorkCounts = undefined;
     const finishGatewayDiagnostics =
       values.diagnostics || values["transport-counts"] || values["session-projection-counts"]
-        ? await startGatewayDiagnostics(gateway)
+        ? await startGatewayDiagnostics(gateway, `round-${round}`)
         : undefined;
     const finishControllerDiagnostics = values.diagnostics
       ? startGatewayBenchDiagnostics()
@@ -5152,6 +5252,7 @@ try {
     completedRounds: samples.length,
     sessionResets,
     warmupOperations: turnScenario ? undefined : warmupOperations,
+    scheduledStartAtEpochMs: startAt,
     rpcConcurrency,
     rpcIntervalMs,
     reconnectStaggerMs,
@@ -5255,6 +5356,7 @@ try {
     cpuProfile: values["cpu-profile"],
     workloadCpuProfile: values["workload-cpu-profile"],
     captureResponses: values["capture-responses"],
+    listFilterChurn: values["list-filter-churn"],
     traceGc: values["trace-gc"] || values.allocations || values["stream-start-allocations"],
     streamStartDiagnostics: values["stream-start-diagnostics"],
     streamStartAllocations: values["stream-start-allocations"],
@@ -5368,6 +5470,46 @@ try {
       : {}),
     samples: samples.map((sample) =>
       Object.assign(sample, {
+        ...(!turnScenario &&
+        !connectionScenario &&
+        listIntervalMs === 0 &&
+        values.diagnostics &&
+        !values.allocations &&
+        !values["workload-cpu-profile"]
+          ? {
+              naturalGc: (() => {
+                const operationCount = Object.values(sample.rpc).reduce(
+                  (sum, measurement) => sum + measurement.count,
+                  0,
+                );
+                if (operationCount !== operations || !sample.diagnostics) {
+                  throw new Error(
+                    "Natural GC capture must contain the declared completed RPC count",
+                  );
+                }
+                const gcTrace = values["trace-gc"]
+                  ? readGatewayGcTrace(
+                      path.join(output, "gateway.stdout.log"),
+                      `round-${sample.round}`,
+                      "diagnostics",
+                    )
+                  : undefined;
+                return {
+                  operationCount,
+                  timingGateEligible: !values["trace-gc"],
+                  ...(gcTrace
+                    ? { gcTrace, promotedBytesPerOperation: gcTrace.promotedBytes / operationCount }
+                    : {}),
+                  millisecondsPerOperation: Object.fromEntries(
+                    Object.entries(sample.diagnostics.gateway.gc).map(([kind, metric]) => [
+                      kind,
+                      metric.total / operationCount,
+                    ]),
+                  ),
+                };
+              })(),
+            }
+          : {}),
         ...(sample.allocation
           ? {
               allocation: {

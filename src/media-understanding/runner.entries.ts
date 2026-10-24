@@ -66,8 +66,6 @@ import type {
   MediaUnderstandingProvider,
 } from "./types.js";
 
-type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
-
 function trimOutput(text: string, maxChars?: number): string {
   const trimmed = text.trim();
   if (!maxChars || trimmed.length <= maxChars) {
@@ -250,7 +248,7 @@ export async function runProviderEntry(params: {
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
-  providerRegistry: ProviderRegistry;
+  providerRegistry: Map<string, MediaUnderstandingProvider>;
   assertCurrent?: () => void;
   config?: MediaUnderstandingConfig;
   secretOwnerId?: string;

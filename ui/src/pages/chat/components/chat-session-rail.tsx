@@ -262,8 +262,7 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
         )}
         {!props.companion.loading && !props.companion.turns.length && (
           <PanelEmptyState
-            // Side chat keeps its native desktop empty; only mobile adopts the shared variant.
-            presentation={props.presentation === "mobile" ? "mobile" : undefined}
+            presentation={props.presentation}
             icon={<Icon name="bot" />}
             heading={t("chat.sidePanel.companion")}
             description={t("chat.rail.empty")}

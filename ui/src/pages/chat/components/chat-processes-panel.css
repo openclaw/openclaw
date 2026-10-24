@@ -263,14 +263,7 @@
 }
 .chat-processes__output-empty {
   display: flex;
-  flex: none;
   width: 100%;
-  aspect-ratio: 8 / 5;
-  min-height: 220px;
-  max-height: 100%;
-}
-.chat-processes__output-empty .empty-state {
-  transform: none;
 }
 .chat-processes__panel button:focus-visible,
 .chat-processes__output:focus-visible {

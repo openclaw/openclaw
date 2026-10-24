@@ -44,6 +44,7 @@ export type StreamGroupOptions = MessageRenderOptions & {
   resolveReplyPreview?: ReplyPreviewLookup;
   branding?: ThemeBranding;
   bubbleMode?: boolean;
+  bubbleActivityActive?: boolean;
   firstBubbleKey?: string | null;
   onReply?: (target: ChatReplyTarget) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
@@ -135,6 +136,7 @@ function NonstreamPart(props: {
           part={part()}
           options={{
             bubbleMode: props.options.bubbleMode,
+            bubbleActivityActive: props.options.bubbleActivityActive,
             mascot: props.options.branding?.mascot,
             workingIndicator: props.options.branding?.workingIndicator,
             workingPhrases: props.options.branding?.workingPhrases,

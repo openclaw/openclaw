@@ -119,13 +119,20 @@ export function listAgentIds(cfg: AgentRosterConfig): string[] {
   return [...new Set(agents.map((entry) => normalizeAgentId(entry?.id)))];
 }
 
-/** Lists configured roster and ACP harness targets for subagent policy. */
-export function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): Set<string> {
-  const ids = new Set<string>(listAgentIds(cfg));
+/** Lists ACP harness ids and ACP-runtime roster agents named by config; native agents are excluded. */
+export function resolveConfiguredAcpHarnessIds(cfg: OpenClawConfig): Set<string> {
+  const ids = new Set<string>();
+  for (const agent of listAgentEntries(cfg)) {
+    if (agent.runtime?.type !== "acp") {
+      continue;
+    }
+    ids.add(normalizeAgentId(agent.id));
+    const acpAgent = normalizeOptionalAgentId(agent.runtime.acp?.agent);
+    if (acpAgent) {
+      ids.add(acpAgent);
+    }
+  }
   const candidates = [
-    ...listAgentEntries(cfg).flatMap((agent) =>
-      agent.runtime?.type === "acp" ? [agent.runtime.acp?.agent] : [],
-    ),
     cfg.acp?.defaultAgent,
     ...(cfg.acp?.allowedAgents ?? []).filter((entry) => entry.trim() !== "*"),
   ];
@@ -136,6 +143,11 @@ export function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): Set<
     }
   }
   return ids;
+}
+
+/** Lists configured roster and ACP harness targets for subagent policy. */
+export function resolveConfiguredAcpSubagentTargetIds(cfg: OpenClawConfig): Set<string> {
+  return new Set([...listAgentIds(cfg), ...resolveConfiguredAcpHarnessIds(cfg)]);
 }
 
 /** Reserved system agents belong to the Gateway without authored roster entries. */

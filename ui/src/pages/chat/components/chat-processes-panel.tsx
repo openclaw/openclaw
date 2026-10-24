@@ -308,6 +308,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
               fallback={
                 <div class="chat-processes__output-empty">
                   <PanelEmptyState
+                    presentation="desktop"
                     icon={<Icon name="terminal" />}
                     heading={t("chat.processesPanel.noOutputTitle")}
                     description={t("chat.processesPanel.noOutput")}
@@ -474,6 +475,7 @@ export const ChatProcessesPanel = defineSolidBridge<ChatProcessesPanelProps>(
                 }
               >
                 <PanelEmptyState
+                  presentation={props.mobile ? "mobile" : "desktop"}
                   icon={<Icon name="terminal" />}
                   heading={t("chat.processesPanel.emptyTitle")}
                   description={t("chat.processesPanel.empty")}

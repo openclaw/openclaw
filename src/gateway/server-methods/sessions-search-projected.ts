@@ -5,7 +5,6 @@ import type {
 import { withAgentRosterFactsBatch } from "../../agents/agent-scope-config.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import type { SessionStoreTarget } from "../../config/sessions/targets.js";
-import { runSynchronousWork } from "../../shared/synchronous-work.js";
 import { filterSessionEntries } from "../session-list-filters.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
 import {
@@ -39,7 +38,7 @@ export async function searchProjectedSessionTranscripts(params: {
       searchIdentities,
     });
     const { entries } = withAgentRosterFactsBatch(prepared.cfg, () =>
-      runSynchronousWork(filterSessionEntries(filters)),
+      filterSessionEntries(filters),
     );
     type SelectedRow = NonNullable<ReturnType<typeof prepared.getTarget>>;
     const stores = new Map<

@@ -10,6 +10,7 @@ import {
   transcriptIdentity,
 } from "../../../lib/sqlite-transcript-payload.mjs";
 import { readDatabase } from "./observations.mjs";
+import { readSessionArchiveBytes } from "./session-archive-proof.mjs";
 
 function readJson(file) {
   return JSON.parse(fs.readFileSync(file, "utf8"));
@@ -254,11 +255,11 @@ function assertSeededAgents(snapshot) {
           archiveRoot,
           "agent archive escaped its owner",
         );
-        assert(fs.existsSync(move.archivePath), `legacy agent archive missing: ${file.relative}`);
+        const archiveBytes = readSessionArchiveBytes(move);
         if (file.kind === "legacy-store") {
           // Earlier Doctor passes may normalize the entry, but keys and session identities must survive.
           assert.deepEqual(
-            sessionIdentities(readJson(move.archivePath)),
+            sessionIdentities(JSON.parse(archiveBytes.toString("utf8"))),
             file.sessions,
             `legacy session index identities changed: ${file.relative}`,
           );
@@ -274,7 +275,7 @@ function assertSeededAgents(snapshot) {
           }
         } else {
           assert.equal(
-            hashBytes(fs.readFileSync(move.archivePath)),
+            hashBytes(archiveBytes),
             file.sha256,
             `legacy agent archive changed: ${file.relative}`,
           );

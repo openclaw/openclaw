@@ -383,7 +383,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     pluginRuntimeRefreshMessages: params.pluginRuntimeRefreshMessages,
     continuation: sessionPromptState.continuation,
     runCleanupSettlement: params.runCleanupSettlement,
-    executionSelection: params.executionSelection,
+    joinObservation: params.joinObservation,
     permissionChange: input.permissionChange,
     admittedRunContext: params.admittedRunContext,
     startedAtMs: runInput.startedAtMs,

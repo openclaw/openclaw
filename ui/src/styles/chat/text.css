@@ -115,14 +115,19 @@
 }
 
 .markdown-hex-color {
+  margin-inline: 0.2em;
   white-space: nowrap;
+
+  &:not(:is(strong, b) *) {
+    font-weight: 500;
+  }
 }
 
 .markdown-hex-color__swatch {
   display: inline-block;
   width: 0.85em;
   height: 0.85em;
-  margin-inline-start: 0.3em;
+  margin-inline-end: 0.3em;
   vertical-align: -0.05em;
   border: 1px solid var(--muted);
   border-radius: 3px;

@@ -608,7 +608,9 @@ If an owner assignment fails on the Sessions page, the page keeps the session an
 shows the Gateway's error. Resolve the reported problem, then reopen **Assign to**
 to retry. A late failure from a previous connection does not replace the current page's state.
 The **Assign to** menu marks the session's current owner and disables that choice,
-including while the team directory is loading or unavailable.
+including while the team directory is loading or unavailable. Once its submenu is open,
+typing filters people and agents without first clicking the search field. Escape clears
+the search; Arrow Down and Enter let you select a matching owner.
 
 ### Share a session publicly
 
