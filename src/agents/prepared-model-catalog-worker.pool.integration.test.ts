@@ -27,6 +27,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { applySkillEnvOverridesFromSnapshot } from "../skills/runtime/env-overrides.js";
 import * as agentAuthDiscovery from "./agent-auth-discovery.js";
 import { saveAuthProfileStore } from "./auth-profiles/store-runtime.js";
+import { configFor } from "./model-auth.fixtures.test-support.js";
 import { PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS } from "./model-catalog-timeouts.js";
 import { getPreparedModelCatalogWorkerPoolSnapshot } from "./prepared-model-catalog-worker.js";
 import { writeFixturePlugin, PROVIDER_ID } from "./prepared-model-catalog-worker.test-support.js";
@@ -470,15 +471,9 @@ describe("Gateway catalog worker pool", () => {
                 ? fixture.config
                 : {
                     ...fixture.config,
-                    models: {
-                      providers: {
-                        [PROVIDER_ID]: {
-                          baseUrl: "https://replacement-catalog.invalid/v1",
-                          api: "openai-completions",
-                          models: [],
-                        },
-                      },
-                    },
+                    ...configFor(PROVIDER_ID, "https://replacement-catalog.invalid/v1", {
+                      api: "openai-completions",
+                    }),
                   };
             await refreshPreparedModelRuntimeSnapshots(config, {
               catalogMode: "static",

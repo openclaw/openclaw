@@ -155,7 +155,7 @@ native settings; per-account overrides may differ. Text-only surfaces keep the h
 </ParamField>
 
 <ParamField path="commands.restart" type="boolean" default="true">
-  Enables `/restart`, `/update`, and external `SIGUSR2` restart requests.
+  Enables `/restart`, `/update`, external-chat `gateway` tool restart/update actions, and external `SIGUSR2` restart requests. `gateway` cleanup does not restart and is independent of this setting.
 </ParamField>
 
 <ParamField path="commands.ownerAllowFrom" type="string[]">

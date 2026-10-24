@@ -8,10 +8,10 @@ import * as acpManager from "../../../acp/control-plane/manager.js";
 import { disposeAcpSessionManagerInstance } from "../../../acp/control-plane/manager.lifecycle.js";
 import { SessionActorQueue } from "../../../acp/control-plane/session-actor-queue.js";
 import * as runtimeRegistry from "../../../acp/runtime/registry.js";
-import * as acpSessionEntry from "../../../acp/runtime/session-meta-entry.js";
 import type { CliDeps } from "../../../cli/deps.types.js";
 import * as configRuntime from "../../../config/config.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
+import * as sessionEntryWorker from "../../../config/sessions/session-accessor.sqlite-replacement-worker.js";
 import * as gatewayCall from "../../../gateway/call.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import { withLocalGatewayRequestScope } from "../../../gateway/local-request-context.js";
@@ -237,14 +237,14 @@ it.each([
     }
     const lateMetadata = vi.fn();
     if (stage === "metadata") {
-      const update = acpSessionEntry.updateAcpSessionStoreEntry;
+      const update = sessionEntryWorker.withSessionEntryWorker;
       let held = false;
-      vi.spyOn(acpSessionEntry, "updateAcpSessionStoreEntry").mockImplementation(async (params) => {
-        const updated = await update(params);
+      vi.spyOn(sessionEntryWorker, "withSessionEntryWorker").mockImplementation(async (...args) => {
+        const updated = await update(...args);
         if (
           !held &&
-          params.mutation.kind === "touch" &&
-          params.scope.sessionKey === childKey &&
+          args[0].agentId === "fixture" &&
+          childKey &&
           ensuredSessions.includes(childKey)
         ) {
           held = true;

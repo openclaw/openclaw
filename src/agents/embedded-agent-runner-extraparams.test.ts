@@ -22,6 +22,21 @@ vi.mock("../plugins/provider-hook-runtime.js", () => ({
   getModelProviderRuntimePluginHandle: () => undefined,
 }));
 
+function createAuthenticatedNativeSearchConfig(openaiCodex: {
+  enabled: boolean;
+  mode: "live" | "cached";
+  allowedDomains?: string[];
+}) {
+  return {
+    auth: {
+      profiles: {
+        "openai:default": { provider: "openai", mode: "oauth" },
+      },
+    },
+    tools: { web: { search: { enabled: true, openaiCodex } } },
+  };
+}
+
 function firstTransportHookCall(mock: { mock: { calls: unknown[][] } }): Record<string, unknown> {
   const call = mock.mock.calls[0]?.[0];
   if (!call || typeof call !== "object" || Array.isArray(call)) {
@@ -912,28 +927,11 @@ describe("applyExtraParamsToAgent", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5.4",
-      cfg: {
-        auth: {
-          profiles: {
-            "openai:default": {
-              provider: "openai",
-              mode: "oauth",
-            },
-          },
-        },
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              openaiCodex: {
-                enabled: true,
-                mode: "live",
-                allowedDomains: ["example.com"],
-              },
-            },
-          },
-        },
-      },
+      cfg: createAuthenticatedNativeSearchConfig({
+        enabled: true,
+        mode: "live",
+        allowedDomains: ["example.com"],
+      }),
       model: {
         api: "openai-chatgpt-responses",
         provider: "openai",
@@ -956,27 +954,10 @@ describe("applyExtraParamsToAgent", () => {
     const payload = runResponsesPayloadMutationCase({
       applyProvider: "openai",
       applyModelId: "gpt-5.4",
-      cfg: {
-        auth: {
-          profiles: {
-            "openai:default": {
-              provider: "openai",
-              mode: "oauth",
-            },
-          },
-        },
-        tools: {
-          web: {
-            search: {
-              enabled: true,
-              openaiCodex: {
-                enabled: true,
-                mode: "cached",
-              },
-            },
-          },
-        },
-      },
+      cfg: createAuthenticatedNativeSearchConfig({
+        enabled: true,
+        mode: "cached",
+      }),
       model: {
         api: "openai-chatgpt-responses",
         provider: "openai",

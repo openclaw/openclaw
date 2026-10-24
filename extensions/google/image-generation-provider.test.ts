@@ -3,7 +3,7 @@ import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
 import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
+import { jsonResponse, mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { googleImageGenerationProvider } from "./image-generation-provider.js";
 
@@ -29,13 +29,6 @@ function inlineImage(data: Buffer | string, mimeType = "image/png") {
 }
 
 let ssrfMock: { mockRestore: () => void } | undefined;
-
-function jsonResponse(payload: unknown): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
-}
 
 function installGoogleFetchMock(
   payload: unknown = googleImagePayload([inlineImage(Buffer.from("png-data"))]),

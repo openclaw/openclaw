@@ -30,6 +30,7 @@ import { loadTranscriptEventsSync } from "./session-accessor.sqlite-read.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import * as workerReaders from "./session-transcript-worker-readers.js";
+import { promptReport } from "./system-prompt-report.test-support.js";
 import type { SessionEntry } from "./types.js";
 
 let state: OpenClawTestState;
@@ -123,14 +124,7 @@ it("hydrates only old scoped candidates while protecting out-of-scope history re
   const snapshots = {
     sessionDiffBaseline: { version: 1, sessionId, root: "/synthetic", files: [] },
     skillsSnapshot: { prompt: "saved prompt".repeat(1024), skills: [] },
-    systemPromptReport: {
-      source: "run",
-      generatedAt: 1,
-      systemPrompt: { chars: 1, projectContextChars: 0, nonProjectContextChars: 1 },
-      injectedWorkspaceFiles: [],
-      skills: { promptChars: 0, entries: [] },
-      tools: { listChars: 0, schemaChars: 0, entries: [] },
-    },
+    systemPromptReport: promptReport(1, 1, 0),
   } satisfies Partial<SessionEntry>;
   const survivorReferences = {
     previousSessionId: "protected-previous",

@@ -279,6 +279,7 @@ No cross-kind category taxonomy or global relevance ranking is introduced.
 
 ## Messaging and logs
 
+- `chat.history`, `chat.startup`, and live `session.message` payloads contain display projections. Provider replay bookkeeping stays in the durable transcript for model continuation; it is omitted from these client payloads without changing visible message content or tool arguments.
 - `send` is the direct outbound-delivery RPC for channel/account/thread-targeted sends outside the chat runner.
 - `logs.tail` returns the configured gateway file-log tail with cursor/limit and max-byte controls.
 

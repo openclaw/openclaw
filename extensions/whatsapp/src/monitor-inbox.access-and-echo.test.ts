@@ -1,5 +1,6 @@
 // WhatsApp monitor inbox access and echo behavior.
 import { cleanMessage } from "baileys";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it, vi } from "vitest";
 import { whatsappInboundLog } from "./auto-reply/loggers.js";
 import { isRecentOutboundMessage } from "./inbound/dedupe.js";
@@ -22,15 +23,8 @@ const DEFAULT_MESSAGES_CFG = {
   responsePrefix: undefined,
 } as const;
 
-function createAllowListConfig(allowFrom: string[]) {
-  return {
-    channels: {
-      whatsapp: {
-        allowFrom,
-      },
-    },
-    messages: DEFAULT_MESSAGES_CFG,
-  };
+function createInboxConfig(whatsapp: NonNullable<OpenClawConfig["channels"]>["whatsapp"]) {
+  return { channels: { whatsapp }, messages: DEFAULT_MESSAGES_CFG };
 }
 
 async function openInboxMonitor(onMessage = vi.fn()) {
@@ -57,15 +51,12 @@ async function expectOutboundDmSkipsPairing(params: {
   messageId: string;
   body: string;
 }) {
-  mockLoadConfig.mockReturnValue({
-    channels: {
-      whatsapp: {
-        dmPolicy: "pairing",
-        selfChatMode: params.selfChatMode,
-      },
-    },
-    messages: DEFAULT_MESSAGES_CFG,
-  });
+  mockLoadConfig.mockReturnValue(
+    createInboxConfig({
+      dmPolicy: "pairing",
+      selfChatMode: params.selfChatMode,
+    }),
+  );
 
   const onMessage = vi.fn();
   const { listener, sock } = await startInboxMonitor(onMessage);
@@ -91,10 +82,7 @@ async function expectOutboundDmSkipsPairing(params: {
     expect(upsertPairingRequestMock).not.toHaveBeenCalled();
     expect(sock.sendMessage).not.toHaveBeenCalled();
   } finally {
-    mockLoadConfig.mockReturnValue({
-      channels: { whatsapp: { allowFrom: ["*"] } },
-      messages: DEFAULT_MESSAGES_CFG,
-    });
+    mockLoadConfig.mockReturnValue(createInboxConfig({ allowFrom: ["*"] }));
     await listener.close();
   }
 }
@@ -162,7 +150,7 @@ describe("web monitor inbox", () => {
   );
 
   it("allows messages from senders in allowFrom list", async () => {
-    mockLoadConfig.mockReturnValue(createAllowListConfig(["+111", "+999"]));
+    mockLoadConfig.mockReturnValue(createInboxConfig({ allowFrom: ["+111", "+999"] }));
 
     const { onMessage, listener, sock } = await openInboxMonitor();
 
@@ -199,7 +187,7 @@ describe("web monitor inbox", () => {
   it("allows same-phone messages even if not in allowFrom", async () => {
     // Same-phone mode: when from === selfJid, should always be allowed
     // This allows users to message themselves even with restrictive allowFrom
-    mockLoadConfig.mockReturnValue(createAllowListConfig(["+111"]));
+    mockLoadConfig.mockReturnValue(createInboxConfig({ allowFrom: ["+111"] }));
 
     const { onMessage, listener, sock } = await openInboxMonitor();
 
@@ -232,16 +220,13 @@ describe("web monitor inbox", () => {
   });
 
   it("blocks allowlisted same-phone fromMe DMs when self-chat mode is disabled", async () => {
-    mockLoadConfig.mockReturnValue({
-      channels: {
-        whatsapp: {
-          dmPolicy: "pairing",
-          allowFrom: ["+123"],
-          selfChatMode: false,
-        },
-      },
-      messages: DEFAULT_MESSAGES_CFG,
-    });
+    mockLoadConfig.mockReturnValue(
+      createInboxConfig({
+        dmPolicy: "pairing",
+        allowFrom: ["+123"],
+        selfChatMode: false,
+      }),
+    );
     const { onMessage, listener, sock } = await openInboxMonitor();
 
     try {
@@ -372,16 +357,13 @@ describe("web monitor inbox", () => {
   });
 
   it("allows owner fromMe group commands when they were not sent by the gateway", async () => {
-    mockLoadConfig.mockReturnValue({
-      channels: {
-        whatsapp: {
-          groupPolicy: "open",
-          allowFrom: ["+123"],
-          selfChatMode: false,
-        },
-      },
-      messages: DEFAULT_MESSAGES_CFG,
-    });
+    mockLoadConfig.mockReturnValue(
+      createInboxConfig({
+        groupPolicy: "open",
+        allowFrom: ["+123"],
+        selfChatMode: false,
+      }),
+    );
 
     const { onMessage, listener, sock } = await openInboxMonitor();
 
@@ -431,15 +413,12 @@ describe("web monitor inbox", () => {
     { name: "remote inbound", fromMe: false, selfChatMode: false },
     { name: "linked-device self-chat", fromMe: true, selfChatMode: true },
   ])("admits a distinct-ID $name collision after an accepted outbound send", async (testCase) => {
-    mockLoadConfig.mockReturnValue({
-      channels: {
-        whatsapp: {
-          allowFrom: ["+123", "+999"],
-          selfChatMode: testCase.selfChatMode,
-        },
-      },
-      messages: DEFAULT_MESSAGES_CFG,
-    });
+    mockLoadConfig.mockReturnValue(
+      createInboxConfig({
+        allowFrom: ["+123", "+999"],
+        selfChatMode: testCase.selfChatMode,
+      }),
+    );
     const onMessage = vi.fn();
     const { listener, sock } = await startInboxMonitor(onMessage);
     const remoteJid = testCase.fromMe ? "123@s.whatsapp.net" : "999@s.whatsapp.net";
@@ -468,15 +447,12 @@ describe("web monitor inbox", () => {
   });
 
   it("filters group fromMe echoes only when the gateway sent the matching message id", async () => {
-    mockLoadConfig.mockReturnValue({
-      channels: {
-        whatsapp: {
-          groupPolicy: "open",
-          allowFrom: ["+123"],
-        },
-      },
-      messages: DEFAULT_MESSAGES_CFG,
-    });
+    mockLoadConfig.mockReturnValue(
+      createInboxConfig({
+        groupPolicy: "open",
+        allowFrom: ["+123"],
+      }),
+    );
 
     const onMessage = vi.fn();
     const { listener, sock } = await startInboxMonitor(onMessage);
@@ -509,15 +485,12 @@ describe("web monitor inbox", () => {
   });
 
   it("filters self-chat DM fromMe echoes when the gateway sent the matching message id", async () => {
-    mockLoadConfig.mockReturnValue({
-      channels: {
-        whatsapp: {
-          selfChatMode: true,
-          allowFrom: ["+123"],
-        },
-      },
-      messages: DEFAULT_MESSAGES_CFG,
-    });
+    mockLoadConfig.mockReturnValue(
+      createInboxConfig({
+        selfChatMode: true,
+        allowFrom: ["+123"],
+      }),
+    );
 
     const onMessage = vi.fn();
     const { listener, sock } = await startInboxMonitor(onMessage);
@@ -584,15 +557,12 @@ describe("web monitor inbox", () => {
   ])(
     "filters provider-normalized outbound self echoes for $name",
     async ({ outboundJid, echoedJid, echoedAlternateJid }) => {
-      mockLoadConfig.mockReturnValue({
-        channels: {
-          whatsapp: {
-            selfChatMode: true,
-            allowFrom: ["+123"],
-          },
-        },
-        messages: DEFAULT_MESSAGES_CFG,
-      });
+      mockLoadConfig.mockReturnValue(
+        createInboxConfig({
+          selfChatMode: true,
+          allowFrom: ["+123"],
+        }),
+      );
 
       const onMessage = vi.fn();
       const { listener, sock } = await startInboxMonitor(onMessage);
@@ -628,15 +598,12 @@ describe("web monitor inbox", () => {
   );
 
   it("keeps provider-normalized echo matches scoped to their account and message", async () => {
-    mockLoadConfig.mockReturnValue({
-      channels: {
-        whatsapp: {
-          selfChatMode: true,
-          allowFrom: ["+123"],
-        },
-      },
-      messages: DEFAULT_MESSAGES_CFG,
-    });
+    mockLoadConfig.mockReturnValue(
+      createInboxConfig({
+        selfChatMode: true,
+        allowFrom: ["+123"],
+      }),
+    );
 
     const { listener, sock } = await startInboxMonitor(vi.fn());
     sock.sendMessage.mockResolvedValueOnce({ key: { id: "scoped-hosted-echo" } });

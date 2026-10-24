@@ -266,7 +266,7 @@ const THINKING_TAG_CLOSE_RE = new RegExp(
   String.raw`<\s*\/\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
   "i",
 );
-export const THINKING_TAG_SCAN_RE = new RegExp(
+const THINKING_TAG_SCAN_RE = new RegExp(
   String.raw`<\s*(\/?)\s*${THINKING_TAG_NAME_PATTERN}\s*>`,
   "gi",
 );
@@ -285,7 +285,7 @@ export type ThinkingTagStreamState = {
 };
 
 export function createAssistantStreamBlockState() {
-  return { thinking: false, final: false, inlineCode: createInlineCodeState() };
+  return { reasoningDepth: 0, final: false, inlineCode: createInlineCodeState() };
 }
 
 export function createThinkingTagStreamState(): ThinkingTagStreamState {

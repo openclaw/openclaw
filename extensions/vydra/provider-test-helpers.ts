@@ -35,13 +35,6 @@ export function stubVydraApiKey(): void {
   });
 }
 
-export function jsonResponse(payload: Record<string, unknown>): Response {
-  return new Response(JSON.stringify(payload), {
-    status: 200,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
 export function binaryResponse(data: string, contentType: string): Response {
   return new Response(Buffer.from(data), {
     status: 200,

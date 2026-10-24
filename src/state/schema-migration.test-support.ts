@@ -1,7 +1,9 @@
+import fs from "node:fs";
 import { constants, DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { expect } from "vitest";
 import { restoreDoctorMigrationBackup } from "../commands/doctor-migration-backup-restore.js";
 import { createScopedMigrationSnapshot } from "../infra/sqlite-migration-scoped-snapshot.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withAgentDatabaseMaintenanceLease } from "./openclaw-agent-db-maintenance-lease.js";
 import {
@@ -29,6 +31,37 @@ export function seedVersion(db: DatabaseSync, version: number) {
   db.exec(`PRAGMA user_version = ${version};
     INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, created_at, updated_at)
     VALUES ('primary', 'agent', ${version}, 'main', 1, 1);`);
+}
+
+// Frozen v27 plus published v28–30 DDL, independent of the candidate migration.
+const schemaV27 = fs.readFileSync(
+  new URL("../../test/fixtures/sqlite/openclaw-agent-schema-v27.sql", import.meta.url),
+  "utf8",
+);
+
+export function seedAgentV30Schema(database: DatabaseSync, version: number): void {
+  database.exec(schemaV27);
+  seedVersion(database, version);
+  database.exec(`
+    DROP INDEX idx_agent_transcript_event_parent;
+    DROP INDEX idx_agent_session_windows_conversation;
+    CREATE INDEX idx_agent_session_windows_conversation
+      ON session_windows(primary_conversation_id) WHERE primary_conversation_id IS NOT NULL;
+    DROP TABLE memory_entry_origins;
+    ${extractSqliteTableSchema(schemaV27, "memory_entry_origins").replace(
+      ") STRICT;",
+      ") STRICT, WITHOUT ROWID;",
+    )}
+    DROP INDEX idx_agent_session_nodes_last_interaction_at;
+    DROP INDEX idx_agent_session_reactions_message;
+    ALTER TABLE trajectory_runtime_events ADD COLUMN event_utf8_bytes INTEGER;
+    ALTER TABLE trajectory_runtime_events ADD COLUMN event_payload BLOB;
+    ALTER TABLE trajectory_runtime_events ADD COLUMN event_codec TEXT;
+    DROP INDEX idx_agent_trajectory_runtime_run;
+    CREATE INDEX idx_agent_trajectory_runtime_run
+      ON trajectory_runtime_events(session_id, run_id, created_at,
+        COALESCE(event_utf8_bytes, octet_length(event_json)));
+  `);
 }
 
 export function refuseVersion(db: DatabaseSync, version: number) {

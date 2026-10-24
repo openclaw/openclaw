@@ -2,6 +2,7 @@ import * as crypto from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { convertToLlm } from "../../../packages/agent-core/src/harness/messages.js";
 import { convertProviderResponsesMessages } from "../../../packages/ai/src/transports/openai-responses-replay-messages-internal.js";
+import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
 import {
   normalizeTranscriptJsonValue,
   isOwnedTranscriptPayload,
@@ -176,14 +177,7 @@ describe("prompt cache history fingerprints", () => {
           stopReason: "toolUse",
           timestamp: 3,
         }),
-        {
-          role: "toolResult",
-          toolCallId: "read-1",
-          toolName: "read",
-          content: [{ type: "text", text: "fixture result" }],
-          isError: false,
-          timestamp: 4,
-        },
+        makeTextToolResult("read-1", "read", "fixture result", false, 4),
       );
       const loop = await request();
       source.push(

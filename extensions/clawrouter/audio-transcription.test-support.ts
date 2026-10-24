@@ -78,3 +78,15 @@ export async function withClawRouterAudioFixture(
     { env: { CLAWROUTER_API_KEY: undefined, OPENAI_API_KEY: "fixture-upstream-never-router" } },
   );
 }
+
+export const respondPricingRequired = (res: ServerResponse) => {
+  res.statusCode = 400;
+  res.end(
+    JSON.stringify({
+      error: {
+        code: "pricing_required",
+        message: "No qualified arbitrary-file reserve bound",
+      },
+    }),
+  );
+};

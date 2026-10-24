@@ -1,7 +1,7 @@
-import { once } from "node:events";
 import { createServer } from "node:http";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import {
   DiscordError,
   isUnknownDiscordVoiceStateError,
@@ -84,17 +84,11 @@ describe("Discord REST error redaction", () => {
       });
       res.end(JSON.stringify(responseBody));
     });
-    const listening = once(server, "listening");
-    server.listen(0, "127.0.0.1");
-    await listening;
+    const port = await listenOnLoopback(server);
 
     try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("test server did not bind to a TCP port");
-      }
       const client = new RequestClient(token, {
-        baseUrl: `http://127.0.0.1:${address.port}`,
+        baseUrl: `http://127.0.0.1:${port}`,
         queueRequests: false,
       });
 

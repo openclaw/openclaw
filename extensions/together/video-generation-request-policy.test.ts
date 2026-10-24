@@ -7,7 +7,10 @@ import type {
   postJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import { afterEach, assert, expect, it, vi } from "vitest";
-import { createProxyRequestModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
+import {
+  createModelProviderConfig,
+  createProxyRequestModelProviderConfig,
+} from "../test-support/model-provider-config.test-support.js";
 import plugin from "./index.js";
 
 const { postMock, pollMock } = vi.hoisted(() => ({
@@ -84,13 +87,9 @@ it("denies private polling without needing a proxy override", async () => {
       provider: "together",
       model: "Wan-AI/wan2.7-t2v",
       prompt: "a synthetic lobster",
-      cfg: {
-        models: {
-          providers: {
-            together: { baseUrl: "http://127.0.0.1:9", models: [] },
-          },
-        },
-      },
+      cfg: createModelProviderConfig({
+        together: { baseUrl: "http://127.0.0.1:9", models: [] },
+      }),
     }),
   ).rejects.toMatchObject({ name: "SsrFBlockedError" });
   expect(postMock).toHaveBeenCalled();
