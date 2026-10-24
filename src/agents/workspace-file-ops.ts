@@ -8,7 +8,7 @@ import {
 import { toRelativeWorkspacePath } from "./path-policy.js";
 import { resolveHostWorkspaceRoot } from "./workspace-write-scope.js";
 
-export async function writeWorkspaceFile(
+export async function writeHostWorkspaceFile(
   root: string,
   getRoot: (root: string) => ReturnType<typeof fsRoot>,
   absolutePath: string,

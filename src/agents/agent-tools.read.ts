@@ -65,7 +65,7 @@ import {
   toolResultFitsBudget,
   type ToolResultBudget,
 } from "./tool-result-limits.js";
-import { toCanonicalRelativeWorkspacePath, writeWorkspaceFile } from "./workspace-file-ops.js";
+import { toCanonicalRelativeWorkspacePath, writeHostWorkspaceFile } from "./workspace-file-ops.js";
 import { resolveHostWorkspaceRoot } from "./workspace-write-scope.js";
 
 // NOTE(steipete): Upstream read now does file-magic MIME detection; we keep the wrapper
@@ -1314,7 +1314,7 @@ function createHostMutationOperations(
         });
       },
       writeFile: (absolutePath: string, content: string) =>
-        writeWorkspaceFile(root, getRoot, absolutePath, content, options?.abortSignal),
+        writeHostWorkspaceFile(root, getRoot, absolutePath, content, options?.abortSignal),
       readFile: async (absolutePath: string) => {
         // Reads retain the workspace contract of following only symlink parents.
         const selectedRoot = resolveHostWorkspaceRoot(root, absolutePath);
