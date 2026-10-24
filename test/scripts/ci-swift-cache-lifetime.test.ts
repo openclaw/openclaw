@@ -60,6 +60,7 @@ function selected(owner: Step, context: Context = {}) {
       "swiftpm-cache": outputs({ "cache-hit": String(context.hit ?? false) }),
       "swift-build-cache": outputs({ "cache-hit": String(context.hit ?? false) }),
       "record-swift-build-cache-metadata": {
+        outputs: {},
         outcome:
           context.metadataOutcome === "" ? undefined : (context.metadataOutcome ?? "success"),
       },
