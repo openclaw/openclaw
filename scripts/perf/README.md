@@ -4110,25 +4110,45 @@ Apply the paired-mean and sample-count decision rules; major GC needs at least
 50 collections per side to gate. Set each process's HOME, OPENCLAW_HOME, and
 TMPDIR to its own sandbox, and use the host's production guard and resource limits.
 
-`prompt-cache-history-measure.ts` runs the production `convertToLlm` and history
-fingerprint owner over 400 synthetic assistant messages with text and nested tool
-arguments. It separates one cold call from 100 warm calls for append-normalized,
-sealed/reloaded, and mutable SDK history. It counts SHA-256 calls and UTF-8 input
-bytes per observation and per message, plus elapsed and process CPU time. These
-are fingerprint work counts, not whole-Gateway allocation or provider latency.
+`prompt-cache-history-measure.ts` exercises the history fingerprint owner with
+1,000 precreated synthetic messages. Select `--mode sealed|append|mutable` and
+`--content string|blocks`; block messages contain text, thinking, and nested tool
+arguments. `sealed` owns the whole message; `append` owns its content while the
+envelope remains mutable. Each process warms the owner, collects garbage, creates
+its fixture, and collects again before measurement.
 
 ```sh
-node --import ./scripts/tsx.mjs scripts/perf/prompt-cache-history-measure.ts \
-  --start-at <future-epoch-ms>
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/prompt-cache-history-measure.ts \
+  --mode sealed --content blocks --measure retained
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/prompt-cache-history-measure.ts \
+  --mode append --content blocks --measure cpu --passes 1000 --start-at <future-epoch-ms>
 ```
 
+`retained` reports the incremental forced-GC heap bytes and bytes per message,
+including both owner caches and returned fingerprints. `cpu` reports cold,
+repeated-history, and history-plus-one-new-message observations. Every appended
+pass uses a previously unobserved message. Fixture creation and forced collection
+are outside the timed warm/append loops. Use enough `--passes` for the fast sealed
+path; `--count` controls history size. The output digest covers role, identity,
+layout, and packed diagnostic fields and must match between baseline and candidate.
+
+`--measure counts` separately instruments SHA-256 call/input-byte counts;
+`--measure allocation --output <profile.json>` samples allocations including
+collected objects; `--measure snapshot --output <prefix>` writes before/after
+forced-GC heap snapshots. Profiling and counting runs are separate from untraced
+CPU/GC decisions. GC entries report collection kind and duration, with counts
+available from the entry arrays; small collection samples are context only.
+These are owner-level measurements, not whole-Gateway allocation or latency.
+
 To compare a baseline, save its `prompt-cache-history.ts` beside the current
-module and pass its absolute path with `--owner`. Use the same runtime and fixture
-on both sides of each concurrent, locked pair, swapping CPU halves between pairs.
-Run at least five pairs. The retained append-normalized case should eliminate
-repeated nested-argument hashing; sealed history should remain at zero warm hash
-bytes, and mutable SDK content must still be inspected. Diagnostic output and
-in-place mutation coverage live in `prompt-cache-observability.history.test.ts`.
+module and pass its absolute path with `--owner`. Both owners and the fixture
+must share the same transcript normalization module. Use the same runtime and
+fixture on both sides of concurrent, locked pairs, swapping the interleaved CPU
+sides between pairs. Run at least five pairs using the host production guard.
+The append-normalized case should eliminate repeated nested-argument hashing;
+sealed history should remain at zero warm hash bytes, and mutable SDK content
+must still be inspected. Diagnostic output and in-place mutation coverage live
+in `prompt-cache-observability.history.test.ts`.
 
 ## WebSocket event diagnostic accounting
 
