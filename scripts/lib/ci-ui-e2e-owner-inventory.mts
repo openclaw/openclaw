@@ -1576,11 +1576,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/pages/chat/components/chat-question-card.ts"],
   ),
   pageWatch(
-    "ui/src/e2e/question-progress.e2e.test.ts",
-    ["chat"],
-    ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/scroll.ts"],
-  ),
-  pageWatch(
     "ui/src/e2e/resize-handles.e2e.test.ts",
     ["chat"],
     [
