@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
-import { once } from "node:events";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import type { MemoryEmbeddingProviderCreateOptions } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { describe, expect, it, onTestFinished } from "vitest";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { mistralMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
 function createOptions(
@@ -37,16 +37,11 @@ async function outboundHeaders(...params: Parameters<typeof createOptions>) {
         server.close((error) => (error ? reject(error) : resolve()));
       }),
   );
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected loopback TCP address");
-  }
+  const port = await listenOnLoopback(server);
   const options = createOptions(...params);
   const { provider } = await mistralMemoryEmbeddingProviderAdapter.create({
     ...options,
-    remote: { ...options.remote, baseUrl: `http://127.0.0.1:${address.port}/v1` },
+    remote: { ...options.remote, baseUrl: `http://127.0.0.1:${port}/v1` },
   });
   assert(provider, "expected configured Mistral embedding provider");
   await expect(provider.embed("fixture input")).resolves.toEqual([1, 2]);

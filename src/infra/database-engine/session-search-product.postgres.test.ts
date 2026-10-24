@@ -28,6 +28,7 @@ import { sessionReadHandlers } from "../../gateway/server-methods/sessions-read.
 import { appendSessionTranscriptMessagesByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { dropPostgresTestSchemas } from "../postgres-sync/schema-cleanup.test-support.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
@@ -108,13 +109,7 @@ describe.skipIf(!connection)("PostgreSQL session search product flow", () => {
     }
     try {
       await cleanupSessionStateForTest({ stateDir: root });
-      const schemas = await client.query<{ nspname: string }>(
-        "SELECT nspname FROM pg_namespace WHERE left(nspname, $1) = $2",
-        [prefix.length + 1, `${prefix}_`],
-      );
-      for (const { nspname } of schemas.rows) {
-        await client.query(`DROP SCHEMA "${nspname}" CASCADE`);
-      }
+      await dropPostgresTestSchemas(client, prefix);
     } finally {
       await client.end();
       clearRuntimeConfigSnapshot();

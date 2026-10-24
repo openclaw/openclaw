@@ -393,37 +393,33 @@ describe("dispatchCronDelivery", () => {
     },
   );
 
-  it.each([
-    {
-      name: "textless",
-      input: [{ text: "   " }, {}],
-      summary: "Pablo Daily Summary\n- One task needs attention.",
-      output: [{ text: "Pablo Daily Summary\n- One task needs attention." }],
-    },
-    {
-      name: "metadata-only",
-      input: [{ text: "   ", channelData: buttons }],
-      summary: "Report ready",
-      output: [
-        { text: "Report ready" },
+  const report = "Report ready";
+  type Payloads = DispatchCronDeliveryParams["deliveryPayloads"];
+  it.each<[string, Payloads, string, Payloads]>([
+    ["textless", [{ text: "   " }, {}], report, [{ text: report }]],
+    [
+      "metadata-only",
+      [{ text: "   ", channelData: buttons }],
+      report,
+      [
+        { text: report },
         {
           text: "   ",
-          fallbackText: { text: "Report ready", replacesPayloadIndex: 0 },
+          fallbackText: { text: report, replacesPayloadIndex: 0 },
           channelData: buttons,
         },
       ],
-    },
-    {
-      name: "literal metadata text",
-      input: [{ text: SILENT_REPLY_TOKEN, channelData: buttons }],
-      summary: SILENT_REPLY_TOKEN,
-      output: [{ text: SILENT_REPLY_TOKEN, channelData: buttons }],
-    },
-  ])("normalizes $name direct payloads", async ({ input, summary, output }) => {
-    const state = await dispatchCronDelivery(structuredParams(input, summary));
+    ],
+    [
+      "literal metadata text",
+      [{ text: SILENT_REPLY_TOKEN, channelData: buttons }],
+      SILENT_REPLY_TOKEN,
+      [{ text: SILENT_REPLY_TOKEN, channelData: buttons }],
+    ],
+  ])("normalizes %s direct payloads", async (_name, input, summary, output) => {
+    expectDelivered(await dispatchCronDelivery(structuredParams(input, summary)));
     expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
     expectDeliveryCall(0, { payloads: output });
-    expectDelivered(state);
   });
 
   it.each([true, false])(

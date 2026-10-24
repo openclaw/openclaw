@@ -6,6 +6,7 @@ import { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
 import { defaultProvider } from "@aws-sdk/credential-provider-node";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../test-support/hanging-loopback-server.js";
 import { bedrockModel } from "./bedrock.test-support.js";
 import { loadBedrockControlPlaneSdk } from "./control-plane.js";
 import { createBedrockEmbeddingProvider } from "./embedding-provider.js";
@@ -18,15 +19,9 @@ async function withAwsServer(
   endpointEnv: string,
   run: () => Promise<void>,
 ) {
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
+  const port = await listenOnLoopback(server);
   try {
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Expected loopback listener");
-    }
-    vi.stubEnv(endpointEnv, `http://127.0.0.1:${address.port}`);
+    vi.stubEnv(endpointEnv, `http://127.0.0.1:${port}`);
     await run();
   } finally {
     server.closeAllConnections();

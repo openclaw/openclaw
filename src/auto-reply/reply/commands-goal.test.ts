@@ -32,6 +32,22 @@ async function upsertSessionEntry(params: {
   );
 }
 
+async function seedGoalStartStore(): Promise<string> {
+  const storePath = await createStorePath();
+  await upsertSessionEntry({
+    storePath,
+    sessionKey,
+    entry: {
+      sessionId: "sess-main",
+      updatedAt: 1,
+      totalTokens: 0,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+    },
+  });
+  return storePath;
+}
+
 function buildGoalSessionFixture(
   storePath: string,
   targetSessionKey: string,
@@ -115,18 +131,7 @@ describe("goal commands", () => {
   });
 
   it.each([""])("preserves the objective when starting with /goal %s", async (action) => {
-    const storePath = await createStorePath();
-    await upsertSessionEntry({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "sess-main",
-        updatedAt: 1,
-        totalTokens: 0,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
-    });
+    const storePath = await seedGoalStartStore();
 
     const objective = "build a 3d game\n\nKeep this exact label: a  b\n\tThen verify it.";
     const params = buildGoalParams(normalizeCommandBody(`/goal ${action}${objective}`), storePath);
@@ -143,18 +148,7 @@ describe("goal commands", () => {
   });
 
   it("wraps command-prefixed goal objectives before continuing", async () => {
-    const storePath = await createStorePath();
-    await upsertSessionEntry({
-      storePath,
-      sessionKey,
-      entry: {
-        sessionId: "sess-main",
-        updatedAt: 1,
-        totalTokens: 0,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
-    });
+    const storePath = await seedGoalStartStore();
 
     const slashParams = buildGoalParams("/goal start /status", storePath);
     const slashResult = await handleGoalCommand(slashParams, true);
@@ -165,18 +159,7 @@ describe("goal commands", () => {
     expect((slashParams.ctx as { BodyForAgent?: string }).BodyForAgent).toBe(slashPrompt);
     expect(getSessionEntry({ storePath, sessionKey })?.goal?.objective).toBe("/status");
 
-    const bangStorePath = await createStorePath();
-    await upsertSessionEntry({
-      storePath: bangStorePath,
-      sessionKey,
-      entry: {
-        sessionId: "sess-main",
-        updatedAt: 1,
-        totalTokens: 0,
-        totalTokensFresh: true,
-        totalTokensVersion: 1,
-      },
-    });
+    const bangStorePath = await seedGoalStartStore();
 
     const bangParams = buildGoalParams("/goal start !npm test", bangStorePath);
     const bangResult = await handleGoalCommand(bangParams, true);

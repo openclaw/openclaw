@@ -553,7 +553,7 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         metricsActive
           ? tracesActive
             ? undefined
-            : { exclude: ["diagnostic.phase.completed"] }
+            : { exclude: ["diagnostic.phase.completed"], includePromptStats: false }
           : tracesActive
             ? {
                 exclude: [

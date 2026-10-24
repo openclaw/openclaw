@@ -72,7 +72,6 @@ import { resolveSubagentSessionStatus } from "../registry/subagent-session-metri
 import {
   activateSwarmRun,
   closeSwarmScheduler,
-  enqueueSwarmRun,
   holdQueuedSwarmRun,
   releaseSwarmRun,
   reserveSwarmRun,
@@ -91,6 +90,7 @@ import {
   createEmbeddedRunWaiter,
   createSpawnBoundaryParent,
   createSpawnOperatorSource,
+  holdSpawnCapacity,
   prepareIsolatedChildAdmissionProof,
   recordSpawnBoundaryFinal,
 } from "./subagent-spawn.production-boundary.test-support.js";
@@ -598,18 +598,10 @@ describe("recursive spawn production boundary", () => {
       const bound = await createBoundParent(operatorAuthority);
       const { context, runtime, identities } = await createBoundGateway(bound);
       const groupId = "production-boundary-queued";
-      const capacityStarted = createDeferred();
-      enqueueSwarmRun({
-        groupId: JSON.stringify(["main", parentSessionKey, groupId]),
-        runId: "production-boundary-capacity",
-        maxConcurrent: 1,
-        activeRunIds: [],
-        start: async () => {
-          capacityStarted.resolve();
-        },
-        onStartFailure: () => true,
-      });
-      await capacityStarted.promise;
+      await holdSpawnCapacity(
+        JSON.stringify(["main", parentSessionKey, groupId]),
+        "production-boundary-capacity",
+      );
       const releaserInstance = createOperationalRunInstanceRef("capacity-releasing-run");
       const releaserAuthority = claimAgentRunDelegatedAuthority(releaserInstance);
       const modelRun = createDeferred<EmbeddedAgentRunResult>();

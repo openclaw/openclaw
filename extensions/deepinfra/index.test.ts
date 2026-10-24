@@ -1,4 +1,4 @@
-import { streamSimple, type Model } from "openclaw/plugin-sdk/llm";
+import type { Model } from "openclaw/plugin-sdk/llm";
 import {
   createCapturedPluginRegistration,
   registerSingleProviderPlugin,
@@ -6,6 +6,7 @@ import {
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import type { ProviderCatalogContext } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { captureProviderRequestPayload } from "../test-support/provider-request-payload.test-support.js";
 import deepinfraPlugin from "./index.js";
 
 const DEEPINFRA_MODELS_URL =
@@ -78,20 +79,9 @@ describe("deepinfra capability registration", () => {
       const normalized =
         provider.normalizeResolvedModel?.({ provider: model.provider, modelId: model.id, model }) ??
         model;
-      let payload: unknown;
-      const result = await streamSimple(
-        normalized,
-        { messages: [] },
-        {
-          apiKey: "synthetic-unused-key",
-          sessionId: "synthetic-session",
-          cacheRetention: route.disabled ? "none" : "long",
-          onPayload(value) {
-            payload = value;
-            throw new Error("captured before request");
-          },
-        },
-      ).result();
+      const { result, payload } = await captureProviderRequestPayload(normalized, {
+        cacheRetention: route.disabled ? "none" : "long",
+      });
       expect(result.errorMessage).toBe("captured before request");
       expect(payload).toMatchObject({ prompt_cache_key: route.expected });
       expect(payload).not.toHaveProperty("prompt_cache_retention");

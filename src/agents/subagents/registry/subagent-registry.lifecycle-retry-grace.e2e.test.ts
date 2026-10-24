@@ -27,6 +27,7 @@ import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import {
+  createExternalRequesterSessionEntry,
   getAgentResultsForChildSession,
   settleYieldedCliTurn,
   type LifecycleData,
@@ -159,16 +160,7 @@ beforeEach(async () => {
   chatHistoryBySessionKey = new Map();
   transcriptEventsBySessionKey = new Map();
   sessionStore = {
-    "agent:main:main": {
-      sessionId: "sess-main",
-      updatedAt: 1,
-      delivery: {
-        kind: "external",
-        route: { channel: "discord", accountId: "default", target: { to: "user-1" } },
-        context: { channel: "discord", to: "user-1", accountId: "default" },
-        origin: { provider: "discord", to: "user-1", accountId: "default" },
-      },
-    },
+    "agent:main:main": createExternalRequesterSessionEntry(),
   };
   await replaceSessionEntry(
     { storePath: sessionStorePath, sessionKey: REQUESTER },

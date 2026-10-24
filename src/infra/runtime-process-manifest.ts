@@ -194,248 +194,168 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
 }
 
 // Plugin workers retain package-local paths while build tools share their target inventory.
+function pluginRuntimeProcess<
+  const Plugin extends string,
+  const Owner extends string,
+  const Worker extends string,
+>(plugin: Plugin, owner: Owner, worker: Worker) {
+  return {
+    plugin,
+    ownerSource: `extensions/${plugin}/${owner}.ts`,
+    sourceWorkerName: worker,
+    distWorkerPath: `extensions/${plugin}/${worker}.js`,
+    package: { name: `@openclaw/${plugin}`, distWorkerPath: `${worker}.js` },
+  } as const;
+}
+
 export const pluginRuntimeProcessManifest = {
   browserNativeHost: {
-    plugin: "browser",
-    ownerSource: "extensions/browser/native-host-entry.ts",
-    sourceWorkerName: "native-host-entry",
-    distWorkerPath: "extensions/browser/native-host-entry.js",
+    ...pluginRuntimeProcess("browser", "native-host-entry", "native-host-entry"),
     package: { name: "@openclaw/browser-plugin", distWorkerPath: "native-host-entry.js" },
   },
   browserRelayDaemon: {
-    plugin: "browser",
-    ownerSource: "extensions/browser/native-host-entry.ts",
-    sourceWorkerName: "relay-daemon-entry",
-    distWorkerPath: "extensions/browser/relay-daemon-entry.js",
+    ...pluginRuntimeProcess("browser", "native-host-entry", "relay-daemon-entry"),
     package: { name: "@openclaw/browser-plugin", distWorkerPath: "relay-daemon-entry.js" },
   },
   browserSetup: {
-    plugin: "browser",
-    ownerSource: "extensions/browser/setup-entry.ts",
-    sourceWorkerName: "setup-entry",
-    distWorkerPath: "extensions/browser/setup-entry.js",
+    ...pluginRuntimeProcess("browser", "setup-entry", "setup-entry"),
     package: { name: "@openclaw/browser-plugin", distWorkerPath: "setup-entry.js" },
   },
   quickJsCodeMode: {
-    plugin: "code-mode-quickjs",
-    ownerSource: "extensions/code-mode-quickjs/src/executor.ts",
+    ...pluginRuntimeProcess("code-mode-quickjs", "src/executor", "src/code-mode.worker"),
     sourceWorkerName: "code-mode.worker",
-    distWorkerPath: "extensions/code-mode-quickjs/src/code-mode.worker.js",
-    package: {
-      name: "@openclaw/code-mode-quickjs",
-      distWorkerPath: "src/code-mode.worker.js",
-    },
   },
-  codexCatalogPage: {
-    plugin: "codex",
-    ownerSource: "extensions/codex/catalog-page-worker-entrypoint.ts",
-    sourceWorkerName: "catalog-page.worker",
-    distWorkerPath: "extensions/codex/catalog-page.worker.js",
-    package: {
-      name: "@openclaw/codex",
-      distWorkerPath: "catalog-page.worker.js",
-    },
-  },
-  codexSessionHistory: {
-    plugin: "codex",
-    ownerSource: "extensions/codex/session-history-worker-entrypoint.ts",
-    sourceWorkerName: "session-history.worker",
-    distWorkerPath: "extensions/codex/session-history.worker.js",
-    package: {
-      name: "@openclaw/codex",
-      distWorkerPath: "session-history.worker.js",
-    },
-  },
+  codexCatalogPage: pluginRuntimeProcess(
+    "codex",
+    "catalog-page-worker-entrypoint",
+    "catalog-page.worker",
+  ),
+  codexSessionHistory: pluginRuntimeProcess(
+    "codex",
+    "session-history-worker-entrypoint",
+    "session-history.worker",
+  ),
   discordAudio: {
-    plugin: "discord",
-    ownerSource: "extensions/discord/src/voice/audio-worker-thread.ts",
+    ...pluginRuntimeProcess(
+      "discord",
+      "src/voice/audio-worker-thread",
+      "src/voice/audio-worker.runtime",
+    ),
     sourceWorkerName: "audio-worker.runtime",
-    distWorkerPath: "extensions/discord/src/voice/audio-worker.runtime.js",
-    package: {
-      name: "@openclaw/discord",
-      distWorkerPath: "src/voice/audio-worker.runtime.js",
-    },
   },
   documentExtractor: {
-    plugin: "document-extract",
-    ownerSource: "extensions/document-extract/document-extractor-worker-entrypoint.ts",
-    sourceWorkerName: "document-extractor.worker",
-    distWorkerPath: "extensions/document-extract/document-extractor.worker.js",
+    ...pluginRuntimeProcess(
+      "document-extract",
+      "document-extractor-worker-entrypoint",
+      "document-extractor.worker",
+    ),
     package: {
       name: "@openclaw/document-extract-plugin",
       distWorkerPath: "document-extractor.worker.js",
     },
   },
   iMessageChatDb: {
-    plugin: "imessage",
-    ownerSource: "extensions/imessage/src/chat-db.ts",
+    ...pluginRuntimeProcess("imessage", "src/chat-db", "src/chat-db.worker"),
     sourceWorkerName: "chat-db.worker",
-    distWorkerPath: "extensions/imessage/src/chat-db.worker.js",
-    package: {
-      name: "@openclaw/imessage",
-      distWorkerPath: "src/chat-db.worker.js",
-    },
   },
   memorySearch: {
-    plugin: "memory-core",
-    ownerSource: "extensions/memory-core/src/memory/manager-cpu-entrypoints.ts",
+    ...pluginRuntimeProcess(
+      "memory-core",
+      "src/memory/manager-cpu-entrypoints",
+      "src/memory/manager-search.worker",
+    ),
     sourceWorkerName: "manager-search.worker",
     distWorkerPath: "extensions/memory-core/memory-search.worker.js",
-    package: {
-      name: "@openclaw/memory-core",
-      distWorkerPath: "src/memory/manager-search.worker.js",
-    },
   },
   memoryIndex: {
-    plugin: "memory-core",
-    ownerSource: "extensions/memory-core/src/memory/manager-cpu-entrypoints.ts",
+    ...pluginRuntimeProcess(
+      "memory-core",
+      "src/memory/manager-cpu-entrypoints",
+      "src/memory/manager-index.worker",
+    ),
     sourceWorkerName: "manager-index.worker",
     distWorkerPath: "extensions/memory-core/memory-index.worker.js",
-    package: {
-      name: "@openclaw/memory-core",
-      distWorkerPath: "src/memory/manager-index.worker.js",
-    },
   },
   memoryPublication: {
-    plugin: "memory-core",
-    ownerSource: "extensions/memory-core/src/memory/manager-cpu-entrypoints.ts",
+    ...pluginRuntimeProcess(
+      "memory-core",
+      "src/memory/manager-cpu-entrypoints",
+      "src/memory/manager-publication.worker",
+    ),
     sourceWorkerName: "manager-publication.worker",
     distWorkerPath: "extensions/memory-core/memory-publication.worker.js",
-    package: {
-      name: "@openclaw/memory-core",
-      distWorkerPath: "src/memory/manager-publication.worker.js",
-    },
   },
   memoryStandingIntents: {
-    plugin: "memory-core",
-    ownerSource: "extensions/memory-core/src/memory/manager-cpu-entrypoints.ts",
+    ...pluginRuntimeProcess(
+      "memory-core",
+      "src/memory/manager-cpu-entrypoints",
+      "src/standing-intents.worker",
+    ),
     sourceWorkerName: "../standing-intents.worker",
     distWorkerPath: "extensions/memory-core/standing-intents.worker.js",
-    package: {
-      name: "@openclaw/memory-core",
-      distWorkerPath: "src/standing-intents.worker.js",
-    },
   },
   memoryEntryOrigins: {
-    plugin: "memory-core",
-    ownerSource: "extensions/memory-core/src/memory/manager-cpu-entrypoints.ts",
+    ...pluginRuntimeProcess(
+      "memory-core",
+      "src/memory/manager-cpu-entrypoints",
+      "src/memory-entry-origins.worker",
+    ),
     sourceWorkerName: "../memory-entry-origins.worker",
     distWorkerPath: "extensions/memory-core/memory-entry-origins.worker.js",
-    package: {
-      name: "@openclaw/memory-core",
-      distWorkerPath: "src/memory-entry-origins.worker.js",
-    },
   },
-  memoryStatsRuntime: {
-    plugin: "memory-lancedb",
-    ownerSource: "extensions/memory-lancedb/memory-stats-entrypoint.ts",
-    sourceWorkerName: "memory-stats.worker",
-    distWorkerPath: "extensions/memory-lancedb/memory-stats.worker.js",
-    package: {
-      name: "@openclaw/memory-lancedb",
-      distWorkerPath: "memory-stats.worker.js",
-    },
-  },
+  memoryStatsRuntime: pluginRuntimeProcess(
+    "memory-lancedb",
+    "memory-stats-entrypoint",
+    "memory-stats.worker",
+  ),
   memoryWikiQuery: {
-    plugin: "memory-wiki",
-    ownerSource: "extensions/memory-wiki/src/query-reader.ts",
+    ...pluginRuntimeProcess("memory-wiki", "src/query-reader", "src/query-reader.worker"),
     sourceWorkerName: "query-reader.worker",
-    distWorkerPath: "extensions/memory-wiki/src/query-reader.worker.js",
-    package: {
-      name: "@openclaw/memory-wiki",
-      distWorkerPath: "src/query-reader.worker.js",
-    },
   },
   openAiRealtimeAudio: {
-    plugin: "openai",
-    ownerSource: "extensions/openai/realtime-quicksilver-peer.runtime.ts",
-    sourceWorkerName: "realtime-quicksilver-audio.worker",
-    distWorkerPath: "extensions/openai/realtime-quicksilver-audio.worker.js",
+    ...pluginRuntimeProcess(
+      "openai",
+      "realtime-quicksilver-peer.runtime",
+      "realtime-quicksilver-audio.worker",
+    ),
     package: {
       name: "@openclaw/openai-provider",
       distWorkerPath: "realtime-quicksilver-audio.worker.js",
     },
   },
   openAiRealtimeSocket: {
-    plugin: "openai",
-    ownerSource: "extensions/openai/realtime-quicksilver-socket.ts",
-    sourceWorkerName: "realtime-quicksilver-socket.worker",
-    distWorkerPath: "extensions/openai/realtime-quicksilver-socket.worker.js",
+    ...pluginRuntimeProcess(
+      "openai",
+      "realtime-quicksilver-socket",
+      "realtime-quicksilver-socket.worker",
+    ),
     package: {
       name: "@openclaw/openai-provider",
       distWorkerPath: "realtime-quicksilver-socket.worker.js",
     },
   },
   qaExecutionIdentityInspection: {
-    plugin: "qa-lab",
-    ownerSource: "extensions/qa-lab/src/execution-identity-storage-inspection.ts",
+    ...pluginRuntimeProcess(
+      "qa-lab",
+      "src/execution-identity-storage-inspection",
+      "src/execution-identity-storage-inspection.worker",
+    ),
     sourceWorkerName: "execution-identity-storage-inspection.worker",
-    distWorkerPath: "extensions/qa-lab/src/execution-identity-storage-inspection.worker.js",
-    package: {
-      name: "@openclaw/qa-lab",
-      distWorkerPath: "src/execution-identity-storage-inspection.worker.js",
-    },
   },
   telegramIngress: {
-    plugin: "telegram",
-    ownerSource: "extensions/telegram/src/telegram-ingress-worker.ts",
+    ...pluginRuntimeProcess(
+      "telegram",
+      "src/telegram-ingress-worker",
+      "src/telegram-ingress-worker.runtime",
+    ),
     sourceWorkerName: "telegram-ingress-worker.runtime",
     distWorkerPath: "telegram-ingress-worker.runtime.js",
-    package: {
-      name: "@openclaw/telegram",
-      distWorkerPath: "src/telegram-ingress-worker.runtime.js",
-    },
   },
-  onnxInference: {
-    plugin: "onnx",
-    ownerSource: "extensions/onnx/index.ts",
-    sourceWorkerName: "src/inference.worker",
-    distWorkerPath: "extensions/onnx/src/inference.worker.js",
-    package: {
-      name: "@openclaw/onnx",
-      distWorkerPath: "src/inference.worker.js",
-    },
-  },
-  teamReportsStore: {
-    plugin: "team-reports",
-    ownerSource: "extensions/team-reports/index.ts",
-    sourceWorkerName: "src/store.worker",
-    distWorkerPath: "extensions/team-reports/src/store.worker.js",
-    package: {
-      name: "@openclaw/team-reports",
-      distWorkerPath: "src/store.worker.js",
-    },
-  },
-  teamReportsRun: {
-    plugin: "team-reports",
-    ownerSource: "extensions/team-reports/index.ts",
-    sourceWorkerName: "src/run.worker",
-    distWorkerPath: "extensions/team-reports/src/run.worker.js",
-    package: {
-      name: "@openclaw/team-reports",
-      distWorkerPath: "src/run.worker.js",
-    },
-  },
-  logbookStore: {
-    plugin: "logbook",
-    ownerSource: "extensions/logbook/index.ts",
-    sourceWorkerName: "src/store.worker",
-    distWorkerPath: "extensions/logbook/src/store.worker.js",
-    package: {
-      name: "@openclaw/logbook",
-      distWorkerPath: "src/store.worker.js",
-    },
-  },
-  workboardSqlite: {
-    plugin: "workboard",
-    ownerSource: "extensions/workboard/index.ts",
-    sourceWorkerName: "src/sqlite-store.worker",
-    distWorkerPath: "extensions/workboard/src/sqlite-store.worker.js",
-    package: {
-      name: "@openclaw/workboard",
-      distWorkerPath: "src/sqlite-store.worker.js",
-    },
-  },
+  onnxInference: pluginRuntimeProcess("onnx", "index", "src/inference.worker"),
+  teamReportsStore: pluginRuntimeProcess("team-reports", "index", "src/store.worker"),
+  teamReportsRun: pluginRuntimeProcess("team-reports", "index", "src/run.worker"),
+  logbookStore: pluginRuntimeProcess("logbook", "index", "src/store.worker"),
+  workboardSqlite: pluginRuntimeProcess("workboard", "index", "src/sqlite-store.worker"),
 } as const;
 
 export function createPluginRuntimeProcessEntrypoint(

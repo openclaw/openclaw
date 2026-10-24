@@ -38,18 +38,17 @@ import {
 } from "../../plugins/runtime.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import type { PluginCommandContext, PluginCommandResult } from "../../plugins/types.js";
-import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { trackAsyncWork } from "../../shared/async-work-scope.js";
 import { unlinkUserChannelIdentity } from "../../state/user-channel-identities.js";
 import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
-import { handlePluginCommand } from "./commands-plugin.js";
-import { createPersistedPluginCommandParams } from "./commands-plugin.test-support.js";
+import {
+  createPersistedPluginCommandParams,
+  createPluginCommandInvocation,
+} from "./commands-plugin.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { runWithCommandNativeSubagents } from "./dispatch-native-subagent.js";
-import { finalizeInboundContext } from "./inbound-context.js";
 export const pluginId = "command-controller";
 
 type Handler = (ctx: PluginCommandContext) => PluginCommandResult | Promise<PluginCommandResult>;
@@ -413,50 +412,12 @@ export async function withCommandPlugin(
 }
 
 export function commandInvocation(fixture: Fixture, body = "/review-panel") {
-  const params = fixture.params(body);
-  const state = commandDispatchState(params);
-  const recorder = expectDefined(state.params.replyOptions?.userTurnTranscriptRecorder, "recorder");
-  params.opts = {
-    withCommandNativeSubagents: (binding, run) =>
-      runWithCommandNativeSubagents(state, binding, run),
-  };
-  return { params, state, recorder, run: () => handlePluginCommand(params, true) };
-}
-
-function commandDispatchState(
-  params: HandleCommandsParams,
-): Parameters<typeof runWithCommandNativeSubagents>[0] {
-  const entry = expectDefined(params.sessionEntry, "command session");
-  return {
-    cfg: params.cfg,
-    ctx: finalizeInboundContext(params.ctx),
-    sessionAgentId: params.agentId,
-    sessionKey: params.sessionKey,
-    sessionStoreEntry: { sessionKey: params.sessionKey, entry },
-    params: {
-      replyOptions: {
-        runId: "command-turn",
-        operatorAuthority: getCommandOwnerAuthority(params.ctx)?.operatorAuthority,
-        toolsAllow: ["sessions_spawn", "agents_wait", "automations", "read"],
-        userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
-          input: { text: params.command.commandBodyNormalized },
-          target: {
-            agentId: params.agentId,
-            sessionKey: params.sessionKey,
-            sessionId: entry.sessionId,
-            sessionEntry: entry,
-            storePath: params.storePath,
-            config: params.cfg,
-          },
-        }),
-      },
-    },
-    turnAdoption: undefined,
-    getPreDispatchAbortSignal: () => undefined,
-    getDispatchAbortSignal: () => params.opts?.abortSignal,
-    assertProgressCurrent: () => {},
-    assertCurrentBindingRoute: async () => {},
-  };
+  return createPluginCommandInvocation(fixture.params(body), [
+    "sessions_spawn",
+    "agents_wait",
+    "automations",
+    "read",
+  ]);
 }
 
 export function scheduleRequest(overrides: { requestId?: string; maxRuns?: number } = {}) {

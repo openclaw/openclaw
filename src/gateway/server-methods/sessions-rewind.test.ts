@@ -253,10 +253,13 @@ function enqueueSessionWork(label: string): QueuedSessionWork {
   const registration = registerSource(`queued-${label}`);
   followup.abortSignal = registration.controller.signal;
   bindSessionControllerSource(registration.entry.input, followup);
-  expect(
-    enqueueFollowupRun(sessionKey, followup, { mode: "followup" }, "none", undefined, false),
-  ).toBe(true);
+  enqueue(followup);
   return { followup, rpcSource: registration.entry };
+}
+
+function enqueue(run: FollowupRun, key = sessionKey) {
+  expect(enqueueFollowupRun(key, run, { mode: "followup" }, "none", undefined, false)).toBe(true);
+  return run;
 }
 
 function registerSource(runId: string) {
@@ -405,16 +408,14 @@ describe("session message-cut methods", () => {
       message: { role: "user", content: "research question" },
       parentId: null,
     });
-    const main = createQueueTestRun({ prompt: "main queued work" });
-    Object.assign(main.run, { agentId: "main", sessionKey: key, sessionId: "main-rewind" });
-    const research = createQueueTestRun({ prompt: "research queued work" });
-    Object.assign(research.run, target);
-    expect(enqueueFollowupRun(key, main, { mode: "followup" }, "none", undefined, false)).toBe(
-      true,
+    const main = enqueue(
+      createQueueTestRun(
+        { prompt: "main queued work" },
+        { agentId: "main", sessionKey: key, sessionId: "main-rewind" },
+      ),
+      key,
     );
-    expect(enqueueFollowupRun(key, research, { mode: "followup" }, "none", undefined, false)).toBe(
-      true,
-    );
+    const research = enqueue(createQueueTestRun({ prompt: "research queued work" }, target), key);
     try {
       const respond = await invoke("sessions.rewind", "research-user", {
         params: { sessionKey: key, agentId: target.agentId, entryId: "research-user" },
@@ -679,18 +680,10 @@ function installUpstreamForkHarness(
   contract: "dual" | "legacy" | "v2" = "v2",
 ): void {
   const sessionFork = { upstreamKinds: ["codex-app-server" as const], fork: mocks.upstreamFork };
+  const environment = executionEnvironment ? { executionEnvironment } : {};
   installHarness({
-    ...(contract !== "v2"
-      ? { ...(executionEnvironment ? { executionEnvironment } : {}), sessionFork }
-      : {}),
-    ...(contract !== "legacy"
-      ? {
-          sessionForkV2: {
-            ...(executionEnvironment ? { executionEnvironment } : {}),
-            ...sessionFork,
-          },
-        }
-      : {}),
+    ...(contract !== "v2" && { ...environment, sessionFork }),
+    ...(contract !== "legacy" && { sessionForkV2: { ...environment, ...sessionFork } }),
   });
 }
 
@@ -742,48 +735,58 @@ describe("upstream session message-cut methods", () => {
     },
   );
 
-  it("delegates complete upstream fork materialization to the harness", async () => {
-    installUpstreamForkHarness(undefined, "dual");
-    mocks.upstreamFork.mockResolvedValue({
-      status: "created",
-      key: "agent:main:dashboard:forked",
-      editorText: "edit me",
-    });
-
-    const respond = await invoke("sessions.fork");
-    expectCutReply(respond, { editorText: "edit me", sessionKey: "agent:main:dashboard:forked" });
-    expect(mocks.upstreamFork).toHaveBeenCalledWith(
-      expect.objectContaining({
-        assertCurrent: expect.any(Function),
-        source: expect.objectContaining({ entryId: "user-entry", sessionKey }),
-        targetKey: expect.stringMatching(/^agent:main:dashboard:/),
-        upstream: expect.objectContaining({
-          catalogId: "codex",
-          hostId: "gateway:local",
-          kind: "codex-app-server",
-          threadId: "thread-source",
-        }),
-      }),
-    );
-  });
-
-  it.each(["created", "failed"] as const)(
-    "expires native-write authority when the upstream fork settles %s",
-    async (outcome) => {
-      installUpstreamForkHarness();
+  it.each([
+    ["dual", "created", undefined],
+    ["v2", "created", undefined],
+    ["v2", "upstream-unavailable", ErrorCodes.UNAVAILABLE],
+    ["v2", "drift-mismatch", ErrorCodes.INVALID_REQUEST],
+  ] as const)(
+    "settles %s upstream fork %s and expires write authority",
+    async (contract, outcome, code) => {
+      installUpstreamForkHarness(undefined, contract);
       let retainedAssertCurrent: (() => void) | undefined;
+      const message =
+        outcome === "upstream-unavailable"
+          ? forkFailure.message
+          : "boundary failed: drift-mismatch";
+      const result =
+        outcome === "created"
+          ? { status: "created", key: "agent:main:dashboard:forked", editorText: "edit me" }
+          : {
+              status: "failed",
+              code: outcome,
+              message,
+            };
       mocks.upstreamFork.mockImplementation(
         async ({ assertCurrent }: { assertCurrent: () => void }) => {
           assertCurrent();
           retainedAssertCurrent = assertCurrent;
-          return outcome === "created"
-            ? { status: "created", key: "agent:main:dashboard:forked" }
-            : forkFailure;
+          return result;
         },
       );
-
-      await invoke("sessions.fork");
-
+      const entryCount = (await entries()).length;
+      const respond = await invoke("sessions.fork");
+      if (outcome === "created") {
+        expectCutReply(respond, {
+          editorText: "edit me",
+          sessionKey: "agent:main:dashboard:forked",
+        });
+      } else {
+        expectCutFailure(respond, { code, details: { reason: outcome }, message });
+        expect(await entries()).toHaveLength(entryCount);
+      }
+      expect(mocks.upstreamFork).toHaveBeenCalledWith(
+        expect.objectContaining({
+          source: expect.objectContaining({ entryId: "user-entry", sessionKey }),
+          targetKey: expect.stringMatching(/^agent:main:dashboard:/),
+          upstream: expect.objectContaining({
+            catalogId: "codex",
+            hostId: "gateway:local",
+            kind: "codex-app-server",
+            threadId: "thread-source",
+          }),
+        }),
+      );
       const nativeWrites = vi.fn();
       expect(() => {
         expectDefined(retainedAssertCurrent, "retained native-write authority")();
@@ -816,31 +819,6 @@ describe("upstream session message-cut methods", () => {
       });
       expect(mocks.upstreamFork).not.toHaveBeenCalled();
       expect(await entries()).toHaveLength(1);
-    },
-  );
-
-  it.each([
-    { failure: forkFailure, code: ErrorCodes.UNAVAILABLE },
-    {
-      failure: {
-        status: "failed",
-        code: "drift-mismatch",
-        message: "boundary failed: drift-mismatch",
-      },
-      code: ErrorCodes.INVALID_REQUEST,
-    },
-  ])(
-    "passes through $failure.code without mutating the local session",
-    async ({ failure, code }) => {
-      installUpstreamForkHarness();
-      mocks.upstreamFork.mockResolvedValue(failure);
-      const entryCount = (await entries()).length;
-      expectCutFailure(await invoke("sessions.fork"), {
-        code,
-        details: { reason: failure.code },
-        message: failure.message,
-      });
-      expect(await entries()).toHaveLength(entryCount);
     },
   );
 });
