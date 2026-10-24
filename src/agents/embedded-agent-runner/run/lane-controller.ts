@@ -193,13 +193,17 @@ export function createEmbeddedRunLaneController<TParams extends LaneParams>(opti
     let deadlineOwned = false;
     let timeoutCleanupRequested = false;
     const operation = options.getParams().replyOperation;
-    const isCurrent = () =>
+    const isAttemptCurrent = () =>
       state === "active" &&
       activeAttemptOwner === owner &&
       !signal.aborted &&
-      isAgentEventLifecycleGenerationCurrent(lifecycleGeneration) &&
+      isAgentEventLifecycleGenerationCurrent(lifecycleGeneration);
+    const isCurrent = () =>
+      isAttemptCurrent() &&
       authority !== undefined &&
-      getAdmittedRunDelegatedAuthority(input.admittedRunContext) === authority;
+      getAdmittedRunDelegatedAuthority(input.admittedRunContext) === authority &&
+      // A source callback can synchronously retire this attempt without closing its run.
+      isAttemptCurrent();
     recoverAttemptDeadline = async () => {
       if (!operation || !timeoutCleanupRequested || !isCurrent()) {
         return false;
