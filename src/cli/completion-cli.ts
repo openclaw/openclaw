@@ -201,10 +201,13 @@ function generateZshArgs(cmd: Command): string {
         opt.required || opt.optional
           ? `${opt.optional ? "::" : ":"}${opt.attributeName()}:${choices ? `(${choices})` : ""}`
           : "";
+      // `=` accepts long-option values either after an equals sign or in the next word.
+      const optionSpec = (flag: string) =>
+        opt.required || opt.optional ? `${flag}${flag.startsWith("--") ? "=" : ""}` : flag;
       if (alternate) {
-        return `"${visibility}(${name} ${alternate})"{${name},${alternate}}"[${desc}]${argument}"`;
+        return `"${visibility}(${name} ${alternate})"{${optionSpec(name)},${optionSpec(alternate)}}"[${desc}]${argument}"`;
       }
-      return `"${visibility}${name}[${desc}]${argument}"`;
+      return `"${visibility}${optionSpec(name)}[${desc}]${argument}"`;
     })
     .join(" \\\n    ");
 }
