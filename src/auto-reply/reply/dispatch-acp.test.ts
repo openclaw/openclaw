@@ -162,12 +162,11 @@ vi.mock("./dispatch-acp-manager.runtime.js", async (importOriginal) => ({
 vi.mock("../../agents/command/acp-lifecycle.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../agents/command/acp-lifecycle.js")>();
   return {
-    createAcpToolLifecycleTracker: actual.createAcpToolLifecycleTracker,
+    ...actual,
     emitAcpLifecycleStart: auditMocks.emitAcpLifecycleStart,
     emitAcpRuntimeEvent: auditMocks.emitAcpRuntimeEvent,
     emitAcpLifecycleEnd: auditMocks.emitAcpLifecycleEnd,
     emitAcpLifecycleError: auditMocks.emitAcpLifecycleError,
-    resolveAcpLifecycleEndFields: actual.resolveAcpLifecycleEndFields,
   };
 });
 
