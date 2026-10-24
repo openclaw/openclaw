@@ -13,6 +13,7 @@ import kotlinx.coroutines.test.setMain
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
@@ -124,15 +125,22 @@ class CameraHandlerTest {
     }
 
   @Test
-  fun isCameraClipWithinPayloadLimit_allowsZeroAndLimit() {
-    assertTrue(isCameraClipWithinPayloadLimit(0L))
-    assertTrue(isCameraClipWithinPayloadLimit(CAMERA_CLIP_MAX_RAW_BYTES))
+  fun cameraClipPayloadError_reportsEmptyCaptureSeparatelyFromOversizedPayload() {
+    val empty = cameraClipPayloadError(0L)
+    assertEquals("CAMERA_CAPTURE_FAILED", empty?.error?.code)
+    assertEquals(
+      "CAMERA_CAPTURE_FAILED: camera clip produced an empty file; retry the capture",
+      empty?.error?.message,
+    )
+
+    val oversized = cameraClipPayloadError(CAMERA_CLIP_MAX_RAW_BYTES + 1L)
+    assertEquals("PAYLOAD_TOO_LARGE", oversized?.error?.code)
   }
 
   @Test
-  fun isCameraClipWithinPayloadLimit_rejectsNegativeAndTooLarge() {
-    assertFalse(isCameraClipWithinPayloadLimit(-1L))
-    assertFalse(isCameraClipWithinPayloadLimit(CAMERA_CLIP_MAX_RAW_BYTES + 1L))
+  fun cameraClipPayloadError_acceptsPositiveBytesAndExactLimit() {
+    assertNull(cameraClipPayloadError(1L))
+    assertNull(cameraClipPayloadError(CAMERA_CLIP_MAX_RAW_BYTES))
   }
 
   @Test
