@@ -12,10 +12,12 @@ import { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { installDatabaseEngineSelection } from "./database-engine/context.js";
 import { resetDatabaseEngineSelectionForTest } from "./database-engine/context.test-support.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
+import { writeRestartSentinel } from "./restart-sentinel.js";
 import { resolveRuntimeArgs } from "./runtime-worker-url.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "./supervisor-markers.js";
 import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "./update-control-plane-sentinel.js";
@@ -330,6 +332,50 @@ describe("managed service update handoff", () => {
     expectTrueFields(state, "parked", "restored");
     expect(state.healthProbeCount).toBe(1);
     expect(sensitiveFilesRemoved).toBe(true);
+  });
+
+  itUnix("persists a corrupt restart-sentinel diagnostic before finishing the run", async () => {
+    const { log, run } = await runBoundary("systemd", {
+      ...transferred,
+      trigger: "cli",
+      ledger: true,
+      readSentinel: () => null,
+      updaterExitCode: 7,
+      helperExitCode: 7,
+      updaterResult: {
+        status: "error",
+        mode: "npm",
+        reason: "npm-install-failed",
+        recovery: safeRecovery,
+      },
+      prepareState: async ({ env }) => {
+        await writeRestartSentinel(
+          {
+            kind: "update",
+            status: "skipped",
+            ts: Date.now(),
+            stats: { handoffId: "systemd-boundary", reason: "managed-service-handoff-started" },
+          },
+          env,
+        );
+        const db = new DatabaseSync(resolveOpenClawStateSqlitePath(env));
+        try {
+          db.prepare(
+            "UPDATE gateway_restart_sentinel SET continuation_json = ? WHERE sentinel_key = 'current'",
+          ).run('{"kind":"agentTurn"');
+        } finally {
+          db.close();
+        }
+      },
+    });
+
+    expect(log).toMatch(/Restart sentinel metadata is unreadable;.*openclaw update repair/u);
+    expect(run?.steps).toContainEqual(
+      expect.objectContaining({
+        step: "warning:restart-sentinel-unreadable",
+        detail: expect.stringMatching(/preserved the row.*openclaw update repair/u),
+      }),
+    );
   });
 
   itUnix.each(

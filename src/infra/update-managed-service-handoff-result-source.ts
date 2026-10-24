@@ -84,6 +84,9 @@ async function finishManagedUpdateRun() {
   catch (error) {
     appendLog("Gateway recovery observation could not complete: " + String(error));
   }
+  // Failure triage may discover a corrupt sentinel after notification publication
+  // was skipped. Capture that diagnostic before the terminal writer snapshots warnings.
+  if (triageFailure) captureFailedUpdateResult();
   if (!runLedger || !runOutcome) return;
   if (foregroundParked && runOutcome.status === "succeeded") return;
   if (!ownsManagedUpdateLease()) throw new Error("managed update terminal writer lost its current claim");
