@@ -918,7 +918,9 @@ textarea,
   user-select: text;
 }
 
-::selection {
+/* Highlight styles inherit from the document root; matching every element
+   separately repeats this work whenever a large subtree changes. */
+:root::selection {
   background: var(--selection-bg);
   color: var(--selection-fg);
 }

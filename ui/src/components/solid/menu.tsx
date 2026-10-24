@@ -335,7 +335,7 @@ export function Menu(props: BranchProps): JSX.Element {
     overlay,
     () => trigger,
     () => ({ placement: placement() }),
-    { sameRoot: true, parent: initialIdentity.parent },
+    { sameRoot: true, parent: initialIdentity.parent, lazy: Boolean(initialLazy) },
   );
   const keydown = (event: KeyboardEvent) => {
     if (event.defaultPrevented || event.isComposing) {

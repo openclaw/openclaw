@@ -53,14 +53,13 @@ const actions = [
   },
 ];
 
-function createClient(httpInstance?: Lark.HttpInstance) {
+function createClient(domain: string | Lark.Domain = Lark.Domain.Feishu) {
   return new Lark.Client({
     appId: "loopback-table-app",
     appSecret: "loopback-table-placeholder", // pragma: allowlist secret
-    domain: Lark.Domain.Feishu,
+    domain,
     loggerLevel: Lark.LoggerLevel.error,
     disableTokenCache: true,
-    httpInstance,
   });
 }
 
@@ -379,21 +378,7 @@ describe("registered feishu_doc table patches", () => {
     });
     try {
       const address = server.address() as AddressInfo;
-      const transport = Object.create(Lark.defaultHttpInstance) as Lark.HttpInstance;
-      transport.request = async (options) => {
-        const upstream = new URL(options.url ?? "");
-        const target = new URL(
-          `${upstream.pathname}${upstream.search}`,
-          `http://127.0.0.1:${address.port}`,
-        );
-        const response = await fetch(target, {
-          method: options.method,
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(options.data),
-        });
-        return response.json();
-      };
-      const tool = resolveTool(createClient(transport));
+      const tool = resolveTool(createClient(`http://127.0.0.1:${address.port}`));
       for (const sample of actions) {
         reply = { code: 0, data: { block, client_token: "table-client-token" } };
         expectResult(await tool.execute("http-patch", paramsFor(sample)), {

@@ -77,6 +77,12 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/emoji-search-panel.tsx":
     case "ui/src/styles/emoji-search-panel.css":
       return "emoji-search-panel";
+    case "ui/src/pages/chat/components/chat-composer-emoji-options.tsx":
+    case "ui/src/pages/chat/components/chat-composer-mention-menu-options.tsx":
+    case "ui/src/pages/chat/components/chat-composer-skill-menu-options.tsx":
+    case "ui/src/pages/chat/components/chat-composer-slash-menu-options.tsx":
+      // Share interaction-only rows without four separate preload-map entries.
+      return "composer-invocation-menus";
     case "ui/src/app/app-root-focus.ts":
     case "ui/src/app/app-root-focus-view.tsx":
       return "focus-dashboard-runtime";
@@ -207,6 +213,8 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 modules.add("ui/src/plugins/control-ui-actions.ts");
                 // Both routes read deferred resources; share their existing boot partition.
                 modules.add("node_modules/@solidjs/signals/dist/prod/deferred.js");
+                // Opened person cards share labels with New Session, not its composer chunk.
+                modules.add("ui/src/lib/platform-label.ts");
               }
               return {
                 name: `control-ui-boot-${route}`,
@@ -219,7 +227,7 @@ export function createControlUiCodeSplitting(options: { includeBootGroups?: bool
                 // modules can exceed the compressed-size budget after regrouping.
                 // Chat-only code can share a larger compression dictionary;
                 // shipped byte/request budgets still bound the output.
-                minSize: (route === "chat" ? 256 : 128) * 1024,
+                minSize: (route === "chat" ? 384 : 128) * 1024,
                 maxSize: (route === "shared" ? 1280 : route === "chat" ? 1664 : 1408) * 1024,
               };
             }),

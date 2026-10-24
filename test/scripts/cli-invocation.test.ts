@@ -2,19 +2,42 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
+  getStandaloneRuntimeBuild,
   isStandaloneRuntimeExecutable,
   readStandaloneRuntimeManifest,
   readStandaloneRuntimeManifestForRoot,
   resolveOpenClawCliInvocation,
   resolveOpenClawCliRespawn,
+  runtimeHasSourceLoader,
 } from "../../cli-invocation.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.unstubAllGlobals());
+const parentExecArgv = process.execArgv;
+afterEach(() => {
+  process.execArgv = parentExecArgv;
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 const execPath = "/synthetic/node";
 const entryPath = "/synthetic/openclaw.mjs";
 const execArgv = ["--import", "synthetic-loader"];
+
+it.each([
+  ["native source execution", undefined, undefined, [], false],
+  ["loose source loader", undefined, undefined, execArgv, true],
+  ["embedded executable", "file:///synthetic/runtime/", undefined, execArgv, false],
+  ["standalone runtime executing a disk script", "file:///synthetic/runtime/", "1", execArgv, true],
+] as const)(
+  "identifies source-loader capability for %s",
+  (_label, root, bunBeBun, argv, expected) => {
+    vi.stubGlobal("__openclawStandaloneRootUrl", root);
+    vi.stubEnv("BUN_BE_BUN", bunBeBun);
+    vi.stubEnv("NODE_OPTIONS", "");
+    process.execArgv = [...argv];
+    expect(runtimeHasSourceLoader()).toBe(expected);
+  },
+);
 
 function expectInvocation(
   options: Parameters<typeof resolveOpenClawCliInvocation>[0] & { args: string[] },
@@ -40,6 +63,46 @@ it.each([
     { execPath: command, entryPath: entry, execArgv, args },
     mode === "loose" ? [...execArgv, entryPath] : [],
   );
+});
+
+it("projects matched build facts from a manifest and keeps the executing image authoritative", () => {
+  const root = tempDirs.make("standalone-build-facts-");
+  const executable = path.join(root, "openclaw");
+  const build = {
+    mode: "aot",
+    openclaw: { version: "2026.10.6", commit: "a".repeat(40) },
+    bun: { version: "1.4.4", revision: "compiler-revision" },
+    target: { platform: "linux", arch: "arm64" },
+    build: {
+      id: "matching-build",
+      flavor: "standard",
+      pluginSetSha256: "b".repeat(64),
+      moduleGraphSha256: "c".repeat(64),
+    },
+    plugins: { embedded: ["codex"], omitted: ["matrix"] },
+    nativeModules: [
+      {
+        name: "sqlite",
+        version: "3.53.4",
+        artifacts: [],
+        qualification: "unverified",
+        backend: "sqlite",
+      },
+    ],
+  };
+  fs.writeFileSync(
+    path.join(root, "manifest.json"),
+    JSON.stringify({
+      schemaVersion: 1,
+      executable: { path: "openclaw" },
+      runtime: { path: "runtime" },
+      ...build,
+    }),
+  );
+  expect(getStandaloneRuntimeBuild(executable)).toMatchObject(build);
+  vi.stubGlobal("__openclawStandaloneBuildInfo", build);
+  fs.writeFileSync(path.join(root, "manifest.json"), "corrupted sidecar metadata");
+  expect(getStandaloneRuntimeBuild()).toEqual(build);
 });
 
 it("uses a renamed standalone artifact's manifest for service invocation and runtime metadata", () => {

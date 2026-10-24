@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { cp, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +13,38 @@ import controlUiViteConfig, {
 import { normalizeControlUiBuildInfo } from "../build-info-normalizers.ts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
+
+it("builds boot and deferred inventories before compression sidecars exist", async ({
+  onTestFinished,
+}) => {
+  const output = await mkdtemp(path.join(os.tmpdir(), "openclaw-ui-inventory-"));
+  onTestFinished(() => rm(output, { recursive: true, force: true }));
+  await mkdir(path.join(output, "assets"));
+  await writeFile(path.join(output, "index.html"), "<html><head></head></html>");
+  const bootFile = "assets/index-AbCd1234.js";
+  const deferredFile = "assets/__vite-browser-external-2447137e-CWgf1vdC.js";
+  const source = "export const answer = 42;";
+  for (const file of [bootFile, deferredFile]) {
+    await writeFile(path.join(output, file), source);
+  }
+
+  const sizes = await refreshControlUiBuildOutput(
+    output,
+    normalizeControlUiBuildInfo({ version: "1.0.0", dirty: false, buildId: "inventory" }),
+    [bootFile],
+    false,
+  );
+
+  const worker = readFileSync(path.join(output, "sw.js"), "utf8");
+  const offline = JSON.parse(worker.match(/^const OFFLINE_BOOT = (.+);$/mu)![1]!);
+  const integrity = `sha256-${createHash("sha256").update(source).digest("base64")}`;
+  expect(offline.assets).toEqual([{ path: bootFile, integrity }]);
+  expect(offline.deferredAssets).toEqual([{ path: deferredFile, integrity }]);
+  expect(sizes).toEqual({ count: 1, rawBytes: 25, gzipBytes: 45 });
+  expect(readdirSync(path.join(output, "assets")).toSorted()).toEqual(
+    [bootFile, deferredFile].map((file) => path.basename(file)).toSorted(),
+  );
+});
 
 it("refreshes cached identity without changing compressed assets", async ({ onTestFinished }) => {
   const output = await mkdtemp(path.join(os.tmpdir(), "openclaw-ui-identity-"));
@@ -28,6 +60,28 @@ it("refreshes cached identity without changing compressed assets", async ({ onTe
     { fileName: assetName, source: Buffer.from(source) },
     ...(await createControlUiPrecompressedAssetVariants(assetName, source)),
   ];
+  const deferredFiles = [
+    "assets/session-actions-AbCd1234.js",
+    "assets/session-organizer-operations.runtime-AbCd1234.js",
+    "assets/session-actions-AbCd1234.css",
+    "assets/en-settings-AbCd1234.js",
+  ];
+  const excludedFiles = [
+    "assets/de-AbCd1234.js",
+    "assets/locale-config-hints-zh-CN-AbCd1234.js",
+    "assets/locale-namespace-fr-settings-AbCd1234.js",
+    "assets/mermaid.min-AbCd1234.js",
+    "assets/unhashed.js",
+    "assets/session-actions-AbCd1234.js.map",
+    "plugins/example/assets/plugin-AbCd1234.js",
+  ];
+  for (const fileName of [...deferredFiles, ...excludedFiles]) {
+    await mkdir(path.dirname(path.join(output, fileName)), { recursive: true });
+    assets.push(
+      { fileName, source: Buffer.from(source) },
+      ...(await createControlUiPrecompressedAssetVariants(fileName, source)),
+    );
+  }
   for (const asset of assets) {
     await writeFile(path.join(output, asset.fileName), asset.source);
   }
@@ -66,6 +120,9 @@ it("refreshes cached identity without changing compressed assets", async ({ onTe
     html,
     csp: expect.stringContaining(digest(identityScript!)),
     assets: expect.arrayContaining([{ path: assetName, integrity: digest(source) }]),
+    deferredAssets: deferredFiles
+      .toSorted()
+      .map((file) => ({ path: file, integrity: digest(source) })),
   });
   expect(offline.routes).not.toContain("/api");
   expect(offline.routePrefixes).not.toContain("/plugins/");

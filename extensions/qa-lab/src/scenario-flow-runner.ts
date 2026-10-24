@@ -1,3 +1,4 @@
+import { assertRuntimeSupportsDynamicExecution } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord as isPlainObject } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { QaEvidenceRttMeasurement } from "./evidence-summary.js";
 import type { QaTransportState } from "./qa-transport.js";
@@ -155,7 +156,11 @@ function createEvalContext(api: QaFlowApi, vars: QaFlowVars) {
     ...api,
     qaImport: (specifier: string) => {
       const loader = qaFlowImportLoaders[specifier];
-      return loader ? loader() : import(specifier);
+      if (loader) {
+        return loader();
+      }
+      assertRuntimeSupportsDynamicExecution("QA scenario source import");
+      return import(specifier);
     },
     vars,
     ...vars,
@@ -163,6 +168,7 @@ function createEvalContext(api: QaFlowApi, vars: QaFlowVars) {
 }
 
 async function evalExpr(expr: string, api: QaFlowApi, vars: QaFlowVars) {
+  assertRuntimeSupportsDynamicExecution("QA scenario expression evaluation");
   const context = createEvalContext(api, vars);
   const names = Object.keys(context);
   const values = Object.values(context);
@@ -175,6 +181,7 @@ function buildLambda(
   api: QaFlowApi,
   vars: QaFlowVars,
 ) {
+  assertRuntimeSupportsDynamicExecution("QA scenario lambda creation");
   const context = createEvalContext(api, vars);
   const names = Object.keys(context);
   const values = Object.values(context);

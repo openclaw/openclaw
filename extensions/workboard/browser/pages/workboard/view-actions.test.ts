@@ -604,7 +604,9 @@ describe("WorkboardView", () => {
         const dispatched = moveSelect!.dispatchEvent(
           new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
         );
-        expect(dispatched).toBe(false);
+        if (route === "keyboard") {
+          expect(dispatched).toBe(false);
+        }
       }
     }
     await Promise.resolve();

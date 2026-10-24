@@ -196,7 +196,10 @@ export function useMenuMachine(
     const editing =
       event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement;
     if (event.key === "Escape") {
-      overlay.keydown(event);
+      // A child can retain focus on its parent trigger before navigation loads, too.
+      if (![...overlay.children].some((child) => child.open)) {
+        overlay.keydown(event);
+      }
       return;
     }
     if (

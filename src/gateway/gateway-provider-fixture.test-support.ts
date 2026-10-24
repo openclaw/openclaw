@@ -45,6 +45,16 @@ export function writeToolCall(
     arguments: JSON.stringify(args),
     status: "completed",
   };
+  writeToolCallResponse(response, item, `resp_${id}`, inputTokens, outputTokens);
+}
+
+export function writeToolCallResponse(
+  response: ServerResponse,
+  item: { id: string; arguments: string },
+  responseId: string,
+  inputTokens: number,
+  outputTokens: number,
+): void {
   writeOpenAiResponsesSse(response, [
     {
       type: "response.output_item.added",
@@ -61,7 +71,7 @@ export function writeToolCall(
     {
       type: "response.completed",
       response: {
-        id: `resp_${id}`,
+        id: responseId,
         status: "completed",
         output: [item],
         usage: {

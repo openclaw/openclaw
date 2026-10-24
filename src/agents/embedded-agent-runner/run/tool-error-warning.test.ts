@@ -335,6 +335,25 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
       expected:
         "⚠️ Exec failed: `python3 /tmp/audit.py (in /tmp/build @everyone)`: Command exited with code 1",
     },
+    {
+      title: "preserves raw exec cwd context before trailing raw command metadata",
+      meta: "run python3 audit.py (in /tmp/build) · `python3 audit.py`",
+      toolResultFormat: "markdown",
+      expected: "⚠️ Exec failed: `python3 audit.py (in /tmp/build)`: Command exited with code 1",
+    },
+    {
+      title: "preserves raw exec workspace and node context before trailing raw command metadata",
+      meta: "run python3 audit.py (workspace), node: mac-1, `python3 audit.py`",
+      toolResultFormat: "markdown",
+      expected:
+        "⚠️ Exec failed: `node: mac-1 · python3 audit.py (workspace)`: Command exited with code 1",
+    },
+    {
+      title: "preserves semantic compact repo context before trailing raw command metadata",
+      meta: "check git status (repo), `git status`",
+      toolResultFormat: "markdown",
+      expected: "⚠️ Exec failed: `git status (repo)`: Command exited with code 1",
+    },
   ] as const)("$title", ({ meta, toolResultFormat, expected }) => {
     const payloads = buildPayloads({
       lastToolError: {
@@ -349,52 +368,6 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
 
     expectSinglePayloadSummary(payloads, {
       text: expected,
-      isError: true,
-    });
-  });
-
-  it("preserves raw exec cwd context before trailing raw command metadata", () => {
-    const cwdPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run python3 audit.py (in /tmp/build) · `python3 audit.py`",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-      verboseLevel: "full",
-    });
-    const workspaceNodePayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run python3 audit.py (workspace), node: mac-1, `python3 audit.py`",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-      verboseLevel: "full",
-    });
-    const semanticCompactPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "check git status (repo), `git status`",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-      verboseLevel: "full",
-    });
-
-    expectSinglePayloadSummary(cwdPayloads, {
-      text: "⚠️ Exec failed: `python3 audit.py (in /tmp/build)`: Command exited with code 1",
-      isError: true,
-    });
-    expectSinglePayloadSummary(workspaceNodePayloads, {
-      text: "⚠️ Exec failed: `node: mac-1 · python3 audit.py (workspace)`: Command exited with code 1",
-      isError: true,
-    });
-    expectSinglePayloadSummary(semanticCompactPayloads, {
-      text: "⚠️ Exec failed: `git status (repo)`: Command exited with code 1",
       isError: true,
     });
   });

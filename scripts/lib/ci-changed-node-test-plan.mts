@@ -110,7 +110,6 @@ const CHANGED_FILE_SECONDS_HINTS = new Map<string, number>([
   ["test/e2e/qa-lab/runtime/gateway-node-control-plane.e2e.test.ts", 144],
   ["test/e2e/qa-lab/runtime/gateway-node-mcp.stress.e2e.test.ts", 133],
   ["test/e2e/qa-lab/runtime/telegram-recovered-artifact.e2e.test.ts", 127],
-  ["test/e2e/qa-lab/runtime/gateway-node-mcp.e2e.test.ts", 121],
   ["test/e2e/qa-lab/runtime/gateway-node-exec-routing.e2e.test.ts", 119],
   ["test/e2e/qa-lab/runtime/gateway-node-pending-work.e2e.test.ts", 111],
   ["test/e2e/qa-lab/runtime/node-worker-launch-wire.e2e.test.ts", 104],

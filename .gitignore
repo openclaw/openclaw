@@ -72,6 +72,14 @@ apps/ios/*.xcfilelist
 # Vendor build artifacts
 .bundle.hash
 
+# Retired A2UI build outputs (#182109). Existing Git installs keep these generated
+# files; unignored, they make `openclaw update` refuse the checkout as dirty.
+vendor/a2ui/renderers/lit/dist/
+src/canvas-host/a2ui/*.bundle.js
+src/canvas-host/a2ui/*.map
+extensions/canvas/src/host/a2ui/*.bundle.js
+extensions/canvas/src/host/a2ui/*.map
+
 # fastlane (iOS)
 apps/ios/fastlane/README.md
 apps/android/fastlane/README.md

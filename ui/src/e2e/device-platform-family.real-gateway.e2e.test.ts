@@ -450,20 +450,16 @@ suite.define(() => {
                 );
                 await rejectDevicePairing(request.requestId);
               }
+              expect(meta.split(" · ")[0], item.name).toBe(item.label);
+              expect(
+                connects.every((frame) => frame.client.deviceFamily === item.family),
+                item.name,
+              ).toBe(true);
+              if (!item.legacy) {
+                expect(after?.deviceFamily, item.name).toBe(item.family);
+              }
             },
           );
-        }
-        expect(
-          observations.map((row) => ({ name: row.name, label: row.meta.split(" · ")[0] })),
-        ).toEqual(cases.map((row) => ({ name: row.name, label: row.label })));
-        for (const row of observations) {
-          const frames = row.connects;
-          expect(frames.every((frame) => frame.client.deviceFamily === row.expectedFamily)).toBe(
-            true,
-          );
-          if (!row.legacy) {
-            expect(row.after?.deviceFamily).toBe(row.expectedFamily);
-          }
         }
       },
       close: async () => {

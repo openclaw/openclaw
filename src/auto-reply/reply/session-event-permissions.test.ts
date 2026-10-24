@@ -750,7 +750,8 @@ it.for([
         try {
           await expect(first.accepted).resolves.toEqual({ ok: true });
           await withinTest(firstStarted.promise, signal);
-          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+          // Advance notice timers without moving mailbox enqueue timestamps into the future.
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
           const observed = [await recordWatchEvents(child, "notice-child")];
           const assertCursor = (notice: (typeof observed)[number], consumed = false) => {
             expect(

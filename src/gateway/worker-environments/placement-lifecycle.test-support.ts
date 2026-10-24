@@ -4,6 +4,8 @@ import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
+import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { REQUEST, type PlacementStore } from "./placement-dispatch-test-fixtures.js";
 import { placementTurnOwner, type WorkerSessionPlacementRecord } from "./placement-record.js";
 
@@ -11,6 +13,8 @@ type ActivePlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }
 export const WORKER_PROTOCOL_FEATURES = [
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
+  WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
 ] as const;
 export const workerBundle = (
   artifact: typeof import("./service.test-support.js").BUNDLE_ARTIFACT,

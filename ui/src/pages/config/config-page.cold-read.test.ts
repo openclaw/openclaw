@@ -39,28 +39,45 @@ describe("ConfigPage cold reads", () => {
     vi.unstubAllGlobals();
   });
 
-  it.each(["appearance", "notifications", "infrastructure"] as const)(
-    "keeps the %s config read failure visible until an explicit retry",
-    async (pageId) => {
+  it.each([
+    { pageId: "appearance", failedRead: "config" },
+    { pageId: "notifications", failedRead: "config" },
+    { pageId: "infrastructure", failedRead: "config" },
+    { pageId: "infrastructure", failedRead: "schema" },
+  ] as const)(
+    "loads $pageId independently and keeps its $failedRead failure visible until Retry",
+    async ({ pageId, failedRead }) => {
       const firstRead = deferred<unknown>();
       const retryRead = deferred<unknown>();
+      const pendingConfig = deferred<unknown>();
       const config = { gateway: { port: 18789 } };
+      const configResponse = {
+        config,
+        hash: "recovered",
+        raw: JSON.stringify(config),
+        valid: true,
+        issues: [],
+      };
+      const schemaResponse = {
+        schema: {
+          type: "object",
+          properties: {
+            gateway: { type: "object", properties: { port: { type: "number" } } },
+          },
+        },
+        uiHints: {},
+      };
       let reads = 0;
       const request = vi.fn((method: string) => {
-        if (method === "config.get") {
+        if (method === (failedRead === "config" ? "config.get" : "config.schema")) {
           reads += 1;
           return reads === 1 ? firstRead.promise : retryRead.promise;
         }
+        if (method === "config.get") {
+          return pendingConfig.promise;
+        }
         if (method === "config.schema") {
-          return Promise.resolve({
-            schema: {
-              type: "object",
-              properties: {
-                gateway: { type: "object", properties: { port: { type: "number" } } },
-              },
-            },
-            uiHints: {},
-          });
+          return Promise.resolve(schemaResponse);
         }
         return Promise.resolve({});
       });
@@ -77,6 +94,17 @@ describe("ConfigPage cold reads", () => {
         configPages.find((page) => page.id === pageId),
         "config route",
       );
+      await route.loader!(context, {
+        signal: new AbortController().signal,
+        shouldRun: () => true,
+        revalidating: false,
+        location: { pathname: `/${pageId}`, search: "", hash: "" },
+        deps: "",
+        cause: "navigation",
+      });
+      // Both owner reads start before the page chunk can mount and request missing data.
+      expect(request).toHaveBeenCalledWith("config.get", {});
+      expect(request).toHaveBeenCalledWith("config.schema", {});
       const productionModule = await route.component();
       const provider = createSolidApplicationContextProvider(context);
       const render = productionModule.renderSolid;
@@ -100,10 +128,15 @@ describe("ConfigPage cold reads", () => {
       try {
         await router.navigate(pageId, context);
         await waitForSolid(() => expect(reads).toBe(1));
-        firstRead.reject(new Error("Synthetic config read failed"));
+        const failure = `Synthetic ${failedRead} read failed`;
+        firstRead.reject(new Error(failure));
+        if (failedRead === "schema") {
+          await runtimeConfig.schemaRead;
+          pendingConfig.resolve(configResponse);
+        }
         await waitForSolid(() => {
           expect(mounted.querySelector(".config-content-callout")?.textContent ?? "").toContain(
-            "Synthetic config read failed",
+            failure,
           );
         });
         publishConfigSource(context.theme);
@@ -111,7 +144,7 @@ describe("ConfigPage cold reads", () => {
         await waitForSolid(() => {
           expect(reads).toBe(1);
           expect(mounted.querySelector(".config-content-callout")?.textContent ?? "").toContain(
-            "Synthetic config read failed",
+            failure,
           );
         });
         const retry = expectDefined(
@@ -122,15 +155,11 @@ describe("ConfigPage cold reads", () => {
         retry.click();
         await waitForSolid(() => {
           expect(reads).toBe(2);
-          expect(mounted.querySelector(".config-loading")).not.toBeNull();
+          if (failedRead === "config") {
+            expect(mounted.querySelector(".config-loading")).not.toBeNull();
+          }
         });
-        retryRead.resolve({
-          config,
-          hash: "recovered",
-          raw: JSON.stringify(config),
-          valid: true,
-          issues: [],
-        });
+        retryRead.resolve(failedRead === "config" ? configResponse : schemaResponse);
         await waitForSolid(() => {
           expect(mounted.querySelector(".config-content-callout")).toBeNull();
           expect(mounted.querySelector(".config-loading")).toBeNull();
@@ -140,6 +169,7 @@ describe("ConfigPage cold reads", () => {
       } finally {
         firstRead.resolve(undefined);
         retryRead.resolve(undefined);
+        pendingConfig.resolve(configResponse);
         mounted.dispose();
         router.stop();
         runtimeConfig.dispose();

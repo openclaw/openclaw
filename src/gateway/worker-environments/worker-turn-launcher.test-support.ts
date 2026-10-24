@@ -1,7 +1,6 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { vi } from "vitest";
-import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
@@ -483,10 +482,6 @@ export function attachedEnvironment(): WorkerTurnEnvironmentRecord {
     leaseId: "lease-worker-turn",
     bootstrapReceipt: {
       ...attached.bootstrapReceipt,
-      protocolFeatures: [
-        ...attached.bootstrapReceipt.protocolFeatures,
-        WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
-      ],
       installKind: "bundle",
     },
     sshEndpoint: {

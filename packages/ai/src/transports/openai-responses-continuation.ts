@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { isProxy } from "node:util/types";
 import { sha256StableValue } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ResponseInput, ResponseOutputItem } from "openai/resources/responses/responses.js";
@@ -51,12 +52,62 @@ export type ResponsesContinuationStatus =
   | "no_previous_response"
   | "request_changed";
 
+// Keep text by reference instead of encoding/parsing it solely for comparison.
+// Hook-provided opaque values still use native JSON, including the property's key.
+function projectJsonValue(value: unknown, key: string, ancestors: Set<object>): unknown {
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value + 0 : null;
+  }
+  if (value === null || typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (value === undefined || typeof value === "symbol") {
+    return undefined;
+  }
+  if (
+    typeof value !== "object" ||
+    isProxy(value) ||
+    Object.getPrototypeOf(value) !== (Array.isArray(value) ? Array.prototype : Object.prototype) ||
+    "toJSON" in value ||
+    ancestors.has(value)
+  ) {
+    // oxlint-disable-next-line unicorn/prefer-structured-clone -- Preserve JSON/toJSON semantics, not object identity.
+    const projected: Record<string, unknown> = JSON.parse(
+      JSON.stringify({ __proto__: null, [key]: value }),
+    );
+    return Object.hasOwn(projected, key) ? projected[key] : undefined;
+  }
+  ancestors.add(value);
+  try {
+    if (Array.isArray(value)) {
+      const result: unknown[] = [];
+      const length = value.length;
+      for (let index = 0; index < length; index++) {
+        result.push(projectJsonValue(value[index], String(index), ancestors) ?? null);
+      }
+      return result;
+    }
+    const fields: [string, unknown][] = [];
+    for (const name of Object.keys(value)) {
+      const member = projectJsonValue(Reflect.get(value, name), name, ancestors);
+      if (member !== undefined) {
+        fields.push([name, member]);
+      }
+    }
+    return Object.fromEntries(fields);
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
 function jsonValuesEqual(left: object, right: object): boolean {
-  // Normalize the left side first to preserve serialization errors and toJSON ordering.
-  const leftJson = JSON.stringify(left) as string;
-  const normalizedLeft: unknown = JSON.parse(leftJson);
-  const rightJson = JSON.stringify(right) as string;
-  return leftJson === rightJson || isDeepStrictEqual(normalizedLeft, JSON.parse(rightJson));
+  const normalize = (value: object) => {
+    const projected = projectJsonValue(value, "", new Set());
+    // A root toJSON returning undefined was not a valid JSON comparison either.
+    return projected === undefined ? JSON.parse("undefined") : projected;
+  };
+  // Finish the left side before evaluating any right-side hook values.
+  return isDeepStrictEqual(normalize(left), normalize(right));
 }
 
 function requestWithoutInput(request: ResponsesContinuationRequest): ResponsesContinuationRequest {

@@ -5,6 +5,7 @@ import {
   readControlUiBuildMismatchId,
 } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { registerListener } from "../../../src/shared/listeners.js";
 import type { EventLogEntry } from "../api/event-log.ts";
 import {
@@ -395,9 +396,10 @@ export function createApplicationGateway(
     canvasSurface.stop();
     client?.stop();
 
-    const scheduleReload = (buildId: string) => {
+    const scheduleReload = (buildId: string, reloadOnce?: boolean) => {
       void scheduleStaleChunkReload({
         buildId,
+        reloadOnce,
         ...createGatewayControlUiReloadOptions(
           gateway,
           () => isCurrentClient(nextClient) && isSameOriginGateway(nextConnection.gatewayUrl),
@@ -450,11 +452,7 @@ export function createApplicationGateway(
         const controlUiBuildFresh = !(
           isSameOriginGateway(nextConnection.gatewayUrl) &&
           (exactBuildIdentityAvailable || everConnected) &&
-          controlUiBuildDiffersFrom({
-            version: hello.server?.version,
-            buildId: hello.server?.buildId,
-            controlUiBuildSource: hello.server?.controlUiBuildSource,
-          })
+          controlUiBuildDiffersFrom(hello.server ?? {})
         );
         if (!controlUiBuildFresh) {
           // Keep every connected-only drain fenced. The stale document may
@@ -537,19 +535,23 @@ export function createApplicationGateway(
           everConnected = false;
           credentials.retire(false);
         }
-        const mismatchedBuildId = readControlUiBuildMismatchId(error?.details);
-        if (mismatchedBuildId) {
-          scheduleReload(mismatchedBuildId);
+        const lastErrorCode = resolveGatewayErrorDetailCode(error) ?? error?.code ?? null;
+        const mismatchId = readControlUiBuildMismatchId(error?.details);
+        const buildMismatch = mismatchId !== null && error?.code !== "INVALID_REQUEST";
+        if (mismatchId || lastErrorCode === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
+          const serverBuildId = normalizeNullableString(
+            asOptionalRecord(error?.details)?.gatewayBuildId,
+          );
+          scheduleReload(mismatchId ?? serverBuildId ?? CONTROL_UI_BUILD_INFO.buildId, true);
         }
         const startupPending =
-          mismatchedBuildId === null &&
+          !buildMismatch &&
           !everConnected &&
           willRetry &&
           isRetryableGatewayStartupUnavailableError(error);
         if (startupPending && snapshot.phase === "starting") {
           return;
         }
-        const lastErrorCode = resolveGatewayErrorDetailCode(error) ?? error?.code ?? null;
         if (lastErrorCode === ConnectErrorDetailCodes.AUTH_BOOTSTRAP_TOKEN_INVALID) {
           connection = { ...connection, bootstrapToken: "", bootstrapProfile: undefined };
         }
@@ -570,18 +572,17 @@ export function createApplicationGateway(
           // Retained capabilities describe this client, never its live dispatch authority.
           hello: retainPresentation ? snapshot.hello : null,
           pluginCapabilities: retainPresentation ? snapshot.pluginCapabilities : null,
-          phase:
-            mismatchedBuildId !== null
-              ? "reload-required"
-              : startupPending
-                ? "starting"
-                : everConnected
-                  ? willRetry
-                    ? "reconnecting"
-                    : "offline"
-                  : willRetry
-                    ? "connecting"
-                    : "stopped",
+          phase: buildMismatch
+            ? "reload-required"
+            : startupPending
+              ? "starting"
+              : everConnected
+                ? willRetry
+                  ? "reconnecting"
+                  : "offline"
+                : willRetry
+                  ? "connecting"
+                  : "stopped",
           // Retain only established profileless display identity through transport loss.
           // Rejected admission and unresolved/replaced identities must stay fail-closed.
           selfUser:
