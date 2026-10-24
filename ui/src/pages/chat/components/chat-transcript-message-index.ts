@@ -33,7 +33,6 @@ import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { createTranscriptMemo } from "./chat-transcript-memo.ts";
 import { GuardedTranscriptItem } from "./chat-transcript-render-guard.ts";
 import type { NativeTranscriptView } from "./chat-transcript-rows.ts";
-import { transcriptRowTimestamp } from "./chat-transcript-timeline.ts";
 import type { projectTranscriptWorkPreviews } from "./chat-transcript-work-previews.ts";
 
 type ChatRenderItem = SystemEventRenderItem;
@@ -433,27 +432,35 @@ export function projectTranscriptRows(
 ): readonly TranscriptRow<ChatRenderItem>[] {
   return presentationRows(
     rows,
-    [workPreviews, ...contentRows.flatMap((row) => [row.key, row.timestamp ?? null])],
+    [workPreviews, ...contentRows.flatMap((row) => [row.key, row.slot ?? null])],
     () => {
       if (!workPreviews.size && !contentRows.length) {
         return rows;
       }
-      const timedContent = contentRows
-        .filter((row) => row.timestamp !== undefined)
-        .toSorted((left, right) => left.timestamp! - right.timestamp!);
-      const untimedContent = contentRows.filter((row) => row.timestamp === undefined);
+      const contentBySlot = new Map<number, Extract<TranscriptRow, { kind: "content" }>[]>();
+      const tailContent: Extract<TranscriptRow, { kind: "content" }>[] = [];
+      for (const row of contentRows) {
+        if (row.slot === undefined) {
+          tailContent.push(row);
+          continue;
+        }
+        const slot = Math.max(0, Math.min(row.slot, rows.length));
+        const slotted = contentBySlot.get(slot);
+        if (slotted) {
+          slotted.push(row);
+        } else {
+          contentBySlot.set(slot, [row]);
+        }
+      }
       const result: TranscriptRow<ChatRenderItem>[] = [];
-      let timedIndex = 0;
-      for (const row of rows) {
-        const rowTimestamp = transcriptRowTimestamp(row);
-        if (rowTimestamp !== undefined) {
-          while (
-            timedIndex < timedContent.length &&
-            timedContent[timedIndex]!.timestamp! < rowTimestamp
-          ) {
-            result.push(timedContent[timedIndex]!);
-            timedIndex += 1;
-          }
+      for (let index = 0; index <= rows.length; index += 1) {
+        const slottedContent = contentBySlot.get(index);
+        if (slottedContent) {
+          result.push(...slottedContent);
+        }
+        const row = rows[index];
+        if (!row) {
+          continue;
         }
         result.push(row);
         const previews = workPreviews.get(row.key);
@@ -466,7 +473,7 @@ export function projectTranscriptRows(
           });
         }
       }
-      return result.concat(timedContent.slice(timedIndex), untimedContent);
+      return result.concat(tailContent);
     },
   );
 }

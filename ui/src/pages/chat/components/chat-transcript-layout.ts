@@ -15,8 +15,8 @@ export type TranscriptRow<T = unknown> =
       kind: "content";
       key: string;
       content: TranscriptContent;
-      /** Places live content among history rows; untimed content stays at the tail. */
-      timestamp?: number;
+      /** Zero-based history row to insert before; omitted content stays at the tail. */
+      slot?: number;
     };
 
 export type TranscriptLayoutProps = {

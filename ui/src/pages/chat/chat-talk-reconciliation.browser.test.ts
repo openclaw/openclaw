@@ -71,3 +71,51 @@ it("reconciles persisted voice while preserving the live tail", async () => {
     "Now check the room temperature.",
   );
 });
+
+it("keeps delayed ASR captions in provider order around typed history", async () => {
+  await page.viewport(1440, 900);
+  fixture = createComposerContainer();
+  fixture.style.cssText = "display:block;height:900px;width:100%";
+  document.body.append(fixture);
+  const transcript = createChatTranscript(() => "talk-delayed-asr", {
+    canFollowEnd: () => true,
+  });
+  const props = createChatProps({
+    transcript,
+    paneId: "talk-delayed-asr",
+    assistantName: "Assistant",
+    realtimeTalkActive: true,
+    messages: [
+      {
+        role: "user",
+        content: "Typed in between",
+        timestamp: 3_000,
+        __openclaw: { id: "typed-in-between" },
+      },
+    ],
+    realtimeTalkConversation: [
+      {
+        id: "rt-question",
+        role: "user",
+        text: "Delayed spoken question",
+        isStreaming: false,
+        createdAtMs: 5_000,
+      },
+      {
+        id: "rt-answer",
+        role: "assistant",
+        text: "Spoken answer",
+        isStreaming: false,
+        createdAtMs: 1_000,
+      },
+    ],
+  });
+  renderChatPropsInto(fixture, props);
+  await expect.poll(() => fixture!.querySelectorAll(".agent-chat__voice-turn").length).toBe(2);
+
+  expect(
+    [...fixture.querySelectorAll(".agent-chat__voice-turn-text, .chat-text")].map((element) =>
+      element.textContent?.trim(),
+    ),
+  ).toEqual(["Typed in between", "Delayed spoken question", "Spoken answer"]);
+});

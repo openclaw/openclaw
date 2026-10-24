@@ -10,10 +10,12 @@ type RealtimeTalkProps = Parameters<typeof projectRealtimeTalkConversation>[0];
 
 type TranscriptContentRow = Extract<TranscriptRow, { kind: "content" }>;
 
+type PlacedTranscriptContentRow = TranscriptContentRow & { slot: number };
+
 export function projectRealtimeTalkContentRows(
   rows: readonly TranscriptRow<SystemEventRenderItem>[],
   props: RealtimeTalkProps,
-): TranscriptContentRow[] {
+): PlacedTranscriptContentRow[] {
   const conversation = projectRealtimeTalkConversation(props);
   if (!conversation) {
     return [];
@@ -21,9 +23,9 @@ export function projectRealtimeTalkContentRows(
   const segments: Array<{
     slot: number;
     timed: boolean;
-    timestamp: number | undefined;
     entries: RealtimeTalkConversation["entries"];
   }> = [];
+  let previousSlot = 0;
   for (const entry of conversation.entries) {
     const timestamp =
       typeof entry.createdAtMs === "number" && Number.isFinite(entry.createdAtMs)
@@ -37,16 +39,18 @@ export function projectRealtimeTalkContentRows(
             const rowTimestamp = transcriptRowTimestamp(row);
             return rowTimestamp !== undefined && rowTimestamp > timestamp;
           });
-    const slot = laterRow < 0 ? rows.length : laterRow;
+    const requestedSlot = laterRow < 0 ? rows.length : laterRow;
+    // Provider order is authoritative. A delayed ASR final may carry a later
+    // timestamp than its successor, so only advance through history rather than
+    // moving a later provider entry back above an earlier one.
+    const slot = Math.max(previousSlot, requestedSlot);
+    previousSlot = slot;
     const previous = segments.at(-1);
     if (previous?.slot === slot && previous.timed === timed) {
       previous.entries.push(entry);
-      if (timestamp !== undefined) {
-        previous.timestamp = Math.min(previous.timestamp ?? timestamp, timestamp);
-      }
       continue;
     }
-    segments.push({ slot, timed, timestamp, entries: [entry] });
+    segments.push({ slot, timed, entries: [entry] });
   }
   return segments.map((segment) => {
     const view: NativeTranscriptView = {
@@ -57,7 +61,7 @@ export function projectRealtimeTalkContentRows(
     return {
       kind: "content",
       key: `realtime-talk:${segment.entries[0]!.id}:${segment.entries.at(-1)!.id}`,
-      timestamp: segment.timestamp,
+      slot: segment.slot,
       content: new GuardedTranscriptItem([view], view),
     };
   });

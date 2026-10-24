@@ -480,6 +480,43 @@ describe("voice reconciliation", () => {
     ).toEqual(["Spoken earlier", "Typed later", "Spoken later"]);
   });
 
+  it("keeps provider order when delayed ASR timestamps arrive out of order", () => {
+    const messages = [
+      {
+        role: "user",
+        content: "Typed in between",
+        timestamp: 3_000,
+        __openclaw: { id: "typed-in-between" },
+      },
+    ];
+    const props = threadProps("voice-delayed-asr", undefined, messages);
+    props.realtimeTalkConversation = [
+      {
+        id: "rt-question",
+        role: "user",
+        text: "Delayed spoken question",
+        isStreaming: false,
+        createdAtMs: 5_000,
+      },
+      {
+        id: "rt-answer",
+        role: "assistant",
+        text: "Spoken answer",
+        isStreaming: false,
+        createdAtMs: 1_000,
+      },
+    ];
+
+    const view = drawThread(props);
+    view.draw();
+
+    expect(
+      [...view.container.querySelectorAll(".agent-chat__voice-turn-text, .chat-text")].map((node) =>
+        node.textContent?.trim(),
+      ),
+    ).toEqual(["Typed in between", "Delayed spoken question", "Spoken answer"]);
+  });
+
   it("uses one raw-history scan, preserving pending captions and refreshing replaced history", () => {
     const messages = [
       savedMessage("Hidden saved words", "voice:saved"),
