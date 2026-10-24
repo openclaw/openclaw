@@ -2096,7 +2096,8 @@ button.chat-reply-attribution__target:disabled {
   cursor: var(--cursor-action);
 }
 
-.chat-bubble-activity--working > .chat-bubble-activity__summary {
+.chat-bubble-activity--working > .chat-bubble-activity__summary,
+.chat-activity-group--working > .chat-activity-group__summary {
   min-width: 60px;
   min-height: 40px;
   justify-content: center;
@@ -2104,6 +2105,13 @@ button.chat-reply-attribution__target:disabled {
   border: 1px solid var(--border);
   border-radius: 18px;
   background: var(--bg-elevated);
+}
+
+.chat-bubble-activity__label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .chat.chat--bubbles .chat-group.assistant .chat-bubble--activity-only {
@@ -2132,6 +2140,7 @@ button.chat-reply-attribution__target:disabled {
 }
 
 .chat-bubble-dots {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 4px;
