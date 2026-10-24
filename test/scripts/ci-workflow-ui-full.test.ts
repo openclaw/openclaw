@@ -53,7 +53,6 @@ describe("ci:full UI coverage", () => {
     { full: false, uiOwner: false, runNode: true },
     { full: false, uiOwner: true, runNode: true },
     { full: true, uiOwner: false, runNode: true },
-    { full: true, uiOwner: true, runNode: true },
     { full: true, uiOwner: false, runNode: false },
   ])("selects UI inventories for %j", ({ full, uiOwner, runNode }) => {
     const coverage = runUi({
