@@ -1096,6 +1096,7 @@ src/infra/restart-stale-pids.ts
 src/infra/retry-attempt-errors.ts
 src/infra/retry.ts
 src/infra/root-walk.ts
+src/infra/runtime-capabilities.ts
 src/infra/runtime-dependency-ownership.ts
 src/infra/runtime-process-entrypoints.ts
 src/infra/runtime-process-manifest.ts
