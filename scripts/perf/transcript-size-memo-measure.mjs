@@ -152,6 +152,10 @@ if (mode === "table") {
   for (let i = 0; i < 1000; i++) {
     owner.retainTranscript(cell, transcript([row(i)]));
   }
+  // Seed each memo before timing so every measured retain appends exactly one row.
+  for (const sequence of fixtures) {
+    owner.retainTranscript(cell, sequence.shift());
+  }
   const inspector = new Session();
   if (mode === "allocation") {
     inspector.connect();

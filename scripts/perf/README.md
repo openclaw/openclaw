@@ -4596,8 +4596,8 @@ The harness extracts the source's estimator and `retainTranscript` accounting;
 estimate against an uncached walk, and forces GC before reading the WeakMap's
 backing-table size from a heap snapshot. Its counting WeakMap is used only in that
 pass. `cpu` prepares 100 independent append sequences (128 initial rows, then
-128 appends), warms the code on disjoint rows, and measures 12,900 retains with the
-native WeakMap. `allocation` repeats that workload with sampling that includes
+128 appends), warms the code on disjoint rows, seeds each sequence's memo before
+measurement, and measures 12,800 appends with the native WeakMap. `allocation` repeats that workload with sampling that includes
 collected objects; its timing is not a CPU gate. Fixtures remain live during each
 pass. Table bytes exclude payloads, keys, and the WeakMap object itself.
 
