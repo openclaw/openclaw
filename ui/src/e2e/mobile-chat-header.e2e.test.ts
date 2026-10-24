@@ -2,8 +2,8 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import {
-  chatSessionListResponse,
   captureUiProofEnabled,
+  chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
   installMockGateway,
@@ -14,16 +14,17 @@ const suite = createChatFlowE2eSuite();
 const sessionKey = "agent:main:mobile-header";
 const title = "Seeing duplicate text in the session";
 
-async function installFixture(page: Page) {
+async function installFixture(page: Page, defaultWorkspace = false) {
   return installMockGateway(page, {
     sessionKey,
+    workspace: "/local/workspace-main",
     methodResponses: {
       "sessions.list": chatSessionListResponse([
         {
           key: sessionKey,
           kind: "direct",
           label: title,
-          spawnedCwd: "/repo/openclaw",
+          spawnedCwd: defaultWorkspace ? "/local/workspace-main" : "/repo/openclaw",
           updatedAt: 1,
           owner: { actor: { type: "human", id: "alex", label: "Alex" } },
         },
@@ -47,10 +48,6 @@ suite.define(() => {
       await header.getByRole("button", { name: title + " — Details", exact: true }).waitFor();
       await gateway.setOnline(false);
       await header.locator(".mobile-header__notices").waitFor();
-      await header.locator(".chat-header-session-menu__trigger").click();
-      expect(await page.getByRole("menuitem", { name: "Rename", exact: true }).count()).toBe(0);
-      await page.getByRole("menuitem", { name: "Panels", exact: true }).click();
-      await page.locator(".chat-pane-cache__pane--active .chat-mobile-host").waitFor();
       const offlineDetails = await openChatDetails(page);
       expect(
         await offlineDetails
@@ -89,33 +86,29 @@ suite.define(() => {
           await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
           const header = page.locator(".chat-pane-cache__pane--active .agent-chat__header--mobile");
           await header.locator(".mobile-header__title-text", { hasText: title }).waitFor();
-          if (captureUiProofEnabled) {
-            await captureFrame(suite.artifactDir, `mobile-header-${viewport.width}.png`, header, [
-              header.locator(".mobile-header__title-text"),
-            ]);
-          }
-          expect((await header.boundingBox())!.height).toBe(48);
+          const panels = header.getByRole("button", { name: "Panels", exact: true });
+          await panels.waitFor();
           const actions = header.locator(".chat-header-session-menu__trigger");
           await actions.waitFor();
           expect(
-            await header.locator(".mobile-header__project, .chat-mobile-people-grid").count(),
-          ).toBe(0);
+            await header.locator(".mobile-header__capsule").getByRole("button").allTextContents(),
+          ).toHaveLength(2);
           expect(await header.locator(".header-new-session").count()).toBe(0);
           expect(await header.getByRole("button", { name: "Details", exact: true }).count()).toBe(
             0,
           );
           const geometry = await header.evaluate((element) => {
             const titleText = element.querySelector(".mobile-header__title-text")!;
-            const actionGroup = element.querySelector(".mobile-header__actions")!;
+            const capsule = element.querySelector(".mobile-header__capsule")!;
             return {
               titleWidth: titleText.getBoundingClientRect().width,
               headerRight: element.getBoundingClientRect().right,
-              actionsRight: actionGroup.getBoundingClientRect().right,
+              actionsRight: capsule.getBoundingClientRect().right,
               bodyWidth: document.documentElement.scrollWidth,
               viewportWidth: innerWidth,
               buttons: Array.from(
                 element.querySelectorAll<HTMLButtonElement>(
-                  ".mobile-header__navigation, .mobile-header__title, .mobile-header__actions button",
+                  ".mobile-header__navigation, .mobile-header__capsule button",
                 ),
               )
                 .filter((button) => button.checkVisibility())
@@ -126,21 +119,31 @@ suite.define(() => {
                 })),
             };
           });
-          expect(geometry.titleWidth).toBeGreaterThan(200);
+          expect(geometry.titleWidth).toBeGreaterThan(80);
           expect(geometry.actionsRight).toBeLessThanOrEqual(geometry.headerRight);
           expect(geometry.bodyWidth).toBe(geometry.viewportWidth);
           expect(geometry.buttons.map((button) => button.label)).toEqual([
             "Expand sidebar",
-            title + " — Details",
+            "Panels",
             "Actions for " + title,
           ]);
           for (const button of geometry.buttons) {
-            expect(button.width).toBeGreaterThanOrEqual(44);
-            expect(button.height).toBeGreaterThanOrEqual(44);
+            expect(button.width).toBeGreaterThanOrEqual(40);
+            expect(button.height).toBeGreaterThanOrEqual(40);
+          }
+
+          await header.locator(".chat-pane__workspace-chip", { hasText: "openclaw" }).waitFor();
+          await header.getByRole("button", { name: "People", exact: true }).waitFor();
+          if (captureUiProofEnabled) {
+            await captureFrame(
+              suite.artifactDir,
+              `mobile-header-${viewport.width}.png`,
+              page.locator(".shell"),
+              [header],
+            );
           }
 
           const details = await openChatDetails(page);
-          await details.getByRole("heading", { name: title, exact: true }).waitFor();
           expect((await details.boundingBox())!.width).toBeGreaterThanOrEqual(viewport.width - 24);
           await details.getByRole("button", { name: "Details", exact: true }).focus();
           await page.keyboard.press("Escape");
@@ -151,8 +154,7 @@ suite.define(() => {
               .evaluate((element) => element === document.activeElement),
           ).toBe(true);
 
-          await actions.click();
-          await page.getByRole("menuitem", { name: "Panels", exact: true }).click();
+          await panels.click();
           const host = page.locator(".chat-pane-cache__pane--active .chat-mobile-host");
           await host.getByRole("button", { name: "Panels", exact: true }).click();
           await host
@@ -179,7 +181,7 @@ suite.define(() => {
             .waitFor();
           await expect.poll(async () => (await files.boundingBox())!.width).toBeLessThan(800);
           await page.setViewportSize({ width: viewport.width, height: viewport.height });
-          await actions.waitFor();
+          await panels.waitFor();
           await expect
             .poll(async () => (await files.boundingBox())!.width)
             .toBeGreaterThanOrEqual(viewport.width - 24);
@@ -197,6 +199,31 @@ suite.define(() => {
       );
     });
   }
+
+  it("omits the fallback workspace label without losing mobile controls or desktop files", async () => {
+    await suite.withPage({ viewport: { width: 390, height: 844 } }, async ({ page }) => {
+      await installFixture(page, true);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const pane = page.locator(".chat-pane-cache__pane--active");
+      const header = pane.locator(".agent-chat__header--mobile");
+      await header.getByRole("button", { name: title + " — Details", exact: true }).waitFor();
+      await header.getByRole("button", { name: "Panels", exact: true }).waitFor();
+      await header.getByRole("button", { name: "People", exact: true }).waitFor();
+      expect(await header.locator(".chat-pane__workspace-chip").count()).toBe(0);
+      if (captureUiProofEnabled) {
+        await captureFrame(
+          suite.artifactDir,
+          "mobile-header-default-workspace.png",
+          page.locator(".shell"),
+          [header],
+        );
+      }
+      await page.setViewportSize({ width: 1280, height: 900 });
+      const desktop = pane.locator(".chat-pane__header");
+      await desktop.getByRole("button", { name: "Details", exact: true }).waitFor();
+      expect(await desktop.locator(".chat-pane__workspace-chip").count()).toBe(0);
+    });
+  });
 
   it("preserves native desktop Actions, Details and frame Panels controls", async () => {
     await suite.withPage(

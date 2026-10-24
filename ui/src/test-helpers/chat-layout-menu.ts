@@ -56,10 +56,12 @@ export async function openChatPanels(
   await waitForLayoutSettled(pane.page(), "openclaw-chat-pane :is(" + headers + ")");
   // The scenario owns its target layout; old controls may remain visible during a viewport change.
   if (presentation === "mobile") {
-    const trigger = pane.locator(".agent-chat__header--mobile .chat-header-session-menu__trigger");
+    const trigger = pane
+      .locator(".agent-chat__header--mobile")
+      .getByRole("button", { name: "Panels", exact: true });
     await trigger.waitFor({ state: "visible" });
     if (!(await pane.locator(".chat-mobile-host").isVisible())) {
-      await selectMenuItem(await openSessionActions(pane), "Panels");
+      await trigger.click();
     }
     return trigger;
   }
@@ -104,6 +106,13 @@ async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): P
   const mobile = await pane.locator(".agent-chat__header--mobile").isVisible();
   const host = pane.locator(".chat-mobile-host");
   const side = pane.locator('[data-region-header="side"]');
+  const toggle = mobile
+    ? pane
+        .locator(".agent-chat__header--mobile")
+        .getByRole("button", { name: "Panels", exact: true })
+    : pane
+        .locator(".sidebar-region__panels-toggle")
+        .getByRole("button", { name: "Panels", exact: true });
 
   if (
     matches("Side panel") ||
@@ -118,10 +127,7 @@ async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): P
     } else if (mobile) {
       await openChatPanels(pane, "mobile");
     } else {
-      await pane
-        .locator(".sidebar-region__panels-toggle")
-        .getByRole("button", { name: "Panels", exact: true })
-        .click();
+      await toggle.click();
     }
     return;
   }

@@ -14,6 +14,7 @@ import type {
   HumanMentionAccess,
   HumanMentionRead,
 } from "./components/chat-composer-mention-menu-state.ts";
+import { ChatMobilePeopleGrid } from "./components/chat-mobile-people-grid.tsx";
 import {
   ChatMobilePeopleBody,
   type ChatMobilePeopleBodyProps,
@@ -85,8 +86,17 @@ it("projects native identities and mentions through the People body without send
       mentionableUsers: mentions.read()?.result.users ?? [],
     });
   const close = vi.fn();
+  const open = vi.fn();
   const view = mountSolid(() => (
     <>
+      <ChatMobilePeopleGrid
+        people={projection()}
+        label="Open people"
+        morePeople={labels.morePeople}
+        expanded={false}
+        controls="people-page"
+        onOpen={open}
+      />
       <ChatMobilePeopleBody
         people={projection()}
         labels={labels}
@@ -105,6 +115,9 @@ it("projects native identities and mentions through the People body without send
   expect(view.getByText("3 more people")).toBeDefined();
   expect(view.getByRole("heading", { name: "Participants" }).textContent).toBe("Participants");
   expect(view.queryByText("Elsewhere")).toBeNull();
+  const trigger = view.getByRole("button", { name: "Open people" });
+  trigger.click();
+  expect(open).toHaveBeenCalledExactlyOnceWith(trigger);
   const textarea = composer.container.querySelector<HTMLTextAreaElement>("textarea")!;
   textarea.setSelectionRange(7, 11);
   const participantMention = view
