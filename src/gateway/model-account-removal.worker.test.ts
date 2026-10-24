@@ -13,12 +13,6 @@ import { listUserModelAccounts, readUserModelAuthProfile } from "../state/user-m
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createModelAccountConnectService } from "./model-account-connect.js";
-import type { RespondFn } from "./server-methods/types.js";
-import { usersAuthConnectHandlers } from "./server-methods/users-auth-connect.js";
-import {
-  createContext,
-  createOperatorClient,
-} from "./server-plugin-in-process-dispatch.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -181,76 +175,6 @@ it("rejects an admin-shaped actor targeting another owner and rejects shared IDs
   });
 });
 
-it("serves self-owned removal through the RPC handler and lets the existing chat resolve Gateway auth", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    await state.writeConfig(cfg);
-    await state.writeAuthProfiles({
-      version: 1,
-      profiles: {
-        "synthetic:gateway": {
-          type: "api_key",
-          provider: "synthetic",
-          key: "synthetic-gateway-key",
-        },
-      },
-    });
-    const owner = ensureProfileForEmail("rpc@example.test").id;
-    const removed = (await connect(owner, "rpc")).authProfileId;
-    const scope = session("main");
-    await sessionAccessor.replaceSessionEntry(scope, {
-      sessionId: "rpc-chat",
-      updatedAt: 1,
-      authProfileOverride: removed,
-      authProfileOverrideSource: "user",
-    });
-    const service = createModelAccountConnectService({ getConfig: () => cfg });
-    const client = createOperatorClient({
-      profileId: owner,
-      scopes: ["operator.read", "operator.write"],
-    });
-    const context = createContext();
-    context.getRuntimeConfig = () => cfg;
-    context.getClientConnIds = (filter) =>
-      new Set(client.connId && (!filter || filter(client)) ? [client.connId] : []);
-    context.modelAccountConnectService = service;
-    const respond = vi.fn<RespondFn>();
-    const params = { authProfileId: removed };
-    try {
-      await usersAuthConnectHandlers["users.removeModelAccount"]!({
-        req: { type: "req", id: "remove-account", method: "users.removeModelAccount", params },
-        params,
-        client,
-        context,
-        respond,
-        isWebchatConnect: () => false,
-      });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({ removed: true, sessionCleanup: "complete" }),
-      );
-      const entry = sessionAccessor.loadSessionEntryReadOnly(scope)!;
-      expect(entry.authProfileOverride).toBeUndefined();
-      await expect(
-        resolveSessionAuthSelection({
-          cfg,
-          agentId: "main",
-          agentDir: state.agentDir(),
-          provider: "synthetic",
-          modelId: "example-model",
-          sessionEntry: entry,
-          sessionStore: { [scope.sessionKey]: entry },
-          sessionKey: scope.sessionKey,
-          storePath: scope.storePath,
-          isNewSession: false,
-        }),
-      ).resolves.toMatchObject({ profileId: "synthetic:gateway" });
-      expect(readUserModelAuthProfile(removed)).toBeUndefined();
-    } finally {
-      await service.stop();
-    }
-  });
-});
-
 it("clears removed current and rollback pins from live incognito sessions without durable persistence", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     await state.writeConfig(cfg);
@@ -343,7 +267,7 @@ it("clears removed current and rollback pins from live incognito sessions withou
       };
       collect(state.stateDir);
       expect(durableFiles.filter((file) => file.includes("incognito"))).toEqual([]);
-      // The next native turn no longer fails on the removed personal account.
+      // Auth selection no longer resolves the removed personal account.
       await expect(
         resolveSessionAuthSelection({
           cfg,

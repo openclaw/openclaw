@@ -12,7 +12,11 @@ import type {
   UsersRemoveModelAccountResult,
   UsersSelfResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
 import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import {
@@ -38,6 +42,7 @@ import {
   startGatewayWithClient,
 } from "../test-helpers.e2e.js";
 import { KERNEL_TEST_ENV } from "../test-helpers.env.js";
+import * as userModelAccountAccess from "./users-model-account-access.js";
 
 const DOMAIN = "b1-authority.example.test";
 const ORIGIN = "https://b1-control.example.test";
@@ -251,6 +256,19 @@ const settle = <T>(work: Promise<T>) =>
     (error: unknown) => ({ result: undefined as unknown, error }),
   );
 
+function createMutationHold(cleanup: AsyncDisposableStack) {
+  const reached = createDeferred();
+  const release = createDeferred();
+  cleanup.defer(() => release.resolve());
+  cleanup.defer(() => reached.resolve());
+  return {
+    reached: reached.promise,
+    release: release.promise,
+    markReached: () => reached.resolve(),
+    releaseNow: () => release.resolve(),
+  };
+}
+
 async function createState(label: string) {
   return await createOpenClawTestState({
     label,
@@ -424,33 +442,41 @@ it.for(["revoked", "disconnected"] as const)(
       await gateway.server.close({ reason: `b1 ${mode} fence proof complete` });
     });
     const owner = await connectPerson("owner");
-    let releaseHold = () => {};
-    const release = new Promise<void>((resolveRelease) => {
-      releaseHold = resolveRelease;
-      cleanup.defer(() => resolveRelease());
-    });
+    const mutationHold = createMutationHold(cleanup);
     // Hold after admission, before the state worker deletes anything; the real
     // operation still runs once released, so a passing guard must not skip work.
     const real = userModelAccountOperations.removeUserModelAccountAsync;
+    const operationSettled = createDeferred();
+    const operationOutcome = createDeferred<{ error?: unknown }>();
     const hold = vi
       .spyOn(userModelAccountOperations, "removeUserModelAccountAsync")
       .mockImplementationOnce(async (...args: Parameters<typeof real>) => {
-        reachedResolve();
-        await release;
-        return await real(...args);
+        mutationHold.markReached();
+        await mutationHold.release;
+        try {
+          const result = await real(...args);
+          operationOutcome.resolve({});
+          return result;
+        } catch (error) {
+          operationOutcome.resolve({ error });
+          throw error;
+        } finally {
+          // The client request can reject as soon as its socket closes. Wait for
+          // the actual state-worker operation before asserting its final effect.
+          operationSettled.resolve();
+        }
       });
-    let reachedResolve: () => void = () => {};
-    const gate = new Promise<void>((resolveGate) => {
-      reachedResolve = resolveGate;
-      cleanup.defer(() => resolveGate());
-    });
     try {
       const reply = owner.request<UsersRemoveModelAccountResult>("users.removeModelAccount", {
         authProfileId: accounts.removed,
       });
       void reply.catch(() => undefined);
       await withinTest(
-        awaitGateBeforeSettlement(gate, reply, "removal settled before the preparation hold"),
+        awaitGateBeforeSettlement(
+          mutationHold.reached,
+          reply,
+          "removal settled before the preparation hold",
+        ),
         signal,
       );
       if (mode === "revoked") {
@@ -460,9 +486,10 @@ it.for(["revoked", "disconnected"] as const)(
         await disconnectGatewayClient(owner);
         trace("owner socket closed during preparation hold");
       }
-      releaseHold();
-      const outcome = await withinTest(settle(reply), signal);
-      expect(outcome.error).toBeDefined();
+      mutationHold.releaseNow();
+      await withinTest(operationSettled.promise, signal);
+      expect((await withinTest(operationOutcome.promise, signal)).error).toBeDefined();
+      expect((await withinTest(settle(reply), signal)).error).toBeDefined();
       expect(readAccountRows(state)).toEqual(before.rows);
       expect(readLinksRecords(state)).toEqual(before.links);
       expect(readSession("main", PINNED_SESSION)).toEqual(before.pinned);
@@ -503,25 +530,38 @@ it.for(["revoked", "disconnected"] as const)(
       await gateway.server.close({ reason: `b1 ${mode} post-commit proof complete` });
     });
     const owner = await connectPerson("owner");
-    let releaseHold = () => {};
-    const release = new Promise<void>((resolveRelease) => {
-      releaseHold = resolveRelease;
-      cleanup.defer(() => resolveRelease());
-    });
-    let reachedResolve: () => void = () => {};
-    const gate = new Promise<void>((resolveGate) => {
-      reachedResolve = resolveGate;
-      cleanup.defer(() => resolveGate());
-    });
+    const mutationHold = createMutationHold(cleanup);
     // Hold after the real state-worker removal has committed, before the
     // handler's post-commit authority recheck and session cleanup run.
     const real = userModelAccountOperations.removeUserModelAccountAsync;
+    const serviceSettled = createDeferred();
+    const realPrepare = userModelAccountAccess.prepareUserModelAccountAction;
+    const prepare = vi
+      .spyOn(userModelAccountAccess, "prepareUserModelAccountAction")
+      .mockImplementationOnce(async (...args) => {
+        const action = await realPrepare(...args);
+        const service = args[0].context.modelAccountConnectService;
+        if (!service) {
+          throw new Error("Model-account service is unavailable in the test Gateway");
+        }
+        const realRemove = service.removeAsync.bind(service);
+        vi.spyOn(service, "removeAsync").mockImplementationOnce(async (...removeArgs) => {
+          try {
+            return await realRemove(...removeArgs);
+          } finally {
+            // The client reply can reject as soon as its socket closes. Wait for
+            // the full service operation, including its cleanup attempt, first.
+            serviceSettled.resolve();
+          }
+        });
+        return action;
+      });
     const hold = vi
       .spyOn(userModelAccountOperations, "removeUserModelAccountAsync")
       .mockImplementationOnce(async (...args: Parameters<typeof real>) => {
         const result = await real(...args);
-        reachedResolve();
-        await release;
+        mutationHold.markReached();
+        await mutationHold.release;
         return result;
       });
     try {
@@ -530,7 +570,11 @@ it.for(["revoked", "disconnected"] as const)(
       });
       void reply.catch(() => undefined);
       await withinTest(
-        awaitGateBeforeSettlement(gate, reply, "removal settled before the post-commit hold"),
+        awaitGateBeforeSettlement(
+          mutationHold.reached,
+          reply,
+          "removal settled before the post-commit hold",
+        ),
         signal,
       );
       const rowsAtHold = readAccountRows(state);
@@ -551,7 +595,8 @@ it.for(["revoked", "disconnected"] as const)(
         await disconnectGatewayClient(owner);
         trace("owner socket closed after commit");
       }
-      releaseHold();
+      mutationHold.releaseNow();
+      await withinTest(serviceSettled.promise, signal);
       const outcome = await withinTest(settle(reply), signal);
       expect(outcome.error).toBeDefined();
       // The committed deletion stands; the subsequent session cleanup must not.
@@ -564,6 +609,7 @@ it.for(["revoked", "disconnected"] as const)(
       trace(`post-commit ${mode}: credential row stays deleted; session pins stay untouched`);
     } finally {
       hold.mockRestore();
+      prepare.mockRestore();
     }
   },
 );
