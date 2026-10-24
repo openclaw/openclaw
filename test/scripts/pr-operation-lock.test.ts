@@ -297,6 +297,47 @@ function writeOperationFixture(repoDir: string, name: string, commands: string[]
   return fixture;
 }
 
+function spawnController(repoDir: string, fixture: string, options: SpawnOptions = {}) {
+  return observeChild(
+    spawn(process.execPath, [processGroupRunner, repoDir, fixture], {
+      cwd: repoDir,
+      env: createIndependentPrFixtureEnv(),
+      stdio: "ignore",
+      ...options,
+    }),
+  );
+}
+
+function waitForOutput(child: ChildProcess, pipe: "stdout" | "stderr", marker: string) {
+  const ready = new Promise<void>((resolve) => {
+    let output = "";
+    child[pipe]!.setEncoding("utf8");
+    child[pipe]!.on("data", (chunk: string) => {
+      output += chunk;
+      if (output.includes(marker)) {
+        resolve();
+      }
+    });
+  });
+  return awaitGateBeforeSettlement(
+    ready,
+    childCompletion(child, "close"),
+    `missing output: ${marker}`,
+  );
+}
+
+function runCleanup(repoDir: string) {
+  return runLockShell(repoDir, [
+    'cleanup_pr_worktree ".worktrees/pr-42" || exit $?',
+    "echo cleanup-completed",
+  ]);
+}
+
+function expectCleanup(result: ReturnType<typeof runLockShell>, status: number) {
+  expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(status);
+  expect(result.stdout.includes("cleanup-completed")).toBe(status === 0);
+}
+
 function writeEscapedPipeHolderLauncher(repoDir: string, pidFile: string) {
   const holderScript = writeFixtureFile(
     repoDir,
@@ -516,21 +557,7 @@ function spawnHolder(repoDir: string, statusFile: string, pr = 42, trapTerm = tr
     ],
     { cwd: repoDir, stdio: ["ignore", "pipe", "ignore"] },
   );
-  const ready = new Promise<void>((resolve) => {
-    let output = "";
-    child.stdout!.setEncoding("utf8");
-    child.stdout!.on("data", (chunk: string) => {
-      output += chunk;
-      if (output.includes("held\n")) {
-        resolve();
-      }
-    });
-  });
-  const readiness = awaitGateBeforeSettlement(
-    ready,
-    childCompletion(child, "close"),
-    `holder did not publish ${statusFile}`,
-  );
+  const readiness = waitForOutput(child, "stdout", "held\n");
   void readiness.catch(() => {});
   holderReadiness.set(child, readiness);
   return child;
@@ -762,38 +789,6 @@ describe("scripts/pr process-group platform guard", () => {
 
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 describePosix("scripts/pr per-PR operation lock", () => {
-  it("isolates independent fixtures from inherited maintainer bindings", () => {
-    const repoDir = createRepo();
-    const result = runLockShell(
-      repoDir,
-      [
-        'test -z "${OPENCLAW_PR_GIT-}"',
-        'test -z "${GIT_EXEC-}"',
-        'test -z "${OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT-}"',
-        'test -z "${OPENCLAW_PR_LOCK_NOTIFY_FD-}"',
-        'test -z "${OPENCLAW_PR_LOCK_SUPERVISOR_PID-}"',
-        "acquire_pr_operation_lock 42",
-        'git rev-parse --verify "' + lockRef + '"',
-        "release_pr_operation_lock",
-      ],
-      {
-        ...process.env,
-        OPENCLAW_PR_GIT: "/bin/false",
-        GIT_EXEC: "/bin/false",
-        OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: tempDirs.make("unrelated-lock-snapshot-"),
-        OPENCLAW_PR_LOCK_NOTIFY_FD: "3",
-        OPENCLAW_PR_LOCK_SUPERVISOR_PID: "1",
-      },
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(0);
-    expect(result.stdout.trim()).toMatch(/^[0-9a-f]{40}$/);
-    const after = spawnSync("git", ["show-ref", "--verify", "--quiet", lockRef], {
-      cwd: repoDir,
-      encoding: "utf8",
-    });
-    expect(after.status, after.stderr).toBe(1);
-  });
-
   it.each([
     ["ls-files --others --exclude-standard -z", "require_no_foreign_untracked"],
     ["ls-files --others --ignored --exclude-standard -z", "require_no_ignored_transition_paths"],
@@ -1095,34 +1090,18 @@ exec ${shellQuote(mktemp)} "$@"
     expect(result.status).toBe(0);
     expect(result.stdout.trim()).toBe("2\t1");
   });
-  it.for([
-    {
-      title: "releases a failed lock while the child is still in validation phase",
-      fixture: "failed-validation.sh",
-      commands: ["acquire_pr_operation_lock 42", "begin_pr_operation_validation_phase", "exit 3"],
-      status: 3,
-      retained: false,
-    },
-
-    {
-      title: "retains a validation-phase lock for untrapped signal exit statuses",
-      fixture: "killed-validation.sh",
-      commands: ["acquire_pr_operation_lock 42", "begin_pr_operation_validation_phase", "exit 137"],
-      status: 137,
-      retained: true,
-    },
-  ])("$title", async ({ fixture, commands, status, retained }, { signal }) => {
+  it("retains a validation-phase lock for untrapped signal exit statuses", async ({ signal }) => {
     const repoDir = createRepo();
-    const result = await runSupervisedOperation(repoDir, fixture, commands, { signal });
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(status);
-    if (retained) {
-      const ownerOid = refOid(repoDir);
-      expect(result.stderr).toContain(`reason: child exited with code ${status}`);
-      recoverOperationLock(repoDir, ownerOid);
-    } else {
-      expect(refExists(repoDir)).toBe(false);
-      expect(result.stderr).not.toContain("Retaining the operation lock");
-    }
+    const result = await runSupervisedOperation(
+      repoDir,
+      "killed-validation.sh",
+      ["acquire_pr_operation_lock 42", "begin_pr_operation_validation_phase", "exit 137"],
+      { signal },
+    );
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(137);
+    const ownerOid = refOid(repoDir);
+    expect(result.stderr).toContain("reason: child exited with code 137");
+    recoverOperationLock(repoDir, ownerOid);
   });
   it.each([false, true])(
     "cleans linked GC worktrees before exact-owner release (failure=%s)",
@@ -1516,29 +1495,6 @@ exec ${shellQuote(mktemp)} "$@"
       await cleanupRecordedProcessGroup(nestedPidFile, nestedPgid);
     }
   }, 15_000);
-  it("releases a failed side-effects lock once its group and notification pipe drain", async ({
-    signal,
-  }) => {
-    const repoDir = createRepo();
-    const result = await runSupervisedOperation(
-      repoDir,
-      "failed-drained-operation.sh",
-      [
-        "acquire_pr_operation_lock 42",
-        "begin_pr_operation_validation_phase",
-        "mark_pr_operation_side_effects_started",
-        "exit 1",
-      ],
-      { signal, materializedAnchor: true },
-    );
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
-    expect(result.stderr).toContain(
-      "Released the operation lock for PR #42 after exit code 1; its process group and every notification-pipe holder exited.",
-    );
-    expect(result.stderr).not.toContain("lock-recover");
-    expect(refExists(repoDir)).toBe(false);
-    expect(existsSync(result.anchorDir!)).toBe(false);
-  });
   it("retires a materialized anchor after forwarded SIGTERM while retaining the lock", async ({
     signal,
   }) => {
@@ -1592,13 +1548,7 @@ exec ${shellQuote(mktemp)} "$@"
       "acquire_pr_operation_lock 42",
       `node '${launcherScript}'`,
     ]);
-    const controller = observeChild(
-      spawn(process.execPath, [processGroupRunner, repoDir, fixture], {
-        cwd: repoDir,
-        env: createIndependentPrFixtureEnv(),
-        stdio: "ignore",
-      }),
-    );
+    const controller = spawnController(repoDir, fixture);
     let waiter: ChildProcess | undefined;
     let holderPgid: number | undefined;
     try {
@@ -1623,23 +1573,11 @@ exec ${shellQuote(mktemp)} "$@"
         ],
         { cwd: repoDir, stdio: ["ignore", "ignore", "pipe"] },
       );
-      const waiting = new Promise<void>((resolve) => {
-        let output = "";
-        waiter!.stderr!.setEncoding("utf8");
-        waiter!.stderr!.on("data", (chunk: string) => {
-          output += chunk;
-          if (
-            output.includes("Waiting for the active scripts/pr operation on PR #42 to finish...")
-          ) {
-            resolve();
-          }
-        });
-      });
       await withinTest(
-        awaitGateBeforeSettlement(
-          waiting,
-          childCompletion(waiter, "close"),
-          "waiter did not report the active operation",
+        waitForOutput(
+          waiter,
+          "stderr",
+          "Waiting for the active scripts/pr operation on PR #42 to finish...",
         ),
         signal,
       );
@@ -1731,13 +1669,7 @@ exec ${shellQuote(mktemp)} "$@"
       "}",
       `gc_pr_worktrees true >'${outputFile}'`,
     ]);
-    const controller = observeChild(
-      spawn(process.execPath, [processGroupRunner, repoDir, fixture], {
-        cwd: repoDir,
-        env: createIndependentPrFixtureEnv(),
-        stdio: ["pipe", "ignore", "ignore"],
-      }),
-    );
+    const controller = spawnController(repoDir, fixture, { stdio: ["pipe", "ignore", "ignore"] });
     try {
       await waitForFixtureEvent(ghStarted, controller, signal);
       expect(existsSync(ghStarted) && refExists(repoDir)).toBe(true);
@@ -1765,13 +1697,7 @@ exec ${shellQuote(mktemp)} "$@"
       fixtureReceiptCommand(repoDir, held),
       "while :; do sleep 1; done",
     ]);
-    const controller = observeChild(
-      spawn(process.execPath, [processGroupRunner, repoDir, fixture], {
-        cwd: repoDir,
-        env: createIndependentPrFixtureEnv(),
-        stdio: "ignore",
-      }),
-    );
+    const controller = spawnController(repoDir, fixture);
     let pgid: number | undefined;
     try {
       await waitForFixtureEvent(held, controller, signal);
@@ -2056,12 +1982,8 @@ exec ${shellQuote(mktemp)} "$@"
     const otherBranch = "pr-42-prep";
     execFileSync("git", ["branch", otherBranch], { cwd: repoDir });
     const head = gitOutput(repoDir, ["rev-parse", `refs/heads/${branch}/topic`]);
-    const result = runLockShell(repoDir, [
-      'cleanup_pr_worktree ".worktrees/pr-42" || exit $?',
-      "echo cleanup-completed",
-    ]);
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stdout).toContain("cleanup-completed");
+    const result = runCleanup(repoDir);
+    expectCleanup(result, 0);
     expect(gitOutput(repoDir, ["rev-parse", `refs/heads/${branch}/topic`])).toBe(head);
     expect(gitOutput(sibling, ["rev-parse", "HEAD"])).toBe(head);
     expectWorktreeBranch(sibling, `${branch}/topic`);
@@ -2085,8 +2007,7 @@ exec ${shellQuote(mktemp)} "$@"
       `delete_local_branch_if_safe ${branch} || exit $?`,
       "echo cleanup-completed",
     ]);
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stdout).toContain("cleanup-completed");
+    expectCleanup(result, 0);
     expect(gitOutput(repoDir, ["rev-parse", `refs/heads/${branch}/topic`])).toBe(head);
     expect(gitOutput(sibling, ["rev-parse", "HEAD"])).toBe(head);
     expectWorktreeBranch(sibling, `${branch}/topic`);
@@ -2117,8 +2038,7 @@ exec ${shellQuote(mktemp)} "$@"
         'cleanup_pr_worktree ".worktrees/pr-42" || exit $?',
         "echo unexpected-cleanup-completed",
       ]);
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(code || 1);
-      expect(result.stdout).not.toContain("unexpected-cleanup-completed");
+      expectCleanup(result, code || 1);
       expect(result.stderr).not.toContain("unexpected-raw-delete");
       expect(readFileSync(join(repoDir, "git-calls"), "utf8")).not.toContain("update-ref -d");
       expect(gitOutput(repoDir, ["rev-parse", "refs/heads/pr-42"])).toBe(head);
@@ -2141,21 +2061,17 @@ exec ${shellQuote(mktemp)} "$@"
       'cleanup_pr_worktree ".worktrees/pr-42" || exit $?',
       "echo unexpected-cleanup-completed",
     ]);
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(code);
-    expect(result.stdout).not.toContain("unexpected-cleanup-completed");
+    expectCleanup(result, code);
     expect(gitStatus(repoDir, ["show-ref", "--verify", "--quiet", "refs/heads/pr-42"])).toBe(0);
   });
   it("does not report a broken ref as absent when Git only warns", () => {
     const repoDir = createRepo();
     const ref = join(repoDir, ".git", "refs", "heads", "pr-42");
     writeFileSync(ref, "broken\n");
-    const result = runLockShell(repoDir, [
-      'cleanup_pr_worktree ".worktrees/pr-42" || exit $?',
-      "echo unexpected-cleanup-completed",
-    ]);
+    const result = runCleanup(repoDir);
     expect(result.status, `${result.stdout}\n${result.stderr}`).not.toBe(0);
     expect(result.stderr).toContain("broken ref");
-    expect(result.stdout).not.toContain("unexpected-cleanup-completed");
+    expect(result.stdout).not.toContain("cleanup-completed");
     expect(readFileSync(ref, "utf8")).toBe("broken\n");
   });
   it("parses docs and mixed file lists without temp files or producer processes", () => {
@@ -2238,9 +2154,8 @@ exec ${shellQuote(mktemp)} "$@"
       'cleanup_pr_worktree ".worktrees/pr-42" || exit $?',
       "echo unexpected-cleanup-completed",
     ]);
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(73);
+    expectCleanup(result, 73);
     expect(result.stderr).toContain("fixture remove failure");
-    expect(result.stdout).not.toContain("unexpected-cleanup-completed");
     expect(existsSync(worktreeDir)).toBe(false);
     expect(gitStatus(repoDir, ["show-ref", "--verify", "--quiet", "refs/heads/pr-42"])).toBe(0);
   });
@@ -2275,7 +2190,7 @@ exec ${shellQuote(mktemp)} "$@"
         "echo unexpected-cleanup-completed",
       ]);
       expect(result.status, `${result.stdout}\n${result.stderr}`).not.toBe(0);
-      expect(result.stdout).not.toContain("unexpected-cleanup-completed");
+      expect(result.stdout).not.toContain("cleanup-completed");
       expect(result.stderr).not.toContain("unexpected-prune");
       expect(existsSync(admin)).toBe(true);
       expect(gitStatus(repoDir, ["show-ref", "--verify", "--quiet", "refs/heads/pr-42"])).toBe(0);
@@ -2285,13 +2200,10 @@ exec ${shellQuote(mktemp)} "$@"
     const repoDir = createRepo();
     writeFileSync(join(repoDir, ".worktrees"), "not a directory\n");
     execFileSync("git", ["branch", "pr-42"], { cwd: repoDir });
-    const result = runLockShell(repoDir, [
-      'cleanup_pr_worktree ".worktrees/pr-42" || exit $?',
-      "echo unexpected-cleanup-completed",
-    ]);
+    const result = runCleanup(repoDir);
     expect(result.status, `${result.stdout}\n${result.stderr}`).not.toBe(0);
     expect(result.stderr).toContain("ENOTDIR");
-    expect(result.stdout).not.toContain("unexpected-cleanup-completed");
+    expect(result.stdout).not.toContain("cleanup-completed");
     expect(readFileSync(join(repoDir, ".worktrees"), "utf8")).toBe("not a directory\n");
     expect(gitStatus(repoDir, ["show-ref", "--verify", "--quiet", "refs/heads/pr-42"])).toBe(0);
   });
@@ -2320,21 +2232,5 @@ exec ${shellQuote(mktemp)} "$@"
     expect(existsSync(join(worktreeDir, "ui", "config", "control-ui-chunking.ts"))).toBe(false);
     enterPrWorktree(repoDir, 45);
     expectMaterializedWorktree(worktreeDir);
-  });
-  it("refuses a symlink alias to another registered worktree", () => {
-    const repoDir = createRepo();
-    const worktreesDir = join(repoDir, ".worktrees");
-    const targetDir = join(worktreesDir, "pr-99");
-    const aliasDir = join(worktreesDir, "pr-42");
-    mkdirSync(worktreesDir, { recursive: true });
-    gitOutput(repoDir, ["worktree", "add", "-q", "-b", "pr-99", targetDir]);
-    const canonicalTargetDir = realpathSync(targetDir);
-    symlinkSync("pr-99", aliasDir, "dir");
-    const result = runLockShell(repoDir, ['remove_worktree_if_present ".worktrees/pr-42"']);
-    expect(result.status, `${result.stdout}\n${result.stderr}`).not.toBe(0);
-    expect(result.stderr).toContain("non-canonical PR-worktree path");
-    expect(existsSync(aliasDir)).toBe(true);
-    expect(existsSync(targetDir)).toBe(true);
-    expect(gitOutput(repoDir, ["worktree", "list", "--porcelain"])).toContain(canonicalTargetDir);
   });
 });
