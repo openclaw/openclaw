@@ -17,7 +17,24 @@ import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { restoreGatewayRunRecovery } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
+import {
+  createContext,
+  createOperatorClient,
+} from "./server-plugin-in-process-dispatch.test-support.js";
+
+export function recoveryFixture(
+  stateDir: string,
+  profileId: string,
+  overrides: Partial<Parameters<typeof createOperatorRecoveryFixture>[0]> = {},
+) {
+  return createOperatorRecoveryFixture({
+    stateDir,
+    profileId,
+    context: createContext(),
+    config: {},
+    ...overrides,
+  });
+}
 
 export function pairedOperator(): PairedDevice {
   return {
