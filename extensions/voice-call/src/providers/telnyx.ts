@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
-import type { TelnyxConfig } from "../config.js";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { TelnyxConfig, TelnyxNoiseSuppressionEngineConfig } from "../config.js";
 import type {
   AnswerCallInput,
   EndReason,
@@ -24,6 +25,31 @@ import { createCarrierApi } from "./shared/carrier-api.js";
 interface TelnyxProviderOptions {
   /** Skip webhook signature verification (development only, NOT for production) */
   skipVerification?: boolean;
+}
+
+// The realtime stream token issued before answerCall expires 30s later, so a stalled
+// suppression_start must give up well before then to leave streaming_start a live token.
+const NOISE_SUPPRESSION_START_TIMEOUT_MS = 5_000;
+
+/** OpenClaw engine tuning keys and the `noise_suppression_engine_config` names Telnyx expects. */
+const NOISE_SUPPRESSION_ENGINE_CONFIG_FIELDS = [
+  ["model", "model"],
+  ["suppressionLevel", "suppression_level"],
+  ["attenuationLimit", "attenuation_limit"],
+  ["mode", "mode"],
+  ["enhancementLevel", "enhancement_level"],
+  ["voiceGain", "voice_gain"],
+] as const satisfies ReadonlyArray<readonly [keyof TelnyxNoiseSuppressionEngineConfig, string]>;
+
+/** Map OpenClaw's camelCase engine tuning onto Telnyx's `noise_suppression_engine_config` keys. */
+function buildTelnyxNoiseSuppressionEngineConfig(
+  config: TelnyxNoiseSuppressionEngineConfig,
+): Record<string, string | number> {
+  return Object.fromEntries(
+    NOISE_SUPPRESSION_ENGINE_CONFIG_FIELDS.flatMap(([key, telnyxKey]) =>
+      config[key] === undefined ? [] : [[telnyxKey, config[key]]],
+    ),
+  );
 }
 
 const HANGUP_REASONS = new Map<string, EndReason>([
@@ -73,15 +99,23 @@ export class TelnyxProvider implements VoiceCallProvider {
 
   private readonly connectionId: string;
   private readonly publicKey: string | undefined;
+  private readonly noiseSuppression: TelnyxConfig["noiseSuppression"];
   private readonly options: TelnyxProviderOptions;
   private readonly api: ReturnType<typeof createCarrierApi>;
 
+  /**
+   * Build a Telnyx Call Control provider. `config` supplies the API key and connection ID
+   * (both required; throws when either is missing), the optional webhook public key, and the
+   * optional `noiseSuppression` settings that `answerCall` applies to streamed calls.
+   * `options` carries provider flags such as `skipVerification`.
+   */
   constructor(config: TelnyxConfig, options: TelnyxProviderOptions = {}) {
     assertVoiceCallProviderSetting(config.apiKey, "Telnyx API key is required");
     assertVoiceCallProviderSetting(config.connectionId, "Telnyx connection ID is required");
 
     this.connectionId = config.connectionId;
     this.publicKey = config.publicKey;
+    this.noiseSuppression = config.noiseSuppression;
     this.options = options;
     this.api = createCarrierApi("Telnyx", "https://api.telnyx.com/v2", `Bearer ${config.apiKey}`, {
       statusContentType: "application/json",
@@ -223,12 +257,77 @@ export class TelnyxProvider implements VoiceCallProvider {
     );
   }
 
+  /**
+   * Answer an inbound Telnyx call and attach its media stream. `input.providerCallId` is the
+   * Telnyx call control ID, `input.callId` keys the idempotent `command_id`s, and
+   * `input.streamUrl`/`input.streamAuthToken` describe the optional realtime media stream.
+   * Resolves once every step has succeeded or been skipped.
+   *
+   * Without a stream URL or without `noiseSuppression` configured, this sends a single `answer`
+   * carrying any streaming fields, and an `answer` failure rejects.
+   *
+   * With both, the steps must run in this order, because Telnyx rejects `suppression_start`
+   * while media streaming is active:
+   * 1. `answer` without streaming fields. Failure rejects and no later step runs.
+   * 2. `suppression_start` with the configured direction, engine, and engine config, capped at 5s so the stream
+   *    token stays valid. Failure or timeout is logged and the call streams without suppression.
+   * 3. `streaming_start` with the streaming fields. Failure hangs the answered call up (a failed
+   *    hangup is only logged) and rejects with the `streaming_start` error as `cause`.
+   */
   async answerCall(input: AnswerCallInput): Promise<void> {
-    const body: Record<string, unknown> = {
+    const streaming = buildTelnyxStreamingFields(input.streamUrl, input.streamAuthToken);
+    // Telnyx rejects suppression_start while media streaming is active (422, code 90045),
+    // so a suppressed call answers without its stream and starts it after suppression.
+    const suppression = input.streamUrl ? this.noiseSuppression : undefined;
+    await this.api.request(`/calls/${input.providerCallId}/actions/answer`, {
       command_id: `openclaw-answer-${input.callId}`,
-      ...buildTelnyxStreamingFields(input.streamUrl, input.streamAuthToken),
-    };
-    await this.api.request(`/calls/${input.providerCallId}/actions/answer`, body);
+      ...(suppression ? {} : streaming),
+    });
+    if (!suppression) {
+      return;
+    }
+    try {
+      await this.api.request(
+        `/calls/${input.providerCallId}/actions/suppression_start`,
+        {
+          command_id: `openclaw-suppression-${input.callId}`,
+          direction: suppression.direction,
+          ...(suppression.engine ? { noise_suppression_engine: suppression.engine } : {}),
+          ...(suppression.engineConfig
+            ? {
+                noise_suppression_engine_config: buildTelnyxNoiseSuppressionEngineConfig(
+                  suppression.engineConfig,
+                ),
+              }
+            : {}),
+        },
+        { timeoutMs: NOISE_SUPPRESSION_START_TIMEOUT_MS },
+      );
+    } catch (err) {
+      // Fail open: streaming without suppression beats dropping the call.
+      console.warn(
+        `[telnyx] Noise suppression failed to start for call ${input.callId} (providerCallId=${input.providerCallId}); streaming without it: ${formatErrorMessage(err)}`,
+      );
+    }
+    try {
+      await this.api.request(`/calls/${input.providerCallId}/actions/streaming_start`, {
+        command_id: `openclaw-streaming-${input.callId}`,
+        ...streaming,
+      });
+    } catch (err) {
+      // The call is already answered; without media the caller would sit on silence.
+      await this.hangupCall({
+        callId: input.callId,
+        providerCallId: input.providerCallId,
+        reason: "error",
+      }).catch((hangupErr: unknown) => {
+        console.warn(
+          `[telnyx] Failed to hang up call ${input.callId} after streaming_start failed: ${formatErrorMessage(hangupErr)}`,
+        );
+      });
+      const message = `call answered but Telnyx streaming_start failed; hanging up: ${formatErrorMessage(err)}`;
+      throw new Error(message, { cause: err });
+    }
   }
 
   async playTts(input: PlayTtsInput): Promise<void> {
