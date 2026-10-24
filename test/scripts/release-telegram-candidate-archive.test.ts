@@ -83,6 +83,25 @@ function compressTar(tarPath: string): string {
   return archivePath;
 }
 
+function runPython(source: string, ...args: string[]) {
+  const result = spawnSync(pythonExecPath, ["-c", source, ...args], { encoding: "utf8" });
+  expect(result.status, result.stderr).toBe(0);
+}
+
+function extract(archive: string) {
+  const destination = `${archive}-output`;
+  const result = expectSuccess([
+    "extract-zstd",
+    archive,
+    destination,
+    "--allowed-root",
+    "candidate",
+  ]);
+  const summary = JSON.parse(result.stdout);
+  expect(summary.maxCachedMembers).toBeLessThanOrEqual(1);
+  return { destination, summary };
+}
+
 type ArchiveMember = {
   name: string;
   content?: string;
@@ -122,14 +141,7 @@ with tarfile.open(sys.argv[1], "w", format=getattr(tarfile, sys.argv[3])) as arc
         member.pax_headers = spec.get("pax_headers", {})
         archive.addfile(member, io.BytesIO(payload))
 `;
-  const result = spawnSync(
-    pythonExecPath,
-    ["-c", python, tarPath, JSON.stringify(members), format],
-    {
-      encoding: "utf8",
-    },
-  );
-  expect(result.status, result.stderr).toBe(0);
+  runPython(python, tarPath, JSON.stringify(members), format);
   return compressTar(tarPath);
 }
 
@@ -198,10 +210,7 @@ header.size = int(sys.argv[3])
 with open(sys.argv[1], "wb") as output:
     output.write(header.tobuf(format=tarfile.USTAR_FORMAT))
 `;
-  const result = spawnSync(pythonExecPath, ["-c", python, tarPath, kind, String(size)], {
-    encoding: "utf8",
-  });
-  expect(result.status, result.stderr).toBe(0);
+  runPython(python, tarPath, kind, String(size));
   return compressTar(tarPath);
 }
 
@@ -253,28 +262,16 @@ describe("release Telegram candidate archive guard", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ entries: 3 });
   });
 
-  it("rejects an escaping symlink", () => {
-    const container = tree({ "outside.txt": "outside\n" });
+  it.each([
+    ["../outside.txt", "escaping symlink"],
+    ["missing.txt", "dangling symlink"],
+    ["root", "tree root must not be a symlink"],
+  ])("rejects %s (%s)", (target, message) => {
+    const container = tree({ "outside.txt": "outside\n", "root/value.txt": "ok\n" });
     const root = path.join(container, "root");
-    mkdirSync(root);
-    symlinkSync("../outside.txt", path.join(root, "escape"));
-
-    expectFailure(["validate-tree", root], "escaping symlink");
-  });
-
-  it("rejects a symlink supplied as the tree root", () => {
-    const container = tree({ "target/value.txt": "outside\n" });
-    const root = path.join(container, "root-link");
-    symlinkSync("target", root);
-
-    expectFailure(["validate-tree", root], "tree root must not be a symlink");
-  });
-
-  it("rejects a dangling symlink", () => {
-    const root = scratch();
-    symlinkSync("missing.txt", path.join(root, "dangling"));
-
-    expectFailure(["validate-tree", root], "dangling symlink");
+    const link = path.join(target === "root" ? container : root, "link");
+    symlinkSync(target, link);
+    expectFailure(["validate-tree", target === "root" ? link : root], message);
   });
 
   it("rejects a socket entry", async () => {
@@ -339,16 +336,8 @@ describe("release Telegram candidate archive guard", () => {
         "candidate/app-routes.ts",
       ]);
 
-      const destination = path.join(root, "depth-first-producer-output");
-      const result = expectSuccess([
-        "extract-zstd",
-        archive,
-        destination,
-        "--allowed-root",
-        "candidate",
-      ]);
-      expect(JSON.parse(result.stdout)).toMatchObject({ members: 5 });
-      expect(JSON.parse(result.stdout).maxCachedMembers).toBeLessThanOrEqual(1);
+      const { destination, summary } = extract(archive);
+      expect(summary).toMatchObject({ members: 5 });
       expect(readFileSync(path.join(destination, "candidate", "app-routes.ts"), "utf8")).toBe(
         "routes\n",
       );
@@ -383,17 +372,7 @@ describe("release Telegram candidate archive guard", () => {
   });
 
   it("extracts a prior-target hard link without retaining TarInfo records", () => {
-    const archive = makeValidHardlinkArchive();
-    const destination = `${archive}-output`;
-
-    const result = expectSuccess([
-      "extract-zstd",
-      archive,
-      destination,
-      "--allowed-root",
-      "candidate",
-    ]);
-    expect(JSON.parse(result.stdout).maxCachedMembers).toBeLessThanOrEqual(1);
+    const { destination } = extract(makeValidHardlinkArchive());
     expect(existsSync(path.join(destination, "manifest.json"))).toBe(true);
     expect(statSync(destination).mode & 0o777).toBe(0o700);
     const target = path.join(destination, "candidate", "a-target.txt");
