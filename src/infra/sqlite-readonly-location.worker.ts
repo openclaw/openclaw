@@ -6,6 +6,7 @@ import { deserialize } from "node:v8";
 import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { scheduleOpenClawCompileCacheFlush } from "../../node-compile-cache.mjs";
 import type { AuthProfileReadDatabaseOpener } from "../agents/auth-profiles/sqlite-read-pool.js";
+import { routeLogsToStderr } from "../logging/console.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
 import { GatewayLockNamespaceError, parseGatewayLockPayload } from "./gateway-lock-payload.js";
 import {
@@ -496,6 +497,8 @@ function runSession(): void {
 }
 
 if (process.argv[2] === SQLITE_READONLY_CHILD_ARG) {
+  // One-shot stdout is the JSON result, and sessions may inherit a JSON caller's stdout.
+  routeLogsToStderr();
   useConnectionScopedSqliteDatabaseAdmissionFacts();
   if (process.argv[3] === "session" && process.send) {
     runSession();

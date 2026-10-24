@@ -3,6 +3,7 @@ import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import {
@@ -166,7 +167,10 @@ export async function runUpdateCandidateAdmission(params: {
         try {
           value = JSON.parse(running.stdout());
         } catch {
-          return fallback("malformed-json", diagnostic);
+          // Keep the leading bytes that broke the verdict; stdout is never captured otherwise.
+          const head = running.stdout().trimStart().split(/\r?\n/u, 1)[0] ?? "";
+          const excerpt = `Candidate stdout began with: ${head ? JSON.stringify(sliceUtf16Safe(head, 0, 160)) : "(empty)"}`;
+          return fallback("malformed-json", diagnostic ? `${diagnostic} ${excerpt}` : excerpt);
         }
         if (isRecord(value) && value.protocol !== UPDATE_ADMISSION_PROTOCOL) {
           return fallback("protocol-mismatch", diagnostic);

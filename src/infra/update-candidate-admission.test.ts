@@ -338,6 +338,22 @@ it.each([
   },
 );
 
+it("bounds and redacts the stdout excerpt when a debug line precedes the verdict", async () => {
+  fixture = {
+    code: 0,
+    stdout: `[state/sqlite] SQLite read-only snapshot token=synthetic-secret ${"x".repeat(200)}\n${verdictJson()}`,
+  };
+
+  const result = await run({ env: { API_TOKEN: "synthetic-secret" } });
+
+  expect(result).toMatchObject({ owner: "installed", fallbackReason: "malformed-json" });
+  expect(result.warning?.message).toContain('Candidate stdout began with: "[state/sqlite]');
+  expect(result.warning?.message).not.toContain("synthetic-secret");
+  expect(result.warning?.message).not.toContain("x".repeat(200));
+  expect(result.warning?.message.length).toBeLessThanOrEqual(UPDATE_RUN_TEXT_LIMIT);
+  await expectContextRemoved();
+});
+
 it("bounds admission and terminates its process tree before context cleanup", async () => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   fixture.pending = true;
