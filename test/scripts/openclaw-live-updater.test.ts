@@ -413,10 +413,7 @@ function fakeCommands(mirror: string) {
 }
 
 function passGatewayRestartVerification({ timing }: { timing: Record<string, unknown> }) {
-  return {
-    audit: emptyAudit(),
-    timing,
-  };
+  return { audit: emptyAudit(), timing };
 }
 
 function managedTimeoutError() {
@@ -815,10 +812,7 @@ console.log(JSON.stringify({ ok: true, channels: {} }));
       }
 
       expect(readJsonLines(callsPath)).toEqual([
-        {
-          args: ["gateway", "status", "--deep", "--require-rpc", "--json"],
-          port: "18789",
-        },
+        { args: ["gateway", "status", "--deep", "--require-rpc", "--json"], port: "18789" },
         { args: ["health", "--verbose", "--json"], port: "18789" },
       ]);
     },
@@ -1487,11 +1481,7 @@ console.log(JSON.stringify(result));
       }),
     ).rejects.toMatchObject({
       code: "command_timeout",
-      details: {
-        phase: "dependency install",
-        serviceState: "stopped",
-        timeoutMs: 15 * 60_000,
-      },
+      details: { phase: "dependency install", serviceState: "stopped", timeoutMs: 15 * 60_000 },
     });
 
     const timeoutIndex = events.indexOf("install process tree drained");
@@ -1557,11 +1547,7 @@ console.log(JSON.stringify(result));
         await expect(run()).resolves.toMatchObject({ ok: true, skipped: true, reason: "overlap" });
         expect(acquireMaintenanceLock(mirror, lockPath)).toMatchObject({
           acquired: false,
-          owner: {
-            processGroupId,
-            reason: "command_cleanup_failed",
-            serviceState: "stopped",
-          },
+          owner: { processGroupId, reason: "command_cleanup_failed", serviceState: "stopped" },
         });
       } finally {
         try {
@@ -1797,10 +1783,7 @@ console.log(JSON.stringify(result));
           role: "primary",
           error: invariantDiagnostic("gateway_launchagent_failed", { exitTimeoutSeconds: 0 }),
         },
-        {
-          role: "rollback",
-          error: commandDiagnostic("launchd.bootstrap", 23),
-        },
+        { role: "rollback", error: commandDiagnostic("launchd.bootstrap", 23) },
       ],
     });
     expect(JSON.stringify(formatted)).not.toContain("secret rollback");
@@ -1948,9 +1931,7 @@ console.log(JSON.stringify(result));
         const call = [command, ...args].join(" ");
         calls.push(call);
         if (command === "/bin/launchctl" && args[0] === "bootstrap") {
-          throw Object.assign(new Error("Bootstrap failed: 5: Input/output error"), {
-            status: 5,
-          });
+          throw Object.assign(new Error("Bootstrap failed: 5: Input/output error"), { status: 5 });
         }
       },
       armEnvironmentRestore: () => {
