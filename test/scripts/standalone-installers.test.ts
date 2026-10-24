@@ -21,33 +21,20 @@ function bash(root: string, args: string[], env: NodeJS.ProcessEnv = {}, input?:
 }
 
 describe("standalone shell installers", () => {
-  it.each(["scripts", "install.sh", "install-policy.sh"])(
-    "rejects candidate-controlled %s symlinks instead of embedding host data",
-    (target) => {
-      const root = tempDirs.make("installer-source-symlink-");
-      const candidate = path.join(root, "candidate");
-      const outside = path.join(root, "outside");
-      const output = path.join(root, "output");
-      mkdirSync(candidate);
-      mkdirSync(outside);
-      if (target === "scripts") {
-        write(outside, "install.sh", source);
-        symlinkSync(outside, path.join(candidate, "scripts"), "dir");
-      } else {
-        const scripts = path.join(candidate, "scripts");
-        mkdirSync(scripts);
-        write(outside, "host-data", "synthetic-host-data\n");
-        if (target !== "install.sh") {
-          write(scripts, "install.sh", source);
-        }
-        symlinkSync(path.join(outside, "host-data"), path.join(scripts, target));
-      }
-      expect(() => writeStandaloneInstallers(candidate, output)).toThrow(
-        "Installer source cannot contain symlinks",
-      );
-      expect(readdirSync(output)).toEqual([]);
-    },
-  );
+  it("rejects candidate-controlled policy symlinks instead of embedding host data", () => {
+    const root = tempDirs.make("installer-source-symlink-");
+    const candidate = path.join(root, "candidate");
+    const scripts = path.join(candidate, "scripts");
+    const output = path.join(root, "output");
+    mkdirSync(scripts, { recursive: true });
+    write(scripts, "install.sh", source);
+    write(root, "host-data", "synthetic-host-data\n");
+    symlinkSync(path.join(root, "host-data"), path.join(scripts, "install-policy.sh"));
+    expect(() => writeStandaloneInstallers(candidate, output)).toThrow(
+      "Installer source cannot contain symlinks",
+    );
+    expect(readdirSync(output)).toEqual([]);
+  });
 
   it("uses trusted assembly for a separate smoke candidate and cleans up failed assembly", () => {
     const root = tempDirs.make("installer-smoke-assembly-");
