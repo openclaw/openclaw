@@ -1,6 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
@@ -748,6 +750,42 @@ describe("session history HTTP endpoints", () => {
       await appendText(storePath, "after startup");
       await stream.expectTexts(["during startup", "after startup"]);
     });
+  });
+
+  test("releases the initial snapshot while a bounded SSE stream stays open", async () => {
+    const { storePath } = await seedSession();
+    await replaceHistory(
+      storePath,
+      Array.from({ length: 1_002 }, (_, index) => ({
+        id: "retention-message-" + index,
+        parentId: index === 0 ? null : "retention-message-" + (index - 1),
+        message: makeTranscriptAssistantMessage({ text: "retention row " + index }),
+      })),
+    );
+    let initialSnapshot: WeakRef<object> | undefined;
+    // oxlint-disable-next-line typescript/unbound-method -- Static factory does not use this; restore the exact method after the weak capture.
+    const fromSnapshot = SessionHistorySseState.fromSnapshot;
+    // A spy would retain its arguments and manufacture the retention being tested.
+    SessionHistorySseState.fromSnapshot = (params) => {
+      initialSnapshot = new WeakRef(params.snapshot);
+      return fromSnapshot(params);
+    };
+    try {
+      await withGatewayHistoryStream(async (stream) => {
+        expect((await stream.next()).messages).toHaveLength(1_002);
+        SessionHistorySseState.fromSnapshot = fromSnapshot;
+        const retired = expectDefined(initialSnapshot, "initial HTTP history snapshot");
+        const control = new WeakRef({});
+        await nextTurn();
+        queryObjects(WeakRef);
+        expect(control.deref()).toBeUndefined();
+        expect(retired.deref()).toBeUndefined();
+        const id = await appendText(storePath, "still streaming after collection");
+        await stream.expectMessage("still streaming after collection", 1_003, id);
+      });
+    } finally {
+      SessionHistorySseState.fromSnapshot = fromSnapshot;
+    }
   });
 
   test("bounds retained SSE history without truncating full history or live updates", async () => {

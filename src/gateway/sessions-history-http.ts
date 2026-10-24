@@ -409,46 +409,59 @@ async function serveAuthorizedSessionHistory(
   };
 
   const snapshotVersion = readSessionTranscriptUpdateVersion();
-  let historySnapshot: Awaited<ReturnType<typeof readSessionHistorySnapshotAsync>>;
-  try {
-    historySnapshot = await readSessionHistorySnapshotAsync({
-      cursor,
-      target: historyTarget,
-      limit,
-      maxChars: effectiveMaxChars,
-    });
-  } catch (error) {
-    const unavailableMessage = resolveSessionHistoryUnavailableMessage(error);
-    if (unavailableMessage === undefined) {
-      throw error;
-    }
-    res.setHeader("Retry-After", "1");
-    sendJson(res, 503, {
-      ok: false,
-      error: {
-        type: "unavailable",
-        message: unavailableMessage,
-        retryable: true,
-      },
-    });
-    return true;
-  }
-  const stream = hasExplicitAcceptableMediaRange(getHeader(req, "accept"), SSE_CONTENT_TYPE);
-  if (
-    !(await publishAuthorizedHistory((presentation) => {
-      if (!stream) {
-        sendJson(res, 200, {
-          sessionKey: target.canonicalKey,
-          ...projectHistory(historySnapshot.history, presentation),
-        });
+  let sseState: SessionHistorySseState;
+  // Initial JSON publication captures the full snapshot. Keep that capture out
+  // of the context shared by the live SSE listener and heartbeat.
+  {
+    let historySnapshot: Awaited<ReturnType<typeof readSessionHistorySnapshotAsync>>;
+    try {
+      historySnapshot = await readSessionHistorySnapshotAsync({
+        cursor,
+        target: historyTarget,
+        limit,
+        maxChars: effectiveMaxChars,
+      });
+    } catch (error) {
+      const unavailableMessage = resolveSessionHistoryUnavailableMessage(error);
+      if (unavailableMessage === undefined) {
+        throw error;
       }
-    }))
-  ) {
-    sendSessionNotFound();
-    return true;
-  }
-  if (!stream) {
-    return true;
+      res.setHeader("Retry-After", "1");
+      sendJson(res, 503, {
+        ok: false,
+        error: {
+          type: "unavailable",
+          message: unavailableMessage,
+          retryable: true,
+        },
+      });
+      return true;
+    }
+    const stream = hasExplicitAcceptableMediaRange(getHeader(req, "accept"), SSE_CONTENT_TYPE);
+    if (
+      !(await publishAuthorizedHistory((presentation) => {
+        if (!stream) {
+          sendJson(res, 200, {
+            sessionKey: target.canonicalKey,
+            ...projectHistory(historySnapshot.history, presentation),
+          });
+        }
+      }))
+    ) {
+      sendSessionNotFound();
+      return true;
+    }
+    if (!stream) {
+      return true;
+    }
+
+    sseState = SessionHistorySseState.fromSnapshot({
+      target: historyTarget,
+      maxChars: effectiveMaxChars,
+      limit,
+      cursor,
+      snapshot: historySnapshot,
+    });
   }
 
   // Legacy selectors map lexically to SQLite; following a JSON symlink could merge owners.
@@ -466,13 +479,6 @@ async function serveAuthorizedSessionHistory(
       .filter((candidate): candidate is string => typeof candidate === "string"),
   );
 
-  const sseState = SessionHistorySseState.fromSnapshot({
-    target: historyTarget,
-    maxChars: effectiveMaxChars,
-    limit,
-    cursor,
-    snapshot: historySnapshot,
-  });
   let streamStopped = false;
   let streamQueue = Promise.resolve();
   let pendingRefresh: (() => Promise<void>) | undefined;
