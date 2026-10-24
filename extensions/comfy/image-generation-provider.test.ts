@@ -1,5 +1,6 @@
 import type { LookupAddress } from "node:dns";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildComfyConfig,
@@ -108,13 +109,6 @@ function generateImage(
     prompt,
     cfg: buildComfyConfig(testWorkflowConfig(config)),
     ...options,
-  });
-}
-
-function jsonResponse(body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status: 200,
-    headers: { "content-type": "application/json" },
   });
 }
 

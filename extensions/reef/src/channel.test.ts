@@ -1,11 +1,11 @@
 import http from "node:http";
-import type { AddressInfo } from "node:net";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { generateIdentity, seal, signReceipt } from "../protocol/index.js";
 import { runReefChannelLifecycle } from "./channel-lifecycle.js";
 import { reefPlugin } from "./channel.js";
@@ -701,12 +701,9 @@ describe("Reef channel lifecycle", () => {
       }
       requestStarted.resolve();
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", resolve);
-    });
+    const port = await listenOnLoopback(server);
 
-    const relayUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const relayUrl = `http://127.0.0.1:${port}`;
     const transport = new ReefTransportClient(
       relayUrl,
       "alice",

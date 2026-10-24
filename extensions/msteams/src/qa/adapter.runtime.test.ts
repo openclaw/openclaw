@@ -1,4 +1,3 @@
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer, type RequestListener } from "node:http";
 import os from "node:os";
@@ -6,6 +5,7 @@ import path from "node:path";
 import { json } from "node:stream/consumers";
 import { fileURLToPath } from "node:url";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { createMSTeamsQaTransportAdapter } from "./adapter.runtime.js";
 
 vi.mock("node:timers/promises", async (importOriginal) => ({
@@ -13,16 +13,11 @@ vi.mock("node:timers/promises", async (importOriginal) => ({
   setTimeout: vi.fn(async () => undefined),
 }));
 
-async function listenOnLoopback(handler: RequestListener): Promise<string> {
+async function serveLoopback(handler: RequestListener): Promise<string> {
   const server = createServer(handler);
   onTestFinished(() => server[Symbol.asyncDispose]());
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected loopback server address");
-  }
-  return `http://127.0.0.1:${address.port}`;
+  const port = await listenOnLoopback(server);
+  return `http://127.0.0.1:${port}`;
 }
 
 async function prepareAdapterFlow(
@@ -86,11 +81,11 @@ const channelMessage = {
 
 it("sends ready ingress to the prepared Gateway, not the Lab origin, and cleans up", async () => {
   const lab = vi.fn<RequestListener>((_request, response) => response.writeHead(404).end());
-  const labUrl = await listenOnLoopback(lab);
+  const labUrl = await serveLoopback(lab);
   let inboundActivity: unknown;
   let inboundAuthorization: string | undefined;
   let inboundPath: string | undefined;
-  const webhookUrl = await listenOnLoopback((request, response) => {
+  const webhookUrl = await serveLoopback((request, response) => {
     inboundAuthorization = request.headers.authorization;
     inboundPath = request.url;
     void (async () => {
@@ -213,8 +208,8 @@ it("does not follow webhook redirects to another loopback origin", async () => {
   const redirectTarget = vi.fn<RequestListener>((_request, response) =>
     response.writeHead(200).end(),
   );
-  const targetUrl = await listenOnLoopback(redirectTarget);
-  const webhookUrl = await listenOnLoopback((_request, response) => {
+  const targetUrl = await serveLoopback(redirectTarget);
+  const webhookUrl = await serveLoopback((_request, response) => {
     response.writeHead(302, { location: `${targetUrl}/internal` }).end();
   });
   const { adapter, outputDir, addInboundMessage } = await createAdapter();

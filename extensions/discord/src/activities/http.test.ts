@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -9,6 +8,7 @@ import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { WEBHOOK_BODY_READ_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { buildDiscordActivityCustomId } from "../component-custom-id.js";
 import { DiscordActivitiesRuntime, setDiscordActivitiesRuntime } from "./runtime.js";
 import {
@@ -56,10 +56,8 @@ async function startServer(
     });
   });
   servers.push(server);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  return `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+  const port = await listenOnLoopback(server);
+  return `http://127.0.0.1:${port}`;
 }
 
 function guardedJsonFetch(params?: {

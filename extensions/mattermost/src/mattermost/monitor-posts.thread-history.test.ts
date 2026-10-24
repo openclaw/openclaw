@@ -11,6 +11,7 @@ import {
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { setMattermostRuntime } from "../runtime.js";
 import { resolveMattermostAccount } from "./accounts.js";
 import { createMattermostClient, type MattermostPost } from "./client.js";
@@ -99,14 +100,8 @@ beforeEach(async () => {
       response.destroy(error instanceof Error ? error : new Error(String(error)));
     });
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("missing HTTP address");
-  }
-  baseUrl = `http://127.0.0.1:${address.port}`;
+  const port = await listenOnLoopback(server);
+  baseUrl = `http://127.0.0.1:${port}`;
 });
 
 afterEach(async () => {
