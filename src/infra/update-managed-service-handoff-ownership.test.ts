@@ -711,6 +711,38 @@ describe("managed service update handoff state ownership and sentinel persistenc
     },
   );
 
+  it("reports corrupt sentinel JSON without replacing the row", async () => {
+    let before: unknown;
+    const { env, logPath } = await runOwnershipHelper({
+      handoffId: "handoff-corrupt-json",
+      prepareStateDatabase: (stateEnv) => {
+        writeRestartSentinelRow(stateEnv, pendingSentinel("handoff-corrupt-json"));
+        withStateDatabase(
+          stateEnv,
+          (db) => {
+            db.prepare(
+              "UPDATE gateway_restart_sentinel SET continuation_json = ? WHERE sentinel_key = 'current'",
+            ).run('{"kind":"agentTurn"');
+          },
+          false,
+        );
+        closeOpenClawStateDatabaseForTest();
+        before = withStateDatabase(stateEnv, (db) =>
+          db.prepare("SELECT * FROM gateway_restart_sentinel ORDER BY sentinel_key").all(),
+        );
+      },
+    });
+
+    await expect(fs.readFile(logPath, "utf8")).resolves.toMatch(
+      /Restart sentinel metadata is unreadable;.*openclaw update repair/u,
+    );
+    withStateDatabase(env, (db) => {
+      expect(
+        db.prepare("SELECT * FROM gateway_restart_sentinel ORDER BY sentinel_key").all(),
+      ).toEqual(before);
+    });
+  });
+
   it("repairs legacy restart sentinel columns without changing the database schema version", async () => {
     const { env } = await runOwnershipHelper({
       handoffId: "handoff-123",

@@ -13,6 +13,16 @@ let handoffFailure;
 let terminalRuntimePath = params.recoveryModulePath;
 let serviceStoppedAtMs, serviceDowntimeMs;
 let recoveryObservation;
+let invalidRestartSentinelReported = false;
+
+function reportInvalidRestartSentinel() {
+  if (invalidRestartSentinelReported) return;
+  invalidRestartSentinelReported = true;
+  const hint = "Restart sentinel metadata is unreadable; preserved the row and skipped its " +
+    "unverified recovery context. Run openclaw update repair on the Gateway host, then retry the update.";
+  appendLog(hint);
+  runWarnings.set("warning:restart-sentinel-unreadable", hint);
+}
 
 async function observeUnrecordedRecovery() {
   if (!triageFailure || typeof triageFailure.restored === "boolean" || !ownsManagedUpdateLease()) return;
@@ -128,6 +138,10 @@ function captureFailedUpdateResult() {
   if (!db) return false;
   try {
     const current = readRestartSentinelRowSync(db);
+    if (current.kind === "invalid") {
+      reportInvalidRestartSentinel();
+      return false;
+    }
     const payload = current.kind === "valid" ? current.sentinel.payload : undefined;
     if (payload?.kind !== "update" || payload.stats?.handoffId !== params.handoffId ||
       !isFailedUpdateOutcome(payload.status, payload.stats?.reason)) return false;
@@ -189,7 +203,10 @@ function recordUpdateHandoffOutcome(reason, restored, completedStatus, expectedR
     leaseStore.transact(db, () => {
       assertStateDatabaseWriteAllowed(db);
       const row = readRestartSentinelRowSync(db);
-      if (row.kind === "invalid") return;
+      if (row.kind === "invalid") {
+        reportInvalidRestartSentinel();
+        return;
+      }
       const current = row.kind === "valid" ? row.sentinel : null;
       if (expectedRevision !== undefined && (!current || current.revision !== expectedRevision)) {
         recorded = true;
