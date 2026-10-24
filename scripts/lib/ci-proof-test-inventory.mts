@@ -4865,7 +4865,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "ui/src/e2e/chat-continue-in-terminal.e2e.test.ts",
   "ui/src/e2e/chat-emoji.e2e.test.ts",
   "ui/src/e2e/chat-error-details.e2e.test.ts",
-  "ui/src/e2e/chat-file-copy-retirement.e2e.test.ts",
   "ui/src/e2e/chat-flow.pending-settings.e2e.test.ts",
   "ui/src/e2e/chat-flow.queue-edit.e2e.test.ts",
   "ui/src/e2e/chat-flow.session-start.e2e.test.ts",
