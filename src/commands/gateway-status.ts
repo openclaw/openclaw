@@ -7,7 +7,7 @@ import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.
 import { parseGatewayPortOption } from "../cli/gateway-port-option.js";
 import { parseTimeoutMsWithFallback } from "../cli/parse-timeout.js";
 import { withProgress } from "../cli/progress.js";
-import { readBestEffortConfig } from "../config/config.js";
+import { readBestEffortConfig, resolveGatewayPort } from "../config/config.js";
 import { ensureExplicitGatewayAuth, resolveExplicitGatewayAuth } from "../gateway/call.js";
 import { resolveGatewaySshRemotePort } from "../gateway/connection-details.js";
 import { isLoopbackHost } from "../gateway/net.js";
@@ -19,12 +19,12 @@ import {
   buildGatewayDiscoveryTarget,
   serializeGatewayDiscoveryBeacon,
 } from "../infra/gateway-discovery-targets.js";
+import { pickBestEffortPrimaryTailnetIPv4 } from "../infra/network-discovery-display.js";
 import type { SshTunnel } from "../infra/ssh-tunnel.js";
 import { resolveWideAreaDiscoveryDomain } from "../infra/widearea-dns.js";
 import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
 import { pickGatewaySelfPresence } from "./gateway-presence.js";
 import {
-  buildNetworkHints,
   extractConfigSummary,
   resolveAuthForTarget,
   resolveProbeBudgetMs,
@@ -37,7 +37,6 @@ import {
   isScopeLimitedProbeFailure,
   summarizeGatewayProbeCapability,
   renderProbeSummaryLine,
-  renderTargetHeader,
 } from "./gateway-status/helpers.js";
 type GatewayStatusProbedTarget = {
   target: GatewayStatusTarget;
@@ -59,25 +58,6 @@ function buildSshTarget(input: { user?: string; host?: string; port?: number }):
     return `${base}:${port}`;
   }
   return base;
-}
-
-function gatewaySelfIdentityKey(entry: GatewayStatusProbedTarget): string | null {
-  if (!entry.self) {
-    return null;
-  }
-  const host = normalizeLowercaseStringOrEmpty(entry.self.host);
-  const ip = normalizeLowercaseStringOrEmpty(entry.self.ip);
-  const instanceId = normalizeLowercaseStringOrEmpty(entry.self.instanceId);
-  const deviceId = normalizeLowercaseStringOrEmpty(entry.self.deviceId);
-  const discriminator = instanceId
-    ? `instance:${instanceId}`
-    : deviceId
-      ? `device:${deviceId}`
-      : "";
-  if ((!host && !ip) || !discriminator) {
-    return null;
-  }
-  return `${host}\0${ip}\0${discriminator}`;
 }
 
 export async function gatewayStatusCommand(
@@ -112,7 +92,14 @@ export async function gatewayStatusCommand(
     configDomain: cfg.discovery?.wideArea?.domain,
   });
   const baseTargets = resolveTargets(cfg, opts.url, portOverride);
-  const network = buildNetworkHints(cfg, portOverride);
+  const tailnetIPv4 = pickBestEffortPrimaryTailnetIPv4();
+  const port = portOverride ?? resolveGatewayPort(cfg);
+  const localScheme = cfg.gateway?.tls?.enabled === true ? "wss" : "ws";
+  const network = {
+    localLoopbackUrl: `${localScheme}://127.0.0.1:${port}`,
+    localTailnetUrl: tailnetIPv4 ? `${localScheme}://${tailnetIPv4}:${port}` : null,
+    tailnetIPv4: tailnetIPv4 ?? null,
+  };
   const remotePort = portOverride ?? resolveGatewaySshRemotePort(cfg);
   const discoveryTimeoutMs = Math.min(1200, overallTimeoutMs);
   const hasExplicitUrl = typeof opts.url === "string" && opts.url.trim().length > 0;
@@ -413,7 +400,24 @@ export async function gatewayStatusCommand(
       targetIds: probePass.probed.map((entry) => entry.target.id),
     });
   }
-  const identityKeys = reachable.map(gatewaySelfIdentityKey);
+  const identityKeys = reachable.map((entry) => {
+    if (!entry.self) {
+      return null;
+    }
+    const host = normalizeLowercaseStringOrEmpty(entry.self.host);
+    const ip = normalizeLowercaseStringOrEmpty(entry.self.ip);
+    const instanceId = normalizeLowercaseStringOrEmpty(entry.self.instanceId);
+    const deviceId = normalizeLowercaseStringOrEmpty(entry.self.deviceId);
+    const discriminator = instanceId
+      ? `instance:${instanceId}`
+      : deviceId
+        ? `device:${deviceId}`
+        : "";
+    if ((!host && !ip) || !discriminator) {
+      return null;
+    }
+    return `${host}\0${ip}\0${discriminator}`;
+  });
   if (
     reachable.length > 1 &&
     (identityKeys.some((key) => key === null) || new Set(identityKeys).size > 1)
@@ -544,7 +548,20 @@ export async function gatewayStatusCommand(
   runtime.log("");
   runtime.log(colorize(rich, theme.heading, "Targets"));
   for (const result of probePass.probed) {
-    runtime.log(renderTargetHeader(result.target, rich));
+    const target = result.target;
+    const kindLabel =
+      target.kind === "localLoopback"
+        ? "Local loopback"
+        : target.kind === "sshTunnel"
+          ? "Remote over SSH"
+          : target.kind === "configRemote"
+            ? target.active
+              ? "Remote (configured)"
+              : "Remote (configured, inactive)"
+            : "URL (explicit)";
+    runtime.log(
+      `${colorize(rich, theme.heading, kindLabel)} ${colorize(rich, theme.muted, target.url)}`,
+    );
     runtime.log(`  ${renderProbeSummaryLine(result.probe, rich)}`);
     if (result.target.tunnel?.kind === "ssh") {
       runtime.log(

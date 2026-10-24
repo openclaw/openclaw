@@ -2,9 +2,9 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { WorkerWriteOperationContext } from "../state/worker-operation-registry.js";
+import type { DeferredPluginSessionImport } from "./deferred-plugin-session-import-schema.js";
 import { databaseIdentity } from "./deferred-plugin-session-verification.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
-import type { DeferredPluginSessionImport } from "./state-migrations.deferred-session-import.js";
 import {
   readLegacyMigrationReceiptFromDatabase,
   type LegacyMigrationReceipt,

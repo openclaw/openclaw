@@ -6,6 +6,7 @@ import { buildRestartRecoveryTerminalDeliveryEvidence } from "../agents/agent-co
 import { buildAnnounceIdempotencyKey } from "../agents/announce-idempotency.js";
 import { prepareCommandSessionRecoveryEntry } from "../agents/command/session-preparation.js";
 import type { AgentCommandOpts } from "../agents/command/types.js";
+import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../agents/restart-recovery-prompt.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../agents/subagents/announce/subagent-announce.requester-settle-wake.js";
 import {
   mutateRequesterCompletionBatch,
@@ -35,7 +36,10 @@ import { readUserTurnCompletionForTest } from "./pending-input-commit.test-suppo
 import * as inProcessDispatch from "./server-plugin-in-process-dispatch.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { runPublicSettleRecoveryCase } from "./server.subagent-settle-replay-recovery.test-support.js";
-import { createRequesterFinalResult as finalResult } from "./server.subagent-settle-replay.test-support.js";
+import {
+  createRequesterFinalResult as finalResult,
+  runTombstonedRequesterSettleCase,
+} from "./server.subagent-settle-replay.test-support.js";
 import {
   agentCommandMock,
   installGatewayTestHooks,
@@ -553,6 +557,9 @@ describe("public yielded settle replay with real Gateway admission", () => {
         const persistence = await command.userTurnTranscriptRecorder!.persistApproved();
         if (transcriptOnly) {
           expect(persistence).toMatchObject({ appended: false });
+          expect(command.runtimeContextFragments).toEqual([
+            { kind: "runtime-instruction", text: RESTART_RECOVERY_INTERRUPTION_NOTE },
+          ]);
         }
       });
     }
@@ -672,15 +679,65 @@ describe("public yielded settle replay with real Gateway admission", () => {
     }
   });
 
+  it.for(["resume", "replace"] as const)(
+    "retains a tombstoned parent's exact completion until authorized %s",
+    async (action) => {
+      await runTombstonedRequesterSettleCase(action, {
+        child,
+        harness,
+        requesterScope,
+        saveChild,
+        restoreChildren,
+        wake,
+        markCommandExecutionStarted,
+        recoverViaRpc: (params) => rpcReq(resetClient.ws, "sessions.recover", params),
+      });
+    },
+  );
+
   it.for([
     "visible final",
     "channel visible final",
+    "child visible final",
+    "private child final",
+    "private child parent replaced",
     "progress only",
     "missing original authority",
     "unconsumed revoked cohort",
   ] as const)(
     "recovers public work once through a sibling and reconciles its %s",
     async (reply, { signal }) => {
+      if (reply === "child visible final" || reply.startsWith("private child")) {
+        const parentSessionKey = "agent:main:main";
+        const parentSessionId = `settle-root-${sequence}`;
+        const parentLifecycleRevision = `settle-root-revision-${sequence}`;
+        requesterSessionKey = `agent:main:subagent:settle-requester-${sequence}`;
+        requesterScope = { ...requesterScope, sessionKey: requesterSessionKey };
+        await writeSessionStore({
+          entries: {
+            [parentSessionKey]: {
+              sessionId: parentSessionId,
+              lifecycleRevision: parentLifecycleRevision,
+              updatedAt: Date.now(),
+            },
+            [requesterSessionKey]: {
+              sessionId: requesterSessionId,
+              lifecycleRevision: `settle-requester-revision-${sequence}`,
+              updatedAt: Date.now(),
+              spawnDepth: 1,
+              spawnedBy: parentSessionKey,
+              spawnedBySessionId: parentSessionId,
+              parentSessionLifecycleRevision: parentLifecycleRevision,
+            },
+          },
+        });
+        child.requesterSessionKey = requesterSessionKey;
+        child.requesterDisplayKey = requesterSessionKey;
+        if (reply.startsWith("private child")) {
+          child.completionTarget = "parent";
+        }
+        saveChild(child);
+      }
       await runPublicSettleRecoveryCase(reply, signal, {
         child,
         harness,
@@ -696,6 +753,8 @@ describe("public yielded settle replay with real Gateway admission", () => {
         settleWakeReplay,
         prepareVisibleRequesterCommand,
         markCommandExecutionStarted,
+        recoverViaRpc: () =>
+          rpcReq(resetClient.ws, "sessions.recover", { key: requesterSessionKey }),
       });
     },
   );

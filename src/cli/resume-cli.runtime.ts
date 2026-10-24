@@ -1,6 +1,5 @@
 import { cancel } from "@clack/prompts";
-import { lazyCompile } from "../../packages/gateway-protocol/src/protocol-validator.js";
-import { SessionsResolveResultSchema } from "../../packages/gateway-protocol/src/schema/sessions-resolve.js";
+import { validateSessionsResolveResult as validateHandoffSessionResolveResult } from "../../packages/gateway-protocol/src/session-result-validators.js";
 import { selectStyled } from "../../packages/terminal-core/src/prompt-select-styled.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
@@ -19,8 +18,6 @@ const RESUME_INTERACTIVE_TERMINAL_GUIDANCE =
   "Attaching to a session requires an interactive terminal. Re-run `openclaw resume [query]` from an interactive terminal.";
 const RESUME_HANDOFF_UNRESOLVED =
   "Could not resolve the session handoff. Copy a fresh command from the Control UI.";
-
-const validateHandoffSessionResolveResult = lazyCompile(SessionsResolveResultSchema);
 
 async function formatResumeConnectionError(error: unknown): Promise<Error> {
   const [{ formatTuiErrorMessage }, { resolveGatewayDisconnectState }] = await Promise.all([

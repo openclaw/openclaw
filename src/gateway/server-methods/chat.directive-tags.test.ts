@@ -1587,14 +1587,14 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     }
   });
 
-  it("starts captured-operation injection before ACK and does not dispatch after owner clear", async () => {
+  it("acknowledges captured-operation input before injection and does not dispatch after owner clear", async () => {
     const { context, respond, send } = await createSqliteChatRequest(
       "openclaw-chat-send-steer-before-ack-",
     );
     const delivery = createDeferred();
     let reportAcceptance: ((accepted: boolean) => void) | undefined;
     const queueMessage = vi.fn((_text: string, options?: ReplyBackendQueueMessageOptions) => {
-      expect(respond).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledOnce();
       reportAcceptance = options?.onQueueAccepted;
       return delivery.promise;
     });
@@ -1612,8 +1612,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
     try {
       await waitForAssertion(() => expect(queueMessage).toHaveBeenCalledOnce());
-      expect(respond).not.toHaveBeenCalled();
-      reportAcceptance?.(true);
       await pendingSend;
       expect(respond).toHaveBeenCalledWith(
         true,
@@ -1622,6 +1620,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         expect.any(Object),
       );
       expect(mockState.lastDispatchCtx).toBeUndefined();
+      reportAcceptance?.(true);
       operation.complete();
       delivery.resolve();
       await waitForAssertion(() => {
@@ -1780,7 +1779,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     }
   });
 
-  it("hydrates and accepts reply injection before ACK without waiting for delivery", async () => {
+  it("hydrates durable reply input before ACK without waiting for runtime acceptance or delivery", async () => {
     const { context, respond, send } = await createSqliteChatRequest(
       "openclaw-chat-send-reply-steer-",
     );
@@ -1825,9 +1824,6 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       expect(queueMessage.mock.calls[0]?.[0]).toContain("Reply target of current user message:");
       expect(queueMessage.mock.calls[0]?.[0]).toContain("quoted deployment status");
       expect(queueMessage.mock.calls[0]?.[0]).toContain("hello");
-      expect(respond).not.toHaveBeenCalled();
-
-      reportAcceptance?.(true);
       await pendingSend;
       expect(respond).toHaveBeenCalledWith(
         true,
@@ -1837,7 +1833,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       );
       expect(context.broadcast).not.toHaveBeenCalled();
       expect(mockState.lastDispatchCtx).toBeUndefined();
-
+      reportAcceptance?.(true);
       delivery.resolve();
       await waitForAssertion(() => expect(context.broadcast).toHaveBeenCalledOnce());
     } finally {
@@ -1936,7 +1932,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     try {
       await waitForAssertion(() => expect(queueMessage).toHaveBeenCalledOnce());
       // A negative callback is provisional; only the terminal rejection permits fallback.
-      expect(respond).not.toHaveBeenCalled();
+      expect(respond).toHaveBeenCalledOnce();
       expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBefore);
       delivery.reject(rejection);
       await pendingSend;

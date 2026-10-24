@@ -127,12 +127,12 @@ afterEach(() => {
 });
 
 describe("chat Details presentation", () => {
-  it("measures a closed desktop frame once during mounting", async () => {
+  it("does not synchronously measure a closed desktop frame during mounting", async () => {
     const measurement = vi.spyOn(Element.prototype, "getBoundingClientRect");
     try {
       const { frame, panel } = await fixture(props(), 600, false, "desktop");
       expect(panel.hidden).toBe(true);
-      expect(measurement.mock.contexts.filter((target) => target === frame)).toHaveLength(1);
+      expect(measurement.mock.contexts.filter((target) => target === frame)).toHaveLength(0);
     } finally {
       measurement.mockRestore();
     }

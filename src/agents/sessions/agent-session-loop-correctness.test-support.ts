@@ -23,7 +23,7 @@ const hoistedStreamMocks = vi.hoisted(() => ({
 }));
 export const streamMocks = hoistedStreamMocks;
 
-export const testModel: Model = makeProviderModelFixture({
+export const testModel = makeProviderModelFixture({
   id: "test-model",
   name: "Test Model",
   api: "openai-responses",

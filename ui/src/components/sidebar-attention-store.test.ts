@@ -861,7 +861,7 @@ describe("sidebar attention source publication", () => {
       storageScope: outboxStorageScope(host),
       text: "private submission",
       createdAt: 1,
-      sendState: "unconfirmed" as const,
+      sendState: "held" as const,
       sendRunId: "run-review",
     };
     expect(
@@ -872,7 +872,7 @@ describe("sidebar attention source publication", () => {
       ),
     ).toBe("admitted");
     store = activate(harness);
-    await import("../pages/chat/chat-outbox-owner.ts");
+    await import("../lib/chat/outbox-attention.ts");
     await waitForFast(() =>
       expect(store?.entries.map((entry) => entry.type)).toEqual(["outbox", "attention"]),
     );

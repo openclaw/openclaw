@@ -155,7 +155,6 @@ packages/ai/src/providers/openai-responses-shared.test.ts
 packages/ai/src/transports/anthropic-transport-stream.test.ts
 packages/gateway-client/src/client.ts
 packages/markdown-core/src/ir.ts
-packages/memory-host-sdk/src/host/session-files.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/agents/agent-bundle-mcp-runtime.test.ts
 src/agents/agent-bundle-mcp-runtime.ts
@@ -171,7 +170,6 @@ src/agents/auth-profiles/store.ts
 src/agents/bash-tools.exec-host-gateway.test.ts
 src/agents/bash-tools.exec-host-gateway.ts
 src/agents/bash-tools.exec-host-node.test.ts
-src/agents/bash-tools.exec-runtime.ts
 src/agents/btw.test.ts
 src/agents/cli-runner.reliability.test.ts
 src/agents/cli-runner.spawn.test.ts
@@ -187,7 +185,6 @@ src/agents/embedded-agent-runner/compact.hooks.test.ts
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts
 src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts
 src/agents/embedded-agent-runner/runs.ts
-src/agents/embedded-agent-runner/thinking.test.ts
 src/agents/embedded-agent-runner/tool-result-truncation.test.ts
 src/agents/embedded-agent-runner/tool-result-truncation.ts
 src/agents/embedded-agent-subscribe.handlers.tools.test.ts
@@ -203,7 +200,6 @@ src/agents/sessions/extensions/runner.ts
 src/agents/sessions/extensions/types.ts
 src/agents/sessions/model-registry.ts
 src/agents/subagents/announce/subagent-announce-delivery.test.ts
-src/agents/subagents/announce/subagent-announce.format.e2e.test.ts
 src/agents/subagents/registry/subagent-control.test.ts
 src/agents/subagents/registry/subagent-registry-lifecycle.test.ts
 src/agents/subagents/registry/subagent-registry.test.ts

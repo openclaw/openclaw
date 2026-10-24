@@ -97,21 +97,6 @@ export function createDownstreamTurnFixture(
     return downstreamTurns.mock.calls[0]?.[0] as MsgContext & Record<string, unknown>;
   }
 
-  async function assertAlbumTurnAndTombstones(params: {
-    stateDir: string;
-    updateIds: number[];
-    monitor: ReturnType<typeof createTelegramTransportIngressMonitor>;
-  }) {
-    await params.monitor.waitForDeferredClaims();
-    const turn = await awaitSingleDownstreamTurn();
-    expect(turn.Body).toContain("Two photo album");
-    expect(turn.media).toMatchObject([
-      { path: "/tmp/photo-1.jpg", kind: "image" },
-      { path: "/tmp/photo-2.jpg", kind: "image" },
-    ]);
-    await assertSpoolTombstoned(params);
-  }
-
   function holdFirstDownstreamTurn() {
     const headDispatched = createDeferred<void>();
     const releaseHead = createDeferred<void>();
@@ -177,7 +162,6 @@ export function createDownstreamTurnFixture(
   return {
     captureNextDownstreamTurn,
     awaitSingleDownstreamTurn,
-    assertAlbumTurnAndTombstones,
     holdFirstDownstreamTurn,
     holdDownstreamLane,
   };

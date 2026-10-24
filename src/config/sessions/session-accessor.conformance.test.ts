@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import type { StatementSync } from "node:sqlite";
 import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
@@ -18,7 +17,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import { observeMainThreadReads } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "../../trajectory/runtime-store.test-support.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
@@ -283,16 +282,14 @@ describe.each([publicAccessorAdapter, sqliteAdapter])(
         updatedAt: 42,
         skillsSnapshot: { prompt: `TIMESTAMP_COLD_PAYLOAD_${"x".repeat(65_536)}`, skills: [] },
       });
-      const reads = observeMainThreadReads();
+      const queries: string[] = [];
+      const reads = observeMainThreadSql({ onStatement: (sql) => queries.push(sql) });
       const parse = vi.spyOn(JSON, "parse");
       try {
         expect(adapter.readSessionUpdatedAtCore(scope)).toBe(42);
-        const queries = reads.calls
-          .flatMap((call) => call.mock.contexts)
-          .map((statement) => (statement as StatementSync).sourceSQL)
-          .filter((sql) => /from "session_nodes"/i.test(sql));
-        expect(queries).toHaveLength(1);
-        expect.soft(queries.some((sql) => sql.includes("session_entry_snapshots"))).toBe(false);
+        const nodeQueries = queries.filter((sql) => /from "session_nodes"/i.test(sql));
+        expect(nodeQueries).toHaveLength(1);
+        expect.soft(nodeQueries.some((sql) => sql.includes("session_entry_snapshots"))).toBe(false);
         expect(parse.mock.calls.some(([value]) => value.includes("TIMESTAMP_COLD_PAYLOAD_"))).toBe(
           false,
         );

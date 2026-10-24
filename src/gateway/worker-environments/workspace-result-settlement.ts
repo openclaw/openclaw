@@ -6,6 +6,7 @@ import type {
   WorkerSessionTurnClaim,
 } from "./placement-store.js";
 import type { PlacementTurnClaimCurrentCheck } from "./placement-turn-claims.types.js";
+import { withSessionRepositoryCheckpoint } from "./session-repository-checkpoints.js";
 import { sessionWorkspaceRoot, type WorkerSessionWorkspace } from "./session-workspace.js";
 import { boundedWorkerError } from "./worker-error.js";
 import {
@@ -14,12 +15,45 @@ import {
   type WorkerWorkspaceResultConflict,
 } from "./workspace-conflicts.js";
 import {
+  adoptStagedWorkerWorkspaceHistory,
   deleteStagedWorkerWorkspaceResult,
   isWorkerWorkspaceResultCleanupRef,
   moveStagedWorkerWorkspaceResultToCleanup,
 } from "./workspace-result-staging.js";
 
 const log = createSubsystemLogger("gateway/worker-placement");
+
+export async function adoptReclaimedWorkspaceHistory(
+  params: Pick<PreparedWorkerWorkspaceRecovery, "workspace" | "assertCurrent" | "reportNote"> & {
+    stagedResultRef: string | null | undefined;
+  },
+): Promise<void> {
+  if (params.workspace.kind === "device-folder" || !params.stagedResultRef) {
+    return;
+  }
+  if (params.workspace.kind === "repository") {
+    await withSessionRepositoryCheckpoint(
+      {
+        workspaceId: params.workspace.repository.workspaceId,
+        checkpointRef: params.stagedResultRef,
+      },
+      async (snapshot) => {
+        if (snapshot.gitHistoryNote) {
+          await params.reportNote(snapshot.gitHistoryNote);
+        }
+      },
+    );
+    return;
+  }
+  const note = await adoptStagedWorkerWorkspaceHistory({
+    root: sessionWorkspaceRoot(params.workspace),
+    stagedResultRef: params.stagedResultRef,
+    assertCurrent: params.assertCurrent,
+  });
+  if (note) {
+    await params.reportNote(note);
+  }
+}
 
 export async function resolvePriorWorkspaceResultConflict(
   resolve: PreparedWorkerWorkspaceRecovery["resolveConflict"],

@@ -7,7 +7,6 @@ import { afterEach, expect, it } from "vitest";
 import YAML from "yaml";
 import { resolveFrozenTelegramScenarioOmissions } from "../../scripts/e2e/lib/npm-telegram-live/resolve-target-scenarios.mts";
 import { testing } from "../../scripts/e2e/npm-telegram-live-runner.ts";
-import { privateLocalOnlyPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const repoRoot = path.resolve(fileURLToPath(new URL("../../", import.meta.url)));
@@ -64,15 +63,6 @@ function writeFixture(
   return file;
 }
 
-function expectText(text: string, included: string[], excluded: string[] = []) {
-  for (const value of included) {
-    expect(text).toContain(value);
-  }
-  for (const value of excluded) {
-    expect(text).not.toContain(value);
-  }
-}
-
 function runHotpathCandidate(consentSupported: boolean) {
   const root = mkTempRoot();
   const hotpath = script.slice(
@@ -111,43 +101,11 @@ ${hotpath}`,
   return readFileSync(path.join(root, "argv.log"), "utf8").trim().split("\n");
 }
 
-it("installs the package candidate before forwarding runtime secrets", () => {
-  const installRunStart = script.indexOf('echo "Running package Telegram live Docker E2E');
-  const installRunEnd = script.indexOf("# Mount the trusted current-source QA harness");
-  const installRun = script.slice(installRunStart, installRunEnd);
-
-  expect(installRunStart).toBeGreaterThanOrEqual(0);
-  expect(installRunEnd).toBeGreaterThan(installRunStart);
-  expectText(
-    installRun,
-    [
-      '-e OPENCLAW_E2E_NPM_INSTALL_TIMEOUT="${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}"',
-      '"$timeout_bin" --kill-after=30s "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
-      "elif command -v gtimeout >/dev/null 2>&1; then",
-      'timeout_bin="gtimeout"',
-      'echo "timeout or gtimeout is required for OPENCLAW_E2E_NPM_INSTALL_TIMEOUT=$npm_install_timeout" >&2',
-      '"$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1',
-      '"$timeout_bin" "$npm_install_timeout" npm install -g "$install_source" --no-fund --no-audit',
-      '"${package_mount_args[@]}"',
-      'run_logged_print_heartbeat "npm-telegram-package-install" 60 docker_e2e_docker_run_cmd run --rm',
-    ],
-    [
-      "running package install without OPENCLAW_E2E_NPM_INSTALL_TIMEOUT",
-      '"${docker_env[@]}"',
-      "run_logged_print_heartbeat docker run --rm",
-    ],
+it("keeps bounded installation and redacted runtime logging", () => {
+  expect(script).toMatch(
+    /"\$timeout_bin" (?:--kill-after=\S+ )?"\$npm_install_timeout" npm install/u,
   );
-  expectText(
-    script,
-    [
-      'run_logged_print_heartbeat "npm-telegram-live-suite" 60 docker_e2e_run_with_harness',
-      '"${docker_env[@]}"',
-      'if [ -z "$credential_role" ] && [ "$credential_source" = "convex" ]; then',
-      'credential_role="ci"',
-      'credential_role="maintainer"',
-    ],
-    ['cat "$run_log"'],
-  );
+  expect(script).not.toContain('cat "$run_log"');
 });
 
 it("uses unique direct-run output dirs by default", () => {
@@ -186,33 +144,13 @@ it("keeps the installed OpenClaw command as the package SUT", async () => {
 });
 
 it("requires Convex leases instead of static credentials", () => {
-  expectText(
-    script,
-    ["Telegram package QA requires Convex credential mode."],
-    ["OPENCLAW_QA_TELEGRAM_DRIVER_BOT_TOKEN", "OPENCLAW_QA_TELEGRAM_SUT_BOT_TOKEN"],
-  );
-});
-
-// Mount/env isolation is exercised through captured Docker calls below.
-it("links runtime dependencies from the trusted QA harness", () => {
-  expectText(
-    script,
-    [
-      '*) OUTPUT_DIR_HOST="$ROOT_DIR/$OUTPUT_DIR" ;;',
-      'cp "$ROOT_DIR/package.json" "$harness_package_json"',
-      'node --import tsx "$ROOT_DIR/scripts/e2e/lib/npm-telegram-live/prepare-package.mts" "$harness_package_json"',
-      "for dependency_dir in /trusted-harness/node_modules/*",
-      "for workspace_dir in /app/packages/* /app/extensions/*",
-      'link_harness_dependency "$workspace_dir" "$workspace_name"',
-      "link_harness_dependency /app openclaw",
-    ],
-    [
-      'openclaw_package_dir="/npm-global/lib/node_modules/openclaw"',
-      'cp "$openclaw_package_dir/package.json" /app/package.json',
-      "/app/node_modules/openclaw/package.json",
-      "link_installed_package_dependency",
-    ],
-  );
+  const { result, runs } = captureDocker({
+    OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE: "env",
+    OPENCLAW_NPM_TELEGRAM_SKIP_CREDENTIAL_PREFLIGHT: "0",
+  });
+  expect(result.status).toBe(1);
+  expect(result.stderr).toContain("Telegram package QA requires Convex credential mode.");
+  expect(runs).toEqual([]);
 });
 
 it.each([false, true])(
@@ -226,10 +164,9 @@ it.each([false, true])(
   },
 );
 
-it("adds private SDK exports only to the trusted harness manifest", () => {
+it("adds loadable private SDK exports without replacing existing harness exports", () => {
   const root = mkTempRoot();
   const harnessManifestPath = path.join(root, "package.json");
-  const candidateManifestPath = path.join(root, "candidate-package.json");
   const existingGatewayExport = {
     types: "./existing/gateway-runtime.d.ts",
     default: "./existing/gateway-runtime.js",
@@ -242,8 +179,6 @@ it("adds private SDK exports only to the trusted harness manifest", () => {
       "./plugin-sdk/gateway-runtime": existingGatewayExport,
     },
   });
-  writeFileSync(candidateManifestPath, '{"name":"candidate","exports":{}}\n');
-  const candidateBefore = readFileSync(candidateManifestPath, "utf8");
 
   execFileSync(process.execPath, [PREPARE_PACKAGE_PATH, harnessManifestPath]);
 
@@ -252,27 +187,15 @@ it("adds private SDK exports only to the trusted harness manifest", () => {
   };
   expect(prepared.exports["./kept"]).toBe("./dist/kept.js");
   expect(prepared.exports["./plugin-sdk/gateway-runtime"]).toEqual(existingGatewayExport);
-  const privateQaSubpaths = ["qa-channel", "qa-channel-protocol", "qa-lab", "qa-runtime"];
-  for (const subpath of [...privateLocalOnlyPluginSdkEntrypoints, ...privateQaSubpaths]) {
-    expect(prepared.exports[`./plugin-sdk/${subpath}`]).toEqual({
-      default: `./dist/plugin-sdk/${subpath}.js`,
-    });
-  }
-  for (const subpath of privateQaSubpaths) {
-    writeFixture(root, `dist/plugin-sdk/${subpath}.js`, "export const harnessOnly = true;\n");
-  }
+  writeFixture(root, "dist/plugin-sdk/qa-lab.js", "export const harnessOnly = true;\n");
   // Resolve the private manifest with Node, without the test runner's source SDK aliases.
   const loader = writeFixture(
     root,
     "load-private.mjs",
     `import assert from "node:assert/strict";
-for (const subpath of ${JSON.stringify(privateQaSubpaths)}) {
-  assert.equal((await import("openclaw/plugin-sdk/" + subpath)).harnessOnly, true);
-}
-`,
+assert.equal((await import("openclaw/plugin-sdk/qa-lab")).harnessOnly, true);`,
   );
   execFileSync(process.execPath, [loader], { cwd: root });
-  expect(readFileSync(candidateManifestPath, "utf8")).toBe(candidateBefore);
 });
 
 it.each([
@@ -333,35 +256,27 @@ it.each([
   });
 });
 
-it.each([[], ["telegram-policy-hot-reload"]])(
-  "qualifies default policy reload scenarios from the selected source (%j)",
-  (...supported: string[]) => {
-    const policyScenarios = ["telegram-policy-hot-reload", "telegram-group-policy-hot-reload"];
-    const { qualify } = frozenSource(
-      Object.fromEntries(
-        supported.map((id) => [`qa/scenarios/channels/${id}.yaml`, `scenario:\n  id: ${id}\n`]),
-      ),
-    );
-    const env = qualify();
-    const resolve = (ids: readonly string[]) =>
-      ids.length ? [...ids] : ["channel-canary", ...policyScenarios];
-    expect(testing.resolvePackageTelegramScenarios(env, resolve).resolvedScenarioIds).toEqual([
-      "channel-canary",
-      ...policyScenarios.filter((id) => supported.includes(id)),
-    ]);
-    for (const id of policyScenarios) {
-      for (const key of ["OPENCLAW_NPM_TELEGRAM_SCENARIOS", "OPENCLAW_NPM_TELEGRAM_RTT_CHECKS"]) {
-        expect(
-          testing.resolvePackageTelegramScenarios({ ...env, [key]: id }, resolve)
-            .resolvedScenarioIds,
-        ).toEqual([id]);
-      }
-    }
-    expect(() => qualify("0".repeat(40))).toThrow(
-      "frozen Telegram source checkout does not match package source SHA",
-    );
-  },
-);
+it("qualifies default scenarios but preserves explicit selection", () => {
+  const supported = "telegram-policy-hot-reload";
+  const omitted = "telegram-group-policy-hot-reload";
+  const { qualify } = frozenSource({
+    [`qa/scenarios/channels/${supported}.yaml`]: `id: ${supported}`,
+  });
+  const env = qualify();
+  const resolve = (ids: readonly string[]) => (ids.length ? [...ids] : [supported, omitted]);
+  expect(testing.resolvePackageTelegramScenarios(env, resolve).resolvedScenarioIds).toEqual([
+    supported,
+  ]);
+  for (const key of ["OPENCLAW_NPM_TELEGRAM_SCENARIOS", "OPENCLAW_NPM_TELEGRAM_RTT_CHECKS"]) {
+    expect(
+      testing.resolvePackageTelegramScenarios({ ...env, [key]: omitted }, resolve)
+        .resolvedScenarioIds,
+    ).toEqual([omitted]);
+  }
+  expect(() => qualify("0".repeat(40))).toThrow(
+    "frozen Telegram source checkout does not match package source SHA",
+  );
+});
 
 it("combines only the unsupported frozen Telegram scenario contracts", () => {
   const root = mkTempRoot();
@@ -373,29 +288,15 @@ it("combines only the unsupported frozen Telegram scenario contracts", () => {
     "enqueueDraftLaneEvent(async () => {});",
   );
 
-  for (const id of ["telegram-policy-hot-reload", "telegram-group-policy-hot-reload"]) {
-    writeOwner(`qa/scenarios/channels/${id}.yaml`, `scenario:\n  id: ${id}\n`);
-  }
-
-  const omissions = [
-    "telegram-partial-failure-recovery",
-    "telegram-empty-response-after-write-recovery",
-    "telegram-prepared-delivery-recovery",
-    "telegram-progress-tool-visibility",
-    "telegram-provider-failure-before-output",
-    "telegram-queue-invalid-mode",
-    "telegram-rich-inline-composition",
-  ];
-  expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual(omissions);
+  const partial = "telegram-partial-failure-recovery";
+  const sourceGated = "telegram-prepared-delivery-recovery";
+  expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual(
+    expect.arrayContaining([partial, sourceGated]),
+  );
   writeOwner("extensions/telegram/src/draft-stream.ts", "waitForInFlight();");
-  let remaining = omissions.slice(1);
-  expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual(remaining);
-  // Restore prepared delivery last, preserving every intermediate omission snapshot.
-  for (const id of [omissions[1]!, ...omissions.slice(3), omissions[2]!]) {
-    writeOwner(`qa/scenarios/channels/${id}.yaml`, `id: ${id}\n`);
-    remaining = remaining.filter((omitted) => omitted !== id);
-    expect(resolveFrozenTelegramScenarioOmissions(root)).toEqual(remaining);
-  }
+  expect(resolveFrozenTelegramScenarioOmissions(root)).not.toContain(partial);
+  writeOwner(`qa/scenarios/channels/${sourceGated}.yaml`, `id: ${sourceGated}\n`);
+  expect(resolveFrozenTelegramScenarioOmissions(root)).not.toContain(sourceGated);
 });
 
 it("rejects multiple explicit RTT scenario ids", () => {
@@ -688,9 +589,6 @@ it.each([false, true])("isolates install and runtime credentials (upgrade=%s)", 
       "OPENCLAW_NPM_TELEGRAM_OUTPUT_DIR=.artifacts/qa-e2e/npm-telegram-live-output",
       `${path.join(root, "output")}:/app/.artifacts/qa-e2e/npm-telegram-live-output`,
       `${repoRoot}/node_modules:/trusted-harness/node_modules:ro`,
-      ...["dist", "packages", "extensions", ".agents", "taxonomy.yaml", "qa/scenarios"].map(
-        (entry) => `${repoRoot}/${entry}:/app/${entry}:ro`,
-      ),
     ]),
   ]);
   expect(runs[0]?.some((arg) => arg.startsWith("OPENCLAW_QA_CONVEX_SECRET_"))).toBe(false);

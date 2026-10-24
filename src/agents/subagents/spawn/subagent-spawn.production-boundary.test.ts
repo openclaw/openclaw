@@ -337,7 +337,7 @@ async function createGuestParent(audit = true) {
   const source = createSpawnOperatorSource(guest.id, guestRole.scopes, {
     modelPolicy,
     rolePolicy: { sessionAccessCap: "none", sandboxRequired: true, agents: ["main"] },
-    readCurrentRoleAssignment: () => "guest",
+    readCurrentRoleFacts: () => ({ assignedRole: "guest" }),
   });
   const bound = await createBoundParent(source.authority, {
     guestProfileId: source.authority.profileId,

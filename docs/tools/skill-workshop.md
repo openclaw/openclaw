@@ -132,9 +132,17 @@ umbrella skill: it patches the survivor and archives the rest with
 `absorbed_into`. Then it tells you which skill changed. If there is nothing
 durable to learn, it changes nothing.
 
+When the selected memory plugin supports learning (see
+[provider-neutral memory runtime](/plugins/sdk-overview/memory-and-context#provider-neutral-memory-runtime)),
+`/learn` covers both media: procedures for a
+repeatable class of task go to learned skills, and facts, preferences,
+decisions, and knowledge about one codebase or person go to memory, following
+the memory plugin's guidance. With `skill_workshop` hidden, `/learn` learns into
+memory alone.
+
 `/learn` works in both learning modes. It replies with an explanation instead
-when `skill_workshop` is unavailable, for example in a sandboxed session or
-when tool policy hides the tool.
+when neither `skill_workshop` nor the memory plugin's learning tools are
+available, for example in a sandboxed session or when tool policy hides them.
 
 `/learn undo <id>` is the one exception: with a review id, it reverts that
 background review without a model turn. See [Undo](#undo). Any other text after

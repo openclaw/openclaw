@@ -281,7 +281,6 @@ describe("collectCodexRouteWarnings", () => {
         compaction: {
           model: "openai-codex/gpt-5.4",
           provider: "lossless-claw",
-          memoryFlush: { model: "openai-codex/gpt-5.4-mini" },
         },
       },
       plugins: { slots: { contextEngine: "custom-context" } },
@@ -290,7 +289,6 @@ describe("collectCodexRouteWarnings", () => {
     expect(result.cfg.agents?.defaults?.compaction).toEqual({
       model: "openai/gpt-5.4",
       provider: "lossless-claw",
-      memoryFlush: { model: "openai/gpt-5.4-mini" },
     });
     expectModelRuntime(result.cfg.agents?.defaults?.models?.["openai/gpt-5.4"]);
     expect(result.warnings).toStrictEqual([
@@ -505,7 +503,6 @@ describe("collectCodexRouteWarnings", () => {
         },
         compaction: {
           model: "openai-codex/gpt-5.4",
-          memoryFlush: { model: "openai-codex/gpt-5.4-mini" },
         },
         mediaModels: {
           image: { primary: "openai-codex/gpt-image-2", fallbacks: ["openai-codex/gpt-image-1"] },
@@ -533,7 +530,6 @@ describe("collectCodexRouteWarnings", () => {
       fallbacks: ["openai/gpt-5.4"],
     });
     expect(result.cfg.agents?.defaults?.compaction?.model).toBe("openai/gpt-5.4");
-    expect(result.cfg.agents?.defaults?.compaction?.memoryFlush?.model).toBe("openai/gpt-5.4-mini");
     expect(result.cfg.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "openai/gpt-image-2",
       fallbacks: ["openai/gpt-image-1"],

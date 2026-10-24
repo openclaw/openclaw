@@ -29,12 +29,10 @@ import {
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 import { ChatOutboxAdmissions } from "./chat-outbox-admissions.ts";
-import { ChatOutboxHistory } from "./chat-outbox-history.ts";
 import {
   projectChatOutboxItem,
   isActiveLocal,
   hasActiveChatOutboxProjection,
-  projectChatOutboxAttention,
   reconcileChatOutboxProjection,
   type ChatOutboxHostProjection as HostProjection,
 } from "./chat-outbox-owner.projection.ts";
@@ -65,7 +63,6 @@ class ChatOutboxGatewayOwner {
   private readonly panes = new Set<Host>();
   private readonly live = new Map<string, Map<string, LiveProjection>>();
   private readonly hydrating = new Set<string>();
-  readonly history = new ChatOutboxHistory();
   private unsubscribe: (() => void) | null = null;
   constructor(readonly ownerGatewayKey: string) {}
   private publishAttention(): void {
@@ -97,7 +94,6 @@ class ChatOutboxGatewayOwner {
   }
   private retireHost(host: Host): void {
     this.admissions.cancelRequests(host);
-    this.history.forget(host);
     const state = this.hosts.get(host);
     if (state) {
       const retained = new Set<string>();
@@ -114,7 +110,7 @@ class ChatOutboxGatewayOwner {
           )
           .map((item) => {
             retained.add(item.id);
-            return item.sendState === "failed" || item.sendState === "unconfirmed"
+            return item.sendState === "failed"
               ? item
               : Object.assign({}, item, { sendState: "held" as const });
           });
@@ -250,20 +246,11 @@ class ChatOutboxGatewayOwner {
           }
           if (result.status === "ready") {
             if (result.update.attachmentPayload?.key !== key) {
-              // Reconnect can park this attempt while its private Blob copy awaits.
-              // Preserve that newer state, but never adopt over a changed submission.
-              const parked =
-                item.sendState === "waiting-reconnect" &&
-                current.sendState === "unconfirmed" &&
-                sameQueuedDeliveryVersion(current, {
-                  ...applyStoredChatOutboxScope(item, outbox),
-                  sendState: "unconfirmed",
-                });
               if (
                 !updateStoredChatComposerQueueItems(
                   host,
                   outbox.sessionKey,
-                  [{ expected: parked ? current : item, next: { ...current, ...result.update } }],
+                  [{ expected: item, next: { ...current, ...result.update } }],
                   outbox.agentId,
                 )
               ) {
@@ -276,8 +263,6 @@ class ChatOutboxGatewayOwner {
               ...(result.update.attachmentPayload?.key !== key
                 ? {
                     attachmentPayload: result.update.attachmentPayload,
-                    sendState: result.update.sendState,
-                    sendError: result.update.sendError,
                   }
                 : {}),
             });
@@ -341,7 +326,6 @@ class ChatOutboxGatewayOwner {
   }
   private detach(host: Host): void {
     this.admissions.cancelRequests(host);
-    this.history.forget(host);
     this.panes.delete(host);
     if (!this.panes.size) {
       this.unsubscribe?.();
@@ -366,7 +350,6 @@ class ChatOutboxGatewayOwner {
   private reconcile(host: Host, state: HostProjection): void {
     const outboxes = listOutboxes(host);
     const durableIds = new Set(outboxes.flatMap((outbox) => outbox.queue.map((item) => item.id)));
-    this.history.reconcile(host, outboxes);
     reconcileChatOutboxProjection(state, durableIds, (id) => this.observeDurable(id));
   }
   retirePendingRun(host: Host, runId: string): ChatQueueItem[] {
@@ -713,11 +696,4 @@ export function chatOutboxOwner(host: Composer): ChatOutboxGatewayOwner {
   chatOutboxAttentionOwners.set(key, owner);
   owner.adoptSubscriptions(host);
   return owner;
-}
-
-/** Read-only view of the existing tab/Gateway outbox; it does not claim a personal owner. */
-export function listChatOutboxAttention(host: Composer) {
-  return readOfflineStorageScope(host)
-    ? projectChatOutboxAttention(listOutboxes(host), owners.get(outboxOwnerKey(host)))
-    : [];
 }

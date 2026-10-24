@@ -1,25 +1,25 @@
-// A real Gateway process must finish reset-started plugin work before SIGTERM exit.
+import assert from "node:assert/strict";
 import { once } from "node:events";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import type { SessionsCreateResult } from "../packages/gateway-protocol/src/schema/sessions.js";
-import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import {
   writeRestartPlugin,
   readRestartTrace as readTrace,
 } from "./gateway-restart.test-support.js";
 import { withBuiltGateway } from "./helpers/built-gateway-proof.js";
 import { GATEWAY_RESTART_TEST_KILL_MS } from "./helpers/gateway-restart-budget.js";
-import { createTempDirTracker } from "./helpers/temp-dir.js";
+import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const PLUGIN_ID = "session-end-shutdown-proof";
 const SESSION_KEY = "agent:main:dashboard:session-end-shutdown-proof";
 const WAIT_OPTIONS = { timeout: 10_000, interval: 25 } as const;
 
-const fixtureDirs = createTempDirTracker();
-afterEach(fixtureDirs.cleanup);
+const fixtureDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function writeSessionEndPlugin(pluginDir: string, tracePath: string): Promise<void> {
+it("finishes a real reset-started session_end hook after an operating-system SIGTERM", async () => {
+  const fixtureDir = fixtureDirs.make("openclaw-session-end-shutdown-");
+  const pluginDir = path.join(fixtureDir, "plugin");
+  const tracePath = path.join(fixtureDir, "session-end.trace");
   await writeRestartPlugin(
     pluginDir,
     {
@@ -41,16 +41,7 @@ export default {
   },
 };
 `,
-    "index.mjs",
   );
-}
-
-it("finishes a real reset-started session_end hook after an operating-system SIGTERM", async () => {
-  const fixtureDir = fixtureDirs.make("openclaw-session-end-shutdown-");
-  const pluginDir = path.join(fixtureDir, "plugin");
-  const tracePath = path.join(fixtureDir, "session-end.trace");
-  await writeSessionEndPlugin(pluginDir, tracePath);
-
   await withBuiltGateway(
     {
       name: "session-end-shutdown",
@@ -62,21 +53,17 @@ it("finishes a real reset-started session_end hook after an operating-system SIG
           entries: { [PLUGIN_ID]: { enabled: true } },
           slots: { memory: "none" },
         },
-      } satisfies OpenClawConfig,
+      },
       env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
       stopTimeoutMs: 10_000,
       // Signal the Gateway itself before the custody owner cancels its worker tree.
       gracefulShutdownTimeoutMs: GATEWAY_RESTART_TEST_KILL_MS,
     },
     async (client, instance) => {
-      await vi.waitFor(async () => {
-        const created = await client.request<SessionsCreateResult>("sessions.create", {
-          agentId: "main",
-          key: SESSION_KEY,
-        });
-        expect(created.key).toBe(SESSION_KEY);
-        expect(created.sessionId).toBeTruthy();
-      }, WAIT_OPTIONS);
+      await vi.waitFor(
+        () => client.request("sessions.create", { agentId: "main", key: SESSION_KEY }),
+        WAIT_OPTIONS,
+      );
 
       await client.request("sessions.reset", { key: SESSION_KEY, reason: "reset" });
       await vi.waitFor(async () => {
@@ -84,12 +71,8 @@ it("finishes a real reset-started session_end hook after an operating-system SIG
       }, WAIT_OPTIONS);
 
       const child = instance.child;
-      if (!child) {
-        throw new Error("Gateway process exited before its session-end hook was signaled");
-      }
-      const exited = once(child, "exit") as Promise<
-        [code: number | null, signal: NodeJS.Signals | null]
-      >;
+      assert(child, "Gateway process exited before its session-end hook was signaled");
+      const exited = once(child, "exit");
       expect(child.kill("SIGTERM")).toBe(true);
 
       await expect(exited).resolves.toEqual([0, null]);

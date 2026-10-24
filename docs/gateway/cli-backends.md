@@ -231,7 +231,8 @@ Plugin tools such as remote SSH do not become background jobs automatically.
 When Claude Code moves a foreground Bash command to the background after its tool timeout,
 OpenClaw keeps the turn active until Claude processes the completion and returns its final answer.
 Stopping a native task releases that task's hold. Completions belonging to an earlier
-input do not hold or settle a newer input.
+input do not hold or settle a newer input. Tasks launched inside a subagent report back
+to that subagent and do not independently hold the parent input open.
 Follow-up tools still require the current turn's host permissions. Commands started explicitly
 in the background do not hold the turn open. If the turn fails or is cancelled while one of these
 commands still needs a follow-up, OpenClaw closes that subprocess and starts a fresh one for the next turn.
@@ -508,6 +509,11 @@ Serialization: `serialize: true` keeps same-lane runs ordered (most CLIs seriali
 When the resolved MCP tool names change, OpenClaw starts a fresh native CLI session
 and logs `cli session reset: provider=<backend> reason=prompt-tools`. This refreshes
 the CLI's cached tool catalog; resending prompt text alone cannot refresh it.
+Tools that follow the calling client (`screen`, `show_widget`, `suggest_task`,
+`dismiss_task`) do not count: subagent-completion and channel turns drop them, and
+resetting on each change would discard the session's context. Their change still
+alters the system prompt, so a warm process restarts and the resumed CLI lists the
+current tools.
 The OpenClaw chat remains intact, and saved-history recovery follows the
 [history account boundaries](#history-account-boundaries) above. System-prompt-only
 changes continue to reuse the native session when the backend can resend the prompt.

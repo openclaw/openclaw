@@ -30,6 +30,8 @@ import { activePlacement } from "./worker-environments/placement-suite.test-supp
 
 // Values frozen from d70a7e7300cdc0af4485d10b39f3e4986c3dd155.
 // SHA256 pins wire values; sparse materialization may change top-level property order.
+// Ownership fixtures below differ only in durable childSessions and removal of
+// historical-run spawnedBy/controlOwnerSessionKey (verified against the original hashes).
 const START = Date.UTC(2026, 8, 15);
 const TIMES = [START + 29_999, START + 30_000, START + 7_200_001] as const;
 const GOLDEN_HASHES: Record<string, string | readonly [string, string, string]> = {
@@ -39,13 +41,13 @@ const GOLDEN_HASHES: Record<string, string | readonly [string, string, string]> 
     "03b2a5f8df56d4c6b58c33838ff1a2a7ceeb555d95332d4e936bc32d20fd7995",
   "activity stale and uncorrelated placement":
     "44f6c17648306a69451dea4079e7f325eedb3a58c24eeac47af07c3e011ffb95",
-  "child retention keeps canonical live recent and unknown links": [
-    "02c9c8267711adf6e3673b9fa35c0e63694b400d5af718d1ab84f69e52e49ecd",
-    "02c9c8267711adf6e3673b9fa35c0e63694b400d5af718d1ab84f69e52e49ecd",
-    "556f0f870c08fbf3b5d218d2328ba4c6dff0943bbc3a82d8858a5f57620132a2",
+  "durable parent links outlive display retention": [
+    "ea88f50e0d3b5b904d3f64a44f228fff1cefaf0882c5be411e4263727ed254ef",
+    "ea88f50e0d3b5b904d3f64a44f228fff1cefaf0882c5be411e4263727ed254ef",
+    "daa5d5c2a7cebceeb7e2353d1f6372ba558c2f63c79488340dbdbe83fb26b2da",
   ],
   "ended run uses persisted lifecycle timestamps":
-    "3812cd64fb99bf06451eaebd5d722e38212834e453f21d01afbce70518a2f71e",
+    "46502481a02e7be79b466c588bf42e7cdf6ab62bdd37211763a979e35249d92e",
   "expired status and incognito draft":
     "fc06ca39632d330036ebab35135098ac12d6b22b4f5a0c0ed36b7f7c559474e6",
   "goal below budget retains committed timestamps":
@@ -56,7 +58,7 @@ const GOLDEN_HASHES: Record<string, string | readonly [string, string, string]> 
     "e17984f9316f106afb181d5bfd1f952945e85e9a32b860420ab5d65130d7a1fa",
   ],
   "live subagent accumulated runtime and inherited model":
-    "ec1fab32f0b68de7cf6bab6e0c6bcab8b79382492b710b041f40c53ad7538e6e",
+    "bd892aa29e3d9306ca5d07f2f973bf1bc1881dadc5f8345b9eba3e3e0baf2165",
   "missing entry": "ca59b3ec3a664a3caa055671a6e57891e8a9b072c0509e8073576ab8b80de292",
   "observer digest equal than run start":
     "4abca444a5d0be3ff30b99147ab9d17c073bb440ce3e1175007718d5bcda51d3",
@@ -263,7 +265,7 @@ function fixtures(): RowFixture[] {
       ],
     },
     {
-      name: "child retention keeps canonical live recent and unknown links",
+      name: "durable parent links outlive display retention",
       key: PARENT,
       entry: parentEntry,
       store: childStore,
@@ -491,6 +493,9 @@ test("preserves complete base rows across time and caller presentation fixtures"
         });
         expect(row.createdSurface).toBe(fixture.entry?.createdSurface);
         expect(row.communication).toBeUndefined();
+        expect(row.spawnedBy).toBe(fixture.entry?.spawnedBy);
+        // These fixtures carry display snapshots, not an admitted current controller.
+        expect(row.controlOwnerSessionKey).toBeUndefined();
         const {
           snapshotAt: _snapshotAt,
           createdSurface: _createdSurface,

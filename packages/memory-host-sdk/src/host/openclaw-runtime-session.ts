@@ -2,7 +2,6 @@
 import path from "node:path";
 import { isMainThread } from "node:worker_threads";
 import { isValidAgentId, normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { EXEC_TIMEOUT_RETRY_GUIDANCE } from "../../../../src/agents/bash-tools.exec-output.js";
 import { cloneEnvWithPlatformSemantics } from "../../../../src/config/config-env-vars.js";
 import {
   readTranscriptExportSnapshotReadOnlySync,
@@ -192,7 +191,7 @@ export { canonicalizeMainSessionAlias } from "../../../../src/config/sessions/ma
 export {
   listSessionTranscriptArchivesReadOnly,
   listSessionTranscriptInstances,
-} from "../../../../src/config/sessions/session-history.js";
+} from "../../../../src/config/sessions/session-history-read.js";
 export { resolveSessionTranscriptsDirForAgent } from "../../../../src/config/sessions/paths.js";
 export type { CanonicalSessionReaderContinuation } from "../../../../src/config/sessions/session-canonical-key.js";
 export type { SessionEntry } from "../../../../src/config/sessions/types.js";
@@ -204,36 +203,6 @@ export { hasInterSessionUserProvenance } from "../../../../src/sessions/input-pr
 export { onSessionTranscriptUpdate } from "../../../../src/sessions/transcript-events.js";
 export { prepareAssistantTranscriptText } from "../../../../src/shared/chat-message-content.js";
 
-/**
- * Returns an opaque revision that changes for every canonical transcript mutation.
- * Read-only callers stay on the read-only reader; a missing transcript has no revision.
- */
-export function readTranscriptContentRevisionSync(params: {
-  agentId?: string;
-  env?: NodeJS.ProcessEnv;
-  sessionId: string;
-  sessionKey?: string;
-  storePath?: string;
-  readOnly?: boolean;
-}): string | undefined {
-  const { readOnly, ...scope } = params;
-  // Inventory runs in pooled history Workers; a writable open there would claim an
-  // agent-database lease that only that Worker's process exit could release.
-  const stats = readOnly
-    ? readTranscriptStatsBatchReadOnlySync([scope])[0]
-    : readAccessorTranscriptStatsSync(scope);
-  if (!stats) {
-    return undefined;
-  }
-  return [
-    "sqlite",
-    stats.maxSeq,
-    stats.sizeBytes,
-    stats.eventCount,
-    stats.lastMutationAtMs ?? "",
-    stats.lastObservedMutationAtMs ?? "",
-  ].join(":");
-}
 /** Extracts the agent id from a canonical `agents/<id>/sessions` directory path. */
 export function extractAgentIdFromSessionsDir(sessionsDir: string): string | null {
   const parts = path.normalize(path.resolve(sessionsDir)).split(path.sep).filter(Boolean);
@@ -287,16 +256,3 @@ export {
 export const readSessionResetRecallCutoffInWorker = bindTranscriptRead(
   (runtime) => runtime.readSessionResetRecallCutoffInWorker,
 );
-
-/** Recognize historical exec notices when exporting conversation text for memory. */
-export function isExecCompletionEvent(event: string): boolean {
-  const trimmed = event.trim();
-  if (/^exec finished(?::|\s*\()/i.test(trimmed)) {
-    return true;
-  }
-  const match =
-    /^exec (completed|failed) \(([a-z0-9_-]{1,64}), (code -?\d+|signal [^)]+)\)(?: :: ([\s\S]*)|\n\n([\s\S]+))?$/i.exec(
-      trimmed,
-    );
-  return Boolean(match && (match[5] === undefined || match[5] === EXEC_TIMEOUT_RETRY_GUIDANCE));
-}

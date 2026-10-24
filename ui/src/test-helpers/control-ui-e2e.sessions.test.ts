@@ -72,8 +72,8 @@ it("does not commit rejected patches or unresolved deferrals", async ({ connect 
     await client.patch({ expectedSessionId: replacement.sessionId, label: replacement.label }),
   ).toMatchObject({ ok: true });
   expect(await client.rows()).toMatchObject([replacement]);
-  for (const method of ["sessions.describe", "chat.history", "chat.startup"]) {
-    const params = method === "sessions.describe" ? { key: notes.key } : { sessionKey: notes.key };
+  for (const method of ["sessions.describe", "sessions.dispatch", "chat.history", "chat.startup"]) {
+    const params = method.startsWith("sessions.") ? { key: notes.key } : { sessionKey: notes.key };
     expect(await client.payload(method, params)).toMatchObject(
       method === "sessions.describe"
         ? { session: { sessionId: replacement.sessionId } }

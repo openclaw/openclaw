@@ -54,15 +54,7 @@ export function extractQueueDirective(rawBody?: string): {
   const parsed: ReturnType<typeof extractQueueDirective> = {
     cleaned: body,
     hasDirective: true,
-    queueMode: undefined,
     queueReset: false,
-    rawMode: undefined,
-    debounceMs: undefined,
-    cap: undefined,
-    dropPolicy: undefined,
-    rawDebounce: undefined,
-    rawCap: undefined,
-    rawDrop: undefined,
     hasOptions: false,
   };
   while (i < raw.length) {

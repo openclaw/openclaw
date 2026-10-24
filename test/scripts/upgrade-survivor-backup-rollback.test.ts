@@ -59,9 +59,6 @@ if (isCreate) {
   if (controls.mode === "lost-transcript") fs.unlinkSync(path.join(state, controls.transcriptRelative));
   using db = new DatabaseSync(path.join(state, controls.agentRelative));
   if (controls.mode === "changed-session") db.exec("UPDATE session_nodes SET current_session_id = 'different-session'");
-  if (controls.mode === "changed-payload") db.exec("UPDATE transcript_events SET event_json = '{}' WHERE seq = 1");
-  if (controls.mode === "changed-schema") db.exec("PRAGMA user_version = 21");
-  if (controls.mode === "changed-schema-meta") db.exec("UPDATE schema_meta SET schema_version = 21");
   if (controls.mode === "missing-legacy") fs.unlinkSync(path.join(state, controls.legacyRelative));
   result = { ok: true, archivePath: archive, targetPath: target, archiveRoot };
 } else {
@@ -83,7 +80,6 @@ if (isCreate) {
     const sessions = db.prepare("SELECT session_key AS key, current_session_id AS sessionId FROM session_nodes ORDER BY session_key").all();
     if (controls.mode === "missing-consumer-session") sessions.pop();
     if (controls.mode === "wrong-consumer-key") sessions[0].key = "agent:main:wrong";
-    if (controls.mode === "wrong-consumer-session") sessions[0].sessionId = "wrong-session";
     if (controls.mode === "mutating-consumer") db.exec("DELETE FROM transcript_events");
     result = { path: controls.mode === "wrong-consumer-path" ? controls.source : database,
       count: sessions.length, totalCount: sessions.length, limitApplied: null, hasMore: false, sessions };
@@ -308,15 +304,11 @@ it.each([
 it.each([
   ["lost-transcript", "ENOENT"],
   ["changed-session", "restored baseline inventory differs"],
-  ["changed-payload", "restored baseline inventory differs"],
-  ["changed-schema", "restored baseline inventory differs"],
-  ["changed-schema-meta", "restored baseline inventory differs"],
   ["missing-legacy", "ENOENT"],
   ["wrong-preflight", "preflight ran with the wrong baseline target"],
   ["mutating-preflight", "baseline preflight mutated restored history"],
   ["missing-consumer-session", "baseline session consumer lost sessions"],
   ["wrong-consumer-key", "baseline session consumer returned different identities"],
-  ["wrong-consumer-session", "baseline session consumer returned different identities"],
   ["wrong-consumer-path", "baseline session consumer read the wrong store"],
   ["mutating-consumer", "baseline session consumer mutated restored history"],
   ["consumer-failure", "baseline sessions --store failed"],

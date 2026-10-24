@@ -41,6 +41,10 @@ export const optimisticSessionRowFields = [
   "label",
   "icon",
   "color",
+  "archived",
+  "archivedAt",
+  "archivedBy",
+  "archiveReason",
   "thinkingLevel",
   "fastMode",
   "effectiveFastMode",
@@ -191,7 +195,7 @@ export function resolvePredecessorRowTarget(
     : null;
 }
 
-function createOptimisticRowPatches<T>(
+export function createOptimisticRowPatches<T>(
   host: PendingRowHost,
   fields: {
     read: (row: GatewaySessionRow | undefined) => T;

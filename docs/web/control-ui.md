@@ -22,6 +22,12 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
+Optional surfaces follow the permissions granted to the current connection.
+Session-only roles do not load the plugin UI catalog, Side Chat history, observer
+visibility, or remote session-link titles. Side Chat is hidden, and session links
+keep their locally available labels. MCP Apps discovery requires general write
+access. The Gateway continues to authorize every request.
+
 ## Command palette file attachments
 
 Open the command palette with **Cmd+K** on macOS or **Ctrl+K** elsewhere. Drop
@@ -198,7 +204,7 @@ Provider authentication status is shared across views and refreshes after accoun
 
 The sidebar loads automation status once per connection and refreshes after automation or configuration changes. Failed reads retry once per minute while the tab is visible and stop retrying after success. Sidebar health and Automations page refreshes pause during announced restarts or suspension and catch up when the Gateway is available again. Overdue warnings advance on a local deadline without polling the Gateway. Hidden tabs catch up when visible; returning to an unchanged tab does not poll automations. Command palette searches reuse their automation inventory on the same connection until one of those changes or a reconnect.
 
-In a session’s menu, open **View → Speech bubbles** to switch that conversation—including the main session—to two-sided bubbles. Your messages stay on the right and agent replies stream into bubbles on the left. The choice is saved per session in this browser; other sessions keep their own mode. Turn it off to restore the flat reply layout. In bubble mode, activity appears as a compact **…** preview. Click it to see the full tool or status details. Agent reactions appear beneath the prompt they acknowledge, independently of the selected layout.
+In a session’s menu, open **View → Speech bubbles** to switch that conversation—including the main session—to two-sided bubbles. Your messages stay on the right and agent replies stream into bubbles on the left. The choice is saved per session in this browser; other sessions keep their own mode. Turn it off to restore the flat reply layout. In bubble mode, ordinary waiting appears only as **…**, without a status phrase or timer. Active work uses one compact bubble with its recorded purpose; parallel tasks share one bubble that expands into their current activity and session links. Click a work bubble to inspect its tool details. Approval and retry states remain visible, and finished work leaves an expandable receipt instead of animated dots. Agent reactions appear beneath the prompt they acknowledge, independently of the selected layout.
 
 Automation inputs appear as compact, collapsed activity rows instead of message bubbles. Expand a row to read the full prompt and access its message actions. Each automation input stays separate, even when several jobs run in the same conversation. The expanded **From** link opens that automation's History tab and highlights the originating run; open the run's transcript from History when needed.
 
@@ -283,7 +289,7 @@ with the call count. When only part of a long history is loaded, the count is a
 lower bound such as **40+ calls**. Avatar-free child transcripts do not reserve
 empty avatar columns, and narrow panes use compact horizontal insets while wide
 transcripts retain the reading-width limit. It does not add rows to the left
-sidebar. The parallel-tasks view also shows aggregate swarm progress. A directly
+sidebar. Delegated tasks appear inline with the turn that launched them, not above the composer. Batches of up to five tasks use a compact expandable row; larger active batches expand with progress and task details. Collected results stay with that turn after completion. A directly
 opened child page offers **Open parent session**. The `/subagents list`,
 `/subagents info <id|#>`, and `/subagents log <id|#>` commands remain available.
 
@@ -343,6 +349,10 @@ Chat filename links first try the named path. If a bare filename is missing ther
 the preview opens a nested file only when a complete workspace search finds exactly
 one matching filename. Ambiguous or incomplete searches keep the missing-file error;
 use an explicit path to select the intended file.
+
+Opening a file collapses the file tree to make room for its preview. Use **Toggle
+file tree** to browse another file, or **Show in Files** to reveal the current file
+in its folder with the **All** filter.
 
 If the **Files** panel shows a listing error, select **Retry** to load the current
 folder or search again. This keeps the session and query in place; access checks

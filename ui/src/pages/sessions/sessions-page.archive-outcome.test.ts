@@ -7,6 +7,7 @@ import type {
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { createGatewayDeferredIntents } from "../../app/gateway-store.deferred-intents.ts";
 import { sessionRequest as mockSessionRequests } from "../../lib/sessions/hydration-family.test-support.ts";
 import type { SessionPatchResult } from "../../lib/sessions/patch.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
@@ -79,12 +80,137 @@ async function setup(initial = target, selection = false) {
   };
 }
 
+function attachDeferredOwner(fixture: Awaited<ReturnType<typeof setup>>) {
+  const { page, client, gateway } = fixture;
+  Object.assign(client, { recoveryScope: "page-archive", recoveryScopeReady: true });
+  const owner = createGatewayDeferredIntents({
+    snapshot: () => page.context.gateway.snapshot,
+    connectionRevision: () => 0,
+    isStopped: () => false,
+    publish: (patch) => gateway.emit(patch),
+  });
+  Object.assign(page.context.gateway, { defer: owner.defer });
+  onTestFinished(() => owner.discard());
+  return owner;
+}
+
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
 });
 
 describe("Sessions archive outcome lifetime", () => {
+  it.each(["archive", "unarchive", "delete"] as const)(
+    "queues offline page %s without issuing an RPC until reconnect",
+    async (action) => {
+      const initial = { ...target, pinned: false, archived: action === "unarchive" };
+      const fixture = await setup(initial);
+      const { page, gateway, request } = fixture;
+      const owner = attachDeferredOwner(fixture);
+      let serverRow: GatewaySessionRow | null = initial;
+      request.mockImplementation(
+        mockSessionRequests({
+          "sessions.list": () => sessionsResult(serverRow ? [serverRow] : []),
+          "sessions.patch": (params) => {
+            serverRow = { ...initial, ...(params as Partial<GatewaySessionRow>) };
+            return { ...patched, entry: serverRow };
+          },
+          "sessions.delete": () => {
+            serverRow = null;
+            return { ok: true, key: initial.key, deleted: true, archived: [] };
+          },
+        }),
+      );
+      const before = request.mock.calls.length;
+      gateway.emit({ phase: "reconnecting" });
+      if (action === "archive") {
+        await page.archive(initial);
+      } else if (action === "unarchive") {
+        await page.patchSession(initial.key, { archived: false }, undefined, initial.sessionId, {
+          sessionScope: true,
+        });
+      } else {
+        const modal = createModalDialogTestFixture();
+        onTestFinished(() => modal.cleanup());
+        const deletion = modal.track(page.deleteSessionFromMenu(initial));
+        const dialog = await waitForConfirmDialogActions();
+        answerConfirmDialog(dialog, "confirm");
+        await deletion;
+      }
+      expect(page.context.gateway.snapshot.deferredIntentCount).toBe(1);
+      expect(request.mock.calls).toHaveLength(before);
+      if (action === "archive") {
+        await page.forkSession(initial.key);
+        await expect(
+          page.patchSession(initial.key, { model: "unavailable-offline" }),
+        ).resolves.toMatchObject({
+          status: "failed",
+        });
+        expect(request.mock.calls).toHaveLength(before);
+        expect(page.context.gateway.snapshot.deferredIntentCount).toBe(1);
+      }
+      gateway.emit({ phase: "connected" });
+      await owner.flush();
+      const writes = request.mock.calls.filter(
+        ([method]) => method === "sessions.patch" || method === "sessions.delete",
+      );
+      expect(writes).toHaveLength(1);
+      expect(writes[0]?.[1]).toMatchObject({
+        key: initial.key,
+        expectedSessionId: initial.sessionId,
+      });
+      expect(serverRow).toEqual(
+        action === "delete" ? null : expect.objectContaining({ archived: action === "archive" }),
+      );
+    },
+  );
+
+  it("restores a personal pin when captured Undo joins other deferred work", async () => {
+    const initial = { ...target, pinned: false };
+    const fixture = await setup(initial);
+    const { page, gateway, pending, patches, undo } = fixture;
+    const owner = attachDeferredOwner(fixture);
+    const beforeArchive = createDeferred();
+    const afterArchive = createDeferred();
+    onTestFinished(() => {
+      beforeArchive.resolve();
+      afterArchive.resolve();
+    });
+    const pin = "session:" + target.key;
+    page.context.navigation.update({ sidebarEntries: [pin] });
+    gateway.emit({ phase: "reconnecting" });
+    owner.defer({ key: "before-archive", run: () => beforeArchive.promise });
+    gateway.emit({ phase: "connected" });
+    const draining = owner.flush();
+    await page.archive(initial);
+    owner.defer({ key: "after-archive", run: () => afterArchive.promise });
+    beforeArchive.resolve();
+    await fixture.started.promise;
+    pending.resolve(patched);
+    await waitForSolid(() => expect(undo()).not.toBeNull());
+    expect(page.context.navigation.snapshot.sidebarEntries).toEqual([]);
+    fixture.request.mockImplementation(
+      mockSessionRequests({
+        "sessions.list": () => sessionsResult([{ ...initial, archived: false }]),
+        "sessions.patch": () => ({
+          ...patched,
+          entry: { sessionId: initial.sessionId!, archived: false },
+        }),
+      }),
+    );
+    undo()!.click();
+    await vi.waitFor(() => expect(page.context.gateway.snapshot.deferredIntentCount).toBe(1));
+    expect(patches()).toHaveLength(1);
+    afterArchive.resolve();
+    await draining;
+    expect(patches()).toHaveLength(2);
+    expect(patches()[1]?.[1]).toMatchObject({
+      archived: false,
+      expectedSessionId: target.sessionId,
+    });
+    expect(page.context.navigation.snapshot.sidebarEntries).toEqual([pin]);
+  });
+
   it.each(
     ["rename", "archive", "restore"].flatMap((action) =>
       [false, true].map((replaced) => ({ action, replaced })),

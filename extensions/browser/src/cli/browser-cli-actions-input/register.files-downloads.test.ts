@@ -70,8 +70,9 @@ describe("browser action input file/download commands", () => {
   });
 
   it("accepts signed and zero-padded download timeouts", async () => {
-    await run("waitfordownload", "--timeout-ms", "+025000");
+    await run("waitfordownload", " file.txt ", "--timeout-ms", "+025000");
     expect(lastRequest()?.timeoutMs).toBe(30000);
+    expect(lastRequest()?.body).toMatchObject({ path: " file.txt " });
   });
 
   it("uses custom download timeouts as the inner wait plus outer slack", async () => {
@@ -80,12 +81,12 @@ describe("browser action input file/download commands", () => {
   });
 
   it("rejects conflicting dialog actions without arming the hook", async () => {
-    await run("dialog", "--accept", "--dismiss");
-    expect(gatewayMock).not.toHaveBeenCalled();
-    expect(String(browserCliRuntime.error.mock.calls.at(-1)?.[0])).toContain(
+    await expect(run("dialog", "--accept", "--dismiss")).rejects.toThrow(
       "Specify only one of --accept or --dismiss",
     );
-    expect(getBrowserCliRuntime().exit).toHaveBeenCalledWith(1);
+    expect(gatewayMock).not.toHaveBeenCalled();
+    expect(browserCliRuntime.error).not.toHaveBeenCalled();
+    expect(browserCliRuntime.exit).not.toHaveBeenCalled();
   });
 
   it("preserves an empty prompt response", async () => {

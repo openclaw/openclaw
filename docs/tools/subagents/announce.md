@@ -93,7 +93,9 @@ the input owner marks optional may finish silently; it does not by itself satisf
 an outstanding user reply.
 OpenClaw does not automatically send the child result, parent final, or
 generated media to a channel. The parent can still choose to send a message
-through its permitted tools.
+through its permitted tools. When the requester has no current conversation or
+delivery target, the private completion guidance tells it to record its final
+reply in the session for the requester; no messaging send is needed.
 
 If the parent called `sessions_yield` while waiting for private children, the
 yield hands the conversation back to it. When those children settle, the parent
@@ -162,9 +164,13 @@ If completion receipts for the same run arrive out of order, the receipt with
 the newer producer end time owns the reply. Equal end times retain the first
 accepted reply; a correction with a newer end time can replace it.
 
-OpenClaw preserves prompt-data escaping and stable order when it delivers several
-results together. Completion findings have a strict shared 160,000-character cap,
-including escaping and framing. Small answers stay intact; larger answers keep
+OpenClaw keeps each child result's own characters inside its prompt-data block, so
+a requester can quote it exactly: markup, entities, ampersands and tabs arrive as
+the child wrote them. Only a `<` that would open or close a data block, an
+OpenClaw prompt-region marker or an OpenClaw `<<<…>>>` delimiter is escaped as
+`&lt;`. Task titles stay fully escaped. Several results keep a stable order, and
+completion findings have a strict shared 160,000-character cap, including
+escaping and framing. Small answers stay intact; larger answers keep
 their beginning and an explicit truncation marker pointing to `sessions_history`
 with the child session key. `sessions_history` truncates text fields to 4,000
 characters; this pointer does not provide lossless retrieval of an omitted tail.

@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { deserialize, serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { collectSynchronousErrors } from "../../infra/error-graph-internal.js";
 import { decodeNativeWorkerFailure } from "../../infra/worker-native-error.js";
 import { createDeferredCore, type Deferred } from "../../shared/deferred.js";
 import { MAX_PENDING_BYTES, MAX_PENDING_MESSAGES } from "./ipc.js";
@@ -305,14 +306,9 @@ export class BrokerResourceClaims {
   fail(error: Error): void {
     this.failure ??= error;
     const failed = [...this.claims.values()].filter((claim) => this.rejectClaim(claim, error));
-    const callbackErrors: unknown[] = [];
-    for (const claim of failed) {
-      try {
-        claim.inContext(() => claim.callbacks.failed(error));
-      } catch (callbackError) {
-        callbackErrors.push(callbackError);
-      }
-    }
+    const callbackErrors = collectSynchronousErrors(failed, (claim) =>
+      claim.inContext(() => claim.callbacks.failed(error)),
+    );
     if (callbackErrors.length) {
       throw new AggregateError(callbackErrors, "Native resource failure callback failed");
     }

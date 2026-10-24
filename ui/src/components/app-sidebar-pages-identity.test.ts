@@ -78,6 +78,7 @@ async function fixture() {
     actions: [],
     accessories: [],
     widgets: [],
+    inlineViews: [],
     replacements: [],
   };
   const plugins = Object.assign(context.plugins, {

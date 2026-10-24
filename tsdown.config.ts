@@ -10,6 +10,7 @@ import {
   collectSourceCheckoutPluginBuildEntries,
   createBundledPluginBuildInventory,
 } from "./scripts/lib/bundled-plugin-build-entries.mjs";
+import { createFsSafeWindowsHelperAssetPlugin } from "./scripts/lib/fs-safe-windows-helper-asset.mts";
 import { createGatewayRunChunkMetadataPlugin } from "./scripts/lib/gateway-run-chunk-metadata.mts";
 import { createManagedHandoffBuildConfigs } from "./scripts/lib/managed-handoff-build-config.mts";
 import { createPackageRuntimeUrlBuildPlugin } from "./scripts/lib/package-runtime-url-build-plugin.mts";
@@ -53,7 +54,9 @@ import {
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
 } from "./scripts/lib/worker-deploy-build-plugin.mts";
 import { buildPackageDistEntriesFromExports } from "./scripts/lib/workspace-package-entries.mts";
+import { WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH } from "./src/shared/worker-bundle-hash.ts";
 
+type OutputOptions = Exclude<NonNullable<UserConfig["outputOptions"]>, Function>;
 type InputOptionsFactory = Extract<NonNullable<UserConfig["inputOptions"]>, Function>;
 type InputOptionsArg = InputOptionsFactory extends (
   options: infer Options,
@@ -264,7 +267,10 @@ function nodeBuildConfig(
   };
 }
 
-function workerDeployBuildConfig(entry: Record<string, string>, split = false): UserConfig {
+function workerDeployBuildConfig(
+  entry: Record<string, string>,
+  split: OutputOptions["codeSplitting"] = false,
+): UserConfig {
   return {
     name: TSDOWN_UNIFIED_CONFIG_GROUP,
     entry,
@@ -444,6 +450,9 @@ function shouldNeverBundleDeclarationDependency(id: string): boolean {
 
 function shouldAlwaysBundleDependency(id: string): boolean {
   return (
+    // Ship the repaired compression dependency to npm installs as well as source builds.
+    id === "tar" ||
+    id.startsWith("tar/") ||
     // Keep htmlparser2's decoder version intact instead of binding it to the root major.
     id === "entities/decode" ||
     id === "openclaw/plugin-sdk/ssrf-runtime-internal" ||
@@ -1032,7 +1041,31 @@ const configs: UserConfig[] = [
   }),
   workerDeployBuildConfig(
     { "worker/openclaw-state-read.worker": "src/worker/worker-deploy-state-read.ts" },
-    true,
+    {
+      // Keep lazy owners separate without capturing their shared dependencies.
+      groups: [
+        {
+          name: "state-read-handlers",
+          test: /(?:^|[\\/])src[\\/]state[\\/]openclaw-state-read-handlers\.ts$/u,
+          includeDependenciesRecursively: false,
+        },
+        {
+          name: "state-read-subagent-store",
+          test: /(?:^|[\\/])src[\\/]agents[\\/]subagents[\\/]registry[\\/]subagent-registry\.store\.worker\.ts$/u,
+          includeDependenciesRecursively: false,
+        },
+        {
+          name: "state-read-subagent-restore",
+          test: /(?:^|[\\/])src[\\/]agents[\\/]subagents[\\/]registry[\\/]subagent-registry\.store\.restore\.worker\.ts$/u,
+          includeDependenciesRecursively: false,
+        },
+        {
+          name: "state-read-transcript-export",
+          test: /(?:^|[\\/])src[\\/]transcripts[\\/]store-export\.worker\.ts$/u,
+          includeDependenciesRecursively: false,
+        },
+      ],
+    },
   ),
   workerDeployBuildConfig({
     "worker/worker-native-lifecycle.worker": "src/infra/worker-native-lifecycle.worker.ts",
@@ -1056,7 +1089,18 @@ const configs: UserConfig[] = [
   workerHelperBuildConfig({
     "worker/workspace-rsync-receiver": "src/worker/workspace-rsync-receiver.ts",
   }),
-  workerHelperBuildConfig({ "worker/github-exec-launcher": "src/agents/github-exec-launcher.ts" }),
+  {
+    ...workerHelperBuildConfig({
+      "worker/github-exec-launcher": "src/agents/github-exec-launcher.ts",
+    }),
+    // Credential reads need fs-safe's relocated metadata/helper, but no runtime state schemas.
+    plugins: [
+      createFsSafeWindowsHelperAssetPlugin(
+        process.cwd(),
+        `worker/${WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH}`,
+      ),
+    ],
+  },
   ...["service-child-relay", "service-child-group-anchor"].map((name) =>
     workerHelperBuildConfig(
       { [`worker/${name}`]: `src/process/supervisor/${name}.ts` },

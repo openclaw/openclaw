@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { renderStorageFailureSummary } from "../../agents/failover/assistant-request-failure-copy.js";
+import * as utilityCompletion from "../../agents/utility-completion.js";
 import { persistSessionTranscriptTurn } from "../../config/sessions/session-accessor.transcript-turn.js";
 import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import { createSessionActivitySummaries } from "../../gateway/session-activity-summaries.js";
@@ -79,6 +80,8 @@ it.for(["ready", "late", "abandoned"] as const)(
     const result = createDeferred<Awaited<ReturnType<typeof defaultCompleteModel>>>();
     const published = createDeferred();
     const scheduler = createTestGatewayScheduler();
+    using auth = vi.spyOn(utilityCompletion, "hasAvailableUtilityCompletionAuth");
+    auth.mockResolvedValue(true);
     const prepare = vi.spyOn(observerModel, "defaultPrepareModel").mockResolvedValue({
       config: cfg,
       authProfileId: undefined,
@@ -333,8 +336,10 @@ it.each(["publication-failure", "unknown-commit", "unknown-storage-commit"] as c
       );
       if (failure === "unknown-storage-commit") {
         expect(error).toHaveProperty("code", "outcome-unknown");
-        expect(renderStorageFailureSummary(classifyGatewayStorageFailure(error))).toBe(
-          "OpenClaw couldn't save your conversation because the disk is full. Free up space on the computer running OpenClaw before continuing.",
+        const storageOutcome = classifyGatewayStorageFailure(error);
+        expect(storageOutcome).toBe("session_actor_reconciliation");
+        expect(renderStorageFailureSummary(storageOutcome)).toMatch(
+          /check.*history.*before trying again/i,
         );
       }
       expect(
@@ -376,8 +381,10 @@ it("preserves storage guidance when queued activity loses its commit reply", asy
       publish,
     ).catch((caughtError: unknown) => caughtError);
     expect(error).toHaveProperty("code", "outcome-unknown");
-    expect(renderStorageFailureSummary(classifyGatewayStorageFailure(error))).toBe(
-      "OpenClaw couldn't save your conversation because the disk is full. Free up space on the computer running OpenClaw before continuing.",
+    const storageOutcome = classifyGatewayStorageFailure(error);
+    expect(storageOutcome).toBe("session_actor_reconciliation");
+    expect(renderStorageFailureSummary(storageOutcome)).toMatch(
+      /check.*history.*before trying again/i,
     );
     expect(observer.commands.filter((command) => command === "session.actor.patch")).toHaveLength(
       1,

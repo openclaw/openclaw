@@ -41,6 +41,12 @@ necessarily delete the provider's older cache entry before its normal expiry.
 
 ## Stable tools between turns
 
+Client-capability tool listing uses the session's recorded operator declaration.
+Internal wake and restart-recovery turns retain the same tool definitions and
+Code Mode catalog, including `screen`, without borrowing execution authority.
+The next operator declaration updates that session fact; current-turn execution
+gates and the live requesting-browser check still enforce calls.
+
 The `message` description and schema use the session's channel, bound account,
 and configured bindings, not the current turn's source. CLI, restart recovery, and subagent
 announcement turns in the same conversation keep identical definitions,
@@ -52,6 +58,10 @@ prompt prefix; supported in-history prompt updates append changes to the
 conversation. Reaction
 execution still requires the current prompt's live authority; an advertised
 action does not grant permission to execute it.
+
+Isolated settled-turn finalization uses a separate cache key scoped to the run.
+Its tool-free prompt and full transcript differ from the conversation request,
+so it does not replace the conversation's cache or history-diagnostic baseline.
 
 ## Keep replayed tool results stable
 

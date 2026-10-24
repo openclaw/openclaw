@@ -7,7 +7,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import { assertNoRetainedSessionSharingReads } from "../../config/sessions/session-accessor.sqlite-diagnostics.test-support.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { CliSessionBinding, SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { mintMcpLoopbackClientGrant as MintMcpLoopbackClientGrant } from "../../gateway/mcp-grant-store.js";
 import { handleMcpJsonRpc } from "../../gateway/mcp-http.handlers.js";
@@ -24,6 +24,7 @@ import {
   createTestMcpLoopbackClientGrant,
   createTestMcpLoopbackServerConfig,
 } from "../cli-runner.test-helpers.js";
+import { resolveCliSessionReuse } from "../cli-session.js";
 import * as subagentSpawn from "../subagents/spawn/subagent-spawn.js";
 import {
   expectReadWriteEditTools,
@@ -652,6 +653,100 @@ describe("restricted CLI tool preparation", () => {
     expect(nativeSkillsPlugin).not.toHaveBeenCalled();
   });
 
+  it("keeps the Claude session across Control UI turns and caller-less completion turns", async () => {
+    const { sessionTarget } = fixture.session;
+    const childSessionKey = "agent:main:subagent:surface-tools";
+    replaceSessionEntrySync(
+      { storePath: sessionTarget.storePath, sessionKey: childSessionKey },
+      {
+        sessionId: "surface-tools-child",
+        updatedAt: 1,
+        spawnedBy: sessionTarget.sessionKey,
+        spawnDepth: 1,
+        inheritedToolPolicyVersion: 1,
+        inheritedToolAllow: ["read", "screen", "show_widget", "suggest_task", "dismiss_task"],
+      },
+    );
+    const base = {
+      sessionKey: sessionTarget.sessionKey,
+      sessionId: sessionTarget.sessionId,
+      provider: "claude-cli",
+      model: "opus",
+      modelHasVision: false,
+      sourceReplyDeliveryMode: "automatic" as const,
+      config: {
+        session: { store: sessionTarget.storePath },
+        tools: { allow: ["read", "screen", "show_widget", "suggest_task", "dismiss_task"] },
+      },
+    };
+    const turns: { binding: CliSessionBinding; names: string[]; systemPrompt: string }[] = [];
+    for (const completion of [false, true, false]) {
+      const context = await fixture.prepare({
+        ...base,
+        ...(completion
+          ? {
+              trustedInternalHandoff: {
+                kind: "subagent-completion" as const,
+                sourceSessionKey: childSessionKey,
+                sourceSessionId: "surface-tools-child",
+                targetSessionKey: sessionTarget.sessionKey,
+                targetSessionId: sessionTarget.sessionId,
+                provider: "claude-cli",
+                model: "opus",
+              },
+              inputProvenance: {
+                kind: "inter_session" as const,
+                sourceTool: "subagent_announce",
+                sourceSessionKey: childSessionKey,
+              },
+            }
+          : {
+              clientCaps: ["ui-commands", "inline-widgets"],
+              taskSuggestionDeliveryMode: "gateway" as const,
+            }),
+      });
+      try {
+        turns.push({
+          binding: {
+            sessionId: "native-surface-session",
+            authEpoch: context.authEpoch,
+            authEpochVersion: context.authEpochVersion,
+            extraSystemPromptHash: context.extraSystemPromptHash,
+            messageToolPolicyHash: context.messageToolPolicyHash,
+            promptToolNamesHash: context.promptToolNamesHash,
+            cwdHash: context.cwdHash,
+            mcpConfigHash: context.preparedBackend.mcpConfigHash,
+            mcpResumeHash: context.preparedBackend.mcpResumeHash,
+          },
+          systemPrompt: context.systemPrompt,
+          names: [...(mintGrant.mock.lastCall?.[0]?.context.toolsAllow ?? [])].toSorted(),
+        });
+      } finally {
+        await context.preparedBackend.cleanup?.();
+      }
+    }
+    // The fixture really varies the caller surface: only these tools differ.
+    const removed = turns[0]!.names.filter((name) => !turns[1]!.names.includes(name));
+    const added = turns[1]!.names.filter((name) => !turns[0]!.names.includes(name));
+    expect(added).toEqual([]);
+    expect(removed.toSorted()).toEqual(["dismiss_task", "screen", "show_widget", "suggest_task"]);
+    expect(turns[0]!.binding.promptToolNamesHash).toBeTruthy();
+    // The prompt still tracks the surface, so a warm process restarts with the current catalog.
+    expect(turns[1]!.systemPrompt).not.toBe(turns[0]!.systemPrompt);
+    expect(turns[2]!.systemPrompt).toBe(turns[0]!.systemPrompt);
+    // Each later turn resumes the session the previous turn stored instead of starting over.
+    for (const [index, turn] of turns.slice(1).entries()) {
+      const { authEpochVersion, ...current } = turn.binding;
+      expect(
+        resolveCliSessionReuse({
+          ...current,
+          authEpochVersion: authEpochVersion!,
+          binding: turns[index]!.binding,
+        }),
+      ).toMatchObject({ sessionId: "native-surface-session" });
+    }
+  });
+
   it.each([false, true])(
     "keeps bootstrap file access accurate with mediated write=%s",
     async (writeAllowed) => {
@@ -811,12 +906,12 @@ describe("restricted CLI tool preparation", () => {
           [
             "write",
             { path: deniedPath, content: "must not execute" },
-            "write is outside the authority this completion turn carries from its requester. Do not retry write.",
+            "write is not available during a child-completion turn because it is outside the authority carried from its requester. Do not retry write.",
           ],
           [
             "gateway",
             { action: "config.get" },
-            "gateway needs the owner's authority, and this turn was not started by the owner. Do not retry gateway.",
+            "gateway is not available during a child-completion turn because it is outside the authority carried from its requester. Do not retry gateway.",
           ],
           [
             "intent",

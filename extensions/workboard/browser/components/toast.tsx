@@ -1,5 +1,5 @@
 /** @jsxImportSource @solidjs/web */
-import { createEffect, createSignal, onCleanup, onSettled, Show } from "solid-js";
+import { createEffect, createSignal, onSettled, Show } from "solid-js";
 import { t } from "../i18n/index.ts";
 import { icons } from "./icons.tsx";
 import "./toast.css";
@@ -128,8 +128,10 @@ export function WorkboardToast(props: WorkboardToastProps) {
       }
     },
   );
-  onSettled(resume);
-  onCleanup(pause);
+  onSettled(() => {
+    resume();
+    return pause;
+  });
 
   return (
     <openclaw-workboard-toast

@@ -1,5 +1,6 @@
 import { Type, type Static } from "typebox";
-import { lazyCompile } from "../protocol-validator.js";
+import * as Checks from "../compiled/protocol.generated/schema-worker-gateway-tool.js";
+import { createProtocolValidator } from "../protocol-validator.js";
 import { closedObject } from "./closed-object.js";
 import {
   isWorkerFrameWithinBudget,
@@ -180,13 +181,18 @@ export const WorkerGatewayToolUpdateFrameSchema = closedObject({
   }),
 });
 
-export const validateWorkerGatewayToolInvokeParams = lazyCompile(
+export const validateWorkerGatewayToolInvokeParams = createProtocolValidator(
   WorkerGatewayToolInvokeParamsSchema,
+  Checks.isWorkerGatewayToolInvokeParams,
 );
-export const validateWorkerGatewayToolCancelParams = lazyCompile(
+export const validateWorkerGatewayToolCancelParams = createProtocolValidator(
   WorkerGatewayToolCancelParamsSchema,
+  Checks.isWorkerGatewayToolCancelParams,
 );
-export const validateWorkerGatewayToolUpdateFrame = lazyCompile(WorkerGatewayToolUpdateFrameSchema);
+export const validateWorkerGatewayToolUpdateFrame = createProtocolValidator(
+  WorkerGatewayToolUpdateFrameSchema,
+  Checks.isWorkerGatewayToolUpdateFrame,
+);
 
 export type WorkerToolSurface = Static<typeof WorkerToolSurfaceSchema>;
 export type WorkerGatewayToolInvokeParams = Static<typeof WorkerGatewayToolInvokeParamsSchema>;

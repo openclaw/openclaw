@@ -1,4 +1,5 @@
 import * as fs from "node:fs/promises";
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import { runRealGatewayUiTests } from "../../scripts/test-ui-real-gateway.mts";
@@ -85,69 +86,40 @@ it("spends one slot per initial branch and waits for both joins before qualified
   ).toBe(true);
 });
 
-// The Linux CI runner uses strict process-tree ownership, which is POSIX-only.
-it.skipIf(process.platform === "win32").each([false, true])(
-  "joins both real owners on interruption (cleanup failure=%s)",
+// Native signal/tree cleanup is owned by managed-child-process.test.ts.
+it.each([false, true])(
+  "joins both command results on interruption (cleanup failure=%s)",
   async (failCleanup) => {
-    const actual = await vi.importActual<
-      typeof import("../../scripts/lib/managed-child-process.mts")
-    >("../../scripts/lib/managed-child-process.mts");
-    const initialHandlers = process.listeners("SIGTERM");
+    const serial = createDeferred<number>();
+    const desktop = createDeferred<number>();
     const cleanupError = new Error("cleanup failed");
-    const owners: Promise<number>[] = [];
-    let started = 0;
-    let joined = 0;
-    managed.mockImplementation((command) => {
-      const owner = actual
-        .runManagedCommand({
-          ...command,
-          bin: process.execPath,
-          args: ["-e", "setInterval(() => {}, 1000)"],
-          stdio: "ignore",
-          timeoutMs: 5_000,
-          onReady() {
-            started++;
-            if (started === 2) {
-              // Exercise the real owner without invoking Vitest's own signal handler.
-              const handler = process
-                .listeners("SIGTERM")
-                .find((entry) => !initialHandlers.includes(entry));
-              if (!handler) {
-                throw new Error("Managed signal handler was not installed");
-              }
-              handler("SIGTERM");
-            }
-          },
-        })
-        .then((code) => {
-          if (failCleanup && project(command.args) === "ui-e2e-serial") {
-            throw cleanupError;
-          }
-          return code;
-        })
-        .finally(() => joined++);
-      owners.push(owner);
-      return owner;
-    });
-    try {
-      const running = runRealGatewayUiTests([], env);
-      if (failCleanup) {
-        const failure: unknown = await running.catch((error: unknown) => error);
-        expect(failure).toBeInstanceOf(AggregateError);
-        if (failure instanceof AggregateError) {
-          expect(failure.errors).toEqual([cleanupError]);
-        }
-      } else {
-        await expect(running).resolves.toBe(143);
-      }
-    } finally {
-      await Promise.allSettled(owners);
+    managed.mockImplementation(({ args }) =>
+      project(args) === "ui-e2e-serial" ? serial.promise : desktop.promise,
+    );
+    const settled = vi.fn();
+    const running = runRealGatewayUiTests([], env);
+    const observed = running.then(settled, settled);
+    expect(managed).toHaveBeenCalledTimes(2);
+    managed.mock.calls[0]![0].onSignal!("SIGTERM");
+    if (failCleanup) {
+      serial.reject(cleanupError);
+    } else {
+      serial.resolve(143);
     }
-    expect(started).toBe(2);
-    expect(joined).toBe(2);
+    await setImmediate();
+    expect(settled).not.toHaveBeenCalled();
+    desktop.resolve(143);
+    if (failCleanup) {
+      await expect(running).rejects.toMatchObject({
+        name: "AggregateError",
+        errors: [cleanupError],
+      });
+    } else {
+      await expect(running).resolves.toBe(143);
+    }
+    await observed;
     expect(managed).toHaveBeenCalledTimes(2);
     expect(fs.readFile).not.toHaveBeenCalled();
-    expect(process.listeners("SIGTERM")).toEqual(initialHandlers);
   },
 );
 

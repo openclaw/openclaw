@@ -10,6 +10,7 @@ import { pathForSession } from "../app-session-path-builder.ts";
 import type { SessionPathTarget } from "../app-session-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
+import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   areUiSessionKeysEquivalent,
   buildAgentMainSessionKey,
@@ -398,10 +399,17 @@ export class SessionLinkTitler {
       return cached.promise;
     }
     const client = this.client;
+    if (
+      !client ||
+      !canCallGatewayMethod(
+        this.context && { ...this.context.gateway.snapshot, client },
+        "controlUi.sessionPreview",
+        "operator.read",
+      )
+    ) {
+      return Promise.resolve(target);
+    }
     const load = async () => {
-      if (!client) {
-        throw new Error("Session title requires a connected Gateway");
-      }
       const value = await client.request<ControlUiSessionPreview>("controlUi.sessionPreview", {
         sessionKey: target.sessionKey,
       });

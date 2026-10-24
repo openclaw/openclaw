@@ -21,7 +21,7 @@ import { PROXY_ATTRIBUTION_REQUIRED_REASON } from "./ingress-attribution.js";
  * Apply baseline security headers that are safe for all response types (API JSON,
  * HTML pages, static assets, SSE streams). Headers that restrict framing or set a
  * Content-Security-Policy are intentionally omitted here because some handlers
- * (canvas host, A2UI) serve content that may be loaded inside frames.
+ * (canvas host) serve content that may be loaded inside frames.
  */
 export function setDefaultSecurityHeaders(
   res: ServerResponse,

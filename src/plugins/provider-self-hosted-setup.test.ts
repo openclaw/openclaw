@@ -163,23 +163,36 @@ function cancelTrackedResponse(init?: ResponseInit): {
   };
 }
 
+function queueResponse(response: Response, finalUrl: string) {
+  const release = vi.fn(async () => undefined);
+  fetchWithSsrFGuardMock.mockResolvedValueOnce({ response, finalUrl, release });
+  return release;
+}
+
+function queueJsonResponse(body: unknown, finalUrl: string) {
+  return queueResponse(new Response(JSON.stringify(body), { status: 200 }), finalUrl);
+}
+
+function discoverModels(
+  label: string,
+  baseUrl: string,
+  options: Omit<
+    Parameters<typeof discoverOpenAICompatibleLocalModels>[0],
+    "label" | "baseUrl" | "env"
+  > = {},
+) {
+  return discoverOpenAICompatibleLocalModels({ baseUrl, label, env: {}, ...options });
+}
+
 async function discoverSingleCatalogModel(
   row: Record<string, unknown>,
   options?: { contextWindow?: number },
 ) {
-  const release = vi.fn(async () => undefined);
-  fetchWithSsrFGuardMock.mockResolvedValueOnce({
-    response: new Response(JSON.stringify({ data: [row] }), { status: 200 }),
-    finalUrl: "https://provider.example/v1/models",
-    release,
-  });
+  const release = queueJsonResponse({ data: [row] }, "https://provider.example/v1/models");
 
-  const models = await discoverOpenAICompatibleLocalModels({
-    baseUrl: "https://provider.example/v1",
-    label: "custom provider",
+  const models = await discoverModels("custom provider", "https://provider.example/v1", {
     contextWindow: options?.contextWindow,
     discoverRuntimeContext: false,
-    env: {},
   });
 
   expect(release).toHaveBeenCalledOnce();
@@ -188,30 +201,22 @@ async function discoverSingleCatalogModel(
 
 describe("discoverOpenAICompatibleLocalModels", () => {
   it("retains valid models when a provider catalog contains malformed entries", async () => {
-    const release = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(
-        JSON.stringify({
-          data: [
-            { id: "valid-a", meta: { n_ctx_train: 32_768 } },
-            null,
-            7,
-            "invalid",
-            [],
-            { id: "valid-b", meta: { n_ctx_train: 65_536 } },
-          ],
-        }),
-        { status: 200 },
-      ),
-      finalUrl: "http://127.0.0.1:8000/v1/models",
-      release,
-    });
+    const release = queueJsonResponse(
+      {
+        data: [
+          { id: "valid-a", meta: { n_ctx_train: 32_768 } },
+          null,
+          7,
+          "invalid",
+          [],
+          { id: "valid-b", meta: { n_ctx_train: 65_536 } },
+        ],
+      },
+      "http://127.0.0.1:8000/v1/models",
+    );
 
-    const models = await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://127.0.0.1:8000/v1",
-      label: "vLLM",
+    const models = await discoverModels("vLLM", "http://127.0.0.1:8000/v1", {
       discoverRuntimeContext: false,
-      env: {},
     });
 
     expect(models).toMatchObject([
@@ -224,20 +229,10 @@ describe("discoverOpenAICompatibleLocalModels", () => {
 
   it("rejects a non-array model catalog", async () => {
     const data = {};
-    const release = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ data }), { status: 200 }),
-      finalUrl: "http://127.0.0.1:8000/v1/models",
-      release,
-    });
+    const release = queueJsonResponse({ data }, "http://127.0.0.1:8000/v1/models");
 
     await expect(
-      discoverOpenAICompatibleLocalModels({
-        baseUrl: "http://127.0.0.1:8000/v1",
-        label: "vLLM",
-        discoverRuntimeContext: false,
-        env: {},
-      }),
+      discoverModels("vLLM", "http://127.0.0.1:8000/v1", { discoverRuntimeContext: false }),
     ).resolves.toEqual([]);
     expect(loggerWarnMock).toHaveBeenCalledWith(
       expect.stringContaining("vLLM discovery: malformed JSON response"),
@@ -274,11 +269,7 @@ describe("discoverOpenAICompatibleLocalModels", () => {
       };
     });
 
-    const models = await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://127.0.0.1:8080/v1",
-      label: "llama.cpp",
-      env: {},
-    });
+    const models = await discoverModels("llama.cpp", "http://127.0.0.1:8080/v1");
 
     expect(models).toHaveLength(201);
     expect(models[0]).toMatchObject({ id: "local/model-0", contextTokens: 16_384 });
@@ -291,22 +282,14 @@ describe("discoverOpenAICompatibleLocalModels", () => {
   });
 
   it("discovers a large non-llama.cpp catalog without probing per-model llama.cpp props", async () => {
-    const release = vi.fn(async () => undefined);
     const data = Array.from({ length: 500 }, (_, index) => ({
       id: `Qwen/model-${index}`,
       meta: { n_ctx_train: 32_768 },
     }));
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ data }), { status: 200 }),
-      finalUrl: "http://127.0.0.1:8000/v1/models",
-      release,
-    });
+    const release = queueJsonResponse({ data }, "http://127.0.0.1:8000/v1/models");
 
-    const models = await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://127.0.0.1:8000/v1",
-      label: "vLLM",
+    const models = await discoverModels("vLLM", "http://127.0.0.1:8000/v1", {
       discoverRuntimeContext: false,
-      env: {},
     });
 
     expect(models).toHaveLength(500);
@@ -317,18 +300,12 @@ describe("discoverOpenAICompatibleLocalModels", () => {
   });
 
   it("labels malformed discovery JSON in the warning", async () => {
-    const release = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response("not valid json {", { status: 200 }),
-      finalUrl: "http://127.0.0.1:8080/v1/models",
-      release,
-    });
+    const release = queueResponse(
+      new Response("not valid json {", { status: 200 }),
+      "http://127.0.0.1:8080/v1/models",
+    );
 
-    const models = await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://127.0.0.1:8080/v1",
-      label: "local llama.cpp",
-      env: {},
-    });
+    const models = await discoverModels("local llama.cpp", "http://127.0.0.1:8080/v1");
 
     expect(models).toEqual([]);
     expect(loggerWarnMock).toHaveBeenCalledWith(
@@ -338,23 +315,17 @@ describe("discoverOpenAICompatibleLocalModels", () => {
   });
 
   it("logs a warning when discovery JSON contains invalid UTF-8 bytes", async () => {
-    const release = vi.fn(async () => undefined);
     const body = new Uint8Array([
       ...new TextEncoder().encode('{"data":[{"id":"qwen3-'),
       0xff,
       ...new TextEncoder().encode('"}]}'),
     ]);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(body, { status: 200 }),
-      finalUrl: "http://127.0.0.1:8080/v1/models",
-      release,
-    });
+    const release = queueResponse(
+      new Response(body, { status: 200 }),
+      "http://127.0.0.1:8080/v1/models",
+    );
 
-    const models = await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://127.0.0.1:8080/v1",
-      label: "local llama.cpp",
-      env: {},
-    });
+    const models = await discoverModels("local llama.cpp", "http://127.0.0.1:8080/v1");
 
     expect(models).toEqual([]);
     expect(loggerWarnMock).toHaveBeenCalledWith(
@@ -364,27 +335,15 @@ describe("discoverOpenAICompatibleLocalModels", () => {
   });
 
   it("uses guarded fetch pinned to the configured self-hosted provider", async () => {
-    const release = vi.fn(async () => undefined);
-    const propsRelease = vi.fn(async () => undefined);
     const propsResponse = cancelTrackedResponse({ status: 404 });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ data: [{ id: "Qwen/Qwen3-32B" }] }), {
-        status: 200,
-      }),
-      finalUrl: "http://127.0.0.1:8000/v1/models",
-      release,
-    });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: propsResponse.response,
-      finalUrl: "http://127.0.0.1:8000/props",
-      release: propsRelease,
-    });
+    const release = queueJsonResponse(
+      { data: [{ id: "Qwen/Qwen3-32B" }] },
+      "http://127.0.0.1:8000/v1/models",
+    );
+    const propsRelease = queueResponse(propsResponse.response, "http://127.0.0.1:8000/props");
 
-    const models = await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://127.0.0.1:8000/v1/",
+    const models = await discoverModels("vLLM", "http://127.0.0.1:8000/v1/", {
       apiKey: "self-hosted-test-key",
-      label: "vLLM",
-      env: {},
     });
 
     expect(models).toEqual([expectedModel("Qwen/Qwen3-32B")]);
@@ -463,19 +422,11 @@ describe("discoverOpenAICompatibleLocalModels", () => {
   );
 
   it("cancels model discovery error bodies before falling back", async () => {
-    const release = vi.fn(async () => undefined);
     const response = cancelTrackedResponse({ status: 503, statusText: "Service Unavailable" });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: response.response,
-      finalUrl: "http://127.0.0.1:8000/v1/models",
-      release,
-    });
+    const release = queueResponse(response.response, "http://127.0.0.1:8000/v1/models");
 
-    const models = await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://127.0.0.1:8000/v1/",
+    const models = await discoverModels("vLLM", "http://127.0.0.1:8000/v1/", {
       apiKey: "self-hosted-test-key",
-      label: "vLLM",
-      env: {},
     });
 
     expect(models).toEqual([]);
@@ -484,36 +435,23 @@ describe("discoverOpenAICompatibleLocalModels", () => {
   });
 
   it("uses llama.cpp nested /props n_ctx as the runtime context cap", async () => {
-    const modelsRelease = vi.fn(async () => undefined);
-    const propsRelease = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(
-        JSON.stringify({
-          data: [
-            {
-              id: "qwen3.6-mxfp4-moe",
-              meta: { n_ctx_train: 262_144 },
-            },
-          ],
-        }),
-        { status: 200 },
-      ),
-      finalUrl: "http://127.0.0.1:8080/v1/models",
-      release: modelsRelease,
-    });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ default_generation_settings: { n_ctx: 65_536 } }), {
-        status: 200,
-      }),
-      finalUrl: "http://127.0.0.1:8080/props",
-      release: propsRelease,
-    });
+    const modelsRelease = queueJsonResponse(
+      {
+        data: [
+          {
+            id: "qwen3.6-mxfp4-moe",
+            meta: { n_ctx_train: 262_144 },
+          },
+        ],
+      },
+      "http://127.0.0.1:8080/v1/models",
+    );
+    const propsRelease = queueJsonResponse(
+      { default_generation_settings: { n_ctx: 65_536 } },
+      "http://127.0.0.1:8080/props",
+    );
 
-    const models = await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://127.0.0.1:8080/v1",
-      label: "llama.cpp",
-      env: {},
-    });
+    const models = await discoverModels("llama.cpp", "http://127.0.0.1:8080/v1");
 
     expect(models).toEqual([
       expectedModel("qwen3.6-mxfp4-moe", { contextWindow: 262_144, contextTokens: 65_536 }),
@@ -532,48 +470,31 @@ describe("discoverOpenAICompatibleLocalModels", () => {
   });
 
   it("scopes llama.cpp /props runtime caps to each discovered model without autoloading", async () => {
-    const modelsRelease = vi.fn(async () => undefined);
-    const firstPropsRelease = vi.fn(async () => undefined);
-    const secondPropsRelease = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(
-        JSON.stringify({
-          data: [
-            {
-              id: "qwen/router-a",
-              meta: { n_ctx_train: 262_144 },
-            },
-            {
-              id: "qwen/router-b",
-              meta: { n_ctx_train: 131_072 },
-            },
-          ],
-        }),
-        { status: 200 },
-      ),
-      finalUrl: "http://127.0.0.1:8080/v1/models",
-      release: modelsRelease,
-    });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ default_generation_settings: { n_ctx: 65_536 } }), {
-        status: 200,
-      }),
-      finalUrl: "http://127.0.0.1:8080/props?model=qwen%2Frouter-a&autoload=false",
-      release: firstPropsRelease,
-    });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ default_generation_settings: { n_ctx: 32_768 } }), {
-        status: 200,
-      }),
-      finalUrl: "http://127.0.0.1:8080/props?model=qwen%2Frouter-b&autoload=false",
-      release: secondPropsRelease,
-    });
+    const modelsRelease = queueJsonResponse(
+      {
+        data: [
+          {
+            id: "qwen/router-a",
+            meta: { n_ctx_train: 262_144 },
+          },
+          {
+            id: "qwen/router-b",
+            meta: { n_ctx_train: 131_072 },
+          },
+        ],
+      },
+      "http://127.0.0.1:8080/v1/models",
+    );
+    const firstPropsRelease = queueJsonResponse(
+      { default_generation_settings: { n_ctx: 65_536 } },
+      "http://127.0.0.1:8080/props?model=qwen%2Frouter-a&autoload=false",
+    );
+    const secondPropsRelease = queueJsonResponse(
+      { default_generation_settings: { n_ctx: 32_768 } },
+      "http://127.0.0.1:8080/props?model=qwen%2Frouter-b&autoload=false",
+    );
 
-    const models = await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://127.0.0.1:8080/v1",
-      label: "llama.cpp",
-      env: {},
-    });
+    const models = await discoverModels("llama.cpp", "http://127.0.0.1:8080/v1");
 
     expect(models).toEqual([
       expectedModel("qwen/router-a", { contextWindow: 262_144, contextTokens: 65_536 }),
@@ -603,34 +524,20 @@ describe("discoverOpenAICompatibleLocalModels", () => {
   });
 
   it("keeps top-level llama.cpp /props n_ctx as a compatibility fallback", async () => {
-    const modelsRelease = vi.fn(async () => undefined);
-    const propsRelease = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(
-        JSON.stringify({
-          data: [
-            {
-              id: "qwen3.6-mxfp4-moe",
-              meta: { n_ctx_train: 262_144 },
-            },
-          ],
-        }),
-        { status: 200 },
-      ),
-      finalUrl: "http://127.0.0.1:8080/v1/models",
-      release: modelsRelease,
-    });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ n_ctx: 65_536 }), { status: 200 }),
-      finalUrl: "http://127.0.0.1:8080/props",
-      release: propsRelease,
-    });
+    const modelsRelease = queueJsonResponse(
+      {
+        data: [
+          {
+            id: "qwen3.6-mxfp4-moe",
+            meta: { n_ctx_train: 262_144 },
+          },
+        ],
+      },
+      "http://127.0.0.1:8080/v1/models",
+    );
+    const propsRelease = queueJsonResponse({ n_ctx: 65_536 }, "http://127.0.0.1:8080/props");
 
-    const models = await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://127.0.0.1:8080/v1",
-      label: "llama.cpp",
-      env: {},
-    });
+    const models = await discoverModels("llama.cpp", "http://127.0.0.1:8080/v1");
 
     expect(models).toEqual([
       expectedModel("qwen3.6-mxfp4-moe", { contextWindow: 262_144, contextTokens: 65_536 }),
@@ -640,23 +547,15 @@ describe("discoverOpenAICompatibleLocalModels", () => {
   });
 
   it("preserves explicit configured context windows ahead of llama.cpp /props", async () => {
-    const release = vi.fn(async () => undefined);
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(
-        JSON.stringify({
-          data: [{ id: "qwen3.6-mxfp4-moe", meta: { n_ctx_train: 262_144 } }],
-        }),
-        { status: 200 },
-      ),
-      finalUrl: "http://127.0.0.1:8080/v1/models",
-      release,
-    });
+    const release = queueJsonResponse(
+      {
+        data: [{ id: "qwen3.6-mxfp4-moe", meta: { n_ctx_train: 262_144 } }],
+      },
+      "http://127.0.0.1:8080/v1/models",
+    );
 
-    const models = await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://127.0.0.1:8080/v1",
-      label: "llama.cpp",
+    const models = await discoverModels("llama.cpp", "http://127.0.0.1:8080/v1", {
       contextWindow: 65_536,
-      env: {},
     });
 
     expect(models).toEqual([expectedModel("qwen3.6-mxfp4-moe", { contextWindow: 65_536 })]);
@@ -666,19 +565,13 @@ describe("discoverOpenAICompatibleLocalModels", () => {
   });
 
   it("bounds an unbounded /models discovery stream instead of buffering it", async () => {
-    const release = vi.fn(async () => undefined);
     const oversized = createUnboundedJsonStream();
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(oversized.body, { status: 200 }),
-      finalUrl: "http://127.0.0.1:8000/v1/models",
-      release,
-    });
+    const release = queueResponse(
+      new Response(oversized.body, { status: 200 }),
+      "http://127.0.0.1:8000/v1/models",
+    );
 
-    const models = await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://127.0.0.1:8000/v1",
-      label: "vLLM",
-      env: {},
-    });
+    const models = await discoverModels("vLLM", "http://127.0.0.1:8000/v1");
 
     // The reader cancels the body once the byte cap is exceeded; without the
     // cap the stream would never finish and the discovery would buffer it all.
@@ -691,27 +584,17 @@ describe("discoverOpenAICompatibleLocalModels", () => {
   });
 
   it("bounds an unbounded llama.cpp /props discovery stream instead of buffering it", async () => {
-    const modelsRelease = vi.fn(async () => undefined);
-    const propsRelease = vi.fn(async () => undefined);
     const oversized = createUnboundedJsonStream();
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(JSON.stringify({ data: [{ id: "qwen3.6-mxfp4-moe" }] }), {
-        status: 200,
-      }),
-      finalUrl: "http://127.0.0.1:8080/v1/models",
-      release: modelsRelease,
-    });
-    fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(oversized.body, { status: 200 }),
-      finalUrl: "http://127.0.0.1:8080/props",
-      release: propsRelease,
-    });
+    const modelsRelease = queueJsonResponse(
+      { data: [{ id: "qwen3.6-mxfp4-moe" }] },
+      "http://127.0.0.1:8080/v1/models",
+    );
+    const propsRelease = queueResponse(
+      new Response(oversized.body, { status: 200 }),
+      "http://127.0.0.1:8080/props",
+    );
 
-    const models = await discoverOpenAICompatibleLocalModels({
-      baseUrl: "http://127.0.0.1:8080/v1",
-      label: "llama.cpp",
-      env: {},
-    });
+    const models = await discoverModels("llama.cpp", "http://127.0.0.1:8080/v1");
 
     // /props overflow is swallowed so discovery still succeeds, but the body is
     // capped: the runtime context token probe is skipped, not OOM'd.

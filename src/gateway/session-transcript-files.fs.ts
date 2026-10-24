@@ -277,7 +277,6 @@ export function archiveSessionTranscriptsDetailed(opts: {
   sessionId: string;
   storePath: string | undefined;
   sessionFile?: string;
-  agentId?: string;
   reason: "reset" | "deleted";
   /**
    * When true, only archive files resolved under the session store directory.
@@ -299,7 +298,6 @@ export function archiveSessionTranscriptsDetailed(opts: {
     opts.sessionId,
     opts.storePath,
     opts.sessionFile,
-    opts.agentId,
   )) {
     const candidatePath = canonicalizePathForComparison(candidate);
     if (storeDir) {

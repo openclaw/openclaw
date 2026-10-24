@@ -3,6 +3,7 @@ import type {
   postJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import { afterEach, assert, expect, it, vi } from "vitest";
+import { createProxyRequestModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 import { buildBytePlusVideoGenerationProvider } from "./video-generation-provider.js";
 
 const { postMock, pollMock } = vi.hoisted(() => ({
@@ -33,21 +34,7 @@ it("preserves configured task headers and proxy through submission and polling",
       provider: "byteplus",
       model: "seedance-1-0-pro-250528",
       prompt: "a synthetic lobster",
-      cfg: {
-        models: {
-          providers: {
-            byteplus: {
-              baseUrl: "https://relay.example.test",
-              models: [],
-              request: {
-                headers: { "X-Relay": "synthetic-route" },
-                proxy: { mode: "explicit-proxy", url: "http://proxy.example:8080" },
-                allowPrivateNetwork: true,
-              },
-            },
-          },
-        },
-      },
+      cfg: createProxyRequestModelProviderConfig("byteplus"),
     }),
   ).rejects.toBe(intercepted);
 

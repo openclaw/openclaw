@@ -229,7 +229,6 @@
     "dist-runtime/",
     // Intentional negative-test corpora contain parser and lint violations by contract.
     "test/fixtures/oxlint-boundary-guards/**",
-    "**/a2ui.bundle.js",
     "extensions/diffs/assets/viewer-runtime.js",
     "extensions/diffs-language-pack/assets/viewer-runtime.js",
     "node_modules/",
@@ -252,10 +251,12 @@
         "ui/**/*.tsx",
         "ui/src/lib/reactive/**/*.ts",
         "ui/src/components/solid/**/*.ts",
-        "ui/src/test-helpers/**/*.ts"
+        "ui/src/test-helpers/**/*.ts",
+        "extensions/*/browser/**/*.tsx",
+        "extensions/*/src/**/*.tsx"
       ],
       "jsPlugins": ["./tools/solid-lint/index.mjs"],
-      // Solid 2 rendering and helper scopes; plain TypeScript domain owners are not components.
+      // Component analysis stays scoped to renderers and explicitly reactive helpers.
       "rules": {
         "solid/jsx-no-duplicate-props": "error",
         "solid/jsx-no-undef": "error",
@@ -277,11 +278,6 @@
         "solid/prefer-show": "off",
         "solid/no-proxy-apis": "off",
         "solid/prefer-classlist": "off",
-        "solid/removed-api": "error",
-        "solid/no-single-arg-create-effect": "error",
-        "solid/no-store-mutation-outside-setter": "error",
-        "solid/no-write-in-pure-computation": "error",
-        "solid/no-unused-signal": "warn",
         "solid/no-accessor-as-prop": "error",
         "solid/no-boolean-enumerated-attribute": "error",
         "solid/prefer-structured-class": "warn",
@@ -289,6 +285,22 @@
         "solid/require-async-server-function": "error",
         "solid/no-invalid-server-capture": "error",
         "solid/no-browser-globals-in-server-function": "error"
+      }
+    },
+    {
+      "files": [
+        "ui/**/*.{ts,tsx}",
+        "extensions/*/browser/**/*.{ts,tsx}",
+        "extensions/*/src/**/*.tsx"
+      ],
+      "jsPlugins": ["./tools/solid-lint/index.mjs"],
+      // Primitive contracts apply to domain helpers too, without treating props-named data as components.
+      "rules": {
+        "solid/removed-api": "error",
+        "solid/no-single-arg-create-effect": "error",
+        "solid/no-store-mutation-outside-setter": "error",
+        "solid/no-write-in-pure-computation": "error",
+        "solid/no-unused-signal": "warn"
       }
     },
     {
@@ -353,9 +365,12 @@
       }
     },
     {
-      "files": ["src/cli/cli-process-diagnostics.test-support.cjs"],
+      "files": [
+        "src/cli/cli-process-diagnostics.test-support.cjs",
+        "scripts/perf/async-context-probe.cjs"
+      ],
       "rules": {
-        // The saved emitter is always invoked with the caller's receiver via Reflect.apply.
+        // Saved native methods always receive the original caller's receiver.
         // CJS semantic discovery varies by lint target set; an inline disable can appear unused.
         "typescript/unbound-method": "off"
       }

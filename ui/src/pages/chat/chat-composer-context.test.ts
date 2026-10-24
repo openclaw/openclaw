@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { contextBudgetStatusFixture } from "../../../../src/config/sessions/context-budget.test-support.js";
 import type {
@@ -7,8 +8,10 @@ import type {
   ModelAuthStatusProfile,
   ModelAuthStatusProvider,
 } from "../../api/types.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { renderComposerFixture, resetComposerFixture } from "./chat-composer.test-support.ts";
+import { ContextNotice } from "./components/chat-composer-context.tsx";
 
 type ComposerOverrides = Parameters<typeof renderComposerFixture>[0];
 
@@ -48,6 +51,47 @@ afterEach(async () => {
 });
 
 describe("renderChatComposer context usage", () => {
+  it("reads provider costs only while the usage popover is open", () => {
+    let costReads = 0;
+    const message = (output: number) => ({
+      role: "assistant",
+      provider: "example",
+      get cost() {
+        costReads += 1;
+        return { output };
+      },
+    });
+    const [messages, setMessages] = createSignal([message(0.01)]);
+    const view = mountSolid(() =>
+      createComponent(ContextNotice, {
+        session: sessionRow({ totalTokens: 1_000, contextTokens: 200_000 }),
+        get messages() {
+          return messages();
+        },
+      }),
+    );
+    flush();
+    const toggle = () => {
+      view.container.querySelector<HTMLElement>(".context-usage summary")!.click();
+      flush();
+    };
+    try {
+      expect(costReads).toBe(0);
+      toggle();
+      expect(view.container.textContent).toContain("$0.01");
+      expect(costReads).toBe(1);
+      toggle();
+      setMessages([message(0.02)]);
+      flush();
+      expect(costReads).toBe(1);
+      toggle();
+      expect(view.container.textContent).toContain("$0.02");
+      expect(costReads).toBe(2);
+    } finally {
+      view.unmount();
+    }
+  });
+
   it("uses the last-run prompt budget with fresh usage", () => {
     const container = renderComposer({
       selectedSession: sessionRow({

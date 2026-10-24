@@ -17,7 +17,8 @@ import type { ChatTranscriptPendingScrollOffset } from "./chat-transcript-sessio
 export class TranscriptOffsetState {
   pendingScrollOffset: ChatTranscriptPendingScrollOffset | null = null;
   scrollCommand:
-    | { behavior: ScrollBehavior; target: "end" | "index" }
+    | { behavior: ScrollBehavior; target: "end"; offset?: number }
+    | { behavior: ScrollBehavior; target: "index" }
     | { behavior: ScrollBehavior; target: "message"; messageId: string }
     | null = null;
   touching = false;
@@ -96,7 +97,24 @@ export function scrollTranscriptOffset(
 ): void {
   const element = instance.scrollElement;
   const before = element?.scrollTop ?? 0;
-  elementScroll(offset, options, instance);
+  const command = state.scrollCommand;
+  // An ACK can remove wrapped delivery metadata during a smooth send. Keep a
+  // shrinking endpoint smooth instead of taking virtual-core's instant final approach.
+  const shrinkingSmoothEnd =
+    command?.target === "end" &&
+    command.behavior === "smooth" &&
+    options.behavior === "auto" &&
+    command.offset !== undefined &&
+    offset < command.offset &&
+    offset > before;
+  if (command?.target === "end" && options.behavior !== undefined) {
+    command.offset = offset;
+  }
+  elementScroll(
+    offset,
+    shrinkingSmoothEnd ? { ...options, behavior: "smooth" } : options,
+    instance,
+  );
   // TanStack omits behavior for measurement, anchor sync, and compensation retries.
   // Explicit commands carry their resolved behavior.
   state.recordProgrammaticScroll?.(before, element?.scrollTop ?? 0, options.behavior === undefined);

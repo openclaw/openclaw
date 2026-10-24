@@ -1,6 +1,50 @@
 {
   "entries": [
     {
+      "name": "@openclaw/abliteration-provider",
+      "description": "OpenClaw Abliteration provider plugin.",
+      "source": "official",
+      "kind": "provider",
+      "openclaw": {
+        "plugin": {
+          "id": "abliteration",
+          "label": "Abliteration"
+        },
+        "providers": [
+          {
+            "id": "abliteration",
+            "name": "Abliteration",
+            "docs": "/providers/abliteration",
+            "categories": ["cloud", "llm"],
+            "envVars": ["ABLITERATION_API_KEY", "ABLIT_KEY"],
+            "authChoices": [
+              {
+                "method": "api-key",
+                "choiceId": "abliteration-api-key",
+                "appGuidedSecret": true,
+                "choiceLabel": "Abliteration API key",
+                "choiceHint": "OpenAI-compatible abliterated open-weight models",
+                "groupId": "abliteration",
+                "groupLabel": "Abliteration",
+                "groupHint": "OpenAI-compatible abliterated open-weight models",
+                "optionKey": "abliterationApiKey",
+                "cliFlag": "--abliteration-api-key",
+                "cliOption": "--abliteration-api-key <key>",
+                "cliDescription": "Abliteration API key",
+                "onboardingScopes": ["text-inference"]
+              }
+            ]
+          }
+        ],
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/abliteration-provider",
+          "npmSpec": "@openclaw/abliteration-provider",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.10.6"
+        }
+      }
+    },
+    {
       "name": "@openclaw/amazon-bedrock-provider",
       "description": "OpenClaw Amazon Bedrock provider plugin",
       "source": "official",

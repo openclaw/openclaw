@@ -6,6 +6,7 @@ import type {
   Model,
 } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { wrapKimiProviderStream } from "./stream.js";
 
@@ -123,14 +124,7 @@ describe("kimi tool-call markup wrapper", () => {
       api: KIMI_MODEL.api,
       provider: KIMI_MODEL.provider,
       model: KIMI_MODEL.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsageFixture(),
       timestamp: 1,
       content: [{ type: "text", text: KIMI_TOOL_TEXT }],
       stopReason: "stop",
@@ -285,6 +279,15 @@ describe("kimi tool-call markup wrapper", () => {
     expect(getCapturedPayload()).toEqual({
       thinking: { type: "disabled" },
       output_config: { format: { type: "json_schema" } },
+    });
+  });
+
+  it.each(["k3.1-pro", "k3.1-pro-highspeed"])("keeps %s thinking on for session off", (modelId) => {
+    const { getCapturedPayload } = captureKimiPayload({ modelId, thinkingLevel: "off" });
+
+    expect(getCapturedPayload()).toEqual({
+      thinking: { type: "adaptive", display: "summarized" },
+      output_config: { effort: "high" },
     });
   });
 

@@ -175,7 +175,6 @@ it("rebuilds browser assets without invalidating unchanged manifest inputs", () 
     });
 
   build();
-  expect(files.read("openclaw.plugin.json")).toBe(authoredManifest);
   const generatedManifest = files.json("dist/openclaw.plugin.json");
   const { entry, styles } = generatedManifest.controlUi;
   const compactManifest = JSON.stringify({

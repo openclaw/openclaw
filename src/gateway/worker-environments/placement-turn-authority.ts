@@ -1,4 +1,5 @@
 import { attachErrorDiagnostic } from "../../infra/error-diagnostics.js";
+import { formatErrorStackWithMessage } from "../../infra/errors.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
@@ -205,7 +206,7 @@ function capturePlacementObservation(pathname: string, sessionId?: string) {
       : `Session ${sessionId} placement authority changed`;
   const changed = () => {
     const error = new Error(changedMessage);
-    return attachErrorDiagnostic(error, error.stack ?? changedMessage);
+    return attachErrorDiagnostic(error, formatErrorStackWithMessage(error));
   };
   const assertUsable = () => {
     context.admission.assertCurrent();
@@ -629,13 +630,12 @@ export function publishPlacementTurnClaimCleared(
   db: EngineConnection,
   sessionId: string,
   previousState?: WorkerSessionTurnClaimFacts["state"] | null,
-  retired?: true,
 ): void {
   stageChange(db, {
     kind: "claim",
     sessionId,
     localOnly: previousState === null || previousState === "local",
-    retired,
+    retired: true,
   });
 }
 

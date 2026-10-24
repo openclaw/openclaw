@@ -124,6 +124,7 @@ export async function resolveImageRuntime(
           config: params.cfg ?? {},
           ...(runtimeParams.workspaceDir ? { workspaceDir: runtimeParams.workspaceDir } : {}),
           loadRuntimePlugins: true,
+          runtimePluginPurpose: "isolated-completion",
         },
         // The request already chose a model; full inventory discovery must stay outside setup.
         {

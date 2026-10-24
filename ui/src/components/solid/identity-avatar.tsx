@@ -178,6 +178,7 @@ function SystemAgentAvatar(props: {
           src={inferControlUiPublicAssetPath("favicon.svg")}
           alt={props.name ?? ""}
           aria-hidden={props.name ? undefined : "true"}
+          decoding="async"
         />
       }
     >

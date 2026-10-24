@@ -1,5 +1,5 @@
-import { createServer } from "node:http";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   acquireQaCredentialLease,
@@ -79,11 +79,13 @@ function retryClock() {
   };
 }
 
-function startHeartbeat(heartbeat: () => Promise<void>, retryDelaysMs?: number[]) {
-  return startQaCredentialLeaseHeartbeat(
-    { source: "convex", kind: "telegram", heartbeatIntervalMs: 50, heartbeat },
-    { intervalMs: 50, retryDelaysMs },
-  );
+function startHeartbeat(heartbeat: () => Promise<void>) {
+  return startQaCredentialLeaseHeartbeat({
+    source: "convex",
+    kind: "telegram",
+    heartbeatIntervalMs: 50,
+    heartbeat,
+  });
 }
 
 function jsonResponse(payload: unknown, status = 200) {
@@ -109,66 +111,6 @@ function fetchInit(fetchImpl: FetchMock, index = 0): RequestInit {
     throw new Error(`expected fetch call ${index} init`);
   }
   return init;
-}
-
-async function startStreamingFailureBroker() {
-  const chunkBytes = 64 * 1024;
-  const totalBytes = 4 * 1024 * 1024;
-  let bytesWritten = 0;
-  let requestCount = 0;
-  const closed = Promise.withResolvers<void>();
-
-  const server = createServer((_req, res) => {
-    requestCount += 1;
-    res.writeHead(500, { "content-type": "text/plain" });
-    const interval = setInterval(() => {
-      if (bytesWritten >= totalBytes || res.destroyed) {
-        clearInterval(interval);
-        if (!res.destroyed) {
-          res.end();
-        }
-        return;
-      }
-      const nextBytes = Math.min(chunkBytes, totalBytes - bytesWritten);
-      bytesWritten += nextBytes;
-      res.write("x".repeat(nextBytes));
-    }, 1);
-    res.on("close", () => {
-      clearInterval(interval);
-      closed.resolve();
-    });
-  });
-
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected streaming broker address");
-  }
-  return {
-    closePromise: closed.promise,
-    getBytesWritten: () => bytesWritten,
-    getRequestCount: () => requestCount,
-    totalBytes,
-    url: `http://127.0.0.1:${address.port}`,
-    stop: async () => {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-          } else {
-            resolve();
-          }
-        });
-      });
-    },
-  };
 }
 
 describe("credential lease runtime", () => {
@@ -293,24 +235,49 @@ describe("credential lease runtime", () => {
   });
 
   it("cancels a streaming convex broker failure body after the response cap", async () => {
-    const broker = await startStreamingFailureBroker();
-    try {
-      await expect(
-        acquireMaintainer(
-          {},
-          {
-            OPENCLAW_QA_CONVEX_SITE_URL: broker.url,
-            OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1",
-          },
-        ),
-      ).rejects.toThrow("Convex credential broker: text response exceeds 1048576 bytes");
+    const chunkBytes = 64 * 1024;
+    const totalBytes = 4 * 1024 * 1024;
+    let bytesWritten = 0;
+    let requestCount = 0;
+    const closed = Promise.withResolvers<void>();
 
-      await broker.closePromise;
-      expect(broker.getRequestCount()).toBe(1);
-      expect(broker.getBytesWritten()).toBeLessThan(broker.totalBytes);
-    } finally {
-      await broker.stop();
-    }
+    await withServer(
+      (_req, res) => {
+        requestCount += 1;
+        res.writeHead(500, { "content-type": "text/plain" });
+        const interval = setInterval(() => {
+          if (bytesWritten >= totalBytes || res.destroyed) {
+            clearInterval(interval);
+            if (!res.destroyed) {
+              res.end();
+            }
+            return;
+          }
+          const nextBytes = Math.min(chunkBytes, totalBytes - bytesWritten);
+          bytesWritten += nextBytes;
+          res.write("x".repeat(nextBytes));
+        }, 1);
+        res.on("close", () => {
+          clearInterval(interval);
+          closed.resolve();
+        });
+      },
+      async (baseUrl) => {
+        await expect(
+          acquireMaintainer(
+            {},
+            {
+              OPENCLAW_QA_CONVEX_SITE_URL: baseUrl,
+              OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1",
+            },
+          ),
+        ).rejects.toThrow("Convex credential broker: text response exceeds 1048576 bytes");
+
+        await closed.promise;
+        expect(requestCount).toBe(1);
+        expect(bytesWritten).toBeLessThan(totalBytes);
+      },
+    );
   });
 
   it("hydrates chunked convex credential payloads after acquire", async () => {
@@ -488,13 +455,13 @@ describe("credential lease runtime", () => {
         new Error("fetch failed | Connect Timeout Error | UND_ERR_CONNECT_TIMEOUT"),
       )
       .mockResolvedValueOnce(undefined);
-    const heartbeat = startHeartbeat(heartbeatRequest, [10]);
+    const heartbeat = startHeartbeat(heartbeatRequest);
 
     await vi.advanceTimersByTimeAsync(50);
     expect(heartbeatRequest).toHaveBeenCalledTimes(1);
     expect(heartbeat.getFailure()).toBeNull();
 
-    await vi.advanceTimersByTimeAsync(10);
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(heartbeatRequest).toHaveBeenCalledTimes(2);
     expect(heartbeat.getFailure()).toBeNull();
     await heartbeat.stop();
@@ -505,10 +472,10 @@ describe("credential lease runtime", () => {
     const heartbeatRequest = vi.fn(async () => {
       throw new Error("fetch failed | ETIMEDOUT");
     });
-    const heartbeat = startHeartbeat(heartbeatRequest, [10, 20]);
+    const heartbeat = startHeartbeat(heartbeatRequest);
 
-    await vi.advanceTimersByTimeAsync(80);
-    expect(heartbeatRequest).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(50 + 1_000 + 3_000 + 5_000);
+    expect(heartbeatRequest).toHaveBeenCalledTimes(4);
     expect(() => heartbeat.throwIfFailed()).toThrow("ETIMEDOUT");
     await heartbeat.stop();
   });

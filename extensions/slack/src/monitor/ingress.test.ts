@@ -13,18 +13,16 @@ import type {
   ChannelIngressMonitorLifecycle,
   ChannelIngressQueue,
 } from "openclaw/plugin-sdk/channel-outbound";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { PluginJsonValue } from "openclaw/plugin-sdk/plugin-entry";
-import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { peekSystemEventEntries } from "openclaw/plugin-sdk/system-event-runtime";
 import { resetSystemEventsForTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installSlackTestRuntime } from "../test-runtime.test-support.js";
-import { createSlackMonitorContext } from "./context.js";
 import { registerSlackMemberEvents } from "./events/members.js";
 import { createSlackDurableIngress, resolveSlackIngressTurnLifecycle } from "./ingress.js";
 import { claimSlackMessageDispatchReplay } from "./message-dispatch-dedupe.js";
+import { createMonitorTestContext } from "./monitor-context.test-support.js";
 
 type SlackIngressQueue = NonNullable<Parameters<typeof createSlackDurableIngress>[0]["queue"]>;
 type SlackIngressPayload = Parameters<SlackIngressQueue["enqueue"]>[1];
@@ -174,47 +172,24 @@ function attachBoltMemberIngress(params: {
         })),
     );
   }
-  const ctx = createSlackMonitorContext({
-    cfg: {} as OpenClawConfig,
-    accountId: "default",
-    botToken: "xoxb-test",
+  const ctx = createMonitorTestContext({
+    cfg: {},
     app,
-    runtime: {} as RuntimeEnv,
-    botUserId: "U_BOT",
-    botId: "B_BOT",
-    identityHealth: { lifecycle: "ready", lastError: null },
     teamId: "T_TEST",
     apiAppId: "A_TEST",
     installationIdentity: { kind: "workspace", teamId: "T_TEST" },
-    historyLimit: 0,
-    dmHistoryLimit: 0,
-    sessionScope: "per-sender",
-    mainKey: "main",
-    dmEnabled: true,
-    dmPolicy: "open",
-    allowFrom: [],
     allowNameMatching: true,
     groupDmEnabled: true,
-    groupDmChannels: [],
-    defaultRequireMention: true,
     channelsConfig: { C_TEST: { users: ["alice"], enabled: true } },
-    channelsConfigKeys: ["C_TEST"],
     groupPolicy: "open",
     useAccessGroups: false,
-    reactionMode: "off",
-    reactionAllowlist: [],
-    replyToMode: "off",
     slashCommand: {
       enabled: false,
       name: "openclaw",
       sessionPrefix: "slack:slash",
       ephemeral: true,
     },
-    textLimit: 4000,
-    typingReaction: "",
     mediaMaxBytes: 1,
-    threadHistoryScope: "thread",
-    threadInheritParent: false,
   });
   // This Bolt retry fixture starts after policy resolution, with the explicit policy above.
   ctx.readRuntimeContext = async () => ctx;

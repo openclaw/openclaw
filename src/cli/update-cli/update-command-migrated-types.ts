@@ -41,10 +41,10 @@ export type MigratedUpdateFinalizationInput = Partial<UpdateTimeoutHandoff> & {
     FinishUpdateParams,
     "packageTransaction" | "databaseBackup" | "preManagedServiceStop" | "opts"
   > & {
-    opts: Omit<FinishUpdateParams["opts"], "run" | "recovery"> & {
+    opts: Omit<FinishUpdateParams["opts"], "run" | "recovery" | "onResult"> & {
       run?: Omit<
         NonNullable<FinishUpdateParams["opts"]["run"]>,
-        "requesterAuthority" | "executorFence" | "sourceArtifactLock"
+        "requesterAuthority" | "executorFence" | "sourceArtifactLock" | "deadline"
       > & {
         requesterAuthority?: Pick<UpdateRequesterAuthority, "requester">;
       };

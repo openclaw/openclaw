@@ -52,6 +52,7 @@ import { registerRequesterAutomationCustodyTests } from "./subagent-registry.req
 import {
   createRequesterCompletionClient,
   prepareNestedRequesterReplay,
+  requesterCompletionRecoveryCases,
 } from "./subagent-registry.requester-completion.fixture.test-support.js";
 import { resetSubagentRegistryForTests, testing } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
@@ -66,29 +67,7 @@ export function registerRequesterCompletionCustodyTests({
   registration: (runId: string, overrides?: Partial<Registration>) => Registration;
   updateRun: (runId: string, update: (draft: SubagentRunRecord) => void) => Promise<void>;
 }) {
-  it.each([
-    "current",
-    "owner current",
-    "owner nested password",
-    "owner nested committed replay",
-    "owner nested adopted replay",
-    "owner rotated",
-    "current with child",
-    "owner current with child",
-    "owner revoked with child",
-    "overloaded then current",
-    "overloaded then revoked",
-    "overloaded then retired",
-    "unavailable policy then current",
-    "revoked after restore",
-    "missing source",
-    "missing source with unrelated requester claim",
-    "missing parent source",
-    "mismatched source",
-    "revoked grant",
-    "mixed sources",
-    "replaced requester",
-  ] as const)(
+  it.each(requesterCompletionRecoveryCases)(
     "revalidates %s for a cold-loaded interrupted child batch without widening the parent",
     async (recovery) => {
       const owner = recovery.startsWith("owner ");
@@ -461,7 +440,7 @@ export function registerRequesterCompletionCustodyTests({
             await expect(prepareRecovery()).rejects.toThrow("awaits its current Gateway binding");
             expect(loadSubagentRegistryFromSqlite()).toEqual(unbound);
           }
-          await activateSubagentRegistry(() => replacement);
+          await activateSubagentRegistry(() => replacement).settled;
           await replay?.();
           if (terminalRecovery) {
             if (missingSource) {
@@ -470,7 +449,11 @@ export function registerRequesterCompletionCustodyTests({
             } else {
               await expect(prepareRecovery()).resolves.toEqual({
                 status: "unrestorable",
-                reason: expect.stringMatching(/original operator/),
+                reason: expect.stringMatching(
+                  recovery === "revoked grant"
+                    ? /Gateway access is not active/
+                    : /original operator/,
+                ),
               });
             }
             const settled = loadSubagentRegistryFromSqlite();
@@ -495,7 +478,7 @@ export function registerRequesterCompletionCustodyTests({
             const nextGateway = createContext([], () => cfg);
             nextGateway.resolveGatewayContext = () => nextGateway;
             nextGateway.recoveryRuntime = createMockGatewayRecoveryRuntime();
-            await activateSubagentRegistry(() => nextGateway);
+            await activateSubagentRegistry(() => nextGateway).settled;
             await expect(
               prepareRequesterSettleWakeRecoverySource({
                 ...recoveryTarget,

@@ -7,6 +7,7 @@ import {
 } from "../../../plugins/config-state.js";
 import type { PluginManifestRecord } from "../../../plugins/manifest-registry.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
+import { createPluginManifestRecordFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import {
   collectStalePluginConfigWarnings,
   maybeRepairStalePluginConfig,
@@ -26,18 +27,12 @@ vi.mock("../../../plugins/installed-plugin-index-records.js", async (importOrigi
 }));
 
 function manifest(id: string): PluginManifestRecord {
-  return {
+  return createPluginManifestRecordFixture({
     id,
-    channels: [],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    origin: "bundled",
     rootDir: `/plugins/${id}`,
     source: `/plugins/${id}`,
     manifestPath: `/plugins/${id}/openclaw.plugin.json`,
-  };
+  });
 }
 
 function enabledEntries(...ids: string[]) {
@@ -250,6 +245,79 @@ describe("doctor stale plugin config helpers", () => {
       "- plugins.slots: reset 2 stale plugin slots (memory: acpx -> memory-core, contextEngine: missing-engine -> legacy)",
     ]);
     expect(result.config.plugins?.slots).toBeUndefined();
+  });
+
+  it("retains canonical policy for an installed mixed-case manifest owner", () => {
+    vi.mocked(manifestRegistry.loadPluginManifestRegistryCore).mockReturnValue({
+      plugins: [manifest("MiXeD-owner")],
+      diagnostics: [],
+    });
+    const cfg: OpenClawConfig = {
+      plugins: {
+        allow: ["mixed-owner"],
+        deny: ["mixed-owner"],
+        entries: { "mixed-owner": { enabled: true, config: { retained: true } } },
+      },
+    };
+    expect(scanStalePluginConfig(cfg)).toEqual([]);
+    expect(maybeRepairStalePluginConfig(cfg).config).toEqual(cfg);
+  });
+
+  it.each(["context-engine", ["memory", "context-engine"]] as const)(
+    "preserves declared engine slots without treating engine IDs as plugin policy IDs (%s)",
+    (kind) => {
+      vi.mocked(manifestRegistry.loadPluginManifestRegistryCore).mockReturnValue({
+        plugins: [
+          {
+            ...manifest("vendor-plugin"),
+            kind: typeof kind === "string" ? kind : [...kind],
+            contextEngineIds: ["canonical-engine"],
+          },
+        ],
+        diagnostics: [],
+      });
+      const cfg: OpenClawConfig = {
+        plugins: {
+          allow: ["vendor-plugin", "canonical-engine"],
+          deny: ["canonical-engine"],
+          entries: { "vendor-plugin": { enabled: false }, "canonical-engine": { enabled: true } },
+          slots: { memory: "canonical-engine", contextEngine: "canonical-engine" },
+        },
+      };
+      expect(scanStalePluginConfig(cfg).map((entry) => entry.pathLabel)).toEqual([
+        "plugins.allow",
+        "plugins.deny",
+        "plugins.entries.canonical-engine",
+        "plugins.slots.memory",
+      ]);
+      const result = maybeRepairStalePluginConfig(cfg);
+      expect(result.config.plugins).toEqual({
+        allow: ["vendor-plugin"],
+        deny: [],
+        entries: { "vendor-plugin": { enabled: false } },
+        slots: { contextEngine: "canonical-engine" },
+      });
+    },
+  );
+
+  it("does not retain engine slots using stale install records or non-engine declarations", () => {
+    vi.mocked(manifestRegistry.loadPluginManifestRegistryCore).mockReturnValue({
+      plugins: [
+        { ...manifest("other-plugin"), kind: "memory", contextEngineIds: ["canonical-engine"] },
+      ],
+      diagnostics: [],
+    });
+    installedPluginIndexMocks.loadInstalledPluginIndexInstallRecordsSync.mockReturnValue({
+      "missing-owner": {
+        source: "path",
+        contextEngineIdsByPlugin: { "missing-owner": ["canonical-engine"] },
+      },
+    });
+    const result = maybeRepairStalePluginConfig({
+      plugins: { slots: { contextEngine: "canonical-engine" } },
+    });
+    expect(result.config.plugins?.slots).toBeUndefined();
+    expect(result.changes).toHaveLength(1);
   });
 
   it("does not preserve codex outside policy surfaces", () => {

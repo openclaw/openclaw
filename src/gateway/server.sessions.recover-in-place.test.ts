@@ -321,13 +321,20 @@ function expectContinuation(
   });
 }
 
-test.for(["builtin", "native", "pending"] as const)(
+test.for(["builtin", "native", "pending", "pending-child"] as const)(
   "operator resume keeps session identity and admits one durable continuation (%s)",
   async (scenario, { signal }) => {
     const native = scenario === "native";
     const current = await fixture(`${scenario}-resume`, native ? "codex" : undefined, true);
-    if (scenario === "pending") {
+    if (scenario === "pending" || scenario === "pending-child") {
       await patchSessionEntryCore(current.scope, () => ({
+        ...(scenario === "pending-child"
+          ? {
+              spawnDepth: 1,
+              spawnedBy: "agent:requester:discord:group:synthetic",
+              parentSessionKey: "agent:requester:discord:group:synthetic",
+            }
+          : {}),
         status: "interrupted",
         abortedLastRun: true,
         mainRestartRecovery: {

@@ -866,7 +866,7 @@ describe("SQLite active transcript event projection", () => {
     const liveWrite = await persistMessages([
       makeMessage("m100001", "m100000", "toolResult", "live-write"),
     ]);
-    expect(liveWrite.appendedCount).toBe(1);
+    expect(liveWrite.messages.filter((m) => m.appended)).toHaveLength(1);
     order.push("live-write");
     await reconciliation;
     expect(order).toEqual(["event-loop-responsive", "live-write", "reconciled"]);

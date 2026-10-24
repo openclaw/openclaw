@@ -29,10 +29,6 @@ export type OpenClawCliInvocation = Readonly<{
   env?: Record<string, string>;
 }>;
 
-function resolveTsxImport(packageRoot: string): string {
-  return pathToFileURL(requireFromHere.resolve("tsx", { paths: [packageRoot] })).href;
-}
-
 /** Keep parent runtime flags, pin its known TSX preload, and leave debugger ownership behind. */
 export function filterOpenClawChildExecArgv(
   execArgv: readonly string[],
@@ -53,7 +49,7 @@ export function filterOpenClawChildExecArgv(
     const bareTsx = arg === "tsx" && execArgv[index - 1] === "--import";
     filtered.push(
       sourceRoot && (bareTsx || arg === "--import=tsx")
-        ? `${bareTsx ? "" : "--import="}${resolveTsxImport(sourceRoot)}`
+        ? `${bareTsx ? "" : "--import="}${pathToFileURL(requireFromHere.resolve("tsx", { paths: [sourceRoot] })).href}`
         : arg,
     );
   }

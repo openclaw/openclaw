@@ -316,6 +316,20 @@ function createArgBackendConfig(
   return { command, args, output, input: "arg", sessionMode: "existing" };
 }
 
+function createNativeArgMcpBackend(): CliBackendPlugin & { pluginId: string } {
+  return {
+    id: "native-cli",
+    pluginId: "native-plugin",
+    bundleMcp: true,
+    bundleMcpMode: "claude-config-file",
+    config: {
+      ...createArgBackendConfig("native-cli"),
+      systemPromptArg: "--system-prompt",
+      systemPromptWhen: "first",
+    },
+  };
+}
+
 type CliContextBudgetTestCase = {
   name: string;
   provider: string;
@@ -1759,7 +1773,7 @@ describe("prepareCliRunContext", () => {
       try {
         const preparation = withPluginRuntimeRegistryScope(custody.registry, () =>
           fixture.prepare({
-            config: { plugins: { slots: { contextEngine: engineId } } },
+            config: { plugins: { allow: ["fixture"], slots: { contextEngine: engineId } } },
             assertCurrent: () => {
               if (!current) {
                 throw new Error("CLI owner retired after engine acquisition");
@@ -1851,7 +1865,7 @@ describe("prepareCliRunContext", () => {
             model: "test-model",
             runId: "cli-custody-history-failure",
             timeoutMs: 1_000,
-            config: { plugins: { slots: { contextEngine: engineId } } },
+            config: { plugins: { allow: ["fixture"], slots: { contextEngine: engineId } } },
           }),
         ),
       ).rejects.toBe(historyFailure);
@@ -1901,7 +1915,7 @@ describe("prepareCliRunContext", () => {
         "plugin:fixture",
       );
       try {
-        const config = { plugins: { slots: { contextEngine: engineId } } };
+        const config = { plugins: { allow: ["fixture"], slots: { contextEngine: engineId } } };
         const context = await work.run(() =>
           withPluginRuntimeRegistryScope(custody.registry, async () => {
             if (ownership === "borrowed") {
@@ -2283,17 +2297,7 @@ describe("prepareCliRunContext", () => {
       getActiveMcpLoopbackRuntime,
       resolveMcpLoopbackScopedTools,
     });
-    setRawCliBackendForPrepareTest({
-      id: "native-cli",
-      pluginId: "native-plugin",
-      bundleMcp: true,
-      bundleMcpMode: "claude-config-file",
-      config: {
-        ...createArgBackendConfig("native-cli"),
-        systemPromptArg: "--system-prompt",
-        systemPromptWhen: "first",
-      },
-    });
+    setRawCliBackendForPrepareTest(createNativeArgMcpBackend());
     const cliSessionBindingFacts = {
       extraSystemPromptStatic: "group:telegram:group:message_tool_only",
       sourceReplyDeliveryMode: "message_tool_only" as const,
@@ -2489,17 +2493,7 @@ describe("prepareCliRunContext", () => {
       revokeMcpLoopbackClientGrant,
       resolveMcpLoopbackScopedTools,
     });
-    setRawCliBackendForPrepareTest({
-      id: "native-cli",
-      pluginId: "native-plugin",
-      bundleMcp: true,
-      bundleMcpMode: "claude-config-file",
-      config: {
-        ...createArgBackendConfig("native-cli"),
-        systemPromptArg: "--system-prompt",
-        systemPromptWhen: "first",
-      },
-    });
+    setRawCliBackendForPrepareTest(createNativeArgMcpBackend());
     const baselineContext = await fixture.prepare({
       sessionKey: "main",
       agentId: "worker",
@@ -2611,17 +2605,7 @@ describe("prepareCliRunContext", () => {
       createMcpLoopbackServerConfig,
       resolveMcpLoopbackScopedTools,
     });
-    setRawCliBackendForPrepareTest({
-      id: "native-cli",
-      pluginId: "native-plugin",
-      bundleMcp: true,
-      bundleMcpMode: "claude-config-file",
-      config: {
-        ...createArgBackendConfig("native-cli"),
-        systemPromptArg: "--system-prompt",
-        systemPromptWhen: "first",
-      },
-    });
+    setRawCliBackendForPrepareTest(createNativeArgMcpBackend());
     await expect(
       fixture.prepare({
         sessionKey: "agent:main:test",

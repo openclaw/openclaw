@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 294961,
-  "reason": "Startup leaf icons, update classification, and lazy English: matched b5b24cf15c2 build 310773 to 294961 B gzip with 7 JS and 1 CSS request.",
-  "updatedAt": "2026-10-23"
+  "startupJsGzipBytes": 281671,
+  "reason": "Bound Cron run-history selector traversal: matched c64f3109 startup 281744 to 281671 B gzip, style CPU median down 15.25% desktop and 17.09% mobile; 7 JS and 1 CSS request unchanged.",
+  "updatedAt": "2026-10-24"
 }

@@ -555,6 +555,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/acpx/**"
+"extensions: abliteration":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/abliteration/**"
+          - "docs/providers/abliteration.md"
 "extensions: arcee":
   - changed-files:
       - any-glob-to-any-file:
@@ -765,6 +770,12 @@
           - "extensions/radius/**"
           - "docs/providers/radius.md"
           - "docs/plugins/reference/radius.md"
+"extensions: requesty":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/requesty/**"
+          - "docs/providers/requesty.md"
+          - "docs/plugins/reference/requesty.md"
 "extensions: runway":
   - changed-files:
       - any-glob-to-any-file:

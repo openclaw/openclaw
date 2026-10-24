@@ -764,7 +764,7 @@ server.listen(port, "127.0.0.1", () => {
       const bundledPluginFixture: OpenClawConfig = withBundledFixture
         ? {
             plugins: {
-              allow: ["fixture-required", "fixture-defaults"],
+              allow: ["fixture-required", "fixture-defaults", "memory-core"],
               entries: {
                 "fixture-required": {
                   config: { token: "synthetic-only", scheduler: { enabled: false } },
@@ -806,6 +806,7 @@ server.listen(port, "127.0.0.1", () => {
       expect(config.channels).toEqual(bundledPluginFixture.channels);
       expect(config.tools).toEqual(bundledPluginFixture.tools);
       expect(config.plugins?.entries?.browser).toEqual({ enabled: false });
+      expect(config.plugins?.entries?.["memory-core"]).toEqual({ enabled: withBundledFixture });
       expect(
         testing.parseOptions(["--case", "teamBoot"]).cases[0]?.bundledPluginFixture,
       ).toBeUndefined();

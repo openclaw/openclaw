@@ -6,6 +6,7 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { runWithTrackedCancellation } from "../shared/async-work-resources.js";
+import { bindPluginInlineViewInvocation } from "./inline-view.js";
 import { prepareMemoryAudienceRead } from "./memory-audience.js";
 import { resolveMemoryCapabilityRegistration } from "./memory-state.js";
 import { capturePluginLifecycleAuthority } from "./registry-lifecycle.js";
@@ -79,7 +80,7 @@ export function bindPluginToolCallbacks(
         await racePromiseWithAbortSignal(pending, signal);
       }
       // Cancellation retains this context after the instance call has settled.
-      return withPluginRuntimePluginScope(
+      const result = await withPluginRuntimePluginScope(
         { pluginId: entry.pluginId, pluginSource: entry.source },
         () =>
           invoke(() => {
@@ -89,6 +90,7 @@ export function bindPluginToolCallbacks(
           }),
         registry,
       );
+      return bindPluginInlineViewInvocation(result, entry.pluginId, tool.name, toolCallId);
     },
     ...(prepare
       ? { prepareArguments: (args: unknown) => invoke(() => prepare.call(tool, args)) }

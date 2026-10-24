@@ -48,7 +48,6 @@ describe("createCacheTrace", () => {
     writerMocks.getQueuedFileWriter.mockReturnValue({
       filePath: "memory",
       write: (line) => lines.push(line),
-      flush: async () => undefined,
     });
     const trace = createCacheTrace({
       cfg: { diagnostics: { cacheTrace: { enabled: true } } },

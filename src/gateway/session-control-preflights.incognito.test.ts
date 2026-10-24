@@ -109,7 +109,6 @@ it("reports private activity recaps unavailable without acquiring a source or sc
     beginCompletion: () => undefined,
     ensure,
     handleEvent() {},
-    handleTranscript() {},
     handleLifecycle() {},
     async dispose() {},
   };

@@ -69,6 +69,57 @@ describe("diagnostic support export", () => {
     vi.useRealTimers();
   });
 
+  it("includes separate redacted capabilities for the exporter and serving Gateway", async () => {
+    vi.stubGlobal("__openclawStandaloneBuildInfo", {
+      mode: "aot",
+      openclaw: { version: "2026.10.3", commit: "a".repeat(40) },
+      bun: { version: "1.4.4" },
+      plugins: { embedded: ["synthetic-private@example.invalid"], omitted: [] },
+    });
+    try {
+      const outputPath = path.join(tempDir, "capabilities.zip");
+      await writeDiagnosticSupportExport({
+        outputPath,
+        readGatewayCapabilities: async () => ({
+          process: { kind: "bun", flavor: "jit" },
+          source: "synthetic-private@example.invalid",
+          token: "synthetic-secret-value",
+        }),
+      });
+      const entries = await readZipTextEntries(outputPath);
+      expect(readJsonEntry(entries, "runtime/capabilities.json")).toHaveProperty(
+        "data.process.flavor",
+        "aot",
+      );
+      expect(readJsonEntry(entries, "runtime/capabilities.json")).toHaveProperty(
+        "data.build.openclaw.commit",
+        "a".repeat(40),
+      );
+      expect(readJsonEntry(entries, "runtime/gateway-capabilities.json")).toHaveProperty(
+        "data.process.flavor",
+        "jit",
+      );
+      expect(Object.values(entries).join("\n")).not.toMatch(
+        /synthetic-private@example.invalid|synthetic-secret-value/,
+      );
+      await writeDiagnosticSupportExport({
+        outputPath: path.join(tempDir, "offline.zip"),
+        readGatewayCapabilities: async () => {
+          throw new Error("synthetic-private@example.invalid is offline");
+        },
+      });
+      const offline = await readZipTextEntries(path.join(tempDir, "offline.zip"));
+      expect(readJsonEntry(offline, "runtime/gateway-capabilities.json")).toHaveProperty(
+        "status",
+        "failed",
+      );
+      expect(readJsonEntry(offline, "runtime/capabilities.json")).toHaveProperty("status", "ok");
+      expect(Object.values(offline).join("\n")).not.toContain("synthetic-private@example.invalid");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it.each(["current", "other-state alias", "marked relocated alias"])(
     "excludes %s capture files selected as config, logs, or a stability bundle",
     async (owner) => {
@@ -416,6 +467,7 @@ describe("diagnostic support export", () => {
       "health/gateway-health.json",
       "logs/openclaw-sanitized.jsonl",
       "manifest.json",
+      "runtime/capabilities.json",
       "stability/latest.json",
       "status/gateway-status.json",
       "summary.md",
@@ -630,56 +682,65 @@ describe("diagnostic support export", () => {
     }
   });
 
-  it("includes mDNS config state and recent Bonjour log summary", async () => {
-    const configPath = path.join(tempDir, "openclaw.json");
-    const outputPath = path.join(tempDir, "support-bonjour.zip");
-    writeJson(configPath, { discovery: { mdns: { mode: "minimal" } } });
-    vi.mocked(logTailModule.readConfiguredLogTail).mockResolvedValue({
-      file: path.join(tempDir, "logs", "openclaw.log"),
-      cursor: 0,
-      size: 0,
-      truncated: false,
-      reset: false,
-      lines: [
-        JSON.stringify({
-          time: "2026-04-22T12:00:00.000Z",
-          level: "warn",
-          subsystem: "gateway/discovery/bonjour",
-          msg: "bonjour: suppressing ciao interface assertion: AssertionError",
-        }),
-        JSON.stringify({
+  it.each([
+    [undefined, "unset"],
+    ["  ", "unset"],
+    ["1", "force-disabled"],
+    ["0", "force-enabled"],
+    ["not-a-boolean", "unrecognized"],
+  ] as const)(
+    "includes mDNS config state and recent Bonjour log summary (%s)",
+    async (value, expected) => {
+      const configPath = path.join(tempDir, "openclaw.json");
+      const outputPath = path.join(tempDir, "support-bonjour.zip");
+      writeJson(configPath, { discovery: { mdns: { mode: "minimal" } } });
+      vi.mocked(logTailModule.readConfiguredLogTail).mockResolvedValue({
+        file: path.join(tempDir, "logs", "openclaw.log"),
+        cursor: 0,
+        size: 0,
+        truncated: false,
+        reset: false,
+        lines: [
+          JSON.stringify({
+            time: "2026-04-22T12:00:00.000Z",
+            level: "warn",
+            subsystem: "gateway/discovery/bonjour",
+            msg: "bonjour: suppressing ciao interface assertion: AssertionError",
+          }),
+          JSON.stringify({
+            time: "2026-04-22T12:00:00.500Z",
+            level: "warn",
+            msg: "bonjour: disabling advertiser after 3 failed restarts",
+          }),
+        ],
+      });
+      vi.stubEnv("OPENCLAW_DISABLE_BONJOUR", value);
+      await writeDiagnosticSupportExport({ outputPath });
+
+      const entries = await readZipTextEntries(outputPath);
+      const configShape = readJsonEntry(entries, "config/shape.json");
+      expect(configShape).toHaveProperty("discovery", {
+        mdnsMode: "minimal",
+        bonjourEnvOverride: expected,
+      });
+
+      const diagnostics = readJsonEntry(entries, "diagnostics.json");
+      expect(diagnostics).toHaveProperty("bonjour", {
+        count: 2,
+        warnings: 2,
+        last: {
           time: "2026-04-22T12:00:00.500Z",
           level: "warn",
-          msg: "bonjour: disabling advertiser after 3 failed restarts",
-        }),
-      ],
-    });
-    vi.stubEnv("OPENCLAW_DISABLE_BONJOUR", "1");
-    await writeDiagnosticSupportExport({ outputPath });
-
-    const entries = await readZipTextEntries(outputPath);
-    const configShape = readJsonEntry(entries, "config/shape.json");
-    expect(configShape).toHaveProperty("discovery", {
-      mdnsMode: "minimal",
-      bonjourEnvOverride: "force-disabled",
-    });
-
-    const diagnostics = readJsonEntry(entries, "diagnostics.json");
-    expect(diagnostics).toHaveProperty("bonjour", {
-      count: 2,
-      warnings: 2,
-      last: {
-        time: "2026-04-22T12:00:00.500Z",
-        level: "warn",
-        kind: "disabled",
-      },
-      flags: {
-        disabled: true,
-        restarted: false,
-        ciaoSuppressed: true,
-      },
-    });
-  });
+          kind: "disabled",
+        },
+        flags: {
+          disabled: true,
+          restarted: false,
+          ciaoSuppressed: true,
+        },
+      });
+    },
+  );
 
   it("keeps writing when status and health snapshots fail", async () => {
     const fakeToken = "sk-test-support-export-secret-token-1234567890";
@@ -779,6 +840,7 @@ describe("diagnostic support export", () => {
       "diagnostics.json",
       "logs/openclaw-sanitized.jsonl",
       "manifest.json",
+      "runtime/capabilities.json",
       "summary.md",
     ]);
 

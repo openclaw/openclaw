@@ -3,7 +3,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "tsdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -204,16 +204,22 @@ import fs from "node:fs";
 import { createRequire, isBuiltin, registerHooks } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-const [entry, observer, rootDir, mode, outcome, sealed, bundledNativeAsset] = process.argv.slice(1);
+const [entry, observer, rootDir, mode, outcome, sealed, bundledNativeAsset, emittedChunksPath] = process.argv.slice(1);
 const sealedImports = new Set([
   pathToFileURL(entry).href,
+  ...JSON.parse(fs.readFileSync(emittedChunksPath, "utf8")),
   ...(bundledNativeAsset ? [bundledNativeAsset, pathToFileURL(bundledNativeAsset).href] : []),
 ]);
 if (sealed) registerHooks({ resolve(specifier, context, next) {
-  if (!isBuiltin(specifier) && !sealedImports.has(specifier))
+  const target = specifier.startsWith(".") ? new URL(specifier, context.parentURL).href : specifier;
+  if (!isBuiltin(specifier) && !sealedImports.has(target))
     throw new Error("sealed dependency escaped: " + specifier);
   return next(specifier, context);
 }});
+if (sealed) {
+  await assert.rejects(import("p-map"), /sealed dependency escaped: p-map/);
+  await assert.rejects(import(new URL("./not-emitted.mjs", pathToFileURL(entry)).href), /sealed dependency escaped:/);
+}
 const { root, parseJsonWithJson5Fallback, resolvePreferredOpenClawTmpDir, resolveRuntimeProcessEntrypointUrl } = await import(pathToFileURL(entry).href);
 if (sealed) {
   assert.deepEqual(parseJsonWithJson5Fallback("{value:'bundled',}"), {value:"bundled"});
@@ -1054,7 +1060,49 @@ console.log("relocated session card renders with bundled fonts");
         logLevel: "silent",
       });
       try {
+        const chunks = bundles.flatMap((bundle) =>
+          bundle.chunks.filter((chunk) => chunk.type === "chunk"),
+        );
+        if (!worker) {
+          const dependencies = JSON.parse(fs.readFileSync("package.json", "utf8")).dependencies;
+          const emittedFiles = new Set(chunks.map((chunk) => chunk.fileName));
+          // Preserve the copied fs-safe/native owner while providing the other
+          // production dependencies imported by the real SDK entrypoint.
+          for (const specifier of new Set(
+            chunks.flatMap((chunk) => [...chunk.imports, ...chunk.dynamicImports]),
+          )) {
+            if (isBuiltin(specifier) || specifier.startsWith(".") || emittedFiles.has(specifier)) {
+              continue;
+            }
+            const packageName = specifier
+              .split("/")
+              .slice(0, specifier.startsWith("@") ? 2 : 1)
+              .join("/");
+            expect(Object.hasOwn(dependencies, packageName), specifier).toBe(true);
+            const destination = path.join(sourceRoot, "node_modules", packageName);
+            if (!fs.existsSync(destination)) {
+              fs.mkdirSync(path.dirname(destination), { recursive: true });
+              fs.symlinkSync(
+                fs.realpathSync(path.join("node_modules", packageName)),
+                destination,
+                "dir",
+              );
+            }
+          }
+        }
         fs.renameSync(sourceRoot, relocatedRoot);
+        const emittedChunks = worker
+          ? chunks.map((chunk) => {
+              expect(chunk.fileName).toMatch(/^worker\//u);
+              expect(
+                chunk.fileName === "worker/worker.mjs" ||
+                  WORKER_BUNDLE_CHUNK_PATH_PATTERN.test(chunk.fileName.slice(7)),
+              ).toBe(true);
+              return pathToFileURL(path.join(relocatedRoot, "output", chunk.fileName)).href;
+            })
+          : [];
+        const emittedChunksPath = path.join(relocatedRoot, "emitted-chunks.json");
+        fs.writeFileSync(emittedChunksPath, JSON.stringify(emittedChunks));
         const entry = path.join(
           relocatedRoot,
           worker ? "output/worker/worker.mjs" : "output/plugin-sdk/memory-core-host-engine-fs.js",
@@ -1092,6 +1140,7 @@ console.log("relocated session card renders with bundled fonts");
                   outcome,
                   worker ? "sealed" : "",
                   bundledNativeAsset,
+                  emittedChunksPath,
                 ],
                 {
                   cwd: relocatedRoot,
@@ -1485,7 +1534,6 @@ console.log("relocated session card renders with bundled fonts");
     const {
       worker: workerConfig,
       receiver: receiverConfig,
-      "github-launcher": launcherConfig,
       "service-relay": relayConfig,
       "service-group-anchor": anchorConfig,
     } = workerConfigs;
@@ -1518,16 +1566,14 @@ console.log("relocated session card renders with bundled fonts");
       chunkFileNames: "worker/worker-chunk-[hash].mjs",
       assetFileNames: "worker/[name][extname]",
     });
-    for (const config of [receiverConfig, launcherConfig]) {
-      expect(config?.define).toBeUndefined();
-    }
+    expect(receiverConfig?.define).toBeUndefined();
     for (const config of [relayConfig, anchorConfig]) {
       expect(config?.define).toEqual({
         WORKER_DEPLOY_BUILD: "true",
         SEALED_RUNTIME_BUILD: "true",
       });
     }
-    for (const config of [receiverConfig, launcherConfig, relayConfig, anchorConfig]) {
+    for (const config of [receiverConfig, relayConfig, anchorConfig]) {
       expect(config?.alias).toBeUndefined();
       expect(config?.plugins).toBeUndefined();
       expect(config?.outputOptions).toEqual({ codeSplitting: false });

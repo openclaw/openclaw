@@ -6,7 +6,6 @@ import * as pluginPreflight from "../plugins/plugin-install-preflight.js";
 import * as skillLifecycle from "../skills/lifecycle/clawhub.js";
 import * as packageLease from "../state/claw-package-lifecycle-lease.js";
 import * as addState from "./add-state-write.js";
-import type { InstallClawPackagesOptions } from "./package-install-options.js";
 import {
   installClawPackages as installPackages,
   rollbackStatelessClawPackages as rollbackPackages,
@@ -87,7 +86,7 @@ type PackageBoundaryFixtures = {
   resolvePlugin?: typeof pluginPreflight.resolveInstalledClawHubPlugin;
 };
 
-export type PackageInstallFixtureOptions = InstallClawPackagesOptions & {
+export type PackageInstallFixtureOptions = NonNullable<Parameters<typeof installPackages>[1]> & {
   deps?: PackageBoundaryFixtures;
 };
 
