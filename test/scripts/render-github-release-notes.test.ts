@@ -11,7 +11,6 @@ import {
   formatShippedBaselineExclusions,
   parseContributionRecordProvenance,
   parseShippedBaselineExclusions,
-  releaseNotesVersionForTag,
   renderGithubReleaseNotes,
   verifyGithubReleaseNotes,
 } from "../../scripts/render-github-release-notes.mts";
@@ -34,10 +33,18 @@ function changelogFor(record: string): string {
 }
 
 function renderNotes(
-  options: Pick<Parameters<typeof renderGithubReleaseNotes>[0], "changelog"> &
-    Partial<Parameters<typeof renderGithubReleaseNotes>[0]>,
+  changelog: string,
+  options: Partial<Parameters<typeof renderGithubReleaseNotes>[0]> = {},
 ) {
-  return renderGithubReleaseNotes({ version, tag, repository, ...options });
+  return renderGithubReleaseNotes({ version, tag, repository, changelog, ...options });
+}
+
+function verifyNotes(
+  body: string,
+  options: Pick<Parameters<typeof verifyGithubReleaseNotes>[0], "changelog"> &
+    Partial<Parameters<typeof verifyGithubReleaseNotes>[0]>,
+) {
+  return verifyGithubReleaseNotes({ version, tag, repository, ...options, body });
 }
 
 function releaseRepo() {
@@ -71,9 +78,9 @@ function releaseRepo() {
 describe("GitHub release-note rendering", () => {
   it("refuses docs-mirror source in the initial renderer", () => {
     expect(() =>
-      renderNotes({
-        changelog: `## ${version}\n\n<!-- openclaw-docs-mirror-v1 {} -->\n\nPublished reader prose.\n`,
-      }),
+      renderNotes(
+        `## ${version}\n\n<!-- openclaw-docs-mirror-v1 {} -->\n\nPublished reader prose.\n`,
+      ),
     ).toThrow("docs-publication renderer");
   });
 
@@ -202,8 +209,7 @@ describe("GitHub release-note rendering", () => {
       version,
       extendedVersion,
     );
-    const rendered = renderNotes({
-      changelog,
+    const rendered = renderNotes(changelog, {
       version: extendedVersion,
       tag: extendedTag,
       regularStableVersion,
@@ -220,18 +226,15 @@ describe("GitHub release-note rendering", () => {
       ),
     ).toBe(true);
     expect(
-      verifyGithubReleaseNotes({
-        body: rendered.body,
+      verifyNotes(rendered.body, {
         changelog,
         version: extendedVersion,
         tag: extendedTag,
-        repository,
         regularStableVersion,
       }).matches,
     ).toBe(true);
     expect(() =>
-      renderNotes({
-        changelog,
+      renderNotes(changelog, {
         version: extendedVersion,
         tag: extendedTag,
       }),
@@ -239,17 +242,11 @@ describe("GitHub release-note rendering", () => {
   });
 
   it("uses the full form at exactly 125,000 bytes and compacts at 125,001", () => {
-    const seed = renderNotes({
-      changelog: changelogFor("x"),
-    });
+    const seed = renderNotes(changelogFor("x"));
     const exactRecordLength =
       GITHUB_RELEASE_BODY_MAX_BYTES - seed.size.bytes + Buffer.byteLength("x");
-    const exact = renderNotes({
-      changelog: changelogFor("x".repeat(exactRecordLength)),
-    });
-    const over = renderNotes({
-      changelog: changelogFor("x".repeat(exactRecordLength + 1)),
-    });
+    const exact = renderNotes(changelogFor("x".repeat(exactRecordLength)));
+    const over = renderNotes(changelogFor("x".repeat(exactRecordLength + 1)));
 
     expect(exact.mode).toBe("full");
     expect(exact.size).toEqual({
@@ -260,9 +257,7 @@ describe("GitHub release-note rendering", () => {
   });
 
   it("normalizes correction tags to the stable changelog section", () => {
-    expect(releaseNotesVersionForTag("v2026.7.1-2")).toBe("2026.7.1");
-    const rendered = renderNotes({
-      changelog: changelogFor("- **PR #123** fix: correction."),
+    const rendered = renderNotes(changelogFor("- **PR #123** fix: correction."), {
       tag: "v2026.7.1-2",
     });
 
@@ -292,18 +287,18 @@ describe("GitHub release-note rendering", () => {
 
   it("rejects tag/version drift and legacy oversized ledger anchors", () => {
     expect(() =>
-      renderNotes({
-        changelog: changelogFor("- **PR #123** fix: example."),
+      renderNotes(changelogFor("- **PR #123** fix: example."), {
         tag: "v2026.7.2-beta.1",
       }),
     ).toThrow("requires CHANGELOG.md version 2026.7.2");
 
     expect(() =>
-      renderNotes({
-        changelog: changelogFor(
-          `### Complete contribution ledger\n\n${"legacy ".repeat(20_000)}`,
-        ).replace("### Complete contribution record\n\n", ""),
-      }),
+      renderNotes(
+        changelogFor(`### Complete contribution ledger\n\n${"legacy ".repeat(20_000)}`).replace(
+          "### Complete contribution record\n\n",
+          "",
+        ),
+      ),
     ).toThrow("cannot be compacted without a complete contribution record");
   });
 
@@ -315,8 +310,7 @@ describe("GitHub release-note rendering", () => {
       "## 2026.7.1-alpha.2\n\n- Alpha-only fix.",
       "## 2026.6.11\n\n- Previous release.\n",
     ].join("\n\n");
-    const rendered = renderNotes({
-      changelog,
+    const rendered = renderNotes(changelog, {
       tag: "v2026.7.1-alpha.2",
     });
 
@@ -330,17 +324,15 @@ describe("GitHub release-note rendering", () => {
       "## 2026.7.1",
       "## Unreleased",
     );
-    const rendered = renderNotes({
-      changelog,
+    const rendered = renderNotes(changelog, {
       tag: "v2026.7.1-alpha.1",
     });
 
     expect(rendered.body).toContain("## 2026.7.1");
     expect(rendered.body).not.toContain("## Unreleased");
-    expect(() => renderNotes({ changelog })).toThrow("CHANGELOG.md does not contain ## 2026.7.1");
+    expect(() => renderNotes(changelog)).toThrow("CHANGELOG.md does not contain ## 2026.7.1");
     expect(() =>
-      renderNotes({
-        changelog,
+      renderNotes(changelog, {
         version: "foo",
         tag: "vfoo-alpha.1",
       }),
@@ -352,7 +344,7 @@ describe("GitHub release-note rendering", () => {
       "### Fixes",
       ["```md", "### Complete contribution record", "```", "", "### Fixes"].join("\n"),
     );
-    const rendered = renderNotes({ changelog });
+    const rendered = renderNotes(changelog);
 
     expect(rendered.mode).toBe("compact");
     expect(rendered.body).toContain("```md\n### Complete contribution record\n```");
@@ -363,37 +355,15 @@ describe("GitHub release-note rendering", () => {
   it("verifies the exact generated compact body and optional proof tail", () => {
     const changelog = changelogFor(`- **PR #123** ${"z".repeat(130_000)}`);
     const verification = "### Release verification\n\n- release SHA: `abc123`";
-    const rendered = renderNotes({
-      changelog,
-      verification,
-    });
+    const rendered = renderNotes(changelog, { verification });
 
-    expect(
-      verifyGithubReleaseNotes({
-        body: rendered.body,
-        changelog,
-        version,
-        tag,
-        repository,
-      }),
-    ).toMatchObject({ matches: true, mode: "compact" });
-    expect(
-      verifyGithubReleaseNotes({
-        body: rendered.body.replace("tag-pinned", "mutable"),
-        changelog,
-        version,
-        tag,
-        repository,
-      }).matches,
-    ).toBe(false);
-    expect(
-      verifyGithubReleaseNotes({
-        body: rendered.body,
-        changelog,
-        version,
-        tag: "v2026.7.1-beta.2",
-        repository,
-      }).matches,
-    ).toBe(false);
+    expect(verifyNotes(rendered.body, { changelog })).toMatchObject({
+      matches: true,
+      mode: "compact",
+    });
+    expect(verifyNotes(rendered.body.replace("tag-pinned", "mutable"), { changelog }).matches).toBe(
+      false,
+    );
+    expect(verifyNotes(rendered.body, { changelog, tag: "v2026.7.1-beta.2" }).matches).toBe(false);
   });
 });

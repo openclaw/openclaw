@@ -25,6 +25,23 @@ vi.mock("../../scripts/lib/managed-windows-job.mts", () => ({
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
+function exitedChild() {
+  const child = new ChildProcess();
+  Object.defineProperties(child, {
+    pid: { value: 12345 },
+    exitCode: { value: 0 },
+    stdio: { get: () => [child.stdin, child.stdout, child.stderr, null] },
+  });
+  child.stdout = null;
+  child.stderr = null;
+  return child;
+}
+
+function emitExit(child: ChildProcess) {
+  child.emit("exit", 0, null);
+  child.emit("close", 0, null);
+}
+
 it("cancels admission while Windows platform code loads without spawning or retaining a claim", async () => {
   const root = dirs.make("managed-platform-cancel-");
   const owner = createVitestResourceOwner(root);
@@ -72,14 +89,7 @@ it("preserves deferred spawn errors and releases ownership when output streams w
 
 it("preserves requested command inputs across Windows platform loading", async () => {
   const root = dirs.make("managed-platform-inputs-");
-  const child = new ChildProcess();
-  Object.defineProperties(child, {
-    pid: { value: 12345 },
-    exitCode: { value: 0 },
-    stdout: { value: null, writable: true },
-    stderr: { value: null, writable: true },
-    stdio: { get: () => [child.stdin, child.stdout, child.stderr, null] },
-  });
+  const child = exitedChild();
   let launched: { argument?: string; value?: string } | undefined;
   mocks.spawnWindowsJobChild.mockImplementation((_command, args, options) => {
     launched = { argument: args[0], value: options.env.VALUE };
@@ -96,10 +106,7 @@ it("preserves requested command inputs across Windows platform loading", async (
     env,
     platform: "win32",
     shell: false,
-    onReady: () => {
-      child.emit("exit", 0, null);
-      child.emit("close", 0, null);
-    },
+    onReady: () => emitExit(child),
   });
   args[0] = "mutated";
   env.VALUE = "mutated";
@@ -145,15 +152,7 @@ it.each([false, true])(
   async (leaderSignalFails) => {
     const root = dirs.make("managed-joined-diagnostics-");
     const owner = createVitestResourceOwner(root);
-    const child = new ChildProcess();
-    Object.defineProperties(child, {
-      pid: { value: 12345 },
-      exitCode: { value: 0 },
-      stdio: { get: () => [child.stdin, child.stdout, child.stderr, null] },
-    });
-    // spawn with ignored stdio returns null streams, unlike an unspawned ChildProcess.
-    child.stdout = null;
-    child.stderr = null;
+    const child = exitedChild();
     const groupError = Object.assign(new Error("group signal denied"), { code: "EPERM" });
     const leaderError = Object.assign(new Error("leader signal denied"), { code: "EACCES" });
     mocks.spawn.mockReturnValue(child);
@@ -190,10 +189,7 @@ it.each([false, true])(
         stdio: "ignore",
         requireProcessTreeExit: true,
         env: { TMPDIR: root },
-        onReady: () => {
-          child.emit("exit", 0, null);
-          child.emit("close", 0, null);
-        },
+        onReady: () => emitExit(child),
       }),
     ).rejects.toMatchObject({
       code: "EPROCESSGROUP_CLEANUP_FAILED",
@@ -220,12 +216,7 @@ it.each([
   async (platform, terminates, closes) => {
     const root = dirs.make("managed-normal-exit-");
     const owner = createVitestResourceOwner(root);
-    const child = new ChildProcess();
-    Object.defineProperties(child, {
-      pid: { value: 12345 },
-      exitCode: { value: 0 },
-      stdio: { get: () => [child.stdin, child.stdout, child.stderr, null] },
-    });
+    const child = exitedChild();
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
     const closed = Promise.all([once(child.stdout, "close"), once(child.stderr, "close")]);
@@ -281,10 +272,7 @@ it.each([
           // but only after the command has acquired and observed its output.
           child.stdout?.destroy();
           child.stderr?.destroy();
-          void closed.then(() => {
-            child.emit("exit", 0, null);
-            child.emit("close", 0, null);
-          });
+          void closed.then(() => emitExit(child));
         },
       }).catch((error: unknown) => error);
       if (platform === "win32") {

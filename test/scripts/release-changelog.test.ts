@@ -213,30 +213,17 @@ describe("release docs mirrors", () => {
     const f = mirrorFixture();
     const input = [
       "# Release title",
-      "",
       `AI agents and tools can read these release notes as [plain Markdown](https://raw.githubusercontent.com/openclaw/openclaw/main/CHANGELOG/${version}.md).`,
-      "",
       "## Messaging",
-      "",
       "- First reader-facing fix.",
-      "",
-      '  <details class="release-source-inline release-source-toggle" id="first">',
-      "  <summary>More details</summary>",
-      "",
+      '  <details class="release-source-inline release-source-toggle" id="first">\n  <summary>More details</summary>',
       "  [#42](https://github.com/openclaw/openclaw/pull/42). Thanks to [@alice](https://github.com/alice).",
-      "",
       "  </details>",
-      "",
       "- Second reader-facing fix.",
-      "",
-      '  <details class="release-source-toggle  release-source-inline">',
-      "  <summary>More details</summary>",
-      "",
+      '  <details class="release-source-toggle  release-source-inline">\n  <summary>More details</summary>',
       "  [Guide](/channels/example) and `literal` remain in order.",
-      "",
-      "  </details>",
-      "",
-    ].join("\n");
+      "  </details>\n",
+    ].join("\n\n");
     f.write(source, input);
     const output = f.file(`CHANGELOG/${version}.md`);
     const rendered = f.cli("--version", version, "--source", source, "--output", output);
@@ -244,14 +231,10 @@ describe("release docs mirrors", () => {
     const mirror = fs.readFileSync(output, "utf8");
     expect(mirror.slice(mirror.indexOf("\n\n") + 2)).toBe(
       [
-        `## ${version}`,
-        "",
-        "### Release title",
-        "",
-        `For formatted release notes, [read this release on the docs site](https://docs.openclaw.ai/releases/${version}).`,
-        "",
-        "#### Messaging",
-        "",
+        `## ${version}\n`,
+        "### Release title\n",
+        `For formatted release notes, [read this release on the docs site](https://docs.openclaw.ai/releases/${version}).\n`,
+        "#### Messaging\n",
         "- First reader-facing fix.",
         "  [#42](https://github.com/openclaw/openclaw/pull/42). Thanks to [@alice](https://github.com/alice).",
         "- Second reader-facing fix.",
@@ -266,44 +249,24 @@ describe("release docs mirrors", () => {
 
   it("preserves intentional detail paragraphs, literal code and non-inline disclosures", () => {
     const literal = [
-      "  ```md",
-      '  <details class="release-source-inline">',
-      "  <summary>More details</summary>",
-      "",
-      "  - Literal example.",
-      "  </details>",
-      "  ```",
+      '  ```md\n  <details class="release-source-inline">\n  <summary>More details</summary>\n',
+      "  - Literal example.\n  </details>\n  ```",
     ].join("\n");
     const input = [
       "# Release title",
-      "",
       "- A fix.",
-      "",
-      '  <details class="release-source-toggle release-source-inline">',
-      "  <summary>More details</summary>",
-      "",
+      '  <details class="release-source-toggle release-source-inline">\n  <summary>More details</summary>',
       "      Initial indented code.",
-      "",
       "  First supporting paragraph.",
-      "",
       "  Second supporting paragraph.",
-      "",
       literal,
-      "",
       "  </details>",
-      "",
       "      - Literal list marker in indented code.",
-      "",
       "## Supporting updates",
-      "",
-      '<details class="release-source-toggle release-source-inline-extra">',
-      "<summary>Full sources</summary>",
-      "",
+      '<details class="release-source-toggle release-source-inline-extra">\n<summary>Full sources</summary>',
       "Unchanged standalone detail.",
-      "",
-      "</details>",
-      "",
-    ].join("\n");
+      "</details>\n",
+    ].join("\n\n");
     const result = docs.flattenReleaseDocs(input, source);
     const codeBlocks = createDocsMarkdown({ html: false })
       .parse(result, {})
