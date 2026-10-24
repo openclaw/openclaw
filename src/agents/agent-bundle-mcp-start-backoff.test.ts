@@ -9,12 +9,11 @@ import { bindSessionMcpRuntimeTestScheduler } from "./agent-bundle-mcp-manager.t
 import { createSessionMcpRuntime } from "./agent-bundle-mcp-runtime.js";
 import type { SessionMcpRequesterScope, SessionMcpRuntime } from "./agent-bundle-mcp-types.js";
 import { OpenClawStreamableHTTPClientTransport } from "./mcp-http-transport.js";
+import * as mcpTransport from "./mcp-transport.js";
 
-const { resolveTransport, warn } = vi.hoisted(() => ({
-  resolveTransport: vi.fn(),
+const { warn } = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
-vi.mock("./mcp-transport.js", () => ({ resolveMcpTransport: resolveTransport }));
 vi.mock("../logger.js", () => ({ logWarn: warn }));
 vi.mock("./embedded-agent-mcp.js", () => ({
   loadEmbeddedAgentMcpConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
@@ -41,7 +40,7 @@ beforeEach(() => {
   invalidListing = false;
   listToolsGate = undefined;
   warn.mockClear();
-  resolveTransport.mockImplementation((serverName: string) => {
+  vi.spyOn(mcpTransport, "resolveMcpTransport").mockImplementation((serverName: string) => {
     const transport = new OpenClawStreamableHTTPClientTransport(
       new URL("https://mcp.invalid/mcp"),
       {
@@ -107,6 +106,7 @@ beforeEach(() => {
       transportType: "streamable-http",
       connectionTimeoutMs: 30_000,
       requestTimeoutMs: 60_000,
+      supportsParallelToolCalls: true,
     };
   });
 });
@@ -114,6 +114,7 @@ beforeEach(() => {
 afterEach(async () => {
   await Promise.all(runtimes.splice(0).map((runtime) => runtime.dispose()));
   await disposeAllSessionMcpRuntimes();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -134,6 +135,7 @@ async function discover(runtime: SessionMcpRuntime) {
   const pending = runtime.getCatalog().finally(() => {
     settled = true;
   });
+  await vi.dynamicImportSettled();
   await vi.advanceTimersByTimeAsync(0);
   if (!settled) {
     await vi.advanceTimersToNextTimerAsync();
@@ -211,7 +213,10 @@ it("retries failed listings in the background without stalling healthy siblings"
   });
   runtimes.push(runtime);
   const failed = await runtime.getCatalog();
-  expect(failed.tools.map((tool) => tool.toolName)).toEqual(["healthy_tool"]);
+  expect(
+    failed.tools.map((tool) => tool.toolName),
+    JSON.stringify(failed.diagnostics),
+  ).toEqual(["healthy_tool"]);
   expect(failed.diagnostics?.[0]?.serverName).toBe("remote");
 
   invalidListing = false;

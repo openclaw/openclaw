@@ -23,8 +23,10 @@ export function findLegacyConfigRuleIssues(
   if (!raw || typeof raw !== "object") {
     return [];
   }
+  // SAFETY: the guard accepts any non-null object, including legacy array inputs.
   const root = raw as Record<string, unknown>;
   const sourceRoot =
+    // SAFETY: the same object check preserves source-literal reads without excluding arrays.
     sourceRaw && typeof sourceRaw === "object" ? (sourceRaw as Record<string, unknown>) : root;
   const issues: LegacyConfigIssue[] = [];
   for (const rule of rules) {
