@@ -4845,3 +4845,32 @@ barrier before warmup. Use identical work counts, the shared quiet-slot lock and
 and swap the interleaved CPU placements in the second pair. Keep maintenance
 settings identical. Apply the campaign's absolute-delta and sample-count rules;
 run matched identical-source controls before interpreting adverse GC or promotion.
+
+## Native worker CPU sampling
+
+`worker-cpu-measure.ts` exercises the registered CPU source of 50 real, idle
+Workers. Each batch requests every native counter through the production owner;
+unavailable counters invalidate the run. Startup and 100 warmup batches precede
+measurement. This isolates per-sample overhead, not whole-Gateway savings or
+worker task throughput. The Gateway's one-second active and ten-second idle
+sampling intervals remain unchanged.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/worker-cpu-measure.ts \
+  --workers 50 --batches 5000 --yield-ms 1 --output /path/to/timing.json
+```
+
+Use `--allocations` in a separate pass for 8 KiB collected-object heap sampling;
+the raw profile is saved alongside the result. Untraced runs report main/process
+CPU per batch, batch latency, natural GC by kind with counts and maximum pauses,
+and event-loop delay with sample counts. For separate promotion measurements,
+launch Node with `--trace-gc-nvp` and sum `promoted` bytes only between
+`WORKER_CPU_START` and `WORKER_CPU_END`. Profiler shutdown and worker termination
+are outside the measurement window.
+
+Pass the same future `--start-at` epoch to both sides after preparing the inputs.
+Hold one quiet-slot lock and use its production guard; swap interleaved CPU sets
+and launch order in the second pair. Compare allocation and CPU per fixed batch,
+apply the campaign's absolute-delta and sample-count rules, and use matched A/A
+controls before rejecting on noisy GC, promotion, or maximum pauses. A p99 needs
+1,000 samples, a p95 needs 200, and major-GC tails need 50 collections per side.
