@@ -7,11 +7,8 @@ import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
-type WorkflowStep = {
-  id?: string;
+type WorkflowStep = Partial<Record<"id" | "name" | "run", string>> & {
   env?: Record<string, string>;
-  name?: string;
-  run?: string;
 };
 
 type ExtensionMatrixRow = {
@@ -64,28 +61,22 @@ export function createPrereleaseFixtures() {
       phase = "independent",
     ) {
       const outputPath = join(tempDirs.make("plugin-prerelease-manifest-"), "github-output");
-      const result = spawnSync(
-        "bash",
-        [
-          "-c",
-          expectDefined(
-            findStep(readWorkflow().jobs.preflight, "Build plugin prerelease manifest").run,
-            "plugin prerelease manifest script",
-          ),
-        ],
-        {
-          cwd,
-          encoding: "utf8",
-          env: {
-            PATH: process.env.PATH,
-            FULL_RELEASE_VALIDATION: String(fullReleaseValidation),
-            GITHUB_EVENT_NAME: eventName,
-            GITHUB_OUTPUT: outputPath,
-            PHASE: phase,
-            OPENCLAW_CI_TEST_RUNTIME_POLICY: runtimePolicy,
-          },
-        },
+      const run = expectDefined(
+        findStep(readWorkflow().jobs.preflight, "Build plugin prerelease manifest").run,
+        "plugin prerelease manifest script",
       );
+      const result = spawnSync("bash", ["-c", run], {
+        cwd,
+        encoding: "utf8",
+        env: {
+          PATH: process.env.PATH,
+          FULL_RELEASE_VALIDATION: String(fullReleaseValidation),
+          GITHUB_EVENT_NAME: eventName,
+          GITHUB_OUTPUT: outputPath,
+          PHASE: phase,
+          OPENCLAW_CI_TEST_RUNTIME_POLICY: runtimePolicy,
+        },
+      });
       return { result, output: existsSync(outputPath) ? readFileSync(outputPath, "utf8") : "" };
     },
     target(prefix: string, files: Record<string, string>, linkType: "dir" | "junction") {
