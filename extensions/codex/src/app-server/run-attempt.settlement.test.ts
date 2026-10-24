@@ -138,7 +138,10 @@ describe("Codex app-server terminal settlement", () => {
           id: "active-command",
           type: "commandExecution",
           command: "synthetic-background-command",
+          cwd: params.workspaceDir,
+          commandActions: [],
           processId: "process-1",
+          source: "agent",
           status: "inProgress",
         }),
       );
@@ -193,7 +196,10 @@ describe("Codex app-server terminal settlement", () => {
         id: "failed-command",
         type: "commandExecution",
         command: "synthetic-failed-command",
+        cwd: params.workspaceDir,
+        commandActions: [],
         processId: "process-2",
+        source: "agent",
         status: "inProgress",
       }),
     );
@@ -574,7 +580,10 @@ describe("Codex app-server terminal settlement", () => {
           id: "checkpoint-command",
           type: "commandExecution",
           command: "echo saved",
-
+          cwd: params.workspaceDir,
+          commandActions: [],
+          processId: null,
+          source: "agent",
           status: "completed",
           aggregatedOutput: "saved",
           exitCode: 0,

@@ -87,6 +87,7 @@ vi.mock("../../daemon/launchd-exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/launchd-exec.js")>()),
   execLaunchctl: mocks.launchctl,
 }));
+// mock-isolation: Simulate service ownership without inspecting the host's launchd service.
 vi.mock("../../daemon/launchd-current-service.js", () => ({
   isCurrentProcessLaunchdServiceLabel: () => false,
   isCurrentProcessInsideLaunchdService: async () => false,

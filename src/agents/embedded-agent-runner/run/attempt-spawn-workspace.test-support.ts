@@ -239,6 +239,7 @@ vi.mock("../../sessions/resource-loader.js", () => ({
   },
 }));
 
+// mock-isolation: Keep session storage and provider runtime inside the in-memory attempt fixture.
 vi.mock("../../sessions/index.js", () => {
   function AuthStorage() {}
   function ModelRegistry() {}
@@ -263,6 +264,7 @@ vi.mock("../../sessions/sdk.js", () => ({
   createAgentSession: hoisted.createAgentSessionMock,
 }));
 
+// mock-isolation: Observe child dispatch without launching a real subagent.
 vi.mock("../../subagents/spawn/subagent-spawn.js", () => ({
   SUBAGENT_SPAWN_MODES: ["run", "session"],
   spawnSubagentDirect: hoisted.spawnSubagentDirectMock,
@@ -273,10 +275,12 @@ vi.mock("../../sandbox/context.js", async () => ({
   resolveSandboxContext: hoisted.resolveSandboxContextMock,
 }));
 
+// mock-isolation: The fixture owns its synthetic session manager and tool-result capture.
 vi.mock("../../session-tool-result-guard-wrapper.js", () => ({
   guardSessionManager: hoisted.guardSessionManagerMock,
 }));
 
+// mock-isolation: Supply explicit stream callbacks without starting real session subscriptions.
 vi.mock("../../embedded-agent-subscribe.js", () => ({
   subscribeEmbeddedAgentSession: hoisted.subscribeEmbeddedAgentSessionMock,
 }));
@@ -335,6 +339,7 @@ vi.mock("../../workspace.js", async () => {
   };
 });
 
+// mock-isolation: Observe maintenance admission without running background engine work.
 vi.mock("../context-engine-maintenance.js", () => ({
   runContextEngineMaintenance: hoisted.runContextEngineMaintenanceMock,
 }));
@@ -394,6 +399,7 @@ vi.mock("../tool-result-context-guard.js", async () => {
   };
 });
 
+// mock-isolation: The fixture controls pending tool results instead of waiting on a real stream.
 vi.mock("../wait-for-idle-before-flush.js", () => ({
   flushPendingToolResultsAfterIdle: hoisted.flushPendingToolResultsAfterIdleMock,
 }));
@@ -564,6 +570,7 @@ vi.mock("../compaction-safety-timeout.js", () => ({
   resolveCompactionTimeoutMs: () => undefined,
 }));
 
+// mock-isolation: Supply explicit history limits independently of runtime configuration.
 vi.mock("../history.js", () => ({
   getHistoryLimitFromSessionKey: hoisted.getHistoryLimitFromSessionKeyMock,
   limitHistoryTurns: hoisted.limitHistoryTurnsMock,

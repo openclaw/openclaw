@@ -130,7 +130,7 @@ beforeEach(() => {
 });
 
 describe("runCodexAppServerAttempt context-engine lifecycle", () => {
-  it.each(["summary", "text budget", "image budget"] as const)(
+  it.each(["summary", "text budget", "image budget", "no authored cap"] as const)(
     "assembles %s before starting the native turn",
     async (scenario) => {
       const summary = scenario === "summary";
@@ -159,7 +159,9 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         setRuntimeConfigSnapshot(params.config);
       } else {
         manager.appendMessage(userMessage("PRIOR_BUDGET_CONTEXT", 10));
-        params.authoredContextTokenCap = 600_000;
+        if (scenario !== "no authored cap") {
+          params.authoredContextTokenCap = 600_000;
+        }
         params.prompt = `CURRENT_REQUEST ${"current ".repeat(1_000).trimEnd()}`;
         if (scenario === "image budget") {
           params.images = [
@@ -173,8 +175,8 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
       }
       const run = runCodexAppServerAttempt(params);
       await run.waitForTurnAccepted();
-      const assembly = vi.mocked(contextEngine.assemble).mock.calls[0]?.[0];
-      const bootstrap = vi.mocked(contextEngine.bootstrap!).mock.calls[0]?.[0];
+      const assembly = vi.mocked(contextEngine, true).assemble.mock.calls[0]?.[0];
+      const bootstrap = vi.mocked(contextEngine, true).bootstrap?.mock.calls[0]?.[0];
       const input = getRequestInputText(harness);
       expect(input).toContain(params.prompt);
       expect(input).toContain("Current inbound reply context");
@@ -205,6 +207,10 @@ describe("runCodexAppServerAttempt context-engine lifecycle", () => {
         expect(input).toContain("[assistant]\nACK: existing context");
         expect(input.trim().startsWith("Current inbound reply context")).toBe(true);
         expect(input).toContain(`Current user request:\n${params.prompt}`);
+      } else if (scenario === "no authored cap") {
+        expect(assembly?.tokenBudget).toBe(500_000);
+        expect(assembly?.runtimeSettings?.limits.promptTokenBudget).toBe(500_000);
+        expect(harness.requests.some(({ method }) => method === "thread/inject_items")).toBe(false);
       } else {
         expect(assembly?.tokenBudget).toBeGreaterThan(0);
         expect(assembly?.tokenBudget).toBeLessThan(480_000);

@@ -171,7 +171,9 @@ function nextWorkspaceUpdate(state: SessionWorkspaceHost, ready: () => boolean) 
 
 function useFakeClock() {
   vi.useFakeTimers();
-  onTestFinished(() => vi.useRealTimers());
+  onTestFinished(() => {
+    vi.useRealTimers();
+  });
 }
 
 describe("session workspace state", () => {

@@ -118,7 +118,7 @@ function captureRequests() {
 function promptImages(buffer: Buffer) {
   return finalizeRuntimePromptImages([
     {
-      image: { type: "image", data: buffer.toString("base64"), mimeType: "image/png" },
+      image: { type: "image" as const, data: buffer.toString("base64"), mimeType: "image/png" },
       factIndex: 0,
     },
   ]).images;

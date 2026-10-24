@@ -580,35 +580,42 @@ it.each([false, true])(
   },
 );
 
-it("runs staged install and Doctor with an explicit work budget", async () => {
-  const { root, params } = await packageFixture(base, "2026.5.14", {
-    installedVersion: "2026.4.21",
-  });
-  const entryPath = path.join(root, "dist", "index.js");
-  const commands = mockDoctor(async (argv, options) => {
-    expect(argv.slice(1)).toEqual([entryPath, "doctor", "--non-interactive", "--fix"]);
-    expect(options).toMatchObject({
-      cwd: root,
-      env: {
-        OPENCLAW_SERVICE_REPAIR_POLICY: "external",
-        OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.14",
-      },
+it.each([
+  { label: "explicit", workTimeoutMs: 2000, expectedTimeout: 2000 },
+  { label: "unbounded", workTimeoutMs: null, expectedTimeout: undefined },
+  { label: "legacy", workTimeoutMs: undefined, expectedTimeout: 1000 },
+])(
+  "runs staged install and Doctor with a $label work budget",
+  async ({ workTimeoutMs, expectedTimeout }) => {
+    const { root, params } = await packageFixture(base, "2026.5.14", {
+      installedVersion: "2026.4.21",
     });
-    expect(await readManifest(root)).toMatchObject({ version: "2026.5.14" });
-    return createCommandResult();
-  });
-  const result = await runPackageInstallUpdate({
-    ...params,
-    installSpec: "openclaw@2026.5.14",
-    managedServiceEnv: packageEnv(base),
-    workTimeoutMs: 2000,
-  });
-  expect(result).toMatchObject({ status: "ok", root, after: { version: "2026.5.14" } });
-  expect(commands.mock.calls.filter(([argv]) => argv[2] === "doctor")).toHaveLength(1);
-  for (const [argv, options] of commands.mock.calls) {
-    expect(options, argv.join(" ")).toMatchObject({ timeoutMs: 2000 });
-  }
-});
+    const entryPath = path.join(root, "dist", "index.js");
+    const commands = mockDoctor(async (argv, options) => {
+      expect(argv.slice(1)).toEqual([entryPath, "doctor", "--non-interactive", "--fix"]);
+      expect(options).toMatchObject({
+        cwd: root,
+        env: {
+          OPENCLAW_SERVICE_REPAIR_POLICY: "external",
+          OPENCLAW_COMPATIBILITY_HOST_VERSION: "2026.5.14",
+        },
+      });
+      expect(await readManifest(root)).toMatchObject({ version: "2026.5.14" });
+      return createCommandResult();
+    });
+    const result = await runPackageInstallUpdate({
+      ...params,
+      installSpec: "openclaw@2026.5.14",
+      managedServiceEnv: packageEnv(base),
+      workTimeoutMs,
+    });
+    expect(result).toMatchObject({ status: "ok", root, after: { version: "2026.5.14" } });
+    expect(commands.mock.calls.filter(([argv]) => argv[2] === "doctor")).toHaveLength(1);
+    for (const [argv, options] of commands.mock.calls) {
+      expect(options, argv.join(" ")).toMatchObject({ timeoutMs: expectedTimeout });
+    }
+  },
+);
 
 it.each(["settlement", "database writes", "reporting failure"] as const)(
   "retains Doctor %s warnings through the package activation result",

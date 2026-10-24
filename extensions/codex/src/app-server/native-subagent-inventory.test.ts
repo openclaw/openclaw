@@ -573,6 +573,15 @@ describe("native pending assignment inventory through registered monitor admissi
       await expect(prepareInput(client, "child-thread", "followup-turn", "/root")).rejects.toThrow(
         "does not admit this model",
       );
+      await client.item(
+        collabItem("wait", ["child-thread"], {
+          id: "wait-a",
+          senderThreadId: "rotated-parent",
+          agentsStates: { "child-thread": { status: "completed", message: "A result" } },
+        }),
+        "rotated-turn",
+        "rotated-parent",
+      );
       await completeChild(client, "B result", "followup-turn");
       await replacement.unregister();
       expect(f.deliver).toHaveBeenCalledOnce();
@@ -627,9 +636,9 @@ describe("native pending assignment inventory through registered monitor admissi
           display: true,
           content: expect.stringContaining("status succeeded"),
         });
-        expect(notes[0]?.message.content).toEqual(
-          expect.stringContaining("child session key: codex-thread:child-thread"),
-        );
+        expect(notes[0]?.message).toMatchObject({
+          content: expect.stringContaining("child session key: codex-thread:child-thread"),
+        });
       }
       parent.closeCaller();
       client.close();

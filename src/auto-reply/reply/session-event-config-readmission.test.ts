@@ -34,12 +34,10 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import { readSessionEntryInWorker } from "../../config/sessions/session-entry-read-writable.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
 import { captureCronInferenceBinding } from "../../cron/inference-binding.runtime.js";
 import { TEST_SCHEDULED_TURN } from "../../cron/scheduled-occurrence.test-support.js";
 import { runCronSessionTurn } from "../../cron/session-run.js";
-import type { CronJob } from "../../cron/types.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../../infra/system-events.js";
 import {
   captureActivePluginRegistrySnapshot,
@@ -53,10 +51,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import * as routedReplies from "./route-reply.js";
 import {
@@ -75,68 +70,6 @@ await Promise.all([
     runtime.prewarmConfigDrivenReplyRuntime(),
   ),
 ]);
-
-async function prepareState(state: OpenClawTestState, config: ReturnType<typeof completionConfig>) {
-  setRuntimeConfigSnapshot(config);
-  await state.writeConfig(config);
-  openOpenClawStateDatabase();
-}
-
-async function createSession(sessionId: string, entry: Partial<SessionEntry> = {}) {
-  const scope = { agentId: "main", sessionKey: `agent:main:${sessionId}` };
-  await replaceSessionEntry(scope, {
-    sessionId,
-    lifecycleRevision: "original",
-    permissionMode: "full",
-    updatedAt: Date.now(),
-    ...entry,
-  });
-  return scope;
-}
-
-function createTurnGate(signal: AbortSignal) {
-  const started = createDeferred();
-  const released = createDeferred();
-  const queued = createDeferred();
-  return {
-    async hold() {
-      started.resolve();
-      await released.promise;
-    },
-    release: released.resolve,
-    waitForStart: (settled: PromiseLike<unknown>) =>
-      withinTest(
-        awaitGateBeforeSettlement(started.promise, settled, "first turn never started"),
-        signal,
-      ),
-    waitForQueue: (settled: PromiseLike<unknown>) =>
-      withinTest(
-        awaitGateBeforeSettlement(queued.promise, settled, "scheduled turn never queued"),
-        signal,
-      ),
-    onLaneWait(info?: { waiting: boolean }) {
-      if (info?.waiting) {
-        queued.resolve();
-      }
-    },
-  };
-}
-
-async function enqueueFirst(scope: { agentId: string; sessionKey: string }, signal: AbortSignal) {
-  return enqueueSessionEventForHost("First admitted work", {
-    ...scope,
-    source: "task",
-    expectedTarget: await captureSessionEventTargetForHost(scope.agentId, scope.sessionKey),
-    abortSignal: signal,
-    deliver: false,
-  });
-}
-
-async function settleWork(...work: (PromiseLike<unknown> | undefined)[]) {
-  await Promise.allSettled(work);
-  await drainGlobalSingletonLifecycleState("restart");
-  resetSystemEventsForTest();
-}
 
 async function startRun(params: RunEmbeddedAgentParams) {
   const admitted = expectDefined(
@@ -259,27 +192,34 @@ it.for([
           scenario.startsWith("scheduled-model-") ||
           scheduledAccount;
         const scheduledSubagent = scenario.startsWith("scheduled-subagent-");
-        const defaults = expectDefined(config.agents?.defaults, "fixture defaults");
-        const gmail = scenario === "scheduled-gmail-default";
-        const locked = scenario === "scheduled-subagent-locked";
-        if (explicitScheduledModel || scheduledSubagent || gmail) {
-          defaults.modelPolicy = { allow: ["mock-openai/*"] };
-          defaults.models = {
-            ...defaults.models,
-            "mock-openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+        if (explicitScheduledModel || scheduledSubagent || scenario === "scheduled-gmail-default") {
+          config.agents = {
+            ...config.agents,
+            defaults: {
+              ...config.agents?.defaults,
+              modelPolicy: {
+                allow: [
+                  "mock-openai/*",
+                  ...(scheduledProvider === "mock-other" ? ["mock-other/*"] : []),
+                ],
+              },
+              ...(scheduledSubagent ? { subagents: { model: "mock-openai/gpt-5.6-luna" } } : {}),
+              models: {
+                ...config.agents?.defaults?.models,
+                "mock-openai/gpt-5.6-sol": { agentRuntime: { id: "openclaw" } },
+                ...(scheduledProvider === "mock-other"
+                  ? { [`${scheduledProvider}/gpt-5.6-sol`]: { agentRuntime: { id: "openclaw" } } }
+                  : {}),
+              },
+            },
           };
-          if (scheduledProvider === "mock-other") {
-            defaults.modelPolicy.allow.push("mock-other/*");
-            defaults.models["mock-other/gpt-5.6-sol"] = { agentRuntime: { id: "openclaw" } };
-          }
-          if (scheduledSubagent) {
-            defaults.subagents = { model: "mock-openai/gpt-5.6-luna" };
-          }
         }
         if (scenario === "scheduled-gmail-default") {
           config.hooks = { gmail: { model: "mock-openai/gpt-5.6-luna", thinking: "off" } };
         }
-        await prepareState(state, config);
+        setRuntimeConfigSnapshot(config);
+        await state.writeConfig(config);
+        openOpenClawStateDatabase();
         if (scheduledAccount) {
           await state.writeAuthProfiles({
             version: 1,
@@ -310,31 +250,35 @@ it.for([
         const missingDestinationProfileId = boundAccount
           ? `personal:${ensureProfileForEmail("destination@example.test").id}:${randomUUID()}`
           : undefined;
-        const session: Partial<SessionEntry> = {
+        const scope = { agentId: "main", sessionKey: "agent:main:config-readmission" };
+        await replaceSessionEntry(scope, {
+          sessionId: "config-readmission",
+          lifecycleRevision: "original",
+          permissionMode: "full",
+          ...(scheduledAccount
+            ? {
+                authProfileOverride: "mock-openai:conversation",
+                authProfileOverrideSource: "user" as const,
+                authProfileOverrideCompactionCount: 2,
+              }
+            : {}),
+          ...(scenario === "scheduled-subagent-locked" || boundAccount
+            ? { modelSelectionLocked: true }
+            : {}),
+          ...(scenario === "scheduled-gmail-default"
+            ? {
+                providerOverride: "mock-openai",
+                modelOverride: "gpt-5.6-luna",
+                thinkingLevel: "off",
+              }
+            : {}),
           // A channel route arms durable restart-recovery source claims.
           delivery: normalizeSessionDeliveryState({
             context: { channel: "telegram", to: "-100001", accountId: "readmission" },
           }),
+          updatedAt: Date.now(),
           sessionStartedAt: Date.now(),
-        };
-        if (scheduledAccount) {
-          Object.assign(session, {
-            authProfileOverride: "mock-openai:conversation",
-            authProfileOverrideSource: "user",
-            authProfileOverrideCompactionCount: 2,
-          });
-        }
-        if (locked || boundAccount) {
-          session.modelSelectionLocked = true;
-        }
-        if (gmail) {
-          Object.assign(session, {
-            providerOverride: "mock-openai",
-            modelOverride: "gpt-5.6-luna",
-            thinkingLevel: "off",
-          });
-        }
-        const scope = await createSession("config-readmission", session);
+        });
         let sourceReferences = 1;
         const operatorAuthority =
           scenario === "allow-control" || scenario.startsWith("scheduled-")
@@ -425,46 +369,6 @@ it.for([
               missingDestinationProfileId,
             );
           }
-          const payload: Extract<CronJob["payload"], { kind: "agentTurn" }> = {
-            kind: "agentTurn",
-            message: "Background exec completed",
-          };
-          if (gmail) {
-            payload.externalContentSource = "gmail";
-          }
-          if (locked) {
-            payload.fallbacks = ["mock-openai/gpt-5.6-sol"];
-          }
-          if (explicitScheduledModel) {
-            payload.model =
-              scenario === "scheduled-model-malformed"
-                ? "openai/"
-                : `${scheduledProvider}/gpt-5.6-sol`;
-          }
-          const scheduledAutomation = scenario.startsWith("scheduled-")
-            ? {
-                ...TEST_SCHEDULED_TURN,
-                job: {
-                  ...makeCronJob({
-                    id: "scheduled-readmission",
-                    name: "Scheduled readmission",
-                    createdAtMs: 1,
-                    updatedAtMs: 1,
-                    wakeMode: "now",
-                    sessionTarget: `session:${scope.sessionKey}`,
-                    payload,
-                  }),
-                  inferenceBinding,
-                },
-                onLaneWait: ({ waiting }: { waiting: boolean }) => laneStates.push(waiting),
-                operatorAuthority,
-                assertCurrent: () => {
-                  if (revoked) {
-                    throw new Error("Scheduled source retired");
-                  }
-                },
-              }
-            : undefined;
           completion = enqueueSessionEventForHost("Background exec completed", {
             ...scope,
             source: "exec",
@@ -474,7 +378,50 @@ it.for([
             expectedTarget:
               scenario === "retained-ceiling" ? { ...target, toolsAllow: ["read"] } : target,
             abortSignal: signal,
-            scheduledAutomation,
+            ...(scenario.startsWith("scheduled-")
+              ? {
+                  scheduledAutomation: {
+                    ...TEST_SCHEDULED_TURN,
+                    job: {
+                      id: "scheduled-readmission",
+                      name: "Scheduled readmission",
+                      enabled: true,
+                      createdAtMs: 1,
+                      updatedAtMs: 1,
+                      schedule: { kind: "every" as const, everyMs: 60_000 },
+                      sessionTarget: `session:${scope.sessionKey}` as const,
+                      wakeMode: "now" as const,
+                      payload: {
+                        kind: "agentTurn" as const,
+                        message: "Background exec completed",
+                        ...(scenario === "scheduled-gmail-default"
+                          ? { externalContentSource: "gmail" as const }
+                          : {}),
+                        ...(scenario === "scheduled-subagent-locked"
+                          ? { fallbacks: ["mock-openai/gpt-5.6-sol"] }
+                          : {}),
+                        ...(explicitScheduledModel
+                          ? {
+                              model:
+                                scenario === "scheduled-model-malformed"
+                                  ? "openai/"
+                                  : `${scheduledProvider}/gpt-5.6-sol`,
+                            }
+                          : {}),
+                      },
+                      state: {},
+                      inferenceBinding,
+                    },
+                    onLaneWait: ({ waiting }) => laneStates.push(waiting),
+                    operatorAuthority,
+                    assertCurrent: () => {
+                      if (revoked) {
+                        throw new Error("Scheduled source retired");
+                      }
+                    },
+                  },
+                }
+              : {}),
             assertCurrent: () => {
               if (revoked && !scenario.startsWith("scheduled-")) {
                 throw new Error("Background producer retired");
@@ -498,26 +445,36 @@ it.for([
           if (scenario === "scheduled-control") {
             expect(laneStates.at(-1)).toBe(true);
           }
-          const published = structuredClone(config);
-          const publishedDefaults = expectDefined(published.agents?.defaults, "published defaults");
-          if (gmail) {
-            published.hooks = {
-              gmail: { model: "mock-openai/gpt-5.6-sol", thinking: "high" },
-            };
-          }
-          if (scenario === "scheduled-model-revoked") {
-            publishedDefaults.modelPolicy = { allow: ["mock-openai/gpt-5.6-luna"] };
-          } else if (scheduledSubagent) {
-            publishedDefaults.subagents = {
-              model: {
-                primary: "mock-openai/gpt-5.6-sol",
-                fallbacks: ["mock-openai/gpt-5.6-luna"],
-              },
-            };
-          }
-          // Ceiling and control publish a change that still permits write.
-          published.tools = { deny: scenario === "published-deny" ? ["write"] : ["exec"] };
-          setRuntimeConfigSnapshot(published);
+          setRuntimeConfigSnapshot({
+            ...config,
+            ...(scenario === "scheduled-gmail-default"
+              ? {
+                  hooks: { gmail: { model: "mock-openai/gpt-5.6-sol", thinking: "high" as const } },
+                }
+              : {}),
+            ...(scenario === "scheduled-model-revoked" || scheduledSubagent
+              ? {
+                  agents: {
+                    ...config.agents,
+                    defaults: {
+                      ...config.agents?.defaults,
+                      ...(scenario === "scheduled-model-revoked"
+                        ? { modelPolicy: { allow: ["mock-openai/gpt-5.6-luna"] } }
+                        : {
+                            subagents: {
+                              model: {
+                                primary: "mock-openai/gpt-5.6-sol",
+                                fallbacks: ["mock-openai/gpt-5.6-luna"],
+                              },
+                            },
+                          }),
+                    },
+                  },
+                }
+              : {}),
+            // Ceiling and control publish a change that still permits write.
+            tools: { deny: scenario === "published-deny" ? ["write"] : ["exec"] },
+          });
           storming = scenario === "publication-storm";
           revoked = scenario === "revoked-producer" || scenario === "scheduled-revoked";
           releaseFirst.resolve();
@@ -550,28 +507,28 @@ it.for([
           if (executes) {
             expect(prompts[1]).toContain("Background exec completed");
           }
-          const saved = await readSessionEntryInWorker(scope);
-          const expectModel = (
-            index: number,
-            model: string,
-            extra: Partial<RunEmbeddedAgentParams> = {},
-          ) =>
-            expect(runEmbeddedAgentMock.mock.calls[index]?.[0]).toMatchObject({
-              provider: "mock-openai",
-              model,
-              ...extra,
-            });
           if (scenario === "scheduled-control" || scenario === "scheduled-subagent-default") {
-            expectModel(1, "gpt-5.6-sol");
+            expect(runEmbeddedAgentMock.mock.calls[1]?.[0]).toMatchObject({
+              provider: "mock-openai",
+              model: "gpt-5.6-sol",
+            });
           }
           if (scenario === "scheduled-subagent-default") {
-            expectModel(2, "gpt-5.6-luna");
+            expect(runEmbeddedAgentMock.mock.calls[2]?.[0]).toMatchObject({
+              provider: "mock-openai",
+              model: "gpt-5.6-luna",
+            });
+            const saved = await readSessionEntryInWorker(scope);
             expect(saved?.providerOverride).toBeUndefined();
             expect(saved?.modelOverride).toBeUndefined();
           }
           if (scenario === "scheduled-gmail-default") {
-            expectModel(1, "gpt-5.6-sol", { thinkLevel: "high" });
-            expect(saved).toMatchObject({
+            expect(runEmbeddedAgentMock.mock.calls[1]?.[0]).toMatchObject({
+              provider: "mock-openai",
+              model: "gpt-5.6-sol",
+              thinkLevel: "high",
+            });
+            expect(await readSessionEntryInWorker(scope)).toMatchObject({
               providerOverride: "mock-openai",
               modelOverride: "gpt-5.6-luna",
               thinkingLevel: "off",
@@ -581,8 +538,11 @@ it.for([
             expect(completedOutcome.error).toBe(
               "⚠️ This model was not found. Choose another model in the Control UI or run `openclaw configure`.",
             );
-            expectModel(1, "gpt-5.6-luna");
-            expect(saved).toMatchObject({
+            expect(runEmbeddedAgentMock.mock.calls[1]?.[0]).toMatchObject({
+              provider: "mock-openai",
+              model: "gpt-5.6-luna",
+            });
+            expect(await readSessionEntryInWorker(scope)).toMatchObject({
               modelSelectionLocked: true,
             });
           }
@@ -595,7 +555,7 @@ it.for([
                   ? "mock-openai:conversation"
                   : "mock-other:automation",
             });
-            expect(saved).toMatchObject({
+            expect(await readSessionEntryInWorker(scope)).toMatchObject({
               authProfileOverride: missingDestinationProfileId ?? "mock-openai:conversation",
               authProfileOverrideSource: "user",
               authProfileOverrideCompactionCount: 2,
@@ -650,7 +610,9 @@ it.for([
           storming = false;
           revoked = false;
           releaseFirst.resolve();
-          await settleWork(first.settled, completion?.settled, replay?.settled);
+          await Promise.allSettled([first.settled, completion?.settled, replay?.settled]);
+          await drainGlobalSingletonLifecycleState("restart");
+          resetSystemEventsForTest();
         }
       },
     );
@@ -665,24 +627,46 @@ it("rebuilds queued Gmail content under the readmitted external-content policy",
     async (state) => {
       const config = completionConfig(state.workspaceDir);
       config.hooks = { gmail: { allowUnsafeExternalContent: true } };
-      await prepareState(state, config);
-      const scope = await createSession("hook:gmail:readmission", {
+      setRuntimeConfigSnapshot(config);
+      await state.writeConfig(config);
+      openOpenClawStateDatabase();
+      const scope = { agentId: "main", sessionKey: "agent:main:hook:gmail:readmission" };
+      await replaceSessionEntry(scope, {
         sessionId: "gmail-readmission",
+        lifecycleRevision: "original",
+        permissionMode: "full",
+        updatedAt: Date.now(),
       });
-      const gate = createTurnGate(signal);
+      const firstStarted = createDeferred();
+      const releaseFirst = createDeferred();
+      const queued = createDeferred();
       const prompts: string[] = [];
       runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
         prompts.push(params.prompt);
         await startRun(params);
         if (prompts.length === 1) {
-          await gate.hold();
+          firstStarted.resolve();
+          await releaseFirst.promise;
         }
         return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
       });
-      const first = await enqueueFirst(scope, signal);
+      const first = enqueueSessionEventForHost("First admitted work", {
+        ...scope,
+        source: "task",
+        expectedTarget: await captureSessionEventTargetForHost(scope.agentId, scope.sessionKey),
+        abortSignal: signal,
+        deliver: false,
+      });
       let scheduled: ReturnType<typeof runCronSessionTurn> | undefined;
       try {
-        await gate.waitForStart(first.settled);
+        await withinTest(
+          awaitGateBeforeSettlement(
+            firstStarted.promise,
+            first.settled,
+            "first turn never started",
+          ),
+          signal,
+        );
         scheduled = runCronSessionTurn({
           ...TEST_SCHEDULED_TURN,
           ...scope,
@@ -697,14 +681,21 @@ it("rebuilds queued Gmail content under the readmitted external-content policy",
           text: "Summarize this synthetic email.",
           deliveryAttemptFence: null,
           abortSignal: signal,
-          onLaneWait: gate.onLaneWait,
+          onLaneWait(info) {
+            if (info?.waiting) {
+              queued.resolve();
+            }
+          },
         });
-        await gate.waitForQueue(scheduled);
+        await withinTest(
+          awaitGateBeforeSettlement(queued.promise, scheduled, "scheduled turn never queued"),
+          signal,
+        );
         setRuntimeConfigSnapshot({
           ...config,
           hooks: { gmail: { allowUnsafeExternalContent: false } },
         });
-        gate.release();
+        releaseFirst.resolve();
         await expect(first.settled).resolves.toMatchObject({ status: "completed" });
         await expect(scheduled).resolves.toMatchObject({ status: "ok", executionStarted: true });
         expect(prompts).toHaveLength(2);
@@ -712,11 +703,18 @@ it("rebuilds queued Gmail content under the readmitted external-content policy",
         expect(prompt).toMatch(
           /<<<EXTERNAL_UNTRUSTED_CONTENT id="[^"]+">>>[\s\S]*Summarize this synthetic email\.[\s\S]*<<<END_EXTERNAL_UNTRUSTED_CONTENT id="[^"]+">>>/,
         );
+        expect(prompt).toContain("Job ID: gmail-policy-readmission");
+        expect(prompt).toContain("Queued Gmail report");
+        expect(prompt).toContain("Source: Email");
+        expect(prompt).toContain("Current time:");
+        expect(prompt).toContain("Reference UTC:");
         expect(prompt.match(/This is an unattended scheduled run\./g)).toHaveLength(1);
         expect(peekSystemEventEntries(scope.sessionKey)).toEqual([]);
       } finally {
-        gate.release();
-        await settleWork(first.settled, scheduled);
+        releaseFirst.resolve();
+        await Promise.allSettled([first.settled, scheduled]);
+        await drainGlobalSingletonLifecycleState("restart");
+        resetSystemEventsForTest();
       }
     },
   );
@@ -729,7 +727,9 @@ it.for(["changed", "unchanged", "no-delivery"] as const)(
       { label: "scheduled-message-route", env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
         const config = completionConfig(state.workspaceDir);
-        await prepareState(state, config);
+        setRuntimeConfigSnapshot(config);
+        await state.writeConfig(config);
+        openOpenClawStateDatabase();
         const registry = captureActivePluginRegistrySnapshot();
         const currentRegistry = expectDefined(registry.activeRegistry, "active plugin registry");
         const sendText = vi
@@ -764,11 +764,18 @@ it.for(["changed", "unchanged", "no-delivery"] as const)(
             ...channels.channelSetups,
           ],
         });
+        const scope = { agentId: "main", sessionKey: "agent:main:scheduled-message-route" };
         const route = { channel: "telegram", to: "-100001", accountId: "default" };
-        const scope = await createSession("scheduled-message-route", {
+        await replaceSessionEntry(scope, {
+          sessionId: "scheduled-message-route",
+          lifecycleRevision: "original",
+          permissionMode: "full",
           delivery: normalizeSessionDeliveryState({ context: route }),
+          updatedAt: Date.now(),
         });
-        const gate = createTurnGate(signal);
+        const firstStarted = createDeferred();
+        const releaseFirst = createDeferred();
+        const queued = createDeferred();
         let nativeCalls = 0;
         let messageError: unknown;
         runEmbeddedAgentMock
@@ -776,7 +783,8 @@ it.for(["changed", "unchanged", "no-delivery"] as const)(
           .mockImplementation(async (params: RunEmbeddedAgentInternalParams) => {
             await startRun(params);
             if (++nativeCalls === 1) {
-              await gate.hold();
+              firstStarted.resolve();
+              await releaseFirst.promise;
             } else {
               const tool = createMessageTool({
                 config: params.config,
@@ -812,10 +820,23 @@ it.for(["changed", "unchanged", "no-delivery"] as const)(
               })),
             };
           });
-        const first = await enqueueFirst(scope, signal);
+        const first = enqueueSessionEventForHost("First admitted work", {
+          ...scope,
+          source: "task",
+          expectedTarget: await captureSessionEventTargetForHost(scope.agentId, scope.sessionKey),
+          abortSignal: signal,
+          deliver: false,
+        });
         let scheduled: ReturnType<typeof runCronSessionTurn> | undefined;
         try {
-          await gate.waitForStart(first.settled);
+          await withinTest(
+            awaitGateBeforeSettlement(
+              firstStarted.promise,
+              first.settled,
+              "first turn never started",
+            ),
+            signal,
+          );
           scheduled = runCronSessionTurn({
             ...TEST_SCHEDULED_TURN,
             ...scope,
@@ -827,15 +848,22 @@ it.for(["changed", "unchanged", "no-delivery"] as const)(
             text: "Send the scheduled report",
             deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent() {} },
             abortSignal: signal,
-            onLaneWait: gate.onLaneWait,
+            onLaneWait(info) {
+              if (info?.waiting) {
+                queued.resolve();
+              }
+            },
           });
-          await gate.waitForQueue(scheduled);
+          await withinTest(
+            awaitGateBeforeSettlement(queued.promise, scheduled, "scheduled turn never queued"),
+            signal,
+          );
           if (scenario !== "unchanged") {
             await patchSessionEntryCore(scope, () => ({
               delivery: normalizeSessionDeliveryState({ context: { ...route, to: "-100002" } }),
             }));
           }
-          gate.release();
+          releaseFirst.resolve();
           await first.settled;
           const outcome = await scheduled;
           expect(nativeCalls).toBe(2);
@@ -852,8 +880,10 @@ it.for(["changed", "unchanged", "no-delivery"] as const)(
             }
           }
         } finally {
-          gate.release();
-          await settleWork(first.settled, scheduled);
+          releaseFirst.resolve();
+          await Promise.allSettled([first.settled, scheduled]);
+          await drainGlobalSingletonLifecycleState("restart");
+          resetSystemEventsForTest();
           restoreActivePluginRegistrySnapshot(registry);
         }
       },
@@ -868,10 +898,17 @@ it.for(["transport", "agent", "context-overflow"] as const)(
       { label: "session-event-delivery", env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
         const config = completionConfig(state.workspaceDir);
-        await prepareState(state, config);
+        setRuntimeConfigSnapshot(config);
+        await state.writeConfig(config);
+        openOpenClawStateDatabase();
+        const scope = { agentId: "main", sessionKey: "agent:main:scheduled-delivery" };
         const route = { channel: "telegram", to: "-100001", accountId: "scheduled" };
-        const scope = await createSession("scheduled-delivery", {
+        await replaceSessionEntry(scope, {
+          sessionId: "scheduled-delivery",
+          lifecycleRevision: "original",
+          permissionMode: "full",
           delivery: normalizeSessionDeliveryState({ context: route }),
+          updatedAt: Date.now(),
         });
         // Inject only this transport failure; sibling cases retain normal silent delivery.
         using routePreparedReply = vi.spyOn(routedReplies, "routePreparedReply").mockResolvedValue({
@@ -958,6 +995,8 @@ it.for(["transport", "agent", "context-overflow"] as const)(
               : {}),
           });
           if (failureKind === "context-overflow") {
+            expect(outcome.error).toContain("use /compact");
+            expect(outcome.error).toContain("use /new");
             expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
           }
           if (failureKind === "transport") {
@@ -967,7 +1006,9 @@ it.for(["transport", "agent", "context-overflow"] as const)(
           }
         } finally {
           receipt.cancel();
-          await settleWork(receipt.settled);
+          await receipt.settled;
+          await drainGlobalSingletonLifecycleState("restart");
+          resetSystemEventsForTest();
         }
       },
     );

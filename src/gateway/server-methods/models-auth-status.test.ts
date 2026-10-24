@@ -455,7 +455,7 @@ describe("models.authStatus", () => {
 
     const admin = createOptions({ agentId: "main" });
     const reader = createOptions({ agentId: "main" }, ["operator.read"]);
-    await Promise.all([admin, reader].map((opts) => handler(opts)));
+    await Promise.all([admin, reader].map(async (opts) => handler(opts)));
 
     expect(firstRespondCall(admin)?.[1]?.providers[0]?.profiles[0]).toMatchObject({
       email: "owner@example.com",
@@ -640,13 +640,13 @@ describe("models.authStatus", () => {
     });
     try {
       expect((await firstAuthStatusProvider())?.status).toBe("expired");
-      readExternal.mockReturnValue(
-        oauthCredential("minimax-portal", {
-          access: "fixture-new-access",
-          refresh: "fixture-new-refresh",
-          expires: Date.now() + 2 * 24 * 60 * 60_000,
-        }),
-      );
+      readExternal.mockReturnValue({
+        type: "oauth",
+        provider: "minimax-portal",
+        access: "fixture-new-access",
+        refresh: "fixture-new-refresh",
+        expires: Date.now() + 2 * 24 * 60 * 60_000,
+      });
       expect((await firstAuthStatusProvider())?.status).toBe("ok");
     } finally {
       readExternal.mockRestore();
