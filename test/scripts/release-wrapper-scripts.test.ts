@@ -56,14 +56,12 @@ it("runs trusted harness planning and verification against an old release target
     join(oldTarget, "package.json"),
     JSON.stringify({ name: "openclaw", version: "2026.7.1-beta.3" }),
   );
-  writeFileSync(
-    join(oldTarget, "scripts/openclaw-release-clawhub-plan.ts"),
-    'throw new Error("old target planner invoked");\n',
-  );
-  writeFileSync(
-    join(oldTarget, "scripts/release-verify-beta.ts"),
-    'throw new Error("old target verifier invoked");\n',
-  );
+  for (const script of ["openclaw-release-clawhub-plan", "release-verify-beta"]) {
+    writeFileSync(
+      join(oldTarget, `scripts/${script}.ts`),
+      'throw new Error("old target invoked");\n',
+    );
+  }
   const bootstrapWorkflowRef = `release-publish/${"b".repeat(12)}-123`;
   const plan = runScript(
     "openclaw-release-clawhub-plan",
@@ -82,7 +80,7 @@ it("runs trusted harness planning and verification against an old release target
     bootstrap: { ref: bootstrapWorkflowRef, shouldDispatch: false },
     normal: { ref: bootstrapWorkflowRef, shouldDispatch: false },
   });
-  expect(plan.stderr).not.toContain("old target planner invoked");
+  expect(plan.stderr).not.toContain("old target invoked");
 
   const verify = runScript(
     "release-verify-beta",
@@ -103,6 +101,6 @@ it("runs trusted harness planning and verification against an old release target
       "package.json version is 2026.7.1-beta.3; expected 2026.7.1-beta.4.",
     ),
   });
-  expect(verify.stderr).not.toContain("old target verifier invoked");
+  expect(verify.stderr).not.toContain("old target invoked");
   expect(verify.stderr).not.toContain("Unknown argument");
 });

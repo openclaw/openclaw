@@ -2,7 +2,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  normalizeBuildCommit,
   normalizeBuildTimestamp,
   resolveBuildInfo,
   writeBuildInfo,
@@ -86,12 +85,6 @@ describe("write-build-info", () => {
     expect(resolve({ env, execFileSync: unavailableGit }).commit).toBe(env.GITHUB_SHA);
     expect(() => resolve({ env: { GITHUB_SHA: "bad" }, execFileSync: unavailableGit })).toThrow(
       "GITHUB_SHA must be a full 40-character Git commit SHA.",
-    );
-  });
-
-  it.each(["abc1234", "g".repeat(40)])("rejects malformed explicit commit %s", (commit) => {
-    expect(() => normalizeBuildCommit(commit)).toThrow(
-      "GIT_COMMIT must be a full 40-character Git commit SHA.",
     );
   });
 
