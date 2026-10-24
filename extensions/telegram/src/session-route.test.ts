@@ -1,4 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import {
+  type ConversationBindingInspection,
+  inspectConversationBindingAsync,
+} from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
 import { registerSessionBindingAdapter, testing } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   createTestRegistry,
@@ -7,8 +11,10 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { telegramPlugin } from "./channel.js";
+import { prepareTelegramConversationRouteOwnersAsync } from "./conversation-route-owner.js";
 import { inspectTelegramConversationRouteOwner } from "./conversation-route-owner.test-support.js";
 import {
+  inspectTelegramConversationRouteAsync,
   resolveTelegramConversationRoute,
   resolveTelegramTargetSession,
 } from "./conversation-route.js";
@@ -357,6 +363,206 @@ describe("inspectTelegramConversationRouteOwner", () => {
       ).toEqual(expected);
     },
   );
+
+  describe("a runtime binding when ordinary agent selection is ambiguous", () => {
+    // Two agents and no route binding: ordinary routing cannot choose an agent on its own.
+    // The conversation's runtime binding already names one, so it must be read first.
+    const ambiguousCfg: OpenClawConfig = {
+      agents: { entries: { main: {}, codex: {} } },
+      bindings: [],
+      channels: { telegram: { accounts: { default: {} } } },
+    };
+    const direct = {
+      cfg: ambiguousCfg,
+      accountId: "default",
+      chatId: 1234,
+      senderId: 1234,
+      isGroup: false,
+      threadSpec: { scope: "none" as const },
+    };
+
+    const bindTo = (targetSessionKey: string, metadata?: Record<string, unknown>) => {
+      const touchAsync = vi.fn(async () => {});
+      registerSessionBindingAdapter({
+        channel: "telegram",
+        accountId: "default",
+        listBySession: () => [],
+        resolveByConversation: (conversation) => ({
+          bindingId: "binding-dm",
+          targetSessionKey,
+          targetKind: "session",
+          conversation,
+          status: "active",
+          boundAt: 1,
+          ...(metadata ? { metadata } : {}),
+        }),
+        touchAsync,
+      });
+      return touchAsync;
+    };
+
+    it("routes inbound messages to the bound agent", async () => {
+      const touchAsync = bindTo("agent:codex:acp:session-1");
+
+      const result = await resolveTelegramConversationRoute(direct);
+
+      expect(result.route.agentId).toBe("codex");
+      expect(result.route.sessionKey).toBe("agent:codex:acp:session-1");
+      expect(result.bindingMode).toEqual({
+        kind: "runtime-bound",
+        sessionKey: "agent:codex:acp:session-1",
+      });
+      expect(touchAsync).toHaveBeenCalledTimes(1);
+    });
+
+    it("inspects the bound agent without touching liveness", async () => {
+      const touchAsync = bindTo("agent:codex:acp:session-1");
+
+      const result = await inspectTelegramConversationRouteAsync(direct);
+
+      expect(result.route.agentId).toBe("codex");
+      expect(touchAsync).not.toHaveBeenCalled();
+    });
+
+    it("uses explicit bound-agent metadata for a sentinel session", async () => {
+      bindTo("global", { agentId: "codex" });
+
+      const result = await resolveTelegramConversationRoute(direct);
+
+      expect(result.route.agentId).toBe("codex");
+      expect(result.route.sessionKey).toBe("global");
+    });
+
+    it("still requires agent selection when the binding names no agent", async () => {
+      bindTo("global");
+
+      await expect(resolveTelegramConversationRoute(direct)).rejects.toMatchObject({
+        code: "AGENT_SELECTION_REQUIRED",
+      });
+    });
+
+    // The awaited inspection applies the change once, as a revocation or rebind landing just
+    // before routing would; agent selection must follow the inspected binding.
+    const bindChangingDuringResolution = (change: "revoke" | "rebind") => {
+      let targetSessionKey: string | null = "agent:codex:acp:session-1";
+      let boundAt = 1;
+      let changed = false;
+      const read = (conversation: {
+        channel: string;
+        accountId: string;
+        conversationId: string;
+      }) =>
+        targetSessionKey
+          ? {
+              bindingId: "binding-dm",
+              targetSessionKey,
+              targetKind: "session" as const,
+              conversation,
+              status: "active" as const,
+              boundAt,
+            }
+          : null;
+      registerSessionBindingAdapter({
+        channel: "telegram",
+        accountId: "default",
+        listBySession: () => [],
+        resolveByConversation: read,
+        inspectByConversationAsync: async (conversation) => {
+          await Promise.resolve();
+          if (!changed) {
+            changed = true;
+            if (change === "revoke") {
+              targetSessionKey = null;
+            } else {
+              targetSessionKey = "agent:main:acp:session-2";
+              boundAt = 2;
+            }
+          }
+          return read(conversation);
+        },
+        touchAsync: vi.fn(async () => {}),
+      });
+    };
+
+    it("rejects the former owner when the binding is revoked during resolution", async () => {
+      bindChangingDuringResolution("revoke");
+
+      await expect(resolveTelegramConversationRoute(direct)).rejects.toMatchObject({
+        code: "AGENT_SELECTION_REQUIRED",
+      });
+    });
+
+    it("routes to the new owner when the binding is replaced during resolution", async () => {
+      bindChangingDuringResolution("rebind");
+
+      const result = await resolveTelegramConversationRoute(direct);
+
+      expect(result.route.agentId).toBe("main");
+      expect(result.route.sessionKey).toBe("agent:main:acp:session-2");
+      expect(result.runtimeBinding?.boundAt).toBe(2);
+    });
+
+    // Delivery prepares the owner once and reads it again at the effect with fresh binding
+    // facts; a change landing in between must reach agent selection, not the prepared owner.
+    const prepareOwnerThenChange = async (change: "revoke" | "rebind") => {
+      let targetSessionKey: string | null = "agent:codex:acp:session-1";
+      registerSessionBindingAdapter({
+        channel: "telegram",
+        accountId: "default",
+        listBySession: () => [],
+        resolveByConversation: (conversation) =>
+          targetSessionKey
+            ? {
+                bindingId: "binding-dm",
+                targetSessionKey,
+                targetKind: "session",
+                conversation,
+                status: "active",
+                boundAt: 1,
+              }
+            : null,
+      });
+      let refs: Parameters<typeof inspectConversationBindingAsync>[0][] = [];
+      let current: ConversationBindingInspection[] = [];
+      const refresh = async () => {
+        current = await Promise.all(refs.map(inspectConversationBindingAsync));
+      };
+      const [readOwner] = await prepareTelegramConversationRouteOwnersAsync(
+        [
+          {
+            cfg: ambiguousCfg,
+            accountId: "default",
+            conversation: { kind: "direct", peerId: "1234" },
+          },
+        ],
+        async (prepared) => {
+          refs = [...prepared];
+          await refresh();
+          return () => current;
+        },
+      );
+      const preparedOwner = readOwner!();
+      targetSessionKey = change === "revoke" ? null : "agent:main:acp:session-2";
+      await refresh();
+      return { preparedOwner, readOwner: readOwner! };
+    };
+
+    it("rejects the former owner when the binding is revoked after preparation", async () => {
+      const { preparedOwner, readOwner } = await prepareOwnerThenChange("revoke");
+
+      expect(preparedOwner).toEqual({ kind: "agent", agentId: "codex" });
+      expect(() => readOwner()).toThrow(
+        expect.objectContaining({ code: "AGENT_SELECTION_REQUIRED" }),
+      );
+    });
+
+    it("selects the new owner when the binding is replaced after preparation", async () => {
+      const { preparedOwner, readOwner } = await prepareOwnerThenChange("rebind");
+
+      expect(preparedOwner).toEqual({ kind: "agent", agentId: "codex" });
+      expect(readOwner()).toEqual({ kind: "agent", agentId: "main" });
+    });
+  });
 });
 
 describe("telegramPlugin reply threading", () => {

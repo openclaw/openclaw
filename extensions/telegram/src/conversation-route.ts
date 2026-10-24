@@ -74,16 +74,46 @@ function prepareTelegramConversationRoute(params: ResolveTelegramConversationRou
     resolvedThreadId,
     chatId: params.chatId,
   });
-  let route = resolveAgentRoute({
-    cfg: params.cfg,
+  const routeInput = {
     channel: "telegram",
     accountId: params.accountId,
     peer: {
-      kind: params.isGroup ? "group" : "direct",
+      kind: params.isGroup ? ("group" as const) : ("direct" as const),
       id: peerId,
     },
     parentPeer,
-  });
+  };
+  const conversation = {
+    channel: "telegram",
+    accountId: params.accountId,
+    conversationId,
+  };
+  // The binding owner supplies its agent before ordinary agent selection, which rejects an
+  // ambiguous multi-agent roster even when this conversation's binding already names its
+  // agent. Session-only config keeps scope derivation from consulting the roster at all.
+  // Selection runs inside the binding inspection, so the agent and binding come from one read.
+  const selectRoute = ({ boundAgentId }: { boundAgentId?: string }) =>
+    finishTelegramConversationRoute(
+      params,
+      { conversationId, peerId },
+      boundAgentId
+        ? resolveAgentRoute({
+            ...routeInput,
+            cfg: { session: params.cfg.session },
+            defaultAgentId: boundAgentId,
+          })
+        : resolveAgentRoute({ ...routeInput, cfg: params.cfg }),
+    );
+  return { conversation, selectRoute };
+}
+
+function finishTelegramConversationRoute(
+  params: ResolveTelegramConversationRouteParams,
+  ids: { conversationId: string; peerId: string },
+  selectedRoute: TelegramResolvedRoute,
+) {
+  const { conversationId, peerId } = ids;
+  let route = selectedRoute;
 
   const rawTopicAgentId = params.topicAgentId?.trim();
   if (rawTopicAgentId) {
@@ -142,19 +172,11 @@ function prepareTelegramConversationRoute(params: ResolveTelegramConversationRou
       }
     : { kind: "none" };
 
-  return {
-    route,
-    bindingMode,
-    conversation: {
-      channel: "telegram",
-      accountId: params.accountId,
-      conversationId,
-    },
-  };
+  return { route, bindingMode };
 }
 
 function applyTelegramRuntimeRoute(
-  prepared: ReturnType<typeof prepareTelegramConversationRoute>,
+  prepared: ReturnType<typeof finishTelegramConversationRoute>,
   runtimeRoute: RuntimeConversationBindingRouteResult,
 ): TelegramConversationRouteResult {
   const route = runtimeRoute.route;
@@ -180,28 +202,48 @@ function applyTelegramRuntimeRoute(
   };
 }
 
+async function resolveTelegramRuntimeRoute(
+  params: ResolveTelegramConversationRouteParams,
+  touchBinding: boolean,
+): Promise<TelegramConversationRouteResult> {
+  const { conversation, selectRoute } = prepareTelegramConversationRoute(params);
+  // SAFETY: Widens the initializer; TS does not see the route callback's assignment.
+  let selected = undefined as ReturnType<typeof selectRoute> | undefined;
+  const runtimeRoute = await resolveRuntimeConversationBindingRouteAsync({
+    conversation,
+    touchBinding,
+    resolveRoute: (selection) => (selected = selectRoute(selection)).route,
+  });
+  if (!selected) {
+    throw new Error("Telegram route selection did not run");
+  }
+  return applyTelegramRuntimeRoute(selected, runtimeRoute);
+}
+
 export async function resolveTelegramConversationRoute(
   params: ResolveTelegramConversationRouteParams,
 ): Promise<TelegramConversationRouteResult> {
-  const prepared = prepareTelegramConversationRoute(params);
-  return applyTelegramRuntimeRoute(
-    prepared,
-    await resolveRuntimeConversationBindingRouteAsync(prepared),
-  );
+  return resolveTelegramRuntimeRoute(params, true);
 }
 
 /** Prepare route policy once; the supplied binding facts are checked at the effect. */
 export function prepareTelegramConversationRouteInspection(
   params: ResolveTelegramConversationRouteParams,
 ) {
-  const prepared = prepareTelegramConversationRoute(params);
+  const { conversation, selectRoute } = prepareTelegramConversationRoute(params);
   return {
-    conversation: prepared.conversation,
+    conversation,
     resolve(inspection: ConversationBindingInspection) {
-      return applyTelegramRuntimeRoute(
-        prepared,
-        inspectRuntimeConversationBindingRoute({ route: prepared.route, inspection }),
-      );
+      // SAFETY: Widens the initializer; TS does not see the route callback's assignment.
+      let selected = undefined as ReturnType<typeof selectRoute> | undefined;
+      const runtimeRoute = inspectRuntimeConversationBindingRoute({
+        inspection,
+        resolveRoute: (selection) => (selected = selectRoute(selection)).route,
+      });
+      if (!selected) {
+        throw new Error("Telegram route selection did not run");
+      }
+      return applyTelegramRuntimeRoute(selected, runtimeRoute);
     },
   };
 }
@@ -209,11 +251,7 @@ export function prepareTelegramConversationRouteInspection(
 export async function inspectTelegramConversationRouteAsync(
   params: ResolveTelegramConversationRouteParams,
 ): Promise<TelegramConversationRouteResult> {
-  const prepared = prepareTelegramConversationRoute(params);
-  return applyTelegramRuntimeRoute(
-    prepared,
-    await resolveRuntimeConversationBindingRouteAsync({ ...prepared, touchBinding: false }),
-  );
+  return resolveTelegramRuntimeRoute(params, false);
 }
 
 /** Extend only the inspected binding after native command authorization. */
