@@ -39,12 +39,11 @@ var isBoardSnapshot = (() => {
   let External = [
       new RegExp("^[a-z0-9-]{1,40}$", "u"),
       new RegExp(
-        "(^name$|^tabId$|^title$|^contentKind$|^contentOwner$|^registeredContentKind$|^pluginKind$|^props$|^presentation$|^heightMode$|^sizeW$|^sizeH$|^position$|^grantState$|^revision$|^instanceId$|^declaredSummary$|^declared$|^frameUrl$|^viewTicket$|^viewTicketTtlMs$|^viewGeneration$|^sandboxUrl$|^sandboxPort$|^sandboxOrigin$|^kindLabel$)",
+        "(^name$|^tabId$|^title$|^contentKind$|^contentOwner$|^pluginKind$|^props$|^presentation$|^heightMode$|^sizeW$|^sizeH$|^position$|^grantState$|^revision$|^instanceId$|^declaredSummary$|^declared$|^frameUrl$|^viewTicket$|^viewTicketTtlMs$|^viewGeneration$|^sandboxUrl$|^sandboxPort$|^sandboxOrigin$)",
         "u",
       ),
       new RegExp("^[a-z0-9][a-z0-9._-]{0,63}$", "u"),
       new RegExp("^[a-z0-9-]{1,40}$", "u"),
-      new RegExp("^[a-z][a-z0-9-]{0,31}$", "u"),
       new RegExp("^[a-z0-9][a-z0-9-]{0,63}:[a-z0-9][a-z0-9._-]{0,63}$", "u"),
       new RegExp("^.*$", "u"),
       new RegExp("(^netOrigins$|^tools$)", "u"),
@@ -127,22 +126,17 @@ var isBoardSnapshot = (() => {
             (typeof element.contentOwner == "string" &&
               (element.contentOwner === "html" ||
                 element.contentOwner === "mcp-app" ||
-                element.contentOwner === "plugin" ||
-                element.contentOwner === "registered"))) &&
-          (element.registeredContentKind === void 0 ||
-            !("registeredContentKind" in element) ||
-            (typeof element.registeredContentKind == "string" &&
-              External[4].test(element.registeredContentKind))) &&
+                element.contentOwner === "plugin"))) &&
           (element.pluginKind === void 0 ||
             !("pluginKind" in element) ||
-            (typeof element.pluginKind == "string" && External[5].test(element.pluginKind))) &&
+            (typeof element.pluginKind == "string" && External[4].test(element.pluginKind))) &&
           (element.props === void 0 ||
             !("props" in element) ||
             (typeof element.props == "object" &&
               element.props !== null &&
               !Array.isArray(element.props) &&
               Object.entries(element.props).every(
-                ([var_173, var_174], _) => !External[6].test(var_173) || !0,
+                ([var_173, var_174], _) => !External[5].test(var_173) || !0,
               ))) &&
           (element.presentation === void 0 ||
             !("presentation" in element) ||
@@ -184,7 +178,7 @@ var isBoardSnapshot = (() => {
               element.declared !== null &&
               !Array.isArray(element.declared) &&
               Object.getOwnPropertyNames(element.declared).every(
-                (var_175, var_176) => External[7].test(var_175) || !1,
+                (var_175, var_176) => External[6].test(var_175) || !1,
               ) &&
               (element.declared.netOrigins === void 0 ||
                 !("netOrigins" in element.declared) ||
@@ -227,7 +221,7 @@ var isBoardSnapshot = (() => {
           (element.viewGeneration === void 0 ||
             !("viewGeneration" in element) ||
             (typeof element.viewGeneration == "string" &&
-              External[8].test(element.viewGeneration))) &&
+              External[7].test(element.viewGeneration))) &&
           (element.sandboxUrl === void 0 ||
             !("sandboxUrl" in element) ||
             typeof element.sandboxUrl == "string") &&
@@ -238,14 +232,7 @@ var isBoardSnapshot = (() => {
                 (element.sandboxPort >= 1 && element.sandboxPort <= 65535)))) &&
           (element.sandboxOrigin === void 0 ||
             !("sandboxOrigin" in element) ||
-            typeof element.sandboxOrigin == "string") &&
-          (element.kindLabel === void 0 ||
-            !("kindLabel" in element) ||
-            (typeof element.kindLabel == "string" &&
-              (element.kindLabel.length >= 2 ||
-                (element.kindLabel.length >= 1 && CodePointCount(element.kindLabel) >= 1)) &&
-              (element.kindLabel.length <= 80 ||
-                (element.kindLabel.length <= 160 && CodePointCount(element.kindLabel) <= 80)))),
+            typeof element.sandboxOrigin == "string"),
       );
   return (value) => check_0(value);
 })();

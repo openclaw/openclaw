@@ -188,7 +188,7 @@ describe("public session document", () => {
               '[embed url="javascript:alert(1)" /][embed url="https://user:pw@example.test/" /]',
             ].join("\n\n"),
           ),
-          message("assistant", '[embed url="/__openclaw__/a2ui/" /]'),
+          message("assistant", '[embed url="/__openclaw__/canvas/" /]'),
         ],
         widgetOptions,
       ),

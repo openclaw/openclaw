@@ -8,10 +8,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import { createBoardHandlers } from "../gateway/server-methods/board.js";
 import type { GatewayRequestContext, RespondFn } from "../gateway/server-methods/types.js";
 import type { WidgetPresenter } from "../plugins/plugin-registration.types.js";
-import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { readCanvasDocumentHtmlSource, resolveCanvasDocumentsDir } from "./documents.js";
-import { registerTestWidgetContentKind as registerDiagramContentKind } from "./widget-tool.content-kinds.test-support.js";
 import {
   asGatewayCaller,
   createBoardPutCaller,
@@ -57,7 +54,7 @@ function createLiveBoardCaller(
   return callGateway;
 }
 
-const diagram = { title: "Diagram", widget_code: "diagram:ready", kind: "diagram" };
+const html = { title: "Diagram", widget_code: "<p>ready</p>", kind: "html" };
 const failingPresenter = () =>
   currentPresenter(async () => ({
     ok: false,
@@ -120,29 +117,7 @@ function pinner(agentSessionKey = "agent:main:pinned") {
     executeWidget({ agentSessionKey, title, widgetCode, pin: true });
 }
 
-it("builds a sorted kind enum and routes registered source through board put", async () => {
-  registerDiagramContentKind();
-  const { mock: callGatewayMock } = createBoardPutCaller();
-  const tool = createTool({
-    agentSessionKey: "agent:main:registered",
-  });
-  expect(tool.parameters).toHaveProperty("properties.kind.enum", ["html", "diagram"]);
-  await tool.execute("registered", { ...diagram, pin: true });
-  expect(callGatewayMock).toHaveBeenCalledWith(
-    "board.widget.put",
-    expect.objectContaining({
-      content: { kind: "registered", contentKind: "diagram", source: "diagram:ready" },
-    }),
-  );
-
-  setActivePluginRegistry(createEmptyPluginRegistry());
-  await expect(tool.execute("stale", diagram)).rejects.toThrow(
-    'widget kind "diagram" is unavailable; enable the plugin that provides it and retry',
-  );
-});
-
 it("uses board-only delivery when inline hosting is disabled", async () => {
-  registerDiagramContentKind();
   const { mock: callGatewayMock } = createBoardPutCaller();
   const tool = createTool({
     agentSessionKey: "agent:main:board-only",
@@ -153,12 +128,12 @@ it("uses board-only delivery when inline hosting is disabled", async () => {
     "Inline previews are unavailable this turn; set pin=true to save to the session dashboard",
   );
   expect(tool.description).not.toContain("Keep one-off visualizations inline");
-  await expect(tool.execute("unpinned", diagram)).rejects.toThrow(
+  await expect(tool.execute("unpinned", html)).rejects.toThrow(
     "inline widget hosting is disabled; set pin=true to place the widget on the session dashboard",
   );
   await expectNoDocument();
 
-  const result = await tool.execute("pinned", { ...diagram, pin: true });
+  const result = await tool.execute("pinned", { ...html, pin: true });
   expect(payload(result)).toEqual({
     status: "pinned",
     boardWidgetName: "diagram",
@@ -168,7 +143,7 @@ it("uses board-only delivery when inline hosting is disabled", async () => {
   expect(callGatewayMock).toHaveBeenCalledExactlyOnceWith(
     "board.widget.put",
     expect.objectContaining({
-      content: { kind: "registered", contentKind: "diagram", source: "diagram:ready" },
+      content: { kind: "html", html: "<p>ready</p>" },
     }),
   );
   await expectNoDocument();
@@ -259,7 +234,6 @@ it.each([
 );
 
 it("enforces current-presenter source kinds and byte limits in core", async () => {
-  registerDiagramContentKind();
   const presenter = currentPresenter(
     async () => {
       throw new Error("present must not run");
@@ -272,12 +246,11 @@ it("enforces current-presenter source kinds and byte limits in core", async () =
     presenterContext: {},
   });
   expect(tool.parameters).toHaveProperty("properties.kind.enum", ["html"]);
-  expect(tool.description).not.toContain("registered kinds are diagram");
   await expect(
     tool.execute("oversized-current", { title: "Large", widget_code: "123456789" }),
   ).rejects.toThrow("widget_code exceeds maximum size (8 bytes)");
-  await expect(tool.execute("unsupported-current", diagram)).rejects.toThrow(
-    "inline widget hosting is disabled",
+  await expect(tool.execute("unsupported-current", { ...html, kind: "diagram" })).rejects.toThrow(
+    'Unsupported widget kind "diagram"; use kind "html"',
   );
 });
 
