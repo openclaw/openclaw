@@ -1,10 +1,6 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { useCanvasSandboxFixture } from "./canvas-sandbox.test-support.ts";
 import {
   createChatFlowE2eSuite,
@@ -26,19 +22,6 @@ const doneSession = () => ({
   status: "done",
   updatedAt: Date.now(),
 });
-function proofDirectory(name: string) {
-  const root = process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR?.trim();
-  return root ? createControlUiE2eArtifactDir(name, root) : undefined;
-}
-async function screenshot(page: Page, directory: string | undefined, name: string) {
-  if (directory) {
-    await page.screenshot({
-      animations: "disabled",
-      fullPage: true,
-      path: path.join(directory, name),
-    });
-  }
-}
 function expectBubbleOrder(page: Page, texts: string[]) {
   return expect
     .poll(() =>
@@ -89,7 +72,6 @@ function canvasToolResult(viewId: string, toolCallId: string, timestamp: number)
 suite.define(() => {
   const canvasView = useCanvasSandboxFixture();
   it("renders each persisted Canvas view once after reload", async () => {
-    const artifactDir = proofDirectory("chat-canvas-history-stability");
     const page = await newChatPage(suite);
     const documentIds = ["cv_first", "cv_second"];
     const finalText = "Both previews are ready.";
@@ -153,26 +135,19 @@ suite.define(() => {
     await expectRenderedPreviews();
     await expect.poll(() => page.getByText(finalText, { exact: true }).isVisible()).toBe(true);
 
-    await screenshot(page, artifactDir, "before-reload.png");
-
     await page.reload();
     // Reload reinstalls the in-page mock Gateway and its request ring, so the
     // first startup request in the new document is the synchronization point.
     await gateway.waitForRequest("chat.startup");
     await expectRenderedPreviews();
     await expect.poll(() => page.getByText(finalText, { exact: true }).isVisible()).toBe(true);
-    await screenshot(page, artifactDir, "after-reload.png");
   });
 
   it("keeps multiple live replies after their delayed prompt before history catches up", async () => {
-    const artifactDir = proofDirectory("chat-live-final-order");
     const page = await newChatPage(suite, {
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
-      ...(artifactDir
-        ? { recordVideo: { dir: artifactDir, size: { width: 1280, height: 900 } } }
-        : {}),
     });
     const runId = "multi-reply-run";
     const replies = [
@@ -216,14 +191,6 @@ suite.define(() => {
         session: doneSession(),
       });
       await page.locator(".chat-thread-inner").getByText(text, { exact: true }).waitFor();
-    }
-    if (artifactDir) {
-      await writeFile(
-        path.join(artifactDir, "multi-reply-order.png"),
-        await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-          page.locator(".chat-thread-inner").getByText(replies[1], { exact: true }),
-        ]),
-      );
     }
     await expectBubbleOrder(page, [previous, prompt, ...replies]);
   });
