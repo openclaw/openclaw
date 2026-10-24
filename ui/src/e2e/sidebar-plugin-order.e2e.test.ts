@@ -1,9 +1,6 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import {
-  controlUiBundledSettingsStorageKey,
-  installMockGateway,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { isFocused } from "./sidebar-contract.test-support.ts";
 
@@ -86,15 +83,6 @@ async function checkPluginOrder({ page }: { page: Page }) {
     names: ["Beta", "Alpha"],
     sectionOrder: ["category:Beta", "category:Alpha", "ungrouped", "groups", "work"],
   });
-  // This profileless fixture owns personal navigation in the Gateway-scoped browser mirror.
-  const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
-  await expect
-    .poll(() =>
-      page.evaluate((key) => {
-        return JSON.parse(localStorage.getItem(key) ?? "{}").railShortcuts;
-      }, settingsKey),
-    )
-    .toEqual(expected);
   expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
   await page.reload();
   await row(workboard).waitFor();

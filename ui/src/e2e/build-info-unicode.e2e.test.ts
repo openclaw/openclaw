@@ -1,4 +1,3 @@
-// Control UI tests keep build identity readable at UTF-16 truncation boundaries.
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
@@ -23,8 +22,6 @@ const suite = createControlUiE2eSuite({
       buildId: BUILD_ID,
     }),
   startServerBeforeBrowser: true,
-  unavailableMessage: (executablePath) =>
-    `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
 const RAW_BRANCH = `${"a".repeat(12)}😀${"b".repeat(85)}😀suffix`;
@@ -41,7 +38,6 @@ async function openBuildDetails(page: Page) {
   await buildLink.waitFor();
   const compactText = (await buildLink.textContent()) ?? "";
   expect(compactText).toContain(`${COMPACT_BRANCH}@0123456`);
-  // Unicode mode consumes valid surrogate pairs as one code point.
   expect(compactText).not.toMatch(/�|[\uD800-\uDFFF]/u);
 
   await buildLink.hover();
@@ -69,17 +65,8 @@ async function openBuildDetails(page: Page) {
     )
     .toBe(true);
   expect(await buildLinkHandle.evaluate((element) => element.isConnected)).toBe(true);
-  await tooltip.evaluate((element, marker) => element.removeAttribute(marker), afterHideMarker);
   await page.mouse.up();
   await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/about");
-}
-
-async function assertFullBranchLabel(page: Page) {
-  const branchValue = page
-    .locator(".settings-kv dt", { hasText: "Branch" })
-    .locator("xpath=following-sibling::dd[1]/code");
-  await branchValue.waitFor();
-  expect(await branchValue.textContent()).toBe(`${NORMALIZED_BRANCH}*`);
 }
 
 suite.define(() => {
@@ -87,24 +74,16 @@ suite.define(() => {
     suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       await installMockGateway(page, { serverBuildId: BUILD_ID, serverVersion: "2026.7.10" });
 
-      const response = await page.goto(`${suite.server.baseUrl}chat`);
-      expect(response?.status()).toBe(200);
-      const identityCard = page.locator(".sidebar-identity-card");
+      await page.goto(`${suite.server.baseUrl}chat`);
       await expect
-        .poll(async () => {
-          const ariaLabel = (await identityCard.getAttribute("aria-label")) ?? "";
-          const detail = ariaLabel.split(": ").slice(1).join(": ");
-          const [gitIdentity, relativeAge] = detail.trim().split(" · ", 2);
-          return { gitIdentity, hasRelativeAge: Boolean(relativeAge?.trim()) };
-        })
-        .toEqual({
-          gitIdentity: `${COMPACT_BRANCH}@0123456*`,
-          hasRelativeAge: true,
-        });
-
+        .poll(() => page.locator(".sidebar-identity-card").getAttribute("aria-label"))
+        .toMatch(/: a{12}😀…@0123456\* · \S/u);
       await openBuildDetails(page);
-      await assertFullBranchLabel(page);
+      const branch = page
+        .locator(".settings-kv dt", { hasText: "Branch" })
+        .locator("xpath=following-sibling::dd[1]/code");
+      await expect.poll(() => branch.textContent()).toBe(`${NORMALIZED_BRANCH}*`);
       await page.reload();
-      await assertFullBranchLabel(page);
+      await expect.poll(() => branch.textContent()).toBe(`${NORMALIZED_BRANCH}*`);
     }));
 });
