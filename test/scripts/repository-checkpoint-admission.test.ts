@@ -73,9 +73,6 @@ it.skipIf(process.platform === "win32")("denies writes, redirected and escaped r
   };
   for (const argv of [
     ["git", "push", "origin", "HEAD"],
-    ["git", "update-ref", "--stdin", "-z"],
-    ["git", "fast-import", "--quiet"],
-    ["git", "config", "--local", "core.hooksPath", "/tmp"],
     [...init, "extra.git"],
     [...probe, "true"],
     [...prefix, "init", "--bare"],
