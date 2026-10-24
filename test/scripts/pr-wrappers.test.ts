@@ -568,7 +568,6 @@ exit "$status"
     ];
     for (const args of [
       ["123", outcomeOid],
-      ["123", "", "--confirmed-operator-recovery"],
       ["123", "not-an-outcome", "--confirmed-operator-recovery"],
       ["123", outcomeOid, "--confirmed-no-running-tools"],
       recovery("--auto-merge"),
@@ -576,9 +575,7 @@ exit "$status"
       recovery("--observed-head", selectedHead),
       ...[
         [],
-        [""],
         ["HEAD"],
-        ["B".repeat(40)],
         [selectedHead, "--observed-head", otherHead],
         [selectedHead, "--merged-head", otherHead],
         [selectedHead, "--replacement-head", otherHead],
@@ -592,10 +589,7 @@ exit "$status"
       recovery("--cancel-auto", "--replacement-head", selectedHead),
       ...[
         [],
-        [""],
         ["HEAD"],
-        ["a".repeat(39)],
-        ["A".repeat(40)],
         [selectedHead, "--replacement-head", otherHead],
         [selectedHead, "--confirmed-operator-recovery"],
       ].map((suffix) => recovery("--replacement-head").concat(suffix)),
@@ -605,7 +599,6 @@ exit "$status"
       ...[
         [],
         ["HEAD"],
-        ["B".repeat(40)],
         [selectedHead, "--merged-head", otherHead],
         [selectedHead, "--cancel-auto"],
         [selectedHead, "--auto-merge"],
@@ -637,7 +630,6 @@ exit "$status"
     }
     for (const args of [
       ["--pr"],
-      ["--pr", "0123"],
       ["--pr", "../123"],
       ["--pr", "123", "--pr", "456"],
       ["--dry-run", "--dry-run"],

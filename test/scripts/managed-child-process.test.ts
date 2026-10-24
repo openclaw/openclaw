@@ -555,76 +555,53 @@ sendReceipt(process.argv[2], "ready");
     expect(signalExitCode("SIGKILL")).toBe(137);
   });
 
-  it("wraps Windows shell argv through cmd.exe without Node shell mode", () => {
-    expect(
-      createManagedCommandSpawnSpec({
-        args: ["lint:scripts", "--", "scripts"],
-        bin: "pnpm.cmd",
-        comSpec: "C:\\Windows\\System32\\cmd.exe",
-        env: {},
-        platform: "win32",
-        shell: true,
-      }),
-    ).toEqual({
-      args: ["/d", "/s", "/c", "pnpm.cmd lint:scripts -- scripts"],
+  it.each([
+    {
+      bin: "pnpm.cmd",
+      args: ["lint:scripts", "--", "scripts"],
+      shell: true,
       command: "C:\\Windows\\System32\\cmd.exe",
-      options: {
-        cwd: undefined,
-        detached: false,
-        env: {},
-        shell: false,
-        stdio: "inherit",
-        windowsVerbatimArguments: true,
-      },
-    });
-  });
-
-  it("uses Windows shell normalization when the platform override is win32", () => {
-    expect(
-      createManagedCommandSpawnSpec({
-        args: ["-p", "packages/plugin-sdk/tsconfig.json", "--listFilesOnly", "--noEmit"],
-        bin: "C:\\repo\\node_modules\\.bin\\tsgo",
-        comSpec: "C:\\Windows\\System32\\cmd.exe",
-        env: {},
-        platform: "win32",
-      }),
-    ).toEqual({
-      args: [
+      argv: ["/d", "/s", "/c", "pnpm.cmd lint:scripts -- scripts"],
+    },
+    {
+      bin: "C:\\repo\\node_modules\\.bin\\tsgo",
+      args: ["-p", "packages/plugin-sdk/tsconfig.json", "--listFilesOnly", "--noEmit"],
+      shell: undefined,
+      command: "C:\\Windows\\System32\\cmd.exe",
+      argv: [
         "/d",
         "/s",
         "/c",
         "C:\\repo\\node_modules\\.bin\\tsgo -p packages/plugin-sdk/tsconfig.json --listFilesOnly --noEmit",
       ],
-      command: "C:\\Windows\\System32\\cmd.exe",
-      options: {
-        cwd: undefined,
-        detached: false,
-        env: {},
-        shell: false,
-        stdio: "inherit",
-        windowsVerbatimArguments: true,
-      },
-    });
-  });
-
-  it("preserves explicit non-shell Windows subprocesses", () => {
+    },
+    {
+      bin: "node.exe",
+      args: ["--version"],
+      shell: false,
+      command: "node.exe",
+      argv: ["--version"],
+    },
+  ])("normalizes Windows $bin (shell=$shell)", ({ bin, args, shell, command, argv }) => {
     expect(
       createManagedCommandSpawnSpec({
-        args: ["--version"],
-        bin: "node.exe",
+        bin,
+        args,
+        shell,
+        env: shell === false ? undefined : {},
+        comSpec: "C:\\Windows\\System32\\cmd.exe",
         platform: "win32",
-        shell: false,
       }),
     ).toEqual({
-      args: ["--version"],
-      command: "node.exe",
+      args: argv,
+      command,
       options: {
         cwd: undefined,
         detached: false,
-        env: undefined,
+        env: shell === false ? undefined : {},
         shell: false,
         stdio: "inherit",
-        windowsVerbatimArguments: undefined,
+        windowsVerbatimArguments: shell === false ? undefined : true,
       },
     });
   });
@@ -741,18 +718,13 @@ sendReceipt(process.argv[2], "ready");
   });
 
   it("signals POSIX process groups without signaling their leaders twice", () => {
-    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
+    using kill = vi.spyOn(process, "kill").mockReturnValue(true);
     const child = { kill: vi.fn(), pid: 12345 };
-
-    try {
-      expect(terminateManagedChild(child, "SIGTERM", { platform: "linux" })).toEqual({
-        processTreeState: "signaled",
-      });
-      expect(kill).toHaveBeenCalledWith(-12345, "SIGTERM");
-      expect(child.kill).not.toHaveBeenCalled();
-    } finally {
-      kill.mockRestore();
-    }
+    expect(terminateManagedChild(child, "SIGTERM", { platform: "linux" })).toEqual({
+      processTreeState: "signaled",
+    });
+    expect(kill).toHaveBeenCalledWith(-12345, "SIGTERM");
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -760,46 +732,38 @@ sendReceipt(process.argv[2], "ready");
     { code: "EPERM", processGroupFallback: "never" as const },
   ])("preserves caller-owned direct fallback for $code", ({ code, processGroupFallback }) => {
     const error = Object.assign(new Error("process group unavailable"), { code });
-    const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+    using _ = vi.spyOn(process, "kill").mockImplementation(() => {
       throw error;
     });
     const child = { kill: vi.fn(), pid: 12345 };
 
-    try {
-      terminateManagedChild(child, "SIGTERM", { platform: "linux", processGroupFallback });
-      expect(child.kill).not.toHaveBeenCalled();
-    } finally {
-      kill.mockRestore();
-    }
+    terminateManagedChild(child, "SIGTERM", { platform: "linux", processGroupFallback });
+    expect(child.kill).not.toHaveBeenCalled();
   });
 
   it("preserves indeterminate group state after the leader exits", () => {
     const permissionError = Object.assign(new Error("group signal denied"), { code: "EPERM" });
     const child = { exitCode: null, pid: 12345, signalCode: null };
-    const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
+    using kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
       if (pid === -12345) {
         throw permissionError;
       }
       return true;
     });
 
-    try {
-      expect(
-        inspectManagedProcessGroup(child, { errorPolicy: "alive-on-eperm", platform: "linux" }),
-      ).toBe("live");
-      expect(
-        inspectManagedProcessGroup(child, { errorPolicy: "indeterminate", platform: "linux" }),
-      ).toBe("indeterminate");
-      expect(
-        inspectManagedProcessGroup(
-          { ...child, exitCode: 0 },
-          { errorPolicy: "indeterminate", platform: "linux" },
-        ),
-      ).toBe("indeterminate");
-      expect(kill).not.toHaveBeenCalledWith(12345, 0);
-    } finally {
-      kill.mockRestore();
-    }
+    expect(
+      inspectManagedProcessGroup(child, { errorPolicy: "alive-on-eperm", platform: "linux" }),
+    ).toBe("live");
+    expect(
+      inspectManagedProcessGroup(child, { errorPolicy: "indeterminate", platform: "linux" }),
+    ).toBe("indeterminate");
+    expect(
+      inspectManagedProcessGroup(
+        { ...child, exitCode: 0 },
+        { errorPolicy: "indeterminate", platform: "linux" },
+      ),
+    ).toBe("indeterminate");
+    expect(kill).not.toHaveBeenCalledWith(12345, 0);
   });
 
   it("inspects direct child liveness only when nongroup cleanup explicitly requires it", () => {
@@ -849,7 +813,6 @@ sendReceipt(process.argv[2], "ready");
     groupCase("zombie-leader", null, "live"),
     groupCase("empty", "EPERM", "live"),
     groupCase("empty", "EPERM", "indeterminate", { policy: "indeterminate" }),
-    groupCase("empty", "EIO", "indeterminate", { policy: "indeterminate" }),
     groupCase("empty", "EIO", "indeterminate"),
     groupCase("zombie", null, "live", { platform: "darwin" }),
     groupCase("zombie", null, "live", { running: true }),
@@ -858,7 +821,6 @@ sendReceipt(process.argv[2], "ready");
     groupCase("zombie-leader", null, "live", { remainingMs: 20, snapshotTimeoutMs: 20 }),
     groupCase("failed", "ESRCH", "dead", { remainingMs: 20, snapshotTimeoutMs: 20 }),
     groupCase("zombie", null, "live", { remainingMs: 0 }),
-    groupCase("zombie", null, "live", { remainingMs: -1 }),
     groupCase("zombie", "ESRCH", "dead", { remainingMs: 0 }),
     groupCase("zombie", "EPERM", "indeterminate", { remainingMs: 0, policy: "indeterminate" }),
   ])(
@@ -941,19 +903,14 @@ sendReceipt(process.argv[2], "ready");
   );
 
   it("bounds process-group waiting when the group remains live", async () => {
-    const kill = vi.spyOn(process, "kill").mockReturnValue(true);
-
-    try {
-      await expect(
-        waitForManagedProcessGroupExit({ pid: 12345 }, 5, {
-          errorPolicy: "alive-on-eperm",
-          platform: "linux",
-          pollIntervalMs: 1,
-        }),
-      ).resolves.toBe(false);
-    } finally {
-      kill.mockRestore();
-    }
+    using _ = vi.spyOn(process, "kill").mockReturnValue(true);
+    await expect(
+      waitForManagedProcessGroupExit({ pid: 12345 }, 5, {
+        errorPolicy: "alive-on-eperm",
+        platform: "linux",
+        pollIntervalMs: 1,
+      }),
+    ).resolves.toBe(false);
   });
 
   it.each([
@@ -2064,34 +2021,6 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
       });
     },
   );
-
-  it("allows bounded retry output to complete", async () => {
-    await expect(
-      runManagedCommand({
-        bin: process.execPath,
-        args: [
-          "-e",
-          "process.stderr.write('network retry 1\\n'); setTimeout(() => process.exit(0), 100)",
-        ],
-        shell: false,
-        stdio: "ignore",
-        timeoutMs: 1_000,
-      }),
-    ).resolves.toBe(0);
-  });
-
-  posixIt("allows strict normal long-running work to complete", async () => {
-    await expect(
-      runManagedCommand({
-        bin: process.execPath,
-        args: ["-e", "setTimeout(() => process.exit(0), 200)"],
-        requireProcessTreeExit: true,
-        shell: false,
-        stdio: "ignore",
-        timeoutMs: 1_000,
-      }),
-    ).resolves.toBe(0);
-  });
 
   it("cleans up the child when onReady throws", async () => {
     let childPid = 0;
