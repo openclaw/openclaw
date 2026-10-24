@@ -505,6 +505,7 @@ export async function refreshControlUiBuildOutput(
       })),
   };
   const bootPaths = new Set(selectedBootAssets);
+  const deferredSize = { count: 0, rawBytes: 0, gzipBytes: 0 };
   const deferredAssets = fs
     .readdirSync(path.join(buildOutDir, "assets"))
     .map((name) => `assets/${name}`)
@@ -515,22 +516,17 @@ export async function refreshControlUiBuildOutput(
         !isControlUiOptionalAsset(file),
     )
     .toSorted()
-    .map((file) => ({
-      path: file,
-      integrity:
-        "sha256-" +
-        createHash("sha256")
-          .update(fs.readFileSync(path.join(buildOutDir, file)))
-          .digest("base64"),
-    }));
-  const deferredSize = deferredAssets.reduce(
-    (size, asset) => ({
-      count: size.count + 1,
-      rawBytes: size.rawBytes + fs.statSync(path.join(buildOutDir, asset.path)).size,
-      gzipBytes: size.gzipBytes + fs.statSync(path.join(buildOutDir, `${asset.path}.gz`)).size,
-    }),
-    { count: 0, rawBytes: 0, gzipBytes: 0 },
-  );
+    .map((file) => {
+      const assetSource = fs.readFileSync(path.join(buildOutDir, file));
+      // Inventory must work before compression sidecars have been written.
+      deferredSize.count++;
+      deferredSize.rawBytes += assetSource.byteLength;
+      deferredSize.gzipBytes += gzip(assetSource, 11).byteLength;
+      return {
+        path: file,
+        integrity: "sha256-" + createHash("sha256").update(assetSource).digest("base64"),
+      };
+    });
   // Same-commit source rebuilds must not pair a new document with an old shell.
   const { module: csp } = await runnerImport<typeof import("../src/gateway/control-ui-csp.ts")>(
     path.join(repoRoot, "src/gateway/control-ui-csp.ts"),
