@@ -4,6 +4,7 @@ import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD as subscribe } from "../lib/sess
 import { controlUiSessionPath, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { chatSessionListResponse } from "./chat-flow.test-support.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
+import { polledAttribute, polledCount, polledVisible } from "./chat-presentation.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -70,9 +71,10 @@ suite.define(() => {
           // Keep this regression keyboard-only: a pointer click would light-dismiss
           // the previous pane's PR menu before Escape is exercised.
           await pane.getByRole("button", { name: "Details", exact: true }).press("Enter");
-          await expect
-            .poll(() => pane.locator('[data-details-group="pull-requests"]').getAttribute("open"))
-            .not.toBeNull();
+          await polledAttribute(
+            pane.locator('[data-details-group="pull-requests"]'),
+            "open",
+          ).not.toBeNull();
           const actions = pane.locator(".chat-pr__actions-trigger");
           await actions.focus();
           await actions.press("Enter");
@@ -81,28 +83,24 @@ suite.define(() => {
           await menu.locator('[data-value="monitoring"]').press("Enter");
           await menu.locator(".chat-pr-menu__page:visible").waitFor();
         }
-        await expect.poll(() => page.locator("openclaw-chat-pane").count()).toBe(2);
+        await polledCount(page.locator("openclaw-chat-pane")).toBe(2);
         const hiddenPane = page.locator('openclaw-chat-pane[aria-hidden="true"][inert]');
-        const visiblePane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-        const hiddenMenu = hiddenPane.locator(".chat-pr-menu");
-        const visibleMenu = visiblePane.locator(".chat-pr-menu");
-        expect(
-          await hiddenPane.locator(".chat-pr__actions-trigger").getAttribute("aria-expanded"),
-        ).toBe("false");
-        expect(await hiddenMenu.isVisible()).toBe(false);
-        await expect.poll(() => visibleMenu.isVisible()).toBe(true);
+        const visibleMenu = pane.locator(".chat-pr-menu");
+        const expectClosed = async (target: typeof pane) => {
+          expect(
+            await target.locator(".chat-pr__actions-trigger").getAttribute("aria-expanded"),
+          ).toBe("false");
+          expect(await target.locator(".chat-pr-menu").isVisible()).toBe(false);
+        };
+        await expectClosed(hiddenPane);
+        await polledVisible(visibleMenu).toBe(true);
         await page.keyboard.press("Escape");
-        await expect.poll(() => visibleMenu.locator(".chat-pr-menu__page:visible").count()).toBe(0);
+        await polledCount(visibleMenu.locator(".chat-pr-menu__page:visible")).toBe(0);
         expect(await visibleMenu.isVisible()).toBe(true);
         await page.keyboard.press("Escape");
-        await expect.poll(() => visibleMenu.isVisible()).toBe(false);
-        expect(
-          await visiblePane.locator(".chat-pr__actions-trigger").getAttribute("aria-expanded"),
-        ).toBe("false");
-        expect(
-          await hiddenPane.locator(".chat-pr__actions-trigger").getAttribute("aria-expanded"),
-        ).toBe("false");
-        expect(await hiddenMenu.isVisible()).toBe(false);
+        await polledVisible(visibleMenu).toBe(false);
+        await expectClosed(pane);
+        await expectClosed(hiddenPane);
       },
     );
   });
