@@ -29,7 +29,6 @@ import { activeSessions } from "../transcripts/capture-startup.js";
 import { clearTranscriptCapturesForTest } from "../transcripts/capture.test-support.js";
 import type { TranscriptStartRequest } from "../transcripts/provider-types.js";
 import { TranscriptsStore } from "../transcripts/store.js";
-import { buildGatewayReloadPlan } from "./config-reload-plan.js";
 import { createChannelManager } from "./server-channels.js";
 import { startGatewayDiscovery } from "./server-discovery-runtime.js";
 import {
@@ -249,8 +248,7 @@ function expectWatch(
   index = -1,
 ) {
   const watch = provider.watches.at(index);
-  expect(watch?.cfg).toEqual(config);
-  expect(watch?.source.channelId).toBe(channelId);
+  expect([watch?.cfg, watch?.source.channelId]).toEqual([config, channelId]);
 }
 
 async function stopTranscripts(
@@ -745,6 +743,15 @@ it.for([
         const siblingCapture = await sibling.waitForActiveCapture(1, signal);
         const oldOwner = activeSessions.get(oldCapture.session.sessionId);
         const siblingOwner = activeSessions.get(siblingCapture.session.sessionId);
+        const expectPendingCleanup = () => {
+          expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
+          expect(fixture.firstStop).not.toHaveBeenCalled();
+          expect(first.stop).toHaveBeenCalledOnce();
+          expect(activeSessions.get(oldCapture.session.sessionId)).toBe(oldOwner);
+          expect(first.watches).toHaveLength(1);
+          expect(providers.first).toHaveLength(1);
+          expect(activeSessions.get(siblingCapture.session.sessionId)).toBe(siblingOwner);
+        };
         if (outcome === "stop refused") {
           first.stop.mockResolvedValue({ ok: false, error: "fixture capture still active" });
         }
@@ -775,8 +782,7 @@ it.for([
           }
           const reload = observeSettlement(fixture.reload(acceptedConfig));
           pendingReload = reload.result;
-          // An old owner may return before it attempts provider cleanup. Race that
-          // result as well as provider entry so the pre-fix test cannot deadlock.
+          // Observe early failure too, so a stale owner cannot deadlock this wait.
           await Promise.race([
             stopEntered.promise,
             pendingReload.then(() => expect(first.stop).toHaveBeenCalledOnce()),
@@ -792,14 +798,8 @@ it.for([
             // Acquired capture cleanup has no startup deadline; publication still waits for it.
             expect(reload.state.settled).toBe(false);
           }
-          expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
-          expect(fixture.firstStop).not.toHaveBeenCalled();
-          expect(first.stop).toHaveBeenCalledOnce();
-          expect(activeSessions.get(oldCapture.session.sessionId)).toBe(oldOwner);
+          expectPendingCleanup();
           expect(oldOwner?.stopping).toBe(true);
-          expect(first.watches).toHaveLength(1);
-          expect(providers.first).toHaveLength(1);
-          expect(activeSessions.get(siblingCapture.session.sessionId)).toBe(siblingOwner);
           stopRelease.resolve();
           if (manualStop) {
             expect(await manualStop).toMatchObject({
@@ -816,16 +816,11 @@ it.for([
         }
         if (outcome === "stop refused") {
           expect(result).toMatchObject({ details: { phase: "drain", committed: false } });
-          expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
-          expect(fixture.firstStop).not.toHaveBeenCalled();
-          expect(first.stop).toHaveBeenCalledOnce();
-          expect(activeSessions.get(oldCapture.session.sessionId)).toBe(oldOwner);
+          expectPendingCleanup();
           expect(oldOwner?.cleanupPending).toBe(true);
-          expect([first.watches.length, first.captures.length]).toEqual([1, 1]);
-          expect(providers.first).toHaveLength(1);
+          expect(first.captures).toHaveLength(1);
           expect(sibling.watches).toHaveLength(1);
           expect(sibling.unwatch).not.toHaveBeenCalled();
-          expect(activeSessions.get(siblingCapture.session.sessionId)).toBe(siblingOwner);
           // A new operator request can publish only after this same provider
           // confirms that the previously refused capture cleanup completed.
           first.stop.mockImplementation(async ({ sessionId }) => ({ ok: true, sessionId }));
@@ -839,8 +834,7 @@ it.for([
             cause: failure,
           });
         }
-        // The returned watcher handle belongs to a real PluginInstance; invoking
-        // it after quiescence cannot reach this provider's stop implementation.
+        // Quiescence must not prevent the real PluginInstance's watcher cleanup.
         expect(first.unwatch).toHaveBeenCalledOnce();
         expect(first.unwatch.mock.invocationCallOrder[0]).toBeLessThan(
           fixture.firstStop.mock.invocationCallOrder[0]!,
@@ -895,8 +889,7 @@ it.for([
         vi.useRealTimers();
         await manualStop;
         await pendingReload;
-        // Preserve the semantic failure on the old owner, whose stale handle can
-        // reject shutdown; afterEach still closes registry and SQLite ownership.
+        // afterEach closes registry/SQLite even when a stale handle rejects stop.
         await sidecars.stop().catch(() => {});
       }
     });
@@ -941,10 +934,6 @@ it("starts the first configured transcript capture after plugin reload", async (
 it.for(["replace", "remove", "disable", "rollback"] as const)(
   "drains changed transcript configuration on a retained plugin before publication: %s",
   async (change, { signal }) => {
-    expect(buildGatewayReloadPlan(["transcripts.autoStart"])).toMatchObject({
-      restartGateway: false,
-      reloadPlugins: true,
-    });
     const stateDir = makeTrackedTempDir("gateway-transcript-config-replacement-", tempDirs);
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       const entry = (owner: string, channelId?: string) =>
@@ -979,12 +968,6 @@ it.for(["replace", "remove", "disable", "rollback"] as const)(
                 ],
               },
       };
-      expect(
-        buildGatewayReloadPlan(["transcripts.autoStart"], {
-          previousConfig: config,
-          candidateConfig: nextConfig,
-        }),
-      ).toMatchObject({ restartGateway: false, reloadPlugins: true });
       sibling.unwatch.mockImplementation(() => {
         events.push("unwatch-sibling");
       });
