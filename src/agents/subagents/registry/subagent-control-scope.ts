@@ -14,6 +14,7 @@ import {
   parseAgentSessionKey,
 } from "../../../routing/session-key.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
+import { captureExecRequestCancellation } from "../../bash-process-control.js";
 import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import {
   resolveInternalSessionKey,
@@ -32,6 +33,10 @@ import {
 } from "./subagent-exec-request-ownership.js";
 import { observeSubagentExecution } from "./subagent-execution-observation.js";
 import { captureSubagentListReadContext, type SubagentListReadContext } from "./subagent-list.js";
+import {
+  captureSubagentEmbeddedExecution,
+  hasRetainedControllerExecution,
+} from "./subagent-registry-execution-cleanup.js";
 import {
   getCurrentSubagentRunOwner,
   getSubagentRunsForRequesterSession,
@@ -62,6 +67,67 @@ import {
 export const DEFAULT_RECENT_MINUTES = 30;
 export const MAX_RECENT_MINUTES = 24 * 60;
 
+function hasLiveSubagentDescendants(
+  parentSessionKey: string,
+  visited = new Set<string>(),
+): boolean {
+  if (!parentSessionKey || visited.has(parentSessionKey)) {
+    return false;
+  }
+  visited.add(parentSessionKey);
+  for (const candidate of subagentRuns.values()) {
+    if (
+      (candidate.controllerSessionKey?.trim() || candidate.requesterSessionKey) === parentSessionKey
+    ) {
+      if (
+        candidate.execution.status !== "terminal" ||
+        !candidate.execution.endedAt ||
+        candidate.pauseReason === "sessions_yield" ||
+        candidate.requesterSettleWake ||
+        captureSubagentEmbeddedExecution(candidate) !== undefined ||
+        hasRetainedControllerExecution(candidate) ||
+        captureExecRequestCancellation({
+          runId: candidate.runId,
+          sessionKey: candidate.childSessionKey,
+          sessionId: candidate.childSessionIdentity?.sessionId,
+          agentId: candidate.childAgentId,
+        }).owners.length > 0 ||
+        hasLiveSubagentDescendants(candidate.childSessionKey, visited)
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+export function hasRetainedSubagentWork(entry: SubagentRunRecord): boolean {
+  if (
+    entry.execution.status !== "terminal" ||
+    !entry.execution.endedAt ||
+    entry.pauseReason === "sessions_yield" ||
+    entry.requesterSettleWake
+  ) {
+    return true;
+  }
+  if (
+    captureSubagentEmbeddedExecution(entry) !== undefined ||
+    hasRetainedControllerExecution(entry)
+  ) {
+    return true;
+  }
+  const commands = captureExecRequestCancellation({
+    runId: entry.runId,
+    sessionKey: entry.childSessionKey,
+    sessionId: entry.childSessionIdentity?.sessionId,
+    agentId: entry.childAgentId,
+  });
+  if (commands.owners.length > 0) {
+    return true;
+  }
+  return hasLiveSubagentDescendants(entry.childSessionKey);
+}
+
 /** Lifecycle cleanup owns both the requester and its separately scoped controller. */
 export async function prepareSessionSubagentKillSelection(params: {
   cfg: OpenClawConfig;
@@ -84,37 +150,45 @@ export async function prepareSessionSubagentKillSelection(params: {
   for (const entry of runs.values()) {
     if (
       entry.execution.status !== "terminal" ||
-      entry.execution.suppressSessionEffects !== true ||
       entry.pauseReason === "sessions_yield" ||
       !ownsRoot(entry)
     ) {
       continue;
     }
-    // The old task owns only its notice, never the replacement child's work.
-    const assertCurrent = () => {
-      params.assertCurrent?.();
-      const current = getCurrentSubagentRunOwner(subagentRuns, entry);
-      if (
-        !current ||
-        !ownsRoot(current) ||
-        current.execution.status !== "terminal" ||
-        current.execution.suppressSessionEffects !== true ||
-        current.pauseReason === "sessions_yield"
-      ) {
-        throw new Error("Subagent completion changed during session cleanup; retry.");
+    if (entry.execution.suppressSessionEffects === true) {
+      // The old task owns only its notice, never the replacement child's work.
+      const assertCurrent = () => {
+        params.assertCurrent?.();
+        const current = getCurrentSubagentRunOwner(subagentRuns, entry);
+        if (
+          !current ||
+          !ownsRoot(current) ||
+          current.execution.status !== "terminal" ||
+          current.execution.suppressSessionEffects !== true ||
+          current.pauseReason === "sessions_yield"
+        ) {
+          throw new Error("Subagent completion changed during session cleanup; retry.");
+        }
+      };
+      try {
+        const { retireSubagentObligations } = await import("./subagent-registry.js");
+        assertCurrent();
+        await retireSubagentObligations(entry, assertCurrent, { requesterNotified: true });
+      } catch (error) {
+        if (hasSqliteWorkerOutcomeUnknown(error)) {
+          throw error;
+        }
+        preparationErrors.push(`${resolveSubagentLabel(entry)}: ${formatErrorMessage(error)}`);
       }
-    };
-    try {
-      const { retireSubagentObligations } = await import("./subagent-registry.js");
-      assertCurrent();
-      await retireSubagentObligations(entry, assertCurrent, { requesterNotified: true });
-    } catch (error) {
-      if (hasSqliteWorkerOutcomeUnknown(error)) {
-        throw error;
-      }
-      preparationErrors.push(`${resolveSubagentLabel(entry)}: ${formatErrorMessage(error)}`);
+      runs.delete(entry.runId);
+      continue;
     }
-    runs.delete(entry.runId);
+    // Historical completed runs that retain neither active commands nor live descendants
+    // are inert. Pruning them avoids re-cancellation and dormant delivery queue errors during reset,
+    // while preserving completed-child command and descendant cleanup for live work (#166832).
+    if (!hasRetainedSubagentWork(entry)) {
+      runs.delete(entry.runId);
+    }
   }
   return {
     cfg: params.cfg,

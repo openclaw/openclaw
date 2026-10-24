@@ -108,3 +108,14 @@ export function retireSubagentGatewayBinding(observed: SubagentRunRecord): void 
   }
   clearGatewayContextResolver(entry);
 }
+
+/** Reports whether a subagent run retains active controller source execution or pending disposal. */
+export function hasRetainedControllerExecution(entry: SubagentRunRecord): boolean {
+  const current = getCurrentSubagentRunOwner(subagentRuns, entry) ?? entry;
+  const runtimeKey = getSubagentRunRuntimeKey(current);
+  if (retiredExecutions.get(runtimeKey) !== undefined) {
+    return true;
+  }
+  const resolver = getGatewayContextResolver(current);
+  return resolver ? getRpcSourceForGateway(current.runId, resolver) !== undefined : false;
+}

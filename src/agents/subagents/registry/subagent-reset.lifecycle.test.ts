@@ -26,6 +26,7 @@ import { createDeferredCore } from "../../../shared/deferred.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { isSubagentRegistryWriteCommand } from "../../subagent-test-fixtures.test-helpers.js";
 import { killAllControlledSubagentRuns, killSessionSubagentRuns } from "./subagent-control-kill.js";
+import { prepareSessionSubagentKillSelection } from "./subagent-control-scope.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { markSubagentRunPausedAfterYield } from "./subagent-registry-run-pause.js";
@@ -447,3 +448,356 @@ it.each(["sessionId", "lifecycleRevision"] as const)(
     }
   },
 );
+
+it("lifecycle reset prunes inert terminal runs from kill selection while preserving runs with pending wakes", async () => {
+  const cfg = getRuntimeConfig();
+  await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: "agent:main:subagent:inert-run",
+    defaultSessionId: "inert-run",
+  });
+  await registerChild(
+    "inert-run",
+    { sessionId: "inert-run" },
+    {
+      childSessionKey: "agent:main:subagent:inert-run",
+      childAgentId: "main",
+      requesterSessionKey: "global",
+      controllerSessionKey: "global",
+      requesterAgentId: "main",
+      requesterDisplayKey: "global",
+    },
+  );
+  await updateRun("inert-run", (entry) => {
+    entry.execution = {
+      ...entry.execution,
+      status: "terminal",
+      endedAt: Date.now() - 60_000,
+    };
+  });
+
+  const selection = await prepareSessionSubagentKillSelection({
+    cfg,
+    sessionKey: "global",
+    agentId: "main",
+  });
+  expect([...selection.runs].map((r) => r.runId)).not.toContain("inert-run");
+
+  const result = await killSessionSubagentRuns({ cfg, sessionKey: "global", agentId: "main" });
+  expect(result).toMatchObject({ status: "ok", killed: 0 });
+});
+
+it("lifecycle reset retains terminal runs that have active command owners and aborts them", async () => {
+  const cfg = getRuntimeConfig();
+  await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: "agent:main:subagent:terminal-command-run",
+    defaultSessionId: "terminal-command-run",
+  });
+  await registerChild(
+    "terminal-command-run",
+    { sessionId: "terminal-command-run" },
+    {
+      childSessionKey: "agent:main:subagent:terminal-command-run",
+      childAgentId: "main",
+      requesterSessionKey: "global",
+      controllerSessionKey: "global",
+      requesterAgentId: "main",
+      requesterDisplayKey: "global",
+    },
+  );
+  await updateRun("terminal-command-run", (entry) => {
+    delete entry.requesterSettleWake;
+    entry.execution = {
+      ...entry.execution,
+      status: "terminal",
+      endedAt: Date.now() - 60_000,
+    };
+  });
+
+  const { createLazyExecTool } = await import("../../lazy-exec-tool.js");
+  const { getSession, waitForExecSession } = await import("../../bash-process-registry.js");
+  const { withEnvAsync } = await import("../../../test-utils/env.js");
+  const { withExecRequestTurn } = await import("../../../infra/exec-request-context.js");
+
+  const identity = {
+    runId: "terminal-command-run",
+    sessionKey: "agent:main:subagent:terminal-command-run",
+    sessionId: "terminal-command-run",
+    agentId: "main",
+  };
+
+  const command = await withEnvAsync({ OPENCLAW_EXEC_SHELL_SNAPSHOT: "0" }, () =>
+    withExecRequestTurn({ identity }, async () => {
+      const exec = createLazyExecTool({
+        ...identity,
+        config: cfg,
+        cwd: fixture.stateDir,
+        scopeKey: identity.sessionKey,
+        host: "gateway",
+        mode: "full",
+        ask: "off",
+        allowBackground: true,
+        notifyOnExit: false,
+        preparedStoreEnvironment: {},
+      });
+      const result = await exec.execute("child-command", {
+        command: `node -e "require('fs').watch('.', () => {})"`,
+        yieldMs: 10,
+        timeoutSeconds: 60,
+      });
+      const details = result.details as { sessionId: string; status: string };
+      expect(details?.status).toBe("running");
+      return getSession(details.sessionId)!;
+    }),
+  );
+
+  expect(command).toBeDefined();
+  expect(command.exited).toBe(false);
+
+  const selection = await prepareSessionSubagentKillSelection({
+    cfg,
+    sessionKey: "global",
+    agentId: "main",
+  });
+  expect([...selection.runs].map((r) => r.runId)).toContain("terminal-command-run");
+
+  const result = await killSessionSubagentRuns({ cfg, sessionKey: "global", agentId: "main" });
+  expect(result).toMatchObject({ status: "ok" });
+  await waitForExecSession(command);
+  expect(command.exited).toBe(true);
+  expect(command.cancellationRequested).toBe(true);
+});
+
+it("lifecycle reset waits for terminal child's retained controller-source disposal after embedded execution has detached", async () => {
+  const cfg = getRuntimeConfig();
+  const sessionKey = "agent:main:subagent:terminal-disposing-run";
+  const sessionId = "terminal-disposing-session";
+  const runId = "terminal-disposing-run";
+
+  const storePath = await writeSession(sessionKey, sessionId);
+  const { read } = sessions(storePath);
+  await registerChild(runId, read(sessionKey), {
+    childSessionKey: sessionKey,
+    childAgentId: "main",
+    requesterSessionKey: "global",
+    controllerSessionKey: "global",
+    requesterAgentId: "main",
+    requesterDisplayKey: "global",
+  });
+
+  await updateRun(runId, (r) => {
+    delete r.requesterSettleWake;
+    r.execution = {
+      ...r.execution,
+      status: "terminal",
+      endedAt: Date.now() - 60_000,
+    };
+  });
+
+  const { retireSubagentGatewayBinding } = await import("./subagent-registry-execution-cleanup.js");
+  const { registerChatAbortController } = await import("../../../gateway/chat-abort.js");
+  const { captureSessionTarget } =
+    await import("../../../sessions/session-controller.lifecycle.js");
+  const { bindGatewayContextResolver, withPluginRuntimeGatewayContextResolver } =
+    await import("../../../plugins/runtime/gateway-request-scope.js");
+  const { createDirectChatContext } =
+    await import("../../../gateway/server-chat.agent-events.test-helpers.js");
+  const { withSessionTurn } = await import("../../../sessions/session-controller.admission.js");
+  const { withSessionControllerSource } =
+    await import("../../../sessions/session-controller.context.js");
+  const { trackSessionControllerSourceWork } =
+    await import("../../../sessions/session-controller.mailbox.js");
+  const { markReplyOperationExecutionStarted } =
+    await import("../../../sessions/session-controller.state.js");
+  const { awaitGateBeforeSettlement } = await import("../../../../test/helpers/promise.js");
+  const subagentKillSettlement = await import("./subagent-control-kill-settlement.js");
+  const { expectDefined } = await import("@openclaw/normalization-core/expect");
+  type RpcSourceRef = import("../../../sessions/session-controller.rpc-sources.js").RpcSourceRef;
+
+  const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+  const resolveGatewayContext = () => context;
+  const entry = subagentRuns.get(runId)!;
+  bindGatewayContextResolver(entry, resolveGatewayContext);
+
+  const registration = withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
+    registerChatAbortController({
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey,
+        agentId: "main",
+        incarnation: sessionId,
+      }),
+      runId,
+      sessionKey,
+      sessionId,
+      kind: "agent",
+      timeoutMs: 60_000,
+    }),
+  );
+
+  async function startSourceExecution(
+    source: RpcSourceRef,
+    run: () => Promise<void>,
+    cleanup: () => void,
+  ) {
+    const started = createDeferredCore();
+    const target = source.input.target!;
+    const execute = async () => {
+      started.resolve();
+      try {
+        await run();
+      } finally {
+        cleanup();
+      }
+    };
+    const completion = withSessionControllerSource(source.input, async () => {
+      await withSessionTurn(
+        {
+          sessionKey: target.sessionKey,
+          sessionId: target.incarnation,
+          agentId: target.agentId,
+          target,
+          controllerInput: source.input,
+        },
+        async (operation) => {
+          markReplyOperationExecutionStarted(expectDefined(operation, "claimed source operation"));
+          await execute();
+        },
+      );
+    });
+    void completion.catch(() => {});
+    trackSessionControllerSourceWork(source.input, completion);
+    await awaitGateBeforeSettlement(
+      started.promise,
+      completion,
+      "Source did not enter its real controller turn",
+    );
+    return { completion };
+  }
+
+  const releaseTail = createDeferredCore();
+  const { completion: execution } = await startSourceExecution(
+    registration.entry!,
+    async () => {
+      await releaseTail.promise;
+      registration.cleanup();
+    },
+    registration.cleanup,
+  );
+
+  retireSubagentGatewayBinding(entry);
+
+  const selectionBefore = await prepareSessionSubagentKillSelection({
+    cfg,
+    sessionKey: "global",
+    agentId: "main",
+  });
+  expect([...selectionBefore.runs].map((r) => r.runId)).toContain(runId);
+
+  const settlementReached = createDeferredCore();
+  const originalSettle = subagentKillSettlement.settleSubagentKillSources;
+  const settleSpy = vi
+    .spyOn(subagentKillSettlement, "settleSubagentKillSources")
+    .mockImplementation((params) => {
+      if (params.execution === registration.entry) {
+        settlementReached.resolve();
+      }
+      return originalSettle(params);
+    });
+
+  let resetCompleted = false;
+  const resetPromise = killSessionSubagentRuns({
+    cfg,
+    sessionKey: "global",
+    agentId: "main",
+  }).then((res) => {
+    resetCompleted = true;
+    return res;
+  });
+
+  try {
+    await awaitGateBeforeSettlement(
+      settlementReached.promise,
+      resetPromise,
+      "Reset returned before its retained controller-source disposal settled",
+    );
+    expect(resetCompleted).toBe(false);
+  } finally {
+    releaseTail.resolve();
+    settleSpy.mockRestore();
+  }
+
+  const result = await resetPromise;
+  expect(result).toMatchObject({ status: "ok" });
+  await execution;
+
+  const selectionAfter = await prepareSessionSubagentKillSelection({
+    cfg,
+    sessionKey: "global",
+    agentId: "main",
+  });
+  expect([...selectionAfter.runs].map((r) => r.runId)).not.toContain(runId);
+});
+
+it("lifecycle reset retains terminal roots that have live descendants", async () => {
+  const cfg = getRuntimeConfig();
+  await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: "agent:main:subagent:terminal-parent",
+    defaultSessionId: "terminal-parent",
+  });
+  await registerChild(
+    "terminal-parent",
+    { sessionId: "terminal-parent" },
+    {
+      childSessionKey: "agent:main:subagent:terminal-parent",
+      childAgentId: "main",
+      requesterSessionKey: "global",
+      controllerSessionKey: "global",
+      requesterAgentId: "main",
+      requesterDisplayKey: "global",
+    },
+  );
+  await updateRun("terminal-parent", (entry) => {
+    entry.execution = {
+      ...entry.execution,
+      status: "terminal",
+      endedAt: Date.now() - 60_000,
+    };
+  });
+
+  await writeSubagentSessionEntry({
+    stateDir: fixture.stateDir,
+    agentId: "main",
+    sessionKey: "agent:main:subagent:live-nested-child",
+    defaultSessionId: "live-nested-child",
+  });
+  await registerChild(
+    "live-nested-child",
+    { sessionId: "live-nested-child" },
+    {
+      childSessionKey: "agent:main:subagent:live-nested-child",
+      childAgentId: "main",
+      requesterSessionKey: "agent:main:subagent:terminal-parent",
+      controllerSessionKey: "agent:main:subagent:terminal-parent",
+      requesterAgentId: "main",
+      requesterDisplayKey: "terminal-parent",
+    },
+  );
+  await pauseRun("live-nested-child");
+
+  const selection = await prepareSessionSubagentKillSelection({
+    cfg,
+    sessionKey: "global",
+    agentId: "main",
+  });
+  expect([...selection.runs].map((r) => r.runId)).toContain("terminal-parent");
+
+  const result = await killSessionSubagentRuns({ cfg, sessionKey: "global", agentId: "main" });
+  expect(result).toMatchObject({ status: "ok" });
+  expect(displayStatus("live-nested-child")).toBe("killed");
+});
