@@ -1,5 +1,5 @@
 ---
-summary: "Query a running Gateway: health, usage-cost, stability, diagnostics export, status, connectivity checks, call, suspend, and resume"
+summary: "Query a running Gateway: health, usage-cost, stability, diagnostics export, status, connectivity checks, call, suspend, suspend status, and resume"
 read_when:
   - Checking whether a Gateway is healthy, ready, or reachable
   - Exporting Gateway diagnostics or a support bundle
@@ -512,6 +512,25 @@ to eight holders, with an omitted count for the rest. `gateway.suspend.status`
 returns the same details while draining, and each draining observation writes
 one `DRAINING` line to the Gateway log. Pending final writes remain protected
 until their persistence owner settles, even after a chat client disconnects.
+
+### `gateway suspend status <suspensionId>`
+
+Poll an existing cooperative suspension lease without calling prepare or resume.
+Forwards the existing `gateway.suspend.status` RPC (`operator.read`).
+
+```bash
+openclaw gateway suspend status <suspensionId>
+openclaw gateway suspend status <suspensionId> --include-lifecycle --json
+openclaw gateway suspend status <suspensionId> --port 18999 --json
+```
+
+Results match the Gateway contract: `running` (no matching lease), `ready`
+(lease held and idle), or `draining` (active work / committed shutdown progress).
+`--include-lifecycle` asks for optional owner/phase fields when the Gateway
+provides them. Common RPC options such as `--url`, `--token`, `--password`,
+`--timeout`, `--json`, and `--port` are supported. This does not replace
+`gateway suspend --wait` (which polls via repeated prepare); use status when you
+already hold a `suspensionId`.
 
 ### `gateway resume <suspensionId>`
 

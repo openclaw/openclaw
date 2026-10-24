@@ -1,7 +1,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNonExitingRuntimeEnv } from "../../test-utils/plugin-runtime-env.js";
-import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
+import { runGatewayResume, runGatewaySuspend, runGatewaySuspendStatus } from "./suspend-cli.js";
 
 vi.mock("node:timers/promises", { spy: true });
 
@@ -134,5 +134,81 @@ describe("gateway resume CLI", () => {
       { suspensionId: "suspension-1" },
     );
     expect(runtime.log).toHaveBeenCalledExactlyOnceWith(message);
+  });
+});
+
+describe("gateway suspend status CLI", () => {
+  it.each([
+    [
+      { status: "running" as const },
+      "Gateway is running (no matching suspension lease).",
+      undefined,
+    ],
+    [
+      {
+        status: "ready" as const,
+        expiresAtMs: Date.parse("2026-08-11T12:00:00.000Z"),
+      },
+      "Gateway suspension ready.",
+      `Expires: 2026-08-11T12:00:00.000Z (${Date.parse("2026-08-11T12:00:00.000Z")} ms)`,
+    ],
+  ] as const)("prints human summary for %j", async (result, first, second) => {
+    const runtime = createNonExitingRuntimeEnv();
+    const callGateway = vi.fn(async () => result);
+
+    await runGatewaySuspendStatus(
+      { rpcOpts: {}, suspensionId: "suspension-1" },
+      { callGateway, runtime },
+    );
+
+    expect(callGateway).toHaveBeenCalledExactlyOnceWith(
+      "gateway.suspend.status",
+      {},
+      { suspensionId: "suspension-1" },
+    );
+    expect(runtime.log).toHaveBeenCalledWith(first);
+    if (second !== undefined) {
+      expect(runtime.log).toHaveBeenCalledWith(second);
+    }
+  });
+
+  it("forwards includeLifecycle and emits JSON", async () => {
+    const runtime = createNonExitingRuntimeEnv();
+    const result = {
+      status: "draining" as const,
+      expiresAtMs: 1_800_000_000_000,
+      retryAfterMs: 500,
+      activeCount: 2,
+      blockers: [{ kind: "root-request" as const, count: 2, message: "2 active requests" }],
+      phase: "draining" as const,
+      ownerId: "host-operation",
+    };
+    const callGateway = vi.fn(async () => result);
+
+    await runGatewaySuspendStatus(
+      {
+        rpcOpts: { json: true },
+        suspensionId: "  suspension-1  ",
+        includeLifecycle: true,
+        json: true,
+      },
+      { callGateway, runtime },
+    );
+
+    expect(callGateway).toHaveBeenCalledExactlyOnceWith(
+      "gateway.suspend.status",
+      { json: true },
+      { suspensionId: "suspension-1", includeLifecycle: true },
+    );
+    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith(result);
+  });
+
+  it("rejects blank suspension ids before calling the Gateway", async () => {
+    const runtime = createNonExitingRuntimeEnv();
+    const callGateway = vi.fn();
+    await expect(
+      runGatewaySuspendStatus({ rpcOpts: {}, suspensionId: "   " }, { callGateway, runtime }),
+    ).rejects.toThrow("suspensionId must contain 1 to 128 characters");
+    expect(callGateway).not.toHaveBeenCalled();
   });
 });

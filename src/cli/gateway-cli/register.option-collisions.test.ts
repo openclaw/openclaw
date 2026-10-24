@@ -19,6 +19,12 @@ const mocks = vi.hoisted(() => ({
       if (method === "gateway.suspend.resume") {
         return { ok: true, status: "running", resumed: true };
       }
+      if (method === "gateway.suspend.status") {
+        return {
+          status: "ready",
+          expiresAtMs: 1_800_000_000_000,
+        };
+      }
       return { ok: true };
     },
   ),
@@ -197,6 +203,60 @@ describe("gateway register option collisions", () => {
       opts: { localPortOverride: 19087 },
       params: { suspensionId: "suspension-1" },
       json: { ok: true, status: "running", resumed: true },
+    },
+    {
+      name: "projects gateway suspend status --port and include-lifecycle",
+      argv: [
+        "suspend",
+        "status",
+        "suspension-1",
+        "--include-lifecycle",
+        "--port",
+        "19088",
+        "--json",
+      ],
+      method: "gateway.suspend.status",
+      opts: { localPortOverride: 19088 },
+      params: { suspensionId: "suspension-1", includeLifecycle: true },
+      json: { status: "ready", expiresAtMs: 1_800_000_000_000 },
+    },
+    {
+      name: "inherits parent suspend --url for status",
+      argv: [
+        "suspend",
+        "--url",
+        "ws://127.0.0.1:18794",
+        "status",
+        "suspension-1",
+        "--json",
+      ],
+      method: "gateway.suspend.status",
+      opts: { url: "ws://127.0.0.1:18794" },
+      params: { suspensionId: "suspension-1" },
+      json: { status: "ready", expiresAtMs: 1_800_000_000_000 },
+    },
+    {
+      name: "inherits parent suspend --timeout for status",
+      argv: [
+        "suspend",
+        "--timeout",
+        "12000",
+        "status",
+        "suspension-1",
+        "--json",
+      ],
+      method: "gateway.suspend.status",
+      opts: { timeout: "12000" },
+      params: { suspensionId: "suspension-1" },
+      json: { status: "ready", expiresAtMs: 1_800_000_000_000 },
+    },
+    {
+      name: "inherits parent suspend --json for status RPC transport",
+      argv: ["suspend", "--json", "status", "suspension-1"],
+      method: "gateway.suspend.status",
+      opts: { json: true },
+      params: { suspensionId: "suspension-1" },
+      json: { status: "ready", expiresAtMs: 1_800_000_000_000 },
     },
     {
       name: "prefers the explicit usage-cost --port over the parent --port",

@@ -3,6 +3,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type {
   GatewaySuspendPrepareResult,
   GatewaySuspendResumeResult,
+  GatewaySuspendStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
 import type { OutputRuntimeEnv } from "../../runtime.js";
@@ -131,4 +132,71 @@ export async function runGatewayResume(
       ? "Gateway resumed."
       : "No matching suspension was held (lease already expired or resumed); gateway is running.",
   );
+}
+
+export async function runGatewaySuspendStatus(
+  options: {
+    rpcOpts: SuspendRpcOpts;
+    suspensionId: string;
+    includeLifecycle?: boolean;
+    json?: boolean;
+  },
+  deps: SuspendCliDeps,
+): Promise<void> {
+  const suspensionId = options.suspensionId.trim();
+  if (!suspensionId || suspensionId.length > 128) {
+    throw new Error("suspensionId must contain 1 to 128 characters");
+  }
+  const params: { suspensionId: string; includeLifecycle?: boolean } = { suspensionId };
+  if (options.includeLifecycle) {
+    params.includeLifecycle = true;
+  }
+  const result = (await deps.callGateway(
+    "gateway.suspend.status",
+    options.rpcOpts,
+    params,
+  )) as GatewaySuspendStatusResult;
+  if (options.json) {
+    deps.runtime.writeJson(result);
+    return;
+  }
+  const rich = isRich();
+  if (result.status === "running") {
+    deps.runtime.log(
+      colorize(rich, theme.success, "Gateway is running (no matching suspension lease)."),
+    );
+    return;
+  }
+  if (result.status === "ready") {
+    deps.runtime.log(colorize(rich, theme.success, "Gateway suspension ready."));
+    deps.runtime.log(
+      `${colorize(rich, theme.muted, "Expires:")} ${new Date(result.expiresAtMs).toISOString()} (${result.expiresAtMs} ms)`,
+    );
+    if ("ownerId" in result && result.ownerId) {
+      deps.runtime.log(`${colorize(rich, theme.muted, "Owner:")} ${result.ownerId}`);
+    }
+    return;
+  }
+  deps.runtime.log(
+    colorize(
+      rich,
+      theme.warn,
+      `Gateway suspension draining (${result.activeCount} active; retry after ${result.retryAfterMs} ms).`,
+    ),
+  );
+  deps.runtime.log(
+    `${colorize(rich, theme.muted, "Expires:")} ${new Date(result.expiresAtMs).toISOString()} (${result.expiresAtMs} ms)`,
+  );
+  if ("phase" in result && result.phase) {
+    deps.runtime.log(`${colorize(rich, theme.muted, "Phase:")} ${result.phase}`);
+  }
+  if ("ownerId" in result && result.ownerId) {
+    deps.runtime.log(`${colorize(rich, theme.muted, "Owner:")} ${result.ownerId}`);
+  }
+  if (result.blockers.length > 0) {
+    deps.runtime.log("Blockers:");
+    for (const blocker of result.blockers) {
+      deps.runtime.log(`- ${blocker.message}`);
+    }
+  }
 }

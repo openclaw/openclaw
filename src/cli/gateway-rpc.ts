@@ -36,15 +36,19 @@ export function resolveGatewayRpcOptions<T extends { token?: string; password?: 
 }
 
 export function resolveGatewayRpcOptionsWithLocalPort<
-  T extends Pick<GatewayRpcOpts, "url" | "port" | "token" | "password"> & {
+  T extends Pick<GatewayRpcOpts, "url" | "port" | "token" | "password" | "timeout"> & {
     localPortOverride?: number;
   },
 >(opts: T, command?: Command) {
-  // Leaf defaults must not hide an explicit port supplied before the subcommand.
+  // Leaf defaults must not hide an explicit transport option supplied before the subcommand.
   const port = command?.getOptionValueSource("port") === "default" ? undefined : opts.port;
+  const timeout =
+    command?.getOptionValueSource("timeout") === "default" ? undefined : opts.timeout;
   const rpcOpts = {
     ...resolveGatewayRpcOptions(opts, command),
+    url: opts.url ?? inheritOptionFromParent<string>(command, "url"),
     port: port ?? inheritOptionFromParent<string>(command, "port"),
+    timeout: timeout ?? inheritOptionFromParent<string>(command, "timeout") ?? opts.timeout,
   };
   return {
     ...rpcOpts,

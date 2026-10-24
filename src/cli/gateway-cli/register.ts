@@ -27,7 +27,7 @@ import { addGatewayRestartHandoffCommands } from "./register-restart-handoff.js"
 import { addGatewayRunCommand } from "./run-command.js";
 import { normalizeStabilityBundleTarget } from "./stability-bundle-target.js";
 import { formatStabilityBytes, formatStabilityEvent } from "./stability-format.js";
-import { runGatewayResume, runGatewaySuspend } from "./suspend-cli.js";
+import { runGatewayResume, runGatewaySuspend, runGatewaySuspendStatus } from "./suspend-cli.js";
 
 type GatewayRpcOpts = Parameters<typeof callGatewayFromCliWithTransport>[1];
 
@@ -270,7 +270,7 @@ export function registerGatewayCli(program: Command) {
       ),
   );
 
-  gatewayCallOpts(
+  const suspendCommand = gatewayCallOpts(
     gateway
       .command("suspend")
       .description("Prepare the Gateway for cooperative host suspension")
@@ -289,6 +289,34 @@ export function registerGatewayCli(program: Command) {
             { callGateway: callGatewayReadOnlyCli, runtime: defaultRuntime },
           );
         }, "Gateway suspend failed"),
+      ),
+  );
+
+  gatewayCallOpts(
+    suspendCommand
+      .command("status")
+      .description("Poll an existing cooperative Gateway suspension lease")
+      .argument("<suspensionId>", "Suspension id returned by gateway suspend")
+      .option("--include-lifecycle", "Include optional lifecycle / write-custody details", false)
+      .action(
+        gatewayAction(async (suspensionId, opts, command) => {
+          const rpcOpts = resolveGatewayRpcOptionsWithLocalPort(opts, command);
+          // Nested under `gateway suspend`: --json/--port often land on the parent.
+          const json = Boolean(
+            opts.json || inheritOptionFromParent<boolean>(command, "json"),
+          );
+          await runGatewaySuspendStatus(
+            {
+              // Pass inherited JSON into the RPC transport so callGatewayFromCliRuntime
+              // suppresses the terminal spinner under parent `--json` (leaf default is false).
+              rpcOpts: { ...rpcOpts, json },
+              suspensionId: String(suspensionId),
+              includeLifecycle: Boolean(opts.includeLifecycle),
+              json,
+            },
+            { callGateway: callGatewayReadOnlyCli, runtime: defaultRuntime },
+          );
+        }, "Gateway suspend status failed"),
       ),
   );
 
