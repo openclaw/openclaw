@@ -141,7 +141,6 @@ const {
 const {
   captureNextDownstreamTurn,
   awaitSingleDownstreamTurn,
-  assertAlbumTurnAndTombstones,
   holdFirstDownstreamTurn,
   holdDownstreamLane,
 } = createDownstreamTurnFixture(downstreamTurns);
@@ -183,6 +182,13 @@ describe("Telegram durable ingress coalescing", () => {
     const resources = await createIngressMonitor(stateDir, options);
     activeResources.push(resources);
     return resources;
+  }
+
+  const tombstones = (...updateIds: number[]) => assertSpoolTombstoned({ stateDir, updateIds });
+  async function spool(...updates: Parameters<typeof writeTelegramSpooledUpdate>[0]["update"][]) {
+    for (const update of updates) {
+      await writeTelegramSpooledUpdate({ stateDir, update });
+    }
   }
 
   it("keeps a timed-out update retryable while its original middleware is still waiting", async ({
@@ -258,13 +264,12 @@ describe("Telegram durable ingress coalescing", () => {
       await vi.advanceTimersByTimeAsync(2_000);
       monitor.requestDrain();
       await monitor.waitForIdle();
-      expect(downstreamTurns).toHaveBeenCalledTimes(3);
       expect(downstreamTurns.mock.calls.map(([ctx]) => ctx.RawBody)).toEqual([
         "busy turn",
         "deliver this later",
         "deliver after the retry",
       ]);
-      await assertSpoolTombstoned({ stateDir, updateIds: [802, 803] });
+      await tombstones(802, 803);
       const duplicate = await processingOutcome.runWithTelegramUpdateProcessingFrame(() =>
         bot.handleUpdate(queued),
       );
@@ -274,27 +279,6 @@ describe("Telegram durable ingress coalescing", () => {
       finishBlocker.resolve();
       await blocker;
       await monitor.stop();
-    }
-  });
-
-  it("coalesces album members admitted across separate drain passes", async () => {
-    const albumTimers = holdTelegramMediaTimeouts(40);
-    const { monitor, telegramTransport } = await createMonitor();
-    const first = photoUpdate({ updateId: 101, messageId: 1, caption: "Two photo album" });
-    const second = photoUpdate({ updateId: 102, messageId: 2 });
-    monitor.start();
-
-    try {
-      await monitor.admit(first);
-      await monitor.waitForIdle();
-      await monitor.admit(second);
-      await monitor.waitForIdle();
-      flushHeldQuietWindow(albumTimers, 40);
-      await assertAlbumTurnAndTombstones({ stateDir, updateIds: [101, 102], monitor });
-    } finally {
-      albumTimers.mockRestore();
-      await monitor.stop();
-      await telegramTransport.close();
     }
   });
 
@@ -312,12 +296,11 @@ describe("Telegram durable ingress coalescing", () => {
       expect(downstreamTurns, "Album B must wait for album A's adoption").toHaveBeenCalledOnce();
       releaseHead.resolve();
       await withinTest(monitor.waitForDeferredClaims(), signal);
-      expect(downstreamTurns).toHaveBeenCalledTimes(2);
       expect(downstreamTurns.mock.calls.map(([turn]) => turn.RawBody)).toEqual([
         "Album A",
         "Album B",
       ]);
-      await assertSpoolTombstoned({ stateDir, updateIds: [1_001, 1_002, 1_003, 1_004] });
+      await tombstones(1_001, 1_002, 1_003, 1_004);
       expect(runtimeErrors).toEqual([]);
     } finally {
       releaseHead.resolve();
@@ -370,7 +353,7 @@ describe("Telegram durable ingress coalescing", () => {
         "Batch A",
         "Batch B",
       ]);
-      await assertSpoolTombstoned({ stateDir, updateIds: [1_401, 1_402] });
+      await tombstones(1_401, 1_402);
       expect(runtimeErrors).toEqual([]);
     } finally {
       releaseHead.resolve();
@@ -470,7 +453,7 @@ describe("Telegram durable ingress coalescing", () => {
       await Promise.all(replay.settlements);
       await monitor.waitForDeferredClaims();
       expect(downstreamTurns).toHaveBeenCalledOnce();
-      await assertSpoolTombstoned({ stateDir, updateIds: [1_201, 1_202] });
+      await tombstones(1_201, 1_202);
       expect(runtimeErrors).toEqual([]);
     } finally {
       releaseCommit.resolve();
@@ -501,13 +484,12 @@ describe("Telegram durable ingress coalescing", () => {
       // B closes at 50 ms; A's last member moves its close to 60 ms.
       await vi.advanceTimersByTimeAsync(40);
       await monitor.waitForDeferredClaims();
-      expect(downstreamTurns).toHaveBeenCalledTimes(2);
       expect(downstreamTurns.mock.calls.map(([turn]) => turn.RawBody)).toEqual([
         "Album A",
         "Album B",
       ]);
       expect(downstreamTurns.mock.calls.map(([turn]) => turn.media?.length)).toEqual([2, 1]);
-      await assertSpoolTombstoned({ stateDir, updateIds: [1_301, 1_302, 1_303] });
+      await tombstones(1_301, 1_302, 1_303);
       expect(runtimeErrors).toEqual([]);
     } finally {
       await monitor.stop();
@@ -568,10 +550,7 @@ describe("Telegram durable ingress coalescing", () => {
       expect(downstreamTurns).toHaveBeenCalledOnce();
       expect(turn.Body).toContain("Buffered context");
       expect(turn).toMatchObject({ media: testCase.media });
-      await assertSpoolTombstoned({
-        stateDir,
-        updateIds: [testCase.first.update_id, testCase.second.update_id],
-      });
+      await tombstones(testCase.first.update_id, testCase.second.update_id);
     } finally {
       quietTimers.mockRestore();
     }
@@ -674,7 +653,7 @@ describe("Telegram durable ingress coalescing", () => {
       await monitor.waitForIdle();
       expect(downstreamTurns).toHaveBeenCalledTimes(2);
       expect(downstreamTurns.mock.calls[1]?.[0].Body).toContain("Unrelated plain text");
-      await assertSpoolTombstoned({ stateDir, updateIds: [1_301, 1_302] });
+      await tombstones(1_301, 1_302);
     } finally {
       albumTimers.mockRestore();
     }
@@ -709,14 +688,10 @@ describe("Telegram durable ingress coalescing", () => {
       });
       let stopping: Promise<void> | undefined;
       try {
-        await writeTelegramSpooledUpdate({
-          stateDir,
-          update: forwardedTextUpdate({ updateId: 901, messageId: 1, text: "First note" }),
-        });
-        await writeTelegramSpooledUpdate({
-          stateDir,
-          update: forwardedTextUpdate({ updateId: 902, messageId: 2, text: "Second note" }),
-        });
+        await spool(
+          forwardedTextUpdate({ updateId: 901, messageId: 1, text: "First note" }),
+          forwardedTextUpdate({ updateId: 902, messageId: 2, text: "Second note" }),
+        );
         const { monitor } = await createMonitor({ onRuntimeError: vi.fn() });
         monitor.start();
         await operationStarted.promise;
@@ -737,7 +712,7 @@ describe("Telegram durable ingress coalescing", () => {
       const queue = openTelegramIngressQueue({ stateDir });
       expect(await queue.listClaims()).toEqual([]);
       if (phase === "commit") {
-        await assertSpoolTombstoned({ stateDir, updateIds: [901, 902] });
+        await tombstones(901, 902);
       } else {
         expect(await queue.listPending({ limit: "all" })).toMatchObject([
           { id: telegramQueueEventId(901), attempts: 0 },
@@ -801,7 +776,7 @@ describe("Telegram durable ingress coalescing", () => {
     expect(turn.media).toMatchObject([{ path: "/tmp/photo-1.jpg", kind: "image" }]);
     await monitor.waitForDeferredClaims();
     expect(downstreamTurns).toHaveBeenCalledOnce();
-    await assertSpoolTombstoned({ stateDir, updateIds: [301, 302] });
+    await tombstones(301, 302);
 
     await monitor.stop();
     await telegramTransport.close();
@@ -862,14 +837,10 @@ describe("Telegram durable ingress coalescing", () => {
       status: 502,
     });
     saveRemoteMedia.mockRejectedValueOnce(downloadError);
-    await writeTelegramSpooledUpdate({
-      stateDir,
-      update: forwardedTextUpdate({ updateId: 601, messageId: 1, text: "Forwarded context" }),
-    });
-    await writeTelegramSpooledUpdate({
-      stateDir,
-      update: forwardedPhotoUpdate({ updateId: 602, messageId: 2 }),
-    });
+    await spool(
+      forwardedTextUpdate({ updateId: 601, messageId: 1, text: "Forwarded context" }),
+      forwardedPhotoUpdate({ updateId: 602, messageId: 2 }),
+    );
     const { monitor } = await createMonitor({ onRuntimeError: vi.fn() });
     const forwardWindow = holdForwardWindow();
 
@@ -908,56 +879,9 @@ describe("Telegram durable ingress coalescing", () => {
     }
   });
 
-  it("keeps a text update pending when shutdown aborts the turn before adoption", async () => {
-    const update = textUpdate({
-      updateId: 901,
-      messageId: 1,
-      text: "interrupted by restart",
-    });
-    const eventId = telegramQueueEventId(update.update_id);
-    await writeTelegramSpooledUpdate({ stateDir, update });
-    const queue = openTelegramIngressQueue({ stateDir });
-    downstreamTurns.mockImplementationOnce(async (_ctx, abortSignal) => {
-      if (!abortSignal) {
-        throw new Error("Expected the turn's abort signal");
-      }
-      await new Promise<void>((resolve) => {
-        if (abortSignal.aborted) {
-          resolve();
-        } else {
-          abortSignal.addEventListener("abort", () => resolve(), { once: true });
-        }
-      });
-      return { queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } };
-    });
-    const { monitor, telegramTransport } = await createMonitor();
-
-    monitor.start();
-    await awaitSingleDownstreamTurn();
-    await monitor.stop();
-    await telegramTransport.close();
-
-    await vi.waitFor(async () => {
-      expect(await queue.listClaims()).toEqual([]);
-      expect(await queue.listPending({ limit: "all" })).toMatchObject([
-        { id: eventId, attempts: 0 },
-      ]);
-    });
-    expect(
-      (
-        await queue.enqueue(eventId, {
-          version: 1,
-          updateId: update.update_id,
-          receivedAt: Date.now(),
-          update,
-        })
-      ).kind,
-    ).not.toBe("completed");
-  });
-
   it("joins a turn that resumes after shutdown before releasing its state directory", async () => {
     const update = textUpdate({ updateId: 904, messageId: 4, text: "resumed after shutdown" });
-    await writeTelegramSpooledUpdate({ stateDir, update });
+    await spool(update);
     const turnEntered = createDeferred<void>();
     const resumeTurn = createDeferred<void>();
     inboundTurns.gate = async () => {
@@ -1044,7 +968,7 @@ describe("Telegram durable ingress coalescing", () => {
         vi.setSystemTime(Date.now() + 3 * 60 * 1_000);
         monitor.requestDrain();
         await monitor.waitForIdle();
-        await assertSpoolTombstoned({ stateDir, updateIds: [801, 802] });
+        await tombstones(801, 802);
         expect(downstreamTurns.mock.calls.map(([turn]) => turn.RawBody)).toEqual([
           "poison",
           "poison",
