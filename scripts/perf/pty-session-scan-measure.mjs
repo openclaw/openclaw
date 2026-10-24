@@ -43,7 +43,7 @@ const childPid = Number(childLine);
 assert(root.pid && childPid > 0);
 const allowed = new Set([root.pid, -root.pid, childPid, -childPid]);
 const originalSpawnSync = childProcess.spawnSync;
-const originalKill = process.kill;
+const originalKill = process.kill.bind(process);
 let scans = 0;
 let bytes = 0;
 let signalCount = 0;
