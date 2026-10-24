@@ -86,6 +86,84 @@ type TelegramPollOpts = TelegramThreadedSendOpts &
     isAnonymous?: boolean;
   };
 
+/** Emoji accepted by Telegram's sendDice, with the value range each one resolves to. */
+const TELEGRAM_DICE_EMOJI = ["🎲", "🎯", "🏀", "⚽", "🎳", "🎰"] as const;
+
+type TelegramDiceEmoji = (typeof TELEGRAM_DICE_EMOJI)[number];
+
+type TelegramDiceOpts = TelegramThreadedSendOpts &
+  Pick<TelegramSendOpts, "assertPlatformSendAuthorized" | "onPlatformSendDispatch" | "silent">;
+
+export type TelegramDiceSendResult = TelegramSendResult & {
+  emoji: TelegramDiceEmoji;
+  /** Server-rolled outcome. Telegram picks it; it cannot be requested. */
+  value?: number;
+};
+
+/** Send an animated roll; Telegram picks the outcome and returns it in the sent message. */
+export async function sendDiceTelegram(
+  to: string,
+  emoji: string | undefined,
+  opts: TelegramDiceOpts,
+): Promise<TelegramDiceSendResult> {
+  // Keyboards and models routinely append the presentation selector (\u26BD\uFE0F vs \u26BD), which
+  // Telegram rejects for sendDice; strip it before the allowlist lookup as the reaction path does.
+  const normalized = (emoji ?? "").trim().replace(/[\uFE0E\uFE0F]/gu, "") || "\u{1F3B2}";
+  const face = TELEGRAM_DICE_EMOJI.find((candidate) => candidate === normalized);
+  if (!face) {
+    throw new Error(
+      `Unsupported Telegram dice emoji "${normalized}". Use one of: ${TELEGRAM_DICE_EMOJI.join(" ")}`,
+    );
+  }
+
+  return withTelegramApiContext(opts, async (context): Promise<TelegramDiceSendResult> => {
+    const { api } = context;
+    const prepared = await prepareTelegramOutbound({
+      to,
+      context,
+      opts,
+      thread: {
+        messageThreadId: opts.messageThreadId,
+        replyToMessageId: opts.replyToMessageId,
+      },
+      useApiErrorLogging: false,
+    });
+    const diceParams = {
+      ...prepared.threadParams,
+      ...(opts.silent ? { disable_notification: true } : {}),
+    };
+
+    // Target preparation above is awaited, so custody can be revoked while it runs; record the
+    // platform-send boundary and revalidate authority immediately before the roll.
+    await opts.onPlatformSendDispatch?.();
+    const result = await prepared.request(() => {
+      opts.assertPlatformSendAuthorized?.();
+      return api.sendDice(
+        prepared.chatId,
+        face,
+        Object.keys(diceParams).length > 0 ? diceParams : undefined,
+      );
+    }, "dice");
+    const finalized = await finalizeTelegramOutbound({
+      context,
+      prepared,
+      result,
+      resultContext: "dice send",
+    });
+    return {
+      ...finalized,
+      emoji: face,
+      value: typeof result?.dice?.value === "number" ? result.dice.value : undefined,
+    };
+  });
+}
+
+/**
+ * Send a poll to a Telegram chat.
+ * @param to - Chat ID or username (e.g., "123456789" or "@username")
+ * @param poll - Poll input with question, options, maxSelections, and optional durationHours
+ * @param opts - Optional configuration
+ */
 export async function sendPollTelegram(
   to: string,
   poll: PollInput,

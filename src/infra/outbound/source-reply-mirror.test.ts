@@ -248,6 +248,24 @@ it.each(["thread-reply", "upload-file", "sendAttachment", "sendWithEffect"])(
   },
 );
 
+// A roll is a delivered source reply, so it counts for completion while owning neither the
+// transcript nor a restart receipt; this is the shape a remote Gateway admits.
+it("keeps a dice delivery out of transcript and restart-receipt ownership", async () => {
+  const params = source("testchat", "direct:user-1", {
+    action: "dice",
+    actionParams: { to: "direct:user-1", message: "You rolled a six" },
+    sessionId: "session-1",
+    sourceReplyFinal: true,
+    toolCallId: "call-1",
+    toolContext: { currentSourceTurnId: "source-turn-1" },
+    deliveredPayload: { ok: true, messageId: "dice-1" },
+  });
+  await expect(mirrorDeliveredSourceReplyToTranscript(params)).resolves.toBe(false);
+  expect(transcriptMocks.append).not.toHaveBeenCalled();
+  await expect(beginTerminalSourceReplyDelivery(params)).resolves.toBeUndefined();
+  expect(isDeliveredCurrentSourceReply(params)).toBe(true);
+});
+
 it.each([
   {
     name: "topic reply",
