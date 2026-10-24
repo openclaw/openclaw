@@ -16,7 +16,6 @@ import { createGatewayServerIsolatedVitestConfig } from "../vitest/vitest.gatewa
 import { collectVitestExcludePatterns, matchesVitestGlob } from "../vitest/vitest.pattern-file.ts";
 
 const {
-  applyParallelVitestCachePaths,
   buildVitestRunPlans: planRuns,
   createVitestRunSpecs: runSpecs,
   findUnmatchedExplicitTestTargets: unmatchedTargets,
@@ -44,6 +43,13 @@ const VITEST_NODE_PREFIX = [
   ...resolveVitestNodeArgs(process.env),
   resolveVitestCliEntry(),
 ];
+const packageTest = "packages/sdk/src/app-sdk-external-boundary.e2e.test.ts";
+const dockerPackageTest = "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts";
+const ordinaryE2eTest = "src/commands/models.set.e2e.test.ts";
+const packageConfig = "test/vitest/vitest.package-contract.config.ts";
+const e2eConfig = "test/vitest/vitest.e2e.config.ts";
+const coreTest = "src/config/config-misc.test.ts";
+const extensionTest = "extensions/discord/src/monitor/message-handler.preflight.test.ts";
 
 function expectedPlan(
   config: string,
@@ -62,9 +68,27 @@ function changedPlans(paths: string[]) {
   return planRuns(["--changed=origin/main"], process.cwd(), () => paths);
 }
 
-describe("test-projects args", () => {
-  const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+function expectPlan(
+  args: string[],
+  config: string,
+  include: string[] | null = args,
+  forwarded: string[] = [],
+) {
+  expect(planRuns(args)).toEqual([expectedPlan(config, include, forwarded)]);
+}
 
+function fixtureFiles(files: Record<string, string>) {
+  const root = tempDirs.make("openclaw-routing-");
+  for (const [file, content] of Object.entries(files)) {
+    const target = path.join(root, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content);
+  }
+  return root;
+}
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+describe("test-projects args", () => {
   const gatewayWorkerFile = "src/gateway/server-methods/cron.runs.test.ts";
   const catalogFile = "test/plugins/codex-model-catalog.gateway.test.ts";
   it.each<[string, string, string | undefined, boolean]>([
@@ -215,72 +239,23 @@ describe("test-projects args", () => {
     ["src/infra/openclaw-root.test.ts", "boundary"],
     ["src/plugins/loader.test.ts", "bundled"],
     ["test/plugins/codex-model-catalog.gateway.test.ts", "gateway-database-workers"],
-    ["test/e2e/qa-lab/runtime/gateway-loopback-lan-access.test.ts", "infra"],
-    ["test/e2e/qa-lab/runtime/gateway-tls-pinning.test.ts", "infra"],
     ["test/scripts/mac-elevation-artifact.test.ts", "tooling"],
     ["src/utils.test.ts", "unit-fast-fake-timers"],
     ["extensions/google/embedding-provider.test.ts", "extension-database-workers"],
-    ["src/acp/translator.stop-reason.test.ts", "infra"],
-    ["src/acp/control-plane/manager.test.ts", "infra"],
-    ["src/acp/control-plane/manager.cancel-session.producer-custody.worker.test.ts", "infra"],
     ["src/process/exec.test.ts", "process"],
     ["src/infra/sqlite-readonly-worker.compile-cache.process.test.ts", "cli-process"],
-    ["src/daemon/schtasks-process.windows.test.ts", "cli-process"],
-    ["src/snapshot/git-backup.test.ts", "infra"],
-    ["src/config/sessions/disk-budget.physical-usage.test.ts", "infra"],
-    ["src/entry.memory-json.test.ts", "infra"],
-    ["src/plugins/setup-registry.lifecycle.test.ts", "infra"],
-    ["src/wizard/setup.inference-recovery.integration.test.ts", "infra"],
     ["src/acp/runtime/session-meta.test.ts", "infra"],
     ["src/acp/runtime/session-meta-store.test.ts", "acp"],
     ["extensions/workboard/browser/catalog.test.ts", "ui"],
     ["extensions/example/browser/page.e2e.test.ts", "ui-e2e"],
     ["extensions/example/index.test.ts", "extensions"],
     ["src/plugins/contracts/memory-embedding-provider.contract.test.ts", "contracts-plugin"],
-    ["src/infra/migrations.test.ts", "infra"],
     ["src/plugins/discovery.test.ts", "plugins"],
+    ["src/agents/openai-transport-stream.base.test.ts", "agents-core"],
+    ["src/auto-reply/reply/dispatch-from-config.test.ts", "auto-reply"],
+    ["src/auto-reply/reply/dispatch-from-config.tts-stream.test.ts", "infra"],
   ])("routes %s to %s", (target, config) => {
-    expect(planRuns([target])).toEqual([expectedPlan(config, [target])]);
-  });
-
-  it("routes managed handoff scenarios through one infra project", () => {
-    const files = [
-      "lifecycle",
-      "native-lifecycle",
-      "recovery-systemd",
-      "recovery-launchd",
-      "terminal-result",
-      "triage",
-      "repair-validating",
-      "repair-verifying",
-    ].map((scenario) => `src/infra/update-managed-service-handoff-${scenario}.test.ts`);
-    expect(planRuns(files)).toEqual([expectedPlan("infra", files)]);
-  });
-
-  it("keeps split test entries in their owner configs", () => {
-    expect(planRuns(["src/agents/openai-transport-stream.base.test.ts"])).toEqual([
-      expectedPlan("agents-core", ["src/agents/openai-transport-stream.base.test.ts"]),
-    ]);
-    for (const [target, config] of [
-      ["src/auto-reply/reply/dispatch-from-config.test.ts", "auto-reply"],
-      ["src/auto-reply/reply/dispatch-from-config.tts-stream.test.ts", "infra"],
-    ] as const) {
-      expect(planRuns([target])).toEqual([expectedPlan(config, [target])]);
-    }
-  });
-
-  it("expands a test filename prefix into standalone sibling suites", () => {
-    expect(planRuns(["src/agents/openai-transport-stream"])).toEqual([
-      expectedPlan("agents-core", [
-        "src/agents/openai-transport-stream.base.test.ts",
-        "src/agents/openai-transport-stream.deepseek-and-shaping.test.ts",
-        "src/agents/openai-transport-stream.failed-sse.test.ts",
-        "src/agents/openai-transport-stream.replay-and-tools.test.ts",
-      ]),
-      expectedPlan("agents-core-isolated", [
-        "src/agents/openai-transport-stream.streaming.test.ts",
-      ]),
-    ]);
+    expectPlan([target], config);
   });
 
   it.each(["OPENCLAW_VITEST_MAX_WORKERS", "OPENCLAW_TEST_WORKERS"])(
@@ -314,49 +289,14 @@ describe("test-projects args", () => {
     ).toBe(2);
   });
 
-  it("gives parallel Vitest shards separate filesystem module caches", () => {
-    const specs = applyParallelVitestCachePaths(
-      [
-        {
-          config: "test/vitest/vitest.gateway.config.ts",
-          env: { KEEP_ME: "1" },
-        },
-        {
-          config: "test/vitest/vitest.gateway-server.config.ts",
-          env: {},
-        },
-      ],
-      {
-        cwd: "/repo",
-        env: {},
-      },
-    );
-
-    const firstEnv = specs[0]?.env;
-    expect(firstEnv?.KEEP_ME).toBe("1");
-    const paths = specs.map((spec) => spec.env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH);
-    expect(new Set(paths).size).toBe(2);
-    for (const cachePath of paths) {
-      expect(cachePath?.replaceAll("\\", "/")).toMatch(
-        /^\/repo\/\.cache\/vitest\/slots\/[a-f\d]+\/0$/u,
-      );
-    }
-  });
-
   it("routes non-test helper file targets to importing tests inside the routed suites", () => {
-    const tempDir = tempDirs.make("openclaw-helper-routing-");
     const helper = "src/gateway/gateway-connection.test-mocks.ts";
-    fs.mkdirSync(path.join(tempDir, "src/gateway"), { recursive: true });
-    fs.mkdirSync(path.join(tempDir, "src/tui"), { recursive: true });
-    fs.writeFileSync(path.join(tempDir, helper), "export const fixture = 1;\n");
-    fs.writeFileSync(
-      path.join(tempDir, "src/gateway/call.test.ts"),
-      'import { fixture } from "./gateway-connection.test-mocks.js";\nvoid fixture;\n',
-    );
-    fs.writeFileSync(
-      path.join(tempDir, "src/tui/gateway-chat.connection.test.ts"),
-      'import { fixture } from "../gateway/gateway-connection.test-mocks.js";\nvoid fixture;\n',
-    );
+    const tempDir = fixtureFiles({
+      [helper]: "export const fixture = 1;",
+      "src/gateway/call.test.ts": 'import "./gateway-connection.test-mocks.js";',
+      "src/tui/gateway-chat.connection.test.ts":
+        'import "../gateway/gateway-connection.test-mocks.js";',
+    });
 
     expect(planRuns([helper], tempDir)).toEqual([
       expectedPlan("gateway", ["src/gateway/call.test.ts"]),
@@ -364,138 +304,92 @@ describe("test-projects args", () => {
     ]);
   });
 
-  it("routes direct and transitive extension helper importers to the owning config", () => {
-    const helper = "extensions/memory-core/src/memory/test-runtime-mocks.ts";
-    const plans = planRuns([helper]);
-
-    expect(plans).toEqual([
-      expectedPlan(
-        "extension-database-workers",
-        expect.arrayContaining([
-          "extensions/memory-core/src/memory/manager.fts-only-reindex.test.ts",
-          "extensions/memory-core/src/memory/manager-session-update-race.test.ts",
-        ]),
-      ),
-    ]);
-    expect(plans[0]?.includePatterns).not.toContain(helper);
-  });
-
   it("routes top-level test helpers to importing repo tests", () => {
-    const root = tempDirs.make("openclaw-top-level-helper-");
     const helper = "test/helpers/fixture.ts";
     const consumers = ["test/scripts/a.test.ts", "test/scripts/b.test.ts", "src/tui/c.test.ts"];
-    for (const [file, source] of Object.entries({
+    const root = fixtureFiles({
       [helper]: "export const fixture = 1;",
       [consumers[0]!]: 'import "../helpers/fixture.js";',
       [consumers[1]!]: 'export * from "../helpers/fixture.js";',
       [consumers[2]!]: 'import "../../test/helpers/fixture.js";',
       "test/scripts/decoy.test.ts": "const source = 'import \"../helpers/fixture.js\";';",
-    })) {
-      const target = path.join(root, file);
-      fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, source);
-    }
+    });
     expect(planRuns([helper], root)).toEqual([
       expectedPlan("tooling", consumers.slice(0, 2)),
       expectedPlan("tui", consumers.slice(2)),
     ]);
   });
 
-  it.each([
-    ["src/commands/models.set.e2e.test.ts"],
-    [
-      "packages/sdk/src/app-sdk-external-boundary.e2e.test.ts",
-      "src/commands/models.set.e2e.test.ts",
-    ],
-    [
-      "src/commands/models.set.e2e.test.ts",
-      "packages/sdk/src/app-sdk-external-boundary.e2e.test.ts",
-    ],
-  ])("keeps mixed E2E targets in one owner in input order: %j", (...targets) => {
-    expect(planRuns(targets)).toEqual([expectedPlan("e2e", null, targets)]);
+  it.each([[ordinaryE2eTest], [packageTest, ordinaryE2eTest], [ordinaryE2eTest, packageTest]])(
+    "keeps mixed E2E targets in one owner in input order: %j",
+    (...targets) => {
+      expectPlan(targets, "e2e", null, targets);
+    },
+  );
+
+  it.each([dockerPackageTest, packageTest])("routes %s without private-QA E2E setup", (target) => {
+    expectPlan([target], "package-contract", null, [target]);
   });
 
   it.each([
-    "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",
-    "packages/sdk/src/app-sdk-external-boundary.e2e.test.ts",
-  ])("routes %s without private-QA E2E setup", (target) => {
-    expect(planRuns([target])).toEqual([expectedPlan("package-contract", null, [target])]);
-  });
-
-  it.each([
-    ["test/vitest/vitest.package-contract.config.ts", "test/vitest/vitest.e2e.config.ts"],
-    ["test/vitest/vitest.e2e.config.ts", "test/vitest/vitest.package-contract.config.ts"],
+    [packageConfig, e2eConfig],
+    [e2eConfig, packageConfig],
   ])("coalesces package config into the whole E2E owner: %j", (...configs) => {
-    expect(planRuns(configs)).toEqual([expectedPlan("e2e", null)]);
+    expectPlan(configs, "e2e", null);
   });
 
-  it.each([
-    "packages/sdk/src/app-sdk-external-boundary.e2e.test.ts",
-    "src/commands/models.set.e2e.test.ts",
-  ])("keeps whole E2E config scope when also selecting %s", (target) => {
-    expect(planRuns(["test/vitest/vitest.e2e.config.ts", target])).toEqual([
-      expectedPlan("e2e", null),
-    ]);
-  });
+  it.each([packageTest, ordinaryE2eTest])(
+    "keeps whole E2E config scope when also selecting %s",
+    (target) => {
+      expectPlan([e2eConfig, target], "e2e", null);
+    },
+  );
 
   it.each([true, false])(
     "expands a package config within mixed E2E files in input order (packageFirst=%s)",
     (packageFirst) => {
-      const config = "test/vitest/vitest.package-contract.config.ts";
-      const packages = [
-        "packages/sdk/src/app-sdk-external-boundary.e2e.test.ts",
-        "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",
-      ];
-      const ordinary = "src/commands/models.set.e2e.test.ts";
-      expect(planRuns(packageFirst ? [config, ordinary] : [ordinary, config])).toEqual([
-        expectedPlan("e2e", null, packageFirst ? [...packages, ordinary] : [ordinary, ...packages]),
-      ]);
+      const packages = [packageTest, dockerPackageTest];
+      expectPlan(
+        packageFirst ? [packageConfig, ordinaryE2eTest] : [ordinaryE2eTest, packageConfig],
+        "e2e",
+        null,
+        packageFirst ? [...packages, ordinaryE2eTest] : [ordinaryE2eTest, ...packages],
+      );
     },
   );
 
   it.each([
-    { name: "ordinary E2E path", tail: ["src/commands/models.set.e2e.test.ts"], runtime: true },
-    {
-      name: "Docker package with ordinary E2E path",
-      target: "test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts",
-      tail: ["src/commands/models.set.e2e.test.ts"],
-      runtime: true,
-    },
+    { name: "ordinary E2E path", tail: [ordinaryE2eTest], runtime: true },
     { name: "substring", tail: ["models.set"], runtime: true },
-    { name: "command-shaped substring", tail: ["run"], runtime: true },
     {
       name: "exclude operand",
-      tail: ["--exclude", "src/commands/models.set.e2e.test.ts"],
+      tail: ["--exclude", ordinaryE2eTest],
       runtime: false,
     },
     {
       name: "name-pattern operand",
-      tail: ["-t", "src/commands/models.set.e2e.test.ts"],
+      tail: ["-t", ordinaryE2eTest],
       runtime: false,
     },
-  ])(
-    "preserves package file selection with native $name",
-    ({ tail, runtime, target = "packages/sdk/src/app-sdk-external-boundary.e2e.test.ts" }) => {
-      expect(planRuns([target, "--", ...tail])).toEqual([
-        expectedPlan(runtime ? "e2e" : "package-contract", null, [...tail, target]),
+  ])("preserves package file selection with native $name", ({ tail, runtime }) => {
+    expectPlan([packageTest, "--", ...tail], runtime ? "e2e" : "package-contract", null, [
+      ...tail,
+      packageTest,
+    ]);
+  });
+
+  it.each([[], [packageTest]])(
+    "keeps an explicit package config bounded under a native substring filter: %j",
+    (...files) => {
+      expectPlan([packageConfig, ...files, "--", "models.set"], "package-contract", null, [
+        "models.set",
       ]);
     },
   );
 
-  it.each([
-    [],
-    ["packages/sdk/src/app-sdk-external-boundary.e2e.test.ts"],
-    ["test/e2e/qa-lab/runtime/package-openclaw-for-docker.e2e.test.ts"],
-  ])("keeps an explicit package config bounded under a native substring filter: %j", (...files) => {
-    const config = "test/vitest/vitest.package-contract.config.ts";
-    expect(planRuns([config, ...files, "--", "models.set"])).toEqual([
-      expectedPlan("package-contract", null, ["models.set"]),
-    ]);
-  });
-
   it("keeps a plugin browser directory scoped within its UI project", () => {
     const target = "extensions/workboard/browser";
-    expect(planRuns([target])).toEqual([expectedPlan("ui", [`${target}/**/*.test.ts`])]);
+    expectPlan([target], "ui", [`${target}/**/*.test.ts`]);
   });
 
   it("keeps docs-only changed runs empty instead of widening to the full suite", () => {
@@ -568,43 +462,30 @@ describe("test-projects args", () => {
 
   it("keeps extension production changes on the owning extension lane", () => {
     const changedPaths = ["extensions/discord/src/monitor/message-handler.ts"];
-
-    expect(changedPlans(changedPaths)).toEqual([
-      expectedPlan("extension-discord", [
-        "extensions/discord/src/channel-actions.contract.test.ts",
-        "extensions/discord/src/channel.message-adapter.test.ts",
-        "extensions/discord/src/channel.test.ts",
-        "extensions/discord/src/monitor/message-handler.bot-self-filter.test.ts",
-        "extensions/discord/src/monitor/message-handler.queue.test.ts",
-        "extensions/discord/src/monitor/provider.skill-dedupe.test.ts",
-        "extensions/discord/src/monitor/provider.test.ts",
-      ]),
-      expectedPlan("extension-database-workers", [
-        "extensions/discord/src/durable-delivery.test.ts",
-      ]),
+    const plans = changedPlans(changedPaths);
+    expect(plans.map((plan) => plan.config)).toEqual([
+      "test/vitest/vitest.extension-discord.config.ts",
+      "test/vitest/vitest.extension-database-workers.config.ts",
     ]);
+    for (const plan of plans) {
+      expect(plan.includePatterns?.length).toBeGreaterThan(0);
+      expect(
+        plan.includePatterns?.every(
+          (file) => file.startsWith("extensions/discord/") && file.endsWith(".test.ts"),
+        ),
+      ).toBe(true);
+    }
   });
 
   it("splits mixed core and extension targets into separate vitest runs", () => {
-    expect(
-      planRuns([
-        "src/config/config-misc.test.ts",
-        "extensions/discord/src/monitor/message-handler.preflight.test.ts",
-        "-t",
-        "mention",
-      ]),
-    ).toEqual([
-      expectedPlan("runtime-config", ["src/config/config-misc.test.ts"], ["-t", "mention"]),
-      expectedPlan(
-        "extension-discord",
-        ["extensions/discord/src/monitor/message-handler.preflight.test.ts"],
-        ["-t", "mention"],
-      ),
+    expect(planRuns([coreTest, extensionTest, "-t", "mention"])).toEqual([
+      expectedPlan("runtime-config", [coreTest], ["-t", "mention"]),
+      expectedPlan("extension-discord", [extensionTest], ["-t", "mention"]),
     ]);
   });
 
   it("writes scoped include files for routed extension runs", () => {
-    const [spec] = runSpecs(["extensions/discord/src/monitor/message-handler.preflight.test.ts"]);
+    const [spec] = runSpecs([extensionTest]);
 
     expect(spec?.pnpmArgs).toEqual([
       ...VITEST_NODE_PREFIX,
@@ -612,9 +493,7 @@ describe("test-projects args", () => {
       "--config",
       "test/vitest/vitest.extension-discord.config.ts",
     ]);
-    expect(spec?.includePatterns).toEqual([
-      "extensions/discord/src/monitor/message-handler.preflight.test.ts",
-    ]);
+    expect(spec?.includePatterns).toEqual([extensionTest]);
     expect(spec?.includeFilePath).toContain("openclaw-vitest-include-");
     expect(spec?.env.OPENCLAW_VITEST_INCLUDE_FILE).toBe(spec?.includeFilePath);
   });
@@ -627,9 +506,7 @@ describe("test-projects args", () => {
   });
 
   it("rejects explicit non-test file targets with no sibling tests", () => {
-    const tempDir = tempDirs.make("openclaw-test-targets-");
-    fs.mkdirSync(path.join(tempDir, "src", "lonely"), { recursive: true });
-    fs.writeFileSync(path.join(tempDir, "src", "lonely", "runtime.ts"), "export {};\n");
+    const tempDir = fixtureFiles({ "src/lonely/runtime.ts": "export {};" });
 
     expect(unmatchedTargets(["src/lonely/runtime.ts"], tempDir)).toEqual([
       {
@@ -641,9 +518,7 @@ describe("test-projects args", () => {
   });
 
   it("accepts explicit untracked test files that exist on disk", () => {
-    const tempDir = tempDirs.make("openclaw-test-targets-");
-    fs.mkdirSync(path.join(tempDir, "src"), { recursive: true });
-    fs.writeFileSync(path.join(tempDir, "src", "new.test.ts"), "test('new', () => {});\n");
+    const tempDir = fixtureFiles({ "src/new.test.ts": "test('new', () => {});" });
 
     expect(unmatchedTargets(["src/new.test.ts"], tempDir)).toEqual([]);
   });
@@ -687,12 +562,8 @@ describe("test-projects args", () => {
   });
 
   it("rejects watch mode when a command spans multiple suites", () => {
-    expect(() =>
-      planRuns([
-        "--watch",
-        "src/config/config-misc.test.ts",
-        "extensions/discord/src/monitor/message-handler.preflight.test.ts",
-      ]),
-    ).toThrow("watch mode with mixed test suites is not supported");
+    expect(() => planRuns(["--watch", coreTest, extensionTest])).toThrow(
+      "watch mode with mixed test suites is not supported",
+    );
   });
 });

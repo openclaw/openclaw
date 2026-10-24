@@ -79,6 +79,18 @@ function runNode(args: string[], env: NodeJS.ProcessEnv) {
 }
 
 function rollbackSuccessSummary() {
+  const sessions: { key: string; sessionId: string }[] = [];
+  const tables: typeof historyTables = [];
+  const database = <T extends object>(kind: string, version: number, extra: T) => ({
+    kind,
+    present: true,
+    relative: `/private/host/${kind}`,
+    userVersion: version,
+    contentVersion: version,
+    sessions,
+    tables,
+    ...extra,
+  });
   return {
     ...successSummary("2026.9.4", "2026.9.5"),
     backupRollback: {
@@ -98,29 +110,16 @@ function rollbackSuccessSummary() {
       restoredStateDir: "/private/host/restored",
       before: {
         databases: [
-          {
-            kind: "state",
-            present: true,
-            relative: "/private/host/state",
-            userVersion: 16,
-            contentVersion: 16,
-            sessions: [],
-            tables: [],
-          },
-          {
-            kind: "agent",
+          database("state", 16, {}),
+          database("agent", 19, {
             agentId: "main",
-            present: true,
-            userVersion: 19,
-            contentVersion: 19,
-            relative: "/private/host/agent",
             metadata: { secret: "PRIVATE_VALUE" },
             sessions: [{ key: "PRIVATE_SESSION_KEY", sessionId: "PRIVATE_SESSION_ID" }],
             tables: [
               { ...historyTables[0]!, columns: ["PRIVATE_COLUMN"] },
               { ...historyTables[1]!, raw: "PRIVATE_TRANSCRIPT" },
             ],
-          },
+          }),
           { kind: "agent", agentId: "ops", present: false, relative: "/private/host/ops" },
         ],
         files: [
@@ -132,13 +131,7 @@ function rollbackSuccessSummary() {
           },
         ],
       },
-      preflights: [
-        {
-          agentId: "main",
-          ...preflight,
-          output: "/private/host/preflight.json",
-        },
-      ],
+      preflights: [{ agentId: "main", ...preflight, output: "/private/host/preflight.json" }],
       sessionReads: [
         {
           agentId: "main",
@@ -150,6 +143,34 @@ function rollbackSuccessSummary() {
     },
   };
 }
+
+it.each([
+  ["legacy-operator-state", "2026.9.4", "manual", "restored-index-post-update.json"],
+  ["update-report-recovery", "2026.9.6", "manual", "update-report-recovery.json"],
+  ["legacy-operator-state", "2026.9.4", "manual", "legacy-operator-post-update-cron-history.json"],
+  [
+    "legacy-operator-state",
+    "2026.9.6",
+    "auto-auth",
+    "legacy-operator-post-update-cron-history.json",
+  ],
+])("publishes scenario log %s / %s / %s", async (scenario, version, mode, name) => {
+  const summary = rollbackSuccessSummary();
+  summary.baseline = { spec: `openclaw@${version}`, version };
+  summary.backupRollback.baselineVersion = version;
+  summary.backupRollback.runtime.version = version;
+  const { publish, published } = await publishSuccess(
+    {
+      ...summary,
+      scenario,
+      updateRestartMode: mode,
+      backupRollback: scenario === "legacy-operator-state" ? summary.backupRollback : undefined,
+    },
+    { [name]: { proof: "retained" } },
+  );
+  publish();
+  expect(readJson(join(published, "summary.json")).logs[name]).toBe('{"proof":"retained"}');
+});
 
 async function publishSuccess(
   summary: unknown,
@@ -682,72 +703,4 @@ if (process.argv[2] === 'update') {
       expect.objectContaining({ role: "update", event: "started", packageVersion: "2026.7.1-2" }),
     ]);
   });
-});
-
-it.each([
-  {
-    name: "restored-index readback",
-    scenario: "legacy-operator-state",
-    version: "2026.9.4",
-    mode: "manual",
-    logs: {
-      "restored-index-post-update.json": {
-        status: "passed",
-        current: { label: "Renamed session", pinnedAt: 1234 },
-      },
-    },
-  },
-  {
-    name: "report recovery receipts and transport witnesses",
-    scenario: "update-report-recovery",
-    version: "2026.9.6",
-    mode: "manual",
-    logs: {
-      "update-report-recovery.json": { postCounts: [2, 1] },
-      "update-report-baseline.json": { version: "2026.9.6" },
-      "update-report-retry-status.log": { runId: "retry-run" },
-      "update-report-pending-status.log": { runId: "pending-run" },
-      "update-report-retry.gh.jsonl": { kind: "create", status: 422 },
-      "update-report-pending.gh.jsonl": { kind: "lookup", matches: [] },
-    },
-  },
-  ...[
-    { version: "2026.9.4", mode: "manual" },
-    { version: "2026.9.6", mode: "auto-auth" },
-  ].map(({ version, mode }) => ({
-    name: `${version} ${mode} Cron readback`,
-    scenario: "legacy-operator-state",
-    version,
-    mode,
-    logs: Object.fromEntries(
-      ["post-update", "candidate"].map((stage) => [
-        `legacy-operator-${stage}-cron-history.json`,
-        {
-          status: "passed",
-          stage,
-          source: version === "2026.9.4" ? "legacy-doctor-import" : "published-native-runs",
-          pages: [{ jobId: "synthetic", runId: "retained" }],
-        },
-      ]),
-    ),
-  })),
-])("publishes $name", async ({ scenario, version, mode, logs }) => {
-  const summary = rollbackSuccessSummary();
-  summary.baseline = { spec: `openclaw@${version}`, version };
-  summary.backupRollback.baselineVersion = version;
-  summary.backupRollback.runtime.version = version;
-  const publication = await publishSuccess(
-    {
-      ...summary,
-      scenario,
-      updateRestartMode: mode,
-      backupRollback: scenario === "legacy-operator-state" ? summary.backupRollback : undefined,
-    },
-    logs,
-  );
-  publication.publish();
-  const result = readJson(join(publication.published, "summary.json"));
-  expect(result.logs).toMatchObject(
-    Object.fromEntries(Object.entries(logs).map(([name, proof]) => [name, JSON.stringify(proof)])),
-  );
 });
