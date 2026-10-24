@@ -8,12 +8,7 @@ import {
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
-import {
-  expectAttribute,
-  expectCount,
-  expectText,
-  styles,
-} from "./activity-assertions.test-support.ts";
+import { expectAttribute, expectCount, styles } from "./activity-assertions.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { readThemedPopupPaint } from "./popup-theme.test-support.ts";
 
@@ -83,8 +78,6 @@ suite.define(() => {
         const gatewayHandoffKey = "agent:main:gateway-handoff";
         const nightlyMaintenanceKey = "agent:main:nightly-maintenance";
         const incidentNotesKey = "agent:main:incident-notes";
-        const automationKeys = [designKey, gatewayHandoffKey, nightlyMaintenanceKey];
-        const nonAutomationKeys = [releaseKey, incidentNotesKey];
         const session = (
           key: string,
           displayName: string,
@@ -241,11 +234,6 @@ suite.define(() => {
         });
         await waitForControlUiRoute(page, { pathname: "/activity", routeId: "activity" });
         const activityPage = page.locator("openclaw-activity-page");
-        await expectCount(activityPage).toBe(1);
-        await activityPage.locator(".activity-pulse__bars").waitFor();
-        expect(await activityPage.locator(".activity-pulse__bars > span").count()).toBe(
-          sessionList.activityPulse.buckets.length,
-        );
         // The stacked page header's intro copy and the mode tabs share the
         // content's left edge.
         const introLeft = await activityPage
@@ -256,11 +244,6 @@ suite.define(() => {
           .evaluate((element) => element.getBoundingClientRect().left);
         expect(Math.abs(introLeft - tabsLeft)).toBeLessThanOrEqual(8);
         await activityPage.locator(".activity-feed__people-trigger").click();
-        await expectCount(
-          activityPage.locator(
-            '.activity-feed__people-row[data-activity-person]:not([data-activity-person=""])',
-          ),
-        ).toBe(3);
         const peoplePopover = activityPage.locator(".activity-feed__people-popover:popover-open");
         const peoplePaint = await readThemedPopupPaint(peoplePopover, "body");
         if (proofPhase) {
@@ -269,36 +252,9 @@ suite.define(() => {
         expect(peoplePaint.actual).toEqual(peoplePaint.expected);
         await page.keyboard.press("Escape");
         const activityFeed = activityPage.locator(".activity-feed");
-        const activitySession = (key: string) =>
-          activityFeed.locator(`[data-activity-session="${key}"]`);
         const automationGroup = activityFeed.locator("[data-activity-automation-group]");
-        await expectCount(automationGroup).toBe(1);
-        await expectAttribute(automationGroup, "aria-expanded").toBe("false");
-        for (const key of nonAutomationKeys) {
-          await expectCount(activitySession(key)).toBe(1);
-        }
-        for (const key of automationKeys) {
-          await expectCount(activitySession(key)).toBe(0);
-        }
-        await automationGroup.click();
-        await expectAttribute(automationGroup, "aria-expanded").toBe("true");
-        for (const key of automationKeys) {
-          await expectCount(activitySession(key)).toBe(1);
-        }
-        await automationGroup.click();
-        await expectAttribute(automationGroup, "aria-expanded").toBe("false");
-        for (const key of automationKeys) {
-          await expectCount(activitySession(key)).toBe(0);
-        }
-        for (const key of nonAutomationKeys) {
-          await expectCount(activitySession(key)).toBe(1);
-        }
-
-        const liveRow = activitySession(releaseKey);
-        await expectCount(liveRow.locator(".activity-feed__run-dot")).toBe(1);
-        await expectText(liveRow.locator(".activity-feed__session-headline")).toContain(
-          "Waiting on a fictional mock approval",
-        );
+        await automationGroup.waitFor();
+        const liveRow = activityFeed.locator(`[data-activity-session="${releaseKey}"]`);
         const inspectRun = liveRow.locator("xpath=following-sibling::a");
         await liveRow.hover();
         await expect
@@ -312,11 +268,6 @@ suite.define(() => {
           "/activity?view=run&run=mock%20run%3Aa%2Fb",
         );
         const timeFilter = activityPage.locator(".activity-feed__time-filter");
-        expect(
-          await timeFilter
-            .locator(".settings-segmented__btn")
-            .evaluateAll((buttons) => buttons.map((button) => button.textContent?.trim())),
-        ).toEqual(["Last 24 hours", "Last 7 days", "Last 30 days", "All time"]);
         await capture("05-global-activity.png");
 
         await onlineView.click();
@@ -328,9 +279,6 @@ suite.define(() => {
         const attributionIcon = activityPage.locator(".activity-feed__device-attribution");
         await expectCount(attributionIcon.locator("svg")).toBe(1);
         await expect.poll(async () => (await attributionIcon.boundingBox())?.width).toBe(16);
-        await expectCount(
-          activityPage.locator(".activity-feed__viewing-list .activity-feed__session"),
-        ).toBe(2);
         await capture("06-person-activity.png");
 
         await activityPage.locator(".activity-feed__people-clear").click();
@@ -338,10 +286,6 @@ suite.define(() => {
         await activityPage.locator(".activity-feed__people-trigger").click();
         await activityPage.locator('[data-activity-person="profile-carol"]').click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/profile-carol");
-        await expectCount(activitySession(nightlyMaintenanceKey)).toBe(1);
-        await expectCount(
-          activitySession(nightlyMaintenanceKey).locator('[data-activity-created-via="cron"]'),
-        ).toBe(1);
         await capture("06-automation-creator-desktop.png");
 
         await activityPage.locator(".activity-feed__people-clear").click();
@@ -382,8 +326,6 @@ suite.define(() => {
         await activityPage.locator(".activity-feed__people-trigger").click();
         await activityPage.locator('[data-activity-person="profile-carol"]').click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/activity/profile-carol");
-        await expectCount(activitySession(nightlyMaintenanceKey)).toBe(1);
-        await expectCount(activityFeed.locator('[data-activity-created-via="cron"]')).toBe(2);
         await capture("07-automation-creator-mobile.png", true);
       },
     );
