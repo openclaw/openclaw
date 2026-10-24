@@ -1,50 +1,41 @@
 // Drives the real Telegram inbound debounce path, not only key construction.
-import type { Bot } from "grammy";
+import type { Context } from "grammy";
 import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { normalizeAllowFrom } from "./bot-access.js";
 import { buildTelegramInboundDebounceConversationKey } from "./bot-handlers.debounce-key.js";
-import { createTelegramInboundProcessing } from "./bot-handlers.inbound-processing.js";
+import type { TelegramHandlerAuthorization } from "./bot-handlers.inbound-authorization.js";
+import { createTelegramInboundPipeline } from "./bot-handlers.inbound-pipeline.js";
 import type { TelegramMessagePipeline } from "./bot-handlers.message-pipeline.js";
 import type { RegisterTelegramHandlerParams } from "./bot-handlers.types.js";
-import type { TelegramChannelIngressResolver } from "./bot-message-context.types.js";
 import type { TelegramMessageProcessingResult } from "./bot-processing-outcome.js";
-import type { TelegramThreadSpec } from "./bot/helpers.js";
-import type { TelegramContext } from "./bot/types.js";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
+import { resolveTelegramMessageThreadSpec, type TelegramThreadSpec } from "./bot/helpers.js";
 
 const CHAT_ID = 7;
 const SENDER_ID = "42";
 
-function asMessagePipeline(value: object): TelegramMessagePipeline {
-  return value as TelegramMessagePipeline;
-}
-
-function asBot(value: object): Bot {
-  return value as Bot;
-}
-
-function asContext(value: object): TelegramContext {
-  return value as TelegramContext;
-}
-
-function asHandlerParams(
-  params: Pick<
-    RegisterTelegramHandlerParams,
-    "cfg" | "accountId" | "bot" | "runtime" | "opts" | "mediaMaxBytes" | "logger"
-  >,
-): RegisterTelegramHandlerParams {
-  return params as RegisterTelegramHandlerParams;
-}
-
-function textMessage(messageId: number, text: string): Message {
+function textMessage(messageId: number, text: string, threadId?: number): Message {
   return {
     message_id: messageId,
     date: 1_700_000_000 + messageId,
     chat: { id: CHAT_ID, type: "private", first_name: "Ada" },
     from: { id: 42, is_bot: false, first_name: "Ada" },
     text,
+    ...(threadId == null ? {} : { message_thread_id: threadId }),
   } as Message;
+}
+
+function inboundContext(message: Message, updateId: number): Context {
+  return {
+    message,
+    update: { update_id: updateId, message },
+    me: telegramBotInfoForTest,
+    getFile: async () => {
+      throw new Error("text messages do not download files");
+    },
+  } as Context;
 }
 
 describe("private DM topic inbound debounce", () => {
@@ -65,61 +56,90 @@ describe("private DM topic inbound debounce", () => {
       };
     const message = {
       resolveMediaRuntime: () => ({ token: "test-token" }),
-      recordMessageResolvedMedia: () => undefined,
+      recordMessageResolvedMedia: async () => undefined,
       mergeDispatchDedupeClaims: () => [],
       releaseDispatchDedupeClaims: () => undefined,
       settleSpooledReplayParticipants: () => undefined,
-      resolveTelegramSessionState: () => undefined,
-      processMessageWithReplyChain,
-    };
-    const pipeline = asMessagePipeline(message);
-    const { processInboundMessage } = createTelegramInboundProcessing({
-      params: asHandlerParams({
-        cfg,
-        accountId: "default",
-        bot: asBot({ api: { sendMessage: async () => undefined } }),
-        runtime: {
-          log: () => undefined,
-          error: () => undefined,
-          exit: () => undefined,
-        },
-        opts: { token: "test-token" },
-        mediaMaxBytes: 10_000,
-        logger: {
-          info: (_fields: Record<string, unknown>, _message: string) => undefined,
-          warn: (_fields: Record<string, unknown>, _message: string) => undefined,
-        },
+      resolveTelegramSessionState: async () => ({
+        agentId: "test",
+        bindingMode: { kind: "none" as const },
+        sessionEntry: undefined,
+        sessionKey: "test",
+        storePath: "test",
+        model: undefined,
       }),
-      message: pipeline,
+      resolvePromptContextAmbientWatermark: async () => undefined,
+      claimMessageDispatchDedupe: async () => ({ process: true, claims: [] }),
+      recordMessageForReplyChain: async (msg: Message) => ({
+        messageId: String(msg.message_id),
+        sender: "Ada",
+        sourceMessage: msg,
+      }),
+      processMessageWithReplyChain,
+    } as unknown as TelegramMessagePipeline;
+    const allow = normalizeAllowFrom([SENDER_ID]);
+    const emptyAllow = normalizeAllowFrom();
+    const authorizeInboundMessage = async (inbound: { msg: Message; isForum: boolean }) => ({
+      allowed: true,
+      effectiveDmAllow: allow,
+      resolveChannelIngress: async () => {
+        throw new Error("debounce buffering does not resolve ingress");
+      },
+      context: {
+        cfg,
+        commandAuthorizedByConfig: false,
+        allowFrom: [],
+        telegramCfg: {},
+        dmPolicy: "open",
+        resolvedThreadId: undefined,
+        storeAllowFrom: [],
+        groupConfig: undefined,
+        topicConfig: undefined,
+        effectiveGroupAllow: emptyAllow,
+        hasGroupAllowOverride: false,
+        threadSpec: resolveTelegramMessageThreadSpec(inbound.msg, inbound.isForum),
+      },
+    });
+    const params = {
+      cfg,
+      accountId: "default",
+      ownerAgentId: "main",
+      bot: {
+        api: {
+          getChat: async () => {
+            throw new Error("private text debounce does not call getChat");
+          },
+          sendMessage: async () => undefined,
+        },
+      },
+      runtime: {
+        log: () => undefined,
+        error: () => undefined,
+        exit: () => undefined,
+      },
+      opts: { token: "test-token", botInfo: telegramBotInfoForTest },
+      mediaMaxBytes: 10_000,
+      telegramCfg: {},
+      logger: {
+        info: () => undefined,
+        warn: () => undefined,
+      },
+      resolveGroupPolicy: () => ({ allowlistEnabled: false, allowed: true }),
+      resolveGroupActivation: () => undefined,
+      resolveGroupRequireMention: () => false,
+      resolveTelegramGroupConfig: () => ({}),
+      shouldSkipUpdate: () => false,
+      processMessage: async () => ({ kind: "completed" }),
+    } as unknown as RegisterTelegramHandlerParams;
+    const { handle } = createTelegramInboundPipeline({
+      params,
+      message,
+      authorization: { authorizeInboundMessage } as TelegramHandlerAuthorization,
     });
     let messageId = 0;
-    const send = (threadSpec: TelegramThreadSpec, text: string) => {
-      const msg = textMessage(++messageId, text);
-      return processInboundMessage({
-        authorizationCfg: cfg,
-        ctx: asContext({
-          message: msg,
-          me: { id: 1, is_bot: true, first_name: "proof", username: "proof_bot" },
-          getFile: async () => {
-            throw new Error("text messages do not download files");
-          },
-        }),
-        msg,
-        chatId: CHAT_ID,
-        isGroup: false,
-        threadSpec,
-        dmPolicy: "open",
-        storeAllowFrom: [],
-        senderId: SENDER_ID,
-        effectiveGroupAllow: normalizeAllowFrom(),
-        effectiveDmAllow: normalizeAllowFrom([SENDER_ID]),
-        channelIngressResolver: (async () => {
-          throw new Error("debounce buffering does not resolve ingress");
-        }) as TelegramChannelIngressResolver,
-        sendOversizeWarning: false,
-        oversizeLogMessage: "media too large",
-        dispatchDedupeClaims: [],
-      });
+    const send = (threadId: number | undefined, text: string) => {
+      const msg = textMessage(++messageId, text, threadId);
+      return handle(inboundContext(msg, messageId));
     };
 
     const topic100 = { id: 100, scope: "dm" } as const;
@@ -140,11 +160,11 @@ describe("private DM topic inbound debounce", () => {
       }),
     };
     const dispositions = [
-      await send(topic100, "alpha-1"),
-      await send(topic200, "beta"),
-      await send(topic100, "alpha-2"),
-      await send(nonTopicDm, "plain-1"),
-      await send(nonTopicDm, "plain-2"),
+      await send(100, "alpha-1"),
+      await send(200, "beta"),
+      await send(100, "alpha-2"),
+      await send(undefined, "plain-1"),
+      await send(undefined, "plain-2"),
     ];
     await vi.advanceTimersByTimeAsync(40);
 
