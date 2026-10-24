@@ -10,7 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
 import { stripAnsi } from "../../packages/terminal-core/src/ansi.js";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { createOverlayHandle } from "./tui-overlay.test-support.js";
+import { createOverlayHandle } from "./tui-overlay-handle.test-support.js";
+import "./tui-overlay.test-support.js";
 import { createTuiQuestionController } from "./tui-questions.js";
 
 const UP = "\x1b[A";

@@ -17,14 +17,12 @@ const mocks = vi.hoisted(() => ({
 }));
 
 // mock-isolation: Cleanup routing fixtures supply config without reading operator state.
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.loadConfig,
-  loadConfig: mocks.loadConfig,
-  captureRuntimeConfigAsyncReader:
-    (...args: Parameters<typeof mocks.loadConfig>) =>
-    async () =>
-      mocks.loadConfig(...args),
-}));
+vi.mock("../config/config.js", async () => {
+  const { createTestConfigReadMocks } = await import("./test-runtime-config-helpers.js");
+  return {
+    ...createTestConfigReadMocks(mocks, "loadConfig"),
+  };
+});
 
 vi.mock("./sessions-cleanup.runtime.js", () => ({
   runLocalSessionsCleanup: mocks.runLocalSessionsCleanup,
