@@ -15,6 +15,60 @@ const EMAIL = "visitor@example.com";
 describe("VisitorAccessService authority", () => {
   useVisitorFixtures();
 
+  it("publishes grant revisions, clears unavailable state, and releases subscribers", async () => {
+    const grant = visitorGrant(EMAIL);
+    const fixture = visitorFixture({ grants: [grant], emails: [EMAIL] });
+    const publish = vi.fn<(revision: string | undefined) => void>();
+    const unsubscribe = fixture.service.subscribeRevision(publish);
+    expect(publish).toHaveBeenLastCalledWith(undefined);
+    await fixture.service.initialize();
+    const initialRevision = publish.mock.lastCall?.[0];
+    expect(initialRevision).toEqual(expect.any(String));
+    const authority = fixture.authorize([EMAIL]);
+    expect(authority.recheckValidUntil).toBe(NOW + DAY_MS);
+
+    await fixture.invite({ email: EMAIL, days: 3 });
+    const renewedRevision = publish.mock.lastCall?.[0];
+    expect(renewedRevision).toEqual(expect.any(String));
+    expect(renewedRevision).not.toBe(initialRevision);
+    expect(authority.recheckValidUntil).toBe(NOW + 3 * DAY_MS);
+    await fixture.invite({ email: EMAIL, days: 2 });
+    expect(publish.mock.lastCall?.[0]).not.toBe(renewedRevision);
+    expect(authority.recheckValidUntil).toBe(NOW + 2 * DAY_MS);
+
+    fixture.fetcher.mockRejectedValueOnce(new Error("Provider is unavailable"));
+    await expect(fixture.service.sweep()).rejects.toBeInstanceOf(VisitorAccessError);
+    expect(publish).toHaveBeenLastCalledWith(undefined);
+    expect(() => authority.assertCurrent()).not.toThrow();
+    await fixture.revoke({ email: EMAIL });
+    expect(publish.mock.lastCall?.[0]).toEqual(expect.any(String));
+    expect(() => authority.assertCurrent()).toThrow(/access ended/);
+
+    unsubscribe();
+    publish.mockClear();
+    fixture.service.close();
+    expect(publish).not.toHaveBeenCalled();
+    const afterClose = vi.fn<(revision: string | undefined) => void>();
+    fixture.service.subscribeRevision(afterClose)();
+    expect(afterClose).toHaveBeenCalledExactlyOnceWith(undefined);
+  });
+
+  it("bounds a retained allow by wall-clock expiry even before its timer runs", async () => {
+    const fixture = visitorFixture({
+      grants: [
+        visitorGrant(EMAIL, { expiresAt: NOW + 1_000 }),
+        visitorGrant("forever@example.com", { expiresAt: null }),
+      ],
+    });
+    await fixture.service.initialize();
+    const authority = fixture.authorize([EMAIL]);
+    expect(authority.recheckValidUntil).toBe(NOW + 1_000);
+    expect(fixture.authorize(["forever@example.com"]).recheckValidUntil).toBe(Infinity);
+    vi.setSystemTime(NOW + 1_000);
+    expect(authority.signal.aborted).toBe(false);
+    expect(() => authority.assertCurrent()).toThrow(/access ended/);
+  });
+
   it("qualifies legacy records only after a confirmed sweep and preserves qualified access during provider outages", async () => {
     const qualified = visitorGrant("qualified@example.com");
     const legacy = visitorGrant("legacy@example.com", { grantId: undefined });

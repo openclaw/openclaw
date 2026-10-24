@@ -72,6 +72,7 @@ function registerVisitorPlugin(api: OpenClawPluginApi): void {
   };
 
   api.registerGatewayAccessPolicy({
+    subscribeRevision: (publish) => service.subscribeRevision(publish),
     resume({ profile, grantId }) {
       return service.resume(profile.emails, grantId, profile.githubAccountIds);
     },

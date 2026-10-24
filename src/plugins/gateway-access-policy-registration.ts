@@ -11,6 +11,27 @@ import type { PluginInstanceHandle } from "./plugin-instance-scope.js";
 const signalRelays = new WeakMap<AbortSignal, () => void>();
 const signalRelayCleanup = new FinalizationRegistry<() => void>((release) => release());
 
+type PolicyRevision = Readonly<{ revision: string }>;
+type PublishedPolicyRevision = {
+  instance: PluginInstanceHandle;
+  current: PolicyRevision | undefined;
+};
+const policyRevisions = new WeakMap<PluginGatewayAccessPolicy, PublishedPolicyRevision>();
+
+/** Reads only host-owned publication state; never invokes plugin code on a cache hit. */
+export function readGatewayAccessPolicyRevision(
+  policy: PluginGatewayAccessPolicy,
+): PolicyRevision | undefined {
+  const publication = policyRevisions.get(policy);
+  if (!publication) {
+    return undefined;
+  }
+  const instance = publication.instance;
+  return instance.acceptingCalls && !instance.owner?.revoked && !instance.lifecycle.signal.aborted
+    ? publication.current
+    : undefined;
+}
+
 function observeNativeAbort(source: AbortSignal, relay: WeakRef<() => void>, token: object) {
   const onAbort = () => {
     try {
@@ -61,6 +82,7 @@ function bindAccessSignal(signal: AbortSignal, instance: PluginInstanceHandle): 
 function bindAccessAuthority(
   authority: PluginGatewayAccessAuthority | undefined,
   instance: PluginInstanceHandle,
+  runPolicy: <T>(run: () => T) => T,
 ): PluginGatewayAccessAuthority | undefined {
   if (!authority) {
     return undefined;
@@ -69,12 +91,27 @@ function bindAccessAuthority(
   if (grantId !== undefined && typeof grantId !== "string") {
     throw new TypeError("Gateway access grant identity must be a string");
   }
+  let recheckValidUntil: number | undefined;
   return {
     grantId,
     signal: bindAccessSignal(authority.signal, instance),
+    get recheckValidUntil() {
+      return recheckValidUntil;
+    },
     assertCurrent: () =>
-      instance.run(() => {
+      runPolicy(() => {
+        recheckValidUntil = undefined;
         authority.assertCurrent();
+        const validity = authority.recheckValidUntil;
+        if (
+          validity !== undefined &&
+          (typeof validity !== "number" || Number.isNaN(validity) || validity < 0)
+        ) {
+          throw new TypeError(
+            "Gateway access recheck validity must be a Unix-ms deadline or Infinity",
+          );
+        }
+        recheckValidUntil = validity;
       }),
   };
 }
@@ -87,15 +124,56 @@ export function bindPluginGatewayAccessPolicy(
   if (!instance) {
     return policy;
   }
+  const publication: PublishedPolicyRevision = { instance, current: undefined };
+  const runPolicy = <T>(run: () => T): T => {
+    try {
+      return instance.run(run);
+    } catch (error) {
+      publication.current = undefined;
+      throw error;
+    }
+  };
   const bound: PluginGatewayAccessPolicy = {
     authorize(context) {
-      return instance.run(() => bindAccessAuthority(policy.authorize(context), instance));
+      return runPolicy(() => bindAccessAuthority(policy.authorize(context), instance, runPolicy));
     },
   };
-  const resume = instance.run(() => policy.resume);
+  const resume = runPolicy(() => policy.resume);
   if (resume) {
     bound.resume = (context) =>
-      instance.run(() => bindAccessAuthority(resume.call(policy, context), instance));
+      runPolicy(() => bindAccessAuthority(resume.call(policy, context), instance, runPolicy));
+  }
+  const subscribeRevision = runPolicy(() => policy.subscribeRevision);
+  if (subscribeRevision) {
+    const unsubscribe = runPolicy(() =>
+      subscribeRevision.call(policy, (revision) => {
+        publication.current = undefined;
+        if (
+          !instance.acceptingCalls ||
+          instance.owner?.revoked ||
+          instance.lifecycle.signal.aborted
+        ) {
+          return;
+        }
+        if (revision !== undefined && (typeof revision !== "string" || revision.length === 0)) {
+          throw new TypeError(
+            "Gateway access policy revision must be a nonempty string or undefined",
+          );
+        }
+        if (revision !== undefined) {
+          publication.current = Object.freeze({ revision });
+        }
+      }),
+    );
+    if (typeof unsubscribe !== "function") {
+      publication.current = undefined;
+      throw new TypeError("Gateway access policy revision subscription requires an unsubscribe");
+    }
+    policyRevisions.set(bound, publication);
+    instance.lifecycle.onDispose(() => {
+      publication.current = undefined;
+      instance.runCleanup(unsubscribe);
+    });
   }
   return bound;
 }

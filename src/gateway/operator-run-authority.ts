@@ -201,6 +201,7 @@ export function captureChannelOperatorRunAuthority(input: {
   gatewayAccessGrant: AdmittedRunOperatorAuthority["gatewayAccessGrant"];
   getRuntimeConfig: () => OpenClawConfig;
   assertCurrent: () => void;
+  assertCurrentForRecheck?: () => void;
   signal?: AbortSignal;
 }): AdmittedRunOperatorAuthority {
   const params = { ...input };
@@ -223,45 +224,48 @@ export function captureChannelOperatorRunAuthority(input: {
     resolvePolicy: (cfg) => resolveRole(cfg)?.modelPolicy,
   });
   const revocation = createChannelOperatorRevocation(params);
-  return createAdmittedRunOperatorAuthority({
-    profileId: params.profileId,
-    channelRecoverySource: params.recoveryReference
-      ? { reference: params.recoveryReference, modelPolicy: modelPolicy.original }
-      : undefined,
-    scopes: params.scopes,
-    rolePolicy: prepareRunRolePolicy(sourceRolePolicy(role)),
-    gatewayAccessGrant: params.gatewayAccessGrant,
-    assertCurrent: revocation.assertCurrent,
-    signal: revocation.signal,
-    retain: revocation.retain,
-    readCurrentRoleFacts: () => ({
-      assignedRole: params.assignedRole,
-      githubLogin: params.githubLogin ?? null,
-    }),
-    get modelPolicy() {
-      return modelPolicy.readCurrent();
-    },
-    onModelPolicyChanged: (listener) => {
-      const releaseProfile = onUserProfilesChanged(listener);
-      const releasePolicy = onOperatorRolePolicyChanged((change) => {
-        if (change.kind === "config" || change.profileId === params.profileId) {
-          listener();
-        }
-      });
-      // Recheck through the channel assertion so cancellation keeps its revocation error.
-      const signals = [params.signal, revocation.signal];
-      for (const signal of signals) {
-        signal?.addEventListener("abort", listener, { once: true });
-      }
-      return () => {
-        releaseProfile();
-        releasePolicy();
+  return createAdmittedRunOperatorAuthority(
+    {
+      profileId: params.profileId,
+      channelRecoverySource: params.recoveryReference
+        ? { reference: params.recoveryReference, modelPolicy: modelPolicy.original }
+        : undefined,
+      scopes: params.scopes,
+      rolePolicy: prepareRunRolePolicy(sourceRolePolicy(role)),
+      gatewayAccessGrant: params.gatewayAccessGrant,
+      assertCurrent: revocation.assertCurrent,
+      signal: revocation.signal,
+      retain: revocation.retain,
+      readCurrentRoleFacts: () => ({
+        assignedRole: params.assignedRole,
+        githubLogin: params.githubLogin ?? null,
+      }),
+      get modelPolicy() {
+        return modelPolicy.readCurrent();
+      },
+      onModelPolicyChanged: (listener) => {
+        const releaseProfile = onUserProfilesChanged(listener);
+        const releasePolicy = onOperatorRolePolicyChanged((change) => {
+          if (change.kind === "config" || change.profileId === params.profileId) {
+            listener();
+          }
+        });
+        // Recheck through the channel assertion so cancellation keeps its revocation error.
+        const signals = [params.signal, revocation.signal];
         for (const signal of signals) {
-          signal?.removeEventListener("abort", listener);
+          signal?.addEventListener("abort", listener, { once: true });
         }
-      };
+        return () => {
+          releaseProfile();
+          releasePolicy();
+          for (const signal of signals) {
+            signal?.removeEventListener("abort", listener);
+          }
+        };
+      },
     },
-  });
+    { assertCurrentForRecheck: revocation.assertCurrentForRecheck },
+  );
 }
 
 /** Transfers the original operator restriction into accepted work, independently of its request. */
@@ -276,6 +280,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
   independentContinuation?: true;
   sourceAuthority?: Readonly<{
     assertCurrent: () => void;
+    assertCurrentForRecheck?: () => void;
     signal?: AbortSignal;
     gatewayAccessGrant?: AdmittedRunOperatorAuthority["gatewayAccessGrant"];
   }> | null;
@@ -420,28 +425,39 @@ export async function captureGatewayOperatorRunAuthority(input: {
       }
     }
   };
-  const assertSourceCurrent = composeSessionSourceAssertion(
-    sourceAuthorities.map((authority) =>
-      composeSessionSourceAssertion([authority?.assertCurrent], (assertSource) => {
-        authority?.signal?.throwIfAborted();
-        assertSource();
-        authority?.signal?.throwIfAborted();
-      }),
-    ),
-    (assertSources) => {
-      if (revoked || references === 0) {
-        throw new Error("operator execution authority is no longer active");
-      }
-      if (isSourceCurrent?.() === false || !isGatewayCurrent()) {
-        throw new Error("operator source authority is no longer active");
-      }
-      assertSources();
-      if (revoked || references === 0) {
-        throw new Error("operator execution authority is no longer active");
-      }
-    },
-  );
-  const assertCurrent = composeSessionSourceAssertion([assertSourceCurrent], (assertSource) => {
+  const composeSourceCheck = (allowCached: boolean) =>
+    composeSessionSourceAssertion(
+      sourceAuthorities.map((authority) =>
+        composeSessionSourceAssertion(
+          [
+            // Only the captured access owner can classify a recheck; other sources stay live.
+            allowCached && authority === sourceAuthority
+              ? (sourceAuthority?.assertCurrentForRecheck ?? authority?.assertCurrent)
+              : authority?.assertCurrent,
+          ],
+          (assertSource) => {
+            authority?.signal?.throwIfAborted();
+            assertSource();
+            authority?.signal?.throwIfAborted();
+          },
+        ),
+      ),
+      (assertSources) => {
+        if (revoked || references === 0) {
+          throw new Error("operator execution authority is no longer active");
+        }
+        if (isSourceCurrent?.() === false || !isGatewayCurrent()) {
+          throw new Error("operator source authority is no longer active");
+        }
+        assertSources();
+        if (revoked || references === 0) {
+          throw new Error("operator execution authority is no longer active");
+        }
+      },
+    );
+  const assertSourceCurrent = composeSourceCheck(false);
+  const assertSourceForRecheck = composeSourceCheck(true);
+  const assertOperatorCurrent = (assertSource: () => void) => {
     try {
       assertSource();
       assertRoleCurrent();
@@ -449,7 +465,12 @@ export async function captureGatewayOperatorRunAuthority(input: {
       revoked = true;
       throw error;
     }
-  });
+  };
+  const assertCurrent = composeSessionSourceAssertion([assertSourceCurrent], assertOperatorCurrent);
+  const assertCurrentForRecheck = composeSessionSourceAssertion(
+    [assertSourceForRecheck],
+    assertOperatorCurrent,
+  );
   const releaseHold = () => {
     let released = false;
     return () => {
@@ -577,28 +598,32 @@ export async function captureGatewayOperatorRunAuthority(input: {
       config: getConfig(),
     });
     assertCurrent();
-    const authority = createAdmittedRunOperatorAuthority({
-      ...admission,
-      recoverySnapshot,
-      rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),
-      readCurrentRoleFacts: assertProfileCurrent,
-      source: source.token,
-      signal: revocation.signal,
-      retain: () => {
-        assertCurrent();
-        references += 1;
-        return releaseHold();
+    const authority = createAdmittedRunOperatorAuthority(
+      {
+        ...admission,
+        recoverySnapshot,
+        rolePolicy: prepareRunRolePolicy(capturedSourcePolicy),
+        readCurrentRoleFacts: assertProfileCurrent,
+        source: source.token,
+        signal: revocation.signal,
+        retain: () => {
+          // Retaining existing work performs no effect; effect callers still check before execution.
+          assertCurrentForRecheck();
+          references += 1;
+          return releaseHold();
+        },
+        get modelPolicy() {
+          return modelPolicy.readCurrent();
+        },
+        onModelPolicyChanged: (listener) =>
+          onOperatorRolePolicyChanged((change) => {
+            if (change.kind === "config" && change.context === (gatewayContext ?? params.context)) {
+              listener();
+            }
+          }),
       },
-      get modelPolicy() {
-        return modelPolicy.readCurrent();
-      },
-      onModelPolicyChanged: (listener) =>
-        onOperatorRolePolicyChanged((change) => {
-          if (change.kind === "config" && change.context === (gatewayContext ?? params.context)) {
-            listener();
-          }
-        }),
-    });
+      { assertCurrentForRecheck },
+    );
     return { authority, release };
   } catch (error) {
     release();

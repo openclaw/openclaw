@@ -220,15 +220,22 @@ async function restoreGatewayOperatorSnapshot(params: {
       authPolicy = captureGatewayAuthPolicy(cfg, authPolicy);
       return cfg;
     };
-    let assertPolicy = assertSourcePolicy;
+    let assertPolicy: (purpose?: "effect" | "recheck") => ReturnType<typeof assertSourcePolicy> =
+      assertSourcePolicy;
     const assertRecoveryCurrent = () => {
       assertCurrent();
       return assertPolicy();
     };
+    const assertRecoveryForRecheck = () => {
+      // Retained reads keep the exact recovery claim live while rechecking the policy allow.
+      assertCurrent();
+      return assertPolicy("recheck");
+    };
     const recheck = () => {
       if (references > 0 && !signal.signal.aborted) {
         try {
-          assertPolicy();
+          // Source-change notifications revalidate retained work without performing effects.
+          assertPolicy("recheck");
         } catch (error) {
           revoke(error);
         }
@@ -266,7 +273,7 @@ async function restoreGatewayOperatorSnapshot(params: {
       return { cfg, profile };
     };
     let accessAuthority: ReturnType<typeof resumeGatewayOperatorAccessGrant>;
-    assertPolicy = () => {
+    assertPolicy = (purpose = "effect") => {
       try {
         const { profile, cfg } = assertFacts();
         const access = resumeGatewayOperatorAccessGrant(
@@ -274,6 +281,7 @@ async function restoreGatewayOperatorSnapshot(params: {
           cfg,
           snapshot.grant,
           accessAuthority,
+          purpose,
         );
         if (access && !accessAuthority) {
           accessAuthority = access;
@@ -336,36 +344,44 @@ async function restoreGatewayOperatorSnapshot(params: {
       gatewayAccessGrant: snapshot.grant,
       getRuntimeConfig: getConfig,
       assertCurrent: assertPolicy,
+      assertCurrentForRecheck: () => assertPolicy("recheck"),
       signal: signal.signal,
     });
     const originalModels = snapshot.modelPolicy
       ? restoreOperatorModelPolicySnapshot(snapshot.modelPolicy)
       : undefined;
     const retainPolicy = () => {
-      assertPolicy();
+      // Retaining policy custody performs no effect; each later publication stays live.
+      assertPolicy("recheck");
       references += 1;
       return releaseHold();
     };
-    const policyAuthority = createAdmittedRunOperatorAuthority({
-      ...live,
-      signal: signal.signal,
-      recoverySnapshot: snapshot,
-      retain: retainPolicy,
-      get modelPolicy() {
-        return intersectOperatorRunModelPolicy(originalModels, live.modelPolicy);
+    const policyAuthority = createAdmittedRunOperatorAuthority(
+      {
+        ...live,
+        signal: signal.signal,
+        recoverySnapshot: snapshot,
+        retain: retainPolicy,
+        get modelPolicy() {
+          return intersectOperatorRunModelPolicy(originalModels, live.modelPolicy);
+        },
       },
-    });
-    const authority = createAdmittedRunOperatorAuthority({
-      ...policyAuthority,
-      assertCurrent: assertRestoredPolicy,
-      retain: () => {
-        assertCurrent();
-        return retainPolicy();
+      { assertCurrentForRecheck: live.assertCurrentForRecheck },
+    );
+    const authority = createAdmittedRunOperatorAuthority(
+      {
+        ...policyAuthority,
+        assertCurrent: assertRestoredPolicy,
+        retain: () => {
+          assertCurrent();
+          return retainPolicy();
+        },
+        get modelPolicy() {
+          return policyAuthority.modelPolicy;
+        },
       },
-      get modelPolicy() {
-        return policyAuthority.modelPolicy;
-      },
-    });
+      { assertCurrentForRecheck: assertRecoveryForRecheck },
+    );
     bindGatewayOperatorContinuationAuthority(authority, policyAuthority);
     authority.assertCurrent();
     const profile = readResidentUserProfileRevision(snapshot.profileId, profileCatalogPath({}));

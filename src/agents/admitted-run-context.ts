@@ -62,6 +62,10 @@ export type AdmittedRunOperatorAuthority = Readonly<{
   /** Original access dependency; null is proven independent, undefined is unclassified. */
   gatewayAccessGrant?: GatewayAccessGrantRef | null;
   assertCurrent: SessionSourceAssertion;
+  /** Explicit effect checks and unclassified callers retain live source admission. */
+  assertCurrentForEffect?: SessionSourceAssertion;
+  /** Optional source-owned non-effect revalidation; absent sources remain live. */
+  assertCurrentForRecheck?: SessionSourceAssertion;
   signal?: AbortSignal;
   /** Opaque original source identity used only to compare compatible queued input. */
   source?: object;
@@ -92,12 +96,13 @@ const operatorAuthorityIssuers = resolveGlobalSingleton(
 /** Host-only construction; public reply options cannot manufacture a source capability. */
 export function createAdmittedRunOperatorAuthority(
   source: AdmittedRunOperatorAuthority,
+  options: { assertCurrentForRecheck?: SessionSourceAssertion } = {},
 ): AdmittedRunOperatorAuthority {
   const check = source.assertCurrent;
   const signal = source.signal;
   let revoked = false;
   let revocationReason: unknown;
-  const assertCurrent = composeSessionSourceAssertion([check], (assertSource) => {
+  const assertLive = (assertSource: () => void) => {
     if (revoked) {
       throw revocationReason;
     }
@@ -109,7 +114,13 @@ export function createAdmittedRunOperatorAuthority(
       revocationReason = error;
       throw error;
     }
-  });
+  };
+  const assertCurrent = composeSessionSourceAssertion([check], assertLive);
+  const assertCurrentForRecheck = composeSessionSourceAssertion(
+    // A copied source may replace assertCurrent; recheck admission must be explicit too.
+    [options.assertCurrentForRecheck ?? check],
+    assertLive,
+  );
   const readRoleFacts = source.readCurrentRoleFacts;
   const authority = Object.freeze({
     profileId: source.profileId,
@@ -134,9 +145,12 @@ export function createAdmittedRunOperatorAuthority(
       return source.modelPolicy;
     },
     assertCurrent,
+    assertCurrentForEffect: assertCurrent,
+    assertCurrentForRecheck,
     readCurrentRoleFacts: readRoleFacts
       ? () => {
-          assertCurrent();
+          // Reading retained role facts has no privileged effect; execution checks remain live.
+          assertCurrentForRecheck();
           return readRoleFacts();
         }
       : undefined,

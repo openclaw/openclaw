@@ -37,6 +37,35 @@ function installSink() {
 
 afterEach(() => vi.restoreAllMocks());
 
+it("keeps copied operator guards live unless their new owner explicitly classifies rechecks", () => {
+  const effect = vi.fn();
+  const recheck = vi.fn();
+  const source = run.createAdmittedRunOperatorAuthority(
+    {
+      profileId: "reader",
+      scopes: ["operator.read"],
+      assertCurrent: effect,
+      readCurrentRoleFacts: () => ({ assignedRole: "reader" }),
+    },
+    { assertCurrentForRecheck: recheck },
+  );
+  source.readCurrentRoleFacts?.();
+  expect(recheck).toHaveBeenCalledOnce();
+  expect(effect).not.toHaveBeenCalled();
+  source.assertCurrent();
+  source.assertCurrentForEffect?.();
+  expect(effect).toHaveBeenCalledTimes(2);
+
+  const claim = vi.fn(() => {
+    throw new Error("claim ended");
+  });
+  const copied = run.createAdmittedRunOperatorAuthority({ ...source, assertCurrent: claim });
+  expect(copied.readCurrentRoleFacts).toThrow("claim ended");
+  expect(copied.assertCurrentForEffect).toThrow("claim ended");
+  expect(claim).toHaveBeenCalledOnce();
+  expect(recheck).toHaveBeenCalledOnce();
+});
+
 it.each([false, true])("settles reset-module fixtures (reject=%s)", async (reject) => {
   vi.resetModules();
   const admissionOwner = await import("./admitted-run-context.js");

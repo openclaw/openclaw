@@ -1,16 +1,23 @@
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { readGatewayAccessPolicyRevision } from "../plugins/gateway-access-policy-registration.js";
 import type {
   GatewayAccessGrantRef,
   PluginGatewayAccessAuthority,
   PluginGatewayAccessPolicy,
 } from "../plugins/gateway-access-policy.types.js";
 import { getPluginRegistryState } from "../plugins/runtime-state.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { onUserProfilesChanged, readUserProfileVersion } from "../state/user-profile-events.js";
 import { captureResidentUserProfileAccess } from "../state/user-profile-list.js";
 import type { UserProfileAccessFacts } from "../state/user-profiles.types.js";
 import type { GatewayOperatorAccessAuthority } from "./operator-access-policy.types.js";
 import { resolveOperatorRolePolicyForAssignment } from "./operator-role-policy.js";
+
+type CapturedGatewayOperatorAccessAuthority = GatewayOperatorAccessAuthority &
+  Required<
+    Pick<GatewayOperatorAccessAuthority, "assertCurrentForEffect" | "assertCurrentForRecheck">
+  >;
 
 export const GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE =
   "Gateway access is not active for this account; ask a Gateway administrator to grant or restore access.";
@@ -95,12 +102,63 @@ function pluginProfile(
   };
 }
 
+/** One allow slot per captured authority; no answers cross principal or source captures. */
+function capturePolicyAssertion(
+  policy: PluginGatewayAccessPolicy,
+  authority: PluginGatewayAccessAuthority,
+) {
+  let allowedRevision: ReturnType<typeof readGatewayAccessPolicyRevision>;
+  let allowedRegistry:
+    | NonNullable<ReturnType<typeof getPluginRegistryState>>["activeRegistry"]
+    | undefined;
+  let validUntil = 0;
+  let allowedScope:
+    | WeakRef<NonNullable<ReturnType<typeof getPluginRuntimeGatewayRequestScope>>>
+    | undefined;
+  return (recheck: boolean) => {
+    authority.signal.throwIfAborted();
+    const revision = readGatewayAccessPolicyRevision(policy);
+    const registry = getPluginRegistryState()?.activeRegistry;
+    const scope = getPluginRuntimeGatewayRequestScope();
+    if (
+      recheck &&
+      revision &&
+      revision === allowedRevision &&
+      registry === allowedRegistry &&
+      (scope ? allowedScope?.deref() === scope : allowedScope === undefined) &&
+      Date.now() < validUntil
+    ) {
+      return;
+    }
+    allowedRevision = undefined;
+    authority.assertCurrent();
+    authority.signal.throwIfAborted();
+    const deadline = authority.recheckValidUntil;
+    if (
+      revision &&
+      revision === readGatewayAccessPolicyRevision(policy) &&
+      deadline !== undefined &&
+      Date.now() < deadline
+    ) {
+      allowedRevision = revision;
+      allowedRegistry = registry;
+      // Retained grants must not keep a completed request's registry/context graph alive.
+      if (scope !== allowedScope?.deref()) {
+        allowedScope = scope ? new WeakRef(scope) : undefined;
+      } else if (!scope) {
+        allowedScope = undefined;
+      }
+      validUntil = deadline;
+    }
+  };
+}
+
 /** Bind additional access to this exact authenticated person and the original policy lifetimes. */
 export function resolveGatewayOperatorAccessAuthority(
   profileId: string,
   config: OpenClawConfig,
   options: { requireLivePolicySet?: boolean } = {},
-): GatewayOperatorAccessAuthority | null {
+): CapturedGatewayOperatorAccessAuthority | null {
   if (profileId === GATEWAY_OWNER_PROFILE_ID) {
     return null;
   }
@@ -161,7 +219,7 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
   }>,
   config: OpenClawConfig,
   options: { requireLivePolicySet?: boolean } = {},
-): GatewayOperatorAccessAuthority | null {
+): CapturedGatewayOperatorAccessAuthority | null {
   if (profile.profileId === GATEWAY_OWNER_PROFILE_ID) {
     return null;
   }
@@ -218,7 +276,9 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
       if (authority && pluginId === requiredPlugin) {
         requiredPolicyConfirmed = true;
       }
-      return authority ? [{ pluginId, authority }] : [];
+      return authority
+        ? [{ pluginId, authority, assertPolicy: capturePolicyAssertion(policy, authority) }]
+        : [];
     });
     if (!requiredPolicyConfirmed) {
       throw new GatewayOperatorAccessDeniedError();
@@ -235,7 +295,7 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
       invalidated.signal,
       ...authorities.map(({ authority }) => authority.signal),
     ]);
-    const assertCurrent = () => {
+    const assertAccess = (recheck: boolean) => {
       try {
         assertProfileCurrent();
         if (options.requireLivePolicySet) {
@@ -247,20 +307,24 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
             throw new GatewayOperatorAccessDeniedError();
           }
         }
-        for (const { authority } of authorities) {
-          authority.assertCurrent();
+        for (const { assertPolicy } of authorities) {
+          assertPolicy(recheck);
         }
       } catch {
         releaseProfiles();
         throw invalidate();
       }
     };
+    const assertCurrent = () => assertAccess(false);
+    const assertCurrentForRecheck = () => assertAccess(true);
     // Retaining only the composed signal must also retain its policy sources.
     profileAccessChecks.set(signal, assertCurrent);
     assertCurrent();
     const original = authorities.length === 1 ? authorities[0] : undefined;
     return {
       assertCurrent,
+      assertCurrentForEffect: assertCurrent,
+      assertCurrentForRecheck,
       signal,
       requiredPolicyPlugin: requiredPlugin,
       gatewayAccessGrant: original?.authority.grantId
@@ -276,12 +340,25 @@ export function resolvePreparedGatewayOperatorAccessAuthority(
   }
 }
 
+// Each retained grant holds at most one exact plugin-input snapshot; weak keys follow its lifetime.
+const resumedPolicyAssertions = new WeakMap<
+  PluginGatewayAccessAuthority,
+  {
+    policy: PluginGatewayAccessPolicy;
+    config: OpenClawConfig;
+    profile: ReturnType<typeof pluginProfile>;
+    requiredByRole: boolean;
+    assertPolicy: ReturnType<typeof capturePolicyAssertion>;
+  }
+>();
+
 /** Recheck current facts, returning the original grant's live authority for retained work. */
 export function resumeGatewayOperatorAccessGrant(
   profile: UserProfileAccessFacts,
   config: OpenClawConfig,
   grant: GatewayAccessGrantRef | null,
   retained?: PluginGatewayAccessAuthority,
+  purpose: "effect" | "recheck" = "effect",
 ): PluginGatewayAccessAuthority | undefined {
   const policies = currentAccessPolicies();
   const requiredPlugin = resolveOperatorRolePolicyForAssignment(
@@ -296,6 +373,7 @@ export function resumeGatewayOperatorAccessGrant(
   }
   let policyProfile: ReturnType<typeof pluginProfile> | undefined;
   let resumed: PluginGatewayAccessAuthority | undefined;
+  let resumedPolicy: PluginGatewayAccessPolicy | undefined;
   if (grant) {
     const policy = policies.find(({ pluginId }) => pluginId === grant.pluginId)?.policy;
     if (!policy?.resume) {
@@ -320,6 +398,7 @@ export function resumeGatewayOperatorAccessGrant(
       throw new GatewayOperatorAccessDeniedError();
     }
     resumed = authority;
+    resumedPolicy = policy;
   }
   for (const { pluginId, policy } of policies) {
     if (pluginId === grant?.pluginId) {
@@ -343,8 +422,40 @@ export function resumeGatewayOperatorAccessGrant(
   try {
     // Other policies can synchronously invalidate the original grant without aborting its signal.
     resumed?.signal.throwIfAborted();
-    resumed?.assertCurrent();
+    if (purpose === "effect") {
+      resumed?.assertCurrent();
+    } else if (resumed && resumedPolicy) {
+      let captured = resumedPolicyAssertions.get(resumed);
+      const requiredByRole = requiredPlugin === grant?.pluginId;
+      if (
+        !captured ||
+        captured.policy !== resumedPolicy ||
+        captured.config !== config ||
+        captured.requiredByRole !== requiredByRole ||
+        captured.profile.profileId !== profile.profileId ||
+        captured.profile.assignedRole !== profile.assignedRole ||
+        captured.profile.emails.length !== profile.emails.length ||
+        captured.profile.emails.some((email, index) => email !== profile.emails[index]) ||
+        captured.profile.githubAccountIds?.length !== profile.githubAccountIds?.length ||
+        captured.profile.githubAccountIds?.some(
+          (id, index) => id !== profile.githubAccountIds?.[index],
+        )
+      ) {
+        captured = {
+          policy: resumedPolicy,
+          config,
+          profile: policyProfile ?? pluginProfile(profile, profile.assignedRole),
+          requiredByRole,
+          assertPolicy: capturePolicyAssertion(resumedPolicy, resumed),
+        };
+        resumedPolicyAssertions.set(resumed, captured);
+      }
+      captured.assertPolicy(purpose === "recheck");
+    }
   } catch {
+    if (resumed) {
+      resumedPolicyAssertions.delete(resumed);
+    }
     throw new GatewayOperatorAccessUnavailableError();
   }
   return resumed;

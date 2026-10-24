@@ -11,6 +11,14 @@ import { loadPairedDevicePairingStoreRecordReadOnly } from "../infra/device-pair
 import { persistDevicePairingStoreState } from "../infra/device-pairing-store.js";
 import type { PairedDevice } from "../infra/device-pairing.types.js";
 import type { GatewayAccessGrantRef } from "../plugins/gateway-access-policy.types.js";
+import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
+import {
+  captureActivePluginRegistrySnapshot,
+  restoreActivePluginRegistrySnapshot,
+  stageActivePluginRegistry,
+} from "../plugins/runtime.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { InputProvenance } from "../sessions/input-provenance.js";
 import { captureAgentTurnPrincipal } from "./agent-turn/principal.js";
 import { captureGatewayAuthPolicy } from "./auth-policy.js";
@@ -18,6 +26,45 @@ import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js"
 import { restoreGatewayRunRecovery } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
+
+export function createRevisionPublishedRecoveryPolicy(onAssert: () => void) {
+  const original = { pluginId: "recovery-revision", grantId: "retained-turn-grant" };
+  const controller = new AbortController();
+  const grant = {
+    grantId: original.grantId,
+    signal: controller.signal,
+    assertCurrent() {
+      onAssert();
+      controller.signal.throwIfAborted();
+    },
+    recheckValidUntil: Infinity,
+  };
+  const builder = createTestPluginRegistry();
+  const record = createPluginRecord({ id: original.pluginId, source: "recovery-revision-test" });
+  builder.registry.plugins.push(record);
+  builder.createApi(record, { config: {}, registrationMode: "full" }).registerGatewayAccessPolicy({
+    subscribeRevision(publish) {
+      publish("grant-active");
+      return () => {};
+    },
+    authorize: () => grant,
+    resume: () => grant,
+  });
+  const instance = expectDefined(getPluginInstance(record), "managed policy owner");
+  const previous = captureActivePluginRegistrySnapshot();
+  stageActivePluginRegistry(builder.registry, null, "default");
+  return {
+    original,
+    async [Symbol.asyncDispose]() {
+      try {
+        controller.abort();
+        await instance.dispose();
+      } finally {
+        restoreActivePluginRegistrySnapshot(previous);
+      }
+    },
+  };
+}
 
 export async function createOperatorRecoveryFixture(params: {
   stateDir: string;

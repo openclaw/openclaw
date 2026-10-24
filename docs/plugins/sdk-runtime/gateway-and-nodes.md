@@ -217,6 +217,57 @@ from revocation. A policy must preserve independent staff access; it must not
 infer the requesting person's authority from a session's creator, display name,
 or sandbox state. Shared-secret system authority remains outside person policies.
 
+### Revision-published rechecks
+
+Policies can optionally publish a revision to let the Gateway reuse a successful
+assertion during explicitly classified, non-effect revalidation. Implement
+`subscribeRevision(publish)` on the registered policy and return an unsubscribe
+function. Publish a nonempty revision string synchronously when subscribing, and
+publish a fresh string before any dependency changes an assertion's answer.
+This includes grants, revocations, role/configuration dependencies, and external
+identity-provider state. Publish `undefined` before entering an uncertain or
+unavailable state. Plugins that cannot observe all their dependencies must omit
+this subscription and retain live checks.
+
+Subscribing also certifies that each authority's assertion depends only on its
+captured policy inputs, published revision, deadline, and signal. It must not
+depend on mutable per-invocation state such as the current request's client,
+scopes, session, or requested action. Such policies must omit the subscription
+unless they capture those inputs in a separate authority. The host additionally
+isolates cached answers by ambient request-scope identity; that identity does
+not make mutable values inside a scope safe to cache.
+
+The revision belongs to the plugin, not a Gateway mutation counter. Publication
+copies only the revision into host-owned state; reading it does not enter plugin
+runtime scope. The Gateway unsubscribes when the plugin instance retires. Each
+publication invalidates earlier cached answers, including an unknown revision
+followed by a previously used string. A plugin callback error also invalidates
+the publication until the plugin publishes again.
+
+Each returned authority must additionally declare `recheckValidUntil`, an
+exclusive Unix-millisecond deadline. Use `Infinity` only when the answer has no
+time limit; omit the field when its validity cannot be bounded. A getter can
+reflect renewal or shortening of the original grant. The host reads this value
+inside the plugin's live assertion scope after a successful `assertCurrent()`.
+For an expiring grant, the deadline must be no later than its expiry: a delayed
+expiry timer cannot extend cached access. The next recheck at or after that
+deadline calls the plugin even if the revision has not changed.
+
+The host caches only successful assertions for the exact captured authority and
+its original input; it never shares an allow across principals, scopes, sources,
+actions, or plugin generations. Each retained authority has bounded cache state.
+Missing revisions or deadlines, plugin replacement, and Gateway restart cannot
+reuse earlier allows. A plugin that publishes a revision assumes responsibility
+for invalidating it before any dependency changes; an incorrect publication can
+delay a non-effect denial until the declared deadline.
+
+Privileged effects always retain a live plugin call: credential use, tool or
+command execution, external side effects, and publication. The host's
+`assertCurrentForEffect()` and existing parameterless `assertCurrent()` use that
+live path, including immediately after a cached recheck. Only callers explicitly
+classified as non-effect revalidation use `assertCurrentForRecheck()`; adding a
+revision subscription alone does not convert unclassified checks into cache hits.
+
 ### Durable person access grants
 
 A policy that supports deferred shared publication returns a stable UUID as

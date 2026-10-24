@@ -273,6 +273,26 @@ it("checks a live access source once for each role-policy evaluation", () =>
     expect(() => resolveOperatorRolePolicy(client, config)).toThrow("access grant ended");
   }));
 
+it("classifies retained role reads separately from live operator effects", () =>
+  withOperator(async ({ client, context }) => {
+    const assertCurrent = vi.fn();
+    const assertCurrentForRecheck = vi.fn();
+    const captured = await capture({
+      client,
+      context,
+      sourceAuthority: { assertCurrent, assertCurrentForRecheck },
+    });
+    using _ = { [Symbol.dispose]: captured.release };
+    assertCurrent.mockClear();
+    assertCurrentForRecheck.mockClear();
+    captured.authority.readCurrentRoleFacts?.();
+    expect(assertCurrentForRecheck).toHaveBeenCalledOnce();
+    expect(assertCurrent).not.toHaveBeenCalled();
+    captured.authority.assertCurrent();
+    captured.authority.assertCurrentForEffect?.();
+    expect(assertCurrent).toHaveBeenCalledTimes(2);
+  }));
+
 it.each(["capture", "operator tool"])(
   "prepares %s profile authority without parent data SQL",
   (entry) =>

@@ -4,7 +4,7 @@ import { it } from "vitest";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { pluginRetentionEntrypoints } from "./retention-runtime.test-support.js";
 
-it.each(["retirement", "live-grant"])(
+it.each(["retirement", "live-grant", "revision"])(
   "preserves native registered access-signal ownership through %s",
   async (scenario) => {
     await promisify(execFile)(

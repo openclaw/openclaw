@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { setImmediate } from "node:timers/promises";
 import { types } from "node:util";
+import { readGatewayAccessPolicyRevision } from "./gateway-access-policy-registration.js";
 import type {
   PluginGatewayAccessAuthority,
   PluginGatewayAccessPolicy,
@@ -37,7 +38,7 @@ function assertNativeAuthority(authority: PluginGatewayAccessAuthority | undefin
   return authority;
 }
 
-function createRegisteredPolicy(resumable = true) {
+function createRegisteredPolicy(resumable = true, revisioned = false) {
   const builder = createTestPluginRegistry();
   const record = createPluginRecord({
     id: "person-access",
@@ -52,12 +53,21 @@ function createRegisteredPolicy(resumable = true) {
   assert.ok(instance, "Registration must use the production PluginInstance owner");
   const grant = new AbortController();
   const lifetime = new AbortController();
+  let validUntil = Infinity;
+  let publication: ((revision: string | undefined) => void) | undefined;
+  let unsubscribed = false;
+  let failAssertion = false;
   const createAuthority = () =>
     Object.freeze({
       grantId,
       assertCurrent() {
+        assert(!failAssertion, "Synthetic policy unavailable");
         grant.signal.throwIfAborted();
         lifetime.signal.throwIfAborted();
+      },
+      get recheckValidUntil() {
+        assert(instance.hasActiveCall, "Plugin validity getters need a live instance scope");
+        return revisioned ? validUntil : undefined;
       },
       signal: AbortSignal.any([grant.signal, lifetime.signal]),
     });
@@ -71,6 +81,16 @@ function createRegisteredPolicy(resumable = true) {
       return currentContext.grantId === grantId ? createAuthority() : undefined;
     },
   };
+  if (revisioned) {
+    originalPolicy.subscribeRevision = (publish) => {
+      assert(instance.hasActiveCall, "Subscription setup needs a live instance scope");
+      publication = publish;
+      publish("initial");
+      return () => {
+        unsubscribed = true;
+      };
+    };
+  }
   if (!resumable) {
     delete originalPolicy.resume;
   }
@@ -79,7 +99,22 @@ function createRegisteredPolicy(resumable = true) {
   assert.ok(registration);
   const authorize = () => assertNativeAuthority(registration.policy.authorize(context));
   const resume = () => assertNativeAuthority(registration.policy.resume?.(resumedContext));
-  return { grant, lifetime, instance, registration, authorize, resume };
+  return {
+    grant,
+    lifetime,
+    instance,
+    registration,
+    authorize,
+    resume,
+    publish: (revision: string | undefined) => publication?.(revision),
+    setValidity: (value: number) => {
+      validUntil = value;
+    },
+    failAssertion: () => {
+      failAssertion = true;
+    },
+    isUnsubscribed: () => unsubscribed,
+  };
 }
 
 type Policy = ReturnType<typeof createRegisteredPolicy>;
@@ -185,9 +220,40 @@ async function observeLiveGrant() {
   assert.throws(nextAuthority.assertCurrent, PluginInstanceUnavailableError);
 }
 
+async function observePolicyRevision() {
+  const policy = createRegisteredPolicy(true, true);
+  const bound = policy.registration.policy;
+  const initial = readGatewayAccessPolicyRevision(bound);
+  assert.deepEqual(initial, { revision: "initial" });
+  const authority = policy.authorize();
+  assert.equal(authority.recheckValidUntil, Infinity);
+  policy.setValidity(1234);
+  assert.equal(authority.recheckValidUntil, Infinity, "Host reads never execute a plugin getter");
+  authority.assertCurrent();
+  assert.equal(authority.recheckValidUntil, 1234);
+  policy.publish(undefined);
+  assert.equal(readGatewayAccessPolicyRevision(bound), undefined);
+  policy.publish("next");
+  assert.notEqual(readGatewayAccessPolicyRevision(bound), initial);
+  policy.failAssertion();
+  assert.throws(authority.assertCurrent, /Synthetic policy unavailable/);
+  assert.equal(readGatewayAccessPolicyRevision(bound), undefined);
+  assert.equal(authority.recheckValidUntil, undefined);
+  policy.publish("restored");
+  assert.deepEqual(readGatewayAccessPolicyRevision(bound), { revision: "restored" });
+  assert.deepEqual((await policy.instance.dispose()).errors, []);
+  assert.equal(policy.isUnsubscribed(), true);
+  assert.equal(readGatewayAccessPolicyRevision(bound), undefined);
+  policy.publish("late");
+  assert.equal(readGatewayAccessPolicyRevision(bound), undefined);
+  assert.throws(authority.assertCurrent, PluginInstanceUnavailableError);
+}
+
 const scenario = process.argv[2];
 if (scenario === "retirement") {
   await collect(await retireRegisteredPolicy());
+} else if (scenario === "revision") {
+  await observePolicyRevision();
 } else {
   assert.equal(scenario, "live-grant");
   await observeLiveGrant();

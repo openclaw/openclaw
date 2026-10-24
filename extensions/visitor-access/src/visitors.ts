@@ -22,6 +22,7 @@ import {
   type VisitorOnboardingUpdate,
 } from "./grant-record.js";
 import { expiryText, visitorInviteResult } from "./invite-result.js";
+import { createVisitorPolicyRevision } from "./policy-revision.js";
 import type {
   VisitorInviteDetails,
   VisitorListDetails,
@@ -45,6 +46,9 @@ export class VisitorAccessService {
   private initialized: Promise<void> | undefined;
   private ready = false;
   private closed = false;
+  private readonly policyRevision = createVisitorPolicyRevision(
+    () => this.ready && !this.closed && !this.signal?.aborted,
+  );
 
   constructor(
     private readonly config: VisitorAccessConfig,
@@ -54,7 +58,9 @@ export class VisitorAccessService {
     private readonly readAccess: ReadVisitorGatewayAccess,
     private readonly resolveGitHubAccount: PluginRuntime["gateway"]["resolveGitHubAccount"],
     private readonly signal?: AbortSignal,
-  ) {}
+  ) {
+    signal?.addEventListener("abort", () => this.policyRevision.invalidate(), { once: true });
+  }
 
   initialize(): Promise<void> {
     return (this.initialized ??= this.serialize(async () => {
@@ -69,12 +75,14 @@ export class VisitorAccessService {
         }
       }
       this.ready = true;
+      this.policyRevision.advance();
       this.scheduleExpiry();
     }));
   }
 
   close(): void {
     this.closed = true;
+    this.policyRevision.close();
     clearTimeout(this.expiryTimer);
     this.expiryTimer = undefined;
     for (const { controller } of this.grants.values()) {
@@ -82,6 +90,8 @@ export class VisitorAccessService {
     }
     this.grants.clear();
   }
+
+  subscribeRevision = this.policyRevision.subscribe;
 
   private assertOpen(): void {
     this.signal?.throwIfAborted();
@@ -179,21 +189,28 @@ export class VisitorAccessService {
     if (!state) {
       return undefined;
     }
-    const assertCurrent = () => {
-      this.assertOpen();
-      if (state.grant.expiresAt !== null && state.grant.expiresAt <= Date.now()) {
-        state.controller.abort(new VisitorAccessError("Visitor access expired."));
-      }
-      if (
-        this.grants.get(visitorTargetKey(visitorGrantTarget(state.grant))) !== state ||
-        state.controller.signal.aborted
-      ) {
-        throw new VisitorAccessError("Visitor access ended. Ask a maintainer to renew access.");
-      }
-    };
     return Object.freeze({
       grantId: state.grant.grantId,
-      assertCurrent,
+      assertCurrent: () => {
+        this.assertOpen();
+        if (
+          !state.controller.signal.aborted &&
+          state.grant.expiresAt !== null &&
+          state.grant.expiresAt <= Date.now()
+        ) {
+          state.controller.abort(new VisitorAccessError("Visitor access expired."));
+          this.policyRevision.advance();
+        }
+        if (
+          this.grants.get(visitorTargetKey(visitorGrantTarget(state.grant))) !== state ||
+          state.controller.signal.aborted
+        ) {
+          throw new VisitorAccessError("Visitor access ended. Ask a maintainer to renew access.");
+        }
+      },
+      get recheckValidUntil() {
+        return state.grant.expiresAt ?? Infinity;
+      },
       signal: this.signal
         ? AbortSignal.any([state.controller.signal, this.signal])
         : state.controller.signal,
@@ -221,6 +238,7 @@ export class VisitorAccessService {
     if (grant.expiresAt !== null && grant.expiresAt <= Date.now()) {
       state.controller.abort(new VisitorAccessError("Visitor access ended."));
     }
+    this.policyRevision.advance();
   }
 
   private scheduleExpiry(): void {
@@ -247,6 +265,7 @@ export class VisitorAccessService {
             controller.abort(new VisitorAccessError("Visitor access expired."));
           }
         }
+        this.policyRevision.advance();
         this.scheduleExpiry();
       },
       Math.max(0, Math.min(next - Date.now(), MAX_TIMER_DELAY_MS)),
@@ -272,6 +291,7 @@ export class VisitorAccessService {
     await store.delete(email);
     this.grants.get(email)?.controller.abort(new VisitorAccessError("Visitor access ended."));
     this.grants.delete(email);
+    this.policyRevision.advance();
     this.scheduleExpiry();
   }
 
@@ -283,7 +303,7 @@ export class VisitorAccessService {
       assertCurrent?.();
       return operation();
     });
-    this.pending = result.catch(() => {});
+    this.pending = result.catch(() => this.policyRevision.invalidate());
     return result;
   }
 

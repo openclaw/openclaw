@@ -9,6 +9,7 @@ import { onOperatorRolePolicyChanged } from "./operator-role-policy.js";
 export function createChannelOperatorRevocation(params: {
   profileId: string;
   assertCurrent: () => void;
+  assertCurrentForRecheck?: () => void;
   signal?: AbortSignal;
 }) {
   const revocation = new AbortController();
@@ -25,20 +26,24 @@ export function createChannelOperatorRevocation(params: {
     }
     unsubscribe();
   };
-  const assertCurrent = () => {
+  const assertSource = (check: () => void) => {
     revocation.signal.throwIfAborted();
     try {
       // The channel assertion owns the revocation error; the grant signal is a backstop.
-      params.assertCurrent();
+      check();
       params.signal?.throwIfAborted();
     } catch (error) {
       revoke(error);
       throw error;
     }
   };
+  const assertCurrent = () => assertSource(params.assertCurrent);
+  const assertCurrentForRecheck = () =>
+    assertSource(params.assertCurrentForRecheck ?? params.assertCurrent);
   const recheck = () => {
     try {
-      assertCurrent();
+      // Notifications only revalidate retained authority; no privileged effect occurs here.
+      assertCurrentForRecheck();
     } catch {
       // The latched signal owns cancellation; notification must reach other executions.
     }
@@ -62,8 +67,10 @@ export function createChannelOperatorRevocation(params: {
   return {
     signal: revocation.signal,
     assertCurrent,
+    assertCurrentForRecheck,
     retain: () => {
-      assertCurrent();
+      // A lifetime hold preserves existing work; execution still checks the live source.
+      assertCurrentForRecheck();
       if (references++ === 0) {
         subscribe();
       }

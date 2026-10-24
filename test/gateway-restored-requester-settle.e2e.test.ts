@@ -1,4 +1,4 @@
-// E2E: the shipped Gateway process bounds requester wakes restored from SQLite.
+// E2E: the shipped Gateway retains restored wakes while releasing preparation capacity.
 import type { ServerResponse } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -156,33 +156,32 @@ describe("Gateway restored requester settlement", () => {
   );
 
   it(
-    "runs at most two restored wakes while leaving the third queued",
+    "releases restored preparation capacity on acceptance while model turns remain active",
     { timeout: 180_000 },
     async () => {
       const { modelServer, instance } = await setupGateway("gateway-restored-requester-settle");
       await seedRestoredRequesters(instance, 3);
 
       await instance.startGateway();
+      // Accepted deliveries release the two preparation slots; their model turns stay held.
       await vi.waitFor(
-        () => expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(2),
+        () => expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(3),
         { timeout: 30_000, interval: 20 },
       );
-      expect(modelServer.active(), instance.logs()).toBe(2);
-      expect(modelServer.peakRestored(), instance.logs()).toBe(2);
+      expect(modelServer.active(), instance.logs()).toBe(3);
+      expect(modelServer.peakRestored(), instance.logs()).toBe(3);
 
       const probe = instance.cli(["agent", "--message", PROBE_MARKER, "--json"]);
       await vi.waitFor(() => expect(modelServer.countRequestsContaining(PROBE_MARKER)).toBe(1), {
         interval: 20,
         timeout: 30_000,
       });
-      expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(2);
+      expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(3);
+      expect(modelServer.active(), instance.logs()).toBe(4);
+      for (let index = 0; index < 3; index++) {
+        expect(modelServer.closed(index), instance.logs()).toBe(false);
+      }
 
-      modelServer.release(0);
-      await vi.waitFor(
-        () => expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(3),
-        { interval: 20, timeout: 30_000 },
-      );
-      expect(modelServer.peakRestored(), instance.logs()).toBe(2);
       modelServer.releaseAll();
       await expect(probe).resolves.toMatchObject({ code: 0 });
     },

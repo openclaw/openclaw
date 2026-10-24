@@ -68,7 +68,10 @@ import {
   restoreGatewayOperatorSource,
   restoreGatewayQueuedOperatorRecovery,
 } from "./operator-run-recovery.js";
-import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
+import {
+  createOperatorRecoveryFixture,
+  createRevisionPublishedRecoveryPolicy,
+} from "./operator-run-recovery.test-support.js";
 import {
   captureOperatorToolGatewayContinuationContext,
   withOperatorToolGatewayAuthority,
@@ -766,6 +769,36 @@ describe("restart recovery authenticated operator source", () => {
         }
       }),
   );
+  it("reuses revision-published allows during recovered operator role reads while effects and claims stay live", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const assertPlugin = vi.fn();
+      await using policy = createRevisionPublishedRecoveryPolicy(assertPlugin);
+      const profile = ensureProfileForEmail("recovery-revision@example.test");
+      const fixture = await recoveryFixture(state.stateDir, profile.id, {
+        gatewayAccessGrant: policy.original,
+      });
+      const restored = expectDefined(await fixture.restore(), "restored operator source");
+      using _ = { [Symbol.dispose]: restored.release };
+      const readRole = expectDefined(
+        restored.authority.readCurrentRoleFacts,
+        "retained role reader",
+      );
+      readRole(); // Prime the allow outside the measured retained-work rounds.
+      assertPlugin.mockClear();
+
+      // Repeated role reads model retained work between each independently live effect.
+      for (let round = 0; round < 3; round++) {
+        for (let read = 0; read < 20; read++) {
+          expect(readRole()).toEqual({ assignedRole: null, githubLogin: null });
+        }
+        restored.authority.assertCurrent();
+      }
+      expect(assertPlugin).toHaveBeenCalledTimes(3);
+
+      fixture.retire();
+      expect(readRole).toThrow("Recovery claim retired");
+      expect(restored.authority.assertCurrent).toThrow("Recovery claim retired");
+    }));
   it("re-admits durable input after the original authority closes without exporting credentials", () =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       setRuntimeConfigSnapshot({});
