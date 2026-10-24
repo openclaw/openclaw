@@ -7,15 +7,6 @@ import { PluginThemeArtwork } from "./plugin-theme-artwork.tsx";
 import { Icon } from "./solid/icon.tsx";
 import "./theme-brand-icon.css";
 
-/** Existing artwork consumers share the lazy published-branding projection. */
-export function projectThemeBranding() {
-  return projectSource(null, {
-    read: currentThemeBranding,
-    subscribe: (_source, notify) => subscribeThemeBranding(notify),
-    equality: Object.is,
-  });
-}
-
 export function ThemeBrandIcon(
   props: { branding?: ThemeBranding } & SolidJSX.HTMLAttributes<HTMLElement>,
 ) {
@@ -35,7 +26,11 @@ export function ThemeBrandIcon(
 }
 
 export function ThemeBrandingIcon(props: { branding?: ThemeBranding; claw?: SolidJSX.Element }) {
-  const publishedBranding = projectThemeBranding();
+  const publishedBranding = projectSource(null, {
+    read: currentThemeBranding,
+    subscribe: (_source, notify) => subscribeThemeBranding(notify),
+    equality: Object.is,
+  });
   const branding = () => props.branding ?? publishedBranding.read();
   return (
     <Show when={branding().brandIcon !== "claw"} fallback={props.claw ?? <Icon name="lobster" />}>

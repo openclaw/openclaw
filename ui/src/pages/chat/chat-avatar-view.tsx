@@ -1,6 +1,7 @@
 import { createMemo, Show } from "solid-js";
 import { isReservedSystemAgentId } from "../../../../src/system-agent/agent-id.js";
 import type { AgentsListResult } from "../../api/types.ts";
+import { currentThemeBranding, subscribeThemeBranding } from "../../app/theme-branding.ts";
 import {
   resolveLocalUserAvatarText,
   resolveLocalUserAvatarUrl,
@@ -17,7 +18,6 @@ import {
   AgentIdentityAvatar,
   IdentityAvatar,
 } from "../../components/solid/identity-avatar.tsx";
-import { projectThemeBranding } from "../../components/theme-brand-icon.tsx";
 import { resolveAgentTextAvatar } from "../../lib/agents/display.ts";
 import type { AssistantIdentity } from "../../lib/assistant-identity.ts";
 import {
@@ -34,6 +34,7 @@ import { formatSenderLabel, type SenderIdentity } from "../../lib/chat/sender-la
 import { resolveAvatarImageUrl } from "../../lib/identity-avatar-loader.ts";
 import type { IdentityAvatarView } from "../../lib/identity-avatar-view.ts";
 import { resolveAvatarInitials } from "../../lib/identity-avatar.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
 import { DEFAULT_AGENT_ID } from "../../lib/sessions/session-key.ts";
 import { ChatAuthorAvatar, UserAvatarSlot } from "./components/chat-author-avatar-view.tsx";
 
@@ -217,7 +218,11 @@ function AgentAvatar(props: {
   textAvatar?: string | null;
 }) {
   const gateway = useAvatarGatewayContext();
-  const branding = projectThemeBranding();
+  const branding = projectSource(null, {
+    read: currentThemeBranding,
+    subscribe: (_source, notify) => subscribeThemeBranding(notify),
+    equality: Object.is,
+  });
   const url = createMemo(() => props.avatar?.trim() || "");
   const view = createMemo(() => {
     gateway();

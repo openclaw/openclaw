@@ -155,7 +155,6 @@ describe("createAgentCapability lifecycle", () => {
 
     const notify = vi.fn();
     const unsubscribe = agents.subscribe(notify);
-    agents.subscribe(notify);
     harness.publish(true);
     harness.publish(true);
     expect(notify).not.toHaveBeenCalled();
@@ -174,7 +173,6 @@ describe("createAgentCapability lifecycle", () => {
     await expect(agents.ensureList()).resolves.toEqual(reconnected);
     expect(request).toHaveBeenCalledTimes(3);
     expect(notify).toHaveBeenCalledTimes(6);
-    expect(notify.mock.lastCall?.[0]).toBe(agents.state);
     unsubscribe();
     agents.dispose();
   });

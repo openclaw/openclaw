@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { For, Show, createMemo } from "solid-js";
+import { currentThemeBranding, subscribeThemeBranding } from "../../app/theme-branding.ts";
 import type { ControlUiBuildInfo } from "../../build-info.ts";
 import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
@@ -12,7 +13,7 @@ import {
 } from "../../components/solid/icon.tsx";
 import { SettingsPage, SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import "../../components/tooltip.ts";
-import { projectThemeBranding, ThemeBrandIcon } from "../../components/theme-brand-icon.tsx";
+import { ThemeBrandIcon } from "../../components/theme-brand-icon.tsx";
 import { registerAboutEnglish } from "../../i18n/locales/en-about.ts";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { COMMUNITY_DISCORD_URL, OFFICIAL_SUPPORT_URL } from "../../lib/product-links.ts";
@@ -22,6 +23,7 @@ import {
   formatRelativeTimestamp,
 } from "../../lib/reactive/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
 import "../../styles/about.css";
 import "../../styles/settings.css";
 
@@ -137,7 +139,11 @@ function Commit(props: AboutProps) {
 }
 
 export function AboutView(props: AboutProps) {
-  const branding = projectThemeBranding();
+  const branding = projectSource(undefined, {
+    read: currentThemeBranding,
+    subscribe: (_source, notify) => subscribeThemeBranding(notify),
+    equality: Object.is,
+  });
   const palette =
     LOBSTER_PET_PALETTES.find((entry) => entry.id === "crimson") ??
     expectDefined(LOBSTER_PET_PALETTES[0], "about lobster palette");

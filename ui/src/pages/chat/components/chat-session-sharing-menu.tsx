@@ -22,51 +22,11 @@ import {
   ChatSessionSharingModeIcon,
   projectChatSessionSharingRoster,
   chatSessionPermissionLabel,
-  type ChatSessionSharingRosterRow,
   ChatSessionSharingError,
   createChatSessionSharingPresentation,
 } from "./chat-session-sharing-shared.tsx";
 
 registerEnglishCatalog(registerChatSessionEnglish);
-
-export function createChatSessionPermissionMenuItem(
-  row: () => ChatSessionSharingRosterRow,
-  busy: () => boolean,
-): MenuItem {
-  return {
-    id: `permission:${row().identity.id}`,
-    class: "chat-pane__sharing-permission",
-    get label() {
-      return `${row().identity.label ?? row().identity.id}, ${row().controlLabel}`;
-    },
-    get trigger() {
-      return row().controlLabel;
-    },
-    get disabled() {
-      return !busy() && Boolean(row().disabledReason);
-    },
-    get attributes(): MenuItem["attributes"] {
-      return {
-        title: row().disabledReason,
-        "aria-disabled": busy() ? "true" : undefined,
-      };
-    },
-    onBeforeShow(event) {
-      if (busy()) {
-        event.preventDefault();
-      }
-    },
-    get children() {
-      return row().options.map((level) => ({
-        id: `permission:${level}:${row().identity.id}`,
-        label: chatSessionPermissionLabel(level),
-        type: "radio" as const,
-        checked: row().level === level,
-        closeOnSelect: false,
-      }));
-    },
-  };
-}
 
 export function useChatSessionSharingMenu(
   props: ChatSessionSharingProps,
@@ -293,7 +253,39 @@ export function useChatSessionSharingMenu(
         () => (!showPermissions() ? [] : matches()),
         (row): MenuEntry => {
           const identity = () => row().identity;
-          const branch = createChatSessionPermissionMenuItem(row, busy);
+          const branch: MenuEntry = {
+            id: `permission:${identity().id}`,
+            class: "chat-pane__sharing-permission",
+            get label() {
+              return `${identity().label ?? identity().id}, ${row().controlLabel}`;
+            },
+            get trigger() {
+              return row().controlLabel;
+            },
+            get disabled() {
+              return !busy() && Boolean(row().disabledReason);
+            },
+            get attributes(): MenuItem["attributes"] {
+              return {
+                title: row().disabledReason,
+                "aria-disabled": busy() ? "true" : undefined,
+              };
+            },
+            onBeforeShow(event) {
+              if (busy()) {
+                event.preventDefault();
+              }
+            },
+            get children() {
+              return row().options.map((level) => ({
+                id: `permission:${level}:${identity().id}`,
+                label: chatSessionPermissionLabel(level),
+                type: "radio" as const,
+                checked: row().level === level,
+                closeOnSelect: false,
+              }));
+            },
+          };
           return {
             kind: "group",
             id: `member:${identity().id}`,

@@ -4,7 +4,6 @@ import type {
   UsersGitHubStatusResult,
 } from "../../../../packages/gateway-protocol/src/schema/users.ts";
 import { createDeferredCore } from "../../../../src/shared/deferred.ts";
-import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ToolsGitHubStatusResult } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
@@ -55,8 +54,12 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies = {}) {
   let draftDirty = false;
   let configFingerprint = "";
 
-  const listeners = createChangeListeners();
-  const publish = listeners.publish;
+  const listeners = new Set<() => void>();
+  const publish = () => {
+    for (const listener of listeners) {
+      listener();
+    }
+  };
   const loading = () => readOwner !== null;
   const busy = () => mutationOwner !== null;
   function retireRequests() {
@@ -649,7 +652,12 @@ export function createGitHubIdentity(deps: GitHubIdentityDependencies = {}) {
   }
   return {
     read,
-    subscribe: listeners.subscribe,
+    subscribe(listener: () => void) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
     dispose: release,
     sync,
     ensureVerified,

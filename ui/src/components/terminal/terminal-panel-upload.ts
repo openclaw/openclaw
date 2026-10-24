@@ -5,7 +5,7 @@ import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { t } from "../../i18n/index.ts";
 import { registerTerminalEnglish } from "../../i18n/locales/en-terminal.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { projectMutableSource } from "../../lib/reactive/projection.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
 import {
   uploadsEnabled as policyAllowsUploads,
   uploadsDisabledMessage,
@@ -68,12 +68,18 @@ export function createTerminalPanelUpload(host: TerminalPanelUploadHost) {
   const [dragActive, setDragActive] = createSignal(false);
   let activeBatch: TerminalUploadBatch | null = null;
   let dragDepth = 0;
+  let notifyBatch = () => {};
   // Transport admission and cancellation remain synchronous; Solid reads that owner.
-  const currentBatch = projectMutableSource(
-    () => activeBatch,
-    (read) => read(),
-  );
-  const notifyBatch = currentBatch.publish;
+  const currentBatch = projectSource(() => activeBatch, {
+    read: (read) => read(),
+    subscribe: (_read, notify) => {
+      notifyBatch = notify;
+      return () => {
+        notifyBatch = () => {};
+      };
+    },
+    equality: "revision",
+  });
 
   const uploadsEnabled = () => policyAllowsUploads(host.config?.());
 

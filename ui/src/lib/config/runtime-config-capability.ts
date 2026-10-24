@@ -1,5 +1,5 @@
 import type { Result } from "@openclaw/normalization-core/result";
-import { createStateListeners, registerListener } from "../../../../src/shared/listeners.js";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { hasOperatorReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
@@ -43,7 +43,7 @@ export function createRuntimeConfigCapability(
       !writes.hasUnacknowledgedDraftWrite(),
     () => showToast({ message: t("configView.reloadBlocked") }),
   );
-  const { listeners, publish } = createStateListeners(state, () => disposed);
+  const listeners = new Set<(state: RuntimeConfigState) => void>();
   const loads = new Map<"config" | "schema", Promise<unknown>>();
   let schemaRead: Promise<Result<void, string>> | null = null;
   let disposed = false;
@@ -62,6 +62,14 @@ export function createRuntimeConfigCapability(
       method === "config.schema" ? "operator.read" : "operator.admin",
       options,
     );
+  const publish = () => {
+    if (disposed) {
+      return;
+    }
+    for (const listener of listeners) {
+      listener(state);
+    }
+  };
   // Bootstrap changes update the capability's fallback config before views read it.
   const stopBootstrap = bootstrap?.subscribe(publish);
   const run = async <T>(task: () => Promise<T>, loadKey?: "config" | "schema"): Promise<T> => {

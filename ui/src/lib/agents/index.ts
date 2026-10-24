@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { createStateListeners, registerListener } from "../../../../src/shared/listeners.js";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
   AgentsFilesGetResult,
@@ -116,7 +116,7 @@ export function createAgentCapability(gateway: AgentGateway) {
     agentsList: null,
   };
   const files = new Map<string, AgentFilesRequestStatus>();
-  const { listeners, publish } = createStateListeners(state, () => disposed);
+  const listeners = new Set<(state: AgentCapabilityState) => void>();
   let disposed = false;
   const creations = createAgentCreationRecovery();
 
@@ -133,6 +133,14 @@ export function createAgentCapability(gateway: AgentGateway) {
     }
   };
 
+  const publish = () => {
+    if (disposed) {
+      return;
+    }
+    for (const listener of listeners) {
+      listener(state);
+    }
+  };
   const fileStatus = (agentId: string): AgentFilesRequestStatus => {
     const existing = files.get(agentId);
     if (existing) {

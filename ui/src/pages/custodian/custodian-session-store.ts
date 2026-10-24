@@ -1,5 +1,4 @@
 import type { SystemAgentChatParams, SystemAgentChatResult } from "@openclaw/gateway-protocol";
-import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { CustodianTurnAdmission } from "../../components/custodian-alert-contract.ts";
@@ -92,9 +91,12 @@ export class CustodianSessionStore {
   private gatewayCleanup: (() => void) | null = null;
   private agentCleanup: (() => void) | null = null;
   private eventCleanup: (() => void) | null = null;
-  private readonly listeners = createChangeListeners();
+  private readonly listeners = new Set<() => void>();
 
-  readonly subscribe = this.listeners.subscribe;
+  subscribe(listener: () => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
 
   connect(context: ApplicationContext, variant: CustodianSessionVariant): void {
     const contextChanged = this.context !== context;
@@ -444,7 +446,9 @@ export class CustodianSessionStore {
       this.transcriptBlocked,
       () => void this.refreshTranscriptIfIdle(),
     );
-    this.listeners.publish();
+    for (const listener of this.listeners) {
+      listener();
+    }
   }
 
   private startSession(client: GatewayBrowserClient, loadTranscript: boolean): void {

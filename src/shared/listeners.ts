@@ -35,19 +35,3 @@ export function createChangeListeners(options?: { snapshot?: boolean }) {
     clear: () => listeners.clear(),
   };
 }
-
-/** Publish a stable state through the caller's live, synchronously ordered listener set. */
-export function createStateListeners<T>(state: T, isDisposed: () => boolean) {
-  const listeners = new Set<(state: T) => void>();
-  return {
-    listeners,
-    publish: () => {
-      if (isDisposed()) {
-        return;
-      }
-      for (const listener of listeners) {
-        listener(state);
-      }
-    },
-  };
-}

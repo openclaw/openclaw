@@ -6,6 +6,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/schema/tab-icon.ts";
 import { controlUiFaviconBaseSvg } from "../../app/control-ui-environment-presentation.runtime.ts";
 import { inferControlUiPublicAssetPath } from "../../app/public-assets.ts";
+import { currentThemeBranding, subscribeThemeBranding } from "../../app/theme-branding.ts";
 import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import type { LobsterPetPalette } from "../../components/lobster-pet-contract.ts";
 import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
@@ -15,8 +16,9 @@ import {
   createIdentityAvatarPresentation,
 } from "../../components/solid/identity-avatar-image.tsx";
 import { SettingsRow, SettingsSegmented } from "../../components/solid/settings-ui.tsx";
-import { projectThemeBranding, ThemeBrandIcon } from "../../components/theme-brand-icon.tsx";
+import { ThemeBrandIcon } from "../../components/theme-brand-icon.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
+import { projectSource } from "../../lib/reactive/projection.ts";
 import { APPEARANCE_SETTINGS_TARGET_IDS } from "./route-data.ts";
 import { SettingsSectionHeader } from "./settings-section-header.tsx";
 
@@ -29,7 +31,11 @@ export type TabIconViewProps = {
 };
 
 function FallbackArtwork(props: { fallbackUrl: string }) {
-  const branding = projectThemeBranding();
+  const branding = projectSource(null, {
+    read: currentThemeBranding,
+    subscribe: (_source, notify) => subscribeThemeBranding(notify),
+    equality: Object.is,
+  });
   return (
     <Show
       when={branding.read().brandIcon === "claw" || branding.read().brandIcon === "mark"}
