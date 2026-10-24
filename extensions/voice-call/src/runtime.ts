@@ -75,6 +75,11 @@ function mapVoiceCallConsultTranscript(
   return transcript;
 }
 
+/**
+ * Load and construct the carrier provider selected by `config.provider`, passing it that
+ * carrier's config section (the whole `telnyx` block for Telnyx) and shared webhook options.
+ * Resolves with the provider; throws for an unsupported provider or invalid carrier config.
+ */
 async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvider> {
   const allowNgrokFreeTierLoopbackBypass =
     config.tunnel.provider === "ngrok" &&
@@ -84,16 +89,9 @@ async function resolveProvider(config: VoiceCallConfig): Promise<VoiceCallProvid
   switch (config.provider) {
     case "telnyx": {
       const { TelnyxProvider } = await import("./providers/telnyx.js");
-      return new TelnyxProvider(
-        {
-          apiKey: config.telnyx?.apiKey,
-          connectionId: config.telnyx?.connectionId,
-          publicKey: config.telnyx?.publicKey,
-        },
-        {
-          skipVerification: config.skipSignatureVerification,
-        },
-      );
+      return new TelnyxProvider(config.telnyx ?? {}, {
+        skipVerification: config.skipSignatureVerification,
+      });
     }
     case "twilio": {
       const { TwilioProvider } = await import("./providers/twilio.js");

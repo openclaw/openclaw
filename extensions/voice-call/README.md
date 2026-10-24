@@ -51,6 +51,8 @@ Put under `plugins.entries.voice-call.config`:
     // Telnyx webhook public key from the Telnyx Mission Control Portal
     // (Base64 string; can also be set via TELNYX_PUBLIC_KEY).
     publicKey: "...",
+    // Optional: denoise caller audio on inbound realtime calls (off when unset).
+    // noiseSuppression: { direction: "outbound", engine: "Krisp", engineConfig: { model: "krisp-viva-tel-lite-v1.kef" } },
   },
 
   plivo: {
@@ -102,6 +104,7 @@ Notes:
 - Twilio defaults to US1. For a non-US Region, set `twilio.region` to `ie1` or `au1` and use credentials created in that Region; see [Twilio's regional REST API guide](https://www.twilio.com/docs/global-infrastructure/using-the-twilio-rest-api-in-a-non-us-region).
 - `mock` is a local dev provider (no network calls).
 - Telnyx requires `telnyx.publicKey` (or `TELNYX_PUBLIC_KEY`) unless `skipSignatureVerification` is true.
+- `telnyx.noiseSuppression` (`direction`: `outbound` | `inbound` | `both`; optional `engine`: `Denoiser` | `DeepFilterNet` | `Krisp` | `AiCoustics`; optional engine-specific `engineConfig`, which requires `engine`) denoises inbound realtime Telnyx calls before media streaming starts. `direction` uses Telnyx's naming: `outbound` is the caller's audio (recommended for realtime), `inbound` is audio played to the caller. Set the number's own noise suppression to `disabled` in Telnyx first, since a number-level setting engages at answer and collides with `suppression_start`. It is off when unset, a failed or slow (over 5s) suppression request falls back to unsuppressed streaming, a call whose stream cannot start is hung up, and outbound dial requests are unchanged. See `https://docs.openclaw.ai/plugins/voice-call/realtime-and-streaming#telnyx-noise-suppression`.
 - Runtime accepts only the current config format. Doctor retains migrations for `provider: "log"`, `twilio.from`, legacy `streaming.*` OpenAI keys, and `realtime.agentContext.includeSystemPrompt` because supported releases can still preserve these settings. Run `openclaw doctor --fix` to normalize them; existing values in the current format are preserved.
 - advanced webhook, streaming, and tunnel notes: `https://docs.openclaw.ai/plugins/voice-call`
 - `responseModel` is optional. When unset, voice responses use the runtime default model.
