@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ExecAllowlistAnalysis } from "../infra/exec-approvals-allowlist.js";
 import { tail } from "./bash-process-registry.js";
 import { formatExecApprovalContinuationSourceOutput } from "./bash-tools.exec-approval-output.js";
 import { appendExecTimeoutRetryGuidance, normalizeNotifyOutput } from "./bash-tools.exec-output.js";
@@ -122,6 +123,31 @@ export function buildGatewayExecApprovalFollowupSummary(params: {
       : `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})`;
   }
   return appendExecTimeoutRetryGuidance(summary, params.outcome.exitReason);
+}
+
+/** Formats the existing denial from prepared lookup facts without exposing command text. */
+export function buildGatewayExecAllowlistDeniedMessage(evaluation: ExecAllowlistAnalysis): string {
+  const plan = evaluation.authorizationPlan;
+  if (evaluation.analysisOk && plan?.ok) {
+    let segmentIndex = 0;
+    for (const group of plan.groups) {
+      for (const candidate of group.candidates) {
+        const satisfiedBy = evaluation.segmentSatisfiedBy[segmentIndex++];
+        const resolution = candidate.sourceSegment.resolution;
+        if (
+          satisfiedBy === null &&
+          candidate.trustMode === "executable" &&
+          resolution !== null &&
+          resolution.policyBlocked !== true &&
+          !resolution.execution.resolvedPath &&
+          !resolution.execution.resolvedRealPath
+        ) {
+          return "exec denied: executable lookup unresolved; check Gateway PATH or use an absolute executable path";
+        }
+      }
+    }
+  }
+  return "exec denied: allowlist miss";
 }
 
 export function buildGatewayExecApprovalDeniedToolResult(params: {

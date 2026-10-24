@@ -70,6 +70,7 @@ import {
 import { prepareCronStandingGrantConsumption } from "./bash-tools.exec-cron-grant.js";
 import {
   buildGatewayExecApprovalFollowupSummary,
+  buildGatewayExecAllowlistDeniedMessage,
   buildGatewayExecApprovalDeniedToolResult,
   resolveGatewayExecApprovalFollowupText,
 } from "./bash-tools.exec-host-gateway.output.js";
@@ -86,9 +87,8 @@ import {
   sendExecApprovalFollowupResult,
 } from "./bash-tools.exec-host-shared.js";
 import { createApprovalSlug, runExecProcess } from "./bash-tools.exec-runtime.js";
-import type { ExecToolApprovalReview, ExecToolDetails } from "./bash-tools.exec-types.js";
+import type { ExecToolApprovalReview } from "./bash-tools.exec-types.js";
 import { abortable } from "./embedded-agent-runner/run/abortable.js";
-import type { AgentToolResult } from "./runtime/index.js";
 
 const ONE_SHOT_ALLOW_ALWAYS: AllowAlwaysPersistenceDecision = {
   kind: "one-shot",
@@ -177,7 +177,7 @@ async function revalidateGatewayExecApprovalBinding(params: {
   cwdSnapshot?: ApprovedCwdSnapshot;
   command: string;
   cwd: string;
-}): Promise<AgentToolResult<ExecToolDetails> | undefined> {
+}) {
   const deniedReason = await resolveGatewayExecApprovalDrift(params);
   return deniedReason
     ? buildGatewayExecApprovalDeniedToolResult({
@@ -1278,7 +1278,7 @@ export async function processGatewayAllowlist(
   }
 
   if (hasAllowlistMiss) {
-    throw new Error("exec denied: allowlist miss");
+    throw new Error(buildGatewayExecAllowlistDeniedMessage(allowlistEval));
   }
 
   await commitExecutionAuthorization({
