@@ -3,7 +3,6 @@ import type {
   SessionsPatchManyResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { SESSION_ARCHIVE_REQUEST_OPTIONS } from "../../../../src/shared/session-archive-timeout.ts";
-import type { GatewaySessionRow } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import { showToast } from "../toast.ts";
 import {
@@ -11,151 +10,292 @@ import {
   type SessionCreateParams,
   type SessionCreateRequestOptions,
 } from "./create.ts";
-import type { SessionPatch, SessionPatchOptions, SessionPatchRoute } from "./patch.ts";
+import type {
+  SessionPatch,
+  SessionPatchOptions,
+  SessionPatchResult,
+  SessionPatchRoute,
+} from "./patch.ts";
 import { projectSessionArchiveFields } from "./session-archive-state.ts";
 import { resolveSessionCreateParams } from "./session-create-params.ts";
-import type { Deletion, SessionDeferredDeletionHost } from "./session-deletions.ts";
+import { releaseSessionPatchPreview, type SessionPatchPreview } from "./session-deferred-patch.ts";
+import type { Deletion, SessionDeletionOperationsHost } from "./session-deletions.ts";
 import type { createSessionModelOverrides } from "./session-model-overrides.ts";
+import { registerSessionMutationOperations } from "./session-mutation-operations.ts";
 import {
-  registerSessionMutationOperations,
-  type PreparedSessionMutation,
-} from "./session-mutation-operations.ts";
-import type { createSessionMutationRefresh } from "./session-mutation-refresh.ts";
+  createSessionMutationRefresh,
+  isRejectedSessionMutation,
+} from "./session-mutation-refresh.ts";
 import type { SessionMutationsHost } from "./session-mutations-host.ts";
 import { projectSessionPatchRowFields } from "./session-patch-row-facts.ts";
 import {
-  createOptimisticRowPatches,
-  type createOptimisticRowField,
   type PendingRowTarget,
   type SessionPinFields,
   resolvePendingConversation,
 } from "./session-pending-rows.ts";
+import type { SessionPermissionClaim } from "./session-permission-projection.ts";
+import { requestSessionPatch } from "./session-requests.ts";
+import type { createSessionRowLocalPatch } from "./session-row-local-patch.ts";
 import type {
   SessionConnectionScope,
+  SessionRefreshOutcome,
   SessionCreateReconciliation,
   SessionRequestClient,
 } from "./session-types.ts";
 
-type MetadataField = "label" | "icon" | "color" | "category";
-type MetadataFieldOwner = ReturnType<typeof createOptimisticRowField<MetadataField>>;
-
-export function createOptimisticArchivePatches(host: SessionMutationsHost) {
-  const fields = [
-    "archived",
-    "archivedAt",
-    "archivedBy",
-    "archiveReason",
-    "pinned",
-    "pinnedAt",
-  ] as const;
-  return createOptimisticRowPatches(host, {
-    read: (row): Pick<GatewaySessionRow, (typeof fields)[number]> =>
-      Object.fromEntries(fields.map((field) => [field, row?.[field]])),
-    write: (row, next) =>
-      fields.every((field) => row[field] === next[field]) ? row : host.copyRow(row, next),
-    observe: (previous, row, names) => ({
-      ...previous,
-      ...Object.fromEntries(
-        fields.filter((field) => names.includes(field)).map((field) => [field, row[field]]),
-      ),
-    }),
-  });
+export function reconcileConfirmedSessionConnection(
+  host: SessionMutationsHost,
+  scope: SessionConnectionScope,
+  agentId?: string | null,
+): Promise<boolean> {
+  return createSessionMutationRefresh(host).reconcileConfirmedPreviousConnection(scope, agentId);
 }
 
-export function prepareSessionPatch(
+export async function runSessionPatch(
   host: SessionMutationsHost,
-  metadataFields: Record<MetadataField, MetadataFieldOwner>,
-  archiveOwner: (
-    create: typeof createOptimisticArchivePatches,
-  ) => ReturnType<typeof createOptimisticArchivePatches>,
-  patch: SessionPatchRoute,
-  target: PendingRowTarget,
+  scope: SessionConnectionScope,
+  key: string,
   patchParams: SessionPatch,
   options: SessionPatchOptions,
-): PreparedSessionMutation {
-  const archive = archiveOwner(createOptimisticArchivePatches);
-  const claims: Array<readonly [MetadataFieldOwner, symbol | null]> = [];
-  const archived = patchParams.archived;
-  let archiveToken =
-    typeof archived === "boolean"
-      ? archive.prepare(() => projectSessionArchiveFields(archived))(target)
-      : null;
-  const settle = () => {
-    if (archiveToken) {
-      archive.settle(target, archiveToken, false, true);
-    }
-    for (const [owner, token] of claims) {
-      if (token) {
-        owner.settle(target, token, false, true);
+  owner: {
+    hasSettingsPatch: boolean;
+    patchSnapshot: ReturnType<SessionMutationsHost["snapshot"]>;
+    pendingTarget: () => PendingRowTarget | null;
+    startOptimisticPatch: () => void;
+    settleOptimisticPatch: (completed: boolean, rowPatchConfirmed: boolean) => void;
+    adoptPredecessorReceipt: () => void;
+    unsubscribeReceipt: (() => void) | undefined;
+    settingsTargetWasReplaced: () => boolean;
+    canDispatchSettings: () => boolean;
+    ownsSettingsPatch: () => boolean;
+    releaseUncertainCategory: () => void;
+    patchRowLocal: ReturnType<typeof createSessionRowLocalPatch>;
+  },
+): Promise<SessionPatchResult | null> {
+  const {
+    hasSettingsPatch,
+    patchSnapshot,
+    startOptimisticPatch,
+    adoptPredecessorReceipt,
+    unsubscribeReceipt,
+    settingsTargetWasReplaced,
+    canDispatchSettings,
+    patchRowLocal,
+  } = owner;
+  const { reconcileConfirmedPreviousConnection, refreshCategory, reportUncertainCategory } =
+    createSessionMutationRefresh(host);
+  let rowPatchConfirmed = false;
+  let writeConfirmed = false;
+  let permissionProjection: SessionPermissionClaim | undefined;
+  const settleOptimisticPatch = (completed: boolean) =>
+    owner.settleOptimisticPatch(completed, rowPatchConfirmed);
+  try {
+    if (options.waitFor) {
+      await options.waitFor;
+      if (!host.connection.isCurrent(scope)) {
+        settleOptimisticPatch(false);
+        return null;
+      }
+      adoptPredecessorReceipt();
+      if (settingsTargetWasReplaced()) {
+        settleOptimisticPatch(false);
+        return null;
       }
     }
-  };
-  // Warm admission installs newer tokens before coalescing releases their predecessor.
-  for (const field of ["label", "icon", "color", "category"] as const) {
-    if (patchParams[field] !== undefined) {
-      const owner = metadataFields[field];
-      claims.push([owner, owner.prepare(() => patchParams[field]?.trim() || undefined)(target)]);
+    let pendingTarget = owner.pendingTarget();
+    if (options.canDispatch?.() === false) {
+      settleOptimisticPatch(false);
+      return null;
     }
-  }
-  return {
-    admit() {
-      // A superseded delete restores its hidden row during admission.
-      if (!archiveToken && typeof archived === "boolean") {
-        archiveToken = archive.prepare(() => projectSessionArchiveFields(archived))(target);
-      }
-    },
-    async run() {
-      try {
-        const result = await patch(target.key, patchParams, {
-          ...options,
-          agentId: target.agentId,
-          expectedSessionId: target.sessionId,
-          // The initiating dialog or batch has completed; replay owns refresh.
-          deferListRefresh: false,
+    if (!host.connection.isCurrent(scope) || !canDispatchSettings()) {
+      settleOptimisticPatch(false);
+      return null;
+    }
+    startOptimisticPatch();
+    if (Object.hasOwn(patchParams, "permissionMode")) {
+      permissionProjection = host.claimPermissionProjection(
+        key,
+        options.agentId,
+        options.expectedSessionId,
+      );
+    }
+    const confirmFields = pendingTarget ? host.capturePatchFields(pendingTarget) : undefined;
+    const result = await requestSessionPatch(
+      scope.client,
+      key,
+      patchParams,
+      hasSettingsPatch && pendingTarget
+        ? { ...options, expectedSessionId: pendingTarget.sessionId }
+        : options,
+    );
+    writeConfirmed = true;
+    if (!host.connection.isCurrent(scope)) {
+      settleOptimisticPatch(false);
+      return (await reconcileConfirmedPreviousConnection(scope, options.agentId)) ? result : null;
+    }
+    options.onConfirmed?.(result);
+    // The receipt can bind a previously unbound settings target synchronously.
+    pendingTarget = owner.pendingTarget();
+    rowPatchConfirmed =
+      pendingTarget !== null &&
+      result.entry.sessionId === pendingTarget.sessionId &&
+      resolvePendingConversation(patchSnapshot, result.key, pendingTarget.agentId)?.identity ===
+        pendingTarget.identity;
+    if (pendingTarget && rowPatchConfirmed) {
+      const confirm = confirmFields ?? host.capturePatchFields(pendingTarget);
+      const readCutoff = host.readRevision();
+      for (const fields of projectSessionPatchRowFields(patchParams, result)) {
+        confirm({
+          key: pendingTarget.key,
+          agentId: pendingTarget.agentId,
+          sessionId: pendingTarget.sessionId,
+          updatedAt: result.entry.updatedAt ?? null,
+          readCutoff,
+          fields,
         });
-        const error = host.readState().error;
-        if (result === null && error) {
-          showToast({ message: error });
-        }
-      } catch (error) {
-        showToast({ message: formatUiError(error) });
-      } finally {
-        settle();
-        options.onDeferredSettled?.();
       }
-    },
-    discard: settle,
-  };
+    }
+    if (permissionProjection) {
+      const confirmation = permissionProjection.confirm({
+        sessionId: result.entry?.sessionId,
+        permissionMode: result.entry?.permissionMode,
+        updatedAt: result.entry?.updatedAt,
+      });
+      if (confirmation === "superseded") {
+        settleOptimisticPatch(true);
+        return result;
+      }
+      // The successful RPC is the first durable acknowledgement; events may
+      // drop and the follow-up list may fail, so record its fenced fact now.
+      const confirmedTarget = resolvePendingConversation(patchSnapshot, key, options.agentId);
+      if (confirmation === "confirmed" && confirmedTarget && result.entry?.sessionId) {
+        patchRowLocal(
+          key,
+          {
+            permissionMode: result.entry?.permissionMode,
+            ...(result.entry?.updatedAt === undefined ? {} : { updatedAt: result.entry.updatedAt }),
+          },
+          { agentId: confirmedTarget.agentId, sessionId: result.entry.sessionId },
+        );
+      }
+    }
+    // Placement is settled by its durable receipt, not a roster round trip.
+    // The existing refresh owner still reconciles membership in the background.
+    if (
+      patchParams.category !== undefined &&
+      Object.keys(patchParams).every((name) => name === "category" || name === "pinned")
+    ) {
+      settleOptimisticPatch(true);
+      if (!options.deferListRefresh) {
+        refreshCategory(scope, options.agentId);
+      }
+      return result;
+    }
+    // Commit and list reconciliation are separate outcomes. Callers must not
+    // turn a failed refresh into an apparent rollback of the committed patch.
+    let refreshOutcome: SessionRefreshOutcome = { status: "refreshed" };
+    // Read receipts settle their row fields; events still invalidate roster membership.
+    const confirmedRead =
+      rowPatchConfirmed && patchParams.unread === false && Object.keys(patchParams).length === 1;
+    if (!options.deferListRefresh && !confirmedRead) {
+      if (Object.hasOwn(patchParams, "permissionMode")) {
+        refreshOutcome = await host.reconcileMutation(
+          options.agentId,
+          permissionProjection?.isCurrent,
+        );
+      } else {
+        await host.reconcileMutation(options.agentId);
+      }
+      if (!host.connection.isCurrent(scope)) {
+        settleOptimisticPatch(false);
+        return (await reconcileConfirmedPreviousConnection(scope, options.agentId)) ? result : null;
+      }
+      if (permissionProjection?.isCurrent() === false) {
+        settleOptimisticPatch(true);
+        return result;
+      }
+    }
+    settleOptimisticPatch(true);
+    return refreshOutcome.status === "failed"
+      ? { ...result, listRefreshError: refreshOutcome.error }
+      : result;
+  } catch (error) {
+    // Transport loss is not evidence of rollback. Release the tentative value
+    // without restoring its predecessor, then reconcile the original owner.
+    const uncertainCategory =
+      patchParams.category !== undefined && !writeConfirmed && !isRejectedSessionMutation(error);
+    if (uncertainCategory) {
+      owner.releaseUncertainCategory();
+    }
+    try {
+      if (
+        !writeConfirmed &&
+        host.connection.isCurrent(scope) &&
+        !settingsTargetWasReplaced() &&
+        owner.ownsSettingsPatch()
+      ) {
+        options.onRejected?.(error);
+      }
+    } finally {
+      settleOptimisticPatch(writeConfirmed);
+    }
+    if (!host.connection.isCurrent(scope)) {
+      return null;
+    }
+    if (uncertainCategory) {
+      throw reportUncertainCategory(error, options.agentId);
+    }
+    if (options.ownsModelOverride?.() !== false && !settingsTargetWasReplaced()) {
+      host.publish({ ...host.readState(), error: formatUiError(error) }, "operation");
+    }
+    throw error;
+  } finally {
+    unsubscribeReceipt?.();
+  }
 }
 
-export function prepareSessionDelete(
+export async function runSessionDeferredPatch(
+  host: SessionMutationsHost,
+  patch: SessionPatchRoute,
+  preview: SessionPatchPreview,
+  patchParams: SessionPatch,
+  options: SessionPatchOptions,
+): Promise<void> {
+  const { target } = preview;
+  try {
+    const result = await patch(target.key, patchParams, {
+      ...options,
+      agentId: target.agentId,
+      expectedSessionId: target.sessionId,
+      // The initiating dialog or batch has completed; replay owns refresh.
+      deferListRefresh: false,
+    });
+    const error = host.readState().error;
+    if (result === null && error) {
+      showToast({ message: error });
+    }
+  } catch (error) {
+    showToast({ message: formatUiError(error) });
+  } finally {
+    releaseSessionPatchPreview(preview);
+    options.onDeferredSettled?.();
+  }
+}
+
+export function runDeferredSessionDelete(
   record: Deletion,
-  key: string,
-  host: SessionDeferredDeletionHost,
-): PreparedSessionMutation {
-  return {
-    admit() {
-      const row = host.publishedRow(
-        (candidate) => candidate.key === key && candidate.sessionId === record.sessionId,
-      );
-      // Coalescing an unsent archive retains archive-only deletion authorization.
-      if (record.target.archivedOnly && row && !row.archived) {
-        record.archiveBeforeDelete = true;
+  scope: SessionConnectionScope,
+  host: SessionDeletionOperationsHost,
+): Promise<void> {
+  return import("./session-delete-operation.ts").then(
+    ({ runDeferredSessionDelete: run }) => run(record, scope, host),
+    (error: unknown) => {
+      if (host.owns(record)) {
+        host.rollback(record);
+        host.reportError(formatUiError(error));
       }
-      record.phase = "pending";
     },
-    run(scope) {
-      return import("./session-delete-operation.ts").then(
-        ({ runDeferredSessionDelete }) => runDeferredSessionDelete(record, scope, host),
-        (error: unknown) => {
-          if (host.owns(record)) {
-            host.rollback(record);
-            host.reportError(formatUiError(error));
-          }
-        },
-      );
-    },
-  };
+  );
 }
 
 export async function createSessionResult(
@@ -166,9 +306,6 @@ export async function createSessionResult(
   owner: {
     preparedWorkSessionKeys: Set<string>;
     modelOverrides: Pick<ReturnType<typeof createSessionModelOverrides>, "set">;
-    reconcileConfirmedPreviousConnection: ReturnType<
-      typeof createSessionMutationRefresh
-    >["reconcileConfirmedPreviousConnection"];
     reportError: (scope: SessionConnectionScope, error: unknown) => void;
   },
 ) {
@@ -185,9 +322,7 @@ export async function createSessionResult(
     options,
   );
   if (!host.connection.isCurrent(scope)) {
-    return (await owner.reconcileConfirmedPreviousConnection(scope, params.agentId))
-      ? result
-      : null;
+    return (await reconcileConfirmedSessionConnection(host, scope, params.agentId)) ? result : null;
   }
   // Creation precedes canonical rows; claim placement before any event or
   // list publication can assign this key an ordinary roster position.
@@ -206,7 +341,7 @@ export async function createSessionResult(
   } else {
     await reconciliation;
     if (!host.connection.isCurrent(scope)) {
-      return (await owner.reconcileConfirmedPreviousConnection(scope, params.agentId))
+      return (await reconcileConfirmedSessionConnection(host, scope, params.agentId))
         ? result
         : null;
     }
@@ -283,12 +418,11 @@ export function requestSessionPatchMany(
     : client.request<SessionsPatchManyResult>("sessions.patchMany", params);
 }
 
-export { projectSessionPatchRowFields };
-
 registerSessionMutationOperations({
-  prepareSessionPatch,
-  prepareSessionDelete,
+  reconcileConfirmedSessionConnection,
+  runSessionPatch,
+  runSessionDeferredPatch,
+  runDeferredSessionDelete,
   patchSessionBatch,
   createSessionResult,
-  projectSessionPatchRowFields,
 });

@@ -185,7 +185,9 @@ it("coalesces the first offline delete and archive before the optional runtime l
   const h = await setup();
   h.offline();
   const deletion = h.delete();
+  expect(h.row()).toBeUndefined();
   const archive = h.patch(true);
+  expect(h.row()).toMatchObject({ sessionId: "incarnation", archived: true, pinned: false });
   expect(h.gateway.snapshot.deferredIntentCount).toBe(1);
   h.reconnect();
   await expect(deletion).resolves.toMatchObject({ queued: true });
@@ -229,8 +231,9 @@ it.each([false, true])(
   async (replace) => {
     const h = await setup();
     h.offline();
-    await expect(h.patch(true)).resolves.toEqual({ queued: true });
+    const archive = h.patch(true);
     expect(h.row()).toMatchObject({ archived: true, pinned: false });
+    await expect(archive).resolves.toEqual({ queued: true });
     const visibility = (statusFilter: "active" | "archived") =>
       projectSidebarArchiveVisibility({
         sourceRows: h.sessions.presentation.result?.sessions ?? [],
@@ -395,13 +398,15 @@ it.each(["deleted", "delete rejected", "connection replaced", "already gone"] as
 it("discards metadata before hiding a delete, and restores it when archive replaces delete", async () => {
   const h = await setup();
   h.offline();
-  await h.sessions.patch("agent:main:offline", { label: "Unsent name" }, h.target);
-  await h.delete();
+  const rename = h.sessions.patch("agent:main:offline", { label: "Unsent name" }, h.target);
+  expect(h.row()?.label).toBe("Unsent name");
+  const deletion = h.delete();
   expect(h.gateway.snapshot.deferredIntentCount).toBe(1);
   expect(h.row()).toBeUndefined();
-  await h.patch(true);
+  const archive = h.patch(true);
   expect(h.row()).toMatchObject({ label: "Original", archived: true });
   expect(h.gateway.snapshot.deferredIntentCount).toBe(1);
+  await Promise.all([rename, deletion, archive]);
   h.reconnect();
   await vi.waitFor(() => expect(h.gateway.snapshot.deferredIntentDraining).toBe(false));
   expect(h.writes()).toHaveLength(1);

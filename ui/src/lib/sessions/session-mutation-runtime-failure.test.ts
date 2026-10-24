@@ -16,9 +16,13 @@ it("fails before patch dispatch and restores its preview when the optional runti
     "sessions.patch": () => ({ ok: true, key: row.key, entry: { ...row, label: "New label" } }),
   });
   await h.sessions.refresh({ agentId: "main" });
-  await expect(
-    h.sessions.patch(row.key, { label: "New label" }, { expectedSessionId: row.sessionId }),
-  ).rejects.toThrow();
+  const patch = h.sessions.patch(
+    row.key,
+    { label: "New label" },
+    { expectedSessionId: row.sessionId },
+  );
+  expect(h.sessions.state.result?.sessions[0]?.label).toBe("New label");
+  await expect(patch).rejects.toThrow();
   expect(h.request.mock.calls.some(([method]) => method === "sessions.patch")).toBe(false);
   expect(h.sessions.state.result?.sessions[0]?.label).toBe("Original label");
 });

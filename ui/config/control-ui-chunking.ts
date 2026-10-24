@@ -68,6 +68,7 @@ export function controlUiStableChunkName(id: string): string | undefined {
       // Pairing loads on interaction; the earlier boot capture must not pull it into either route.
       return "device-pair-setup-runtime";
     case "ui/src/lib/sessions/session-mutation-operations.runtime.ts":
+    case "ui/src/lib/sessions/session-mutation-refresh.ts":
     case "ui/src/lib/sessions/create.ts":
     case "ui/src/lib/sessions/session-patch-row-facts.ts":
     case "src/shared/session-unread.ts":

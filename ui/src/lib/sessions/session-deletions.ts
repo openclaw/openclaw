@@ -72,9 +72,6 @@ export type SessionDeletionOperationsHost = Pick<
   reportError: (message: string) => void;
 };
 
-export type SessionDeferredDeletionHost = SessionDeletionOperationsHost &
-  Pick<DeletionHost, "publishedRow">;
-
 export function createSessionDeletions(host: DeletionHost) {
   let retainedOwner: { scope: SessionListScope } = { scope: {} };
   // Canonical generation and request order outlive an individual mutation,
@@ -220,7 +217,6 @@ export function createSessionDeletions(host: DeletionHost) {
     }
     const snapshot = host.snapshot();
     if (!scope || snapshot.deferredIntentCount || snapshot.deferredIntentDraining) {
-      const admissions: Promise<void>[] = [];
       for (const target of targets) {
         const record = begin({ ...target });
         if (!record.sessionId?.trim()) {
@@ -242,11 +238,8 @@ export function createSessionDeletions(host: DeletionHost) {
         const agentId = conversation.agentId ?? normalizeAgentId(target.agentId);
         const lifecycleKey = `sessions.lifecycle:${agentId}:${conversation.sessionKey}`;
         const prepared = prepareSessionDeferredMutation(
-          (runtime) =>
-            runtime.prepareSessionDelete(record, conversation.sessionKey, {
-              ...operationsHost,
-              publishedRow: host.publishedRow,
-            }),
+          (runtime, replayScope) =>
+            runtime.runDeferredSessionDelete(record, replayScope, operationsHost),
           host.connection,
           () => {
             if (record.deferredToken === token) {
@@ -264,17 +257,19 @@ export function createSessionDeletions(host: DeletionHost) {
             discard: prepared.discard,
           })
         ) {
-          const ready = prepared.admit();
-          if (ready) {
-            admissions.push(ready);
+          const row = host.publishedRow(
+            (candidate) =>
+              candidate.key === conversation.sessionKey && candidate.sessionId === record.sessionId,
+          );
+          // Coalescing an unsent archive retains archive-only deletion authorization.
+          if (record.target.archivedOnly && row && !row.archived) {
+            record.archiveBeforeDelete = true;
           }
+          record.phase = "pending";
           (result.queued ??= []).push(target.key);
         } else {
           prepared.discard();
         }
-      }
-      if (admissions.length > 0) {
-        await Promise.all(admissions);
       }
       publish();
       if (result.errors.length > 0) {

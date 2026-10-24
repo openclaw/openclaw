@@ -279,7 +279,7 @@ it("queues a header rename and rendered reaction through the shared outbox", asy
   input.value = "Renamed offline";
   input.dispatchEvent(new InputEvent("input", { bubbles: true }));
   input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-  await waitForSolid(() => expect(h.gateway.snapshot.deferredIntentCount).toBe(1));
+  expect(h.gateway.snapshot.deferredIntentCount).toBe(1);
   h.draw();
   expect(selectedChatSessionRow(h.state)?.label).toBe("Renamed offline");
   expect(h.header.textContent).toContain("Renamed offline");
