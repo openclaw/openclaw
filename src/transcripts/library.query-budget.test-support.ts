@@ -1,7 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { vi } from "vitest";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync.js";
-import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import type { createTranscriptLibraryStoreFixture } from "./library.store.test-support.js";
@@ -58,18 +56,10 @@ export function observeArchiveReads(
   );
   clearNodeSqliteKyselyCacheForDatabase(database);
   const queries: ReturnType<typeof queryObservation>[] = [];
-  const location = database.location();
-  const prototype = requireNodeSqlite().DatabaseSync.prototype;
-  // oxlint-disable-next-line typescript/unbound-method -- Called below with the intercepted native database receiver.
-  const prepare = prototype.prepare;
-  const prepareSpy = vi.spyOn(prototype, "prepare");
-  prepareSpy.mockImplementation(function (this: DatabaseSync, sql) {
-    const statement = prepare.call(this, sql);
-    if (
-      this.location() !== location ||
-      !/^(?:select|with)\b/iu.test(sql) ||
-      !sql.includes("meeting_transcript_")
-    ) {
+  const prepare = database.prepare.bind(database);
+  vi.spyOn(database, "prepare").mockImplementation((sql) => {
+    const statement = prepare(sql);
+    if (!/^(?:select|with)\b/iu.test(sql) || !sql.includes("meeting_transcript_")) {
       return statement;
     }
     const record = queryObservation(sql);
