@@ -1,4 +1,3 @@
-// Covers core plugin auto-enable behavior and bundled plugin defaults.
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -279,13 +278,7 @@ describe("applyPluginAutoEnable core", () => {
         tools: { web: { fetch: { provider: "evilfetch" } } },
         plugins: { allow: ["telegram"] },
       },
-      [
-        {
-          id: "evil-plugin",
-          channels: [],
-          contracts: { webFetchProviders: ["evilfetch"] },
-        },
-      ],
+      [plugin("evil-plugin", { contracts: { webFetchProviders: ["evilfetch"] } })],
     );
 
     expect(result.config.plugins?.entries?.["evil-plugin"]).toBeUndefined();
@@ -299,7 +292,6 @@ describe("applyPluginAutoEnable core", () => {
         "telegram",
       ]),
     );
-
     expect(result.config.plugins?.entries?.firecrawl?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toEqual(["telegram", "firecrawl"]);
     expect(result.changes).toContain("firecrawl web fetch configured, enabled automatically.");
@@ -362,14 +354,9 @@ describe("applyPluginAutoEnable core", () => {
   });
 
   it.each([
-    { name: "OpenClaw preference", runtime: "openclaw", api: undefined, codexEnabled: false },
-    {
-      name: "implicit subscription route with legacy Completions",
-      runtime: undefined,
-      api: "openai-completions",
-      codexEnabled: true,
-    },
-  ] as const)("preserves $name for auth-profile models", ({ runtime, api, codexEnabled }) => {
+    ["OpenClaw preference", "openclaw", undefined, false],
+    ["implicit subscription route with legacy Completions", undefined, "openai-completions", true],
+  ] as const)("preserves %s for auth-profile models", (_name, runtime, api, codexEnabled) => {
     const config: OpenClawConfig = {
       auth: { profiles: { "openai:work": { provider: "openai", mode: "oauth" } } },
       ...(api ? modelConfig("openai", "https://api.openai.com/v1", { api }) : {}),
@@ -381,10 +368,7 @@ describe("applyPluginAutoEnable core", () => {
           },
         },
       },
-      plugins: {
-        allow: ["openai"],
-        entries: { openai: { enabled: true } },
-      },
+      ...pluginConfig("openai", { enabled: true }, ["openai"]),
     };
     const result = autoEnable(config, [
       plugin("openai", { providers: ["openai"] }),
@@ -540,9 +524,7 @@ describe("applyPluginAutoEnable core", () => {
   );
 
   it("does not reuse same-turn results for omitted metadata after current snapshot replacement", () => {
-    const config: OpenClawConfig = {
-      channels: { apn: { someKey: "value" } },
-    };
+    const config: OpenClawConfig = { channels: { apn: { someKey: "value" } } };
     const firstRegistry = makeRegistry([{ id: "apn-one", channels: ["apn"] }]);
     const secondRegistry = makeRegistry([{ id: "apn-two", channels: ["apn"] }]);
     setCurrentPluginMetadataSnapshot(
