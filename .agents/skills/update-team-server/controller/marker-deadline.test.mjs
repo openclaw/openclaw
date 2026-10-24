@@ -272,171 +272,129 @@ if recover_journal; then exit 0; else exit "$?"; fi
   return { result, rows, journal, original };
 }
 
-function assertRecovered(result, journal, exit = 0) {
-  assert.equal(result.status, exit, result.stderr);
-  assert.equal(existsSync(journal), false);
+function markerCase(name, options, check = () => {}, failure = false) {
+  test(name, t => {
+    const { terminalAtMs = 590_000, observationFailure = null, admissionReadyAtMs = 0 } = options;
+    const state = deadlineRecovery(t, terminalAtMs, observationFailure, admissionReadyAtMs, options);
+    const { result, rows, journal, original } = state;
+    const events = kind => rows.filter(row => row.kind === kind);
+    const dispatches = events("agent"), observations = events("agent.wait"), pauses = events("pause");
+    if (failure) {
+      assert.notEqual(result.status, 0, result.stdout);
+      assert.equal(readFileSync(journal, "utf8"), original);
+      assert.doesNotMatch(result.stdout, /MARKER_VERIFIED|RECOVERED/);
+      assert.equal(events("recovery-finish").length, 0);
+      if (failure instanceof RegExp) { assert.match(result.stderr, failure); }
+    } else {
+      assert.equal(result.status, options.flow === "rollback" ? 1 : 0, result.stderr);
+      assert.equal(existsSync(journal), false);
+      assert.match(result.stdout, /MARKER_VERIFIED .*observation=agent.wait/);
+      if (options.flow === "rollback") { assert.match(result.stderr, /ROLLED_BACK/); }
+      else { assert.match(result.stdout, /RECOVERED phase=ROLLBACK_FAILED/); }
+    }
+    assert.ok(dispatches.every(row => row.atMs < 600_000));
+    assert.ok(new Set(dispatches.map(row => row.idempotencyKey)).size <= 1);
+    assert.ok(events("native-run").length <= 1);
+    assert.ok(observations.every(row => row.atMs < 600_000 && row.nativeWait === 0 &&
+      row.clientBudget <= (600 - Math.floor(row.atMs / 1000)) * 1000));
+    check({ ...state, events, dispatches, observations, pauses });
+  });
 }
 
-function assertUnrecovered(result, journal, original) {
-  assert.notEqual(result.status, 0, result.stdout);
-  assert.equal(readFileSync(journal, "utf8"), original);
-  assert.doesNotMatch(result.stdout, /MARKER_VERIFIED|RECOVERED/);
-}
-
-function assertPacedToDeadline(rows) {
-  const pauses = rows.filter(row => row.kind === "pause");
-  assert.ok(pauses.every(row => row.ms >= 500 && row.ms <= 10_000));
+function assertDeadline(pauses) {
   assert.equal(pauses.at(-1).atMs + pauses.at(-1).ms, 600_000);
 }
 
-test("marker completion in the final window is observed before the original deadline", (t) => {
-  const { result, rows, journal } = deadlineRecovery(t, 597_000);
-  assertRecovered(result, journal);
-  assert.match(result.stdout, /MARKER_VERIFIED .*observation=agent.wait/);
-  assert.match(result.stdout, /RECOVERED phase=ROLLBACK_FAILED/);
-  assert.equal(rows.filter((row) => row.kind === "agent").length, 1);
-  const observations = rows.filter((row) => row.kind === "agent.wait");
-  assert.ok(observations.some((row) => row.atMs >= 597_000 && row.atMs < 600_000));
-  assert.ok(observations.every((row) => row.atMs < 600_000 && row.nativeWait === 0));
-});
+markerCase("marker completion is observed in the final window", { terminalAtMs: 597_000 },
+  ({ dispatches, observations }) => {
+    assert.equal(dispatches.length, 1);
+    assert.ok(observations.some(row => row.atMs >= 597_000));
+  });
 
-test("pending marker expires without a tight polling loop or retiring recovery evidence", (t) => {
-  const { result, rows, journal, original } = deadlineRecovery(t, Infinity);
-  assertUnrecovered(result, journal, original);
-  assert.match(result.stderr, /stage=marker.wait-budget/);
-  assert.equal(rows.filter((row) => row.kind === "agent").length, 1);
-  assert.equal(rows.filter((row) => row.kind === "recovery-finish").length, 0);
-  const observations = rows.filter((row) => row.kind === "agent.wait");
-  assert.ok(observations.length > 1 && observations.length <= 20);
-  assert.ok(observations.every((row) => row.atMs < 600_000 && row.clientBudget <= (600 - Math.floor(row.atMs / 1000)) * 1000));
-  assertPacedToDeadline(rows);
-});
-
-for (const failure of [
-  { exit: 75, output: "RETRYABLE_OBSERVATION_TRANSPORT", retry: true },
-  { exit: 75, output: "unclassified native failure", retry: false },
-  { exit: 1, output: "RETRYABLE_OBSERVATION_TRANSPORT", retry: false },
+for (const [label, observationFailure, retry] of [
+  ["pending marker", null, null],
+  ["typed transport failure", { exit: 75, output: "RETRYABLE_OBSERVATION_TRANSPORT" }, true],
+  ["unclassified native failure", { exit: 75, output: "unclassified native failure" }, false],
+  ["wrong transport exit", { exit: 1, output: "RETRYABLE_OBSERVATION_TRANSPORT" }, false],
 ]) {
-test(`observation failure ${failure.exit}/${failure.retry ? "typed" : "unclassified"} retains the absolute recovery deadline`, t => {
-  const { result, rows, journal, original } = deadlineRecovery(t, Infinity, failure);
-  assertUnrecovered(result, journal, original);
-  assert.equal(rows.filter(row => row.kind === "agent").length, 1);
-  assert.equal(rows.filter(row => row.kind === "recovery-finish").length, 0);
-  const observations = rows.filter(row => row.kind === "agent.wait");
-  assert.ok(observations.every(row => row.atMs < 600_000 && row.nativeWait === 0 && row.clientBudget <= (600 - Math.floor(row.atMs / 1000)) * 1000));
-  if (failure.retry) {
-    assert.match(result.stderr, /MARKER_OBSERVATION_RETRY/);
-    assert.match(result.stderr, /stage=marker.wait-budget/);
-    assert.ok(observations.length > 1 && observations.length <= 20);
-    assertPacedToDeadline(rows);
-  } else {
-    assert.equal(observations.length, 1);
-    assert.doesNotMatch(result.stderr, /MARKER_OBSERVATION_RETRY/);
-  }
-});
+  markerCase(`${label} preserves evidence and the absolute observation deadline`,
+    { terminalAtMs: Infinity, observationFailure }, ({ result, dispatches, observations, pauses }) => {
+      assert.equal(dispatches.length, 1);
+      if (retry !== false) {
+        assert.match(result.stderr, /stage=marker.wait-budget/);
+        assert.ok(observations.length > 1 && observations.length <= 20);
+        assert.ok(pauses.every(row => row.ms >= 500 && row.ms <= 10_000));
+        assertDeadline(pauses);
+      } else { assert.equal(observations.length, 1); }
+      if (retry) { assert.match(result.stderr, /MARKER_OBSERVATION_RETRY/); }
+      else { assert.doesNotMatch(result.stderr, /MARKER_OBSERVATION_RETRY/); }
+    }, true);
 }
 
-test("startup admission pending is retried with the identical payload before any dispatch", (t) => {
-  const { result, rows, journal } = deadlineRecovery(t, 597_000, null, 596_000);
-  assertRecovered(result, journal);
-  assert.match(result.stderr, /MARKER_ADMISSION_RETRY same-payload=required/);
-  assert.match(result.stdout, /MARKER_VERIFIED .*observation=agent.wait/);
-  const dispatches = rows.filter((row) => row.kind === "agent");
-  assert.equal(dispatches.length, 3);
-  assert.equal(new Set(dispatches.map((row) => row.idempotencyKey)).size, 1);
-  assert.ok(dispatches.every((row) => row.atMs < 600_000));
-  const pauses = rows.filter((row) => row.kind === "pause" && row.atMs < 596_000);
-  assert.equal(pauses.length, 2);
-  assert.ok(pauses.every((row) => row.ms === 3000));
-});
-
-test("startup admission still pending at the deadline fails without retiring recovery evidence", (t) => {
-  const { result, rows, journal, original } = deadlineRecovery(t, Infinity, null, Infinity);
-  assertUnrecovered(result, journal, original);
-  assert.match(result.stderr, /stage=marker.admission-budget/);
-  assert.equal(existsSync(join(dirname(journal), "accepted.json")), false);
-  assert.equal(rows.filter((row) => row.kind === "agent.wait").length, 0);
-  const dispatches = rows.filter((row) => row.kind === "agent");
-  assert.ok(dispatches.length >= 2 && dispatches.length <= 5);
-  assert.ok(dispatches.every((row) => row.atMs < 600_000));
-});
-
-test("healthy dispatch timeout reconciles the same native run after fresh readiness", (t) => {
-  const { result, rows, journal } = deadlineRecovery(t, 596_000, null, 0, {
-    dispatchFailure: { exit: 77, output: "RETRYABLE_DISPATCH_TIMEOUT", once: true },
+markerCase("pending admission retries the identical request before dispatch",
+  { terminalAtMs: 597_000, admissionReadyAtMs: 596_000 }, ({ result, dispatches, pauses }) => {
+    assert.match(result.stderr, /MARKER_ADMISSION_RETRY same-payload=required/);
+    assert.equal(dispatches.length, 3);
+    const admissionPauses = pauses.filter(row => row.atMs < 596_000);
+    assert.equal(admissionPauses.length, 2);
+    assert.ok(admissionPauses.every(row => row.ms === 3000));
   });
-  assertRecovered(result, journal);
-  assert.equal(rows.filter(row => row.kind === "native-run").length, 1);
-  const dispatches = rows.filter(row => row.kind === "agent");
-  assert.equal(dispatches.length, 2);
-  assert.equal(new Set(dispatches.map(row => row.idempotencyKey)).size, 1);
-  const retries = rows.indexOf(dispatches[1]);
-  assert.ok(rows.slice(rows.indexOf(dispatches[0]) + 1, retries).some(row => row.kind === "system.info"));
-});
+markerCase("pending admission expires without dispatch or evidence retirement",
+  { terminalAtMs: Infinity, admissionReadyAtMs: Infinity }, ({ journal, dispatches, observations }) => {
+    assert.equal(existsSync(join(dirname(journal), "accepted.json")), false);
+    assert.equal(observations.length, 0);
+    assert.ok(dispatches.length >= 2 && dispatches.length <= 5);
+  }, /stage=marker.admission-budget/);
 
-test("marker waits for critical startup, agent admission and responsive probes inside the original budget", (t) => {
-  const { result, rows } = deadlineRecovery(t, 596_000, null, 0, {
-    startupReadyAtMs: 591_000, markerReadyAtMs: 592_000,
-    probeReadyAtMs: 593_000, rpcReadyAtMs: 596_000, loopReadyAtMs: 594_000,
-  });
-  assert.equal(result.status, 0, result.stderr);
-  const dispatches = rows.filter(row => row.kind === "agent");
-  assert.equal(dispatches.length, 1);
-  assert.ok(dispatches[0].atMs >= 596_000 && dispatches[0].atMs < 600_000);
-});
+for (const [label, options, earliest, exact = false] of [
+  ["critical startup and responsive probes", { startupReadyAtMs: 591_000, markerReadyAtMs: 592_000,
+    probeReadyAtMs: 593_000, rpcReadyAtMs: 596_000, loopReadyAtMs: 594_000 }, 596_000],
+  ["native readiness after convergence", { readyzReadyAtMs: 596_000 }, 596_000, true],
+  ["responsive sustained CPU load", { nativeConvergence: true, busyCpu: true }, 590_000],
+  ["event-loop delay settles", { nativeConvergence: true, busyCpu: true, loopReadyAtMs: 592_000 }, 592_000],
+  ["other agent inspects", { nativeConvergence: true, otherAgentPending: true }, 590_000],
+  ["model agent also waits", { nativeConvergence: true, otherAgentPending: true, markerReadyAtMs: 593_000 }, 593_000],
+]) {
+  markerCase(`marker waits for ${label} without a CPU waiver`, { ...options, terminalAtMs: earliest },
+    ({ result, dispatches }) => {
+      assert.equal(dispatches.length, 1);
+      assert.ok(exact ? dispatches[0].atMs === earliest : dispatches[0].atMs >= earliest);
+      assert.doesNotMatch(result.stdout, /CPU_DEGRADED_OPERATOR_WAIVED/);
+    });
+}
 
-test("marker waits for native readiness to recover after convergence without renewing the deadline", (t) => {
-  const { result, rows, journal } = deadlineRecovery(t, 596_000, null, 0, {
-    readyzReadyAtMs: 596_000,
-  });
-  assertRecovered(result, journal);
-  const dispatches = rows.filter(row => row.kind === "agent");
-  assert.equal(dispatches.length, 1);
-  assert.equal(dispatches[0].atMs, 596_000);
-});
-
-test("persistent native not-ready retains recovery evidence at the original deadline", (t) => {
-  const { result, rows, journal, original } = deadlineRecovery(t, Infinity, null, 0, {
-    readyzReadyAtMs: 601_000,
-  });
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /stage=marker.readiness-budget/);
-  assert.equal(readFileSync(journal, "utf8"), original);
-  assert.equal(rows.filter(row => row.kind === "agent").length, 0);
-  const pauses = rows.filter(row => row.kind === "pause");
-  assert.equal(pauses.at(-1).atMs + pauses.at(-1).ms, 600_000);
-});
-
+markerCase("persistent native not-ready exhausts the original deadline",
+  { terminalAtMs: Infinity, readyzReadyAtMs: 601_000 }, ({ dispatches, pauses }) => {
+    assert.equal(dispatches.length, 0); assertDeadline(pauses);
+  }, /stage=marker.readiness-budget/);
 for (const [label, options] of [
-  ["unclassified dispatch failure", { dispatchFailure: { exit: 77, output: "not a typed timeout" } }],
+  ["unclassified dispatch", { dispatchFailure: { exit: 77, output: "not a typed timeout" } }],
   ["corrupt agent store", { refusalCode: "agent-database-inspection-failed" }],
   ["changed process instance", { processDrift: true }],
-  ["readiness never settles", { markerReadyAtMs: Infinity }],
-  ["dispatch timeout persists", { convergenceAtMs: 596_000, dispatchFailure: { exit: 77, output: "RETRYABLE_DISPATCH_TIMEOUT" } }],
+  ["unsettled readiness", { markerReadyAtMs: Infinity }],
+  ["persistent dispatch timeout", { convergenceAtMs: 596_000, dispatchFailure: { exit: 77, output: "RETRYABLE_DISPATCH_TIMEOUT" } }],
 ]) {
-  test(`${label} retains evidence and never renews the marker deadline`, (t) => {
-  const { result, rows, journal, original } = deadlineRecovery(t, Infinity, null, 0, options);
-  assertUnrecovered(result, journal, original);
-  assert.ok(rows.filter(row => ["agent", "agent.wait"].includes(row.kind)).every(row => row.atMs < 600_000));
-  assert.ok(rows.filter(row => row.kind === "native-run").length <= 1);
-  });
+  markerCase(`${label} retains evidence without renewing the deadline`, { ...options, terminalAtMs: Infinity }, undefined, true);
 }
 
-test("rollback gives a healthy predecessor the same admission and timeout reconciliation patience", (t) => {
-  const { result, rows, journal } = deadlineRecovery(t, 598_000, null, 0, {
-    flow: "rollback", markerReadyAtMs: 593_000,
-    dispatchFailure: { exit: 77, output: "RETRYABLE_DISPATCH_TIMEOUT", once: true },
+markerCase("rollback reconciles one native run after fresh readiness",
+  { terminalAtMs: 598_000, flow: "rollback", markerReadyAtMs: 593_000,
+    dispatchFailure: { exit: 77, output: "RETRYABLE_DISPATCH_TIMEOUT", once: true } },
+  ({ result, rows, events, dispatches }) => {
+    assert.doesNotMatch(result.stderr, /activation rollback failed/);
+    assert.equal(events("service-restart").length, 1);
+    assert.equal(events("native-run").length, 1);
+    assert.equal(dispatches.length, 2);
+    assert.ok(rows.slice(rows.indexOf(dispatches[0]) + 1, rows.indexOf(dispatches[1])).some(row => row.kind === "system.info"));
   });
-  assert.equal(result.status, 1, "rollback preserves the original activation failure exit");
-  assert.match(result.stderr, /ROLLED_BACK/);
-  assert.doesNotMatch(result.stderr, /activation rollback failed/);
-  assert.equal(existsSync(journal), false);
-  assert.equal(rows.filter(row => row.kind === "service-restart").length, 1);
-  assert.equal(rows.filter(row => row.kind === "native-run").length, 1);
-  assert.equal(rows.filter(row => row.kind === "agent").length, 2);
-});
 
-test("native RPC runner retries typed dispatch/readiness timeouts and rejects real failures", (t) => {
+// Full-entrypoint transport refusals and dispatch replay live in release.test.mjs.
+for (const [method, error, exit, output] of [
+  ["system.info", { name: "GatewayTransportError", kind: "timeout" }, 78, "RETRYABLE_READINESS_TRANSPORT"],
+  ["agent", { name: "GatewayClientRequestError", code: "UNAUTHORIZED" }, 1, ""],
+  ["agent", { name: "GatewayClientRequestError", code: "UNAVAILABLE", details: { code: "agent-database-inspection-failed" } }, 1, ""],
+]) {
+test(`native ${method} classifies ${error.code ?? error.kind}`, t => {
   const root = fixtureRoot(t);
   mkdirSync(join(root, "dist/plugin-sdk"), { recursive: true });
   writeFileSync(join(root, "package.json"), '{"type":"module"}');
@@ -444,42 +402,15 @@ test("native RPC runner retries typed dispatch/readiness timeouts and rejects re
 export function isGatewayTransportError(error) { return error.name === "GatewayTransportError"; }
 export async function callGatewayFromCli() { throw Object.assign(new Error("synthetic failure"), JSON.parse(process.env.FIXTURE_ERROR)); }
 `);
-  const source = readFileSync(ownerPath, "utf8");
   const script = `set -Eeuo pipefail
 run_gateway_node() { "$FIXTURE_NODE" "$@"; }
-${ownerFunction(source, "run_marker_rpc")}
+${ownerFunction(readFileSync(ownerPath, "utf8"), "run_marker_rpc")}
 run_marker_rpc "$FIXTURE_ROOT" "$FIXTURE_METHOD" '{}' 10000
 `;
-  for (const [method, error, exit, output] of [
-    ["agent", { name: "GatewayTransportError", kind: "timeout" }, 77, "RETRYABLE_DISPATCH_TIMEOUT"],
-    ["system.info", { name: "GatewayTransportError", kind: "timeout" }, 78, "RETRYABLE_READINESS_TRANSPORT"],
-    ["agent", { name: "GatewayTransportError", kind: "closed", code: 1002 }, 1, ""],
-    ["agent", { name: "GatewayClientRequestError", code: "UNAUTHORIZED" }, 1, ""],
-    ["agent", { name: "GatewayClientRequestError", code: "UNAVAILABLE", details: { code: "agent-database-inspection-failed" } }, 1, ""],
-  ]) {
-    const result = runShell(root, script, {
-      FIXTURE_METHOD: method, FIXTURE_ERROR: JSON.stringify(error),
-    }, 5000);
-    assert.equal(result.status, exit, result.stderr);
-    assert.equal(result.stdout, output);
-  }
+  const result = runShell(root, script, { FIXTURE_METHOD: method, FIXTURE_ERROR: JSON.stringify(error) }, 5000);
+  assert.equal(result.status, exit, result.stderr);
+  assert.equal(result.stdout, output);
 });
-
-for (const [label, options, firstDispatchAtMs] of [
-  ["responsive sustained CPU/utilization load", { busyCpu: true }, 590_000],
-  ["event-loop delay settles within the shared budget", { busyCpu: true, loopReadyAtMs: 592_000 }, 592_000],
-  ["another agent still inspects after the model agent is admitted", { otherAgentPending: true }, 590_000],
-  ["model agent admission waits while another agent also inspects", { otherAgentPending: true, markerReadyAtMs: 593_000 }, 593_000],
-]) {
-  test(`native convergence: ${label} completes the default marker without a CPU waiver`, (t) => {
-    const { result, rows, journal } = deadlineRecovery(t, firstDispatchAtMs, null, 0, { ...options, nativeConvergence: true });
-    assertRecovered(result, journal);
-    assert.match(result.stdout, /MARKER_VERIFIED/);
-    assert.doesNotMatch(result.stdout, /CPU_DEGRADED_OPERATOR_WAIVED/);
-    const dispatches = rows.filter(row => row.kind === "agent");
-    assert.equal(dispatches.length, 1);
-    assert.ok(dispatches[0].atMs >= firstDispatchAtMs && dispatches[0].atMs < 600_000);
-  });
 }
 
 function successorActivation(t, { stopSeconds = 94, listenerAt = 60, rpcAt = listenerAt,
@@ -648,143 +579,94 @@ rollback_activation "$activation_exit" || exit "$?"
   return { result, rows, journal, started: rows[startIndex]?.at, afterStart: rows.slice(startIndex + 1) };
 }
 
-test("activation preparation: a rejected sealed release leaves admission open", t => {
-  const { result, rows, journal } = successorActivation(t, { pointers: true, fault: "invalid-release" });
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /synthetic sealed release is invalid/);
-  assert.equal(rows.some(row => row.event === "suspension"), false);
-  assert.equal(journal, null);
-});
-
-for (const suspensionState of ["DRAINING", "READY"]) {
-  test(`activation preparation: ${suspensionState} audits sealed releases before closing admission`, t => {
-    const { result, rows } = successorActivation(t, { pointers: true, suspensionState, stopSeconds: 0, listenerAt: 0 });
-    assert.equal(result.status, 0, result.stderr);
-    const closed = rows.findIndex(row => row.event === "suspension");
-    const stopping = rows.findIndex(row => row.event === "systemctl stop");
-    const audits = rows.slice(0, stopping).flatMap((row, index) => row.event.startsWith("release-audit ") ? [index] : []);
-    assert.equal(audits.length, 2);
-    assert.ok(audits.every(index => index < closed), JSON.stringify(rows));
-    assert.ok(rows.some(row => row.event === "systemctl stop"));
-  });
-  for (const fault of ["current-changed", "stale-lease"]) {
-    test(`activation preparation: ${suspensionState} rejects ${fault} before journal or stop`, t => {
-      const { result, rows, journal } = successorActivation(t, { pointers: true, suspensionState, fault });
+function successorCase(name, options, check, failure = false) {
+  test(name, t => {
+    const state = successorActivation(t, options), { result, rows, journal } = state;
+    if (failure) {
       assert.notEqual(result.status, 0);
-      assert.match(result.stderr, fault === "current-changed" ? /current release changed before journal publication/ : /SUSPENSION_CHECK_FAILED stage=status/);
+      assert.doesNotMatch(result.stdout, /SUCCESS /);
+      assert.match(result.stderr, failure);
+    } else {
+      assert.equal(result.status, 0, result.stderr);
+      assert.match(result.stdout, /SUCCESS /);
       assert.equal(journal, null);
-      assert.equal(rows.some(row => row.event === "systemctl stop" || row.event === "successor-start"), false);
-    });
-  }
-}
-
-for (const mode of ["runtime", "deploy"]) {
-test(`successor convergence: ${mode} waits for a late listener and RPC after a 94-second stop`, t => {
-  const rpcAt = mode === "runtime" ? 90 : 60;
-  const { result, rows, journal, started, afterStart } = successorActivation(t, { mode, rpcAt });
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /SUCCESS /);
-  assert.equal((result.stderr.match(/VERIFICATION_WAITING stage=convergence.listener/g) ?? []).length, 1);
-  assert.doesNotMatch(result.stderr, /VERIFICATION_FAILED stage=convergence.generation/);
-  if (rpcAt > 60) { assert.match(result.stderr, /stage=convergence.process-rpc/); }
-  assert.equal(started, 1094);
-  assert.equal(rows.find(row => row.event === "marker").at - started, rpcAt);
-  assert.equal(rows.some(row => row.event === "rollback-compatibility"), false);
-  assert.equal(afterStart.some(row => row.event === "stopped-proof"), false);
-  assert.equal(journal, null);
-});
-}
-
-for (const stopSeconds of [0, 94]) {
-test(`successor convergence: ${stopSeconds}-second predecessor stop leaves the full 600-second window`, t => {
-  const { result, rows, journal, started } = successorActivation(t, { stopSeconds, listenerAt: 598, retrySeconds: 13 });
-  assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /SUCCESS /);
-  assert.equal(rows.find(row => row.event === "marker").at - started, 600 - 2);
-  assert.equal(journal, null);
-});
-}
-
-for (const fault of ["", "exit-at-budget"]) {
-test(`successor convergence: missing listener exhausts the budget before one rollback attempt (${fault || "still running"})`, t => {
-  const { result, rows, journal, started, afterStart } = successorActivation(t, { listenerAt: 9999, fault, retrySeconds: 17 });
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /stage=wait-for-live.budget/);
-  assert.equal((result.stderr.match(/VERIFICATION_WAITING stage=convergence.listener/g) ?? []).length, 1);
-  assert.doesNotMatch(result.stderr, /VERIFICATION_FAILED stage=convergence.generation/);
-  assert.doesNotMatch(result.stdout, /SUCCESS /);
-  const rollback = rows.filter(row => row.event === "rollback-compatibility");
-  assert.equal(rollback.length, 1);
-  assert.equal(rollback[0].at - started, 600);
-  assert.ok(afterStart.filter(row => row.event === "stopped-proof").every(row => row.at - started >= 600));
-  assert.equal(rows.filter(row => row.event === "systemctl restart").length, fault ? 1 : 0);
-  if (fault) {
-    assert.match(result.stderr, /ROLLED_BACK /);
-    assert.equal(journal, null);
-  } else {
-    assert.equal(journal.phase, "ROLLBACK_FAILED");
-    assert.equal(journal.originalWitness, "fixture");
-    assert.equal(rows.some(row => row.event === "restore-pointers"), false);
-  }
-});
-}
-
-for (const fault of ["generation", "foreign", "policy", "identity"]) {
-test(`successor convergence: ${fault} drift never gains verification or rollback authority`, t => {
-  const { result, rows, journal } = successorActivation(t, { listenerAt: fault === "generation" ? 60 : 0, fault, retrySeconds: 20 });
-  assert.notEqual(result.status, 0);
-  assert.doesNotMatch(result.stdout, /SUCCESS /);
-  assert.match(result.stderr, new RegExp({ generation: "started recovery Gateway generation changed",
-    foreign: "Gateway does not own one exact loopback listener", policy: "stage=convergence.policy",
-    identity: "stage=convergence.protected-state" }[fault]));
-  assert.equal(rows.some(row => row.event === "marker" || row.event === "restore-pointers"), false);
-  assert.equal(journal.phase, "ROLLBACK_FAILED");
-  assert.equal(journal.originalWitness, "fixture");
-});
-}
-
-for (const flow of ["recover", "rollback"]) {
-test(`marker configured fallback completes ${flow} with its original run`, (t) => {
-  const { result, rows, journal } = deadlineRecovery(t, 590_000, null, 0, {
-    flow, fallbacks: ["fixture/fallback"], effectiveModel: "fallback",
+    }
+    check({ ...state, events: event => rows.filter(row => row.event === event) });
   });
-  assertRecovered(result, journal, flow === "rollback" ? 1 : 0);
-  assert.match(result.stdout, /MARKER_VERIFIED /);
-  if (flow === "rollback") {
-    assert.match(result.stderr, /ROLLED_BACK sha=/);
-  }
-  assert.equal(rows.filter(row => row.kind === "native-run").length, 1);
-});
 }
 
-for (const [label, options] of [
-  ["unconfigured effective model", { effectiveModel: "other-model" }],
-  ["different requested model", { requestedModel: "other-model", effectiveModel: "fallback" }],
+for (const [fault, reason] of [
+  ["invalid-release", /synthetic sealed release is invalid/],
+  ["current-changed", /current release changed before journal publication/],
+  ["stale-lease", /SUSPENSION_CHECK_FAILED stage=status/],
 ]) {
-test(`marker configured fallback rejects ${label} and retains recovery evidence`, (t) => {
-  const { result, journal } = deadlineRecovery(t, 590_000, null, 0, {
-    fallbacks: ["fixture/fallback"], ...options,
-  });
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /stage=marker.reply-check/);
-  assert.equal(existsSync(journal), true);
-});
+  successorCase(`activation refuses ${fault} before journal or stop`, { pointers: true, fault },
+    ({ journal, events }) => {
+      assert.equal(journal, null);
+      assert.equal(events("systemctl stop").length + events("successor-start").length, 0);
+      if (fault === "invalid-release") { assert.equal(events("suspension").length, 0); }
+    }, reason);
+}
+for (const suspensionState of ["DRAINING", "READY"]) {
+  successorCase(`activation audits releases before closing ${suspensionState} admission`,
+    { pointers: true, suspensionState, stopSeconds: 0, listenerAt: 0 }, ({ rows }) => {
+      const stopping = rows.findIndex(row => row.event === "systemctl stop");
+      const closed = rows.findIndex(row => row.event === "suspension");
+      const audits = rows.slice(0, stopping).flatMap((row, index) => row.event.startsWith("release-audit ") ? [index] : []);
+      assert.equal(audits.length, 2);
+      assert.ok(audits.every(index => index < closed) && stopping >= 0, JSON.stringify(rows));
+    });
+}
+for (const [mode, listenerAt, rpcAt, retrySeconds] of [
+  ["runtime", 60, 90, 2], ["deploy", 60, 60, 2], ["deploy", 598, 598, 13],
+]) {
+  successorCase(`${mode} retains its full successor window with listener/RPC at ${listenerAt}/${rpcAt}`,
+    { mode, listenerAt, rpcAt, retrySeconds }, ({ result, started, afterStart, events }) => {
+      assert.equal(started, 1094);
+      assert.equal(events("marker")[0].at - started, rpcAt);
+      assert.equal(events("rollback-compatibility").length, 0);
+      assert.equal(afterStart.some(row => row.event === "stopped-proof"), false);
+      assert.equal((result.stderr.match(/VERIFICATION_WAITING stage=convergence.listener/g) ?? []).length, 1);
+      assert.doesNotMatch(result.stderr, /VERIFICATION_FAILED stage=convergence.generation/);
+      if (rpcAt > listenerAt) { assert.match(result.stderr, /stage=convergence.process-rpc/); }
+    });
+}
+for (const fault of ["", "exit-at-budget"]) {
+  successorCase(`listener budget expires before rollback: ${fault || "still running"}`,
+    { listenerAt: 9999, fault, retrySeconds: 17 }, ({ result, journal, started, afterStart, events }) => {
+      assert.equal(events("rollback-compatibility").length, 1);
+      assert.equal(events("rollback-compatibility")[0].at - started, 600);
+      assert.ok(afterStart.filter(row => row.event === "stopped-proof").every(row => row.at - started >= 600));
+      assert.equal(events("systemctl restart").length, fault ? 1 : 0);
+      if (fault) {
+        assert.match(result.stderr, /ROLLED_BACK /);
+        assert.equal(journal, null);
+      } else {
+        assert.deepEqual(journal, { phase: "ROLLBACK_FAILED", originalWitness: "fixture" });
+        assert.equal(events("restore-pointers").length, 0);
+      }
+    }, /stage=wait-for-live.budget/);
+}
+for (const [fault, reason] of [
+  ["generation", /started recovery Gateway generation changed/],
+  ["foreign", /Gateway does not own one exact loopback listener/],
+  ["policy", /stage=convergence.policy/],
+  ["identity", /stage=convergence.protected-state/],
+]) {
+  successorCase(`${fault} drift never gains verification or rollback authority`,
+    { listenerAt: fault === "generation" ? 60 : 0, fault, retrySeconds: 20 }, ({ journal, events }) => {
+      assert.equal(events("marker").length + events("restore-pointers").length, 0);
+      assert.deepEqual(journal, { phase: "ROLLBACK_FAILED", originalWitness: "fixture" });
+    }, reason);
 }
 
-test("marker configured fallback resolves auth profiles through the serving release SDK", (t) => {
-  const { result, rows, journal } = deadlineRecovery(t, 590_000, null, 0, {
-    policyModel: "fixture/exact-model@work", fallbacks: ["fixture/fallback@work"], effectiveModel: "fallback",
-  });
-  assertRecovered(result, journal);
-  assert.match(result.stdout, /MARKER_VERIFIED /);
-  assert.equal(rows.filter(row => row.kind === "native-run").length, 1);
-});
-
-test("marker configured fallback preserves model-version suffixes during receipt comparison", (t) => {
-  const { result, journal } = deadlineRecovery(t, 590_000, null, 0, {
-    fallbacks: ["fixture/fallback@20251001"], effectiveModel: "fallback",
-  });
-  assert.notEqual(result.status, 0);
-  assert.match(result.stderr, /stage=marker.reply-check/);
-  assert.equal(existsSync(journal), true);
-});
+for (const [label, options, rejected] of [
+  ["recovery strips auth profiles", { policyModel: "fixture/exact-model@work", fallbacks: ["fixture/fallback@work"], effectiveModel: "fallback" }],
+  ["rollback accepts configured fallback", { flow: "rollback", fallbacks: ["fixture/fallback"], effectiveModel: "fallback" }],
+  ["unconfigured effective model", { effectiveModel: "other-model" }, true],
+  ["different requested model", { requestedModel: "other-model", effectiveModel: "fallback" }, true],
+  ["model-version suffix is not an auth profile", { fallbacks: ["fixture/fallback@20251001"], effectiveModel: "fallback" }, true],
+]) {
+  markerCase(`marker receipt: ${label}`, { fallbacks: ["fixture/fallback"], ...options },
+    ({ events }) => assert.equal(events("native-run").length, 1), rejected && /stage=marker.reply-check/);
+}
