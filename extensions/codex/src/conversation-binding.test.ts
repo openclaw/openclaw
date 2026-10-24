@@ -561,6 +561,7 @@ function expectMethods(
 const {
   getSharedCodexAppServerClient: acquireClient,
   retainSharedCodexAppServerClientByInstanceId: retainClient,
+  retireSharedCodexAppServerClientIfCurrent: retireClient,
 } = sharedClientMocks;
 
 const NETWORK_PROXY_PLUGIN_CONFIG = {
@@ -828,22 +829,15 @@ it("does not recreate a detached conversation queued behind retirement", async (
   expect(bindings.read(identity)).toBeUndefined();
 });
 
-it.each([
-  {
-    label: "an incognito source bound to an ordinary destination",
-    sourceSessionKey: "agent:main:dashboard:incognito-source",
-    destinationSessionKey: "agent:main:telegram:ordinary-destination",
-    ephemeral: true,
-  },
-  {
-    label: "an ordinary source bound to an incognito destination",
-    sourceSessionKey: "agent:main:telegram:ordinary-source",
-    destinationSessionKey: "agent:main:dashboard:incognito-destination",
-    ephemeral: false,
-  },
-])(
-  "uses the persisted source lifecycle for $label",
-  async ({ sourceSessionKey, destinationSessionKey, ephemeral }) => {
+it.each([true, false])(
+  "uses the persisted source lifecycle, not the destination (ephemeral: %s)",
+  async (ephemeral) => {
+    const sourceSessionKey = ephemeral
+      ? "agent:main:dashboard:incognito-source"
+      : "agent:main:telegram:ordinary-source";
+    const destinationSessionKey = ephemeral
+      ? "agent:main:telegram:ordinary-destination"
+      : "agent:main:dashboard:incognito-destination";
     const sessionFile = path.join(tempDir, "mixed-source-lifecycle.jsonl");
     const bindingId = "binding-mixed-source-lifecycle";
     const storePath = path.join(tempDir, "mixed-source-lifecycle.sqlite");
@@ -852,13 +846,14 @@ it.each([
         { agentId: "main", sessionKey: sourceSessionKey, sessionId: "source-mixed-lifecycle" },
         storePath,
       );
+      const threadId = "thread-mixed-source-lifecycle";
       const { client, operations } = replyingClient(
-        "thread-mixed-source-lifecycle",
+        threadId,
         "turn-mixed-source-lifecycle",
         "Bound reply",
         "client-mixed-source-lifecycle",
         {
-          "thread/start": () => threadResult(tempDir, "thread-mixed-source-lifecycle"),
+          "thread/start": () => threadResult(tempDir, threadId),
           "thread/unsubscribe": () => ({}),
         },
       );
@@ -882,10 +877,7 @@ it.each([
         });
       const sql = ephemeral ? observeHostDataSql() : undefined;
       try {
-        await expect(run()).resolves.toMatchObject({
-          handled: true,
-          reply: { text: "Bound reply" },
-        });
+        await expectReply(run(), "Bound reply");
         if (sql) {
           expect(sql.queries).toEqual([]);
         }
@@ -896,17 +888,15 @@ it.each([
       expect(operations.map(({ method }) => method)).toEqual(["thread/start", "turn/start"]);
       if (ephemeral) {
         expect(operations[0]?.params.ephemeral).toBe(true);
-        await expect(
-          consumeThread(client, "thread-mixed-source-lifecycle"),
-        ).resolves.toBeUndefined();
+        await expect(consumeThread(client, threadId)).resolves.toBeUndefined();
       } else {
         expect(operations[0]?.params).not.toHaveProperty("ephemeral");
-        const ownership = await consumeThread(client, "thread-mixed-source-lifecycle");
+        const ownership = await consumeThread(client, threadId);
         expect(ownership).toEqual(expect.objectContaining({ release: expect.any(Function) }));
         await expect(
           retainThread(
             client,
-            "thread-mixed-source-lifecycle",
+            threadId,
             ownership?.release,
             ownership?.configFingerprint,
             ownership?.serviceTier,
@@ -918,7 +908,7 @@ it.each([
 
       expect(operations.at(-1)).toEqual({
         method: "thread/unsubscribe",
-        params: { threadId: "thread-mixed-source-lifecycle" },
+        params: { threadId },
       });
       expect(bindings.read({ kind: "conversation", bindingId })).toBeUndefined();
     } finally {
@@ -2012,9 +2002,7 @@ it.each([
     sharedClientMocks.clearSharedCodexAppServerClientIfCurrentAndUnclaimed
       .mockReturnValueOnce({ found: true, closed: false })
       .mockReturnValue({ found: false, closed: false });
-    sharedClientMocks.retireSharedCodexAppServerClientIfCurrent
-      .mockReturnValueOnce({ activeLeases: 2, closed: false })
-      .mockReturnValue(undefined);
+    retireClient.mockReturnValueOnce({ activeLeases: 2, closed: false }).mockReturnValue(undefined);
   }
   await expectReply(
     runBoundClaim(sessionFile, {}, "agent:main:dashboard:incognito-reconnect"),
@@ -2027,11 +2015,9 @@ it.each([
       : ["thread/read", "thread/resume"],
   );
   if (retired) {
-    expect(
-      sharedClientMocks.retireSharedCodexAppServerClientIfCurrent,
-    ).toHaveBeenCalledExactlyOnceWith(client);
+    expect(retireClient).toHaveBeenCalledExactlyOnceWith(client);
   } else {
-    expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
+    expect(retireClient).not.toHaveBeenCalled();
   }
   expect(closeAndWait).not.toHaveBeenCalled();
   await expect(readBinding(sessionFile)).resolves.toEqual(cleaned ? undefined : binding);
@@ -2089,7 +2075,7 @@ it.each([
     await expectReply(runBoundClaim(sessionFile), `Codex app-server turn failed: ${message}`);
 
     expectMethods(request, ["turn/start"]);
-    expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
+    expect(retireClient).not.toHaveBeenCalled();
     await expect(readBinding(sessionFile)).resolves.toMatchObject({ threadId: "thread-1" });
   },
 );
@@ -2137,7 +2123,7 @@ it("interrupts an indeterminate incognito native turn before cleanup", async () 
       "turn/interrupt",
       "thread/unsubscribe",
     ]);
-    expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
+    expect(retireClient).not.toHaveBeenCalled();
     expect(activeTurn(bindingIdentity(sessionFile))).toBeUndefined();
     await expect(readBinding(sessionFile)).resolves.toBeUndefined();
   } finally {
@@ -2198,7 +2184,7 @@ it("interrupts a timed-out incognito turn before removing active tracking and ha
     );
     expectMethods(request, ["turn/start", "turn/interrupt", "thread/unsubscribe"]);
     expect(cleanupEvents).toEqual(["interrupt", "turn completed", "unsubscribe"]);
-    expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
+    expect(retireClient).not.toHaveBeenCalled();
     expect(activeTurn(identity)).toBeUndefined();
     await expect(readBinding(sessionFile)).resolves.toBeUndefined();
   } finally {
@@ -2231,7 +2217,7 @@ it.each([
       sharedClientMocks.clearSharedCodexAppServerClientIfCurrentAndUnclaimed
         .mockReturnValueOnce({ found: true, closed: false })
         .mockReturnValue({ found: false, closed: false });
-      sharedClientMocks.retireSharedCodexAppServerClientIfCurrent
+      retireClient
         .mockReturnValueOnce({ activeLeases: 2, closed: false })
         .mockReturnValue(undefined);
       const result = runBoundClaim(sessionFile, {}, sessionKey);
@@ -2246,7 +2232,7 @@ it.each([
       );
       if (acknowledged) {
         expect(activeTurn(identity)).toMatchObject({ threadId: "thread-1", turnId: "turn-1" });
-        expect(sharedClientMocks.retireSharedCodexAppServerClientIfCurrent).not.toHaveBeenCalled();
+        expect(retireClient).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(5_000);
       }
 
@@ -2255,9 +2241,7 @@ it.each([
         "Codex app-server turn failed: codex app-server bound turn timed out",
       );
       expectMethods(request, ["turn/start", "turn/interrupt"]);
-      expect(
-        sharedClientMocks.retireSharedCodexAppServerClientIfCurrent,
-      ).toHaveBeenCalledExactlyOnceWith(client);
+      expect(retireClient).toHaveBeenCalledExactlyOnceWith(client);
       expect(closeAndWait).not.toHaveBeenCalled();
       expect(activeTurn(identity)).toBeUndefined();
       if (sessionKey) {
