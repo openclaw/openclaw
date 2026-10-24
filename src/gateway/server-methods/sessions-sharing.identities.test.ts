@@ -2,6 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { Value } from "typebox/value";
 import { afterEach, expect, it, vi } from "vitest";
 import { SessionMembersListEvidenceResultSchema } from "../../../packages/gateway-protocol/src/index.js";
+import type { SessionMemberPermissionLevel } from "../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import * as combinedStore from "../../config/sessions/combined-store-gateway.native.js";
@@ -642,67 +643,46 @@ it("authorizes tickets against their signed agent and issuing Gateway", () =>
 
 it("projects current participation and exact choices through the sharing handlers", () =>
   withState(async () => {
-    const owner = ensureProfileForEmail("owner@example.test");
+    const profile = (name: string, role?: string) => {
+      const created = ensureProfileForEmail(`${name}@example.test`);
+      if (role) {
+        setUserProfileRole(created.id, role);
+      }
+      return created;
+    };
+    const owner = profile("owner");
     const gatewayOwner = ensureGatewayOwnerProfile("Gateway owner");
-    const baseline = ensureProfileForEmail("baseline@example.test");
-    const explicit = ensureProfileForEmail("explicit@example.test");
-    const inherited = ensureProfileForEmail("inherited@example.test");
-    const viewOnly = ensureProfileForEmail("view-only@example.test");
-    const limited = ensureProfileForEmail("limited@example.test");
-    const denied = ensureProfileForEmail("denied@example.test");
-    const sandboxed = ensureProfileForEmail("sandboxed@example.test");
-    const wrongAgent = ensureProfileForEmail("other-agent@example.test");
+    const baseline = profile("baseline");
+    const explicit = profile("explicit");
+    const inherited = profile("inherited", "writer");
+    const viewOnly = profile("view-only", "viewOnly");
+    const limited = profile("limited", "limited");
+    const denied = profile("denied", "denied");
+    const sandboxed = profile("sandboxed", "sandboxed");
+    const wrongAgent = profile("other-agent", "otherAgent");
+    type Role = NonNullable<NonNullable<OpenClawConfig["gateway"]>["roles"]>["definitions"][string];
+    const role = (others: Role["sessions"]["others"], overrides: Partial<Role> = {}): Role => ({
+      sessions: { others },
+      agents: "*",
+      scopes: ["operator.read", "operator.write"],
+      ...overrides,
+    });
     const cfg: OpenClawConfig = {
       gateway: {
         roles: {
           default: "baseline",
           definitions: {
-            baseline: {
-              sessions: { others: "suggest" },
-              agents: "*",
-              scopes: ["operator.read", "operator.write"],
-            },
-            writer: {
-              sessions: { others: "write" },
-              agents: "*",
-              scopes: ["operator.read", "operator.write"],
-            },
-            viewOnly: {
-              sessions: { others: "view" },
-              agents: "*",
-              scopes: ["operator.read", "operator.write"],
-            },
-            limited: { sessions: { others: "suggest" }, agents: "*", scopes: ["operator.read"] },
-            denied: {
-              sessions: { others: "none" },
-              agents: "*",
-              scopes: ["operator.read", "operator.write"],
-            },
-            sandboxed: {
-              sessions: { others: "write" },
-              agents: "*",
-              scopes: ["operator.read", "operator.write"],
-              sandbox: "required",
-            },
-            otherAgent: {
-              sessions: { others: "write" },
-              agents: ["other"],
-              scopes: ["operator.read", "operator.write"],
-            },
+            baseline: role("suggest"),
+            writer: role("write"),
+            viewOnly: role("view"),
+            limited: role("suggest", { scopes: ["operator.read"] }),
+            denied: role("none"),
+            sandboxed: role("write", { sandbox: "required" }),
+            otherAgent: role("write", { agents: ["other"] }),
           },
         },
       },
     };
-    for (const [profile, role] of [
-      [inherited, "writer"],
-      [limited, "limited"],
-      [viewOnly, "viewOnly"],
-      [denied, "denied"],
-      [sandboxed, "sandboxed"],
-      [wrongAgent, "otherAgent"],
-    ] as const) {
-      setUserProfileRole(profile.id, role);
-    }
     setRuntimeConfigSnapshot(cfg);
     const sessionKey = "agent:main:permissions";
     await seed(sessionKey, "permissions", {
@@ -721,64 +701,41 @@ it("projects current participation and exact choices through the sharing handler
     await invoke("session.members.add", { identityId: explicit.id });
     const first = await read();
     const permission = (id: string) => first.permissions?.find((row) => row.identityId === id);
-    expect(permission(baseline.id)).toEqual({
-      identityId: baseline.id,
-      level: "read",
-      options: ["read", "send"],
-    });
-    expect(permission(explicit.id)).toEqual({
-      identityId: explicit.id,
-      level: "send",
-      options: ["read", "send"],
-    });
-    expect(permission(inherited.id)).toEqual({
-      identityId: inherited.id,
-      level: "send",
-      options: ["send"],
-    });
-    expect(permission(limited.id)).toEqual({
-      identityId: limited.id,
-      level: "read",
-      options: ["read"],
-    });
-    expect(permission(sandboxed.id)).toEqual({
-      identityId: sandboxed.id,
-      level: "read",
-      options: ["read"],
-    });
-    expect(permission(wrongAgent.id)).toEqual({
-      identityId: wrongAgent.id,
-      level: "read",
-      options: ["read"],
-    });
+    const expectedPermission = (
+      identityId: string,
+      level: SessionMemberPermissionLevel,
+      options: SessionMemberPermissionLevel[],
+    ) => ({ identityId, level, options });
+    for (const [person, level, options] of [
+      [baseline, "read", ["read", "send"]],
+      [explicit, "send", ["read", "send"]],
+      [inherited, "send", ["send"]],
+      [limited, "read", ["read"]],
+      [sandboxed, "read", ["read"]],
+      [wrongAgent, "read", ["read"]],
+    ] as const) {
+      expect(permission(person.id)).toEqual(expectedPermission(person.id, level, [...options]));
+    }
     expect(permission(denied.id)).toBeUndefined();
     expect(permission(owner.id)).toBeUndefined();
     expect(permission(gatewayOwner.id)).toBeUndefined();
 
     await invoke("session.members.add", { identityId: baseline.id });
-    expect((await read()).permissions).toContainEqual({
-      identityId: baseline.id,
-      level: "send",
-      options: ["read", "send"],
-    });
+    const expectPermission = async (
+      person: { id: string },
+      level: SessionMemberPermissionLevel,
+      options: SessionMemberPermissionLevel[],
+    ) =>
+      expect((await read()).permissions).toContainEqual(
+        expectedPermission(person.id, level, options),
+      );
+    await expectPermission(baseline, "send", ["read", "send"]);
     await invoke("session.members.remove", { identityId: baseline.id });
     await invoke("session.visibility.set", { visibility: "suggest" });
-    expect((await read()).permissions).toContainEqual({
-      identityId: baseline.id,
-      level: "suggest",
-      options: ["suggest", "send"],
-    });
-    expect((await read()).permissions).toContainEqual({
-      identityId: viewOnly.id,
-      level: "read",
-      options: ["read", "send"],
-    });
+    await expectPermission(baseline, "suggest", ["suggest", "send"]);
+    await expectPermission(viewOnly, "read", ["read", "send"]);
     setUserProfileRole(baseline.id, "writer");
-    expect((await read()).permissions).toContainEqual({
-      identityId: baseline.id,
-      level: "send",
-      options: ["send"],
-    });
+    await expectPermission(baseline, "send", ["send"]);
 
     for (const visibility of ["shared", "draft"] as const) {
       await invoke("session.visibility.set", { visibility });
@@ -789,16 +746,12 @@ it("projects current participation and exact choices through the sharing handler
     setRuntimeConfigSnapshot(unconfiguredCfg);
     requestContext = context(vi.fn(), unconfiguredCfg);
     const unconfigured = await read();
-    expect(unconfigured.permissions).toContainEqual({
-      identityId: baseline.id,
-      level: "read",
-      options: ["read", "send"],
-    });
-    expect(unconfigured.permissions).toContainEqual({
-      identityId: explicit.id,
-      level: "send",
-      options: ["read", "send"],
-    });
+    expect(unconfigured.permissions).toContainEqual(
+      expectedPermission(baseline.id, "read", ["read", "send"]),
+    );
+    expect(unconfigured.permissions).toContainEqual(
+      expectedPermission(explicit.id, "send", ["read", "send"]),
+    );
     const legacy = await invoke("session.members.list");
     expect(legacy[0]?.[1]).not.toHaveProperty("permissions");
   }));

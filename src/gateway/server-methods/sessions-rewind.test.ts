@@ -118,6 +118,43 @@ const tempDirs = createTempDirTracker();
 const storedImageId = "stored-image.png";
 const storedImagePath = `/state/media/inbound/${storedImageId}`;
 const storedImageData = Buffer.from("stored-image");
+const sourceScope = { agentId: "main", sessionKey };
+const transcriptScope = { ...sourceScope, sessionId: sourceSessionId };
+const imageAttachment = {
+  mimeType: "image/png",
+  data: storedImageData.toString("base64"),
+};
+const editorReply = {
+  editorText: "edit me",
+  editorAttachments: [{ mimeType: "image/png", data: "aW1hZ2U=" }, imageAttachment],
+};
+
+function sourceStore() {
+  return resolveSessionStorePathCore(undefined, { agentId: "main" });
+}
+
+function readEntry(key = sessionKey) {
+  return readSessionEntryReadOnlyInWorker({ agentId: "main", sessionKey: key });
+}
+
+function entries() {
+  return readSessionEntrySummariesInWorker({ agentId: "main", storePath: sourceStore() });
+}
+
+function invalid(respond: ReturnType<typeof vi.fn>, message: string) {
+  expectCutFailure(respond, {
+    code: ErrorCodes.INVALID_REQUEST,
+    message: expect.stringContaining(message),
+  });
+}
+
+function sourceTarget() {
+  return captureSessionTarget({
+    ...sourceScope,
+    storeScope: sourceStore(),
+    incarnation: sourceSessionId,
+  });
+}
 
 beforeEach(async () => {
   mocks.readMediaBuffer.mockReset().mockImplementation(async (id: string) => {
@@ -134,12 +171,12 @@ beforeEach(async () => {
   setActivePluginRegistry(createEmptyPluginRegistry());
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-rewind-handler-"));
   setRuntimeConfigSnapshot(cfg);
-  await upsertSessionEntryCore(
-    { agentId: "main", sessionKey },
-    { sessionId: sourceSessionId, updatedAt: Date.now() },
-  );
-  const scope = { agentId: "main", sessionId: sourceSessionId, sessionKey };
-  await appendTranscriptEvent(scope, { type: "session", id: sourceSessionId, version: 3 });
+  await upsertSessionEntryCore(sourceScope, { sessionId: sourceSessionId, updatedAt: Date.now() });
+  await appendTranscriptEvent(transcriptScope, {
+    type: "session",
+    id: sourceSessionId,
+    version: 3,
+  });
   for (const [eventId, parentId, message] of [
     [
       "user-entry",
@@ -163,9 +200,9 @@ beforeEach(async () => {
     ["assistant-entry", "user-entry", { role: "assistant", content: "answer" }],
     ["off-path-entry", null, { role: "user", content: "inactive" }],
   ] as const) {
-    await appendTranscriptMessage(scope, { eventId, parentId, message });
+    await appendTranscriptMessage(transcriptScope, { eventId, parentId, message });
   }
-  await appendTranscriptEvent(scope, {
+  await appendTranscriptEvent(transcriptScope, {
     type: "leaf",
     id: "active-leaf",
     parentId: "off-path-entry",
@@ -175,14 +212,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  clearQueuedSessionWork(
-    captureSessionTarget({
-      storeScope: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-      sessionKey,
-      agentId: "main",
-      incarnation: sourceSessionId,
-    }),
-  );
+  clearQueuedSessionWork(sourceTarget());
 
   try {
     for (const stateDir of tempDirs.dirs) {
@@ -248,7 +278,7 @@ function enqueueSessionWork(label: string): QueuedSessionWork {
       prompt: `${label} follow-up`,
       turnAdoptionLifecycle: { admission: "cancel-only", onAdopted: () => {}, onSettled: vi.fn() },
     },
-    { agentId: "main", sessionId: sourceSessionId, sessionKey },
+    transcriptScope,
   );
   const registration = registerSource(`queued-${label}`);
   followup.abortSignal = registration.controller.signal;
@@ -261,12 +291,7 @@ function enqueueSessionWork(label: string): QueuedSessionWork {
 
 function registerSource(runId: string) {
   const registration = registerChatAbortController({
-    target: captureSessionTarget({
-      storeScope: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-      sessionKey,
-      incarnation: sourceSessionId,
-      agentId: "main",
-    }),
+    target: sourceTarget(),
     runId,
     sessionId: sourceSessionId,
     sessionKey,
@@ -296,7 +321,7 @@ async function expectSessionWorkCleared(work: QueuedSessionWork): Promise<void> 
 }
 
 async function archiveSourceSession(storePath?: string): Promise<void> {
-  const entry = await patchSessionEntryCore({ agentId: "main", sessionKey, storePath }, () => ({
+  const entry = await patchSessionEntryCore({ ...sourceScope, storePath }, () => ({
     archivedAt: Date.now(),
   }));
   expectDefined(entry, "source session");
@@ -315,12 +340,7 @@ describe("session message-cut methods", () => {
       code: ErrorCodes.FORBIDDEN,
       message: expect.stringContaining('agent "main"'),
     });
-    expect(
-      await readSessionEntrySummariesInWorker({
-        agentId: "main",
-        storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-      }),
-    ).toHaveLength(1);
+    expect(await entries()).toHaveLength(1);
 
     const rewind = await invoke("sessions.rewind", "user-entry", options);
     expectCutReply(rewind, expect.any(Object));
@@ -338,12 +358,11 @@ describe("session message-cut methods", () => {
     const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
 
     expectCutReply(fork, expect.objectContaining({ sessionKey: expect.any(String) }));
-    expect(
-      await readSessionEntryReadOnlyInWorker({ agentId: "main", sessionKey: forkKey ?? "" }),
-    ).toMatchObject({ createdActor: { type: "human", id: profile.id }, sandbox: "required" });
-    expect(
-      await readSessionEntryReadOnlyInWorker({ agentId: "main", sessionKey }),
-    ).not.toHaveProperty("sandbox");
+    expect(await readEntry(forkKey ?? "")).toMatchObject({
+      createdActor: { type: "human", id: profile.id },
+      sandbox: "required",
+    });
+    expect(await readEntry()).not.toHaveProperty("sandbox");
   });
 
   it("returns an empty branch list for a not-yet-materialized session", async () => {
@@ -375,9 +394,7 @@ describe("session message-cut methods", () => {
       );
       mocks.readMediaBuffer.mockImplementation(async (id: string) => {
         const result = await readMedia(id);
-        expect(
-          (await readSessionEntryReadOnlyInWorker({ agentId: "main", sessionKey }))?.sessionId,
-        ).not.toBe(sourceSessionId);
+        expect((await readEntry())?.sessionId).not.toBe(sourceSessionId);
         if (revoke) {
           current = false;
         }
@@ -438,10 +455,7 @@ describe("session message-cut methods", () => {
 
     const respond = await invoke("sessions.branches.switch", "missing");
 
-    expectCutFailure(respond, {
-      code: ErrorCodes.INVALID_REQUEST,
-      message: expect.stringContaining("branch entry not found"),
-    });
+    invalid(respond, "branch entry not found");
     expectSessionWorkQueued(work);
   });
 
@@ -473,43 +487,37 @@ describe("session message-cut methods", () => {
     ["assistant-entry", "branch is already active"],
   ])("rejects invalid branch switch target %s", async (entryId, message) => {
     const respond = await invoke("sessions.branches.switch", entryId);
-    expectCutFailure(respond, {
-      code: ErrorCodes.INVALID_REQUEST,
-      message: expect.stringContaining(message),
-    });
+    invalid(respond, message);
   });
 
   it.each(["sessions.rewind", "sessions.fork"] as const)(
     "%s restores canonical inbound media facts and skips invalid URI hints",
     async (method) => {
-      await appendTranscriptMessage(
-        { agentId: "main", sessionId: sourceSessionId, sessionKey },
-        {
-          eventId: "canonical-image",
-          parentId: "assistant-entry",
-          message: {
-            role: "user",
-            content: "canonical image prompt",
-            __openclaw: {
-              media: [
-                { url: `media://inbound/${storedImageId}`, contentType: "image/png" },
-                { url: "media://inbound/%73tored-image.png", contentType: "image/png" },
-                { url: `media://outbound/${storedImageId}`, contentType: "image/png" },
-                { url: "media://inbound/nested%2Fimage.png", contentType: "image/png" },
-                { url: `media://inbound/${storedImageId}?query=1`, contentType: "image/png" },
-                { url: "https://example.test/stored-image.png", contentType: "image/png" },
-                { url: "file:///tmp/stored-image.png", contentType: "image/png" },
-              ],
-            },
+      await appendTranscriptMessage(transcriptScope, {
+        eventId: "canonical-image",
+        parentId: "assistant-entry",
+        message: {
+          role: "user",
+          content: "canonical image prompt",
+          __openclaw: {
+            media: [
+              { url: `media://inbound/${storedImageId}`, contentType: "image/png" },
+              { url: "media://inbound/%73tored-image.png", contentType: "image/png" },
+              { url: `media://outbound/${storedImageId}`, contentType: "image/png" },
+              { url: "media://inbound/nested%2Fimage.png", contentType: "image/png" },
+              { url: `media://inbound/${storedImageId}?query=1`, contentType: "image/png" },
+              { url: "https://example.test/stored-image.png", contentType: "image/png" },
+              { url: "file:///tmp/stored-image.png", contentType: "image/png" },
+            ],
           },
         },
-      );
+      });
       const respond = await invoke(method, "canonical-image");
       expectCutReply(
         respond,
         expect.objectContaining({
           editorText: "canonical image prompt",
-          editorAttachments: [{ mimeType: "image/png", data: storedImageData.toString("base64") }],
+          editorAttachments: [imageAttachment],
         }),
       );
       expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(1);
@@ -522,7 +530,7 @@ describe("session message-cut methods", () => {
   );
 
   it("returns editor text for rewind and a new key for fork", async () => {
-    await patchSessionEntryCore({ agentId: "main", sessionKey }, () => ({
+    await patchSessionEntryCore(sourceScope, () => ({
       sandboxMode: "off",
       nativeRuntimeConsent: "native-fixture",
     }));
@@ -541,21 +549,14 @@ describe("session message-cut methods", () => {
     expectCutReply(
       fork,
       expect.objectContaining({
-        editorText: "edit me",
-        editorAttachments: [
-          { mimeType: "image/png", data: "aW1hZ2U=" },
-          { mimeType: "image/png", data: storedImageData.toString("base64") },
-        ],
+        ...editorReply,
         sessionKey: expect.any(String),
       }),
     );
     expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(2);
     const forkKey = (fork.mock.calls[0]?.[1] as { sessionKey?: string } | undefined)?.sessionKey;
     expect(forkKey).toBeTruthy();
-    const forkEntry = await readSessionEntryReadOnlyInWorker({
-      agentId: "main",
-      sessionKey: forkKey ?? "",
-    });
+    const forkEntry = await readEntry(forkKey ?? "");
     expect(forkEntry).not.toHaveProperty("sandboxMode");
     expect(forkEntry).not.toHaveProperty("nativeRuntimeConsent");
     expect(forkEntry).toMatchObject({
@@ -568,27 +569,12 @@ describe("session message-cut methods", () => {
     );
 
     const rewind = await invoke("sessions.rewind", "user-entry");
-    expectCutReply(rewind, {
-      editorText: "edit me",
-      editorAttachments: [
-        { mimeType: "image/png", data: "aW1hZ2U=" },
-        { mimeType: "image/png", data: storedImageData.toString("base64") },
-      ],
-    });
+    expectCutReply(rewind, editorReply);
     expect(mocks.readMediaBuffer).toHaveBeenCalledTimes(4);
-    expect(
-      (await readSessionEntryReadOnlyInWorker({ agentId: "main", sessionKey }))?.sandboxMode,
-    ).toBe("off");
-    expect(
-      (
-        await readSessionEntrySummariesInWorker({
-          agentId: "main",
-          storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-        })
-      )
-        .map((row) => row.sessionKey)
-        .toSorted(),
-    ).toEqual([sessionKey, forkKey ?? ""].toSorted());
+    expect((await readEntry())?.sandboxMode).toBe("off");
+    expect((await entries()).map((row) => row.sessionKey).toSorted()).toEqual(
+      [sessionKey, forkKey ?? ""].toSorted(),
+    );
   });
 
   it.each([
@@ -606,7 +592,7 @@ describe("session message-cut methods", () => {
   });
 
   it("rechecks archived state after waiting for the session lifecycle lock", async () => {
-    const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+    const storePath = sourceStore();
     const { release, settled: archiving } = await holdLifecycle(storePath, sourceSessionId, () =>
       archiveSourceSession(storePath),
     );
@@ -628,10 +614,7 @@ describe("session message-cut methods", () => {
     ["off-path-entry", "not on the active path"],
   ])("returns a typed validation error for %s", async (entryId, message) => {
     const respond = await invoke("sessions.rewind", entryId);
-    expectCutFailure(respond, {
-      code: ErrorCodes.INVALID_REQUEST,
-      message: expect.stringContaining(message),
-    });
+    invalid(respond, message);
   });
 
   it.each([
@@ -650,7 +633,7 @@ describe("session message-cut methods", () => {
           sessionKey,
           sessionId: sourceSessionId,
           agentId: "main",
-          storeScope: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+          storeScope: sourceStore(),
         },
       );
       const release = await claimRpcSourceForTest(source, { executionStarted });
@@ -691,13 +674,6 @@ function installUpstreamForkHarness(
           },
         }
       : {}),
-  });
-}
-
-function entries() {
-  return readSessionEntrySummariesInWorker({
-    agentId: "main",
-    storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
   });
 }
 
