@@ -128,18 +128,32 @@ suite.define(() => {
       await announceUpdate(page, gateway);
       await startUpdate(page);
       const dialog = updateDialog(page);
+      if (
+        (await dialog.locator(".update-run-view__technical-group").getAttribute("open")) === null
+      ) {
+        await dialog.locator(".update-run-view__technical-group > summary").click();
+      }
+      await dialog.locator(".update-run-view__report-details > summary").click();
       await text(dialog, failureText).first().waitFor();
       expect(await dialog.textContent()).toContain("openclaw triage");
       expect(await dialog.textContent()).toContain("Package install did not verify on disk.");
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
       expect(await gateway.getRequests("openclaw.chat")).toHaveLength(0);
       await gateway.setMethodResponse("update.status", { activeRun: null, lastRun: run });
-      await dialog.getByRole("button", { name: "Review update", exact: true }).click();
-      await page.waitForURL("**/settings/updates");
-      await page.locator("openclaw-config-page").waitFor();
-      expect(await dialog.count()).toBe(0);
-      expect(await page.locator("openclaw-sidebar-attention").count()).toBe(0);
-      await text(page.locator("openclaw-update-run-view"), failureText).first().waitFor();
+      await dialog.getByRole("button", { name: "Close", exact: true }).click();
+      await page.keyboard.press("Control+Shift+,");
+      await page.locator('.settings-sidebar a[href="/settings/updates"]').click();
+      await page.getByRole("button", { name: "View result", exact: true }).click();
+      const retained = updateDialog(page);
+      if (
+        (await retained.locator(".update-run-view__technical-group").getAttribute("open")) === null
+      ) {
+        await retained.locator(".update-run-view__technical-group > summary").click();
+      }
+      await retained.locator(".update-run-view__report-details > summary").click();
+      await text(retained, failureText).first().waitFor();
+      expect(await retained.locator("[data-run-id]").getAttribute("data-run-id")).toBe(run.runId);
+      expect(await gateway.getRequests("update.run")).toHaveLength(1);
       expect(pageErrors).toEqual([]);
     });
   });
@@ -161,7 +175,10 @@ suite.define(() => {
       await startUpdate(page);
       await button(page, "Updating…").waitFor();
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
-      await button(page, "Close").click();
+      await page
+        .locator("openclaw-modal-dialog openclaw-modal-actions")
+        .getByRole("button", { name: "Close", exact: true })
+        .click();
       const updateIssue = await openUpdateIssue(page);
       await text(updateIssue, restartingText).first().waitFor();
       await updateIssue.locator(".sidebar-update-card__action").click();
@@ -221,6 +238,12 @@ suite.define(() => {
 
       try {
         const dialog = updateDialog(page);
+        if (
+          (await dialog.locator(".update-run-view__technical-group").getAttribute("open")) === null
+        ) {
+          await dialog.locator(".update-run-view__technical-group > summary").click();
+        }
+        await dialog.locator(".update-run-view__diagnostics > summary").click();
         await text(dialog.locator(".update-run-view__details"), expectedText).waitFor();
         expect(await dialog.locator('[data-oracle="version"]').getAttribute("data-state")).toBe(
           "fail",
@@ -282,7 +305,7 @@ suite.define(() => {
 
         await openUpdateConfirmation(page);
         if (run) {
-          await button(page, "Retry update").click();
+          await button(page, "Try again").click();
         }
         expect(await page.locator("openclaw-modal-dialog").getAttribute("label")).toBe(
           "Update Mac app + Gateway",
@@ -314,7 +337,7 @@ suite.define(() => {
             const confirm = buttons.find(
               (element) => element.textContent?.trim() === "Update Mac app and restart",
             );
-            const retry = buttons.find((element) => element.textContent?.trim() === "Retry update");
+            const retry = buttons.find((element) => element.textContent?.trim() === "Try again");
             return {
               nativeUpdateDialogPresent: Boolean(modal),
               nativeUpdateDialogOpen: modal?.querySelector("dialog")?.open ?? false,

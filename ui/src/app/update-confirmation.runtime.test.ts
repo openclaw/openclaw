@@ -55,7 +55,8 @@ let originalWebkit: PropertyDescriptor | undefined;
 
 function findButton(label: string): HTMLButtonElement {
   const button = [...document.body.querySelectorAll("button")].find(
-    (candidate) => candidate.textContent?.trim() === label,
+    (candidate) =>
+      candidate.textContent?.trim() === label || candidate.getAttribute("aria-label") === label,
   );
   if (!(button instanceof HTMLButtonElement)) {
     throw new Error(`Expected ${label} button`);
@@ -465,7 +466,7 @@ it.each(["close", "retire"] as const)(
     });
     const { modal } = await getRenderedModalDialog(document.body);
     const report = modal.querySelector(".update-run-view");
-    const check = findButton("Check status");
+    const check = findButton("Refresh status");
     try {
       check.click();
       check.click();
@@ -548,6 +549,130 @@ it.each(["existing", "started", "initial"] as const)(
   },
 );
 
+it.each(["Report failure", "Diagnose"] as const)(
+  "closes the confirmation before handing off %s for a failure created after confirmation",
+  async (action) => {
+    const stream = createProgressStream();
+    let ownedFailureId: string | null = null;
+    const onReportFailure = vi.fn();
+    const onDiagnoseFailure = vi.fn();
+    const { settled } = startUpdate({
+      onReportFailure,
+      onDiagnoseFailure,
+      readFailureActions: (attemptId) => ({
+        reportable: attemptId !== null && attemptId === ownedFailureId,
+        diagnosable: attemptId !== null && attemptId === ownedFailureId,
+        canReport: true,
+        canDiagnose: true,
+      }),
+      watchUpdateProgress: stream.watchUpdateProgress,
+    });
+    await getRenderedModalDialog(document.body);
+    findButton("Update and restart").click();
+
+    const failedRun = createUpdateRunFixture({
+      status: "failed",
+      phase: "finished",
+      reason: "build-failed",
+    });
+    ownedFailureId = failedRun.runId;
+    await stream.push({ run: failedRun, busy: false, connected: true, failure: null });
+    expect(document.querySelector(".exec-approval-title")?.textContent).toBe(
+      "Couldn’t finish the update.",
+    );
+    expect(document.querySelector(".update-run-view__heading")).toBeNull();
+    expect(
+      [...document.querySelectorAll(".update-run-view > details > summary")].map(
+        (node) => node.textContent,
+      ),
+    ).toEqual(["Update steps", "Technical details"]);
+    const report = findButton("Report failure");
+    const diagnose = findButton("Diagnose");
+    expect(report.disabled).toBe(false);
+    expect(diagnose.disabled).toBe(false);
+    findButton(action).click();
+    expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+    expect(onReportFailure).toHaveBeenCalledTimes(action === "Report failure" ? 1 : 0);
+    expect(onDiagnoseFailure).toHaveBeenCalledTimes(action === "Diagnose" ? 1 : 0);
+    const callback = action === "Report failure" ? onReportFailure : onDiagnoseFailure;
+    expect(callback).toHaveBeenCalledExactlyOnceWith(failedRun.runId);
+    await settled;
+  },
+);
+
+it("retires failure actions when the displayed run is replaced by another outcome", async () => {
+  const failedRun = createUpdateRunFixture({
+    status: "failed",
+    phase: "finished",
+    reason: "build-failed",
+  });
+  const stream = createProgressStream({
+    run: failedRun,
+    busy: false,
+    connected: true,
+    failure: null,
+  });
+  let ownedFailureId: string | null = failedRun.runId;
+  const onReportFailure = vi.fn();
+  const { settled } = startUpdate({
+    existingRun: failedRun,
+    onReportFailure,
+    readFailureActions: (attemptId) => ({
+      reportable: attemptId !== null && attemptId === ownedFailureId,
+      diagnosable: attemptId !== null && attemptId === ownedFailureId,
+      canReport: true,
+      canDiagnose: true,
+    }),
+    watchUpdateProgress: stream.watchUpdateProgress,
+  });
+  const { modal } = await getRenderedModalDialog(document.body);
+  expect(findButton("Report failure").disabled).toBe(false);
+
+  const replacement = createUpdateRunFixture({
+    status: "succeeded",
+    phase: "finished",
+    reason: null,
+  });
+  ownedFailureId = null;
+  await stream.push({ run: replacement, busy: false, connected: true, failure: null });
+  expect(
+    [...modal.querySelectorAll("button")].map((button) => button.textContent?.trim()),
+  ).not.toContain("Report failure");
+  expect(onReportFailure).not.toHaveBeenCalled();
+  findButton("Close").click();
+  await settled;
+});
+
+it("uses the current owner's failure identity for a non-ledger failure", async () => {
+  const stream = createProgressStream();
+  const onDiagnoseFailure = vi.fn();
+  const { settled } = startUpdate({
+    onDiagnoseFailure,
+    readFailureActions: (attemptId) => ({
+      reportable: false,
+      diagnosable: attemptId === "current-failure",
+      canReport: false,
+      canDiagnose: true,
+    }),
+    watchUpdateProgress: stream.watchUpdateProgress,
+  });
+  await getRenderedModalDialog(document.body);
+  findButton("Update and restart").click();
+  await stream.push({
+    run: null,
+    busy: false,
+    connected: true,
+    failure: "The update failed before a durable run was recorded.",
+    reportableFailureId: "current-failure",
+  });
+  const diagnose = findButton("Diagnose");
+  expect(diagnose.disabled).toBe(false);
+  diagnose.click();
+  expect(onDiagnoseFailure).toHaveBeenCalledExactlyOnceWith("current-failure");
+  expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+  await settled;
+});
+
 it.each([
   {
     name: "a retained failure",
@@ -607,9 +732,9 @@ it.each([
     const labels = new Set(
       [...modal.querySelectorAll("button")].map((button) => button.textContent?.trim()),
     );
-    expect(labels.has("Retry update")).toBe(recovery);
+    expect(labels.has("Try again")).toBe(recovery);
     expect(labels.has("Review update")).toBe(recovery);
-    expect(labels.has("Check status")).toBe(recovery);
+    expect(labels.has("Refresh status")).toBe(recovery);
     findButton("Close").click();
     await settled;
     expect(onAcknowledge).toHaveBeenCalledOnce();
@@ -694,18 +819,23 @@ it.each([
       expect(view).toBe(retainedView);
       expect(view.getAttribute("data-run-id")).toBe(run.runId);
       expect(view.getAttribute("data-run-status")).toBe(status);
-      expect(view.querySelector("h3")?.textContent).toContain(
+      expect(
+        (status === "running"
+          ? view.querySelector("h3")
+          : modal.querySelector(".exec-approval-title")
+        )?.textContent,
+      ).toContain(
         status === "running"
           ? "OpenClaw update in progress: verifying"
-          : `OpenClaw update ${status}`,
+          : "Couldn’t finish the update.",
       );
       const reportText = view.textContent;
-      const check = findButton("Check status");
+      const check = findButton("Refresh status");
       expect(check.disabled).toBe(false);
       if (status !== "failed") {
         expect(
           [...modal.querySelectorAll("button")].some(
-            (button) => button.textContent?.trim() === "Retry update",
+            (button) => button.textContent?.trim() === "Try again",
           ),
         ).toBe(false);
       }
@@ -722,7 +852,7 @@ it.each([
       await flushMicrotasks();
       expect(findButton("Checking status…").disabled).toBe(true);
       if (status === "failed") {
-        expect(findButton("Retry update").disabled).toBe(true);
+        expect(findButton("Try again").disabled).toBe(true);
       }
       check.click();
       pendingStatus.resolve();
@@ -737,14 +867,14 @@ it.each([
       expect(checkoutReads()).toHaveLength(checkoutReadsBeforeCheck + 1);
 
       statusResponse = Promise.reject(new Error("Status refresh unavailable"));
-      findButton("Check status").click();
+      findButton("Refresh status").click();
       await statusOperation;
       flush();
       expect(modal.textContent).toContain(
         "Could not check for updates: Status refresh unavailable",
       );
       expect(modal.textContent).not.toContain("Status refreshed.");
-      await waitForSolid(() => expect(findButton("Check status").disabled).toBe(false));
+      await waitForSolid(() => expect(findButton("Refresh status").disabled).toBe(false));
       expect(modal.querySelector(".update-run-view")).toBe(view);
       expect(view.textContent).toBe(reportText);
       const pendingRetry = createDeferred();
@@ -762,18 +892,18 @@ it.each([
       pendingRetry.resolve();
       await statusOperation;
       flush();
-      await waitForSolid(() => expect(findButton("Check status").disabled).toBe(false));
+      await waitForSolid(() => expect(findButton("Refresh status").disabled).toBe(false));
       expect(modal.textContent).not.toContain("Could not check for updates");
       expect(modal.querySelector(".update-run-view")).toBe(view);
       expect(view.textContent).toBe(reportText);
       harness.update({ phase: "connecting", client: null });
       await flushMicrotasks();
-      expect(findButton("Check status").disabled).toBe(true);
+      expect(findButton("Refresh status").disabled).toBe(true);
       expect(modal.textContent).toContain("Reconnect to the Gateway");
       if (status === "failed") {
-        expect(findButton("Retry update").disabled).toBe(true);
+        expect(findButton("Try again").disabled).toBe(true);
       }
-      findButton("Check status").click();
+      findButton("Refresh status").click();
       expect(checkoutReads()).toHaveLength(checkoutReadsBeforeCheck + 3);
       expect(request.mock.calls.filter(([method]) => method === "update.run")).toHaveLength(
         entry === "started" ? 1 : 0,

@@ -106,6 +106,7 @@ export function createControlUiDefaultResponses(scenario: {
   const now = new Date();
   const date = now.toISOString().slice(0, 10);
   return {
+    "node.list": { nodes: [] },
     "openclaw.chat.history": { turns: [] } satisfies SystemAgentChatHistoryResult,
     "sessions.usage": {
       updatedAt: now.getTime(),

@@ -27,6 +27,14 @@ export type UpdatesPageProps = {
   nowMs?: number;
 };
 
+export function reportFailureOnUpdatesRoute(
+  context: Pick<ApplicationContext, "navigate" | "overlays">,
+  attemptId: string,
+) {
+  context.navigate("updates");
+  return context.overlays.reportUpdateFailure(attemptId);
+}
+
 export function UpdatesPage(props: UpdatesPageProps) {
   const gateway = createMemo(() => projectGateway(props.context.gateway));
   const overlays = createMemo(() => projectOverlays(props.context.overlays));
@@ -39,6 +47,8 @@ export function UpdatesPage(props: UpdatesPageProps) {
       commandScope={snapshot().client ?? props.context.overlays}
       captureCommandPresentation={props.captureCommandPresentation}
       nativeDeviceSettings={props.context.nativeDeviceSettings}
+      appsClient={snapshot().client}
+      appsConnectionRevision={gateway().read().connectionRevision}
       configObject={props.configObject}
       gatewayVersion={config().read().serverVersion ?? snapshot().hello?.server?.version ?? null}
       controlUiCommit={CONTROL_UI_BUILD_INFO.commit}
@@ -63,16 +73,58 @@ export function UpdatesPage(props: UpdatesPageProps) {
       onAutomaticUpdatesChange={(enabled) =>
         props.context.runtimeConfig.patchForm(["update", "auto", "enabled"], enabled)
       }
-      onUpdateNow={() => {
+      onUpdateNow={(existingRun) => {
         const context = props.context;
         const update = overlays().read();
         return confirmAndStartUpdate({
+          existingRun,
           isCurrentTarget: context.overlays.captureUpdateTarget(),
           startGatewayUpdate: () => void context.overlays.runUpdate(),
           // The dialog outlives this page, so read live snapshots after each change.
           watchUpdateProgress: createUpdateProgressWatcher(context),
           onCheckStatus: () => context.overlays.refreshUpdateStatus(),
+          prepareRetry: async () => {
+            if (!(await context.overlays.refreshUpdateStatus())) {
+              return null;
+            }
+            const current = context.overlays.snapshot;
+            return {
+              updateAvailable: current.updateAvailable,
+              updateSchedule: current.updateSchedule,
+            };
+          },
           onAcknowledge: () => context.overlays.acknowledgeUpdateRun(),
+          onReportFailure: (attemptId) => {
+            if (
+              context.overlays.snapshot.reportableUpdateFailureId === attemptId &&
+              canReportUpdateFailure(context.gateway.snapshot)
+            ) {
+              // Confirmation can outlive this page; return to the owner of the report feedback.
+              void reportFailureOnUpdatesRoute(context, attemptId);
+            }
+          },
+          onDiagnoseFailure: (attemptId) => {
+            if (
+              context.overlays.snapshot.diagnosableUpdateFailureId === attemptId &&
+              canCallGatewayMethod(context.gateway.snapshot, "openclaw.chat", "operator.admin")
+            ) {
+              context.overlays.diagnoseUpdateFailure(attemptId);
+            }
+          },
+          readFailureActions: (attemptId) => ({
+            reportable:
+              Boolean(attemptId) &&
+              context.overlays.snapshot.reportableUpdateFailureId === attemptId,
+            diagnosable:
+              Boolean(attemptId) &&
+              context.overlays.snapshot.diagnosableUpdateFailureId === attemptId,
+            canReport: canReportUpdateFailure(context.gateway.snapshot),
+            canDiagnose: canCallGatewayMethod(
+              context.gateway.snapshot,
+              "openclaw.chat",
+              "operator.admin",
+            ),
+          }),
           updateAvailable: update.updateAvailable,
           updateSchedule: update.updateSchedule,
           // Keep Gateway routing: this row has no native-decline listener.

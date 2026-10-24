@@ -38,7 +38,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}settings/updates`);
         await waitForControlUiRoute(page, { pathname: "/settings/updates", routeId: "updates" });
         await page.locator(".settings-status", { hasText: "5 commits behind" }).waitFor();
-        await page.getByRole("button", { name: "Update Gateway…", exact: true }).click();
+        await page.getByRole("button", { name: "Update", exact: true }).click();
         await page.getByRole("dialog", { name: "Update Gateway", exact: true }).waitFor();
         const modal = page.locator("openclaw-modal-dialog");
         const summary = modal.locator(".exec-approval-command > div").first();

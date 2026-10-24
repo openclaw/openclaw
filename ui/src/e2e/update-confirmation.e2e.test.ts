@@ -1,6 +1,8 @@
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, waitForConfirmModal } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { createUpdateRunFixture } from "./update-run.test-support.ts";
@@ -92,6 +94,10 @@ function createFailedRun() {
     phase: "finished" as const,
     reason: "build-failed",
     finishedAtMs: Date.now(),
+    steps: [
+      { step: "requested", status: "completed" },
+      { step: "staging", status: "failed", detail: "Update staging failed." },
+    ],
   };
 }
 
@@ -179,10 +185,20 @@ suite.define(() => {
         await button(page, "Update and restart").click();
         await gateway.waitForRequest("update.run");
         expect(await gateway.getRequests("update.run")).toHaveLength(1);
-        await button(page, "Retry update").waitFor();
+        await button(page, "Try again").waitFor();
+        if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+          await page.screenshot({
+            animations: "disabled",
+            fullPage: false,
+            path: path.join(
+              createControlUiE2eArtifactDir("updates-settings-proof"),
+              "failed-update-dialog.png",
+            ),
+          });
+        }
         if (restore === "before-retry") {
           await restoreNative(page);
-          await button(page, "Retry update").click();
+          await button(page, "Try again").click();
           expect(await confirmationCopy(page).getAttribute("label")).toBe(
             "Update Mac app + Gateway",
           );
@@ -197,7 +213,7 @@ suite.define(() => {
           activeRun: null,
           lastRun: failedRun,
         });
-        await button(page, "Retry update").click();
+        await button(page, "Try again").click();
         await gateway.waitForRequest("update.status", {
           after: 2,
           match: { refreshCheckout: true },
@@ -240,7 +256,7 @@ suite.define(() => {
 
         if (owner === "native") {
           await restoreNative(page);
-          await button(page, "Retry update").click();
+          await button(page, "Try again").click();
           await button(page, "Update Mac app and restart").waitFor();
           expect(await gateway.getRequests("update.run")).toHaveLength(0);
           expect(
@@ -253,10 +269,14 @@ suite.define(() => {
         }
 
         await gateway.deferNext("update.status", { refreshCheckout: true });
-        await button(page, "Retry update").click();
+        await button(page, "Try again").click();
         await gateway.waitForRequest("update.status", { match: { refreshCheckout: true } });
-        expect(await confirmationDialog(page).count()).toBe(1);
-        expect(await button(page, "Retry update").isDisabled()).toBe(true);
+        expect(
+          await page
+            .getByRole("dialog", { name: "Couldn’t finish the update.", exact: true })
+            .count(),
+        ).toBe(1);
+        expect(await button(page, "Try again").isDisabled()).toBe(true);
         await gateway.rejectDeferred("update.status", {
           code: "UNAVAILABLE",
           message: "Latest target unavailable.",
@@ -269,7 +289,7 @@ suite.define(() => {
         expect(await gateway.getRequests("update.run")).toHaveLength(0);
 
         await gateway.setMethodResponse("update.status", status("c", 9));
-        await button(page, "Retry update").click();
+        await button(page, "Try again").click();
         await button(confirmationCopy(page), "Update and restart").waitFor();
         expect(await confirmationCopy(page).textContent()).toContain("9 commits behind");
         expect(await revisions(page).textContent()).toContain("cccccccc");
@@ -511,6 +531,16 @@ suite.define(() => {
       const { gateway, updateButton } = await openUpdateCard(page, suite.server.baseUrl);
       await updateButton.click();
       await confirmationDialog(page).waitFor();
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: false,
+          path: path.join(
+            createControlUiE2eArtifactDir("updates-settings-proof"),
+            "update-confirmation.png",
+          ),
+        });
+      }
       const dialogText = await confirmationCopy(page).textContent();
       expect(dialogText).toContain(
         "Installs the available update on the connected Gateway and restarts it.",
@@ -525,7 +555,10 @@ suite.define(() => {
       await confirmationCopy(page).locator("openclaw-update-run-view").waitFor();
 
       expect(await gateway.getRequests("update.run")).toHaveLength(1);
-      await button(page, "Close").click();
+      await confirmationCopy(page)
+        .locator(".exec-approval-actions")
+        .getByRole("button", { name: "Close", exact: true })
+        .click();
       await page.locator(".sidebar-issues-button").click();
       const updateIssue = updateCard(page);
       await updateIssue.locator("summary").click();
@@ -557,7 +590,7 @@ suite.define(() => {
       expect((await page.goto(`${suite.server.baseUrl}settings/updates`))?.status()).toBe(200);
       await gateway.waitForRequest("config.get");
       await gateway.emitGatewayEvent("update.available", { updateAvailable: UPDATE_AVAILABLE });
-      await button(page, "Update Gateway…").click();
+      await button(page, "Update").click();
 
       const dialog = confirmationDialog(page);
       await dialog.waitFor();

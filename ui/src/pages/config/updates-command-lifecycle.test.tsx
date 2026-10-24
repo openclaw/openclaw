@@ -33,9 +33,12 @@ it.each([
       phase: "finished",
       reason: "build-failed",
     });
-    const request = vi.fn<RequestFn>((method) =>
-      method === "update.report" ? preview.promise : Promise.resolve({ lastRun: run }),
-    );
+    const request = vi.fn<RequestFn>((method) => {
+      if (method === "update.report") {
+        return preview.promise;
+      }
+      return Promise.resolve(method === "node.list" ? { nodes: [] } : { lastRun: run });
+    });
     const harness = updateRunHarness(request);
     harness.update({ selfUser: { id: "synthetic-admin" } });
     const overlays = createApplicationOverlays(harness.gateway);
@@ -81,15 +84,27 @@ it.each([
     >({
       routes: routes.map((route) => Object.assign({}, route, { component: () => module })),
     });
-    Object.assign(context, { router });
+    Object.assign(context, {
+      router,
+      navigate: (id: ConfigPageId) => router.navigate(id, context),
+    });
     const view = mountRouterOutlet({ router, retryContext: context });
     try {
       await router.navigate("updates", context);
       if (command === "report") {
-        const report = await waitForSolid(() => {
+        const result = await waitForSolid(() => {
           const button = [...view.querySelectorAll<HTMLButtonElement>("button")].find(
-            (candidate) => candidate.textContent?.trim() === "Report update failure",
+            (candidate) => candidate.textContent?.trim() === "View result",
           );
+          expect(button).toBeDefined();
+          return button!;
+        });
+        result.click();
+        await vi.dynamicImportSettled();
+        const report = await waitForSolid(() => {
+          const button = [
+            ...document.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button"),
+          ].find((candidate) => candidate.textContent?.trim() === "Report failure");
           expect(button).toBeDefined();
           expect(button!.disabled).toBe(false);
           return button!;
@@ -101,9 +116,12 @@ it.each([
         );
         expect(overlays.snapshot.updateFailureReportBusy).toBe(true);
       } else {
+        [...view.querySelectorAll<HTMLButtonElement>('[role="tab"]')]
+          .find((button) => button.textContent?.trim() === "Apps")
+          ?.click();
         const input = await waitForSolid(() => {
           const row = [...view.querySelectorAll(".settings-row")].find((candidate) =>
-            candidate.textContent?.includes("Check for updates automatically"),
+            candidate.textContent?.includes("Automatic checks and downloads"),
           );
           const toggleInput = row?.querySelector<HTMLInputElement>('input[role="switch"]');
           expect(toggleInput?.checked).toBe(true);
@@ -147,12 +165,25 @@ it.each([
         harness.update({
           client: client(vi.fn<RequestFn>(() => Promise.resolve({ lastRun: run }))),
         });
-        await waitForSolid(() => {
-          const report = [...view.querySelectorAll<HTMLButtonElement>("button")].find(
-            (button) => button.textContent?.trim() === "Report update failure",
+        await overlays.refreshUpdateStatus();
+        const result = await waitForSolid(() => {
+          const button = [...view.querySelectorAll<HTMLButtonElement>("button")].find(
+            (candidate) => candidate.textContent?.trim() === "View result",
           );
+          expect(button?.disabled).toBe(false);
+          return button!;
+        });
+        result.click();
+        await vi.dynamicImportSettled();
+        await waitForSolid(() => {
+          const report = [
+            ...document.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button"),
+          ].find((button) => button.textContent?.trim() === "Report failure");
           expect(report?.disabled).toBe(false);
         });
+        document
+          .querySelector<HTMLButtonElement>('openclaw-modal-dialog button[aria-label="Close"]')
+          ?.click();
         preview.reject(new Error("Retired report preview failed"));
         await vi.dynamicImportSettled();
         expect(overlays.snapshot.updateFailureReportNotice).toBeNull();

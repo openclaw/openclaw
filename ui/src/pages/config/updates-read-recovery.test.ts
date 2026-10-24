@@ -45,13 +45,15 @@ describe("update status read recovery", () => {
       );
 
       expect(row("Status").textContent).toContain("update.runs.get timed out");
-      const check = row("Recovery").querySelector<HTMLButtonElement>("button")!;
-      expect(check.textContent?.trim()).toBe("Check status");
+      const check = [...row("Status").querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.trim() === "Refresh status",
+      )!;
+      expect(check.textContent?.trim()).toBe("Refresh status");
       expect(check.disabled).toBe(!canCheckStatus);
       check.click();
       expect(onCheckStatus).toHaveBeenCalledTimes(canCheckStatus ? 1 : 0);
       expect(onUpdateNow).not.toHaveBeenCalled();
-      expect(container.textContent).not.toContain("Retry update");
+      expect(container.textContent).not.toContain("Try again");
       expect(container.textContent).not.toContain("CLI fallback");
       expect(container.textContent).not.toContain("openclaw triage");
     },

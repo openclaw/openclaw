@@ -1,6 +1,8 @@
 // Control UI tests cover the routed Updates settings page through a mocked Gateway.
+import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -27,14 +29,7 @@ const configResponse = (config: object, hash: string) => ({
   valid: true,
 });
 async function expectRadiosDisabled(page: Page) {
-  expect(
-    await page
-      .getByRole("radiogroup")
-      .getByRole("radio")
-      .evaluateAll(
-        (radios) => radios.length > 0 && radios.every((radio) => radio.matches(":disabled")),
-      ),
-  ).toBe(true);
+  expect(await page.getByRole("combobox", { name: "Release channel" }).isDisabled()).toBe(true);
 }
 
 suite.define(() => {
@@ -57,8 +52,18 @@ suite.define(() => {
       });
       expect((await page.goto(`${suite.server.baseUrl}settings/updates`))?.status()).toBe(200);
       await gateway.waitForRequest("update.status");
+      if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+        await page.screenshot({
+          animations: "disabled",
+          fullPage: false,
+          path: path.join(
+            createControlUiE2eArtifactDir("updates-settings-proof"),
+            "gateway-overview.png",
+          ),
+        });
+      }
       const policy = page.getByRole("switch", { name: "Automatic updates" });
-      const checks = page.getByRole("switch", { name: "Check for updates" });
+      const checks = page.getByRole("switch", { name: "Check automatically" });
       await policy.waitFor();
       await expect.poll(() => policy.isDisabled()).toBe(false);
 
@@ -102,25 +107,18 @@ suite.define(() => {
       expect(await gateway.getRequests("update.run")).toHaveLength(0);
       await status.scrollIntoViewIfNeeded();
       const geometry = await status.evaluate((element) => {
-        const row = element.closest(".settings-row");
-        const title = row?.querySelector(".settings-row__title");
-        if (!row || !title) {
-          throw new Error("Missing update status row or title");
+        const card = element.closest('section[aria-label="Update status"]');
+        if (!card) {
+          throw new Error("Missing compact update status card");
         }
         const bounds = element.getBoundingClientRect();
-        const rowBounds = row.getBoundingClientRect();
-        const titleBounds = title.getBoundingClientRect();
+        const cardBounds = card.getBoundingClientRect();
         return {
-          insideRow: bounds.left >= rowBounds.left && bounds.right <= rowBounds.right,
-          overlapsTitle:
-            bounds.left < titleBounds.right &&
-            bounds.right > titleBounds.left &&
-            bounds.top < titleBounds.bottom &&
-            bounds.bottom > titleBounds.top,
+          insideCard: bounds.left >= cardBounds.left && bounds.right <= cardBounds.right,
           overflows: element.scrollWidth > element.clientWidth,
         };
       });
-      expect(geometry).toEqual({ insideRow: true, overlapsTitle: false, overflows: false });
+      expect(geometry).toEqual({ insideCard: true, overflows: false });
     });
   });
 
@@ -148,14 +146,14 @@ suite.define(() => {
 
       const content = page.locator("#control-ui-main");
       await content.getByText("Updates", { exact: true }).waitFor();
-      const checks = content.getByRole("switch", { name: "Check for updates", exact: true });
+      const checks = content.getByRole("switch", { name: "Check automatically", exact: true });
       const automatic = content.getByRole("switch", { name: "Automatic updates", exact: true });
       await expect.poll(() => automatic.isChecked()).toBe(true);
       expect(await checks.isChecked()).toBe(false);
       expect(await automatic.isDisabled()).toBe(true);
       await content
         .locator(".settings-row__title")
-        .filter({ hasText: /^Check for updates$/ })
+        .filter({ hasText: /^Check automatically$/ })
         .click();
       const checksSaved = await gateway.waitForRequest("config.set");
       const checksRaw = (checksSaved.params as { raw?: unknown }).raw;
@@ -215,11 +213,108 @@ suite.define(() => {
       );
       await expectRadiosDisabled(page);
       expect(await page.getByRole("switch", { name: "Automatic updates" }).isDisabled()).toBe(true);
-      expect(await page.getByRole("switch", { name: "Check for updates" }).isDisabled()).toBe(true);
-      expect(await page.getByRole("button", { name: "Update Gateway…" }).isDisabled()).toBe(true);
+      expect(await page.getByRole("switch", { name: "Check automatically" }).isDisabled()).toBe(
+        true,
+      );
+      expect(await page.getByRole("button", { name: "Update" }).isDisabled()).toBe(true);
       expect(await gateway.getRequests("config.schema")).toHaveLength(0);
     });
   });
+
+  it.each(["light", "dark"] as const)(
+    "keeps preferences visible and terminal details optional (%s)",
+    async (colorScheme) => {
+      await suite.withPage({ ...pageOptions, colorScheme }, async ({ page }) => {
+        const run = createUpdateRunFixture({
+          phase: "finished",
+          status: "failed",
+          reason: "build-failed",
+          finishedAtMs: 500,
+        });
+        const gateway = await installMockGateway(page, {
+          operatorScopes: ["operator.read", "operator.write", "operator.admin"],
+          methodResponses: {
+            "config.get": configResponse({ update: { channel: "stable" } }, "visual-correction"),
+            "update.status": {
+              lastRun: run,
+              activeRun: null,
+              schedule: {
+                channel: "stable",
+                autoEnabled: false,
+                install: { kind: "package" },
+                target: { kind: "package", version: "2026.9.2" },
+              },
+            },
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}settings/updates`);
+        await gateway.waitForRequest("update.status");
+        await page.getByRole("button", { name: "View result", exact: true }).waitFor();
+        const preferences = page.getByRole("heading", { name: "Preferences", exact: true });
+        expect(await preferences.isVisible()).toBe(true);
+        expect(await page.locator(".page-subtitle").count()).toBe(0);
+        expect(await page.getByRole("combobox", { name: "Release channel" }).isVisible()).toBe(
+          true,
+        );
+        const folder = createControlUiE2eArtifactDir(`correction-${colorScheme}`);
+        await page.screenshot({ path: path.join(folder, "overview.png"), animations: "disabled" });
+        await page.getByRole("button", { name: "View result", exact: true }).click();
+        const dialog = page.locator("openclaw-modal-dialog");
+        await dialog.getByRole("button", { name: "Diagnose", exact: true }).waitFor();
+        for (const name of ["Refresh status", "Try again", "Report failure", "Diagnose"]) {
+          expect(await dialog.getByRole("button", { name, exact: true }).isVisible()).toBe(true);
+        }
+        expect(
+          await dialog
+            .getByRole("heading", { name: "Couldn’t finish the update.", exact: true })
+            .count(),
+        ).toBe(1);
+        expect(await dialog.locator(".exec-approval-title").textContent()).toBe(
+          "Couldn’t finish the update.",
+        );
+        expect(
+          await dialog.locator(".update-run-view > details > summary").allTextContents(),
+        ).toEqual(["Update steps", "Technical details"]);
+        expect(await dialog.locator(".update-run-view > details[open]").count()).toBe(0);
+        expect(await dialog.locator(".update-run-view__phases").isVisible()).toBe(false);
+        await page.screenshot({ path: path.join(folder, "result.png"), animations: "disabled" });
+        await page.setViewportSize({ width: 390, height: 844 });
+        await page.screenshot({
+          path: path.join(folder, "result-narrow.png"),
+          animations: "disabled",
+        });
+        await page.keyboard.press("Escape");
+        await dialog.waitFor({ state: "detached" });
+        await page.screenshot({
+          path: path.join(folder, "overview-narrow.png"),
+          animations: "disabled",
+        });
+        await page.setViewportSize(pageOptions.viewport);
+        await gateway.setMethodResponse("update.status", {
+          lastRun: null,
+          activeRun: null,
+          schedule: null,
+          updateAvailable: null,
+        });
+        await page.getByRole("button", { name: "Refresh status", exact: true }).click();
+        const status = page.locator('section[aria-label="Update status"] .settings-status');
+        await expect.poll(() => status.textContent()).toBe("No recent update status");
+        await page.getByRole("heading", { name: "Updates", exact: true }).scrollIntoViewIfNeeded();
+        await page.screenshot({ path: path.join(folder, "unknown.png"), animations: "disabled" });
+        await gateway.setMethodResponse("update.status", {
+          __mockError: { code: "UNAVAILABLE", message: "Status check unavailable" },
+        });
+        await page.getByRole("button", { name: "Refresh status", exact: true }).click();
+        await expect.poll(() => status.textContent()).toContain("Status check unavailable");
+        await page.getByRole("heading", { name: "Updates", exact: true }).scrollIntoViewIfNeeded();
+        await page.screenshot({
+          path: path.join(folder, "check-failed.png"),
+          animations: "disabled",
+        });
+        expect(await gateway.getRequests("update.run")).toHaveLength(0);
+      });
+    },
+  );
 
   it("lets a named administrator review an update report and receive their browser handoff", async () => {
     await suite.withPage(
@@ -263,7 +358,8 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}settings/updates`);
         await gateway.waitForRequest("update.status");
-        const report = page.getByRole("button", { name: "Report update failure", exact: true });
+        await page.getByRole("button", { name: "View result", exact: true }).click();
+        const report = page.getByRole("button", { name: "Report failure", exact: true });
         await report.waitFor();
         expect(await report.isEnabled()).toBe(true);
         await report.click();

@@ -58,7 +58,7 @@ function renderConfigPageSubtitle(pageId: ConfigPageId) {
         </>
       );
     case "updates":
-      return t("updates.page.intro");
+      return undefined;
     default:
       return subtitleForRoute(pageId);
   }

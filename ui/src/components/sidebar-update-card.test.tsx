@@ -235,7 +235,7 @@ describe("SidebarUpdateCard", () => {
       if (native) {
         expect(element.props().onCheckStatus).not.toHaveBeenCalled();
       }
-      modalButton(modal, native ? "Update Mac app and restart" : "Retry update").click();
+      modalButton(modal, native ? "Update Mac app and restart" : "Try again").click();
       if (native && !bridgeLost) {
         await vi.waitFor(() => expect(postMessage).toHaveBeenCalledOnce());
         expect(element.props().prepareRetry).not.toHaveBeenCalled();

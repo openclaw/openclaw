@@ -289,6 +289,12 @@ it("shows failure details and report text without interpreting diagnostic markup
   expect(text('[aria-label="Update report"]')).toContain(
     "Run openclaw triage to diagnose and repair the failed update.",
   );
+  const disclosures = Array.from(
+    find(".update-run-view")!.querySelectorAll("details > summary"),
+    (node) => node.textContent?.trim(),
+  );
+  expect(disclosures.some((label) => label?.startsWith("Step details"))).toBe(true);
+  expect(disclosures).toContain("Full report");
   expect(output()).toContain('<img src=x onerror="alert(1)">');
   expect(find("img")).toBeNull();
   expect(find('[data-step="build"]')).toMatchObject({ ariaLabel: "Building OpenClaw: Failed" });

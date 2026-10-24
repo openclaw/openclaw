@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { beforeEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { createUpdateRunFixture } from "../../test-helpers/update-run.ts";
 import {
@@ -66,8 +66,14 @@ describe("running update status", () => {
           update.updateRun = createUpdateRunFixture({ origin: { campaignId: scenario } });
         }
       }
+      const onUpdateNow = vi.fn(async () => undefined);
       mountUpdates(
-        createProps({ updateBusy: true, update, statusRead: new Promise<boolean>(() => {}) }),
+        createProps({
+          updateBusy: true,
+          update,
+          onUpdateNow,
+          statusRead: new Promise<boolean>(() => {}),
+        }),
       );
       expect(row("Status").textContent).toContain("Updating · Staging");
       if (scenario === "read error") {
@@ -76,21 +82,13 @@ describe("running update status", () => {
         expect(row("Status").textContent).not.toContain("Waiting for active work");
         expect(row("Status").querySelector("[role='timer']")).toBeNull();
         expect(row("Status").textContent).not.toContain("aaaaaaaa");
-        expect(row("Current step").textContent).toContain("build");
-        expect(row("Update target").querySelector("code")?.title).toBe("b".repeat(40));
-        expect(row("Last progress").querySelector("time")?.dateTime).toBe(
-          "1970-01-01T00:00:00.900Z",
-        );
-        const queued = row("Automatic update");
-        expect(queued.textContent).toContain("Waiting for active work · forced update in 12:41");
-        expect(queued.textContent).toContain("aaaaaaaa");
-        expect(queued.querySelector("[role='timer']")?.getAttribute("aria-live")).toBe("off");
-      } else {
-        expect(row("Update target").textContent).toContain("2026.9.2");
-        expect(container.textContent).not.toContain("Automatic updateWaiting");
-        expect(() => row("Automatic update")).toThrow("Missing settings row");
-        expect(() => row("Current step")).toThrow("Missing settings row");
       }
+      const result = [...container.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.trim() === "View result",
+      )!;
+      result.click();
+      expect(onUpdateNow).toHaveBeenCalledWith(update.updateRun);
+      expect(container.querySelector("openclaw-update-run-view")).toBeNull();
     },
   );
 });
