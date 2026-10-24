@@ -103,7 +103,7 @@ export async function runSignalSseLoop({
       // A healthy event stream stays open while idle; a clean close is a daemon or proxy fault.
       lastError =
         streamEvents === 0
-          ? "Signal daemon closed the event stream without sending any events. Check that the daemon delivers messages on its event endpoint (or use container mode), then watch for reconnects."
+          ? "Signal daemon closed the event stream without sending any events. Check that the daemon is delivering received messages to its event stream, then watch for reconnects."
           : `Signal daemon closed the event stream after ${streamEvents} event(s).`;
     } catch (err) {
       if (abortSignal?.aborted) {

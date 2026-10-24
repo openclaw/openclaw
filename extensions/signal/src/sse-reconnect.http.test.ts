@@ -76,16 +76,14 @@ describe("runSignalSseLoop over HTTP", () => {
     );
   });
 
-  it.each(["idle stream", "intentional abort"] as const)("keeps the %s quiet", async (scenario) => {
+  it("keeps an idle stream quiet through intentional shutdown", async () => {
     const { abort, loop, patches, runtime } = await runUntil("idle", () => false);
     await vi.waitFor(() =>
       expect(patches).toContainEqual(expect.objectContaining({ lifecycle: "ready" })),
     );
-    if (scenario === "idle stream") {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 200);
-      });
-    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 200);
+    });
     abort.abort();
     await loop;
 
