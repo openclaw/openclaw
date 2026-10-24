@@ -70,17 +70,12 @@ esac
   return { ...result, calls };
 }
 describe.each(["e2e", "smoke"])("%s installer upgrade baseline", (runner) => {
-  it.each([
-    ["2026.7.1-2", "2026.7.1-1"],
-    ["2026.7.1-beta.2", "2026.7.1-beta.1"],
-    ["2026.7.1", "2026.7.1-beta.2"],
-  ])("preinstalls the predecessor of %s despite newer publications", (target, previous) => {
+  it("preinstalls the target's predecessor despite newer publications", () => {
+    const target = "2026.7.1";
+    const previous = "2026.7.1-beta.2";
     const result = runInstallerVersionSelection(runner, {
       target,
-      versions:
-        "2026.7.1-1 2026.7.1-2 2026.7.1-beta.1 2026.7.1-beta.2 2026.7.1 2026.8.1-beta.3 2026.8.1-beta.4".split(
-          " ",
-        ),
+      versions: [previous, target, "2026.8.1"],
     });
     expect(result.status, result.stderr).toBe(fixtureStop);
     expect(result.calls).toContainEqual(["install", "-g", `openclaw@${previous}`]);

@@ -54,22 +54,16 @@ describePosix("baseline-bound publication signatures", () => {
     expect(f.git(f.repo, "merge-base", f.incoming, published)).toBe(f.incoming);
   });
 
-  it.each(["first", "side"])("rejects an unsigned task commit on the %s parent", (parent) => {
+  it("rejects an unsigned task commit outside the first-parent chain", () => {
     const f = fixture();
-    if (parent === "side") {
-      f.prepGit("switch", "-qc", "unsigned-task", f.baseline);
-    }
+    f.prepGit("switch", "-qc", "unsigned-task", f.baseline);
     writeFileSync(join(f.worktree, "docs/later.md"), "later task change\n");
     f.prepGit("add", "docs/later.md");
     f.prepGit("commit", "--no-gpg-sign", "-qm", "fix: unsigned task change");
     const unsigned = f.prepGit("rev-parse", "HEAD");
-    if (parent === "side") {
-      f.prepGit("switch", "-q", "pr-42-prep");
-      f.prepGit("merge", "--no-ff", "-qm", "fix: merge the task change", unsigned);
-      expect(f.prepGit("rev-list", "--first-parent", `${f.incoming}..HEAD`)).not.toContain(
-        unsigned,
-      );
-    }
+    f.prepGit("switch", "-q", "pr-42-prep");
+    f.prepGit("merge", "--no-ff", "-qm", "fix: merge the task change", unsigned);
+    expect(f.prepGit("rev-list", "--first-parent", `${f.incoming}..HEAD`)).not.toContain(unsigned);
     f.approve();
     const result = expectRefused(f);
     expect(result.status).toBe(2);

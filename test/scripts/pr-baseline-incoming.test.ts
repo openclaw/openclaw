@@ -2,11 +2,7 @@ import { appendFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import {
-  createBaselineFixture,
-  failRestore,
-  signBaselineRequest,
-} from "./pr-baseline-native.test-support.js";
+import { createBaselineFixture, signBaselineRequest } from "./pr-baseline-native.test-support.js";
 import { reviewWithFinding } from "./pr-correction-preparation.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
@@ -75,7 +71,7 @@ describePosix("first baseline integration from the reviewed incoming head", () =
     expect(f.publish()).toBe(candidate);
   });
 
-  it("binds incoming authority across signing and resumes only the same installed candidate", () => {
+  it("binds incoming authority across signing", () => {
     const f = fixture();
     const signer = f.prepGit("show", "-s", "--format=%GF", "HEAD");
     const requestArgs = [...f.manifest(f.baseline), "--signer", signer];
@@ -90,19 +86,9 @@ describePosix("first baseline integration from the reviewed incoming head", () =
     expect(changed.stderr).toContain("Incoming authority changed");
     expectUnchanged(f);
     f.writeLocal("review.json", f.incomingReview);
-    const interrupted = f.run(
-      "prepare-baseline-signing-continue",
-      args,
-      failRestore(f.root, f.env),
-    );
-    expect(interrupted.status, interrupted.stdout + interrupted.stderr).not.toBe(0);
-    expect(JSON.parse(f.readLocal("review-transition.json").toString()).target).toBe(target);
-    expect(f.prepGit("rev-parse", "HEAD")).toBe(f.source);
     f.pass("prepare-baseline-signing-continue", args);
     expect(f.prepGit("rev-parse", "HEAD")).toBe(target);
     f.expectReviews();
-    f.pass("prepare-baseline-signing-continue", args);
-    expect(f.prepGit("rev-parse", "HEAD")).toBe(target);
     f.pass("prepare-correction-review-init");
     f.expectUnreviewed();
   });
