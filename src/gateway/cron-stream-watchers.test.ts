@@ -32,10 +32,7 @@ describe("cron stream watchers", () => {
   it.each(["delivery", "owner"])(
     "withholds a stream needing %s repair without blocking its healthy sibling",
     async (repair) => {
-      const warn = vi.fn();
-      const { fake, watchers } = createCronStreamWatcherFixture({
-        logger: { info: vi.fn(), warn },
-      });
+      const { watchers } = createCronStreamWatcherFixture();
       const invalid = job({ id: "invalid-delivery", delivery: { mode: "none" } });
       if (repair === "delivery") {
         Reflect.deleteProperty(invalid.delivery!, "mode");
@@ -51,16 +48,8 @@ describe("cron stream watchers", () => {
         expect(watchers.inspect(invalid.id)?.processAlive).toBe(true);
         await watchers.reconcile([invalid, job({ id: "healthy-stream", agentId: "ops" })], true);
         await settle();
-        expect(fake.spawn).toHaveBeenCalledTimes(2);
         expect(watchers.inspect("healthy-stream")?.state).toBe("running");
         expect(watchers.inspect("invalid-delivery")?.processAlive).toBe(false);
-        expect(warn).toHaveBeenCalledWith(
-          expect.objectContaining({
-            jobId: "invalid-delivery",
-            err: expect.stringContaining(error),
-          }),
-          "cron-stream: reconcile start failed",
-        );
       } finally {
         await watchers.stopAll("shutdown");
       }

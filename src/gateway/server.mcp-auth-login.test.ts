@@ -4,6 +4,8 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { text } from "node:stream/consumers";
+import { toNodeHandler } from "@modelcontextprotocol/node";
+import { createMcpHandler, McpServer } from "@modelcontextprotocol/server";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
@@ -74,6 +76,14 @@ describe("registered mcp.authLogin", () => {
   let discoveryEntered = createDeferredCore();
   let releaseDiscovery: Deferred | undefined;
   const requests: string[] = [];
+  const mcp = createMcpHandler(() => {
+    const server = new McpServer({ name: "fixture", version: "1.0.0" });
+    server.registerTool("echo", {}, async () => ({
+      content: [{ type: "text", text: "Authenticated connector reply" }],
+    }));
+    return server;
+  });
+  const serveMcp = toNodeHandler(mcp);
   const endpoint = createServer((request, response) => {
     void (async () => {
       const json = (value: unknown, code = 200) =>
@@ -133,29 +143,7 @@ describe("registered mcp.authLogin", () => {
             .end();
           return;
         }
-        const body = await text(request);
-        if (!body) {
-          response.writeHead(405).end();
-          return;
-        }
-        const message = JSON.parse(body);
-        if (message.id === undefined) {
-          response.writeHead(202).end();
-          return;
-        }
-        const result =
-          message.method === "initialize"
-            ? {
-                protocolVersion: message.params.protocolVersion,
-                capabilities: { tools: {} },
-                serverInfo: { name: "fixture", version: "1.0.0" },
-              }
-            : message.method === "tools/list"
-              ? {
-                  tools: [{ name: "echo", inputSchema: { type: "object" } }],
-                }
-              : { content: [{ type: "text", text: "Authenticated connector reply" }] };
-        json({ jsonrpc: "2.0", id: message.id, result });
+        await serveMcp(request, response);
       } else {
         response.writeHead(404).end();
       }
@@ -199,6 +187,7 @@ describe("registered mcp.authLogin", () => {
     other?.close();
     readOnly?.close();
     await gateway?.close();
+    await mcp.close();
     endpoint.closeAllConnections();
     await new Promise<void>((resolve) => {
       endpoint.close(() => resolve());

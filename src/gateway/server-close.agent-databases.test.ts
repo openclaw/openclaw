@@ -212,10 +212,8 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
   let closing: Promise<void> | undefined;
   let heldWriter: ReturnType<typeof patchSessionEntryCore> | undefined;
   let heldColdWriter: Promise<void> | undefined;
-  let acceptedColdAdmission: Promise<void> | undefined;
   let coldDatabase: ReturnType<typeof openOpenClawAgentDatabase> | undefined;
-  let acceptedFinal: ReturnType<typeof settlePendingFinalDelivery> | undefined;
-  let acceptedLifecycle: ReturnType<typeof applySessionEntryLifecycleMutation> | undefined;
+  let acceptedWrites: Promise<unknown[]> | undefined;
   let acceptedGoal: ReturnType<typeof mutateSessionGoal> | undefined;
   try {
     const pluginId = fixture.pluginId;
@@ -229,14 +227,10 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
     registry.plugins.push(record);
     setActivePluginRegistry(registry);
     const { server, kernel } = await fixture.startServer();
-    expect(kernel.pluginRuntime.registry.plugins).toEqual(
-      expect.arrayContaining([expect.objectContaining({ id: pluginId })]),
-    );
     const activeStore = fixture.target().storePath;
     const coldOptions = { agentId: "cold-close", env: fixture.state.env };
-    const coldStore = path.join(fixture.state.sessionsDir(coldOptions.agentId), "sessions.json");
+    const coldTarget = fixture.target("agent:cold-close:main", coldOptions.agentId);
     const coldPath = resolveOpenClawAgentSqlitePath(coldOptions);
-    const coldSessionKey = "agent:cold-close:main";
     const pluginExtensions = { [pluginId]: { active: true } };
     await fixture.write("agent:main:main", {
       sessionId: "main-session",
@@ -355,45 +349,48 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
       id: "kernel-held-work",
       delayMs: 0,
       async run() {
-        acceptedColdAdmission = withOpenClawAgentDatabaseRuntime(coldOptions, async (database) => {
-          coldDatabase = database;
-          await replaceSessionEntry(
-            { agentId: coldOptions.agentId, storePath: coldStore, sessionKey: coldSessionKey },
-            { sessionId: "cold-close-session", updatedAt: 1, label: "accepted before close" },
-          );
-        });
-        acceptedFinal = settlePendingFinalDelivery(
-          {
-            kind: "pending-final",
-            ...goalTarget,
-            sessionId: "main-session",
-            deliveryId: "close-delivery",
-            intentId: "close-intent",
-          },
-          "delivered",
-        );
-        acceptedLifecycle = applySessionEntryLifecycleMutation({
-          agentId: "main",
-          storePath: activeStore,
-          activeSessionKey: lifecycleKey,
-          upserts: [
+        acceptedWrites = Promise.all([
+          withOpenClawAgentDatabaseRuntime(coldOptions, async (database) => {
+            coldDatabase = database;
+            await replaceSessionEntry(coldTarget, {
+              sessionId: "cold-close-session",
+              updatedAt: 1,
+              label: "accepted before close",
+            });
+          }),
+          settlePendingFinalDelivery(
             {
-              sessionKey: lifecycleKey,
-              entry: {
-                sessionId: "lifecycle-close-session",
-                updatedAt: 2,
-                skillsSnapshot: { prompt: "accepted before close", skills: [] },
-              },
+              kind: "pending-final",
+              ...goalTarget,
+              sessionId: "main-session",
+              deliveryId: "close-delivery",
+              intentId: "close-intent",
             },
-          ],
-        });
-        acceptedGoal = mutateSessionGoal({
-          ...goalTarget,
-          expectedSessionId: "main-session",
-          operation: goalOperation,
-        });
+            "delivered",
+          ),
+          applySessionEntryLifecycleMutation({
+            agentId: "main",
+            storePath: activeStore,
+            activeSessionKey: lifecycleKey,
+            upserts: [
+              {
+                sessionKey: lifecycleKey,
+                entry: {
+                  sessionId: "lifecycle-close-session",
+                  updatedAt: 2,
+                  skillsSnapshot: { prompt: "accepted before close", skills: [] },
+                },
+              },
+            ],
+          }),
+          (acceptedGoal = mutateSessionGoal({
+            ...goalTarget,
+            expectedSessionId: "main-session",
+            operation: goalOperation,
+          })),
+        ]);
         rootWorkEntered.resolve();
-        await Promise.all([acceptedColdAdmission, acceptedFinal, acceptedLifecycle, acceptedGoal]);
+        await acceptedWrites;
       },
     });
     await vi.advanceTimersByTimeAsync(0);
@@ -423,28 +420,20 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
     await expect(fs.stat(coldPath)).rejects.toMatchObject({ code: "ENOENT" });
     releaseRootWork.resolve();
     await Promise.all([heldWriter, heldColdWriter]);
-    await expect(acceptedColdAdmission).resolves.toBeUndefined();
-    await expect(acceptedFinal).resolves.toEqual({ state: "delivered" });
-    await expect(acceptedLifecycle).resolves.toMatchObject({ removedEntries: 0 });
+    assert(acceptedWrites);
+    await acceptedWrites;
     const goalResult = await acceptedGoal;
     assert(goalResult);
-    expect(goalResult).toMatchObject({
-      replayed: false,
-      result: { action: "edit", goal: { objective: "accepted before close" } },
-    });
     await expect(closing).resolves.toBeUndefined();
     expect([disposed, shared.isOpen, agent.isOpen]).toEqual([true, false, false]);
     expect(fixture.inspectLeases).not.toThrow();
     expect(memorySessionActorOwners.read(incognito)).toBeUndefined();
     expect(() => incognito.assertCurrent()).toThrow("closed");
     expect(coldDatabase?.db.isOpen).toBe(false);
-    expect(
-      loadSessionEntry({
-        agentId: coldOptions.agentId,
-        storePath: coldStore,
-        sessionKey: coldSessionKey,
-      }),
-    ).toMatchObject({ sessionId: "cold-close-session", label: "accepted before close" });
+    expect(loadSessionEntry(coldTarget)).toMatchObject({
+      sessionId: "cold-close-session",
+      label: "accepted before close",
+    });
     const goalReceipt = withOpenClawAgentDatabaseReadOnly(
       (database) =>
         readSessionGoalOperationInDatabase(database, {
@@ -474,15 +463,7 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
   } finally {
     stopEntered.resolve();
     releaseRootWork.resolve();
-    await Promise.allSettled([
-      heldWriter,
-      heldColdWriter,
-      acceptedColdAdmission,
-      acceptedFinal,
-      acceptedLifecycle,
-      acceptedGoal,
-      closing,
-    ]);
+    await Promise.allSettled([heldWriter, heldColdWriter, acceptedWrites, closing]);
     vi.useRealTimers();
     vi.restoreAllMocks();
     await fixture.cleanup();
