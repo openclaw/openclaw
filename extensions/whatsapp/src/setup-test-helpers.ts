@@ -148,13 +148,20 @@ export function expectWhatsAppLoginFollowup(harness: WizardPromptHarness): void 
 export function expectWhatsAppNextStepsNote(
   harness: WizardPromptHarness,
   account: string,
-  guidance: string,
+  options: { linked: boolean; guidance?: string },
 ): void {
   const calls = (harness.note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
   const message = calls.find((call) => call[1] === "WhatsApp next steps")?.[0];
   expect(message).toEqual(expect.stringContaining(`Account: ${account}`));
-  expect(message).toEqual(expect.stringContaining("send a WhatsApp message"));
-  expect(message).toEqual(expect.stringContaining(guidance));
+  if (options.linked) {
+    expect(message).toEqual(expect.stringContaining("send a WhatsApp message"));
+  } else {
+    expect(message).toEqual(expect.stringContaining("Finish linking this account first"));
+    expect(message).not.toEqual(expect.stringContaining("send a WhatsApp message"));
+  }
+  if (options.guidance) {
+    expect(message).toEqual(expect.stringContaining(options.guidance));
+  }
 }
 
 function expectAccountAccessNote(harness: WizardPromptHarness, account: string): void {

@@ -122,7 +122,7 @@ describe("whatsapp setup wizard", () => {
 
     expect(hoisted.loginWeb).not.toHaveBeenCalled();
     expectWhatsAppOwnerAllowlistSetup(result.cfg, harness);
-    expectWhatsAppNextStepsNote(harness, "default", "covered by allowFrom");
+    expectWhatsAppNextStepsNote(harness, "default", { linked: false });
   });
 
   it.each(["work", ""])("writes scoped DM policy for selected account %j", async (accountId) => {
@@ -135,7 +135,7 @@ describe("whatsapp setup wizard", () => {
 
     expectWhatsAppWorkAccountOpenAccess(named.cfg);
     expectWhatsAppWorkAccountAccessNote(harness);
-    expectWhatsAppNextStepsNote(harness, "work", "DMs are open");
+    expectWhatsAppNextStepsNote(harness, "work", { linked: false });
   });
 
   it.each([
@@ -184,7 +184,7 @@ describe("whatsapp setup wizard", () => {
     const result = await runFinalizeWithHarness({ harness });
 
     expectWhatsAppPersonalPhoneSetup(result.cfg);
-    expectWhatsAppNextStepsNote(harness, "default", "covered by allowFrom");
+    expectWhatsAppNextStepsNote(harness, "default", { linked: false });
   });
 
   it("forces wildcard allowFrom for open policy without allowFrom follow-up prompts", async () => {
@@ -282,7 +282,10 @@ describe("whatsapp setup wizard", () => {
     } else {
       expectWhatsAppLoginFollowup(harness);
     }
-    expectWhatsAppNextStepsNote(harness, "default", "DMs are disabled");
+    expectWhatsAppNextStepsNote(harness, "default", {
+      linked,
+      ...(linked ? { guidance: "DMs are disabled" } : {}),
+    });
   });
 
   it("shows first-message pairing guidance after setup", async () => {
@@ -291,6 +294,42 @@ describe("whatsapp setup wizard", () => {
 
     await runFinalizeWithHarness({ harness });
 
-    expectWhatsAppNextStepsNote(harness, "default", "approve the DM access request");
+    expectWhatsAppNextStepsNote(harness, "default", {
+      linked: true,
+      guidance: "already in allowFrom",
+    });
+  });
+
+  it("reports link readiness after terminal login succeeds", async () => {
+    hoisted.hasWebCredsSync.mockReturnValueOnce(false).mockReturnValue(true);
+    const harness = createWhatsAppLinkingHarness(createQueuedWizardPrompter);
+
+    await runFinalizeWithHarness({ harness });
+
+    expect(hoisted.loginWeb).toHaveBeenCalledOnce();
+    expectWhatsAppNextStepsNote(harness, "default", {
+      linked: true,
+      guidance: "DMs are disabled",
+    });
+  });
+
+  it("does not advertise messaging when terminal login fails", async () => {
+    hoisted.loginWeb.mockRejectedValueOnce(new Error("QR expired"));
+    const harness = createWhatsAppLinkingHarness(createQueuedWizardPrompter);
+    const runtime = createRuntimeSpies();
+
+    await runFinalizeWithHarness({ harness, runtime });
+
+    expect(runtime.error).toHaveBeenCalledWith("WhatsApp login failed: Error: QR expired");
+    expectWhatsAppNextStepsNote(harness, "default", { linked: false });
+  });
+
+  it("keeps browser-owned linking actions when device linking is deferred", async () => {
+    const harness = createSeparatePhoneHarness(["separate", "disabled"]);
+
+    await runFinalizeWithHarness({ harness, options: { deferDeviceLinkToClient: true } });
+
+    expect(harness.confirm).not.toHaveBeenCalled();
+    expectWhatsAppNextStepsNote(harness, "default", { linked: false });
   });
 });

@@ -84,19 +84,23 @@ openclaw gateway
 
   <Step title="Send the first message">
 
-    From an allowlisted phone (or your own number in personal-number mode), send
-    `Hello` to the WhatsApp account you linked in OpenClaw.
+    From the phone you plan to use, send `Hello` to the WhatsApp account you
+    linked in OpenClaw.
 
-    In pairing mode, this first message creates an access request instead of an
-    immediate reply. Approve that request in the next step, then send the message
-    again.
+    In pairing mode, a sender already covered by `allowFrom` proceeds directly.
+    If the sender is not covered, this first message creates an access request
+    instead of an immediate reply. Approve that request in the next step, then
+    resend the message.
 
   </Step>
 
-  <Step title="Approve the first DM access request (pairing mode)">
+  <Step title="Approve an unknown sender's DM access request (pairing mode)">
 
     Open **Settings → Channels → DM access requests**, find the WhatsApp account,
     and approve the sender. If you prefer the CLI:
+
+    If the sender was already in `allowFrom`, no request is created and you can
+    skip this step.
 
 ```bash
 openclaw pairing list whatsapp

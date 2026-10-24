@@ -117,7 +117,11 @@ function parseWhatsAppAllowFromEntries(raw: string): { entries: string[]; invali
   return { entries: normalizeWhatsAppAllowFromEntries(entries) };
 }
 
-function buildWhatsAppNextStepsNote(cfg: OpenClawConfig, accountId: string): string {
+function buildWhatsAppNextStepsNote(
+  cfg: OpenClawConfig,
+  accountId: string,
+  linked: boolean,
+): string {
   const account = resolveWhatsAppAccount({ cfg, accountId });
   const policy = account.dmPolicy ?? "pairing";
   const policyGuidance: Record<DmPolicy, string> = {
@@ -130,8 +134,8 @@ function buildWhatsAppNextStepsNote(cfg: OpenClawConfig, accountId: string): str
     t("wizard.whatsapp.nextStepsAccount", {
       account: accountId === DEFAULT_ACCOUNT_ID ? "default" : accountId,
     }),
-    t("wizard.whatsapp.nextStepsMessage"),
-    policyGuidance[policy],
+    linked ? t("wizard.whatsapp.nextStepsMessage") : t("wizard.whatsapp.nextStepsUnlinked"),
+    ...(linked ? [policyGuidance[policy]] : []),
     t("wizard.channels.docs", { link: formatDocsLink("/whatsapp", "whatsapp") }),
   ].join("\n");
 }
@@ -155,7 +159,7 @@ export async function finalizeWhatsAppSetup(params: {
         });
 
   const { authDir } = resolveWhatsAppAuthDir({ cfg: next, accountId: selectedAccountId });
-  const linked = hasWebCredsSync(authDir);
+  let linked = hasWebCredsSync(authDir);
 
   // Gateway clients render their own pairing QR; only terminal setup runs login here.
   if (!params.options?.deferDeviceLinkToClient) {
@@ -191,6 +195,7 @@ export async function finalizeWhatsAppSetup(params: {
         await loginWeb(false, undefined, params.runtime, selectedAccountId, {
           beforeCredentialPersistence,
         });
+        linked = hasWebCredsSync(authDir);
       } catch (error) {
         if (persistenceGuardFailure) {
           throw persistenceGuardFailure.error;
@@ -377,7 +382,7 @@ export async function finalizeWhatsAppSetup(params: {
   }
   next = await promptWhatsAppDmAccess();
   await prompter.note(
-    buildWhatsAppNextStepsNote(next, selectedAccountId),
+    buildWhatsAppNextStepsNote(next, selectedAccountId, linked),
     t("wizard.whatsapp.nextStepsTitle"),
   );
   return { cfg: next };
