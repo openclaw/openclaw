@@ -326,7 +326,7 @@ it("bounds archived residency across pages and evicts the least recently read ro
     }
     cleanup.defer(yieldSessionListBackgroundWork);
     cleanup.defer(retainSessionListForegroundWork());
-    let afterExactPreparation: (() => Promise<void>) | undefined;
+    let afterExactPreparation: (() => Promise<void> | undefined) | undefined;
     const createRefresh = rowRefresh.createSessionRowRefresh;
     vi.spyOn(rowRefresh, "createSessionRowRefresh").mockImplementation((owner) => {
       const refresh = createRefresh(owner);
@@ -334,9 +334,10 @@ it("bounds archived residency across pages and evicts the least recently read ro
         ...refresh,
         prepareExactRows(queries) {
           // All materialization slices finish here while the reader still holds archive pins.
-          return Promise.resolve(refresh.prepareExactRows(queries)).then(async () => {
-            await afterExactPreparation?.();
-          });
+          const pending = refresh.prepareExactRows(queries);
+          return pending
+            ? pending.then(() => afterExactPreparation?.())
+            : afterExactPreparation?.();
         },
       };
     });
@@ -358,11 +359,11 @@ it("bounds archived residency across pages and evicts the least recently read ro
     const pagePrepared = createDeferredCore();
     const releasePage = createDeferredCore();
     let wholePagePaused = false;
-    afterExactPreparation = async () => {
+    afterExactPreparation = () => {
       if (!wholePagePaused && projection.selectEntries().filter(ready).length === 128) {
         wholePagePaused = true;
         pagePrepared.resolve();
-        await releasePage.promise;
+        return releasePage.promise;
       }
     };
     const pendingPage = listRows(projection, {
@@ -377,9 +378,13 @@ it("bounds archived residency across pages and evicts the least recently read ro
       await waitForPage(pendingPage, pagePrepared, signal);
       await listRows(projection, { archived: true, limit: 1 });
       expect(projection.selectEntries().filter(ready)).toHaveLength(128);
-      afterExactPreparation = async () => {
-        secondPrepared.resolve();
-        await releaseSecond.promise;
+      let secondPaused = false;
+      afterExactPreparation = () => {
+        if (!secondPaused) {
+          secondPaused = true;
+          secondPrepared.resolve();
+          return releaseSecond.promise;
+        }
       };
       overlappingPage = listRows(projection, { archived: true, limit: 110, offset: 18 });
       await waitForPage(overlappingPage, secondPrepared, signal);
@@ -406,7 +411,7 @@ it("bounds archived residency across pages and evicts the least recently read ro
       prepared: createDeferredCore(),
       resume: createDeferredCore(),
     }));
-    afterExactPreparation = async () => {
+    afterExactPreparation = () => {
       const readyKeys = new Set(
         projection
           .selectEntries()
@@ -417,7 +422,7 @@ it("bounds archived residency across pages and evicts the least recently read ro
         if (!barrier.paused && barrier.keys.every((key) => readyKeys.has(key))) {
           barrier.paused = true;
           barrier.prepared.resolve();
-          await barrier.resume.promise;
+          return barrier.resume.promise;
         }
       }
     };
