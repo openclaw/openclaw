@@ -12,6 +12,7 @@ import {
   configSnapshot,
   hostedFeedDiffsEntry,
   metadataSnapshot,
+  mockHostedOfficialCatalog,
 } from "./management-service.test-helpers.js";
 import { managementMetadata } from "./management-service.test-support.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
@@ -120,15 +121,6 @@ const mockMetadata = (id: string, fields: Partial<Parameters<typeof metadataSnap
     metadataSnapshot({ enabled: true, id, origin: "global", ...fields }),
   );
 
-function mockHostedOfficialCatalog(entries: unknown[]) {
-  mocks.officialCatalog.mockResolvedValue({
-    source: "hosted",
-    entries,
-    feed: { schemaVersion: 1, id: "test", generatedAt: "now", sequence: 1, entries: [] },
-    metadata: { url: "https://clawhub.ai/feed", status: 200, checksum: "hash" },
-  });
-}
-
 function hostedEntry(id: string, candidates: unknown[], fields: Record<string, unknown> = {}) {
   return {
     id,
@@ -196,7 +188,7 @@ describe("managed plugin installation", () => {
     mocks.installRecords.mockResolvedValue({});
     mocks.readConfig.mockResolvedValue(configSnapshot());
     mocks.persistInstall.mockResolvedValue({});
-    mockHostedOfficialCatalog([]);
+    mockHostedOfficialCatalog(mocks.officialCatalog, []);
   });
 
   afterEach(() => {
@@ -338,7 +330,7 @@ describe("managed plugin installation", () => {
   ])("pins public ClawHub identity despite ambient custom env ($label)", async ({ env }) => {
     vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://ambient.example.test");
     vi.stubEnv("CLAWHUB_URL", "https://ambient-legacy.example.test");
-    mockHostedOfficialCatalog([hostedFeedDiffsEntry]);
+    mockHostedOfficialCatalog(mocks.officialCatalog, [hostedFeedDiffsEntry]);
     mockClawHubInstall("impostor", "@openclaw/diffs");
     mockMetadata("impostor");
 
@@ -389,7 +381,7 @@ describe("managed plugin installation", () => {
       vi.stubEnv("OPENCLAW_CLAWHUB_URL", "https://clawhub.ai");
       vi.stubEnv("CLAWHUB_URL", "https://clawhub.ai");
       mocks.readConfig.mockResolvedValue(configSnapshot({ update: { channel } }));
-      mockHostedOfficialCatalog([hostedFeedDiffsEntry]);
+      mockHostedOfficialCatalog(mocks.officialCatalog, [hostedFeedDiffsEntry]);
       mockClawHubInstall("custom-diffs", "@openclaw/diffs", "https://mirror.example.test");
       mockMetadata("custom-diffs", { name: "Diffs" });
       const constraints = constrained
@@ -429,7 +421,7 @@ describe("managed plugin installation", () => {
 
   it("never falls back after npm security refusal", async () => {
     const failure = { code: "security_scan_blocked", error: "untrusted package" };
-    mockHostedOfficialCatalog([
+    mockHostedOfficialCatalog(mocks.officialCatalog, [
       {
         name: "@openclaw/diffs",
         openclaw: {
@@ -519,7 +511,7 @@ describe("managed plugin installation", () => {
         },
       });
       // The hosted feed supplies artifacts; Brave's local descriptor owns recovery permission.
-      mockHostedOfficialCatalog([
+      mockHostedOfficialCatalog(mocks.officialCatalog, [
         hostedEntry(packageName, [{ sourceRef: `public-${source}`, package: packageName }]),
       ]);
       if (source === "clawhub") {
@@ -557,7 +549,7 @@ describe("managed plugin installation", () => {
     "keeps each hosted source's exact version and integrity on fallback through %s",
     async (clawhubUrl) => {
       vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "2026.9.7");
-      mockHostedOfficialCatalog([
+      mockHostedOfficialCatalog(mocks.officialCatalog, [
         {
           ...hostedFeedDiffsEntry,
           install: {
@@ -627,7 +619,7 @@ describe("managed plugin installation", () => {
       const packageName = "@openclaw/perplexity-plugin";
       const catalogSpec = `clawhub:${packageName}@2026.9.9`;
       const integrity = `sha256-${Buffer.from("a".repeat(64), "hex").toString("base64")}`;
-      mockHostedOfficialCatalog([
+      mockHostedOfficialCatalog(mocks.officialCatalog, [
         hostedEntry(
           packageName,
           [{ sourceRef: "public-clawhub", package: packageName, version: "2026.9.9", integrity }],
@@ -706,7 +698,7 @@ describe("managed plugin installation", () => {
     };
     mocks.readConfig.mockResolvedValue(configSnapshot({ update: { channel: "beta" } }));
     // Package identity without a declared runtime id must not become an expectedPluginId pin.
-    mockHostedOfficialCatalog([
+    mockHostedOfficialCatalog(mocks.officialCatalog, [
       hostedEntry(
         "@openclaw/bluebubbles",
         [{ sourceRef: "public-clawhub", package: "@openclaw/bluebubbles" }],
@@ -733,7 +725,7 @@ describe("managed plugin installation", () => {
 
   it("keeps the runtime-id pin when a declared id equals the package name", async () => {
     // An unscoped package can legitimately declare its package name as the runtime id.
-    mockHostedOfficialCatalog([
+    mockHostedOfficialCatalog(mocks.officialCatalog, [
       hostedEntry("sonos", [{ sourceRef: "public-clawhub", package: "sonos" }], {
         title: "Sonos",
         openclaw: { plugin: { id: "sonos" } },
@@ -748,7 +740,7 @@ describe("managed plugin installation", () => {
   });
 
   it("approves every install-policy warning in an acknowledged Gateway install", async () => {
-    mockHostedOfficialCatalog([hostedFeedDiffsEntry]);
+    mockHostedOfficialCatalog(mocks.officialCatalog, [hostedFeedDiffsEntry]);
     const installed = mockClawHubInstall("diffs", "@openclaw/diffs");
     mocks.clawhubInstall.mockImplementation(
       async (params: Parameters<typeof import("./clawhub.js").installPluginFromClawHub>[0]) => {

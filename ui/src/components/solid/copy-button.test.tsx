@@ -2,6 +2,7 @@ import { cleanup, fireEvent, render } from "@solidjs/testing-library";
 import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { restorePropertyDescriptor } from "../../test-helpers/property-descriptor.ts";
 import { CopyButton } from "./copy-button.tsx";
 
 const clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, "clipboard");
@@ -20,16 +21,8 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
-  if (clipboardDescriptor) {
-    Object.defineProperty(navigator, "clipboard", clipboardDescriptor);
-  } else {
-    Reflect.deleteProperty(navigator, "clipboard");
-  }
-  if (execCommandDescriptor) {
-    Object.defineProperty(document, "execCommand", execCommandDescriptor);
-  } else {
-    Reflect.deleteProperty(document, "execCommand");
-  }
+  restorePropertyDescriptor(navigator, "clipboard", clipboardDescriptor);
+  restorePropertyDescriptor(document, "execCommand", execCommandDescriptor);
 });
 
 describe("Solid copy button", () => {
