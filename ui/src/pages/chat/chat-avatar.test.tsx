@@ -365,7 +365,7 @@ describe("ChatAvatar", () => {
         ...transcript.container.querySelectorAll("img"),
       ].map((image) => image.getAttribute("src"));
     expect(sources()).toEqual([null, null, null]);
-    expect(fetchAvatar).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledOnce());
     expect(fetchAvatar).toHaveBeenCalledWith(
       `https://gateway.example.test${avatar}`,
       expect.objectContaining({ headers: { Authorization: "Bearer device-token" } }),
@@ -500,6 +500,7 @@ describe("refreshChatAvatar", () => {
     const pressureLoads = Array.from({ length: 128 }, (_, index) =>
       Promise.resolve(resolveAvatarImageUrl(`/avatar/pending-${index}?v=1`)),
     );
+    await vi.waitFor(() => expect(fetchAvatar).toHaveBeenCalledTimes(129));
     host.sessionKey = "agent:main:second";
     const current = refreshChatAvatar(host);
     avatar.resolve(imageResponse());

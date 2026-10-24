@@ -124,13 +124,15 @@ it("fetches one persisted settings avatar alongside unrelated requests", async (
     const classes = view.classes();
     expect(classes).toContain("is-pending");
     expect(classes).not.toContain("is-fallback");
-    expect(fetchAvatar).toHaveBeenCalledWith(
-      avatarUrl(1),
-      expect.objectContaining({
-        credentials: "include",
-        headers: { Authorization: "Bearer avatar-token" },
-        signal: expect.any(AbortSignal),
-      }),
+    await waitForFast(() =>
+      expect(fetchAvatar).toHaveBeenCalledWith(
+        avatarUrl(1),
+        expect.objectContaining({
+          credentials: "include",
+          headers: { Authorization: "Bearer avatar-token" },
+          signal: expect.any(AbortSignal),
+        }),
+      ),
     );
     response.resolve(avatarResponse());
     await view.loaded(1);
@@ -197,9 +199,9 @@ it("keeps a reopened picker preview pending until the authenticated avatar resol
   flush();
   const preview = view.query(".avatar-picker__preview .identity-avatar--agent");
   const image = preview?.querySelector("img");
+  await waitForFast(() => expect(fetchAvatar).toHaveBeenCalledOnce());
   expect(preview?.classList).toContain("is-pending");
   expect(image?.getAttribute("src")).toBeNull();
-  expect(fetchAvatar).toHaveBeenCalledOnce();
   response.resolve(avatarResponse());
   await waitForFast(() => expect(image?.getAttribute("src")).toBe("blob:settings-avatar-1"));
   image?.dispatchEvent(new Event("load"));
