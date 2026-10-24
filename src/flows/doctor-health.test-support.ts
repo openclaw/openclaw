@@ -117,7 +117,10 @@ const mocks = vi.hoisted(() => {
       noteStalePluginRuntimeSymlinks: async () => undefined,
       removeStalePluginRuntimeSymlinks: async () => ({ changes: [], warnings: [] }),
     },
-    "../commands/doctor-platform-notes.js": { noteStartupOptimizationHints: () => undefined },
+    "../commands/doctor-platform-notes.js": {
+      noteStartupOptimizationHints: () => undefined,
+      maybeRepairMacGatewayServiceEnvQuotes: async () => undefined,
+    },
     // Keep config preparation outside service-lifecycle fixtures.
     "../commands/doctor-config-flow.js": {
       loadAndMaybeMigrateDoctorConfig: async () => ({

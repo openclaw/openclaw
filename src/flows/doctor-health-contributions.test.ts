@@ -101,6 +101,7 @@ const mocks = vi.hoisted(() => ({
   maybeScanExtraGatewayServices: vi.fn().mockResolvedValue(undefined),
   maybeResolveDuelingSystemdGatewayScopes: vi.fn().mockResolvedValue(undefined),
   noteMacGatewayPlatformWarnings: vi.fn(),
+  maybeRepairMacGatewayServiceEnvQuotes: vi.fn(),
   noteMacDisabledGatewayLaunchAgent: vi.fn(),
   gatewaySecretInputPathCanWin: vi.fn(),
   readGatewaySecretInputValue: vi.fn((..._args: unknown[]) => undefined as string | undefined),
@@ -402,6 +403,7 @@ vi.mock("../gateway/call.js", () => ({
 vi.mock("../commands/doctor-platform-notes.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../commands/doctor-platform-notes.js")>()),
   noteMacGatewayPlatformWarnings: mocks.noteMacGatewayPlatformWarnings,
+  maybeRepairMacGatewayServiceEnvQuotes: mocks.maybeRepairMacGatewayServiceEnvQuotes,
   noteMacDisabledGatewayLaunchAgent: mocks.noteMacDisabledGatewayLaunchAgent,
 }));
 

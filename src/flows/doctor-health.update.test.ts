@@ -62,7 +62,11 @@ const mocks = vi.hoisted(() => {
     "../commands/doctor/shared/plugin-runtime-symlinks.js": {
       noteStalePluginRuntimeSymlinks: async () => undefined,
     },
-    "../commands/doctor-platform-notes.js": { noteStartupOptimizationHints: () => undefined },
+    // mock-isolation: update-flow assertions keep platform notes and the env-quote repair inert.
+    "../commands/doctor-platform-notes.js": {
+      noteStartupOptimizationHints: () => undefined,
+      maybeRepairMacGatewayServiceEnvQuotes: async () => undefined,
+    },
     // mock-isolation: outcomes do not need config preparation or plugin resources.
     "../commands/doctor-config-flow.js": {
       loadAndMaybeMigrateDoctorConfig: async () => ({

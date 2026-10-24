@@ -123,6 +123,7 @@ vi.mock("./doctor-platform-notes.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./doctor-platform-notes.js")>()),
   noteStartupOptimizationHints: vi.fn(),
   noteMacGatewayPlatformWarnings: vi.fn().mockResolvedValue(undefined),
+  maybeRepairMacGatewayServiceEnvQuotes: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("./doctor-sandbox.js", () => ({
