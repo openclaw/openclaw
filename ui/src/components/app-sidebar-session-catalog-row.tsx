@@ -90,6 +90,7 @@ export function renderCatalogSessionRow(
     routeId,
     navigation: target().options,
     canOpenTerminal: readSession().canOpenTerminal === true,
+    originalUrl: readSession().originalUrl,
     canDelete: readSession().canArchive && readCatalog().capabilities.archive,
     name: readSession().name ?? readSession().threadId,
     displayName: readSession().name,

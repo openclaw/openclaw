@@ -9,6 +9,9 @@ const enSessionNavigation = {
       unsupportedViewOnly: "This external session source is view-only.",
       sessionMenu: "External session actions",
       openInOpenClaw: "Open in OpenClaw",
+      openOriginal: "Open original",
+      originalUnavailable:
+        "Open original is unavailable. Ask the source operator to check link support, session routing, and the configured Control UI address.",
       importToOpenClaw: "Import to OpenClaw",
       importComplete: "Imported {count} transcript items.",
       importUnchanged: "The imported transcript is up to date.",

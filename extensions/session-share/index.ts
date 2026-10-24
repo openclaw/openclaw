@@ -1,5 +1,9 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
-import { createSessionShareNodeCommands, SESSION_SHARE_COMMANDS } from "./src/node-commands.js";
+import {
+  createSessionShareNodeCommands,
+  SESSION_SHARE_COMMANDS,
+  SESSION_SHARE_LIST_LINKS_COMMAND,
+} from "./src/node-commands.js";
 import { createSessionShareCatalog } from "./src/session-catalog.js";
 
 export default definePluginEntry({
@@ -12,7 +16,7 @@ export default definePluginEntry({
       api.registerNodeHostCommand(command);
     }
     api.registerNodeInvokePolicy({
-      commands: SESSION_SHARE_COMMANDS,
+      commands: [...SESSION_SHARE_COMMANDS, SESSION_SHARE_LIST_LINKS_COMMAND],
       defaultPlatforms: ["macos", "linux", "windows"],
       handle: (context) => context.invokeNode(),
     });

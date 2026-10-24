@@ -54,6 +54,7 @@ function fixture(beforeOpen = () => {}) {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   cleanupSolid();
   document.body.replaceChildren();
 });
@@ -99,4 +100,41 @@ it("retargets an adopted row without remounting its open popup", async () => {
   owner.retargetTrigger(request.key, replacement);
   await waitForSolid(() => expect(popup.trigger).toBe(replacement));
   expect(view.container.querySelector(popupSelector)).toBe(popup);
+});
+
+it.each([
+  undefined,
+  null,
+  "javascript:alert(1)",
+  "//source.example/chat/main",
+  "https://user:password@source.example/chat/main",
+  "https://source.example/chat/main?token=private",
+  "https://source.example/chat/main#token",
+  "https://source.example\\other/chat/main",
+  "https://source.example/chat/main\n",
+  "https://[",
+  "https://source.example/control/chat/research/planning",
+])("admits only credential-free source navigation for %j", async (originalUrl) => {
+  const open = vi.spyOn(window, "open").mockReturnValue(null);
+  const { owner, mount } = fixture();
+  const view = mount();
+  owner.open({ ...request, originalUrl }, 10, 20);
+  await waitForSolid(() =>
+    expect(view.container.querySelector('[data-value="viewer"]')).not.toBeNull(),
+  );
+  const action = view.container.querySelector<HTMLButtonElement>('[data-value="original"]');
+  if (originalUrl === "https://source.example/control/chat/research/planning") {
+    expect(action).not.toBeNull();
+    action!.click();
+    expect(open).toHaveBeenCalledExactlyOnceWith(originalUrl, "_blank", "noopener,noreferrer");
+  } else {
+    if (originalUrl === undefined) {
+      expect(action).toBeNull();
+    } else {
+      expect(action?.disabled).toBe(true);
+      expect(action?.title).toContain("Open original is unavailable");
+      action?.click();
+    }
+    expect(open).not.toHaveBeenCalled();
+  }
 });

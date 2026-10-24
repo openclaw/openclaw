@@ -1,5 +1,6 @@
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { sessionShareControlUiOrigin } from "./original-url.js";
 
 type SessionShareConfigSnapshot = ReturnType<PluginRuntime["config"]["current"]>;
 
@@ -23,12 +24,18 @@ export function sessionShareNodeBinding(
   nodeId: string,
 ): {
   owner?: string;
+  controlUiOrigin?: string;
+  controlUiBasePath?: unknown;
   linkGitHubIdentities: boolean;
 } {
   const nodes = sessionShareConfig(config).nodes;
   const binding = isRecord(nodes) ? nodes[nodeId] : undefined;
   return {
     ...(isRecord(binding) && typeof binding.owner === "string" ? { owner: binding.owner } : {}),
+    controlUiOrigin: sessionShareControlUiOrigin(
+      isRecord(binding) ? binding.controlUiOrigin : undefined,
+    ),
+    controlUiBasePath: isRecord(binding) ? binding.controlUiBasePath : undefined,
     linkGitHubIdentities: isRecord(binding) && binding.linkGitHubIdentities === true,
   };
 }

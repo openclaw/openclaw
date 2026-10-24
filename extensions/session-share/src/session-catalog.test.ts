@@ -118,7 +118,9 @@ async function catalogFixture() {
     host: async (query: CatalogQuery = {}) => (await readList(query))[0],
     read: (hostId = "node:alpha") => catalog.read({ hostId, threadId: nativeSession.threadId }),
     expectSessions: async (sessions = [nativeSession], query: CatalogQuery = {}) => {
-      expect((await readList(query))[0]?.sessions).toEqual(sessions);
+      expect((await readList(query))[0]?.sessions).toEqual(
+        sessions.map((session) => Object.assign({}, session, { originalUrl: null })),
+      );
     },
     hold: () => {
       const gate = createDeferred<unknown>();
@@ -276,7 +278,9 @@ describe("session-share receiver catalog", () => {
     expect((await f.begin())[0]?.pending).toBe(true);
     await vi.advanceTimersByTimeAsync(delay ? 35_005 : 2);
     const first = (await f.host({ limitPerHost: 100 }))!;
-    expect(first.sessions).toEqual(sessions.slice(0, 100));
+    expect(first.sessions).toEqual(
+      sessions.slice(0, 100).map((session) => Object.assign({}, session, { originalUrl: null })),
+    );
     expect(first.error).toBeUndefined();
     await f.expectSessions(sessions.slice(100, 200), {
       limitPerHost: 100,
@@ -524,7 +528,7 @@ describe("session-share receiver catalog", () => {
       { hostId: "node:offline", error: { code: "NODE_OFFLINE" } },
       { hostId: "node:broken", error: { code: "NODE_INVOKE_FAILED" } },
     ]);
-    expect(hosts[0]?.sessions).toEqual([nativeSession]);
+    expect(hosts[0]?.sessions).toEqual([{ ...nativeSession, originalUrl: null }]);
     expect(f.invoke).toHaveBeenCalledTimes(4);
     expect(f.catalog.continueSession).toBeUndefined();
     expect(f.catalog.archive).toBeUndefined();
@@ -556,5 +560,67 @@ describe("session-share receiver catalog", () => {
     } else {
       await expect(f.read()).rejects.toThrow("Invalid OpenClaw transcript");
     }
+  });
+});
+
+describe("source-link command compatibility", () => {
+  const linkedCommand = "openclaw.sessions.list-with-links.v1";
+  const originalPath = "/chat/main/shared";
+  const configure = () => {
+    f.configure({
+      plugins: {
+        entries: {
+          "session-share": {
+            config: {
+              nodes: {
+                alpha: { controlUiOrigin: "https://source.example", controlUiBasePath: "/control" },
+              },
+            },
+          },
+        },
+      },
+    });
+  };
+  const linkedNode = { nodeId: "alpha", connected: true, commands: [...commands, linkedCommand] };
+
+  it("uses the advertised variant and strips private path metadata from catalog rows", async () => {
+    configure();
+    f.list.mockResolvedValue({ nodes: [linkedNode] });
+    f.invoke.mockResolvedValue({ sessions: [{ ...nativeSession, originalPath }] });
+    expect((await f.host())?.sessions).toEqual([
+      {
+        ...nativeSession,
+        originalUrl: "https://source.example/control/chat/main/shared",
+      },
+    ]);
+    expect(f.invoke).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ command: linkedCommand }),
+    );
+  });
+
+  it("keeps an old source readable with visible unavailable navigation", async () => {
+    configure();
+    await f.expectSessions();
+    expect(f.invoke).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ command: commands[0] }),
+    );
+  });
+
+  it("withdraws an in-flight linked snapshot when the command is removed without reconnecting", async () => {
+    configure();
+    f.list.mockResolvedValue({ nodes: [linkedNode] });
+    const gate = f.hold();
+    const publication = await f.watch();
+    await vi.advanceTimersByTimeAsync(2);
+    f.nodes("alpha");
+    gate.resolve({ sessions: [{ ...nativeSession, originalPath }] });
+    await publication.done();
+    expect(publication.onHost.mock.calls.flatMap(([host]) => host.sessions)).toEqual([]);
+    f.invoke.mockResolvedValue({ sessions: [nativeSession] });
+    await f.expectSessions();
+    expect(f.invoke.mock.calls.map(([request]) => request.command)).toEqual([
+      linkedCommand,
+      commands[0],
+    ]);
   });
 });

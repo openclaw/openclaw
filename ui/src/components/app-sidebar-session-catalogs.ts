@@ -226,6 +226,7 @@ export type CatalogSessionMenuRequest = {
   canDelete: boolean;
   name: string;
   displayName?: string;
+  originalUrl?: string | null;
   meta: string;
 };
 

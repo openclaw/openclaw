@@ -84,6 +84,42 @@ The source reads its session metadata inventory in a background worker and reuse
 
 Listings leave cold transcript archives untouched and use any stored title metadata. To read cold history, open the session on the source Gateway first so its normal history owner restores the archive. Each source page also bounds raw transcript reads to 8 MiB; a single larger entry returns an explicit error instead of being silently skipped. Inspect that entry on the source Gateway.
 
+## Open the original session
+
+**Open original** in a shared session's menu opens the source Control UI in a separate tab. Upgrade Session Share on both machines, then add the optional read-only `openclaw.sessions.list-with-links.v1` command to the source node's existing list/read allowlist. Restart or reconnect the source node and approve its updated command surface on the receiver with `openclaw nodes pending` and `openclaw nodes approve <requestId>`.
+
+Older sources and receivers continue to list and read sessions through the unchanged v1 commands. The new receiver only requests link metadata when the optional command is advertised and approved; it does not probe or retry an unsupported command.
+
+Configure the source Control UI address on the receiver:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "session-share": {
+        enabled: true,
+        config: {
+          nodes: {
+            "<nodeId>": {
+              controlUiOrigin: "https://team.example.com",
+              controlUiBasePath: "/openclaw",
+            },
+          },
+        },
+      },
+    },
+  },
+}
+```
+
+`controlUiOrigin` is an HTTP(S) origin without credentials, a path, query, or fragment. `controlUiBasePath` is optional and defaults to root; set it only when the source Control UI uses a path prefix. Do not include whitespace, query strings, fragments, backslashes, or dot segments. The receiver never infers either value from its own configuration or a paired node's address or session rows. Without a valid origin and path, the action is unavailable with guidance.
+
+The source offers a link only when its current ordinary session routing and URL grammar select the same stored agent and key. Home aliases, raw and qualified global rows that share the legacy live stream, and other ambiguous addresses have no link. The menu explains when navigation is unavailable.
+
+These are ordinary source links, not immutable transcript addresses. Changing source routing, deleting a session, or reusing its name can change how a saved link resolves. Refresh the catalog after source changes. Normal named and UUID sessions remain eligible while routing selects the same address.
+
+You must authenticate to the source separately. The receiver stays view-only; this action grants no source access and does not continue or import the session on the receiver.
+
 ## Attribute the source node
 
 Receiver-side identity settings are optional and keyed by the node ID shown by `openclaw nodes list`:

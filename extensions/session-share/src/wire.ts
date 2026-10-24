@@ -76,39 +76,46 @@ const actor = {
     avatarUrl: shortString,
   },
 };
-const sessionPageSchema: JsonSchemaObject = {
-  type: "object",
-  additionalProperties: false,
-  required: ["sessions"],
-  properties: {
-    nextCursor: cursor,
-    sessions: {
-      type: "array",
-      maxItems: 100,
-      items: {
-        type: "object",
-        additionalProperties: false,
-        required: ["threadId", "status", "archived", "canContinue", "canArchive"],
-        properties: {
-          threadId: shortString,
-          name: text,
-          color: shortString,
-          cwd: text,
-          status: { enum: ["live", "idle", "archived"] },
-          createdAt: { type: "number" },
-          updatedAt: { type: "number" },
-          recencyAt: { type: "number" },
-          gitBranch: text,
-          archived: { type: "boolean" },
-          createdActor: actor,
-          canContinue: { const: false },
-          canArchive: { const: false },
-          canOpenTerminal: { const: false },
+function sessionPageSchema(includeLinks: boolean): JsonSchemaObject {
+  return {
+    type: "object",
+    additionalProperties: false,
+    required: ["sessions"],
+    properties: {
+      nextCursor: cursor,
+      sessions: {
+        type: "array",
+        maxItems: 100,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          required: ["threadId", "status", "archived", "canContinue", "canArchive"],
+          properties: {
+            threadId: shortString,
+            ...(includeLinks
+              ? { originalPath: { type: "string", minLength: 1, maxLength: 2048 } }
+              : {}),
+            name: text,
+            color: shortString,
+            cwd: text,
+            status: { enum: ["live", "idle", "archived"] },
+            createdAt: { type: "number" },
+            updatedAt: { type: "number" },
+            recencyAt: { type: "number" },
+            gitBranch: text,
+            archived: { type: "boolean" },
+            createdActor: actor,
+            canContinue: { const: false },
+            canArchive: { const: false },
+            canOpenTerminal: { const: false },
+          },
         },
       },
     },
-  },
-};
+  };
+}
+const plainSessionPageSchema = sessionPageSchema(false);
+const linkedSessionPageSchema = sessionPageSchema(true);
 const transcriptPageSchema: JsonSchemaObject = {
   type: "object",
   additionalProperties: false,
@@ -138,17 +145,18 @@ const transcriptPageSchema: JsonSchemaObject = {
     },
   },
 };
-type SessionSharePage = { sessions: SessionCatalogSession[]; nextCursor?: string };
+export type SessionShareSession = SessionCatalogSession & { originalPath?: string };
+type SessionSharePage = { sessions: SessionShareSession[]; nextCursor?: string };
 type SessionShareTranscriptPage = {
   threadId: string;
   items: SessionCatalogTranscriptItem[];
   nextCursor?: string;
 };
 
-function isSessionPage(value: unknown): value is SessionSharePage {
+function isSessionPage(value: unknown, includeLinks: boolean): value is SessionSharePage {
   return validateJsonSchemaValue({
-    schema: sessionPageSchema,
-    cacheKey: "session-share.sessions.v1",
+    schema: includeLinks ? linkedSessionPageSchema : plainSessionPageSchema,
+    cacheKey: includeLinks ? "session-share.sessions-with-links.v1" : "session-share.sessions.v1",
     value,
   }).ok;
 }
@@ -173,10 +181,10 @@ function unwrapPayload(value: unknown): unknown {
 
 // The wire vocabulary deliberately excludes profile identities and local sessionKey.
 // Only the receiver's explicit binding may turn a paired node claim into local attribution.
-export function parseSessionSharePage(raw: unknown): SessionSharePage {
+export function parseSessionSharePage(raw: unknown, includeLinks = false): SessionSharePage {
   const value = unwrapPayload(raw);
   if (
-    !isSessionPage(value) ||
+    !isSessionPage(value, includeLinks) ||
     (value.nextCursor !== undefined && !sessionCatalogPaging.isExactCursor(value.nextCursor))
   ) {
     throw new Error("Invalid OpenClaw session page from paired node");

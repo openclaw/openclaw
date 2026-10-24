@@ -4,10 +4,12 @@ import { Show, type Component } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
 import { registerSessionNavigationEnglish } from "../i18n/locales/en-session-navigation.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { openExternalUrlSafe } from "../lib/open-external-url.ts";
 import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
 import { readSessionMethodScopeAccess } from "../lib/session-method-access.ts";
 import { parseCatalogSessionKey, type CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
+import { resolveCatalogOriginalUrl } from "../lib/sessions/catalog-original-url.ts";
 import { openCatalogSessionInTerminal } from "../lib/sessions/catalog-terminal.ts";
 import { sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import { showToast } from "../lib/toast.ts";
@@ -222,9 +224,21 @@ export function createSidebarCatalogMenu(host: SidebarCatalogMenuHost, beforeOpe
                 trigger={snapshot.read()?.trigger ?? null}
                 lastActive={menu.meta}
                 canDelete={menu.canDelete}
+                canOpenOriginal={
+                  menu.originalUrl === undefined
+                    ? undefined
+                    : Boolean(resolveCatalogOriginalUrl(menu.originalUrl))
+                }
                 canImport={canImport(viewHost)}
                 terminalDisabled={!menu.canOpenTerminal || !viewHost.terminalAvailable}
                 onAction={(action) => {
+                  if (action === "original") {
+                    const url = resolveCatalogOriginalUrl(menu.originalUrl);
+                    if (url) {
+                      openExternalUrlSafe(url);
+                    }
+                    return;
+                  }
                   if (action === "import") {
                     if (canImport()) {
                       void importSession(menu);

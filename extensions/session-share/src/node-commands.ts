@@ -8,6 +8,7 @@ import {
   sessionCatalogPaging,
   type SessionCatalogSession,
 } from "openclaw/plugin-sdk/session-catalog";
+import { resolveStoredSessionControlUiPath } from "openclaw/plugin-sdk/session-discussion";
 import type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   prepareSessionCatalogSourceActorProjector,
@@ -17,6 +18,7 @@ import {
 import { sessionShareGroups } from "./config.js";
 
 export const SESSION_SHARE_LIST_COMMAND = "openclaw.sessions.list.v1";
+export const SESSION_SHARE_LIST_LINKS_COMMAND = "openclaw.sessions.list-with-links.v1";
 export const SESSION_SHARE_READ_COMMAND = "openclaw.sessions.read.v1";
 export const SESSION_SHARE_COMMANDS = [SESSION_SHARE_LIST_COMMAND, SESSION_SHARE_READ_COMMAND];
 
@@ -137,101 +139,121 @@ export function createSessionShareNodeCommands(
     }
     return sessions;
   }
-  return [
-    {
-      command: SESSION_SHARE_LIST_COMMAND,
-      hasActiveWork: () => false,
-      cap: "openclaw-sessions",
-      dangerous: false,
-      isAvailable: ({ config }) => sessionShareGroups(config).length > 0,
-      async handle(paramsJSON) {
-        const params = sessionCatalogPaging.parseListParams(parseNodeParams(paramsJSON), {
-          searchMaxLength: 500,
-          messages: parameterMessages,
-        });
-        const offset = sessionCatalogPaging.decodeCursor(params.cursor);
-        const search = params.searchTerm?.toLowerCase();
-        const sessions = [];
-        for (const {
+  const listCommand = (command: string, includeLinks: boolean): OpenClawPluginNodeHostCommand => ({
+    command,
+    hasActiveWork: () => false,
+    cap: "openclaw-sessions",
+    dangerous: false,
+    isAvailable: ({ config }) => sessionShareGroups(config).length > 0,
+    async handle(paramsJSON) {
+      const config = api.runtime.config.current();
+      // Routing takes a mutable config view; retain the published snapshot for generation checks.
+      const routingConfig = includeLinks ? api.runtime.config.current({ clone: true }) : undefined;
+      const params = sessionCatalogPaging.parseListParams(parseNodeParams(paramsJSON), {
+        searchMaxLength: 500,
+        messages: parameterMessages,
+      });
+      const offset = sessionCatalogPaging.decodeCursor(params.cursor);
+      const search = params.searchTerm?.toLowerCase();
+      const sessions = [];
+      for (const {
+        agentId,
+        sessionKey,
+        storePath,
+        entry,
+        assertSourceCurrent,
+      } of await readSharedEntries()) {
+        const name = search
+          ? await readSessionTranscriptCatalogTitleAsync({
+              agentId,
+              sessionKey,
+              storePath,
+              entry,
+            })
+          : undefined;
+        if (
+          search &&
+          !name?.toLowerCase().includes(search) &&
+          !sessionKey.toLowerCase().includes(search)
+        ) {
+          continue;
+        }
+        sessions.push({
           agentId,
-          sessionKey,
           storePath,
+          threadId: sessionKey,
+          name,
           entry,
           assertSourceCurrent,
-        } of await readSharedEntries()) {
-          const name = search
-            ? await readSessionTranscriptCatalogTitleAsync({
-                agentId,
-                sessionKey,
-                storePath,
-                entry,
-              })
-            : undefined;
-          if (
-            search &&
-            !name?.toLowerCase().includes(search) &&
-            !sessionKey.toLowerCase().includes(search)
-          ) {
-            continue;
-          }
-          sessions.push({
-            agentId,
-            storePath,
-            threadId: sessionKey,
-            name,
-            entry,
-            assertSourceCurrent,
-            recencyAt: Math.max(
-              entry.updatedAt,
-              entry.lastInteractionAt ?? 0,
-              entry.lastActivityAt ?? 0,
-            ),
+          recencyAt: Math.max(
+            entry.updatedAt,
+            entry.lastInteractionAt ?? 0,
+            entry.lastActivityAt ?? 0,
+          ),
+        });
+      }
+      sessions.sort(
+        (left, right) =>
+          right.recencyAt - left.recencyAt || left.threadId.localeCompare(right.threadId),
+      );
+      const selected = sessions.slice(offset, offset + params.limit);
+      if (!search) {
+        for (const session of selected) {
+          session.name = await readSessionTranscriptCatalogTitleAsync({
+            agentId: session.agentId,
+            sessionKey: session.threadId,
+            storePath: session.storePath,
+            entry: session.entry,
           });
         }
-        sessions.sort(
-          (left, right) =>
-            right.recencyAt - left.recencyAt || left.threadId.localeCompare(right.threadId),
-        );
-        const selected = sessions.slice(offset, offset + params.limit);
-        if (!search) {
-          for (const session of selected) {
-            session.name = await readSessionTranscriptCatalogTitleAsync({
-              agentId: session.agentId,
-              sessionKey: session.threadId,
-              storePath: session.storePath,
-              entry: session.entry,
-            });
-          }
-        }
-        const sourceAssertions = new Set(selected.map((session) => session.assertSourceCurrent));
-        const projectCreator = await prepareSessionCatalogSourceActorProjector({
-          ...source,
-          actors: selected.map(({ entry }) => entry.createdActor),
-        });
-        sourceAssertions.forEach((assertCurrent) => assertCurrent());
-        const current = sharedEntries(
-          api,
-          selected.map((session) => ({
-            agentId: session.agentId,
-            storePath: session.storePath,
-            sessionKey: session.threadId,
-          })),
-        );
-        if (
-          selected.some(
-            (session) =>
-              !current.some(
-                ({ agentId, sessionKey, storePath, entry }) =>
-                  agentId === session.agentId &&
-                  sessionKey === session.threadId &&
-                  storePath === session.storePath &&
-                  entry.sessionId === session.entry.sessionId,
-              ),
+      }
+      const sourceAssertions = new Set(selected.map((session) => session.assertSourceCurrent));
+      const projectCreator = await prepareSessionCatalogSourceActorProjector({
+        ...source,
+        actors: selected.map(({ entry }) => entry.createdActor),
+      });
+      const originalPaths = routingConfig
+        ? await Promise.all(
+            selected.map(({ agentId, threadId }) =>
+              resolveStoredSessionControlUiPath({
+                config: routingConfig,
+                agentId,
+                sessionKey: threadId,
+              }),
+            ),
           )
-        ) {
-          throw new Error("Session is no longer shared. Refresh the session catalog.");
-        }
-        const page = selected.map(({ threadId, name, entry, recencyAt }): SessionCatalogSession => {
+        : [];
+      if (api.runtime.config.current() !== config) {
+        throw new Error("Session sharing configuration changed. Refresh the session catalog.");
+      }
+      sourceAssertions.forEach((assertCurrent) => assertCurrent());
+      const current = sharedEntries(
+        api,
+        selected.map((session) => ({
+          agentId: session.agentId,
+          storePath: session.storePath,
+          sessionKey: session.threadId,
+        })),
+      );
+      if (
+        selected.some(
+          (session) =>
+            !current.some(
+              ({ agentId, sessionKey, storePath, entry }) =>
+                agentId === session.agentId &&
+                sessionKey === session.threadId &&
+                storePath === session.storePath &&
+                entry.sessionId === session.entry.sessionId,
+            ),
+        )
+      ) {
+        throw new Error("Session is no longer shared. Refresh the session catalog.");
+      }
+      const page = selected.map(
+        (
+          { threadId, name, entry, recencyAt },
+          index,
+        ): SessionCatalogSession & { originalPath?: string } => {
           const archived = entry.archivedAt !== undefined;
           const cwd =
             entry.execCwd ??
@@ -241,6 +263,7 @@ export function createSessionShareNodeCommands(
             entry.worktree?.repoRoot;
           return {
             threadId,
+            originalPath: originalPaths[index],
             name,
             color: entry.color,
             cwd: cwd ? cwd.slice(0, 6000) : undefined,
@@ -255,15 +278,19 @@ export function createSessionShareNodeCommands(
             canOpenTerminal: false,
             createdActor: projectCreator(entry.createdActor),
           };
-        });
-        return JSON.stringify({
-          sessions: page,
-          ...(offset + page.length < sessions.length
-            ? { nextCursor: sessionCatalogPaging.encodeCursor(offset + page.length) }
-            : {}),
-        });
-      },
+        },
+      );
+      return JSON.stringify({
+        sessions: page,
+        ...(offset + page.length < sessions.length
+          ? { nextCursor: sessionCatalogPaging.encodeCursor(offset + page.length) }
+          : {}),
+      });
     },
+  });
+  return [
+    listCommand(SESSION_SHARE_LIST_COMMAND, false),
+    listCommand(SESSION_SHARE_LIST_LINKS_COMMAND, true),
     {
       command: SESSION_SHARE_READ_COMMAND,
       hasActiveWork: () => false,

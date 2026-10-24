@@ -63,7 +63,10 @@ function registerSessionShare(runtime: PluginRuntime, config: OpenClawConfig = {
   return { commands: nodeCommands, catalog, services, logger: api.logger };
 }
 
-type SessionPage = { sessions: SessionCatalogSession[]; nextCursor?: string };
+type SessionPage = {
+  sessions: Array<SessionCatalogSession & { originalPath?: string }>;
+  nextCursor?: string;
+};
 type TranscriptPage = {
   threadId: string;
   items: SessionCatalogTranscriptItem[];
@@ -291,6 +294,51 @@ async function withCatalogFixture(
 }
 
 describe("session-share node commands", () => {
+  it("keeps v1 identities unchanged and offers only current source links through the optional command", async () => {
+    await withCommands(async (fixture) => {
+      fixture.config.session = { mainKey: "workspace", scope: "per-sender" };
+      const uuid = "01234567-89ab-cdef-0123-456789abcdef";
+      await writeSession("planning");
+      await writeSession(`dashboard:${uuid}`);
+      await writeSession("main");
+      await writeSession("workspace");
+      await writeSession("global");
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: "global" },
+        {
+          sessionId: "raw-global",
+          updatedAt: Date.now(),
+          category: "Team",
+        },
+      );
+      const plain = await fixture.list();
+      expect(plain.sessions.map(({ threadId }) => threadId)).toContain("global");
+      expect(plain.sessions.map(({ threadId }) => threadId)).toContain("agent:main:global");
+      expect(plain.sessions.every((row) => row.originalPath === undefined)).toBe(true);
+      const command = fixture.commands.find(
+        ({ command: candidate }) => candidate === "openclaw.sessions.list-with-links.v1",
+      )!;
+      const linked = JSON.parse(await command.handle("{}")) as SessionPage;
+      expect(
+        linked.sessions
+          .filter(({ originalPath }) => originalPath)
+          .map(({ threadId, originalPath }) => ({ threadId, originalPath }))
+          .toSorted((left, right) => left.threadId.localeCompare(right.threadId)),
+      ).toEqual([
+        { threadId: `agent:main:dashboard:${uuid}`, originalPath: `/chat/main/dashboard/${uuid}` },
+        { threadId: "agent:main:planning", originalPath: "/chat/main/planning" },
+      ]);
+      expect(linked.sessions.map(({ threadId }) => threadId)).toEqual(
+        plain.sessions.map(({ threadId }) => threadId),
+      );
+      fixture.config.session = { mainKey: "planning", scope: "global" };
+      const changed = JSON.parse(await command.handle("{}")) as SessionPage;
+      expect(
+        changed.sessions.find(({ threadId }) => threadId === "agent:main:planning")?.originalPath,
+      ).toBeUndefined();
+    });
+  });
+
   it("refreshes shared metadata without rescanning the inventory on the node thread", async () => {
     await withCommands(async (source) => {
       expect((await source.list()).sessions).toEqual([]);
@@ -764,12 +812,16 @@ describe("session-share receiver identity integration", () => {
       fixture.invoke.mockImplementation(async ({ command }) =>
         command === commands[0] ? { sessions: [human, agent, unmatched] } : transcript,
       );
-      const namespacedHuman = remoteHuman(human.threadId, "4242", hostId);
-      const namespacedUnmatched = remoteHuman(unmatched.threadId, "9999", hostId);
+      const namespacedHuman = { ...remoteHuman(human.threadId, "4242", hostId), originalUrl: null };
+      const namespacedUnmatched = {
+        ...remoteHuman(unmatched.threadId, "9999", hostId),
+        originalUrl: null,
+      };
+      const projectedAgent = { ...agent, originalUrl: null };
       await fixture.hydrate();
       expect((await fixture.read({}))[0]?.sessions).toEqual([
         namespacedHuman,
-        agent,
+        projectedAgent,
         namespacedUnmatched,
       ]);
       expect(
@@ -790,7 +842,7 @@ describe("session-share receiver identity integration", () => {
         }
         const rows = (await fixture.read({}))[0]!.sessions;
         expect(rows[linksHumans ? 0 : 1]?.createdActor).toMatchObject(linkedActor(profile.id));
-        expect(rows[linksHumans ? 1 : 0]).toEqual(linksHumans ? agent : namespacedHuman);
+        expect(rows[linksHumans ? 1 : 0]).toEqual(linksHumans ? projectedAgent : namespacedHuman);
         expect(rows[2]).toEqual(namespacedUnmatched);
         if (linksHumans) {
           expect.soft(fullIdentityScans()).toBe(0);
