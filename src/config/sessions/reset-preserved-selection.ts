@@ -54,8 +54,12 @@ export function resolveResetPreservedSelection(params: {
     }
   }
 
+  // A person-linked account pin has user-pin strength and keeps its link provenance.
   const authProfileOverrideSource = resolveSessionAuthProfileOverrideSource(entry);
-  if (authProfileOverrideSource === "user" && entry.authProfileOverride) {
+  if (
+    (authProfileOverrideSource === "user" || authProfileOverrideSource === "user-link") &&
+    entry.authProfileOverride
+  ) {
     preserved.authProfileOverride = entry.authProfileOverride;
     preserved.authProfileOverrideSource = authProfileOverrideSource;
     if (entry.authProfileOverrideCompactionCount !== undefined) {
