@@ -1936,6 +1936,7 @@ class NodeRuntime internal constructor(
           gatewayAdvertisesMethod = ::gatewayAdvertisesMethod,
           gatewayAdvertisesCapability = ::gatewayAdvertisesCapability,
           currentGatewayCatalogRevision = { gatewayMethodsEpoch.value },
+          inboundMediaBasePath = { _gatewaySourcePreviewConfig.value?.basePath },
           commandOutbox = chatCommandOutbox,
           recordModelRecent = prefs::recordModelRecent,
           onSessionDeleted = ::publishChatSessionDeletion,

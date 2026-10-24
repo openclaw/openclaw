@@ -432,7 +432,7 @@ class RoomChatTranscriptCache internal constructor(
                   CachedMessageContent(type = part.type, toolActivity = part.toolActivity)
                 }
 
-                (isImage && !part.artifactId.isNullOrBlank() && !part.url.isNullOrBlank()) ||
+                (isImage && part.imageLoadKey() != null && !part.url.isNullOrBlank()) ||
                   part.type == "audio" || part.type == "video" || part.type == "file" -> {
                   CachedMessageContent(
                     type = part.type,
