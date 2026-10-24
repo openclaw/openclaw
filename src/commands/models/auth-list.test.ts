@@ -20,7 +20,9 @@ const mocks = vi.hoisted(() => ({
   externalCliDiscoveryForProviderAuth: vi.fn(() => ({ kind: "none" })),
   loadModelsConfig: vi.fn(),
   resolveAuthProfileDisplayLabel: vi.fn(({ profileId }: { profileId: string }) => profileId),
-  resolveAuthStatePathForDisplay: vi.fn((agentDir: string) => `${agentDir}/openclaw-agent.sqlite`),
+  resolveAuthStatePathForDisplayAsync: vi.fn(
+    async (agentDir: string) => `${agentDir}/openclaw-agent.sqlite`,
+  ),
   resolveModelsTargetAgent: vi.fn((_cfg: OpenClawConfig, rawAgentId?: string) => {
     const agentId = rawAgentId ?? "main";
     return { agentDir: `/tmp/openclaw/agents/${agentId}`, agentId };
@@ -38,7 +40,7 @@ vi.mock("../../agents/auth-profiles.js", () => ({
   setAuthProfileOrder: mocks.setAuthProfileOrder,
   externalCliDiscoveryForProviderAuth: mocks.externalCliDiscoveryForProviderAuth,
   resolveAuthProfileDisplayLabel: mocks.resolveAuthProfileDisplayLabel,
-  resolveAuthStatePathForDisplay: mocks.resolveAuthStatePathForDisplay,
+  resolveAuthStatePathForDisplayAsync: mocks.resolveAuthStatePathForDisplayAsync,
 }));
 
 // mock-isolation: Use fixture config without reading host config or resolving its secrets.
@@ -111,9 +113,9 @@ describe("modelsAuthListCommand", () => {
     vi.clearAllMocks();
     mocks.loadModelsConfig.mockReset().mockResolvedValue({} as OpenClawConfig);
     mocks.ensureAuthProfileStore.mockReset();
-    mocks.resolveAuthStatePathForDisplay
+    mocks.resolveAuthStatePathForDisplayAsync
       .mockReset()
-      .mockImplementation((agentDir: string) => `${agentDir}/openclaw-agent.sqlite`);
+      .mockImplementation(async (agentDir: string) => `${agentDir}/openclaw-agent.sqlite`);
   });
 
   afterEach(() => vi.restoreAllMocks());
@@ -338,7 +340,7 @@ describe("modelsAuthListCommand", () => {
   it("prints an empty profile list with the actual shared auth path", async () => {
     const authStatePath = "/tmp/openclaw/state/openclaw.sqlite";
     mocks.ensureAuthProfileStore.mockReturnValue({ version: 1, profiles: {} });
-    mocks.resolveAuthStatePathForDisplay.mockReturnValue(authStatePath);
+    mocks.resolveAuthStatePathForDisplayAsync.mockResolvedValue(authStatePath);
     const runtime = await list();
 
     expect(runtime.logs).toEqual([
