@@ -1,21 +1,24 @@
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
-import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
+import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { patchSettings } from "../../app/settings.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { navigateMarkdownSession } from "../../components/markdown-session-links.ts";
 import { personActivityRouting } from "../../components/person-activity-link.ts";
+import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
+import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
   pickFreshestObserverDigest,
   projectSessionObserverDigest,
   resolveChatPaneObserverRunId,
 } from "../../lib/observer-digest.ts";
+import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
+import { readSessionMethodScopeAccess } from "../../lib/session-method-access.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { resolveUiConfiguredMainKey } from "../../lib/sessions/session-key.ts";
 import { navigateToModelProvider } from "../model-providers/navigation.ts";
 import { isChatBubbleMode } from "./chat-bubble-mode.ts";
-import { resolveChatComposerAvailability } from "./chat-composer-availability.ts";
 import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { resolveChatModelSetup } from "./chat-model-setup.ts";
@@ -260,32 +263,83 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       unarchiveAccess: mutationAccess.unarchive,
     });
     const initialHistoryUnavailable = !catalogKey && isInitialChatHistoryUnavailable(state);
-    const {
-      nativeConversation,
-      suggestionViewer,
-      composerAvailability: availability,
-      typingEnabled,
-      canWriteProgressCard,
-    } = resolveChatComposerAvailability({
-      gatewaySnapshot,
-      presence: this.presence.snapshot,
-      sessionKey: state.sessionKey,
-      connected: state.connected,
-      session: selectedSession,
-      catalog,
-      catalogCanContinue: this.history.catalogSession?.canContinue === true,
-      catalogDisabledReason,
-      archived: selectedSessionArchived,
-      participationBlocked: sessionParticipationBlocked,
-      multipleIdentities: multiIdentity,
-      placement: placementComposer,
-      sessionDisabledBanner,
-      modelUnavailableBanner,
-      requiredReason,
-      pendingReason: state.connected ? null : pendingReason,
-    });
+    const presence = this.presence.snapshot;
+    const composerSessionKey = state.sessionKey;
+    const composerConnected = state.connected;
+    const catalogCanContinue = this.history.catalogSession?.canContinue === true;
+    const composerPendingReason = state.connected ? null : pendingReason;
+    const auth = gatewaySnapshot.hello?.auth ?? null;
+    const hasWriteScope = hasOperatorWriteAccess(auth);
+    const composerAccess =
+      hasWriteScope ||
+      (!catalog &&
+        readSessionMethodScopeAccess(auth, {
+          method: "chat.send",
+          requiredScope: "operator.write",
+          sessionScope: true,
+          session: selectedSession,
+        }).allowed);
+    const suggestionViewer =
+      multiIdentity &&
+      !selectedSessionArchived &&
+      hasWriteScope &&
+      selectedSession?.visibility === "suggest" &&
+      selectedSession.sharingRole === "viewer" &&
+      isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.add") === true &&
+      isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.list") === true;
+    const nativeConversation = !catalog && !suggestionViewer;
+    // Placement progress explains its gate; other gates need a reason or a banner.
+    const disabledReason = nativeConversation
+      ? (selectedSession?.sendDisabledReason ??
+        (sessionParticipationBlocked ? t("chat.sessionSharing.readOnlyNotice") : null))
+      : null;
+    const available =
+      !selectedSession?.providerReview &&
+      sessionDisabledBanner?.kind !== "composer-replacement" &&
+      (catalog
+        ? catalogCanContinue
+        : !disabledReason &&
+          !(
+            selectedSessionArchived ||
+            selectedSession?.restartRecoveryStatus === "tombstoned" ||
+            placementComposer.blocksSend
+          ));
+    const canWriteProgressCard = composerConnected && !sessionParticipationBlocked && hasWriteScope;
+    const typingEnabled =
+      multiIdentity &&
+      hasWriteScope &&
+      !catalog &&
+      isGatewayMethodAdvertised(gatewaySnapshot, "session.typing") === true &&
+      hasSessionPresenceViewers(
+        presence,
+        gatewaySnapshot.selfUser,
+        gatewaySnapshot.client?.instanceId,
+        composerSessionKey,
+      );
     const composerAvailability = {
-      ...availability,
+      canCompose: composerAccess && available,
+      canSend: composerAccess && available,
+      modelRequiredReason: catalog || suggestionViewer ? undefined : requiredReason,
+      disabledReason:
+        catalogDisabledReason ??
+        (!composerAccess ? t("chat.sessionSharing.scopeReadOnlyNotice") : null) ??
+        disabledReason ??
+        placementComposer.busyMessage ??
+        (placementComposer.state.kind === "failed" && !placementComposer.state.recoveryAction
+          ? placementComposer.failedUnavailableMessage
+          : null) ??
+        // Offline sending stays available for the outbox; this band explains pending recovery.
+        composerPendingReason,
+      disabledReasonTone:
+        !composerAccess ||
+        disabledReason ||
+        placementComposer.busyMessage ||
+        (sessionParticipationBlocked && !suggestionViewer)
+          ? ("info" as const)
+          : ("danger" as const),
+      disabledReasonBusy: placementComposer.busyMessage !== null,
+      disabledBanner:
+        sessionDisabledBanner ?? placementComposer.disabledBanner ?? modelUnavailableBanner,
       ...chatSubmitState(state, initialHistoryUnavailable, nativeConversation),
     };
     const mentionsUnsupported = !nativeConversation || selectedSession?.incognito || !selfProfileId;

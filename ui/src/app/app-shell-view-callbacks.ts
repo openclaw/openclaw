@@ -8,15 +8,13 @@ import type { ApplicationContext } from "./context.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { createUpdateProgressWatcher, type UpdateProgress } from "./update-confirmation.ts";
 
-type ShellViewCallbackHost = {
+/** Stable child bindings resolve current owners when invoked, without invalidating every paint. */
+export function createShellViewCallbacks(host: {
   readonly context: ApplicationContext | undefined;
   readonly routeOutlet?: ControlUiReadinessOutlet;
   readonly shellNavigation: ShellNavigationCapability;
   toggleNavigationSurface(): void;
-};
-
-/** Stable child bindings resolve current owners when invoked, without invalidating every paint. */
-export function createShellViewCallbacks(host: ShellViewCallbackHost) {
+}) {
   return {
     getPrimaryChatPane: (sessionKey: string) =>
       host.routeOutlet

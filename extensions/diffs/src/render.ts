@@ -14,7 +14,6 @@ import type {
   DiffRenderTarget,
   DiffViewerOptions,
   DiffViewerPayload,
-  RenderedDiffDocument,
 } from "./types.js";
 
 const DEFAULT_FILE_NAME = "diff.txt";
@@ -343,7 +342,7 @@ export async function renderDiffDocument(
   input: DiffInput,
   options: DiffRenderOptions,
   target: DiffRenderTarget = "both",
-): Promise<RenderedDiffDocument> {
+) {
   const title = buildDiffTitle(input);
   const { sections, leadingHtml } =
     input.kind === "before_after"
