@@ -95,6 +95,7 @@ if (isMainThread) {
         "session-ancestor-references.ts",
         "server-connection-state.ts",
         "server-methods/sessions-read.ts",
+        "server-methods/sessions-read-by-key.ts",
       ]) {
         projectionSources.set(
           new URL(`../../src/gateway/${file}`, import.meta.url).href,
