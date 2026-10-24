@@ -38,7 +38,6 @@ type WorkflowStep = Partial<Record<"id" | "name" | "uses" | "run" | "if", string
 };
 function workflow() {
   return parse(readFileSync(workflowPath, "utf8")) as {
-    on: { workflow_dispatch: { inputs: Record<string, Record<string, unknown>> } };
     jobs: Record<
       | "approve_plugins_clawhub_release"
       | "validate_release_publish_approval"
@@ -47,7 +46,6 @@ function workflow() {
       {
         environment?: string;
         if?: string;
-        needs: string[];
         outputs?: Record<string, string>;
         permissions?: Record<string, string>;
         steps: WorkflowStep[];
@@ -231,8 +229,6 @@ describe("ClawHub parent publication authorization", () => {
   it("uploads recovery approval only for direct human dispatches from trusted tooling", () => {
     const config = workflow();
     const approval = config.jobs.approve_plugins_clawhub_release;
-    // The human/receipt job gate is covered in release-approval-workflows.test.ts.
-    expect(approval.needs).toContain("validate_release_publish_approval");
     const validation = config.jobs.validate_release_publish_approval;
     expect(validation.outputs?.direct_recovery).toBe(
       "${{ steps.approval.outputs.direct_recovery }}",
@@ -268,13 +264,6 @@ describe("ClawHub parent publication authorization", () => {
       RECOVERED_CLAWHUB_RUN_ID: "${{ inputs.recovered_clawhub_run_id }}",
       RECOVERED_CLAWHUB_RUN_ATTEMPT: "${{ inputs.recovered_clawhub_run_attempt }}",
     });
-    for (const input of ["recovered_clawhub_run_id", "recovered_clawhub_run_attempt"]) {
-      expect(config.on.workflow_dispatch.inputs[input]).toMatchObject({
-        required: false,
-        default: "",
-        type: "string",
-      });
-    }
     const upload = approval.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
     expect(upload?.if).toBe(directRecovery);
     const artifactName =

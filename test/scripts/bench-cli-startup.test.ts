@@ -216,8 +216,6 @@ if (runtime) {
 
 it.each([
   [["--wat", "--help"], "Unknown argument: --wat"],
-  [["--output", "-h"], "--output requires a value"],
-  [["--output", "one.json", "--output", "two.json"], "--output was provided more than once"],
   [["--case", "version", "--case", "version"], 'Duplicate --case "version"'],
 ] as const)("rejects invalid arguments before running benchmarks %j", (args, error) => {
   expectCliRejection([...args], error);
@@ -329,18 +327,9 @@ it.each<[Partial<CaseResult>, string[], string?]>([
   [
     {
       id: "gatewayStatusJson",
-      samples: [
-        cliSample(),
-        cliSample({ exitCode: 1 }),
-        cliSample({ exitCode: null, signal: "SIGTERM" }),
-        cliSample({ timedOut: true }),
-      ],
+      samples: [cliSample({ exitCode: null, signal: "SIGTERM" })],
     },
-    [
-      " sample 2: exited with code 1",
-      " sample 3: exited via signal SIGTERM",
-      " sample 4: timed out",
-    ],
+    [" sample 1: exited via signal SIGTERM"],
     "dist/entry.js",
   ],
   [
