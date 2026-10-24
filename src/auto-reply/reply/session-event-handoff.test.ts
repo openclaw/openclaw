@@ -188,10 +188,12 @@ const it = baseIt.extend<{
   state: TargetFixture;
   nativeState: TargetFixture;
   coldState: TargetFixture;
+  emptyState: TargetFixture;
 }>({
   state: async ({ task: _task }, use) => withTargetFixture(use),
   nativeState: async ({ task: _task }, use) => withTargetFixture(use, { native: true }),
   coldState: async ({ task: _task }, use) => withTargetFixture(use, { empty: true, native: true }),
+  emptyState: async ({ task: _task }, use) => withTargetFixture(use, { empty: true }),
 });
 
 beforeEach(() => {
@@ -392,6 +394,9 @@ describe("session event target custody", () => {
           try {
             prepared.assertCurrent();
             expect((await fs.stat(databasePath)).isFile()).toBe(true);
+            const next = await prepareSessionEventTargetForHost(target, { createIfMissing: true });
+            next.release();
+            prepared.assertCurrent();
           } finally {
             prepared.release();
           }
@@ -528,66 +533,40 @@ describe("session event target custody", () => {
     },
   );
 
-  it.each(["fresh", "retained", "revoked", "already-revoked"] as const)(
-    "prepares cold storage only for authorized fresh work: %s",
-    async (kind) => {
-      await withTargetFixture(
-        async ({ env }) => {
-          const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
-          const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
-          expect(target.sessionId).toBe("");
-          await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
-          if (kind === "fresh") {
-            const prepared = await prepareSessionEventTargetForHost(target, {
-              createIfMissing: true,
-            });
-            try {
-              prepared.assertCurrent();
-              expect((await fs.stat(databasePath)).isFile()).toBe(true);
-              const next = await prepareSessionEventTargetForHost(target, {
-                createIfMissing: true,
-              });
-              next.release();
-              prepared.assertCurrent();
-            } finally {
-              prepared.release();
+  it.for(["retained", "revoked", "already-revoked"] as const)(
+    "does not prepare cold storage for %s work",
+    async (kind, { emptyState: { env } }) => {
+      const databasePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+      const target = await captureSessionEventTargetForHost("main", sessionKey, { env });
+      expect(target.sessionId).toBe("");
+      await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+      let current = kind !== "already-revoked";
+      const enqueue = () =>
+        enqueueSessionEventForHost("Fresh ingress", {
+          ...eventScope,
+          source: "plugin",
+          expectedTarget: target,
+          createIfMissing: kind === "retained" ? undefined : true,
+          assertAcceptanceCurrent: () => {
+            if (!current) {
+              throw new Error("Submitting ingress was revoked");
             }
-            return;
-          }
-          let current = kind !== "already-revoked";
-          const enqueue = () =>
-            enqueueSessionEventForHost("Fresh ingress", {
-              ...eventScope,
-              source: "plugin",
-              expectedTarget: target,
-              createIfMissing: kind === "retained" ? undefined : true,
-              assertAcceptanceCurrent: () => {
-                if (!current) {
-                  throw new Error("Submitting ingress was revoked");
-                }
-              },
-            });
-          if (kind === "already-revoked") {
-            expect(enqueue).toThrow("Submitting ingress was revoked");
-            expect(peekSystemEventEntries(sessionKey)).toEqual([]);
-            await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
-            return;
-          }
-          const receipt = enqueue();
-          current &&= kind !== "revoked";
-          const error = kind === "retained" ? /origin is missing/ : /ingress was revoked/;
-          await expect(receipt.accepted).resolves.toMatchObject({
-            ok: false,
-            error: expect.stringMatching(error),
-          });
-          await expect(receipt.settled).resolves.toMatchObject({
-            status: "failed",
-            executionStarted: false,
-          });
-          await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
-        },
-        { empty: true, native: kind === "fresh" },
-      );
+          },
+        });
+      if (kind === "already-revoked") {
+        expect(enqueue).toThrow("Submitting ingress was revoked");
+        expect(peekSystemEventEntries(sessionKey)).toEqual([]);
+      } else {
+        const receipt = enqueue();
+        current &&= kind !== "revoked";
+        const error = kind === "retained" ? /origin is missing/ : /ingress was revoked/;
+        await expect(receipt.accepted).resolves.toMatchObject({
+          ok: false,
+          error: expect.stringMatching(error),
+        });
+        await expectStopped(receipt, "failed");
+      }
+      await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
     },
   );
   it("retains store, route and producer limits across lookup", async ({
