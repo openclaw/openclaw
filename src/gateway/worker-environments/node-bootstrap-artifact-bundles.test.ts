@@ -59,23 +59,40 @@ describe("node bootstrap bundled dependency ownership", () => {
         dependencies: { "transitive-runtime": "^1.2.3" },
         optionalDependencies: { "unavailable-platform-runtime": "1.0.0" },
       },
-      "index.cjs": 'module.exports = require("transitive-runtime");',
+      "index.cjs":
+        'exports.marker = "bundle-transitive"; exports.run = () => require("transitive-runtime");',
       "node_modules/transitive-runtime/package.json": {
         name: "transitive-runtime",
         version: "1.2.3",
         main: "index.cjs",
+        dependencies: { "@fixture/codec": "2.0.0" },
+      },
+      "node_modules/transitive-runtime/index.cjs":
+        'module.exports = require("@fixture/codec").value;',
+      "node_modules/transitive-runtime/node_modules/@fixture/codec/package.json": {
+        name,
+        version: "2.0.0",
+        main: "index.cjs",
         dependencies: { "leaf-runtime": "1.2.3" },
       },
-      "node_modules/transitive-runtime/index.cjs": 'module.exports = require("leaf-runtime");',
-      "node_modules/transitive-runtime/node_modules/leaf-runtime/package.json": {
-        name: "leaf-runtime",
-        version: "1.2.3",
-        main: "index.cjs",
-        dependencies: { "@fixture/codec": "1.2.3" },
-      },
-      "node_modules/transitive-runtime/node_modules/leaf-runtime/index.cjs":
-        'require.resolve("@fixture/codec"); module.exports = "bundle-transitive";',
+      "node_modules/transitive-runtime/node_modules/@fixture/codec/index.cjs":
+        'exports.marker = "nearer-decoy"; exports.value = require("leaf-runtime");',
+      "node_modules/transitive-runtime/node_modules/@fixture/codec/node_modules/leaf-runtime/package.json":
+        {
+          name: "leaf-runtime",
+          version: "1.2.3",
+          main: "index.cjs",
+          dependencies: { "@fixture/codec": "1.2.3" },
+        },
+      "node_modules/transitive-runtime/node_modules/@fixture/codec/node_modules/leaf-runtime/index.cjs":
+        'module.exports = require("@fixture/codec").marker;',
     });
+    const cycleModules = path.join(
+      bundledRoot,
+      "node_modules/transitive-runtime/node_modules/@fixture/codec/node_modules/leaf-runtime/node_modules/@fixture",
+    );
+    await fs.mkdir(cycleModules, { recursive: true });
+    await fs.symlink(bundledRoot, path.join(cycleModules, "codec"), "junction");
     await writeFiles(packageRoot, {
       "node_modules/transitive-runtime/package.json": {
         name: "transitive-runtime",
@@ -83,7 +100,7 @@ describe("node bootstrap bundled dependency ownership", () => {
         main: "index.cjs",
       },
       "node_modules/transitive-runtime/index.cjs": 'module.exports = "root-decoy";',
-      "dist/entry.js": `import value from "${name}"; console.log(value);`,
+      "dist/entry.js": `import codec from "${name}"; console.log(codec.run());`,
     });
     const artifact = await createProvider({ ...options, plugins: [] }).prepare();
     const installRoot = path.join(root, "fresh-install");

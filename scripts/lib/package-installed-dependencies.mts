@@ -68,7 +68,12 @@ export function hasInstalledPackageAncestor(
 ): boolean {
   const search =
     createRequire(path.join(destination, "package.json")).resolve.paths(dependency.name) ?? [];
-  return search.some(
-    (modules) => ancestors.get(path.join(modules, dependency.name)) === dependency.root,
-  );
+  for (const modules of search) {
+    const root = ancestors.get(path.join(modules, dependency.name));
+    if (root !== undefined) {
+      // A nearer package shadows an outer match, just as it does in Node.
+      return root === dependency.root;
+    }
+  }
+  return false;
 }
