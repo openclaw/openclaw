@@ -280,7 +280,10 @@ export function bindBoundedSeed(
     if (cut) {
       // The host observer is advisory. Its failure must not abort the turn.
       try {
-        await attempt.onAgentEvent?.({ stream: "compaction", data: { phase: "context_bounded" } });
+        await attempt.onAgentEvent?.({
+          stream: "compaction",
+          data: { phase: "context_bounded", message: BOUNDED_CONTEXT_NOTICE },
+        });
       } catch (error) {
         log.warn(`bounded seed observer failed: ${formatErrorMessage(error)}`);
       }

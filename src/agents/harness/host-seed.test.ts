@@ -374,5 +374,12 @@ it.each(["throws", "rejects"] as const)(
       expect(JSON.stringify(seed)).toContain("Older history outside that window is omitted");
       expect(seed).toContainEqual(makeUserMessage("recent request", 2));
       expect(onAgentEvent).toHaveBeenCalledOnce();
+      expect(onAgentEvent).toHaveBeenCalledWith({
+        stream: "compaction",
+        data: {
+          phase: "context_bounded",
+          message: expect.stringContaining("Older history outside that window is omitted"),
+        },
+      });
     }),
 );

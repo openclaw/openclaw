@@ -22,7 +22,8 @@ export function shouldMirrorAgentEventToHiddenSessionMessages(
     stream === "thinking" ||
     stream === "approval" ||
     stream === "lifecycle" ||
-    (stream === "compaction" && (data.phase === "start" || data.phase === "end")) ||
+    (stream === "compaction" &&
+      (data.phase === "start" || data.phase === "end" || data.phase === "context_bounded")) ||
     (!isAborted &&
       stream === "assistant" &&
       ((typeof data.text === "string" && data.text.length > 0) ||
