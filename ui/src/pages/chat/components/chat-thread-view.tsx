@@ -219,6 +219,7 @@ export function ChatThread(input: {
           },
         ]}
         role="log"
+        aria-label={t("chat.sidePanel.conversation")}
         aria-live="off"
         aria-relevant="additions"
         tabindex={0}
