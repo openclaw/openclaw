@@ -64,6 +64,17 @@ const scope = {
   }),
 };
 const authority = { assertCurrent() {}, authorize() {} };
+const userMessage = (content: string, idempotencyKey: string) => ({
+  role: "user" as const,
+  content,
+  idempotencyKey,
+  timestamp: 1,
+});
+const eventEnvelope = (id: string, parentId: string | null = null, millisecond = 1) => ({
+  id,
+  parentId,
+  timestamp: `1970-01-01T00:00:00.00${millisecond}Z`,
+});
 
 afterEach(() => {
   memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
@@ -204,12 +215,7 @@ describe("memory continuation adapters", () => {
   it("keeps live pending custody, then interrupts the retained window after reset", async () => {
     const { binding, storage, replace, acquire } = await fixture();
     const idempotencyKey = "pending:user";
-    const messageJson = JSON.stringify({
-      role: "user",
-      content: "pending",
-      idempotencyKey,
-      timestamp: 1,
-    });
+    const messageJson = JSON.stringify(userMessage("pending", idempotencyKey));
     const expected = await readMemory(storage, "session.pendingInput.read", {
       ...scope,
       kind: "stage",
@@ -268,12 +274,7 @@ describe("memory continuation adapters", () => {
     const pendingOwner = makePendingOwner(
       "store-input",
       idempotencyKey,
-      JSON.stringify({
-        role: "user",
-        content: "stored",
-        idempotencyKey,
-        timestamp: 1,
-      }),
+      JSON.stringify(userMessage("stored", idempotencyKey)),
     );
     registerSessionPendingInputOwner(pendingOwner);
     const guard = () => assertSessionPendingInputLifetimeCurrent(pendingOwner);
@@ -329,12 +330,7 @@ describe("memory continuation adapters", () => {
 
   it("acquires unbound input custody and retains it through collected receipt callbacks", async () => {
     const { owner, binding } = await fixture();
-    const message = {
-      role: "user" as const,
-      content: "recorded",
-      timestamp: 1,
-      idempotencyKey: "recorded:user",
-    };
+    const message = userMessage("recorded", "recorded:user");
     const options = {
       message,
       runId: "recorded",
@@ -417,9 +413,7 @@ describe("memory continuation adapters", () => {
       });
       await append({
         type: "message",
-        id: "completion-source",
-        parentId: null,
-        timestamp: "1970-01-01T00:00:00.001Z",
+        ...eventEnvelope("completion-source"),
         message: {
           role: "user",
           content: "child result",
@@ -445,16 +439,12 @@ describe("memory continuation adapters", () => {
         change === "human"
           ? {
               type: "message",
-              id: "human",
-              parentId: "completion-source",
-              timestamp: "1970-01-01T00:00:00.002Z",
+              ...eventEnvelope("human", "completion-source", 2),
               message: { role: "user", content: "new work" },
             }
           : {
               type: "reset",
-              id: "reset",
-              parentId: "completion-source",
-              timestamp: "1970-01-01T00:00:00.002Z",
+              ...eventEnvelope("reset", "completion-source", 2),
               reason: "new",
               firstKeptEntryId: "completion-source",
             },
@@ -472,9 +462,7 @@ describe("memory continuation adapters", () => {
       expect(await reconcileHarnessCompletionDelivery(request)).toBe("unowned");
       await append({
         type: "message",
-        id: "submitted",
-        parentId: null,
-        timestamp: "1970-01-01T00:00:00.001Z",
+        ...eventEnvelope("submitted"),
         message: {
           role: "user",
           content: "child result",
