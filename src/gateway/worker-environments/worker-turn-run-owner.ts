@@ -40,7 +40,7 @@ import type { WorkerConnectionIdentity } from "./connection-identity.js";
 import { raceNodeWorkerOperation } from "./node-worker-abort.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore, WorkerSessionTurnClaim } from "./placement-store.js";
-import { assertWorkerTurnInputAdmitted } from "./placement-turn-claim-events.js";
+import { assertWorkerTurnLiveEventInputAdmitted } from "./placement-turn-claim-events.js";
 import { boundedWorkerError } from "./worker-error.js";
 
 export type ActiveWorkerTurn = {
@@ -86,13 +86,13 @@ export function prepareWorkerTurnAdmittedLiveEvent(
   request: WorkerLiveEventParams,
 ): WorkerLiveEventParams {
   try {
-    assertWorkerTurnInputAdmitted(identity);
+    assertWorkerTurnLiveEventInputAdmitted(identity);
     return request;
   } catch (error) {
     if (request.event.kind !== "lifecycle" || request.event.payload.phase !== "finishing") {
       throw error;
     }
-    // Unapproved or cancelled workers still settle their terminal receipt, without
+    // Workers without approved input still settle their terminal receipt, without
     // persisting worker-controlled content before input admission.
     return {
       ...request,

@@ -511,6 +511,7 @@ export async function executeWorkerTurn(
         ...inputContext,
         manager,
         media,
+        assertRunCurrent: assertActive,
         isAuthorized,
         workerAdmission,
         userMessageAlreadyPersisted,

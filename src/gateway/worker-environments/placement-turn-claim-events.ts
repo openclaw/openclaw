@@ -373,7 +373,7 @@ export function captureWorkerTurnClaimCurrentness(
     isBoundCurrent();
 }
 
-function resolveWorkerTurnRuntime(
+function resolveBoundWorkerTurnRuntime(
   identity: Pick<
     WorkerConnectionIdentity,
     "turnClaim" | "sessionId" | "runId" | "environmentId" | "ownerEpoch"
@@ -402,16 +402,14 @@ function resolveWorkerTurnRuntime(
     }
     owner = candidate;
   }
-  const runtime = owner?.runtime;
-  if (
-    !owner ||
-    !runtime ||
-    !runtime.claimAuthority.isCurrent() ||
-    !validateAgentRunDelegatedAuthority(runtime.delegatedAuthority)
-  ) {
-    return undefined;
-  }
-  return runtime;
+  return owner?.runtime.claimAuthority.isCurrent() ? owner.runtime : undefined;
+}
+
+function resolveWorkerTurnRuntime(identity: Parameters<typeof resolveBoundWorkerTurnRuntime>[0]) {
+  const runtime = resolveBoundWorkerTurnRuntime(identity);
+  return runtime && validateAgentRunDelegatedAuthority(runtime.delegatedAuthority)
+    ? runtime
+    : undefined;
 }
 
 /** Cache identity follows the Gateway's admitted transcript, never worker-supplied history. */
@@ -513,6 +511,17 @@ export function assertWorkerTurnInputAdmitted(identity: WorkerConnectionIdentity
   ) {
     assertWorkerTurnInputApproval(runtime);
     runtime?.assertActive();
+  }
+}
+
+/** Cancellation closes execution, but the exact claim retains its prior input decision. */
+export function assertWorkerTurnLiveEventInputAdmitted(identity: WorkerConnectionIdentity): void {
+  const runtime = resolveBoundWorkerTurnRuntime(identity);
+  if (
+    runtime?.admitTurn ||
+    identity.protocolFeatures.includes(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE)
+  ) {
+    assertWorkerTurnInputApproval(runtime);
   }
 }
 

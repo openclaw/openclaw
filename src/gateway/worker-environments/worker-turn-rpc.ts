@@ -72,12 +72,8 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       ? options.placementStore?.getExecutionIdentityCapability?.(identity.turnClaim)
       : undefined;
 
-  const processTurnBinding = (
-    identity: WorkerConnectionIdentity,
-  ): WorkerProcessTurnBinding | undefined => {
-    const turnClaim = identity.turnClaim;
-    return turnClaim ? { turnClaim, credentialHash: identity.credentialHash } : undefined;
-  };
+  const processTurnBinding = ({ turnClaim, credentialHash }: WorkerConnectionIdentity) =>
+    turnClaim ? { turnClaim, credentialHash } : undefined;
 
   const admitWorkerAt = (
     admission: WorkerConnectParams["admission"],
@@ -565,7 +561,6 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     if (request.sessionId !== identity.sessionId || request.runId !== identity.runId) {
       return { ok: false, reason: "session-not-attached" } as const;
     }
-    assertWorkerTurnInputAdmitted(identity);
     return validateAttachedWorkerRequest(identity, request.runEpoch, {
       kind: "inference",
     });
@@ -587,6 +582,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     if (!binding.ok) {
       return binding;
     }
+    assertWorkerTurnInputAdmitted(identity);
     const environment = options.store.get(identity.environmentId);
     if (!environment || workerInferencePlacement(environment) !== "gateway") {
       return { ok: false, reason: "model-not-approved" };
@@ -612,7 +608,10 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       sink,
       sessionTarget: source.sessionTarget,
       assertSourceCurrent: source.receiptAuthority,
-      revalidate: () => revalidateInference(identity, request),
+      revalidate: () => {
+        assertWorkerTurnInputAdmitted(identity);
+        return revalidateInference(identity, request);
+      },
     });
   };
 
