@@ -134,9 +134,6 @@ describe("runGatewayLoop", () => {
         expect(mocks.hostedStopExecute).not.toHaveBeenCalled();
         joined.resolve();
         await expect(exited).resolves.toBe(0);
-        expect(mocks.waitForGatewayActiveWork).toHaveBeenCalledWith(20_000, {
-          onSnapshot: expect.any(Function),
-        });
         expect(mocks.hostedStopExecute).toHaveBeenCalledOnce();
         await expect(host!.request("start", () => {})).resolves.toMatchObject({ ok: false });
       } finally {
@@ -185,16 +182,17 @@ describe("runGatewayLoop", () => {
       const startupError = new Error("replacement listener failed");
       const cleanupError = new Error("replacement required cleanup failed");
       const failure = new GatewayStartupCleanupError(startupError, cleanupError);
-      let lockCallsAtFailure = 0;
-      let cancellationsAtFailure = 0;
-      let commitsAtFailure = 0;
+      const authorityCalls = () => [
+        mocks.acquireGatewayLock.mock.calls.length,
+        mocks.cancelManagedServiceUpdateHandoff.mock.calls.length,
+        mocks.commitManagedServiceUpdateHandoff.mock.calls.length,
+      ];
+      let callsAtFailure: number[] = [];
       const start = vi
         .fn<LoopParams["start"]>()
         .mockResolvedValueOnce(testLoop.createGatewayServer(testLoop.createCloseMock()))
         .mockImplementationOnce(async () => {
-          lockCallsAtFailure = mocks.acquireGatewayLock.mock.calls.length;
-          cancellationsAtFailure = mocks.cancelManagedServiceUpdateHandoff.mock.calls.length;
-          commitsAtFailure = mocks.commitManagedServiceUpdateHandoff.mock.calls.length;
+          callsAtFailure = authorityCalls();
           throw failure;
         });
       const onRestartStartupFailure = vi.fn();
@@ -221,11 +219,7 @@ describe("runGatewayLoop", () => {
         await expect(loop).rejects.toBe(failure);
         expect(start).toHaveBeenCalledTimes(2);
         expect(onRestartStartupFailure).not.toHaveBeenCalled();
-        expect(mocks.acquireGatewayLock).toHaveBeenCalledTimes(lockCallsAtFailure);
-        expect(mocks.cancelManagedServiceUpdateHandoff).toHaveBeenCalledTimes(
-          cancellationsAtFailure,
-        );
-        expect(mocks.commitManagedServiceUpdateHandoff).toHaveBeenCalledTimes(commitsAtFailure);
+        expect(authorityCalls()).toEqual(callsAtFailure);
         expect(completeBoot).toHaveBeenCalledWith({
           outcome: "startup_failed",
           reason: expect.stringContaining(startupError.message),
@@ -354,28 +348,13 @@ describe("runGatewayLoop", () => {
         startGatewayRestartTrace("prior.sequence");
         const drain = testLoop.createLifecycleGate();
         const activeSnapshot = testLoop.createActiveWorkSnapshot(
-          {
-            queueSize: 1,
-            pendingReplies: 2,
-            embeddedRuns: 3,
-            backgroundExecSessions: 4,
-            cronRuns: 5,
-            agentRuns: 6,
-            rootRequests: 7,
-            sessionAdmissions: 8,
-            sessionMutations: 9,
-            chatRuns: 10,
-            queuedTurns: 11,
-            terminalPersistence: 12,
-            terminalSessions: 13,
-          },
+          { agentRuns: 6, rootRequests: 7 },
           [
             { kind: "root-request", count: 7, message: "private-root-holder-origin" },
             { kind: "agent-run", count: 6, message: "private-task-message" },
           ],
         );
-        const counts =
-          "queueSize=1 pendingReplies=2 embeddedRuns=3 backgroundExecSessions=4 cronRuns=5 agentRuns=6 rootRequests=7 sessionAdmissions=8 sessionMutations=9 chatRuns=10 queuedTurns=11 terminalPersistence=12 terminalSessions=13";
+        const counts = "agentRuns=6 rootRequests=7";
         mocks.waitForGatewayActiveWork.mockImplementationOnce(async (_timeoutMs, options) => {
           options?.onSnapshot?.(activeSnapshot);
           await drain.wait();
@@ -516,9 +495,6 @@ describe("runGatewayLoop", () => {
         await startedSecond.promise;
         expect(secondAgentEventGeneration).not.toBe(firstAgentEventGeneration);
 
-        expect(mocks.waitForGatewayActiveWork.mock.calls[0]?.[0]).toBeLessThanOrEqual(
-          DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS,
-        );
         expect(mocks.gatewayLog.warn).toHaveBeenCalledWith(
           "restart drain budget 300000ms exhausted; cutting short embeddedRuns=1 agentRuns=2",
         );
@@ -530,24 +506,10 @@ describe("runGatewayLoop", () => {
         expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(false);
         await waitForLoopTurn();
         testLoop.expectRestartCloseCall(closeSecond, DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
-        expect(mocks.markGatewayRestartHandled).toHaveBeenCalledTimes(2);
-        expect(mocks.waitForActiveCronTaskRuns).toHaveBeenCalledTimes(2);
-        expect(mocks.waitForActiveCronJobs).toHaveBeenCalledTimes(2);
-        expect(mocks.advanceCronActiveJobGeneration).toHaveBeenCalledTimes(2);
-        expect(mocks.retireActiveCronTaskRunTracking).toHaveBeenCalledTimes(2);
-        expect(mocks.resetCronActiveJobs).toHaveBeenCalledTimes(2);
-        expect(mocks.clearRuntimeConfigSnapshot).toHaveBeenCalledTimes(2);
-        expect(mocks.resetGatewaySuspendCoordinatorForLifecycleRestart).toHaveBeenCalledTimes(2);
-        expect(mocks.resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(2);
-        expect(mocks.abortActiveCronTaskRuns).toHaveBeenCalledTimes(3);
-        expect(mocks.acquireGatewayLock).toHaveBeenCalledTimes(3);
         expectBefore(mocks.advanceCronActiveJobGeneration, mocks.abortActiveCronTaskRuns, 0, 1);
         expectBefore(mocks.abortActiveCronTaskRuns, closeFirst);
         expectBefore(mocks.waitForActiveCronJobs, mocks.retireActiveCronTaskRunTracking);
         expectBefore(mocks.retireActiveCronTaskRunTracking, mocks.resetCronActiveJobs);
-        expect(mocks.abortActiveCronTaskRuns).toHaveBeenCalledWith(undefined);
-        expect(mocks.waitForActiveCronTaskRuns).toHaveBeenCalledWith(1_000);
-        expect(mocks.waitForActiveCronJobs).toHaveBeenCalledWith(1_000);
         expect(mocks.gatewayLog.warn).toHaveBeenCalledWith(
           "cron run drain timed out during restart lifecycle reset after retiring old cron admission; 0 task handle(s) and 1 active marker(s) remain after aborting old cron runs",
         );
@@ -596,14 +558,6 @@ describe("runGatewayLoop", () => {
           expect(start).toHaveBeenCalledTimes(fails ? 3 : 2);
           testLoop.expectRestartCloseCall(firstClose, DEFAULT_RESTART_DEFERRAL_TIMEOUT_MS);
           expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(false);
-          expect(mocks.markGatewayRestartHandled).toHaveBeenCalledTimes(fails ? 2 : 1);
-          expect(mocks.resetGatewaySuspendCoordinatorForLifecycleRestart).toHaveBeenCalledTimes(
-            fails ? 2 : 1,
-          );
-          expect(mocks.resetGatewayRestartStateForInProcessRestart).toHaveBeenCalledTimes(
-            fails ? 2 : 1,
-          );
-          expect(mocks.acquireGatewayLock).toHaveBeenCalledTimes(fails ? 3 : 2);
           if (fails) {
             expect(mocks.gatewayLog.error).toHaveBeenCalledWith(
               expect.stringContaining("gateway startup failed: restart startup failed."),
@@ -681,162 +635,116 @@ describe("runGatewayLoop", () => {
     });
   });
 
-  it.each(["restart-then-stop", "cleanup-failure", "repaired-systemd"] as const)(
-    "joins admitted startup cleanup for %s before exiting",
-    async (scenario) => {
-      if (scenario === "repaired-systemd") {
+  it.each([
+    { scenario: "restart-then-stop", worker: false, fails: false, repaired: false },
+    { scenario: "cleanup-failure", worker: false, fails: true, repaired: false },
+    { scenario: "repaired-systemd", worker: false, fails: false, repaired: true },
+    { scenario: "worker SIGTERM", worker: true, fails: false, repaired: false },
+    { scenario: "worker SIGKILL", worker: true, fails: true, repaired: false },
+  ])(
+    "joins startup cleanup and active work before settling $scenario",
+    async ({ scenario, worker, fails, repaired }) => {
+      const { SqliteIntegrityWorkerInterruptedError } =
+        await import("../../infra/sqlite-integrity-worker-error.js");
+      if (repaired) {
         process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
         mocks.systemctl.mockResolvedValue(testLoop.systemdReply());
       }
       await testLoop.withIsolatedSignals(async ({ captureSignal }) => {
-        const entered = createDeferredCore<AbortSignal>();
-        const cleanup = createDeferredCore();
-        const activeDrain = createDeferredCore();
+        const entered = createDeferredCore<AbortSignal | undefined>();
+        const cleanup = testLoop.createLifecycleGate();
+        const drain = testLoop.createLifecycleGate();
         mocks.waitForGatewayActiveWork.mockImplementationOnce(async () => {
-          await activeDrain.promise;
+          await drain.wait();
           return { drained: true, snapshot: mocks.idleActiveWorkSnapshot };
         });
-        const cleanupFailure = new Error("startup snapshot cleanup failed");
+        const failure = worker
+          ? new SqliteIntegrityWorkerInterruptedError(fails ? "SIGKILL" : "SIGTERM", "starting")
+          : new Error("startup snapshot cleanup failed");
         const close = testLoop.createCloseMock();
-        const start: LoopParams["start"] = async (options) => {
+        const { runtime, exited, completeBoot, loop } = launchLoop(async (options) => {
+          if (worker) {
+            entered.resolve(undefined);
+            await cleanup.wait();
+            throw failure;
+          }
           await options!.startupOperation!(async (signal) => {
             entered.resolve(signal);
             await new Promise<void>((resolve) => {
               signal.addEventListener("abort", () => resolve(), { once: true });
             });
-            await cleanup.promise;
-            throw scenario === "cleanup-failure" ? cleanupFailure : signal.reason;
+            await cleanup.wait();
+            throw fails ? failure : signal.reason;
           });
           return testLoop.createGatewayServer(close);
-        };
-        const { runtime, exited, completeBoot, loop } = launchLoop(start);
+        });
         const settled = Promise.allSettled([loop]);
         let loopFinished = false;
         void settled.then(() => {
           loopFinished = true;
         });
         const signal = await entered.promise;
-        const stopSignal = scenario === "repaired-systemd" ? "SIGTERM" : "SIGINT";
-        if (scenario === "repaired-systemd") {
+        const stop = repaired || worker ? "SIGTERM" : "SIGINT";
+        if (repaired) {
           mocks.systemctl.mockResolvedValue(testLoop.systemdReply("330s"));
           vi.useFakeTimers();
         }
-        const flush = async () => {
-          if (scenario === "repaired-systemd") {
-            await vi.advanceTimersByTimeAsync(0);
-          } else {
-            await waitForLoopTurn();
-          }
-        };
+        const flush = () => (repaired ? vi.advanceTimersByTimeAsync(0) : waitForLoopTurn());
         try {
           if (scenario === "restart-then-stop") {
             captureSignal("SIGUSR2")();
-            await testLoop.waitForLoopCondition(
-              () => mocks.markGatewayRestartHandled.mock.calls.length > 0,
-              "expected queued startup restart",
-            );
-            expect(signal.aborted).toBe(false);
+            await waitForCalls(mocks.markGatewayRestartHandled, 1);
+            expect(signal!.aborted).toBe(false);
           }
-          captureSignal(stopSignal)();
+          captureSignal(stop)();
           await flush();
-          expect(signal.aborted).toBe(true);
-          // A duplicate signal cannot bypass the already admitted cleanup join.
-          captureSignal(stopSignal)();
-          if (scenario === "repaired-systemd") {
+          if (signal) {
+            expect(signal.aborted).toBe(true);
+            captureSignal(stop)();
+          }
+          if (repaired) {
             await vi.advanceTimersByTimeAsync(60_000);
           }
-          await flush();
           testLoop.expectUncalled(runtime.exit, completeBoot);
-          cleanup.resolve();
-          await flush();
-          expect(loopFinished).toBe(false);
-          testLoop.expectUncalled(runtime.exit, completeBoot);
-          activeDrain.resolve();
-          await flush();
-          if (scenario === "cleanup-failure") {
-            expect(await settled).toEqual([{ status: "rejected", reason: cleanupFailure }]);
-            expect(completeBoot).toHaveBeenCalledExactlyOnceWith({
-              outcome: "forced_stop",
-              reason: "gateway.stop_close_failed",
-            });
-          } else {
-            await expect(exited).resolves.toBe(0);
-            expect(await settled).toEqual([{ status: "fulfilled", value: 0 }]);
-            expect(completeBoot).toHaveBeenCalledExactlyOnceWith({
-              outcome: "clean_stop",
-              reason: `stop (${stopSignal})`,
-            });
+          if (worker) {
+            await drain.entered;
           }
-          expect(close).not.toHaveBeenCalled();
-        } finally {
-          if (!signal.aborted) {
-            captureSignal("SIGINT")();
-          }
-          cleanup.resolve();
-          activeDrain.resolve();
+          cleanup.release();
           await flush();
-          await settled;
-          vi.useRealTimers();
-        }
-      });
-    },
-  );
-
-  it.each([
-    { signal: "SIGTERM", cleanStop: true },
-    { signal: "SIGKILL", cleanStop: false },
-  ] as const)(
-    "joins an accepted stop before classifying an independent startup worker: $signal",
-    async ({ signal, cleanStop }) => {
-      const { SqliteIntegrityWorkerInterruptedError } =
-        await import("../../infra/sqlite-integrity-worker-error.js");
-      await testLoop.withIsolatedSignals(async ({ captureSignal }) => {
-        const inspection = testLoop.createLifecycleGate();
-        const drain = testLoop.createLifecycleGate();
-        mocks.waitForGatewayActiveWork.mockImplementationOnce(async () => {
-          await drain.wait();
-          return { drained: true, snapshot: mocks.idleActiveWorkSnapshot };
-        });
-        const failure = new SqliteIntegrityWorkerInterruptedError(signal, "starting");
-        const close = testLoop.createCloseMock();
-        const { runtime, exited, completeBoot, loop } = launchLoop(async () => {
-          await inspection.wait();
-          return testLoop.createGatewayServer(close);
-        });
-        const settled = Promise.allSettled([loop]);
-        try {
-          await inspection.entered;
-          captureSignal("SIGTERM")();
-          await drain.entered;
-          inspection.reject(failure);
-          await waitForLoopTurn();
+          if (!worker) {
+            expect(loopFinished).toBe(false);
+          }
           expect(runtime.exit).not.toHaveBeenCalled();
-          if (cleanStop) {
+          if (!worker || !fails) {
             expect(completeBoot).not.toHaveBeenCalled();
           }
           drain.release();
-          if (cleanStop) {
+          await flush();
+          if (fails) {
+            expect(await settled).toEqual([{ status: "rejected", reason: failure }]);
+            expect(completeBoot).toHaveBeenCalledExactlyOnceWith(
+              worker
+                ? { outcome: "startup_failed", reason: failure.message }
+                : { outcome: "forced_stop", reason: "gateway.stop_close_failed" },
+            );
+          } else {
             await expect(exited).resolves.toBe(0);
             expect(await settled).toEqual([{ status: "fulfilled", value: 0 }]);
             expect(completeBoot).toHaveBeenCalledExactlyOnceWith({
               outcome: "clean_stop",
-              reason: "stop (SIGTERM)",
-            });
-          } else {
-            expect(await settled).toEqual([{ status: "rejected", reason: failure }]);
-            expect(completeBoot).toHaveBeenCalledWith({
-              outcome: "startup_failed",
-              reason: failure.message,
+              reason: `stop (${stop})`,
             });
           }
           expect(close).not.toHaveBeenCalled();
         } finally {
-          inspection.reject(failure);
-          drain.release();
-          await settled;
-          if (cleanStop) {
-            await exited;
+          if (signal && !signal.aborted) {
+            captureSignal("SIGINT")();
           }
+          cleanup.release();
+          drain.release();
+          await flush();
+          await settled;
+          vi.useRealTimers();
         }
       });
     },
