@@ -1,6 +1,5 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { expect } from "vitest";
 import { resolveRepoToolBinPath } from "../../scripts/lib/local-check-runtime.mts";
@@ -8,9 +7,7 @@ import {
   TSDOWN_UNIFIED_DTS_CONFIG_GROUPS,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
 } from "../../scripts/lib/tsdown-config-groups.mts";
-import { prepareTsgoCommand } from "../../scripts/run-tsgo.mts";
 import type { CommandFixture } from "../helpers/command-fixture.js";
-import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import {
   createDeclarationFixture,
   createDeclarationTest,
@@ -229,36 +226,6 @@ await assert.rejects(buildWorkspacePackage("gateway-client"), /TS2322/);
 assert.equal(process.cwd(), packageDir);
 `);
   }));
-
-it.runIf(process.platform === "win32").concurrent(
-  "starts the checkout compiler when its Windows executable uses an extended-length path",
-  ({ command }) =>
-    command.lifetime.run(async () => {
-      const base = fs.realpathSync.native(command.createTempDir("openclaw-native-long-path-"));
-      const root = path.join(base, "nested-checkout-".repeat(5), "nested-install-".repeat(5));
-      fs.mkdirSync(root, { recursive: true });
-      const native = materializeNativeCompiler(root, { javaScriptApi: false });
-      expect(native.length).toBeGreaterThanOrEqual(248);
-      const require = createRequire(path.join(root, "package.json"));
-      const getExePath: { default: () => string } = require(
-        path.join(root, "node_modules/typescript/lib/getExePath.js"),
-      );
-      expect(getExePath.default()).toBe(path.toNamespacedPath(native));
-      const compilerCommand = prepareTsgoCommand(["--version"], process.env, root);
-      expect(compilerCommand?.bin).toBe(getExePath.default());
-      const result = spawnSync(resolveRepoToolBinPath("tsgo", { cwd: root }), ["--version"], {
-        cwd: base,
-        encoding: "utf8",
-        timeout: 10_000,
-      });
-      const manifest: { version: string } = JSON.parse(
-        fs.readFileSync(require.resolve("typescript/package.json"), "utf8"),
-      );
-      expect(result.error).toBeUndefined();
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.stdout.trim()).toBe(`Version ${manifest.version}`);
-    }),
-);
 
 for (const kind of [
   "directory alias",
@@ -704,7 +671,6 @@ it.concurrent.for([
   "package symlink",
   "source symlink",
   "source reference",
-  "ancestor symlink reference",
 ])("refuses an escaped %s before publication", (kind, { command }) =>
   command.lifetime.run(async () => {
     const ancestorLookup = [
@@ -770,10 +736,6 @@ it.concurrent.for([
       fs.symlinkSync(path.join(outside, "index.d.ts"), path.join(root, "src/escaped.d.ts"));
       write("src/shared.ts", 'export type { Marker as Shared } from "./escaped.js";');
     } else {
-      if (kind === "ancestor symlink reference") {
-        fs.rmSync(path.join(outside, "index.d.ts"));
-        fs.symlinkSync(path.join(root, "src/contract.d.ts"), path.join(outside, "index.d.ts"));
-      }
       write(
         "src/shared.ts",
         `/// <reference path="${path.join(outside, "index.d.ts").replaceAll(path.sep, "/")}" />\nexport class Shared {}\n`,

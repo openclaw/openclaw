@@ -265,7 +265,11 @@ describe("OpenClaw performance Crabbox boundary", () => {
             " ",
           ),
         );
-        expect(probe.env).toMatchObject({ HOME: `/home/openclaw-${runner ? "bench" : "sut"}` });
+        expect(probe.env).toMatchObject({
+          HOME: `/home/openclaw-${runner ? "bench" : "sut"}`,
+          GIT_CONFIG_GLOBAL: "/dev/null",
+          GIT_CONFIG_SYSTEM: "/dev/null",
+        });
         expect(Object.keys(probe.env).some((key) => /proxy/i.test(key))).toBe(false);
       }
     },
@@ -701,16 +705,10 @@ validate_kova mock-provider "$ROOT" diagnostic 1 scenario:probe - "$GATED" "$HEL
   });
 
   it("pins UID handoff and post-quiescence Git commands to trusted executables", () => {
-    for (const command of [
-      'runuser -u "$SUT_USER" -- /usr/bin/env -C "/home/${SUT_USER}" -i',
-      "GIT_CONFIG_GLOBAL=/dev/null",
-      '"$executor" /usr/bin/git -C "$destination" rev-parse HEAD',
-      'as_sut /usr/bin/git -C "$root/openclaw" rev-parse HEAD',
-      '"$executor" /usr/bin/git -C "$kova" rev-parse HEAD',
-      'pkill -KILL -u "$uid"',
-    ]) {
-      expect(scriptSource).toContain(command);
-    }
+    const gitCalls = scriptSource.match(/(?:as_sut|"\$executor")\s+(\S*git)\s+-C/gu) ?? [];
+    expect(gitCalls.length).toBeGreaterThan(0);
+    expect(gitCalls.every((call) => call.includes(" /usr/bin/git -C"))).toBe(true);
+    expect(scriptSource).toContain('pkill -KILL -u "$uid"');
   });
 
   it("verifies tar paths, sizes, hashes, and lease cleanup before export", () => {

@@ -255,7 +255,14 @@ Atomics.wait = (array, index, value, timeout) => {
 `,
   );
 
-  const { workflowSha, trustedWorkflowTag, targetSha } = prepareDispatchRepository(root, options);
+  const { workflowSha, trustedWorkflowTag, targetSha } = prepareDispatchRepository(root, {
+    candidateOwned: options.candidateOwned,
+    releaseRef: options.releaseRef,
+    workflowSource: options.workflowSource,
+    targetSource: options.targetSource,
+    targetAlreadyRemote: options.targetAlreadyRemote,
+    unreachableContributionRecord: options.unreachableContributionRecord,
+  });
   const workflowSource = readFileSync(
     join(checkout, ".github", "workflows", "full-release-validation.yml"),
     "utf8",

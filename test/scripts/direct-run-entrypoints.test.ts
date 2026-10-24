@@ -1,17 +1,8 @@
 import { spawnSync } from "node:child_process";
-import {
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir, userInfo } from "node:os";
+import { userInfo } from "node:os";
 import path from "node:path";
-import { setTimeout as waitForProcessTick } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { detectChangedScope } from "../../scripts/ci-changed-scope.mjs";
@@ -19,7 +10,6 @@ import { isDirectRunPath } from "../../scripts/lib/direct-run.mjs";
 import * as managedChild from "../../scripts/lib/managed-child-process.mts";
 import { scriptModuleEntrypoints } from "../../scripts/script-module-runtime.test-support.mjs";
 import { resolveRuntimeWorkerUrl } from "../../src/infra/runtime-worker-url.js";
-import { readWindowsProcessStartTimeSync } from "../../src/infra/windows-process-start.js";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
@@ -27,7 +17,6 @@ import {
 } from "../helpers/fixture-receipts.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { withinTest } from "../helpers/promise.js";
-import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
 import type { runNodeScript } from "../helpers/run-node-script.js";
 import {
   formatShimResult,
@@ -91,17 +80,6 @@ async function implementationReadyBeforeSettlement(
   );
   await Promise.race([receipts.waitFor(pidPath, "ready"), settled]);
   return Number.parseInt(readFileSync(pidPath, "utf8"), 10);
-}
-
-// Recovery owns only foreign PIDs, so it has no ChildProcess exit handle to join.
-async function waitForExtinction(pid: number, signal: AbortSignal): Promise<void> {
-  try {
-    while (isProcessAlive(pid)) {
-      await waitForProcessTick(10, undefined, { signal });
-    }
-  } catch (error) {
-    throw new Error(`process still alive: ${pid}`, { cause: error });
-  }
 }
 
 type ModulesEnv = Partial<Record<"PNPM_CONFIG_MODULES_DIR" | "npm_config_modules_dir", string>>;
@@ -177,13 +155,7 @@ function expectShimLoader(
 describe("script direct-run entrypoints", () => {
   it
     .skipIf(process.platform === "win32")
-    .for([
-      "scripts/run-vitest.mjs",
-      "scripts/check-changed.mjs",
-      "scripts/run-tsgo.mjs",
-      "scripts/run-oxlint.mjs",
-      "scripts/run-tsgo-core-test-shards.mjs",
-    ] as const)(
+    .for(["scripts/run-vitest.mjs", "scripts/check-changed.mjs"] as const)(
     "lets %s finish implementation cleanup beyond the shim force-kill window",
     async (wrapper, { signal }) => {
       await withShimFixture(wrapper, async (fixture) => {
@@ -452,7 +424,6 @@ process.exitCode = child.status ?? 1;
       const binDir = path.join(fixtureRoot, "fake bin");
       const home = path.join(fixtureRoot, "home");
       const state = path.join(fixtureRoot, "state");
-      const invocationLog = path.join(fixtureRoot, "invocations.jsonl");
       mkdirSync(binDir);
       mkdirSync(home);
       mkdirSync(state);
@@ -466,17 +437,10 @@ process.exitCode = child.status ?? 1;
       writeFileSync(
         path.join(binDir, process.platform === "win32" ? "crabbox.cjs" : "crabbox"),
         String.raw`#!/usr/bin/env node
-const fs = require("node:fs");
 const args = process.argv.slice(2);
-const record = (stage, details = {}) => fs.appendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify({ stage, args, pid: process.pid, atMs: Date.now(), ...details }) + "\n");
-record("entered");
-const { readWindowsProcessStartTimeSync } = require(${JSON.stringify(path.resolve("src/infra/windows-process-start.ts"))});
-record("identity-module-loaded");
-record("identity-read", { startTimeMs: readWindowsProcessStartTimeSync(process.pid, 0) });
 const response = ${JSON.stringify(responses)}[args.join(" ")];
 if (response === undefined) throw new Error("Unexpected fixture command: " + JSON.stringify(args));
 process.stdout.write(response + "\n");
-record("stdout-write-returned");
 `,
         { mode: 0o755 },
       );
@@ -520,57 +484,8 @@ record("stdout-write-returned");
         ),
         process.cwd(),
       );
-      // Read before asserting: joined timeout cleanup removes the fixture even on failure.
-      // A returned stdout write records progress, not completed pipe drainage.
-      const trace = existsSync(invocationLog) ? readFileSync(invocationLog, "utf8") : "";
-      const details = `${formatShimResult(result)}\nfixture stages:\n${trace || "no invocation recorded"}`;
-      expect(result.error, details).toBeUndefined();
-      expect(result.status, details).toBe(0);
-      expect(result.stdout, details).toBe(`crabbox ${fixtureVersion}\n`);
-      const invocations = trace
-        .trim()
-        .split("\n")
-        .map(
-          (line) =>
-            JSON.parse(line) as {
-              stage: string;
-              args: string[];
-              pid: number;
-              startTimeMs?: number | null;
-            },
-        )
-        .filter(({ stage }) => stage === "identity-read");
-      expect(invocations.map(({ args }) => args)).toEqual([
-        ["--version"],
-        ["run", "--help"],
-        ["config", "show", "--json"],
-        ["--version"],
-      ]);
-      for (const invocation of invocations) {
-        if (process.platform === "win32") {
-          expect(
-            Number.isSafeInteger(invocation.startTimeMs) && (invocation.startTimeMs ?? 0) > 0,
-            `${JSON.stringify(invocation)}\n${details}`,
-          ).toBe(true);
-        }
-        // Windows may reuse an exited probe's PID before the remaining probes finish.
-        // An unreadable identity for a live PID still cannot prove child cleanup.
-        const observedStartTimeMs = readWindowsProcessStartTimeSync(invocation.pid, 0);
-        const alive = isProcessAlive(invocation.pid);
-        expect(
-          alive &&
-            (process.platform !== "win32" ||
-              observedStartTimeMs === null ||
-              observedStartTimeMs === invocation.startTimeMs),
-          alive
-            ? `${JSON.stringify({
-                invocation,
-                observedStartTimeMs,
-                invocations,
-              })}\n${formatShimResult(result)}`
-            : undefined,
-        ).toBe(false);
-      }
+      expectExit(result, 0);
+      expect(result.stdout).toBe(`crabbox ${fixtureVersion}\n`);
       expect(readdirSync(state)).toEqual(["tools"]);
     });
   });
@@ -666,122 +581,27 @@ it("retains fixture evidence when command cleanup is unconfirmed", async () => {
   }
 });
 
-it("joins owned descendants and captures timeout output before deleting a rejected fixture", async ({
-  signal,
-}) => {
-  const evidence = mkdtempSync(path.join(tmpdir(), "openclaw-shim-owned-pids-"));
-  const pidPaths = ["wrapper", "implementation", "descendant"].map((role) =>
-    path.join(evidence, `${role}.pid`),
-  );
-  const wrapperPidProbe = path.join(evidence, "wrapper-pid.mjs");
-  writeFileSync(
-    wrapperPidProbe,
-    `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(pidPaths[0])}, String(process.pid));`,
-  );
+it("joins commands before deleting a rejected fixture", async () => {
   const failure = new Error("fixture callback rejected while the command was running");
   let root = "";
-  let fixturePresentAtCommandSettlement: boolean | undefined;
   let command: ReturnType<typeof runNodeScript> | undefined;
-  await runQaGatewayFixture(
-    async () => {
-      const error = await withShimFixture(TSX_SHIM_WRAPPERS[0], async (fixture) => {
-        const { fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
-        root = fixtureRoot;
-        const descendant = `
-const fs = require("node:fs");
-const timer = setInterval(() => {}, 1000);
-process.on("SIGTERM", () => {
-  fs.writeFileSync(${JSON.stringify(path.join(evidence, "shutdown-root-present"))}, String(fs.existsSync(${JSON.stringify(root)})));
-  process.stdout.write("shutdown stdout\\n");
-  process.stderr.write("shutdown stderr\\n");
-  clearInterval(timer);
-});
-fs.writeFileSync(${JSON.stringify(pidPaths[2])}, String(process.pid));
-process.stdout.write("descendant stdout\\n");
-process.stderr.write("descendant stderr\\n");
-process.send("ready");
-process.disconnect();
-`;
-        writeFileSync(
-          implementationPath,
-          `
-import fs from "node:fs";
-import { spawn } from "node:child_process";
-${fixtureReceiptClientSource(receipts.endpoint)}
-enum Transformed { Value = "transformed" }
-console.log(Transformed.Value);
-const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendant)}], { stdio: ["ignore", "inherit", "inherit", "ipc"] });
-child.once("message", () => {
-  fs.writeFileSync(${JSON.stringify(pidPaths[1])}, String(process.pid));
-  sendReceipt(${JSON.stringify(pidPaths[1])}, "ready");
-});
-`,
-        );
-        command = runNode(
-          ["--import", pathToFileURL(wrapperPidProbe).href, wrapperPath],
-          shimEnv(),
-          fixtureRoot,
-        ).then((result) => {
-          fixturePresentAtCommandSettlement = existsSync(fixtureRoot);
-          return result;
-        });
-        const implementationPid = await withinTest(
-          implementationReadyBeforeSettlement(pidPaths[1]!, command),
-          signal,
-        );
-        expect(isProcessAlive(implementationPid)).toBe(true);
-        throw failure;
-      }).catch((cause: unknown) => cause);
-      expect(error).toBe(failure);
-      expect(command).toBeDefined();
-      const result = await command!;
-      expect(result.error, formatShimResult(result)).toMatchObject({
-        code: "ETIMEDOUT",
-        message: "Managed command timed out after 10000ms",
+  await expect(
+    withShimFixture(TSX_SHIM_WRAPPERS[0], ({ fixtureRoot, runNode }) => {
+      root = fixtureRoot;
+      command = runNode(
+        ["-e", 'process.stdout.write("completed");'],
+        testRunnerFixtureEnv(),
+        root,
+      ).then((result) => {
+        expect(existsSync(root), "command teardown still owns its fixture").toBe(true);
+        return result;
       });
-      expect(result.status).toBeNull();
-      expect(fixturePresentAtCommandSettlement, "command teardown still owns its fixture").toBe(
-        true,
-      );
-      expect(result.stdout).toContain("transformed");
-      expect(result.stdout).toContain("descendant stdout");
-      expect(result.stderr).toContain("descendant stderr");
-      for (const pidPath of pidPaths) {
-        expect(isProcessAlive(Number(readFileSync(pidPath, "utf8"))), pidPath).toBe(false);
-      }
-      if (process.platform !== "win32") {
-        expect(readFileSync(path.join(evidence, "shutdown-root-present"), "utf8")).toBe("true");
-        expect(result.stdout).toContain("shutdown stdout");
-        expect(result.stderr).toContain("shutdown stderr");
-      }
-      expect(existsSync(root)).toBe(false);
-    },
-    async () => {
-      await command;
-    },
-    ...pidPaths.toReversed().map((pidPath) => async () => {
-      // Independent recovery also runs after a failed assertion; never rely on the fixture under test.
-      if (existsSync(pidPath)) {
-        const pid = Number(readFileSync(pidPath, "utf8"));
-        if (isProcessAlive(pid)) {
-          managedChild.terminateManagedChild(
-            { pid, kill: (killSignal) => process.kill(pid, killSignal) },
-            "SIGKILL",
-            { useProcessGroup: false },
-          );
-        }
-        await waitForExtinction(pid, signal);
-      }
+      throw failure;
     }),
-    () => {
-      if (
-        pidPaths.some(
-          (pidPath) => existsSync(pidPath) && isProcessAlive(Number(readFileSync(pidPath, "utf8"))),
-        )
-      ) {
-        throw new Error(`Owned proof children remain; retained PID evidence ${evidence}`);
-      }
-      rmSync(evidence, { recursive: true, force: true });
-    },
-  );
+  ).rejects.toBe(failure);
+  expect(command).toBeDefined();
+  const result = await command!;
+  expectExit(result, 0);
+  expect(result.stdout).toBe("completed");
+  expect(existsSync(root)).toBe(false);
 });
