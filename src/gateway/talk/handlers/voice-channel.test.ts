@@ -4,6 +4,10 @@ import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/
 import { releaseAgentRunDelegatedAuthority } from "../../../infra/agent-run-registry.js";
 import { createPluginRuntimeStore } from "../../../plugin-sdk/runtime-store.js";
 import { PluginInstance } from "../../../plugins/plugin-instance.js";
+import {
+  isGatewaySubordinateWorkAdmissionClosed,
+  tryBeginGatewayRootWorkAdmission,
+} from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   registerRealtimeVoiceSelection,
@@ -131,6 +135,30 @@ describe("channel-owned voice selection RPC", () => {
     } finally {
       await Promise.all([discordInstance.dispose(), talkVoiceInstance.dispose()]);
     }
+  });
+
+  it("admits later consults after the voice change request root is released", async () => {
+    let consult: (() => boolean) | undefined;
+    const call = managedCall(async () => {
+      consult = new AsyncResource("discord-replacement-consult").bind(() =>
+        isGatewaySubordinateWorkAdmissionClosed(),
+      );
+    });
+    const admission = tryBeginGatewayRootWorkAdmission("ws:talk.voice.set");
+    if (!admission) {
+      throw new Error("Expected gateway root work admission");
+    }
+    try {
+      expectSuccess(
+        await admission.run(() => invoke("talk.voice.set", { voice: "cedar" }, call.client)),
+        { voice: "cedar", status: "applied" },
+      );
+    } finally {
+      admission.release();
+    }
+
+    expect(call.currentVoice()).toBe("cedar");
+    expect(consult?.()).toBe(false);
   });
 
   it("rejects foreign targets and unsupported voices before reconnecting", async () => {
