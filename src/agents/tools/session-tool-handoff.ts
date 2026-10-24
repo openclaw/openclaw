@@ -6,7 +6,10 @@ import {
   enqueueSessionEventForHost,
 } from "../../auto-reply/reply/session-event-handoff.js";
 import { prepareSessionEventTargetForHost } from "../../auto-reply/reply/session-event-target.js";
-import { captureOperatorToolGatewayContinuationContext } from "../../gateway/server-plugin-in-process-dispatch.js";
+import {
+  captureOperatorToolGatewayContinuationContext,
+  captureOperatorToolGatewayRequestContinuationContext,
+} from "../../gateway/server-plugin-in-process-dispatch.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
   execRequestAbortSignal,
@@ -38,10 +41,11 @@ const pending = new WeakSet<object>();
 export async function handoffSessionTool(params: {
   name: string;
   fenceSuccessors?: true;
-  run: (scope: {
+  run?: (scope: {
     assertCurrent: () => void;
     signal: AbortSignal;
   }) => Promise<Record<string, unknown>>;
+  request?: { method: "plugins.reload"; params: Record<string, unknown> };
   sessionId?: string;
   runId?: string;
   operation?: ReplyOperation;
@@ -75,14 +79,48 @@ export async function handoffSessionTool(params: {
   }
   pending.add(operation);
   const handoffSettled = createDeferredCore();
-  let continuation: Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>> =
-    undefined;
+  let continuation:
+    | Awaited<ReturnType<typeof captureOperatorToolGatewayContinuationContext>>
+    | Awaited<ReturnType<typeof captureOperatorToolGatewayRequestContinuationContext>> = undefined;
+  let runDeferred:
+    | ((scope: {
+        assertCurrent: () => void;
+        signal: AbortSignal;
+      }) => Promise<Record<string, unknown>>)
+    | undefined;
+  let enqueueDeferred:
+    | ((
+        text: string,
+        options: Parameters<typeof enqueueSessionEventForHost>[1],
+      ) =>
+        | ReturnType<typeof enqueueSessionEventForHost>
+        | Promise<ReturnType<typeof enqueueSessionEventForHost>>)
+    | undefined;
   try {
-    continuation = await captureOperatorToolGatewayContinuationContext({
-      agentId: caller.agentId,
-      sessionKey: caller.sessionKey,
-    });
-    if (!continuation) {
+    const gatewayTarget = { agentId: caller.agentId, sessionKey: caller.sessionKey };
+    if (params.request) {
+      const captured = await captureOperatorToolGatewayRequestContinuationContext(
+        gatewayTarget,
+        params.request,
+      );
+      continuation = captured;
+      runDeferred = captured ? (scope) => captured.dispatch(scope) : undefined;
+      enqueueDeferred = captured
+        ? (text, options) => captured.enqueueSessionEvent(text, options)
+        : undefined;
+    } else {
+      const captured = await captureOperatorToolGatewayContinuationContext(gatewayTarget);
+      const run = params.run;
+      continuation = captured;
+      runDeferred = run && captured ? (scope) => captured.run(() => run(scope)) : undefined;
+      enqueueDeferred = captured
+        ? (text, options) =>
+            captured.run(() =>
+              runOutsidePluginRuntimeRegistryScope(() => enqueueSessionEventForHost(text, options)),
+            )
+        : undefined;
+    }
+    if (!continuation || !runDeferred || !enqueueDeferred) {
       throw new ToolInputError(`${params.name} requires its admitted Gateway.`);
     }
     const target = await captureSessionEventTargetForHost(caller.agentId, caller.sessionKey, {
@@ -107,6 +145,8 @@ export async function handoffSessionTool(params: {
       `${params.name} handed off; resume with its result in this same conversation.`,
     );
     const retained = continuation;
+    const deferred = runDeferred;
+    const enqueue = enqueueDeferred;
     const contextKey = "tool-handoff:" + randomUUID();
     let result: Record<string, unknown> | undefined;
     // Start from the context-free root: the yielded turn's caller identity, retired receipts and
@@ -137,12 +177,10 @@ export async function handoffSessionTool(params: {
               try {
                 const destination = await prepareSessionEventTargetForHost(target);
                 try {
-                  result = await retained.run(() =>
-                    params.run({
-                      assertCurrent: destination.assertCurrent,
-                      signal: AbortSignal.any([retained.signal, signal]),
-                    }),
-                  );
+                  result = await deferred({
+                    assertCurrent: destination.assertCurrent,
+                    signal: AbortSignal.any([retained.signal, signal]),
+                  });
                 } finally {
                   destination.release();
                 }
@@ -183,23 +221,19 @@ export async function handoffSessionTool(params: {
                 params.formatResult(result) +
                 "\nContinue the original task in this conversation. Do not repeat a completed operation.";
               // Retain the admitted Gateway, but let resume select the replacement plugin registry.
-              const receipt = retained.run(() =>
-                runOutsidePluginRuntimeRegistryScope(() =>
-                  enqueueSessionEventForHost(
-                    eventText,
-                    withExecRequestOwners(
-                      {
-                        agentId: caller.agentId,
-                        sessionKey: caller.sessionKey,
-                        source: "plugin",
-                        contextKey,
-                        expectedTarget: target,
-                        assertCurrent: retained.assertCurrent,
-                        abortSignal: signal,
-                      },
-                      params.requestOwners,
-                    ),
-                  ),
+              const receipt = await enqueue(
+                eventText,
+                withExecRequestOwners(
+                  {
+                    agentId: caller.agentId,
+                    sessionKey: caller.sessionKey,
+                    source: "plugin",
+                    contextKey,
+                    expectedTarget: target,
+                    assertCurrent: retained.assertCurrent,
+                    abortSignal: signal,
+                  },
+                  params.requestOwners,
                 ),
               );
               const accepted = await receipt.accepted;
