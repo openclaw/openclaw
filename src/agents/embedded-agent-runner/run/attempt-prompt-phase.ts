@@ -503,6 +503,7 @@ export async function runEmbeddedAttemptPromptPhase(
         onModelRequest: preparedStreamRuntime.cache.onModelRequest,
         images: imageResult.images,
         modelPrompt: promptContext.promptForModel,
+        modelPromptProvenance: promptContext.modelPromptProvenance,
         onFinalPromptText: (prompt) => {
           promptState.finalPromptText = prompt;
         },
