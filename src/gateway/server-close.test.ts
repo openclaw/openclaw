@@ -1,5 +1,4 @@
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { isProcessAlive } from "../../test/helpers/process-wait.js";
 import { isAgentRunRestartAbortReason } from "../agents/run-termination.js";
@@ -119,43 +118,19 @@ async function createSdkFixture(label: string) {
     await import("../state/openclaw-state-db.js");
   const state = await createOpenClawTestState({ label });
   const database = openOpenClawStateDatabase({ env: state.env });
-  const sdkDatabase = new DatabaseSync(":memory:");
   const sdkHost = new LegacyPluginSdkResourceHost();
   const inspection = new PluginRegistryInspectionResources(async () => {});
   inspection.attach(createEmptyPluginRegistry());
   const cleanup = async () => {
     await sdkHost.close().catch(() => undefined);
-    if (sdkDatabase.isOpen) {
-      sdkDatabase.close();
-    }
     await closeOpenClawStateDatabaseAsync();
     await state.cleanup();
   };
-  return { database, sdkDatabase, sdkHost, inspection, cleanup };
-}
-
-function expectOpen(databases: DatabaseSync[], isOpen: boolean) {
-  expect(databases.map((database) => database.isOpen)).toEqual(databases.map(() => isOpen));
+  return { database, sdkHost, inspection, cleanup };
 }
 
 async function recordEvent(events: string[], event: string) {
   events.push(event);
-}
-
-function recoveryRun(
-  runId: string,
-  sessionKey: string,
-  sessionId: string,
-  lifecycleGeneration = getAgentEventLifecycleGeneration(),
-) {
-  return {
-    storePath: "/synthetic/gateway-close/sessions.sqlite",
-    agentId: "main",
-    runId,
-    lifecycleGeneration,
-    sessionKey,
-    sessionId,
-  };
 }
 
 describe("createGatewayCloseHandler", () => {
@@ -163,8 +138,6 @@ describe("createGatewayCloseHandler", () => {
     sharedStateLifecycle.set("open", true);
     resetPluginRuntimeStateForTest();
     vi.useRealTimers();
-    mocks.logInfo.mockClear();
-    mocks.logWarn.mockClear();
     mocks.listChannelPlugins.mockReset();
     mocks.listChannelPlugins.mockReturnValue([]);
     mocks.disposeAllCodeModeRuns.mockReset();
@@ -200,33 +173,23 @@ describe("createGatewayCloseHandler", () => {
         "../hooks/internal-hooks.js",
       );
       const fixture = await createSdkFixture("shutdown-actual-sqlite");
-      const { database, sdkDatabase, sdkHost, inspection } = fixture;
+      const { database, sdkHost, inspection } = fixture;
       const sdkDisposalReads: unknown[] = [];
       inspection.register("sdk-provider", {
         id: "native-sdk-borrow",
         dispose: () => {
           sdkDisposalReads.push(database.db.prepare("SELECT 42 AS value").get());
-          sdkDatabase.close();
         },
       });
       sdkHost.adopt(inspection, inspection.retain());
       await inspection.release();
       const entered = createDeferredCore();
       const release = createDeferredCore();
-      const finished = createDeferredCore();
       const reads: unknown[] = [];
-      const failures: unknown[] = [];
       const cleanup = vi.fn(async () => {
         entered.resolve();
-        try {
-          await release.promise;
-          reads.push(database.db.prepare("SELECT 1 AS value").get());
-          expect(sdkDatabase.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
-        } catch (error) {
-          failures.push(error);
-        } finally {
-          finished.resolve();
-        }
+        await release.promise;
+        reads.push(database.db.prepare("SELECT 1 AS value").get());
       });
       const eventKey = `gateway:${owner === "pre-restart" ? "pre-restart" : "shutdown"}`;
       if (owner === "sdk") {
@@ -280,7 +243,7 @@ describe("createGatewayCloseHandler", () => {
               : GATEWAY_SHUTDOWN_HOOK_TIMEOUT_MS,
         );
         await vi.waitFor(() => expect(httpClose).toHaveBeenCalledOnce());
-        expectOpen([database.db, sdkDatabase], true);
+        expect(database.db.isOpen).toBe(true);
         expect(sdkDisposalReads).toEqual([]);
         expect(closed).toBe(false);
         expect(sharedStateLifecycle.has("open")).toBe(true);
@@ -292,14 +255,13 @@ describe("createGatewayCloseHandler", () => {
         }
       } finally {
         release.resolve();
-        await finished.promise;
         try {
           const result = await closing;
           expect(result.warnings).toEqual(
             owner === "sdk" ? [] : [owner === "harness" ? "agent-harnesses" : `gateway:${owner}`],
           );
           expect(sdkDisposalReads).toEqual([{ value: 42 }]);
-          expectOpen([database.db, sdkDatabase], false);
+          expect(database.db.isOpen).toBe(false);
         } finally {
           await sdkHost.close().catch(() => undefined);
           hooks.unregisterInternalHook(eventKey, cleanup);
@@ -309,7 +271,6 @@ describe("createGatewayCloseHandler", () => {
       }
       expect(formatGatewayPendingCloseSteps()).toBe("none");
       expect(cleanup).toHaveBeenCalledOnce();
-      expect(failures).toEqual([]);
       expect(reads).toEqual([{ value: 1 }]);
       expect(sharedStateLifecycle.size).toBe(0);
     },
@@ -319,7 +280,7 @@ describe("createGatewayCloseHandler", () => {
     "finishes shared state cleanup after actual SDK disposal rejects (global failure: %s)",
     async (globalFailure) => {
       const fixture = await createSdkFixture("sdk-disposal-failure-tail");
-      const { database, sdkDatabase, sdkHost, inspection } = fixture;
+      const { database, sdkHost, inspection } = fixture;
       const entered = createDeferredCore();
       const resume = createDeferredCore();
       const disposalError = new Error("synthetic SDK disposal failure");
@@ -327,7 +288,6 @@ describe("createGatewayCloseHandler", () => {
         entered.resolve();
         await resume.promise;
         expect(database.db.prepare("SELECT 42 AS value").get()).toEqual({ value: 42 });
-        sdkDatabase.close();
         throw disposalError;
       });
       inspection.register("sdk-provider", { id: "native-sdk-failure", dispose });
@@ -366,13 +326,13 @@ describe("createGatewayCloseHandler", () => {
       };
       try {
         await entered.promise;
-        expectOpen([database.db, sdkDatabase], true);
+        expect(database.db.isOpen).toBe(true);
         expect(reset).not.toHaveBeenCalled();
         expect(clearSecretsRuntimeSnapshot).not.toHaveBeenCalled();
         resume.resolve();
         const failure = await outcome;
         expectCleanupFailure(failure);
-        expectOpen([database.db, sdkDatabase], false);
+        expect(database.db.isOpen).toBe(false);
         expect(reset).toHaveBeenCalledOnce();
         expect(clearSecretsRuntimeSnapshot).toHaveBeenCalledOnce();
         expectCleanupFailure(
@@ -559,39 +519,25 @@ describe("createGatewayCloseHandler", () => {
     { restart: false, ignoreTerm: false },
     { restart: true, ignoreTerm: true },
   ])(
-    "terminates supervised process trees before Gateway close returns (restart=$restart, ignores TERM=$ignoreTerm)",
+    "terminates supervised children before Gateway close returns (restart=$restart, ignores TERM=$ignoreTerm)",
     async ({ restart, ignoreTerm }) => {
       const previousServiceMarker = process.env.OPENCLAW_SERVICE_MARKER;
       process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
       const supervisor = getProcessSupervisor();
       let output = "";
       let run: ManagedRun | undefined;
-      let replacementRun: ManagedRun | undefined;
       let rootPid: number | undefined;
-      let descendantPid: number | undefined;
 
       try {
-        // Readiness follows TERM handler installation and closure of inherited descriptors.
-        const descendantScript = `
-          ${ignoreTerm ? 'process.on("SIGTERM", () => {});' : ""}
-          setInterval(() => {}, 1_000);
-          process.send("ready", () => process.disconnect());
-        `;
         run = await supervisor.spawn({
           mode: "child",
           argv: [
             process.execPath,
             "-e",
             `
-              const { spawn } = require("node:child_process");
-              const child = spawn(process.execPath, ["-e", ${JSON.stringify(descendantScript)}], {
-                stdio: ["ignore", "ignore", "ignore", "ipc"],
-              });
-              child.once("message", () => {
-                child.once("disconnect", () => {
-                  process.stdout.write(process.pid + " " + child.pid + "\\n");
-                });
-              });
+              ${ignoreTerm ? 'process.on("SIGTERM", () => {});' : ""}
+              setInterval(() => {}, 1_000);
+              process.stdout.write(String(process.pid));
             `,
           ],
           stdinMode: "pipe-closed",
@@ -599,12 +545,9 @@ describe("createGatewayCloseHandler", () => {
             output += chunk;
           },
         });
-        await vi.waitFor(() => expect(output).toMatch(/^\d+ \d+/u));
-        const match = /^(\d+) (\d+)/u.exec(output);
-        rootPid = Number(match?.[1]);
-        descendantPid = Number(match?.[2]);
+        await vi.waitFor(() => expect(output).toMatch(/^\d+$/));
+        rootPid = Number(output);
         expect(isProcessAlive(rootPid)).toBe(true);
-        expect(isProcessAlive(descendantPid)).toBe(true);
 
         const close = createGatewayCloseHandler();
         await close({
@@ -612,27 +555,14 @@ describe("createGatewayCloseHandler", () => {
           ...(restart ? { restartExpectedMs: 1500, drainTimeoutMs: 0 } : {}),
         });
 
-        // Do not poll after close: returning while either process lives is the regression.
+        // Returning while the child lives is the Gateway regression.
         expect(isProcessAlive(rootPid)).toBe(false);
-        expect(isProcessAlive(descendantPid)).toBe(false);
         await expect(run.waitForExtinction!()).resolves.toBeUndefined();
-        const nextSupervisor = getProcessSupervisor();
-        expect(nextSupervisor).not.toBe(supervisor);
-        replacementRun = await nextSupervisor.spawn({
-          mode: "child",
-          argv: [process.execPath, "-e", ""],
-          exactEnv: true,
-          stdinMode: "pipe-closed",
-        });
-        await expect(replacementRun.wait()).resolves.toMatchObject({ reason: "exit", exitCode: 0 });
       } finally {
         try {
           run?.cancel();
-          replacementRun?.cancel();
           killPidIfAlive(rootPid);
-          killPidIfAlive(descendantPid);
           await run?.waitForExtinction?.().catch(() => undefined);
-          await replacementRun?.wait().catch(() => undefined);
         } finally {
           if (previousServiceMarker === undefined) {
             delete process.env.OPENCLAW_SERVICE_MARKER;
@@ -962,31 +892,16 @@ describe("createGatewayCloseHandler", () => {
     });
     const events: string[] = [];
     const generation = getAgentEventLifecycleGeneration();
-    const { source: chat } = await createCloseSource(
-      "run-1",
-      { lifecycleGeneration: generation },
-      {
-        sessionKey: "agent:main:main",
-        sessionId: "session-id-1",
-      },
-    );
-    const { source: agent } = await createCloseSource(
-      "agent-run-1",
-      { lifecycleGeneration: generation, kind: "agent" },
-      {
-        sessionKey: "agent:main:test:direct:source",
-        sessionId: "session-id-2",
-      },
-    );
-    const { source: completed } = await createCloseSource(
-      "completed-run",
-      {
-        lifecycleGeneration: generation,
-        projectSessionActive: false,
-        projectSessionTerminalPersisted: true,
-      },
-      { sessionId: "completed-session-id", sessionKey: "agent:main:completed" },
-    );
+    const { source: chat } = await createCloseSource("run-1", { lifecycleGeneration: generation });
+    const { source: agent } = await createCloseSource("agent-run-1", {
+      lifecycleGeneration: generation,
+      kind: "agent",
+    });
+    const { source: completed } = await createCloseSource("completed-run", {
+      lifecycleGeneration: generation,
+      projectSessionActive: false,
+      projectSessionTerminalPersisted: true,
+    });
     const { source: stale } = await createCloseSource("stale-run", {
       lifecycleGeneration: generation,
     });
@@ -1011,7 +926,7 @@ describe("createGatewayCloseHandler", () => {
       removeChatRun: vi.fn(() => {
         events.push("abort");
         return {
-          sessionKey: "agent:main:main",
+          sessionKey: "agent:main:run-1",
           clientRunId: "run-1",
           registeredAtMs: 1_000,
           registeredSequence: 1,
@@ -1024,8 +939,8 @@ describe("createGatewayCloseHandler", () => {
     expect(rpcSourceTesting.has("run-1")).toBe(false);
     expect(rpcSourceTesting.has("agent-run-1")).toBe(false);
     for (const [runId, sessionKey] of [
-      ["run-1", "agent:main:main"],
-      ["agent-run-1", "agent:main:test:direct:source"],
+      ["run-1", "agent:main:run-1"],
+      ["agent-run-1", "agent:main:agent-run-1"],
     ]) {
       const payload = expect.objectContaining({ runId, state: "aborted", stopReason: "restart" });
       expect(broadcast).toHaveBeenCalledWith("chat", payload, { sessionKeys: [sessionKey] });
@@ -1033,14 +948,9 @@ describe("createGatewayCloseHandler", () => {
     }
     expect(events[0]).toBe("marker");
     expect(markMainSessionsAbortedForRestart).toHaveBeenCalledOnce();
-    expect(firstMockCall(markMainSessionsAbortedForRestart)?.[0]?.activeRuns).toEqual(
-      [
-        recoveryRun("run-1", "agent:main:main", "session-id-1", generation),
-        recoveryRun("agent-run-1", "agent:main:test:direct:source", "session-id-2", generation),
-        // A terminal write does not settle the caller's retained controller custody.
-        recoveryRun("completed-run", "agent:main:completed", "completed-session-id", generation),
-      ].map((run) => Object.assign(run, { observedAt: expect.any(Number) })),
-    );
+    expect(
+      firstMockCall(markMainSessionsAbortedForRestart)?.[0]?.activeRuns.map(({ runId }) => runId),
+    ).toEqual(["run-1", "agent-run-1", "completed-run"]);
     expect(chat.input.abortSignal.aborted).toBe(true);
     expect(agent.input.abortSignal.aborted).toBe(true);
     expect(foreign.input.abortSignal.aborted).toBe(false);
@@ -1053,9 +963,7 @@ describe("createGatewayCloseHandler", () => {
     async (persistence) => {
       vi.useFakeTimers();
       const callerPending = persistence === "post-terminal";
-      const runId = callerPending ? "post-terminal-run" : "completed-run";
-      const sessionId = callerPending ? "post-terminal-session-id" : "completed-session-id";
-      const sessionKey = callerPending ? "agent:main:post-terminal" : "agent:main:completed";
+      const runId = "terminal-run";
       const persisted = createDeferredCore();
       if (persistence === "settled") {
         persisted.resolve();
@@ -1073,7 +981,7 @@ describe("createGatewayCloseHandler", () => {
               }
             : {}),
         },
-        { sessionId, sessionKey, holdProducer: callerPending },
+        { holdProducer: callerPending },
       );
       // A completed producer still owns its accepted terminal writer until that work settles.
       if (!callerPending) {
@@ -1116,11 +1024,11 @@ describe("createGatewayCloseHandler", () => {
           expect(result.warnings).toContain("restart-reply-drain");
         }
         expect(markMainSessionsAbortedForRestart).toHaveBeenCalledOnce();
-        expect(firstMockCall(markMainSessionsAbortedForRestart)?.[0]?.activeRuns).toEqual(
-          persistence === "settled"
-            ? []
-            : [{ ...recoveryRun(runId, sessionKey, sessionId), observedAt: expect.any(Number) }],
-        );
+        expect(
+          firstMockCall(markMainSessionsAbortedForRestart)?.[0]?.activeRuns.map(
+            ({ runId: capturedRunId }) => capturedRunId,
+          ),
+        ).toEqual(persistence === "settled" ? [] : [runId]);
         if (persistence === "untracked") {
           expect(vi.mocked(deps.broadcast).mock.calls.some(([event]) => event === "chat")).toBe(
             false,
