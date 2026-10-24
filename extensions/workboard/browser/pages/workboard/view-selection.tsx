@@ -388,7 +388,10 @@ export function SelectionActions(input: { workboard: WorkboardProps }) {
         title={t("workboard.clearSelection")}
         aria-label={t("workboard.clearSelection")}
         disabled={busy()}
-        onClick={() => {
+        onClick={(event) => {
+          const board = event.currentTarget.closest(".workboard");
+          const card = board?.querySelector<HTMLElement>(".workboard-card--selected");
+          card?.focus({ preventScroll: true });
           state().selectedCardIds.clear();
           input.workboard.onRequestUpdate?.();
         }}

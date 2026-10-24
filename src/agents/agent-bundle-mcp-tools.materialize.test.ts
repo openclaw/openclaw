@@ -9,7 +9,11 @@ import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
-import { fixtureCatalog, fixtureRuntime } from "./agent-bundle-mcp-fixture.test-support.js";
+import {
+  catalogTool,
+  fixtureCatalog,
+  fixtureRuntime,
+} from "./agent-bundle-mcp-fixture.test-support.js";
 import {
   buildBundleMcpToolsFromCatalog,
   createBundleMcpToolRuntime,
@@ -30,21 +34,6 @@ const MCP_APP_RESOURCE_MIME_TYPE = "text/html;profile=mcp-app";
 
 function firstTool(runtime: Pick<BundleMcpToolRuntime, "tools">) {
   return expectDefined(runtime.tools[0], "first materialized tool");
-}
-
-function catalogTool(
-  serverName: string,
-  toolName: string,
-  overrides: Partial<McpCatalogTool> = {},
-): McpCatalogTool {
-  return {
-    serverName,
-    safeServerName: serverName,
-    toolName,
-    inputSchema: { type: "object", properties: {} },
-    fallbackDescription: toolName,
-    ...overrides,
-  };
 }
 
 function knowledgeCatalog(server: Partial<McpToolCatalog["servers"][string]> = {}): McpToolCatalog {
