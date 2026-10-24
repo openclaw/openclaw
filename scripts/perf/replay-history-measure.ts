@@ -50,7 +50,7 @@ if (
   throw new Error("Run timing and allocation separately without GC tracing");
 }
 const manager = SessionManager.inMemory();
-const user = (index: number): AgentMessage => ({
+const user = (index: number): Extract<AgentMessage, { role: "user" }> => ({
   role: "user",
   content: [{ type: "text", text: `Synthetic request ${index}: ${"context ".repeat(64)}` }],
   timestamp: index * 2,
@@ -163,6 +163,16 @@ let reusedOutputMessages = 0;
 let reusedOutputContents = 0;
 let result: AgentMessage[] = [];
 const latencies: number[] = [];
+const contentOf = (message: AgentMessage | undefined) => {
+  switch (message?.role) {
+    case "user":
+    case "assistant":
+    case "toolResult":
+      return message.content;
+    default:
+      return undefined;
+  }
+};
 for (let index = 0; index < attempts; index++) {
   const input = [...messages, user(messages.length + index)];
   const previous = result;
@@ -172,10 +182,10 @@ for (let index = 0; index < attempts; index++) {
   presentedMessages += input.length;
   for (let message = 0; message < input.length; message++) {
     copiedMessages += Number(result[message] !== input[message]);
-    copiedContents += Number(result[message]?.content !== input[message]?.content);
+    copiedContents += Number(contentOf(result[message]) !== contentOf(input[message]));
     if (index > 0 && message < messages.length) {
       reusedOutputMessages += Number(result[message] === previous[message]);
-      reusedOutputContents += Number(result[message]?.content === previous[message]?.content);
+      reusedOutputContents += Number(contentOf(result[message]) === contentOf(previous[message]));
     }
   }
   if (index % 10 === 9) {

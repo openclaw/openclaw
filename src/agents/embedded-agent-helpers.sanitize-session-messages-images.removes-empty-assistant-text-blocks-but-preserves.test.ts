@@ -27,34 +27,37 @@ async function check(input: unknown[], expected: unknown[], options?: Options) {
 }
 
 it("reuses owned text cleanup across rebuilt envelopes without mixing replay policies", async () => {
-  const message = assistant([
+  const content = [
     { ...text(" "), textSignature: "signed" },
     { ...text("visible"), thought_signature: "msg_private", thoughtSignature: "msg_camel" },
-  ]);
+  ];
+  const message = assistant(content);
   normalizeTranscriptJsonValue({ message }, "entry");
-  const sanitize = (options?: Options) =>
-    sanitizeSessionMessagesImages([{ ...message }], "test", options);
+  const sanitize = async (options?: Options) =>
+    (await sanitizeSessionMessagesImages([{ ...message }], "test", options)).find(
+      (entry) => entry.role === "assistant",
+    )?.content;
   const strict = { sanitizeThoughtSignatures: { allowBase64Only: true, includeCamelCase: true } };
   const first = await sanitize(strict);
-  expect(first[0].content).toEqual([{ ...text(" "), textSignature: "signed" }, text("visible")]);
-  expect((await sanitize({ preserveSignatures: true }))[0].content).toBe(message.content);
-  expect((await sanitize(strict))[0].content).toBe(first[0].content);
-  expect(Object.isFrozen(first[0].content)).toBe(true);
-  const user = { role: "user" as const, content: message.content, timestamp: 0 };
-  expect((await sanitizeSessionMessagesImages([user], "test"))[0].content).toEqual([
-    message.content[1],
+  expect(first).toEqual([{ ...text(" "), textSignature: "signed" }, text("visible")]);
+  expect(await sanitize({ preserveSignatures: true })).toBe(content);
+  expect(await sanitize(strict)).toBe(first);
+  expect(Object.isFrozen(first)).toBe(true);
+  const user = { role: "user" as const, content, timestamp: 0 };
+  expect((await sanitizeSessionMessagesImages([user], "test"))[0]).toHaveProperty("content", [
+    content[1],
   ]);
-  expect((await sanitize(strict))[0].content).toBe(first[0].content);
+  expect(await sanitize(strict)).toBe(first);
 });
 
 it("sanitizes mutable content again after an in-place edit", async () => {
   const block = text("first");
   const message = { role: "user" as const, content: [block], timestamp: 0 };
-  expect((await sanitizeSessionMessagesImages([message], "test"))[0].content).toEqual([
+  expect((await sanitizeSessionMessagesImages([message], "test"))[0]).toHaveProperty("content", [
     text("first"),
   ]);
   block.text = " ";
-  expect((await sanitizeSessionMessagesImages([message], "test"))[0].content).toEqual([
+  expect((await sanitizeSessionMessagesImages([message], "test"))[0]).toHaveProperty("content", [
     text("[empty content omitted]"),
   ]);
 });

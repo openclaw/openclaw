@@ -215,15 +215,15 @@ describe("normalizeAssistantReplayContent", () => {
   it("reuses immutable message normalization while new and mutable content is still sanitized", () => {
     const source = assistant([textBlock("answer"), { type: "audio", data: "managed" }], "stop");
     normalizeTranscriptJsonValue({ message: source }, "entry");
-    const first = normalize([source])[0];
-    expect(first.content).toEqual([textBlock("answer")]);
+    const first = normalize([source]).find((message) => message.role === "assistant");
+    expect(first?.content).toEqual([textBlock("answer")]);
     const tail = assistant([textBlock("new answer"), { type: "audio", data: "managed" }], "stop");
     const next = normalize([source, tail]);
     expect(next[0]).toBe(first);
-    expect(next[1].content).toEqual([textBlock("new answer")]);
-    expect(Object.isFrozen(first.content)).toBe(true);
-    tail.content = [textBlock("edited"), { type: "audio", data: "managed" }] as typeof tail.content;
-    expect(normalize([source, tail])[1].content).toEqual([textBlock("edited")]);
+    expect(next[1]).toHaveProperty("content", [textBlock("new answer")]);
+    expect(Object.isFrozen(first?.content)).toBe(true);
+    tail.content = [textBlock("edited")];
+    expect(normalize([source, tail])[1]).toHaveProperty("content", [textBlock("edited")]);
     expect(source.content).toEqual([textBlock("answer"), { type: "audio", data: "managed" }]);
   });
 
