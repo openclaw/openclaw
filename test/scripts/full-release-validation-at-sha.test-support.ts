@@ -55,6 +55,7 @@ export function createDispatchFixture(
     qualificationMovedRef?: boolean;
     advanceMainAfterAdmission?: boolean;
     stopAfterAccepted?: "admission" | "qualification";
+    omitAdmissionWorkflowSha?: boolean;
     bareShaFetchFailure?: boolean;
     createRefFailure?: boolean;
     deleteRefFailure?: boolean;
@@ -642,14 +643,10 @@ if (${JSON.stringify(options.candidateOwned ?? false)} && args[0] === "api" && a
     const args: string[] = [];
     if (!recoveryOnly) {
       if (options.candidateOwned) {
-        args.push(
-          "--admission-workflow-sha",
-          workflowSha,
-          "-f",
-          "provider=openai",
-          "-f",
-          "release_profile=stable",
-        );
+        if (!options.omitAdmissionWorkflowSha) {
+          args.push("--admission-workflow-sha", workflowSha);
+        }
+        args.push("-f", "provider=openai", "-f", "release_profile=stable");
       } else if (!extraArgs.includes("--trusted-workflow-ref")) {
         args.push("--trusted-workflow-ref", "main", "--workflow-sha", workflowSha);
       }

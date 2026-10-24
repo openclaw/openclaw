@@ -2114,6 +2114,7 @@ async function main() {
           inputs: selection.wireInputs,
         }),
         workflowSha: admissionWorkflowSha,
+        workflowShaPolicy: args.admissionWorkflowSha ? "pinned" : "advance-with-main",
         workflowRef: args.admissionWorkflowRef,
         workflowId: Number(metadata.id),
         phase: "prepared",
