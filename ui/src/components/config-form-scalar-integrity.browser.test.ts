@@ -366,7 +366,7 @@ describe("config form scalar integrity", () => {
   });
 
   it.each([false, true])(
-    "keeps a server-redacted sentinel readonly (maskSensitive=%s)",
+    "keeps a server-redacted sentinel concealed until replacement (maskSensitive=%s)",
     (maskSensitive) => {
       const container = document.createElement("div");
 
@@ -394,14 +394,108 @@ describe("config form scalar integrity", () => {
       if (maskSensitive) {
         expect(input.placeholder).toBe("••••••••");
       }
-      const eye = expectElement(
+      const replace = expectElement(
         container.querySelector<HTMLButtonElement>(".settings-secret__toggle"),
-        "stored secret reveal toggle",
+        "stored secret replace button",
       );
-      expect(eye.disabled).toBe(true);
-      expect(eye.getAttribute("aria-label")).toBe("This editor cannot reveal the stored value.");
+      expect(replace.disabled).toBe(false);
+      expect(replace.getAttribute("aria-label")).toBe("Replace stored value");
+      expect(replace.getAttribute("aria-pressed")).toBeNull();
     },
   );
+
+  it("replaces a stored secret without revealing the sentinel", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const container = document.createElement("div");
+    document.body.append(container);
+    const onToggleSensitivePath = vi.fn();
+    let value: unknown = "__OPENCLAW_REDACTED__";
+    const onPatch = vi.fn((_path: Array<string | number>, next: unknown) => {
+      value = next;
+      draw();
+      return true;
+    });
+    const draw = () =>
+      renderTextInputFixture(container, {
+        schema: { type: "string" },
+        value,
+        path: ["secret"],
+        hints: { secret: { sensitive: true } },
+        inputType: "text",
+        maskSensitive: true,
+        onToggleSensitivePath,
+        onPatch,
+        onRemove: vi.fn(),
+      });
+
+    try {
+      draw();
+      const input = () =>
+        expectElement(container.querySelector<HTMLInputElement>("input"), "secret input");
+      expect(input().readOnly).toBe(true);
+      expect(input().type).toBe("password");
+
+      const replace = expectElement(
+        container.querySelector<HTMLButtonElement>('button[aria-label="Replace stored value"]'),
+        "replace stored secret button",
+      );
+      expect(replace.disabled).toBe(false);
+      await userEvent.click(replace);
+
+      expect(input().readOnly).toBe(false);
+      expect(input().value).toBe("");
+      expect(input().type).toBe("password");
+      await userEvent.click(input());
+      await userEvent.keyboard("xy");
+
+      expect(value).toBe("xy");
+      expect(onPatch).toHaveBeenLastCalledWith(["secret"], "xy");
+      expect(document.activeElement).toBe(input());
+      expect(onToggleSensitivePath).not.toHaveBeenCalled();
+    } finally {
+      container.remove();
+    }
+  });
+
+  it("keeps a stored secret when replacement is opened and abandoned", async () => {
+    const { userEvent } = await import("vitest/browser");
+    const container = document.createElement("div");
+    document.body.append(container);
+    const onPatch = vi.fn();
+    try {
+      renderTextInputFixture(container, {
+        schema: { type: "string" },
+        value: "__OPENCLAW_REDACTED__",
+        path: ["secret"],
+        hints: { secret: { sensitive: true } },
+        inputType: "text",
+        maskSensitive: true,
+        onToggleSensitivePath: vi.fn(),
+        onPatch,
+        onRemove: vi.fn(),
+      });
+      const input = expectElement(
+        container.querySelector<HTMLInputElement>("input"),
+        "secret input",
+      );
+      const replace = expectElement(
+        container.querySelector<HTMLButtonElement>('button[aria-label="Replace stored value"]'),
+        "replace stored secret button",
+      );
+
+      await userEvent.click(replace);
+      expect(input.readOnly).toBe(false);
+      await userEvent.click(input);
+      input.dispatchEvent(new FocusEvent("blur"));
+
+      await vi.waitFor(() => expect(input.readOnly).toBe(true));
+      expect(input.value).toBe("");
+      expect(input.type).toBe("password");
+      expect(onPatch).not.toHaveBeenCalled();
+    } finally {
+      container.remove();
+    }
+  });
 
   it("keeps an env placeholder readable in a masked sensitive field", () => {
     const container = document.createElement("div");

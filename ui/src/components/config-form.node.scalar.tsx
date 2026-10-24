@@ -1,7 +1,7 @@
 import { formatInternationalPhoneNumberForDisplay } from "@openclaw/normalization-core/phone-presentation";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import { For, createMemo } from "solid-js";
+import { For, createMemo, createSignal } from "solid-js";
 import { i18n } from "../i18n/index.ts";
 import { getLocale, t } from "../lib/reactive/i18n.ts";
 import { createNativeDraft } from "../lib/reactive/native-draft.ts";
@@ -134,6 +134,9 @@ function ScalarInput(props: {
   inputType: "text" | "number";
   stepped: boolean;
 }): JSX.Element {
+  const [replacingStoredSecret, setReplacingStoredSecret] = createSignal(false);
+  const [storedSecretReplacementDirty, setStoredSecretReplacementDirty] = createSignal(false);
+  let controlElement: HTMLInputElement | HTMLTextAreaElement | undefined;
   const state = createMemo(() => {
     const params = props.params;
     const { schema, value, path, hints, isRequired } = params;
@@ -142,11 +145,13 @@ function ScalarInput(props: {
     const errorId = configFieldId(path, "scalar-error");
     const sensitiveState = props.stepped ? undefined : getSensitiveRenderState(params);
     const isStructuredSecretRef = !props.stepped && isSecretRefObject(value);
+    const replacingSentinel =
+      !props.stepped && replacingStoredSecret() && sensitiveState?.sentinelRedacted === true;
     const rawAvailable = params.rawAvailable ?? true;
     const masked = sensitiveState?.isMasked;
     const effectiveRedacted =
-      (sensitiveState?.isRedacted && !masked) ||
-      sensitiveState?.sentinelRedacted ||
+      (sensitiveState?.isRedacted && !masked && !replacingSentinel) ||
+      (sensitiveState?.sentinelRedacted && !replacingSentinel) ||
       isStructuredSecretRef;
     const placeholder = effectiveRedacted
       ? isStructuredSecretRef
@@ -162,11 +167,12 @@ function ScalarInput(props: {
           : props.stepped
             ? undefined
             : ""));
-    const displayValue = effectiveRedacted
-      ? ""
-      : !props.stepped && isRecord(value)
-        ? jsonValue(value)
-        : (value ?? (params.compact ? schema.default : undefined) ?? "");
+    const displayValue =
+      effectiveRedacted || replacingSentinel
+        ? ""
+        : !props.stepped && isRecord(value)
+          ? jsonValue(value)
+          : (value ?? (params.compact ? schema.default : undefined) ?? "");
     const effectiveValue = value !== undefined ? value : schema.default;
     const initialBranch = scalarValueBranch(effectiveValue);
     const effectiveInputType = masked
@@ -218,6 +224,7 @@ function ScalarInput(props: {
       errorId,
       sensitiveState,
       isStructuredSecretRef,
+      replacingSentinel,
       masked,
       effectiveRedacted,
       placeholder,
@@ -275,6 +282,9 @@ function ScalarInput(props: {
     return false;
   };
   const commitChange = (target: HTMLInputElement | HTMLTextAreaElement, allowClear = true) => {
+    if (state().replacingSentinel && !storedSecretReplacementDirty()) {
+      return;
+    }
     if (state().effectiveRedacted) {
       return;
     }
@@ -310,6 +320,11 @@ function ScalarInput(props: {
     }
     finishScalarEdit(target);
   };
+  const beginStoredSecretReplacement = () => {
+    setStoredSecretReplacementDirty(false);
+    setReplacingStoredSecret(true);
+    queueMicrotask(() => controlElement?.focus());
+  };
   const step = (direction: -1 | 1) => {
     if (props.params.disabled) {
       return;
@@ -340,7 +355,10 @@ function ScalarInput(props: {
     </>
   );
   const controlProps = {
-    ref: draft.ref,
+    ref: (element: HTMLInputElement | HTMLTextAreaElement) => {
+      controlElement = element;
+      draft.ref(element);
+    },
     get class() {
       return ["settings-input", { "cfg-redacted": state().effectiveRedacted }];
     },
@@ -385,6 +403,9 @@ function ScalarInput(props: {
         return;
       }
       const target = event.currentTarget;
+      if (state().replacingSentinel) {
+        setStoredSecretReplacementDirty(true);
+      }
       if (props.params.commitOnBlur) {
         if (!props.stepped) {
           beginScalarEdit(target, state().initialBranch);
@@ -418,6 +439,9 @@ function ScalarInput(props: {
       if (!props.stepped) {
         finishScalarEdit(target);
       }
+      if (state().replacingSentinel && !storedSecretReplacementDirty()) {
+        setReplacingStoredSecret(false);
+      }
     },
   };
   const control = (
@@ -440,7 +464,7 @@ function ScalarInput(props: {
       {!props.stepped &&
       !state().isStructuredSecretRef &&
       (state().sensitiveState?.isSensitiveField || state().sensitiveState?.isSensitive) &&
-      props.params.onToggleSensitivePath ? (
+      (props.params.onToggleSensitivePath || state().sensitiveState?.sentinelRedacted) ? (
         <span class="settings-secret">
           {control}
           <SensitiveToggleButton
@@ -448,6 +472,9 @@ function ScalarInput(props: {
             state={state().sensitiveState!}
             disabled={props.params.disabled}
             onToggleSensitivePath={props.params.onToggleSensitivePath}
+            onReplace={
+              state().sensitiveState?.sentinelRedacted ? beginStoredSecretReplacement : undefined
+            }
           />
         </span>
       ) : (

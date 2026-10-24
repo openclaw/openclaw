@@ -24,29 +24,35 @@ export function SensitiveToggleButton(props: {
   state: SensitiveRenderState;
   disabled: boolean;
   onToggleSensitivePath?: (path: Array<string | number>) => void;
+  onReplace?: () => void;
 }): JSX.Element {
+  const replacing = createMemo(() => props.state.sentinelRedacted && props.onReplace !== undefined);
   const label = createMemo(() =>
-    props.state.canReveal
-      ? props.state.isRevealed
-        ? t("configForm.hideValue")
-        : t("configForm.revealValue")
-      : props.state.sentinelRedacted
-        ? t("configForm.storedSecretNotRevealable")
-        : t("configForm.disableStreamToReveal"),
+    replacing()
+      ? t("configForm.replaceValue")
+      : props.state.canReveal
+        ? props.state.isRevealed
+          ? t("configForm.hideValue")
+          : t("configForm.revealValue")
+        : props.state.sentinelRedacted
+          ? t("configForm.storedSecretNotRevealable")
+          : t("configForm.disableStreamToReveal"),
   );
   return (
     <>
-      {props.state.isSensitive && props.onToggleSensitivePath && (
+      {props.state.isSensitive && (props.onToggleSensitivePath || props.onReplace) && (
         <openclaw-tooltip prop:content={label()}>
           <button
             type="button"
             class="settings-secret__toggle"
             aria-label={label()}
-            aria-pressed={props.state.isRevealed ? "true" : "false"}
-            disabled={props.disabled || !props.state.canReveal}
-            onClick={() => props.onToggleSensitivePath?.(props.path)}
+            aria-pressed={replacing() ? undefined : props.state.isRevealed ? "true" : "false"}
+            disabled={props.disabled || (!replacing() && !props.state.canReveal)}
+            onClick={() =>
+              replacing() ? props.onReplace?.() : props.onToggleSensitivePath?.(props.path)
+            }
           >
-            <Icon name={props.state.isRevealed ? "eye" : "eyeOff"} />
+            <Icon name={replacing() ? "pencil" : props.state.isRevealed ? "eye" : "eyeOff"} />
           </button>
         </openclaw-tooltip>
       )}

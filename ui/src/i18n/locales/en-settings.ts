@@ -436,6 +436,7 @@ const enSettings = {
     revealValue: en.configForm.revealValue,
     disableStreamToReveal: "Disable stream mode to reveal value",
     storedSecretNotRevealable: "This editor cannot reveal the stored value.",
+    replaceValue: "Replace stored value",
     unsupportedType: "Unsupported type: {type}. Use Raw mode.",
     structuredSecretRaw: "Structured value (SecretRef) - use Raw mode to edit",
     structuredSecretFile: "Structured value (SecretRef) - edit the config file directly",
