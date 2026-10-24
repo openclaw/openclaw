@@ -594,3 +594,40 @@ it.each([
     }
   },
 );
+
+it.each([false, true])(
+  "parks the managed Gateway before repairing source artifacts (stop refusal=%s)",
+  async (failStop) => {
+    native.contend = false;
+    native.failStop = failStop;
+    vi.mocked(updateCheck.resolveUpdateInstallKind).mockResolvedValue("git");
+    const afterPublication = new Error("Synthetic Doctor failure after runtime publication");
+    vi.spyOn(sourceRuntime, "completeSourceUpdateRuntime").mockImplementationOnce(
+      async ({ beforePublication }) => {
+        await beforePublication?.();
+        if (!native.stopped) {
+          throw new Error("Runtime artifacts require an offline Gateway");
+        }
+        native.events.push("publish");
+        return { changed: true };
+      },
+    );
+    vi.mocked(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).mockRejectedValueOnce(
+      afterPublication,
+    );
+
+    await expect(
+      updateRepairCommand({ json: true, yes: true, deferCompletionCache: true }),
+    ).rejects.toThrow(
+      failStop ? "An admitted migration write is incomplete." : afterPublication.message,
+    );
+    expect(native.events).toEqual(
+      failStop
+        ? ["running-holder"]
+        : ["running-holder", "stop-verified", "publish", "restart", "restart-verified"],
+    );
+    expect(freshDoctor.runUpdateFinalizationDoctorInFreshProcess).toHaveBeenCalledTimes(
+      failStop ? 0 : 1,
+    );
+  },
+);
