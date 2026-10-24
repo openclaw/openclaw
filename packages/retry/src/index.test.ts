@@ -142,12 +142,24 @@ it("cancels a pending wait with the canonical abort error", async () => {
   const retry = supervisor.next();
   assert(retry, "expected a retry");
   const wait = sleepWithAbort(retry.delayMs, retry.signal);
-  expectTimers(retry.signal, 1);
-  const reason = new Error("stop");
-  supervisor.cancel(reason);
-  const expected = { name: "AbortError", message: "aborted", cause: reason };
-  await expect(wait).rejects.toMatchObject(expected);
-  expectTimers(retry.signal);
+  const settlement = Promise.allSettled([wait]);
+  try {
+    expectTimers(retry.signal, 1);
+    const reason = new Error("stop");
+    supervisor.cancel(reason);
+    const expected = { name: "AbortError", message: "aborted", cause: reason };
+    await expect(wait).rejects.toMatchObject(expected);
+    expectTimers(retry.signal);
+  } finally {
+    try {
+      supervisor.cancel();
+      await vi.runOnlyPendingTimersAsync();
+      await settlement;
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  }
 });
 
 it.each([
@@ -190,32 +202,56 @@ it("removes the abort listener after the sleep completes", async () => {
   const controller = new AbortController();
   const sleeper = sleepWithAbort(50, controller.signal);
   const onSettled = vi.fn();
-  void sleeper.then(onSettled);
-  expectTimers(controller.signal, 1);
-  await vi.advanceTimersByTimeAsync(49);
-  expect(onSettled).not.toHaveBeenCalled();
-  await vi.advanceTimersByTimeAsync(1);
-  await expect(sleeper).resolves.toBeUndefined();
-  expectTimers(controller.signal);
+  const settledSleep = sleeper.then(onSettled);
+  const settlement = Promise.allSettled([sleeper, settledSleep]);
+  try {
+    expectTimers(controller.signal, 1);
+    await vi.advanceTimersByTimeAsync(49);
+    expect(onSettled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await expect(sleeper).resolves.toBeUndefined();
+    expectTimers(controller.signal);
+  } finally {
+    try {
+      controller.abort();
+      await vi.runOnlyPendingTimersAsync();
+      await settlement;
+    } finally {
+      vi.restoreAllMocks();
+      vi.useRealTimers();
+    }
+  }
 });
 
 it("clamps oversized sleep durations before scheduling", async () => {
   const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
   const sleeper = sleepWithAbort(Number.MAX_SAFE_INTEGER);
-  expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), TIMER_MAX_MS);
-  await vi.advanceTimersByTimeAsync(TIMER_MAX_MS);
-  await expect(sleeper).resolves.toBeUndefined();
+  const settlement = Promise.allSettled([sleeper]);
+  try {
+    expect(setTimeoutSpy).toHaveBeenCalledWith(expect.any(Function), TIMER_MAX_MS);
+    await vi.advanceTimersByTimeAsync(TIMER_MAX_MS);
+    await expect(sleeper).resolves.toBeUndefined();
+  } finally {
+    try {
+      await vi.runOnlyPendingTimersAsync();
+      await settlement;
+    } finally {
+      setTimeoutSpy.mockRestore();
+      vi.useRealTimers();
+    }
+  }
 });
 
 it.each(["deadline", "sleep"])("can unref the %s timer", async (kind) => {
   vi.useRealTimers();
   const controller = new AbortController();
   const scheduled = vi.spyOn(globalThis, "setTimeout");
+  const pending =
+    kind === "deadline"
+      ? raceWithTimeout(Promise.resolve("done"), 60_000, () => "expired", { ref: false })
+      : sleepWithAbort(1, controller.signal, { ref: false });
+  const settlement = Promise.allSettled([pending]);
   try {
-    const pending =
-      kind === "deadline"
-        ? raceWithTimeout(Promise.resolve("done"), 60_000, () => "expired", { ref: false })
-        : sleepWithAbort(60_000, controller.signal, { ref: false });
     expect(scheduled.mock.results.at(-1)?.value.hasRef()).toBe(false);
     controller.abort();
     if (kind === "deadline") {
@@ -224,7 +260,12 @@ it.each(["deadline", "sleep"])("can unref the %s timer", async (kind) => {
       await expect(pending).rejects.toMatchObject({ name: "AbortError", message: "aborted" });
     }
   } finally {
-    controller.abort();
+    try {
+      controller.abort();
+      await settlement;
+    } finally {
+      scheduled.mockRestore();
+    }
   }
 });
 

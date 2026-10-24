@@ -139,7 +139,6 @@ it("adds a Cloudflare hint only for Cloudflare Access redirect hosts", () => {
   const generic = classify(redirect("https://login.example/authorize"));
 
   expect(cloudflare.kind).toBe("identity-proxy");
-  expect(cloudflare.kind).not.toBe("unreachable");
   expect(cloudflare.remediation).toContain("Cloudflare Access");
   expect(generic.remediation).not.toContain("Cloudflare");
 });
