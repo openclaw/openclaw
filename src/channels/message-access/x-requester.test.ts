@@ -6,6 +6,7 @@ import { getRequesterProfile } from "../../auto-reply/requester-profile.js";
 import { readSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createPluginRuntimeMock } from "../../plugin-sdk/test-helpers/plugin-runtime-mock.js";
+import type { PluginRuntime } from "../../plugins/runtime/types.js";
 import { waitForSessionParticipantRecording } from "../../sessions/session-participant-recording.js";
 import { linkUserChannelIdentity } from "../../state/user-channel-identities.js";
 import { setDisplayName, syncGitHubIdentity } from "../../state/user-profile-writes.worker.js";
@@ -13,7 +14,11 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createHostIngressFixture, ingressMessage } from "./host-ingress.test-support.js";
-import type { ResolveStableChannelMessageIngressParams } from "./runtime-types.js";
+import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
+  ResolveStableChannelMessageIngressParams,
+} from "./runtime-types.js";
 
 it("resolves X API senders through account-scoped profile links, never asserted or unlinked IDs", () =>
   withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -35,7 +40,16 @@ it("resolves X API senders through account-scoped profile links, never asserted 
     });
     linkUserChannelIdentity(profile.id, { channelId: "x", accountId: "default", senderId: "10" });
     const host = createHostIngressFixture("x", cfg);
-    const x = await loadBundledPluginFacade<typeof import("../../../extensions/x/test-api.js")>({
+    const x = await loadBundledPluginFacade<{
+      setXRuntime(runtime: PluginRuntime): void;
+      createKeyedState(): PluginRuntime["state"]["openKeyedStore"];
+      resolveXIngress(
+        accountId: string,
+        post: { id: string; author_id: string; conversation_id: string; text: string },
+        cfg: OpenClawConfig,
+        contextBinding: ChannelIngressContextBinding,
+      ): Promise<{ ingress: ResolvedChannelMessageIngress }>;
+    }>({
       pluginId: "x",
       artifactBasename: "test-api.js",
     });
