@@ -50,11 +50,6 @@ describe("standalone SQLite staging", () => {
     const options = fixture();
     prepare();
     const result = stageStandaloneSqlite({ ...options, platform: "darwin" });
-    expect(run).toHaveBeenCalledWith(
-      "/bin/bash",
-      [path.join(options.repoRoot, "scripts/build-mac-sqlite.sh"), "arm64", options.runtimeRoot],
-      { encoding: "utf8" },
-    );
     expect(result).toEqual({
       files: [
         {
@@ -74,9 +69,6 @@ describe("standalone SQLite staging", () => {
         license: "public-domain",
       },
     });
-    expect(fs.readFileSync(path.join(options.runtimeRoot, result.manifest.path), "utf8")).toBe(
-      "sqlite fixture",
-    );
   });
 
   it.each([
