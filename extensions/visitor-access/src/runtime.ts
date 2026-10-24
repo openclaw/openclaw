@@ -1,8 +1,10 @@
 import { createPluginRuntimeStore } from "../api.js";
+import type { VisitorInviter } from "./grant-record.js";
 import type { VisitorAccessService } from "./visitors.js";
 
 export type VisitorRuntime = {
   service: VisitorAccessService;
+  readInviter: () => Promise<VisitorInviter | undefined>;
   errorText: (error: unknown) => string;
 };
 

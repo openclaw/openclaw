@@ -23,8 +23,9 @@ import { Type } from "typebox";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import type { VisitorGrant } from "./src/grant-record.js";
+import { visitorRuntimeStore } from "./src/runtime.js";
 import { visitorListDetailsSchema, type VisitorListDetails } from "./src/tool-results.js";
-import type { VisitorGrant } from "./src/visitors.js";
 import { visitorProfileFixture } from "./src/visitors.test-support.js";
 
 type PluginGatewayAccessPolicy = Parameters<OpenClawPluginApi["registerGatewayAccessPolicy"]>[0];
@@ -280,6 +281,51 @@ describe("visitor-access plugin lifecycle", () => {
       },
     };
   }
+
+  it("persists invitation metadata and a CAS session reservation across restart and renewal", async () => {
+    vi.stubGlobal("fetch", createPolicyFetch().fetcher);
+    const first = registerPlugin();
+    await first.start();
+    await first.settle();
+    const readDirectory = first.gatewayRequest.getMockImplementation()!;
+    first.gatewayRequest.mockImplementation(async (method, params) =>
+      method === "users.self"
+        ? { profile: { id: "inviter", displayName: "Inviter" } }
+        : readDirectory(method, params),
+    );
+    await first.execute("visitor_invite", { email: "visitor@example.test" });
+    expect(first.gatewayRequest).toHaveBeenCalledWith(
+      "users.self",
+      {},
+      { scopes: ["operator.read"] },
+    );
+    const service = visitorRuntimeStore.getRuntime().service;
+    await service.invite(
+      { email: "visitor@example.test", note: "  Welcome!\n" },
+      { assertCurrent: first.toolContext.assertInvocationCurrent },
+    );
+    const invitation = service.findActiveInvitation({ emails: ["visitor@example.test"] })!;
+    const result = await service.compareAndSetOnboarding({
+      grantId: invitation.grantId,
+      expected: invitation.onboarding!,
+      next: { state: "ready", welcomeSessionKey: "welcome", welcomeSessionId: "welcome-id" },
+    });
+    expect(result.applied).toBe(true);
+    await first.stop();
+    const second = registerPlugin();
+    await second.start();
+    await second.execute("visitor_invite", { email: "visitor@example.test", days: 30 });
+    expect(await second.store.lookup("visitor@example.test")).toMatchObject({
+      invitedBy: { profileId: "inviter", label: "Inviter" },
+      note: "  Welcome!\n",
+      onboarding: { state: "ready", welcomeSessionKey: "welcome", welcomeSessionId: "welcome-id" },
+    });
+    expect(
+      visitorRuntimeStore
+        .getRuntime()
+        .service.findActiveInvitation({ emails: ["visitor@example.test"] }),
+    ).toEqual(await second.store.lookup("visitor@example.test"));
+  });
 
   it("keeps CLI metadata discovery free of runtime access and background work", () => {
     const api = createTestPluginApi({ registrationMode: "cli-metadata" });

@@ -202,6 +202,37 @@ the configured provider and claim. A known profile retains its current
 role; an unknown account reports first sign-in as pending. The stored login is a
 display label, not an identity binding or GitHub authorship credit.
 
+## Onboarding record
+
+Each new invitation records onboarding metadata with its grant: the inviter's
+Gateway profile (`invitedBy`, with a display label when available), an optional
+inviter note of at most 1000 characters stored as given, and welcome-session
+progress (`onboarding`) that starts as `pending`. The inviter comes only from the
+host's trusted requester context, never from tool input; when no human profile
+resolves, it stays unset.
+
+Renewal keeps the recorded inviter, note, and onboarding progress unless new
+values are supplied, and never resets progress to `pending`. Grants recorded
+before this metadata existed keep working without it.
+
+Welcome-session setup inside this plugin uses two service methods:
+
+- `findActiveInvitation({ emails, githubAccountIds })` returns a snapshot of the
+  current grant for a signed-in identity, checking emails before GitHub accounts,
+  or `undefined` when none is active.
+- `compareAndSetOnboarding({ grantId, expected, next })` replaces the onboarding
+  progress of that still-active grant only when the recorded progress matches
+  `expected` by `state` and `updatedAt` (`null` matches a grant without
+  progress). It runs on the same queue as invite, revoke, and sweep, so of
+  concurrent callers holding one snapshot exactly one applies; the others receive
+  `conflict` with the current progress. Expired, revoked, or replaced grants
+  return `inactive`; expiry during a write rejects it. Errors longer than 500 characters are truncated.
+  `updatedAt` advances monotonically, including a `pending` → `pending` reservation
+  in the same millisecond. Reserve a stable session key before creating it; retry
+  setup against that same key instead of allocating another session. This API
+  serializes the active Gateway service, not independent processes. Session
+  creation and restart recovery remain the welcome-setup owner's responsibility.
+
 ## Expiry and drift
 
 Email grants retain their lowercased email keys in the Gateway's durable keyed store.
