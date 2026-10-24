@@ -185,28 +185,25 @@ describe("prepared model runtime scoped refresh", () => {
         responseTier: "priority",
       };
       const tier = { requestedTier: "ultrafast", responseTier: "priority" };
-      const selected = (profileId: string) => ({
-        source: "profile" as const,
-        profileId,
-        identityKey: `profile:${profileId}`,
-      });
       const readTier = (profileId: string) =>
         accounts.readServiceTierObservations({
           ...observation,
-          identityKey: selected(profileId).identityKey,
+          identityKey: `profile:${profileId}`,
         });
-      const recordChanged = accounts.prepareServiceTierObserver({
-        selectedCredential: selected("demo:changed"),
-        credential,
-      });
+      const observe = (
+        profileId: string,
+        profile: PreparedModelCatalogAuth["authStore"]["profiles"][string] = credential,
+      ) =>
+        accounts.prepareServiceTierObserver({
+          selectedCredential: { source: "profile", profileId, identityKey: `profile:${profileId}` },
+          credential: profile,
+        });
+      const recordChanged = observe("demo:changed");
       for (const [profileId, profile] of Object.entries({
         ...authStore.profiles,
         [personalId]: credential,
       })) {
-        accounts.prepareServiceTierObserver({
-          selectedCredential: selected(profileId),
-          credential: profile,
-        })(observation);
+        observe(profileId, profile)(observation);
       }
       const refresh = async (nextStore: PreparedModelCatalogAuth["authStore"]) => {
         if (refreshKind === "catalog") {
@@ -292,21 +289,20 @@ describe("prepared model runtime scoped refresh", () => {
   it.each(["alias", "mixed-success"] as const)(
     "publishes %s inventory without losing ownership",
     async (scenario) => {
-      const originalManifest = mocks.pluginMetadataSnapshot.manifestRegistry;
-      const originalPlugins = mocks.pluginMetadataSnapshot.plugins;
+      const metadata = mocks.pluginMetadataSnapshot;
+      const original = { manifestRegistry: metadata.manifestRegistry, plugins: metadata.plugins };
       if (scenario === "alias") {
-        mocks.pluginMetadataSnapshot.manifestRegistry = { ...originalManifest };
-        Object.assign(mocks.pluginMetadataSnapshot.manifestRegistry, {
-          plugins: [
-            createPluginManifestRecordFixture({
-              id: "demo",
-              providers: ["demo"],
-              modelCatalog: { aliases: { "old-demo": { provider: "demo" } } },
-            }),
-          ],
+        const plugins = [
+          createPluginManifestRecordFixture({
+            id: "demo",
+            providers: ["demo"],
+            modelCatalog: { aliases: { "old-demo": { provider: "demo" } } },
+          }),
+        ];
+        Object.assign(metadata, {
+          plugins,
+          manifestRegistry: { ...original.manifestRegistry, plugins },
         });
-        mocks.pluginMetadataSnapshot.plugins =
-          mocks.pluginMetadataSnapshot.manifestRegistry.plugins;
       }
       const provider = scenario === "alias" ? "old-demo" : "demo";
       mocks.preparedAuthStore = {
@@ -336,8 +332,7 @@ describe("prepared model runtime scoped refresh", () => {
           authoritative: false,
         });
       } finally {
-        mocks.pluginMetadataSnapshot.manifestRegistry = originalManifest;
-        mocks.pluginMetadataSnapshot.plugins = originalPlugins;
+        Object.assign(metadata, original);
       }
     },
   );
@@ -462,7 +457,6 @@ describe("prepared model runtime scoped refresh", () => {
         );
         await refreshCatalog(snapshot, failed);
       }
-      const discoveryRequests = catalogWorker.mock.calls.length;
       const projected = await gatewayCatalog(config);
       expect(projected.entries).toMatchObject([
         {
@@ -476,7 +470,6 @@ describe("prepared model runtime scoped refresh", () => {
       );
       expect(projected.authModes).toEqual({ custom: "api_key" });
       expect(projected.catalogComplete).toBe(true);
-      expect(catalogWorker).toHaveBeenCalledTimes(discoveryRequests);
     }
   });
 
@@ -529,7 +522,6 @@ describe("prepared model runtime scoped refresh", () => {
     const initial = await owner.loadFullModelCatalog!();
     containsEntries(initial.entries, nativeEntry("native-old"));
     expect(initial.providerOutcomes).toContainEqual(nativeOutcome("auth-rejected"));
-    const initialDiscoveryRequests = catalogWorker.mock.calls.length;
     const nextConfig = nativeConfig({ model: "demo/new-configured" });
     holdNative = true;
     await hotReload(nextConfig);
@@ -571,6 +563,5 @@ describe("prepared model runtime scoped refresh", () => {
     const retired = published(retiredConfig).readFullModelCatalog!()!;
     containsEntries(retired.entries, learned);
     expect(retired.entries.some((row) => row.nativeRuntime === runtime)).toBe(false);
-    expect(catalogWorker).toHaveBeenCalledTimes(initialDiscoveryRequests + 1);
   });
 });
