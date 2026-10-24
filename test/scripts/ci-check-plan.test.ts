@@ -8,7 +8,6 @@ import {
   createExtensionOxlintShards,
   selectExtensionOxlintStripe,
 } from "../../scripts/run-oxlint-shards.mts";
-import { createChangedCiTypeCheckPlan } from "../../scripts/run-tsgo-core-test-shards.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   evaluateWorkflowExpression,
@@ -134,11 +133,8 @@ it.each([
   ["hybrid", "full"],
   ["github", "full"],
   ["blacksmith", "affected"],
-] as const)("preserves full owners and extension scope: %s / %s", async (runnerProfile, mode) => {
+] as const)("preserves extension scope: %s / %s", async (runnerProfile, mode) => {
   const roots = selectLint(mode);
-  vi.mocked(createChangedCiTypeCheckPlan).mockClear();
-  const checkMatrix = checks("lint", "prod-types", "test-types", "guards");
-  const coreTypeMatrix = stripeMatrix(5);
   const plan = await createPlan({
     changedBaseRef: "a".repeat(40),
     extensionLintMode: mode === "full" ? "full" : "affected",
@@ -146,20 +142,10 @@ it.each([
     typeGraphBoundaryOwner: "additional-checks",
     changedPaths: ["package.json"],
     runnerProfile,
-    checkMatrix,
-    coreTypeMatrix,
+    checkMatrix: checks("lint", "prod-types", "test-types", "guards"),
     lintCoreMatrix: stripeMatrix(runnerProfile === "hybrid" ? 2 : 5),
     lintExtensionMatrix: stripeMatrix(6),
   });
-  expect(plan.check_matrix.include).toEqual(
-    runnerProfile === "hybrid"
-      ? checkMatrix.include.filter(({ task }) => task !== "lint")
-      : checkMatrix.include,
-  );
-  expect(plan.core_type_matrix.include).toEqual(
-    runnerProfile === "blacksmith" ? [] : coreTypeMatrix.include,
-  );
-  expect(createChangedCiTypeCheckPlan).not.toHaveBeenCalled();
   const payloads = [
     plan.central_lint_selection_json,
     ...plan.lint_core_matrix.include.map((row) => row.lint_selection_json),

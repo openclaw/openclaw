@@ -33,12 +33,7 @@ function compilerSnapshot(root: string) {
   });
 }
 
-function fixture(
-  noEmit = false,
-  outputRoot = "dist",
-  tempRoots = roots,
-  owner: "boundary" | "compiler" = "boundary",
-) {
+function fixture(noEmit = false, tempRoots = roots, owner: "boundary" | "compiler" = "boundary") {
   const root = fs.realpathSync.native(tempRoots.make("native-boundary-cache-"));
   const resolve = (relative: string) => path.join(root, relative);
   materializeNativeCompiler(root);
@@ -55,7 +50,7 @@ function fixture(
       module: "nodenext",
       allowJs: true,
       declaration: true,
-      outDir: outputRoot,
+      outDir: "dist",
       rootDir: ".",
       skipLibCheck: true,
       types: [],
@@ -73,19 +68,19 @@ function fixture(
   write("unrelated/source.ts", "export const unrelated = 1;");
   write("src/api.test.ts", "export const test = 1;");
   const config = "tsconfig.json";
-  const inputReceipt = `${outputRoot}/.inputs.json`;
+  const inputReceipt = "dist/.inputs.json";
   const args = [
     compileWorker,
     JSON.stringify({
       configFile: config,
       inputReceipt,
-      compilerOptions: { outDir: outputRoot, rootDir: ".", declarationMap: false },
+      compilerOptions: { outDir: "dist", rootDir: ".", declarationMap: false },
       emit: !noEmit,
     }),
   ];
-  const ownedOutputRoot = noEmit ? undefined : path.join(root, outputRoot);
+  const ownedOutputRoot = noEmit ? undefined : resolve("dist");
   const prepare = () => {
-    fs.mkdirSync(resolve(outputRoot), { recursive: true });
+    fs.mkdirSync(resolve("dist"), { recursive: true });
     fs.rmSync(resolve(inputReceipt), { force: true });
     const result = spawnSync(process.execPath, args, { cwd: root, encoding: "utf8" });
     expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -141,7 +136,7 @@ function fixture(
 
 describe("native owner content records", () => {
   it("tracks dangling link directory existence and link identity", () => {
-    const f = fixture(true, "dist", roots, "compiler");
+    const f = fixture(true, roots, "compiler");
     const dependency = f.file("fixture-dependencies");
     fs.mkdirSync(dependency);
     const target = path.join(dependency, "missing");
@@ -159,7 +154,7 @@ describe("native owner content records", () => {
   });
 
   it("ignores tool scratch churn under installed roots", () => {
-    const f = fixture(true, "dist", roots, "compiler");
+    const f = fixture(true, roots, "compiler");
     const run = f.prepare();
     // Sibling config loads mint these between the before and seal walks.
     f.write("node_modules/.vite-temp/vitest.config.ts.timestamp-1-a.mjs", "export default {};");
@@ -173,7 +168,7 @@ describe("native owner content records", () => {
   });
 
   it("keeps a compiled generation warm across native app scratch creation and removal", () => {
-    const f = fixture(false, "dist", roots, "compiler");
+    const f = fixture(false, roots, "compiler");
     const record = f.seal(f.prepare());
     const matches = () => f.matches(record);
     expect(matches()).toBe(true);
@@ -234,7 +229,7 @@ describe("native owner content records", () => {
     let baseline: string;
 
     beforeAll(() => {
-      f = fixture(false, "dist", invalidationRoots);
+      f = fixture(false, invalidationRoots);
       f.write("scripts/compile-extension-boundary.mts", "export {};");
       f.write("scripts/lib/local-check-runtime.mts", "export const policy = 1;");
       record = f.seal(f.prepare());

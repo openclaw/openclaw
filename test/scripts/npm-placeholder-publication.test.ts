@@ -128,27 +128,6 @@ function classify(name: string, packument: Record<string, unknown>) {
 }
 
 describe("npm placeholder publication", () => {
-  it("preserves selected multi-package order and binds unique release-enabled manifests", async () => {
-    const names = ["@openclaw/zoom-meetings", "@openclaw/comfy-provider"] as const;
-    const { artifactDir, manifest } = await publication(
-      [packageEntry("comfy", names[1]), packageEntry("zoom-meetings", names[0])],
-      undefined,
-      names.join(","),
-    );
-
-    expect(manifest.packages).toMatchObject(
-      names.map((name, index) => ({
-        packageName: name,
-        packageDir: `extensions/${index ? "comfy" : "zoom-meetings"}`,
-        action: "publish",
-        newPackage: true,
-      })),
-    );
-    expect(readFileSync(join(artifactDir, "npm-placeholder-manifest.json"), "utf8")).toContain(
-      `"targetSha": "${SHA}"`,
-    );
-  });
-
   it("creates deterministic canonical two-file placeholder tarballs", () => {
     const first = createPlaceholderTarball(packageName);
     expect(first).toEqual(createPlaceholderTarball(packageName));
@@ -182,7 +161,7 @@ describe("npm placeholder publication", () => {
     const versions = { "2026.7.2": {} };
     const existingMeta = registryState(tags, undefined, versions);
     const { manifest, publish } = await publication(
-      [packageEntry("byteplus", names[0]), packageEntry("meta", names[1])],
+      [packageEntry("meta", names[1]), packageEntry("byteplus", names[0])],
       async (input) =>
         (typeof input === "string"
           ? input
@@ -192,8 +171,13 @@ describe("npm placeholder publication", () => {
         ).includes(encodeURIComponent(names[0]))
           ? registryResponse()
           : registryResponse(existingMeta),
+      names.join(","),
     );
-    expect(manifest.packages).toHaveLength(2);
+    expect(manifest.targetSha).toBe(SHA);
+    expect(manifest.packages.map((entry) => [entry.packageName, entry.packageDir])).toEqual([
+      [names[0], "extensions/byteplus"],
+      [names[1], "extensions/meta"],
+    ]);
     const calls: string[][] = [];
     const tempRoot = tempDirs.make("npm-placeholder-token-success-");
     const result = await publish({

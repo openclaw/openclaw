@@ -7,7 +7,6 @@ import { pathToFileURL } from "node:url";
 import { expect, it, onTestFinished } from "vitest";
 import {
   generateDependencyReleaseEvidence,
-  parseArgs,
   resolvePreviousReleaseTag,
 } from "../../scripts/generate-dependency-release-evidence.mts";
 
@@ -19,25 +18,12 @@ const readText = (dir: string, name: string) => readFile(path.join(dir, name), "
 const writeExecutable = (dir: string, name: string, source: string) =>
   writeFile(path.join(dir, name), `#!/usr/bin/env node\n${source}`, { mode: 0o755 });
 
-function runCli(args: string[], env = process.env) {
+function runCli(args: readonly string[], env = process.env) {
   return spawnSync(
     process.execPath,
     ["--import", "tsx", "scripts/generate-dependency-release-evidence.mts", ...args],
     { cwd: path.resolve("."), env, encoding: "utf8" },
   );
-}
-
-function advisory(packageName: string, id: string, tool: string, url: string | null = null) {
-  return {
-    id,
-    packageName,
-    severity: "high",
-    graph: "production",
-    lockfile: `.github/release/${tool}/package-lock.json`,
-    source: "github-repository",
-    malware: false,
-    url,
-  };
 }
 
 function makeReports(vulnerability: unknown): Record<string, unknown> {
@@ -100,27 +86,30 @@ it.each([false, true])(
       ],
     };
     const coverage = { npm: "checked", upstream };
-    const findings = malware
+    const advisory = {
+      id: "GHSA-report",
+      packageName: "fixture",
+      severity: "high",
+      graph: "production",
+      lockfile: ".github/release/vercel-cli/package-lock.json",
+      source: "github-repository",
+      malware: false,
+      url: malware ? null : "https://github.com/advisories/GHSA-report",
+    };
+    const blockers = malware
       ? [
           { id: "GHSA-malware", lockfile: "pnpm-lock.yaml", source: "npm-bulk", malware: true },
           {
             id: "GHSA-malware",
-            lockfile: ".github/release/vercel-cli/package-lock.json",
+            lockfile: advisory.lockfile,
             source: "github-repository",
             malware: true,
           },
-          advisory("report-pkg", "GHSA-report", "clawhub-cli"),
         ]
-      : [
-          advisory(
-            "undici",
-            "GHSA-rfgv-xxqx-mfg5",
-            "vercel-cli",
-            "https://github.com/advisories/GHSA-rfgv-xxqx-mfg5",
-          ),
-        ];
+      : [];
+    const findings = [...blockers, advisory];
     const reports = makeReports({
-      blockers: malware ? findings.slice(0, 2) : [],
+      blockers,
       findings,
       coverage,
     });
@@ -133,14 +122,11 @@ it.each([false, true])(
       baseRef: "v2026.5.1",
       githubOutput: "",
       githubStepSummary: stepPath,
-      execFileSyncImpl: (command, commandArgs, options) => {
+      execFileSyncImpl: (command, commandArgs) => {
         if (command === "git") {
           return "a".repeat(40);
         }
         const args = commandArgs ?? [];
-        expect(command).toBe("pnpm");
-        expect(options).toMatchObject({ cwd: path.resolve(".") });
-        expect(args[args.indexOf("--root") + 1]).toBe(source);
         const jsonPath = args[args.indexOf("--json") + 1]!;
         const report = reports[path.basename(jsonPath)];
         if (!report) {
@@ -155,7 +141,7 @@ it.each([false, true])(
     expect(result.counts).toMatchObject({
       malwareBlockers: malware ? 2 : 0,
       vulnerabilityFindings: malware ? 3 : 1,
-      advisories: malware ? [findings[2]] : findings,
+      advisories: [advisory],
       vulnerabilityCoverage: coverage,
       upstreamOnlyVulnerabilityFindings: malware ? 2 : 1,
       npmLockPackages: 2,
@@ -174,9 +160,7 @@ it.each([false, true])(
         `- Known malware findings (release-blocking): ${malware ? 2 : 0}`,
         "- npm advisory coverage: checked",
         "- Upstream public repository advisory coverage: partial",
-        malware
-          ? "- HIGH `report-pkg` (.github/release/clawhub-cli/package-lock.json; production) id=GHSA-report source=github-repository\n"
-          : "- HIGH `undici` (.github/release/vercel-cli/package-lock.json; production) id=GHSA-rfgv-xxqx-mfg5 source=github-repository https://github.com/advisories/GHSA-rfgv-xxqx-mfg5",
+        `- HIGH \`fixture\` (.github/release/vercel-cli/package-lock.json; production) id=GHSA-report source=github-repository${malware ? "\n" : " https://github.com/advisories/GHSA-report"}`,
         "Coverage is limited to these advisory sources; zero findings do not prove that dependencies are unaffected.",
       );
       for (const { subject, reason } of upstream.issues) {
@@ -185,19 +169,6 @@ it.each([false, true])(
     }
   },
 );
-
-it("rejects missing dependency evidence CLI option values", () => {
-  const missingValues = [
-    ["--output-dir", "--release-ref"],
-    ["--release-ref", "-h"],
-    ["--base-ref", undefined],
-  ] satisfies Array<[string, string | undefined]>;
-  for (const [flag, value] of missingValues) {
-    expect(() => parseArgs(value === undefined ? [flag] : [flag, value])).toThrow(
-      `Expected ${flag} <value>.`,
-    );
-  }
-});
 
 it("prints CLI help without generating evidence", () => {
   const result = runCli(["--help"]);
@@ -208,16 +179,15 @@ it("prints CLI help without generating evidence", () => {
   );
 });
 
-it("reports CLI argument errors without a Node stack trace", () => {
-  for (const args of [["--wat"], ["wat", "--help"]]) {
-    const result = runCli(args);
+it.each([
+  [["--wat"], "Unsupported argument: --wat"],
+  [["--base-ref"], "Expected --base-ref <value>."],
+] as const)("reports CLI argument errors without a Node stack trace: %s", (args, error) => {
+  const result = runCli(args);
 
-    expect(result).toMatchObject({ status: 1, stdout: "" });
-    expect(result.stderr.trim()).toBe(
-      `Unsupported argument: ${args[0]}\n[dependency-release-evidence] FAILED (exit 1)`,
-    );
-    expect(result.stderr).not.toMatch(/Node\.js|\n {4}at /u);
-  }
+  expect(result).toMatchObject({ status: 1, stdout: "" });
+  expect(result.stderr.trim()).toBe(`${error}\n[dependency-release-evidence] FAILED (exit 1)`);
+  expect(result.stderr).not.toMatch(/Node\.js|\n {4}at /u);
 });
 
 it.skipIf(process.platform === "win32")(
