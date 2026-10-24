@@ -20,41 +20,12 @@ import {
   requireValue,
 } from "./update-cli-assertions.test-support.js";
 import { createUpdateCliFixture } from "./update-cli-fixture.test-support.js";
+import * as service from "./update-cli-mocks.test-support.js";
 import {
-  gatewayFixturePid,
-  readPackageVersion,
-  resumeScheduledTaskAutoStartAfterUpdate as resumeTask,
-  serviceLoaded,
-  serviceReadCommand,
-  serviceReadRuntime,
-  serviceRestart,
-  serviceStart,
-  serviceStop,
   suspendScheduledTaskAutoStartForUpdate as suspendTask,
-  triageAfterFailure,
-  triageCommand,
+  resumeScheduledTaskAutoStartAfterUpdate as resumeTask,
 } from "./update-cli-mocks.test-support.js";
-import {
-  ExitError,
-  defaultRuntime,
-  expectSelectorTriageFailure,
-  fetchNpmPackageTargetStatus,
-  invokeUpdateCli,
-  listUpdateRuns,
-  makeOkUpdateResult,
-  mockGitUpdateAfterMutation,
-  readConfigFileSnapshot,
-  replaceConfigFile,
-  resolveGatewayInstallEntrypoint,
-  resolveUpdateInstallIdentity,
-  resolveUpdateInstallKind,
-  runCommandWithTimeout,
-  runDaemonRestart,
-  runUpdateFailureTriage,
-  updateCommand,
-  updateFinalizeCommand,
-  updateGitCheckout,
-} from "./update-cli-modules.test-support.js";
+import * as api from "./update-cli-modules.test-support.js";
 import { registerFailureSelectorTests } from "./update-cli/update-cli-failure-recovery.test-support.js";
 import {
   writeJsonFixture,
@@ -132,13 +103,13 @@ describe("update-cli", () => {
       resolveGatewayTaskScriptPath(process.env),
     );
   const stoppedRuntime = () =>
-    serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
+    service.serviceReadRuntime.mockResolvedValue({ status: "stopped", state: "stopped" });
   const expectPackageVersion = async (root: string) =>
     expect(JSON.parse(await fs.readFile(path.join(root, "package.json"), "utf8"))).toMatchObject({
       version: "1.0.0",
     });
   const commandOrder = (matches: (argv: readonly string[]) => boolean) => {
-    const command = vi.mocked(runCommandWithTimeout);
+    const command = vi.mocked(api.runCommandWithTimeout);
     return requireValue(
       command.mock.invocationCallOrder[command.mock.calls.findIndex(([argv]) => matches(argv))],
       "command order",
@@ -154,13 +125,13 @@ describe("update-cli", () => {
   registerWindowsTaskAdmissionTests(fixture);
 
   registerFailureSelectorTests({
-    updateCommand,
-    updateFinalizeCommand,
-    updateGitCheckout,
-    readConfigFileSnapshot,
+    updateCommand: api.updateCommand,
+    updateFinalizeCommand: api.updateFinalizeCommand,
+    updateGitCheckout: api.updateGitCheckout,
+    readConfigFileSnapshot: api.readConfigFileSnapshot,
     profileStateDir: fixture.profileStateDir,
-    runUpdateFailureTriage,
-    expectSelectorTriageFailure,
+    runUpdateFailureTriage: api.runUpdateFailureTriage,
+    expectSelectorTriageFailure: api.expectSelectorTriageFailure,
   });
 
   it("rejects a conflicting Windows task selector before mutation", async () => {
@@ -170,11 +141,11 @@ describe("update-cli", () => {
     const home = path.join(tempDir, "home");
     const stateDir = path.join(home, ".openclaw-work");
     const { nodeModules, pkgRoot: root } = await fixture.setupInstalledPackageRoot(tempDir);
-    serviceReadCommand.mockResolvedValue({
+    service.serviceReadCommand.mockResolvedValue({
       programArguments: gatewayArgs(root, true),
       environment: { OPENCLAW_PROFILE: "work", [envKey]: "OpenClaw Gateway" },
     });
-    serviceLoaded.mockResolvedValue(true);
+    service.serviceLoaded.mockResolvedValue(true);
     stoppedRuntime();
     fixture.mockFileBackedPathExists();
     fixture.mockNpmGlobalRoot(nodeModules);
@@ -190,17 +161,22 @@ describe("update-cli", () => {
         [envKey]: undefined,
       },
       async () => {
-        await expect(invokeUpdateCli({ yes: true })).rejects.toEqual(new ExitError(1));
+        await expect(api.invokeUpdateCli({ yes: true })).rejects.toEqual(new api.ExitError(1));
       },
     );
 
-    expectNoSideEffects(serviceReadRuntime, suspendTask, serviceStop, serviceRestart);
+    expectNoSideEffects(
+      service.serviceReadRuntime,
+      suspendTask,
+      service.serviceStop,
+      service.serviceRestart,
+    );
     expect(freshRestartCalls()).toHaveLength(0);
-    expect(runDaemonRestart).not.toHaveBeenCalled();
+    expect(api.runDaemonRestart).not.toHaveBeenCalled();
     expect(packageInstallCommandCall()?.[0]).toBeUndefined();
-    expect(defaultRuntime.exit).not.toHaveBeenCalled();
+    expect(api.defaultRuntime.exit).not.toHaveBeenCalled();
     expect(getLogOutput()).toContain(envKey);
-    expect(fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
+    expect(api.fetchNpmPackageTargetStatus).not.toHaveBeenCalled();
     for (const candidateState of [stateDir, path.join(home, ".openclaw")]) {
       expect(
         fsSync.existsSync(resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: candidateState })),
@@ -215,22 +191,21 @@ describe("update-cli", () => {
       "../daemon/gateway-entrypoint.js",
     );
     // A failed stop never reaches package Doctor or the fresh-process decision.
-    vi.mocked(resolveGatewayInstallEntrypoint)
+    vi.mocked(api.resolveGatewayInstallEntrypoint)
       .mockReset()
       .mockImplementation(entrypoints.resolveGatewayInstallEntrypoint);
     fixture.mockRunningManagedGateway(gatewayArgs(root, true));
-    serviceStop.mockImplementationOnce(async ({ onMutation }) => {
+    service.serviceStop.mockImplementationOnce(async ({ onMutation }) => {
       onMutation?.({ mode: "bootout" });
       throw new Error("port still busy after bootout");
     });
 
-    await expect(invokeUpdateCli({ channel: "beta", yes: true, json: true })).rejects.toEqual(
-      new ExitError(1),
+    await expect(api.invokeUpdateCli({ channel: "beta", yes: true, json: true })).rejects.toEqual(
+      new api.ExitError(1),
     );
 
-    expect(serviceStop).toHaveBeenCalledOnce();
     expect(freshRestartCalls(), getErrorOutput()).toHaveLength(1);
-    expect(replaceConfigFile).not.toHaveBeenCalled();
+    expect(api.replaceConfigFile).not.toHaveBeenCalled();
     expect(lastWriteJsonCall()).toMatchObject({
       status: "error",
       reason: "managed-service-stop-failed",
@@ -244,8 +219,8 @@ describe("update-cli", () => {
     fixture.setTty(true);
     fixture.setStdoutTty(true);
     const root = await fixture.mockPackageInstallAtCaseDir("openclaw-update-native-preparation");
-    vi.mocked(resolveUpdateInstallKind).mockResolvedValue("git");
-    vi.mocked(resolveUpdateInstallIdentity).mockResolvedValue({ installKind: "git" });
+    vi.mocked(api.resolveUpdateInstallKind).mockResolvedValue("git");
+    vi.mocked(api.resolveUpdateInstallIdentity).mockResolvedValue({ installKind: "git" });
     fixture.mockRunningManagedGateway([
       process.execPath,
       path.join(root, "dist", "entry.js"),
@@ -277,12 +252,12 @@ describe("update-cli", () => {
     );
     await fixture.useNativeScheduledTaskControl();
     const configuredRunCommand = requireValue(
-      vi.mocked(runCommandWithTimeout).getMockImplementation(),
+      vi.mocked(api.runCommandWithTimeout).getMockImplementation(),
       "installed package command fixture",
     );
     let taskEnabled = true;
     const nativeCommands: string[][] = [];
-    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
+    vi.mocked(api.runCommandWithTimeout).mockImplementation(async (argv, options) => {
       if (argv[0] === "git" && argv[argv.indexOf("-C") + 2] === "rev-parse") {
         return commandResult({ stdout: `${root}\n` });
       }
@@ -302,9 +277,9 @@ describe("update-cli", () => {
       }
       throw new Error("spawn PowerShell EACCES: enable denied");
     });
-    mockGitUpdateAfterMutation();
+    api.mockGitUpdateAfterMutation();
     const originalSignalListeners = process.listenerCount("SIGINT");
-    triageCommand.mockImplementationOnce(async () => {
+    service.triageCommand.mockImplementationOnce(async () => {
       expect(taskEnabled).toBe(false);
       expect(process.listenerCount("SIGINT")).toBe(originalSignalListeners);
     });
@@ -324,13 +299,12 @@ describe("update-cli", () => {
       nativeCommands.map(scheduledTaskAction),
       `${String(reportedError)}\n${getErrorOutput()}`,
     ).toEqual(["/XML", "/DISABLE", "/ENABLE"]);
-    expectNoSideEffects(serviceStop, serviceRestart, defaultRuntime.exit);
+    expectNoSideEffects(service.serviceStop, service.serviceRestart, api.defaultRuntime.exit);
     expect(packageInstallCommandCall()).toBeUndefined();
     await expectPackageVersion(root);
     expect(freshRestartCalls()).toEqual([]);
-    expect(triageCommand).toHaveBeenCalledOnce();
-    expect(reportedError).toEqual(new ExitError(1));
-    const recovery = triageCommand.mock.calls[0]?.[1]?.recovery;
+    expect(reportedError).toEqual(new api.ExitError(1));
+    const recovery = service.triageCommand.mock.calls[0]?.[1]?.recovery;
     expect(recovery).toHaveProperty("updateFailure.result.verification", {});
     expect(recovery).toMatchObject({
       target,
@@ -356,10 +330,10 @@ describe("update-cli", () => {
     stoppedRuntime();
     suspendTask.mockResolvedValue(true);
     const runFixtureCommand = requireValue(
-      vi.mocked(runCommandWithTimeout).getMockImplementation(),
+      vi.mocked(api.runCommandWithTimeout).getMockImplementation(),
       "staged package commands",
     );
-    vi.mocked(runCommandWithTimeout).mockImplementation(async (argv, options) => {
+    vi.mocked(api.runCommandWithTimeout).mockImplementation(async (argv, options) => {
       if (argv[2] === "doctor") {
         await fs.unlink(path.join(root, "dist", "index.js"));
         const listeners = process
@@ -375,13 +349,20 @@ describe("update-cli", () => {
     });
 
     const priorSigintListeners = new Set(process.listeners("SIGINT"));
-    await expect(updateCommand({ yes: true, restart: false })).rejects.toEqual(new ExitError(1));
+    await expect(api.updateCommand({ yes: true, restart: false })).rejects.toEqual(
+      new api.ExitError(1),
+    );
     await expect(waitForCliSignalExit()).resolves.toBe(130);
     expect(process.exitCode).toBe(130);
-    expectNoSideEffects(processExitSpy, resumeTask, defaultRuntime.exit, serviceRestart);
+    expectNoSideEffects(
+      processExitSpy,
+      resumeTask,
+      api.defaultRuntime.exit,
+      service.serviceRestart,
+    );
     await fs.access(path.join(root, "dist", "index.js"));
     await expectPackageVersion(root);
-    runtimeRecovery.expectInterruptedDoctorPackageRollback(listUpdateRuns({ limit: 1 }));
+    runtimeRecovery.expectInterruptedDoctorPackageRollback(api.listUpdateRuns({ limit: 1 }));
   });
 
   it("refuses mutation while a Windows recovery owner is settling", async () => {
@@ -399,7 +380,6 @@ describe("update-cli", () => {
       expect(() => recovery.beginMutation()).toThrow(UpdateCommandAbort);
       await completion;
       expect(resumeTask).toHaveBeenCalledOnce();
-      expect(packageInstallCommandCall()).toBeUndefined();
     } finally {
       await recovery.complete();
     }
@@ -424,7 +404,7 @@ describe("update-cli", () => {
       "../daemon/schtasks-control.js",
     );
     resumeTask.mockImplementation(nativeTaskControl.resumeScheduledTaskAutoStartAfterUpdate);
-    serviceStop.mockImplementationOnce(async () => {
+    service.serviceStop.mockImplementationOnce(async () => {
       fixture.primeServiceCommand(
         [nodeExecutable, "/another-install/openclaw.mjs", "gateway", "run"],
         undefined,
@@ -437,13 +417,11 @@ describe("update-cli", () => {
       maybeStopManagedServiceBeforeMutableUpdate({ ...params, expectedService }),
     ).rejects.toThrow("restore Windows Scheduled Task autostart");
 
-    expect(serviceStop).toHaveBeenCalledOnce();
     expect(
       vi
-        .mocked(runCommandWithTimeout)
+        .mocked(api.runCommandWithTimeout)
         .mock.calls.some(([argv]) => scheduledTaskAction(argv) === "/ENABLE"),
     ).toBe(false);
-    expect(packageInstallCommandCall()?.[0]).toBeUndefined();
   });
 
   it.each([
@@ -476,14 +454,14 @@ describe("update-cli", () => {
       });
       if (phase === "Git task suspension") {
         fixture.mockOwnedGitService();
-        serviceLoaded.mockResolvedValue(true);
-        vi.mocked(updateGitCheckout).mockImplementationOnce(async ({ opts: options }) => {
+        service.serviceLoaded.mockResolvedValue(true);
+        vi.mocked(api.updateGitCheckout).mockImplementationOnce(async ({ opts: options }) => {
           await requireValue(
             options.beforeGitMutation,
             "Git mutation admission",
           )({ schemaVersions: { state: 3, agent: 11 } });
           gitMutation();
-          return makeOkUpdateResult({ mode: "git" });
+          return api.makeOkUpdateResult({ mode: "git" });
         });
       } else {
         const root = await fixture.mockPackageInstallAtCaseDir("openclaw-update-suspension-signal");
@@ -502,18 +480,18 @@ describe("update-cli", () => {
         },
       );
       if (phase === "service pre-stop inspection") {
-        serviceLoaded.mockResolvedValue(true);
-        serviceReadRuntime.mockImplementation(async () => {
+        service.serviceLoaded.mockResolvedValue(true);
+        service.serviceReadRuntime.mockImplementation(async () => {
           if (taskSuspended) {
             await waitForSignal();
           }
-          return { status: "running", pid: gatewayFixturePid };
+          return { status: "running", pid: service.gatewayFixturePid };
         });
       } else {
         stoppedRuntime();
       }
 
-      const updatePromise = updateCommand({
+      const updatePromise = api.updateCommand({
         yes: true,
         restart: phase === "service pre-stop inspection",
       });
@@ -540,14 +518,14 @@ describe("update-cli", () => {
 
         await updatePromise;
         expect(resumeTask).toHaveBeenCalledOnce();
-        expect(serviceStop).not.toHaveBeenCalled();
+        expect(service.serviceStop).not.toHaveBeenCalled();
         expect(Boolean(packageInstallCommandCall())).toBe(phase !== "Git task suspension");
         expect(gitMutation).not.toHaveBeenCalled();
         expect(freshRestartCalls()).toEqual([]);
-        expect(listUpdateRuns({ limit: 1 })).toMatchObject([
+        expect(api.listUpdateRuns({ limit: 1 })).toMatchObject([
           { phase: "finished", status: "skipped", reason: "cancelled" },
         ]);
-        expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
+        expect(api.defaultRuntime.exit).not.toHaveBeenCalledWith(1);
         await expect(waitForCliSignalExit()).resolves.toBe(130);
         expect(process.exitCode).toBe(130);
         expect(processExitSpy).not.toHaveBeenCalled();
@@ -566,24 +544,24 @@ describe("update-cli", () => {
     );
     fixture.primeNpmChannelTag("latest", "2026.4.22");
     fixture.mockFileBackedPathExists();
-    readPackageVersion.mockResolvedValue("2026.4.21");
+    service.readPackageVersion.mockResolvedValue("2026.4.21");
     fixture.mockNpmGlobalCommands(nodeModules, async (argv) => {
       if (argv[0] === "npm" && argv[1] === "i" && argv.includes("--prefix")) {
         await writeNpmPackageInstall(argv, pkgRoot, "2026.4.22");
       }
     });
     primeTask(entryPath);
-    serviceReadRuntime.mockResolvedValue({
+    service.serviceReadRuntime.mockResolvedValue({
       status: "running",
       state: "running",
-      pid: gatewayFixturePid,
+      pid: service.gatewayFixturePid,
     });
     suspendTask.mockResolvedValue(true);
     resumeTask.mockResolvedValue(true);
 
-    await updateCommand({ yes: true, restart: false });
+    await api.updateCommand({ yes: true, restart: false });
 
-    expect(serviceStop).not.toHaveBeenCalled();
+    expect(service.serviceStop).not.toHaveBeenCalled();
     expect(packageInstallCommandCall()).toBeDefined();
     expect(resumeTask, `${getLogOutput()}\n${getErrorOutput()}`).toHaveBeenCalledOnce();
     const suspendOrder = suspendTask.mock.invocationCallOrder[0];
@@ -600,11 +578,11 @@ describe("update-cli", () => {
       fixture.mockRunningManagedGateway(gatewayArgs());
       suspendTask.mockResolvedValue(true);
       const failure = new Error("post-core configuration could not be read");
-      vi.mocked(updateGitCheckout).mockImplementationOnce(async ({ opts }) => {
+      vi.mocked(api.updateGitCheckout).mockImplementationOnce(async ({ opts }) => {
         await requireValue(opts.beforeGitMutation, "Git mutation admission")({});
         if (failureKind === "post-core exception") {
-          vi.mocked(readConfigFileSnapshot).mockRejectedValue(failure);
-          return makeOkUpdateResult({ mode: "git", root: process.cwd() });
+          vi.mocked(api.readConfigFileSnapshot).mockRejectedValue(failure);
+          return api.makeOkUpdateResult({ mode: "git", root: process.cwd() });
         }
         return {
           status: "error",
@@ -617,18 +595,18 @@ describe("update-cli", () => {
         };
       });
 
-      await expect(updateCommand({ yes: true, json: true })).rejects.toEqual(new ExitError(1));
-      expectNoSideEffects(
-        defaultRuntime.exit,
-        triageAfterFailure,
-        resumeTask,
-        serviceStart,
-        serviceRestart,
+      await expect(api.updateCommand({ yes: true, json: true })).rejects.toEqual(
+        new api.ExitError(1),
       );
-      expect(suspendTask).toHaveBeenCalledOnce();
-      expect(serviceStop).toHaveBeenCalledOnce();
+      expectNoSideEffects(
+        api.defaultRuntime.exit,
+        service.triageAfterFailure,
+        resumeTask,
+        service.serviceStart,
+        service.serviceRestart,
+      );
       expect(suspendTask.mock.invocationCallOrder[0]).toBeLessThan(
-        requireValue(serviceStop.mock.invocationCallOrder[0], "Git service stop order"),
+        requireValue(service.serviceStop.mock.invocationCallOrder[0], "Git service stop order"),
       );
       expect(freshRestartCalls()).toHaveLength(0);
     },

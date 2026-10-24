@@ -114,9 +114,6 @@ async function add(...args: string[]): Promise<CronJobCreate> {
   return rpcParams("cron.add");
 }
 
-async function namedAdd(...args: string[]): Promise<CronJobCreate> {
-  return add(...ADD.slice(2), ...args);
-}
 const addOptions = (options: Record<string, string | true>, ...positionals: string[]) =>
   add(...positionals, ...flags(options));
 const editOptions = (options: Record<string, string | true>) => edit(...flags(options));
@@ -160,8 +157,7 @@ async function editSchedule(
   ...args: string[]
 ): Promise<CronJobPatch> {
   mockExistingJob({ schedule });
-  await parse([...EDIT, ...args]);
-  return rpcParams<{ patch: CronJobPatch }>("cron.update").patch;
+  return edit(...args);
 }
 
 async function runCronRunAndCaptureExit(params: {
@@ -469,47 +465,64 @@ it("keeps the ambiguous cron show name error when a matching row has no schedule
   expectRuntimeErrorContaining("Multiple automations match this name.");
 });
 
-it("creates a configured agent job from a positional cron schedule and prompt", async () => {
-  const params = await addOptions(
-    {
-      "--name": "job",
-      "--agent": " Ops ",
-      "--session": "SESSION:agent:ops:telegram:group:-100123:topic:42",
-      "--model": "  opus  ",
-      "--thinking": "  low  ",
-      "--light-context": true,
-      "--fallbacks": "openrouter/gpt-4.1-mini openai/gpt-5",
-      "--tools": "read write",
-      "--timeout-seconds": "0",
-      "--stagger": "45s",
-      ...telegramOptions,
-      "--thread-id": " 42 ",
-    },
-    "0 2 * * *",
-    "hello",
-  );
-  expect(params).toMatchObject({
-    name: "job",
-    agentId: "ops",
-    sessionTarget: "session:agent:ops:telegram:group:-100123:topic:42",
-    schedule: { kind: "cron", expr: "0 2 * * *", staggerMs: 45_000 },
-    payload: {
-      kind: "agentTurn",
-      message: "hello",
-      model: "opus",
-      thinking: "low",
-      lightContext: true,
-      fallbacks: ["openrouter/gpt-4.1-mini", "openai/gpt-5"],
-      timeoutSeconds: 0,
-      toolsAllow: ["read", "write"],
-    },
-    delivery: telegramDelivery,
-  });
-  expect(defaultRuntime.error).not.toHaveBeenCalled();
+const agentOptions = {
+  "--model": "  opus  ",
+  "--thinking": "  low  ",
+  "--light-context": true,
+  "--tools": "read write",
+  "--timeout-seconds": "0",
+} as const;
+const agentPayload = {
+  kind: "agentTurn",
+  message: "hello",
+  model: "opus",
+  thinking: "low",
+  lightContext: true,
+  fallbacks: ["openrouter/gpt-4.1-mini", "openai/gpt-5"],
+  timeoutSeconds: 0,
+  toolsAllow: ["read", "write"],
+};
+it.each(["add", "edit"])("%s maps configured agent payload fields", async (operation) => {
+  const options = {
+    ...agentOptions,
+    "--fallbacks":
+      operation === "add"
+        ? "openrouter/gpt-4.1-mini openai/gpt-5"
+        : "openrouter/gpt-4.1-mini,openai/gpt-5",
+  };
+  if (operation === "edit") {
+    const patch = await editOptions({ ...options, "--message": "hello" });
+    expect(patch.payload).toEqual(agentPayload);
+    expect(patch).not.toHaveProperty("delivery");
+  } else {
+    expect(
+      await addOptions(
+        {
+          ...options,
+          ...telegramOptions,
+          "--name": "job",
+          "--agent": " Ops ",
+          "--stagger": "45s",
+          "--thread-id": " 42 ",
+          "--session": "SESSION:agent:ops:telegram:group:-100123:topic:42",
+        },
+        "0 2 * * *",
+        "hello",
+      ),
+    ).toMatchObject({
+      name: "job",
+      agentId: "ops",
+      sessionTarget: "session:agent:ops:telegram:group:-100123:topic:42",
+      schedule: { kind: "cron", expr: "0 2 * * *", staggerMs: 45_000 },
+      payload: agentPayload,
+      delivery: telegramDelivery,
+    });
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+  }
 });
 
 it("keeps the default-agent warning off JSON stdout and preserves an empty tool grant", async () => {
-  const params = await namedAdd("--message", "hello", "--tools", "", "--json");
+  const params = await add(...AGENT_ADD.slice(2), "--tools", "", "--json");
   expect(params).toMatchObject({
     sessionTarget: "isolated",
     payload: { kind: "agentTurn", message: "hello", toolsAllow: [] },
@@ -653,29 +666,6 @@ it("creates stream schedules from exact argv flags", async () => {
     batchMs: 100,
     maxBatchBytes: 2_048,
   });
-});
-
-it("updates configured agent payload fields", async () => {
-  const patch = await editOptions({
-    "--message": "hello",
-    "--model": "  opus  ",
-    "--thinking": "  high  ",
-    "--fallbacks": "openrouter/gpt-4.1-mini,openai/gpt-5",
-    "--tools": "exec read write",
-    "--light-context": true,
-    "--timeout-seconds": "0",
-  });
-  expect(patch.payload).toEqual({
-    kind: "agentTurn",
-    message: "hello",
-    model: "opus",
-    thinking: "high",
-    fallbacks: ["openrouter/gpt-4.1-mini", "openai/gpt-5"],
-    toolsAllow: ["exec", "read", "write"],
-    lightContext: true,
-    timeoutSeconds: 0,
-  });
-  expect(patch).not.toHaveProperty("delivery");
 });
 
 it.each([
