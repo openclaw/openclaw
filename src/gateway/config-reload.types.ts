@@ -79,6 +79,8 @@ export type GatewayConfigReloaderOptions = {
   onConfigRevisionApplied?: (hash: string) => void;
   /** Reads the same restart owner that fences publication of the applied revision. */
   hasOutstandingGatewayRestart?: () => boolean;
+  /** False while the accepted restart owes more than the config paths a revert undoes. */
+  canRetireDeferredRestart?: () => boolean;
   /** Retires rejected lifecycle work after any newer config transaction is accepted. */
   onConfigAccepted?: (
     nextConfig: OpenClawConfig,
@@ -87,6 +89,8 @@ export type GatewayConfigReloaderOptions = {
     acceptance: {
       runtimeApplied: boolean;
       publishSource?: () => Promise<void>;
+      /** The candidate matches the config the process still runs. */
+      revertsDeferredRestart?: boolean;
     },
   ) => void | Promise<void>;
   /** Publishes a newer source snapshot when effective runtime bytes are unchanged. */
