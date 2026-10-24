@@ -247,12 +247,10 @@ describe("sweepCronRunSessions", () => {
     expect(readOwner("main", mainKey)).toMatchObject({ sessionId: "main-run" });
   });
 
-  it("commits expired rows and warns when transcript archive retention cleanup fails", async () => {
+  it("leaves archive expiry to transcript maintenance after pruning cron sessions", async () => {
     const sessionKey = "agent:main:cron:job1:run:cleanup-failure";
     const sessionId = "cleanup-failure";
     const staleArchive = path.join(tmpDir, "older.jsonl.deleted.2026-01-01T00-00-00.000Z");
-    const cleanupError = Object.assign(new Error("archive cleanup denied"), { code: "EACCES" });
-    const { warn } = log;
 
     await writeEntry(sessionKey, expiredRun(sessionId));
     await sessionAccessor.appendTranscriptMessage(
@@ -268,24 +266,12 @@ describe("sweepCronRunSessions", () => {
         },
       },
     });
-    const rmSpy = vi.spyOn(fsPromises, "rm").mockRejectedValueOnce(cleanupError);
-
-    try {
-      buildPendingSet.mockClear();
-      const result = await sweep(now);
-
-      expect(result).toEqual({ swept: true, pruned: 1 });
-      expect(buildPendingSet).not.toHaveBeenCalled();
-      expect(readSessionEntries(storePath)[sessionKey]).toBeUndefined();
-      await fsPromises.access(staleArchive);
-      expect(warn).toHaveBeenCalledOnce();
-      expect(warn).toHaveBeenCalledWith(
-        { err: expect.stringContaining("archive cleanup denied") },
-        "cron-reaper: transcript cleanup failed",
-      );
-    } finally {
-      rmSpy.mockRestore();
-    }
+    buildPendingSet.mockClear();
+    expect(await sweep(now)).toEqual({ swept: true, pruned: 1 });
+    expect(buildPendingSet).not.toHaveBeenCalled();
+    expect(readSessionEntries(storePath)[sessionKey]).toBeUndefined();
+    await fsPromises.access(staleArchive);
+    expect(log.warn).not.toHaveBeenCalled();
   });
 
   it("discovers, accesses, and reaps a logical owner in one shared exact store", async () => {

@@ -1267,7 +1267,9 @@ After both print `PHASE warmed`, atomically publish a future epoch in millisecon
 to that file. It replaces `--start-at`; missed deadlines fail the run. Keep the
 wait short and record the resulting process ages. This aligns workload start,
 not maintenance phase: repeating maintenance can be scheduled from the preceding
-pass's completion. Keep maintenance enabled and preserve its logs.
+pass's completion. Initial main-thread and worker heap collections finish before
+`PHASE warmed`; retained-resource baselines therefore precede the barrier.
+Keep maintenance enabled and preserve its logs.
 
 For `memory-soak`, use `--diagnostics --retained-profile-ms 0` without allocation,
 CPU, or GC-trace flags for natural-GC cost. Its continuous `wholeSoakDiagnostics`
@@ -1916,6 +1918,46 @@ at seed time with `--mutate --scenario diff-uncommitted-full` during measurement
 to exercise repeated baseline filtering. Keep fixture generation sequential and
 run simultaneous pairs under the host guard with swapped interleaved CPU sets.
 
+## Actor transcript context cloning
+
+`transcript-context-clone-measure.ts` measures the real actor context seed/read
+functions with 64 synthetic 16 KiB messages. Fixture creation flattens message
+strings before warmup to match worker-decoded payloads. Each operation seeds one
+replica and reads it once. It checks byte-equivalent output and isolation from nested payload,
+array, and navigation-map mutations before capture.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-context-clone-measure.ts \
+  --owner-file /path/to/session-actor-transcript-replica.ts --mode exact \
+  --operations 10000 --interval-ms 1 --start-file /path/to/pair-start \
+  --output /path/to/result.json
+```
+
+Use the same replacement hook on both sides, prepared fixtures, a synchronized
+warm start, and swapped interleaved CPU sets under the shared measurement lock and
+guard. `--mode window` and `--mode complete` cover the other residency shapes.
+`--allocations` enables a separate collected-object sampling pass; its timing is
+ineligible for natural-GC gates. Measure promotion in another separate pass:
+
+```sh
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/transcript-context-clone-measure.ts \
+  --owner-file /path/to/session-actor-transcript-replica.ts --mode exact \
+  --operations 10000 --interval-ms 1 --start-file /path/to/pair-start \
+  --trace-log /path/to/trace.log --output /path/to/promotion.json \
+  > /path/to/trace.log 2>&1
+```
+
+The trace flags require each other, and tracing requires `--expose-gc` for one
+main-isolate identification collection before fixture preparation and warmup.
+Capture markers exclude that collection from promotion per seed/read pair.
+Use fresh matched A/A controls for this mode; its timing is also ineligible for
+natural-GC gates. Untraced timing runs never force a collection. Report bytes per
+seed/read pair, per-kind GC, latency and loop sample counts, and both pause maxima. Apply the campaign's A/A
+calibration and paired-delta rules. This owner workload does not measure Gateway
+turn latency or establish a deployed allocation reduction; use the real
+`memory-soak` turn workload for that evidence.
+
 ## Measure transcript broadcast fanout
 
 With runtime artifacts built on the authorized benchmark host, seed a fixture
@@ -2290,7 +2332,8 @@ For paired unprofiled memory soaks without mixed RPCs or fingerprint retention, 
 `--worker-heap-done-file` and `--worker-heap-peer-done-file` paths to each side,
 reversing the paths on its peer. Each side publishes completion after its worker
 and whole-workload timing windows, then waits for its peer before collecting or
-snapshotting. Never reuse marker files from an earlier pair.
+snapshotting. The wait allows at least two minutes or one full elapsed capture,
+whichever is longer. Never reuse marker files from an earlier pair.
 For source-runtime comparisons in one checkout, `--worker-baseline-dir` selects
 mirrored TypeScript files while retaining their original module URLs; the worker
 replies record which replacements were loaded. Pass this flag on both sides with

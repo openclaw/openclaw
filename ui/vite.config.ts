@@ -594,7 +594,15 @@ function controlUiBuildOutputPlugin(
           /<script\b(?![^>]*\bdata-cfasync\s*=)/giu,
           '<script data-cfasync="false"',
         );
-        return controlUiBuildIdentityHtml(marked, buildInfo);
+        // index.html owns the critical frame. Download the sole entry sheet
+        // without blocking its paint; the inline loader and main.ts admit it.
+        const nonblocking = marked.replace(
+          /<link\b(?=[^>]*\brel="stylesheet")[^>]*>/gu,
+          (link) =>
+            link.replace('rel="stylesheet"', 'rel="preload" as="style"') +
+            link.replace(/>$/u, ' id="openclaw-boot-styles" media="print">'),
+        );
+        return controlUiBuildIdentityHtml(nonblocking, buildInfo);
       },
     },
     async writeBundle({ dir: buildOutDir }, bundle) {

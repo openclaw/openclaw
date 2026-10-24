@@ -12,6 +12,7 @@ import { drainSystemEvents } from "../infra/system-events.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { pluginFixtureConfig } from "./loader-fixture-builders.test-support.js";
 import { activatePluginRegistry } from "./loader-shared.js";
 import {
   loadOpenClawPluginCliRegistry,
@@ -182,9 +183,7 @@ it("keeps system routing bound to the replacement lifecycle owner", async () => 
     manifestPath,
     JSON.stringify({ ...manifest, contracts: { tools: ["preparation_probe"] } }),
   );
-  const config = {
-    plugins: { allow: [plugin.id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
-  };
+  const config = pluginFixtureConfig(plugin);
   setRuntimeConfigSnapshot(config, config);
   const previous = createEmptyPluginRegistry();
   setActivePluginRegistry(previous);
@@ -294,13 +293,7 @@ describe("registry load modes", () => {
       registration: 'api.registerProvider({ id: "mode-provider", label: "Mode", auth: [] });',
     });
     const options = {
-      config: {
-        plugins: {
-          allow: [plugin.id],
-          load: { paths: [plugin.file] },
-          slots: { memory: "none" },
-        },
-      },
+      config: pluginFixtureConfig(plugin),
     };
     const validation = loadPluginRegistryHandle({ ...options, mode: "validate" });
     const full = loadPluginRegistryHandle(options);

@@ -50,6 +50,7 @@ import {
 } from "./dispatch-from-config.shared.test-harness.js";
 import {
   automaticGroupReplyConfig,
+  mockPluginBoundDiscordBinding,
   dispatchReplyFromConfig,
   installCaptionedVoiceTestPlugin,
   installThreadingTestPlugin,
@@ -270,14 +271,9 @@ describe("dispatchReplyFromConfig", () => {
       status: "handled",
       result: { handled: true, reply: { text: "do not leak slash reply" } },
     });
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-command-escape-denied",
       targetSessionKey: "plugin-binding:codex:abc123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
       detachHint: "/codex detach",
     });
@@ -327,14 +323,9 @@ describe("dispatchReplyFromConfig", () => {
       },
       { pluginId: "codex" },
     );
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-reply-1",
       targetSessionKey: "plugin-binding:codex:reply123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginId: "codex",
       pluginRoot: "/plugins/codex",
     });
@@ -373,14 +364,9 @@ describe("dispatchReplyFromConfig", () => {
       },
       { pluginId: "codex" },
     );
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-reply-abort-1",
       targetSessionKey: "plugin-binding:codex:reply-abort-123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:1481858418548412579",
-      },
       pluginId: "codex",
       pluginRoot: "/plugins/codex",
     });
@@ -824,15 +810,11 @@ describe("dispatchReplyFromConfig", () => {
   it("routes plugin-owned Discord DM bindings to the owning plugin before generic inbound claim broadcast", async () => {
     setNoAbort();
     mockPluginBindingClaim();
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-dm-1",
       targetSessionKey: "plugin-binding:codex:dm123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "user:1177378744822943744",
-      },
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      conversationId: "user:1177378744822943744",
     });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
@@ -951,16 +933,12 @@ describe("dispatchReplyFromConfig", () => {
       status: "no_handler",
     });
     hookMocks.runner.runInboundClaimForPluginOutcome.mockClear();
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-no-handler-1",
       targetSessionKey: "plugin-binding:codex:nohandler123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:no-handler",
-      },
       pluginName: "Codex App Server",
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      conversationId: "channel:no-handler",
     });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "openclaw fallback" }) satisfies ReplyPayload);
@@ -992,17 +970,13 @@ describe("dispatchReplyFromConfig", () => {
     mockPluginBindingClaim({
       status: "declined",
     });
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-declined-1",
       targetSessionKey: "plugin-binding:codex:declined123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:declined",
-      },
       pluginName: "Codex App Server",
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
       detachHint: "/codex_detach",
+      conversationId: "channel:declined",
     });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);
@@ -1033,16 +1007,12 @@ describe("dispatchReplyFromConfig", () => {
       status: "error",
       error: "boom",
     });
-    mockPluginBinding({
+    mockPluginBoundDiscordBinding({
       bindingId: "binding-error-1",
       targetSessionKey: "plugin-binding:codex:error123",
-      conversation: {
-        channel: "discord",
-        accountId: "default",
-        conversationId: "channel:error",
-      },
       pluginName: "Codex App Server",
       pluginRoot: "/Users/huntharo/github/openclaw-app-server",
+      conversationId: "channel:error",
     });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "should not run" }) satisfies ReplyPayload);

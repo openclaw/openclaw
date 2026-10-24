@@ -71,7 +71,17 @@ serveWorkerTasks<SkillsDiscoveryOutput>((input, channel) => {
   }
   if (request.kind === "project") {
     applyEnvironment(request.environment);
-    return { kind: "project", snapshot: buildSkillSnapshotProjection(request.input) };
+    const { resolvedSkills, discoverySkills, ...snapshot } = buildSkillSnapshotProjection(
+      request.input,
+    );
+    // Return selection, not another resident copy of the caller's parsed catalog.
+    const indices = new Map(request.input.eligible.map((entry, index) => [entry.skill, index]));
+    return {
+      kind: "project",
+      snapshot,
+      resolvedIndices: resolvedSkills!.map((skill) => indices.get(skill)!),
+      discoveryIndices: discoverySkills!.map((skill) => indices.get(skill)!),
+    };
   }
   if (request.kind === "status") {
     applyEnvironment(request.environment);

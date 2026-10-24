@@ -687,7 +687,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // fragment-operator_approval_execution_identities, state-feature-operator_approval_execution_identities
-  e4c3e5a0b5ac4c54be7ffd15ac84095dc8d7f7802679b808a97997eb46e3c6ca: [
+  eee176fa30fb315a218b50f12be8d9e4e5561441d59250cf7029aac4edd9eb38: [
     "fragment-operator_approval_execution_identities",
     "0f2bc5e4d656eda1ad36b778905e7e55f8685c0b41a68883f6e9fb1b838a874c",
     [73],
@@ -862,7 +862,7 @@ const fingerprints: Readonly<Record<string, CatalogReference>> = {
     [],
   ],
   // fragment-worker_environment_ssh_fallback_ports, state-feature-worker_environment_ssh_fallback_ports
-  "1d476b2f726e80112ec34821c59c8d5373a322d151ba1ee6b1d0b6d0143c991e": [
+  "59c7fa24ee5aa93144f936173f6efde68e9d2af33d074d5e208f971d500ac5d3": [
     "fragment-worker_environment_ssh_fallback_ports",
     "18ead5da9eec5f58b75326fdaf9ed55a3d0433facc14dad465add6bd80dff080",
     [113],

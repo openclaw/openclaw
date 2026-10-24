@@ -14,6 +14,7 @@ import * as globalUpdate from "../../infra/update-global.js";
 import * as gitRunner from "../../infra/update-runner-git.js";
 import type { UpdateStepResult } from "../../infra/update-step-result.js";
 import * as processRunner from "../../process/exec.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import * as shared from "./shared.js";
 import { updateGitInstall } from "./update-command-git.js";
 import * as packageUpdate from "./update-command-package.js";
@@ -85,14 +86,9 @@ it.each(
       }
       return { status: "ok", mode: "git", root: gitRoot, steps, durationMs: 0 };
     });
-    const doctor = vi.spyOn(processRunner, "runCommandWithTimeout").mockResolvedValue({
-      stdout: "",
-      stderr: "",
-      code: 0,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    });
+    const doctor = vi
+      .spyOn(processRunner, "runCommandWithTimeout")
+      .mockResolvedValue(createCommandResult());
 
     const result = await updateGitInstall({
       root: route === "package-to-git" ? target.packageRoot : gitRoot,

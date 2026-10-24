@@ -16,6 +16,7 @@
 // --sidebar-persistent-children keeps expanded rows outside root windows for staggered handoff proof.
 // --critical-path captures usable-screen readiness and first Sessions/Settings/Cron/Agents visits.
 // Repeat --critical-path-route to narrow/order visits; HTTP throttling and RPC latency are separate.
+// Paint/CLS and static-shell geometry are recorded in presentation; --filmstrip-only saves frames.
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { loadavg } from "node:os";
@@ -249,6 +250,7 @@ const { values } = parseArgs({
     "overlay-probe": { type: "boolean", default: false },
     untraced: { type: "boolean", default: false },
     "filmstrip-only": { type: "boolean", default: false },
+    "hold-boot-assets": { type: "boolean", default: false },
     "history-validator-delay-ms": { type: "string", default: "0" },
     "dashboard-paint-marker": { type: "boolean", default: false },
     "color-scheme": { type: "string" },
@@ -377,6 +379,12 @@ const cpuRuns: Record<string, ColdLoadCpuTables[]> = {};
 const runs = Number(values.runs);
 const gatewayUrl = values["gateway-url"] ? new URL(values["gateway-url"]) : undefined;
 const firstLoad = values["first-load"];
+if (
+  values["hold-boot-assets"] &&
+  (!firstLoad || runs !== 1 || !values["filmstrip-only"] || values["compare-bundle-dir"].length)
+) {
+  throw new Error("hold-boot-assets requires one first-load filmstrip-only run without comparison");
+}
 const bootRoute = values["boot-route"];
 if (bootRoute !== "chat" && bootRoute !== "new") {
   throw new Error("Expected boot-route chat or new");
@@ -704,13 +712,81 @@ try {
       }
       performance.setResourceTimingBufferSize(4096);
       const milestones = {
+        firstPaintMs: null as number | null,
+        firstContentfulPaintMs: null as number | null,
+        firstStaticShellMs: null as number | null,
+        firstLiveShellMs: null as number | null,
         firstShellInteractiveMs: null as number | null,
         firstEnabledComposerMs: null as number | null,
         firstComposerFocusMs: null as number | null,
         firstNonemptyTranscriptMs: null as number | null,
         fontLoadEventsMs: [] as number[],
+        staticShellGeometry: null as Record<string, unknown> | null,
+        firstLiveShellGeometry: null as Record<string, unknown> | null,
+        layoutShifts: [] as Array<{
+          atMs: number;
+          value: number;
+          hadRecentInput: boolean;
+          sources: Array<{
+            element: string | null;
+            previousRect: unknown;
+            currentRect: unknown;
+          }>;
+        }>,
+        cls: 0,
+        nonRecentInputShiftSum: 0,
       };
       Reflect.set(window, "__coldLoadPresentation", milestones);
+      new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          if (entry.name === "first-paint") {
+            milestones.firstPaintMs = entry.startTime;
+          } else if (entry.name === "first-contentful-paint") {
+            milestones.firstContentfulPaintMs = entry.startTime;
+          }
+        }
+      }).observe({ type: "paint", buffered: true });
+      let shiftWindowStartMs = 0;
+      let previousShiftMs = 0;
+      let shiftWindowValue = 0;
+      new PerformanceObserver((list) => {
+        for (const entry of list.getEntries()) {
+          const value: number = Reflect.get(entry, "value");
+          const hadRecentInput: boolean = Reflect.get(entry, "hadRecentInput");
+          const sources: Array<{
+            node?: Node;
+            previousRect: DOMRectReadOnly;
+            currentRect: DOMRectReadOnly;
+          }> = Reflect.get(entry, "sources");
+          milestones.layoutShifts.push({
+            atMs: entry.startTime,
+            value,
+            hadRecentInput,
+            sources: sources.map(({ node, previousRect, currentRect }) => ({
+              element:
+                node instanceof Element
+                  ? `${node.localName}${node.id ? `#${node.id}` : ""}.${[...node.classList].join(".")}`
+                  : null,
+              previousRect: previousRect.toJSON(),
+              currentRect: currentRect.toJSON(),
+            })),
+          });
+          if (!hadRecentInput) {
+            milestones.nonRecentInputShiftSum += value;
+            if (
+              previousShiftMs === 0 ||
+              entry.startTime - previousShiftMs >= 1000 ||
+              entry.startTime - shiftWindowStartMs >= 5000
+            ) {
+              shiftWindowStartMs = entry.startTime;
+              shiftWindowValue = 0;
+            }
+            previousShiftMs = entry.startTime;
+            shiftWindowValue += value;
+            milestones.cls = Math.max(milestones.cls, shiftWindowValue);
+          }
+        }
+      }).observe({ type: "layout-shift", buffered: true });
       document.fonts.addEventListener("loadingdone", () => {
         milestones.fontLoadEventsMs.push(performance.now());
       });
@@ -727,7 +803,48 @@ try {
       });
       const visible = (element: Element) =>
         element.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true });
+      const geometry = (root: Element, selectors: Record<string, string>) =>
+        Object.fromEntries(
+          Object.entries({ frame: ":scope", ...selectors }).map(([name, selector]) => {
+            const element = selector === ":scope" ? root : root.querySelector(selector);
+            return [
+              name,
+              element && visible(element)
+                ? {
+                    ...element.getBoundingClientRect().toJSON(),
+                    background: getComputedStyle(element).backgroundColor,
+                  }
+                : null,
+            ];
+          }),
+        );
       const sample = () => {
+        const staticShell = document.querySelector("#openclaw-boot-shell");
+        if (milestones.firstStaticShellMs === null && staticShell && visible(staticShell)) {
+          milestones.firstStaticShellMs = performance.now();
+          milestones.staticShellGeometry = geometry(staticShell, {
+            sidebar: ".connect-splash__sidebar",
+            transcript: ".loading-skeleton__messages",
+            composer: ".loading-skeleton__composer",
+          });
+        }
+        const shell = document.querySelector(".shell");
+        const chatInput = shell?.querySelector(".agent-chat__input");
+        if (
+          milestones.firstLiveShellGeometry === null &&
+          shell &&
+          visible(shell) &&
+          chatInput &&
+          visible(chatInput)
+        ) {
+          milestones.firstLiveShellMs = performance.now();
+          milestones.firstLiveShellGeometry = geometry(shell, {
+            sidebar: ".shell-nav",
+            header: ".chat-pane__header, .agent-chat__header--mobile",
+            transcript: ".chat-thread",
+            composer: ".agent-chat__input",
+          });
+        }
         if (
           milestones.firstShellInteractiveMs === null &&
           [...document.querySelectorAll("[data-sidebar-entry] a[href]")].some(
@@ -833,9 +950,6 @@ try {
       errors.push(error.stack ?? error.message);
     }
   });
-  await page.route("**/control-ui-config.json", (route) =>
-    route.fulfill({ json: createControlUiMockBootstrapConfig(prepared.scenario) }),
-  );
   if (!usesGatewayHttp) {
     await installControlUiMockBootstrapDocument(
       page,
@@ -846,41 +960,71 @@ try {
     ...fixture.assets,
     ...prepared.assets,
   ]);
-  await page.route("**/__openclaw__/**", async (route) => {
-    const pathname = new URL(route.request().url()).pathname;
-    const asset = assets.get(pathname);
-    if (asset && values["dashboard-widget"] && pathname.startsWith("/__openclaw__/board/")) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, latencyMs);
-      });
-    }
-    return asset
-      ? route.fulfill({
-          status: 200,
-          ...asset,
-        })
-      : route.fallback();
-  });
-  if (values["duplicate-boot-reads"]) {
-    await page.route("**/api/chat/media/outgoing/**", (route) => {
-      const asset = assets.get(new URL(route.request().url()).pathname);
-      return asset ? route.fulfill({ status: 200, ...asset }) : route.fallback();
-    });
-  }
-  if (values["sidebar-live-churn"] || values["sidebar-avatars"] || values["closed-menu-members"]) {
-    await page.route("**/api/users/*/avatar?*", async (route) => {
-      const asset = fixture.assets.get(new URL(route.request().url()).pathname);
-      if (!asset) {
-        return route.fallback();
+  if (gatewayHttpServer) {
+    // Native fixture HTTP keeps browser caching available for production assets.
+    gatewayHttpServer.setFixtureReader((pathname) => {
+      if (pathname === "/control-ui-config.json") {
+        return {
+          body: JSON.stringify(createControlUiMockBootstrapConfig(prepared.scenario)),
+          contentType: "application/json",
+        };
       }
-      const { delayMs, ...response } = asset;
-      if (delayMs) {
+      const asset = assets.get(pathname);
+      return asset
+        ? {
+            ...asset,
+            delayMs:
+              (fixture.assets.get(pathname)?.delayMs ?? 0) +
+              (values["dashboard-widget"] && pathname.startsWith("/__openclaw__/board/")
+                ? latencyMs
+                : 0),
+          }
+        : undefined;
+    });
+  } else {
+    await page.route("**/control-ui-config.json", (route) =>
+      route.fulfill({ json: createControlUiMockBootstrapConfig(prepared.scenario) }),
+    );
+    await page.route("**/__openclaw__/**", async (route) => {
+      const pathname = new URL(route.request().url()).pathname;
+      const asset = assets.get(pathname);
+      if (asset && values["dashboard-widget"] && pathname.startsWith("/__openclaw__/board/")) {
         await new Promise((resolve) => {
-          setTimeout(resolve, delayMs);
+          setTimeout(resolve, latencyMs);
         });
       }
-      return route.fulfill(response);
+      return asset
+        ? route.fulfill({
+            status: 200,
+            ...asset,
+          })
+        : route.fallback();
     });
+    if (values["duplicate-boot-reads"]) {
+      await page.route("**/api/chat/media/outgoing/**", (route) => {
+        const asset = assets.get(new URL(route.request().url()).pathname);
+        return asset ? route.fulfill({ status: 200, ...asset }) : route.fallback();
+      });
+    }
+    if (
+      values["sidebar-live-churn"] ||
+      values["sidebar-avatars"] ||
+      values["closed-menu-members"]
+    ) {
+      await page.route("**/api/users/*/avatar?*", async (route) => {
+        const asset = fixture.assets.get(new URL(route.request().url()).pathname);
+        if (!asset) {
+          return route.fallback();
+        }
+        const { delayMs, ...response } = asset;
+        if (delayMs) {
+          await new Promise((resolve) => {
+            setTimeout(resolve, delayMs);
+          });
+        }
+        return route.fulfill(response);
+      });
+    }
   }
   await page.addInitScript(
     ({ key, pins, mode, bootstrap, bootstrapAttribute, fixtureUrl }) => {
@@ -966,6 +1110,21 @@ try {
         : values["short-route"]
           ? new URL(controlUiSessionPath(fixture.selectedSessionKey, "", face), baseUrl).href
           : controlUiSessionUrl(baseUrl, fixture.selectedSessionKey, face);
+  let releaseBootAssets: (() => void) | undefined;
+  const heldBootAssets: Array<{ url: string; type: string }> = [];
+  if (values["hold-boot-assets"]) {
+    const released = new Promise<void>((resolve) => {
+      releaseBootAssets = resolve;
+    });
+    await page.route("**/*", async (route) => {
+      const type = route.request().resourceType();
+      if (type === "script" || type === "stylesheet") {
+        heldBootAssets.push({ url: route.request().url(), type });
+        await released;
+      }
+      await route.fallback();
+    });
+  }
   const coldResetUrl = new URL("/__control-ui-bench-cold-reset__", baseUrl).href;
   if (firstLoad) {
     await page.route(coldResetUrl, (route) =>
@@ -1399,7 +1558,61 @@ try {
     const threadCpuBefore = values["thread-cpu-time"]
       ? (await cdp.send("Performance.getMetrics")).metrics
       : undefined;
-    if (firstLoad || values["critical-path"]) {
+    if (values["hold-boot-assets"]) {
+      await page.goto(url, { waitUntil: "commit" });
+      let captureTimeout: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          (async () => {
+            // A render-blocking baseline stylesheet can suppress animation frames.
+            // Allow a compositor turn without making its existence the proof prerequisite.
+            await page.waitForTimeout(200);
+            const staticShell = await page.evaluate(() => {
+              const shell = document.querySelector("#openclaw-boot-shell");
+              return {
+                visible:
+                  shell?.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true }) ?? false,
+                geometry: shell?.getBoundingClientRect().toJSON() ?? null,
+                paintEntries: performance.getEntriesByType("paint").map((entry) => entry.toJSON()),
+                completedAssets: performance
+                  .getEntriesByType("resource")
+                  .filter((entry) =>
+                    ["script", "link", "css"].includes(Reflect.get(entry, "initiatorType")),
+                  )
+                  .map((entry) => entry.toJSON()),
+              };
+            });
+            // CDP captures compositor pixels without waiting for held stylesheet/font requests.
+            const screenshot = await cdp.send("Page.captureScreenshot", { format: "png" });
+            await writeFile(
+              path.join(artifactDir, "boot-assets-held.png"),
+              Buffer.from(screenshot.data, "base64"),
+            );
+            await writeFile(
+              path.join(artifactDir, "boot-assets-held.json"),
+              JSON.stringify(
+                {
+                  ...staticShell,
+                  heldAssets: heldBootAssets,
+                },
+                null,
+                2,
+              ),
+            );
+          })(),
+          new Promise<never>((_resolve, reject) => {
+            captureTimeout = setTimeout(
+              () => reject(new Error("No compositor capture while boot assets were held")),
+              5000,
+            );
+          }),
+        ]);
+      } finally {
+        clearTimeout(captureTimeout);
+        releaseBootAssets?.();
+        await page.waitForLoadState("domcontentloaded");
+      }
+    } else if (firstLoad || values["critical-path"]) {
       await page.goto(url, { waitUntil: "domcontentloaded" });
     } else {
       await page.reload({ waitUntil: "domcontentloaded" });
@@ -1605,7 +1818,7 @@ try {
     if (values["filmstrip-only"] && traceNavigationStartUs === undefined) {
       throw new Error("Filmstrip has no main-frame navigation timestamp");
     }
-    if (values["warm-reload"] && screenshots.length) {
+    if ((values["warm-reload"] || values["filmstrip-only"]) && screenshots.length) {
       await mkdir(path.join(artifactDir, `run-${run + 1}.filmstrip`));
       for (const [index, frame] of screenshots.entries()) {
         await writeFile(
@@ -1625,13 +1838,18 @@ try {
         let significantFrames = 0;
         let transitionGroups = 0;
         let dashboardFirstVisiblePixelsMs: number | null = null;
+        const filmstrip: Array<{ ts: number; bytes: Uint8ClampedArray }> = [];
         for (const frame of frames) {
+          if (navigationStartUs !== undefined && frame.ts < navigationStartUs) {
+            continue;
+          }
           const image = new Image();
           image.src = `data:image/jpeg;base64,${frame.data}`;
           await image.decode();
           ctx.drawImage(image, 0, 0, 344, 236);
           const bytes = ctx.getImageData(0, 0, 344, 236).data;
           const pixels = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+          filmstrip.push({ ts: frame.ts, bytes });
           if (
             marker &&
             dashboardFirstVisiblePixelsMs === null &&
@@ -1677,11 +1895,45 @@ try {
           }
           previous = pixels;
         }
+        // The earliest frame in the final stable suffix is a filmstrip estimate,
+        // not a paint timing entry. Ignore JPEG noise and sub-0.4% pixel changes.
+        const finalFrame = filmstrip.at(-1);
+        let visuallyCompleteUs = finalFrame?.ts;
+        if (finalFrame) {
+          for (const frame of filmstrip.toReversed()) {
+            let changed = 0;
+            for (let index = 0; index < frame.bytes.length; index += 4) {
+              if (
+                Math.max(
+                  Math.abs(frame.bytes[index]! - finalFrame.bytes[index]!),
+                  Math.abs(frame.bytes[index + 1]! - finalFrame.bytes[index + 1]!),
+                  Math.abs(frame.bytes[index + 2]! - finalFrame.bytes[index + 2]!),
+                ) >= 32
+              ) {
+                changed++;
+              }
+            }
+            if (changed / (344 * 236) >= 0.004) {
+              break;
+            }
+            visuallyCompleteUs = frame.ts;
+          }
+        }
         return {
-          frames: frames.length,
+          frames: filmstrip.length,
           significantFrames,
           transitionGroups,
           dashboardFirstVisiblePixelsMs,
+          visuallyCompleteMs:
+            visuallyCompleteUs !== undefined && navigationStartUs !== undefined
+              ? (visuallyCompleteUs - navigationStartUs) / 1000
+              : null,
+          lastSignificantChangeMs:
+            lastChange !== undefined && navigationStartUs !== undefined
+              ? (lastChange - navigationStartUs) / 1000
+              : null,
+          measurement:
+            "Compositor filmstrip estimate at 344x236; final stable suffix differs from the last frame by less than 0.4% of pixels with a channel difference of at least 32. Includes skeleton animation; excludes sub-threshold changes.",
           navigationStartUs,
         };
       },
@@ -2295,7 +2547,14 @@ try {
         run: result.run,
         variant: result.variant,
         hostLoadAverage,
-        presentation: result.presentation,
+        presentation: {
+          firstContentfulPaintMs: result.presentation.firstContentfulPaintMs,
+          firstStaticShellMs: result.presentation.firstStaticShellMs,
+          firstShellInteractiveMs: result.presentation.firstShellInteractiveMs,
+          firstEnabledComposerMs: result.presentation.firstEnabledComposerMs,
+          firstNonemptyTranscriptMs: result.presentation.firstNonemptyTranscriptMs,
+          cls: result.presentation.cls,
+        },
       }),
     );
   }
@@ -2384,6 +2643,7 @@ try {
         traced,
         selectorStats: values["selector-stats"],
         filmstripOnly: values["filmstrip-only"],
+        holdBootAssets: values["hold-boot-assets"],
         historyValidatorDelayMs,
         dashboardPaintMarker: values["dashboard-paint-marker"],
         colorScheme,

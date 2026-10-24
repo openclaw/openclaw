@@ -1,6 +1,6 @@
 import { isProxy } from "node:util/types";
-import { isOwnedTranscriptPayload } from "../../config/sessions/transcript-json.js";
 import { isDeeplyFrozenPlainData } from "../../shared/immutable-data.js";
+import { isOwnedTranscriptPayload } from "./transcript-json.js";
 
 const nativeCloneRequired = new Error("Opaque session snapshot requires native cloning");
 

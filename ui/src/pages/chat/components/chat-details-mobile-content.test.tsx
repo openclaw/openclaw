@@ -4,6 +4,7 @@ import { expect, it, vi } from "vitest";
 import "../chat-details-mobile-host-content.tsx";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { createActiveSessionPlacement } from "../../../test-helpers/session-placement.ts";
 import { createChatMobileHostFixture } from "../chat-mobile-host.test-support.ts";
 import type { ChatMobileHost, MobileHostDestination } from "../chat-mobile-host.ts";
 import {
@@ -50,19 +51,14 @@ it("shows a real worker without legacy fields and lets the environment owner dec
   const active: GatewaySessionRow = {
     key: "agent:main:details",
     kind: "direct",
-    placement: {
-      state: "active",
-      generation: 1,
+    placement: createActiveSessionPlacement({
       createdAtMs: 100000,
       updatedAtMs: 300000,
       stateChangedAtMs: 300000,
-      environmentId: "worker:device",
-      activeOwnerEpoch: 1,
-      workerBundleHash: "a".repeat(64),
       workspaceBaseManifestRef: "base-manifest",
       remoteWorkspaceDir: "/worker/repo",
       runner: { kind: "device", status: "available" },
-    },
+    }),
   };
   const [presented, setPresented] = createSignal(true);
   const request = vi.fn();

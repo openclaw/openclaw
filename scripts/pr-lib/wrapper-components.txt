@@ -2197,8 +2197,10 @@ src/config/sessions/session-transcript-worker.types.ts
 src/config/sessions/transcript-assistant-delivery-read.ts
 src/config/sessions/transcript-entry-anchor.ts
 src/config/sessions/transcript-header.ts
+src/config/sessions/transcript-json.ts
 src/config/sessions/transcript-message-identity.ts
 src/config/sessions/transcript-navigation-fields.ts
+src/config/sessions/transcript-snapshot.ts
 src/config/sessions/transcript-tree.ts
 src/shared/chat-message-content.ts
 src/shared/model-fallback-notice.ts
