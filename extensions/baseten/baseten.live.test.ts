@@ -4,14 +4,20 @@ import {
   type AssistantMessage,
   type Context,
   type Model,
-  type Tool,
 } from "openclaw/plugin-sdk/llm";
 import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { createSolidPngBuffer, createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { extractNonEmptyAssistantText, isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
-import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
+import {
+  createLiveValueTool,
+  requireLiveToolCall,
+} from "../test-support/live-value-tool.test-support.js";
+import {
+  makeTextToolResult,
+  makeUserMessage,
+} from "../test-support/message-fixtures.test-support.js";
 import { runSingleProviderCatalog } from "../test-support/provider-model-test-helpers.js";
 import basetenPlugin from "./index.js";
 import {
@@ -62,22 +68,6 @@ function asLiveModel(model: ModelDefinitionConfig) {
   } as Model<"openai-completions">;
 }
 
-function liveProbeTool(): Tool {
-  return {
-    name: "live_probe",
-    description: "Return the supplied value.",
-    parameters: Type.Object({ value: Type.String() }, { additionalProperties: false }),
-  };
-}
-
-function requireToolCall(message: AssistantMessage) {
-  const toolCall = message.content.find((block) => block.type === "toolCall");
-  if (toolCall?.type !== "toolCall") {
-    throw new Error(`Baseten default model did not call the live probe: ${message.stopReason}`);
-  }
-  return toolCall;
-}
-
 describeLive("Baseten plugin live", () => {
   it(
     "discovers and completes through every Baseten Model API",
@@ -105,13 +95,7 @@ describeLive("Baseten plugin live", () => {
             throw new Error("Baseten provider did not register a stream wrapper");
           }
           const context: Context = {
-            messages: [
-              {
-                role: "user",
-                content: "Say hello in one word.",
-                timestamp: Date.now(),
-              },
-            ],
+            messages: [makeUserMessage("Say hello in one word.", Date.now())],
           };
           let payload: Record<string, unknown> | undefined;
           let stream = await wrappedStream(asLiveModel(model), context, {
@@ -175,14 +159,8 @@ describeLive("Baseten plugin live", () => {
       asLiveModel(defaultModel),
       {
         systemPrompt: "Call the requested function exactly once.",
-        messages: [
-          {
-            role: "user",
-            content: "Call live_probe with value exactly inkling.",
-            timestamp: Date.now(),
-          },
-        ],
-        tools: [liveProbeTool()],
+        messages: [makeUserMessage("Call live_probe with value exactly inkling.", Date.now())],
+        tools: [createLiveValueTool("live_probe")],
       },
       {
         apiKey: LIVE_VALUE,
@@ -203,7 +181,10 @@ describeLive("Baseten plugin live", () => {
     }
     expect(payload?.reasoning_effort).toBe("low");
     expect(payload?.max_tokens).toBe(256);
-    const toolCall = requireToolCall(response);
+    const toolCall = requireLiveToolCall(
+      response,
+      "Baseten default model did not call the live probe: ",
+    );
     expect(toolCall).toMatchObject({ name: "live_probe", arguments: { value: "inkling" } });
   }, 120_000);
 
@@ -310,17 +291,10 @@ describeLive("Baseten plugin live", () => {
             stopReason: "toolUse",
             timestamp: Date.now() - 2,
           } as AssistantMessage,
-          {
-            role: "toolResult",
-            toolCallId,
-            toolName: "live_probe",
-            content: [{ type: "text", text: "ok" }],
-            isError: false,
-            timestamp: Date.now() - 1,
-          },
+          makeTextToolResult(toolCallId, "live_probe", "ok", false, Date.now() - 1),
           { role: "user", content: "Reply with exactly ok.", timestamp: Date.now() },
         ],
-        tools: [liveProbeTool()],
+        tools: [createLiveValueTool("live_probe")],
       },
       {
         apiKey: LIVE_VALUE,

@@ -176,6 +176,19 @@ for the terminal's exit before releasing its backend resources.
 Sandbox command adapters retain the sandbox owner's per-stream output bound,
 `SANDBOX_COMMAND_MAX_BUFFER_BYTES`, from `openclaw/plugin-sdk/sandbox`.
 
+Bundled plugin worker and child entries use
+`createPluginRuntimeProcessEntrypoint(name, import.meta.url)` from
+`openclaw/plugin-sdk/process-runtime`, then `resolveRuntimeWorkerUrl(entry)`.
+The host's runtime-process manifest owns these cataloged targets, including their
+source and installed package paths; package `openclaw.build.workerEntries`
+metadata must agree with that manifest. Keep each worker in an explicit entry
+module rather than starting its host module again or passing source with
+`eval: true`.
+
+Third-party plugins retain the explicit descriptor contract of
+`resolveRuntimeWorkerUrl`; loading new plugin code is a separate runtime boundary
+from declaring entries embedded in a standalone executable.
+
 `WorkerTaskPool` from `openclaw/plugin-sdk/process-runtime` retains workers and
 unconsumed inputs when termination fails. Retry `close()` on that same pool;
 dispose dependent files only after closure is acknowledged. The optional

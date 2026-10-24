@@ -8,6 +8,19 @@ type CliBackendsDeps = {
   resolveRuntimeCliBackends: typeof import("../plugins/cli-backends.runtime.js").resolveRuntimeCliBackends;
 };
 
+export function createClaudeCliBackends(): ReturnType<
+  CliBackendsDeps["resolveRuntimeCliBackends"]
+> {
+  return [
+    {
+      id: "claude-cli",
+      modelProvider: "anthropic",
+      pluginId: "anthropic",
+      config: { command: "claude" },
+    },
+  ];
+}
+
 const restoreMocks: Array<() => void> = [];
 
 function resetDepsForTest(): void {

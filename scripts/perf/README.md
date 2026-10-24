@@ -1,5 +1,28 @@
 # Team-shaped synthetic state
 
+## Update database generations
+
+Run `node --import ./scripts/tsx.mjs scripts/perf/update-doctor-generation-measure.ts
+<label> all 1 <source-root>` serially, alternating baseline and candidate roots
+for at least five pairs. Use `generations-only` instead of `all` to measure just
+the generation owner. The script creates and reuses eight synthetic SQLite files
+under `.artifacts/update-doctor-generation-measure`, totaling about 3 GiB with a
+2 GiB largest file. It isolates HOME and state before loading runtime modules.
+
+The measured phases are stopped snapshot capture, Doctor's real database-write
+admission/settlement capture with no repair, and an instrumented generation read.
+This is phase proof, not a complete package update or a full Doctor payload scan.
+Acceptance: unchanged generation receipts and private-image verification, one
+source hash pass per unchanged identity, and no latency regression in either
+downtime phase. Report warm median, p95, spread, source/private read bytes, and
+host load; do not mix cold samples with warm samples.
+
+The read counters cover synchronous source hashing/admission and private-image
+hashing; they exclude native copy and SQLite reads. `resourceUsage().fsRead` is
+reported as operations, not bytes, and may be zero on macOS. On Linux the script
+also reports `/proc/self/io` logical reads; child-process CPU and I/O are outside
+the parent counters. Keep these measurement limits alongside the results.
+
 ## Retained heap
 
 Use the [heap retention runbook](heap-retention-runbook.md) to capture a main-isolate

@@ -19,6 +19,7 @@ import type { MsgContext } from "../templating.js";
 import { setMinimalAcpCommandRegistryForTests } from "./commands-acp.channels.test-support.js";
 import {
   createAcpCommandSessionBindingService,
+  createAcpTestObservabilitySnapshot,
   createAcpTestSessionBinding as createSessionBinding,
 } from "./test-fixtures/acp-runtime.js";
 
@@ -356,18 +357,7 @@ describe("/acp command", () => {
           runtimeStatus: status,
         };
       },
-      getObservabilitySnapshot: () => ({
-        runtimeCache: { activeSessions: 0, idleTtlMs: 0, evictedTotal: 0 },
-        turns: {
-          active: 0,
-          queueDepth: 0,
-          completed: 0,
-          failed: 0,
-          averageLatencyMs: 0,
-          maxLatencyMs: 0,
-        },
-        errorsByCode: {},
-      }),
+      getObservabilitySnapshot: createAcpTestObservabilitySnapshot,
       runTurn: async (input: { onEvent?: (event: unknown) => Promise<void> | void }) => {
         for await (const event of hoisted.runTurnMock(input) as AsyncIterable<unknown>) {
           await input.onEvent?.(event);

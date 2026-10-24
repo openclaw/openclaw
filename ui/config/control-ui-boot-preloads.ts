@@ -104,7 +104,22 @@ export function controlUiBootPreloadsPlugin(): Plugin {
               tag: "link",
               attrs: file.endsWith(".css")
                 ? { rel: "preload", as: "style", crossorigin: "", href: `./${file}` }
-                : { rel: "modulepreload", crossorigin: "", href: `./${file}` },
+                : {
+                    rel: "modulepreload",
+                    crossorigin: "",
+                    // Keep signing and the composer ahead of other Chat content.
+                    ...(route === "chat" &&
+                    bundle[file]?.type === "chunk" &&
+                    bundle[file].name.startsWith("control-ui-boot-chat") &&
+                    Object.keys(bundle[file].modules).every(
+                      (id) =>
+                        controlUiBootManifestKey(id) !==
+                        "ui/src/pages/chat/components/chat-composer.tsx",
+                    )
+                      ? { fetchpriority: "low" }
+                      : {}),
+                    href: `./${file}`,
+                  },
             }));
           return {
             tag: "template",

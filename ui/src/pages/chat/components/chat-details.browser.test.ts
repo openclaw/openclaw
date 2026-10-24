@@ -44,6 +44,7 @@ async function fixture(
   width = 600,
   fullscreen = false,
   nativePresentation?: ChatDetailsViewProps["nativePresentation"],
+  contentPending?: boolean,
 ) {
   const styles = document.createElement("style");
   styles.textContent = [baseStyles, progressStyles, detailsStyles].join("\n");
@@ -61,6 +62,8 @@ async function fixture(
   const pane = document.createElement("openclaw-chat-pane");
   pane.className = "sidebar-region";
   pane.style.cssText = `display:block;position:relative;width:${width}px;height:640px;margin:30px 20px`;
+  pane.style.setProperty("--desktop-side-reserve", "0px");
+  pane.style.setProperty("--desktop-divider-reserve", "0px");
   pane.append(frame);
   frame.hidden = fullscreen;
   const header = document.createElement("div");
@@ -75,6 +78,7 @@ async function fixture(
     presentation: true,
     mobile: false,
     nativePresentation,
+    contentPending,
     conversationVisible: !fullscreen,
     externalTrigger: fullscreen,
     setRef: (handle) => (details = handle),
@@ -137,6 +141,40 @@ describe("chat Details presentation", () => {
       measurement.mockRestore();
     }
   });
+
+  it.each(["transcript paint", "explicit open"] as const)(
+    "holds automatic content until %s and retains it through later hydration",
+    async (release) => {
+      // A cold lazy import must not accidentally satisfy the initial hold assertion.
+      await import("./chat-details-session.tsx");
+      await page.viewport(1700, 900);
+      const { update, open, conversation, trigger, panel } = await fixture(
+        props(),
+        1320,
+        false,
+        "desktop",
+        true,
+      );
+      await expect.poll(() => trigger.getAttribute("aria-expanded")).toBe("true");
+      expect(panel.getAttribute("role")).toBe("complementary");
+      expect(conversation.getBoundingClientRect().right).toBeLessThanOrEqual(
+        panel.getBoundingClientRect().left,
+      );
+      expect(panel.querySelector(".chat-details-session")).toBeNull();
+
+      if (release === "transcript paint") {
+        update({ contentPending: false });
+      } else {
+        open(trigger);
+      }
+      await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
+      const session = panel.querySelector(".chat-details-session");
+      update({ contentPending: true });
+      flush();
+      expect(panel.querySelector(".chat-details-session")).toBe(session);
+      expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+    },
+  );
 
   it("automatically docks within the available pane, preserves intent, and releases its column", async () => {
     await page.viewport(1700, 900);
@@ -320,7 +358,7 @@ describe("chat Details presentation", () => {
   it("opens full-width mobile Details from Panels and restores focus to that control", async () => {
     await page.viewport(420, 720);
     const { update, open, frame, trigger, panel } = await fixture(props(), 380);
-    update({ mobile: true });
+    update({ mobile: true, contentPending: true });
     const source = document.createElement("button");
     source.textContent = "Panels";
     frame.prepend(source);
@@ -331,6 +369,7 @@ describe("chat Details presentation", () => {
     expect(panel.matches(":popover-open")).toBe(true);
     expect(panel.getBoundingClientRect().width).toBe(364);
     expect(panel.querySelector(".chat-details__toolbar")).not.toBeNull();
+    await expect.poll(() => panel.querySelector(".chat-details-session")).not.toBeNull();
     panel.querySelector<HTMLButtonElement>("button")!.focus();
     document.dispatchEvent(
       new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),

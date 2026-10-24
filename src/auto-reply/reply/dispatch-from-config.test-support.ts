@@ -54,6 +54,7 @@ import {
 } from "./dispatch-from-config.shared.test-harness.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import { buildTestCtx } from "./test-ctx.js";
+import { createAcpTestObservabilitySnapshot } from "./test-fixtures/acp-runtime.js";
 
 export type ResolveInboundConversationParams = Parameters<
   NonNullable<ChannelMessagingAdapter["resolveInboundConversation"]>
@@ -149,18 +150,7 @@ export function resetDeliverySettlementFixture() {
   sessionStoreMocks.updateSessionEntry.mockClear();
   acpManagerRuntimeMocks.getAcpSessionManager.mockImplementation(() => ({
     resolveSessionAsync: async () => ({ kind: "none" as const }),
-    getObservabilitySnapshot: () => ({
-      runtimeCache: { activeSessions: 0, idleTtlMs: 0, evictedTotal: 0 },
-      turns: {
-        active: 0,
-        queueDepth: 0,
-        completed: 0,
-        failed: 0,
-        averageLatencyMs: 0,
-        maxLatencyMs: 0,
-      },
-      errorsByCode: {},
-    }),
+    getObservabilitySnapshot: createAcpTestObservabilitySnapshot,
     runTurn: vi.fn(),
   }));
   runtimePluginMocks.loadAgentRuntimePluginRegistryHandle.mockReturnValue(
@@ -235,22 +225,7 @@ function createMockAcpSessionManager() {
             ...target,
           };
     },
-    getObservabilitySnapshot: () => ({
-      runtimeCache: {
-        activeSessions: 0,
-        idleTtlMs: 0,
-        evictedTotal: 0,
-      },
-      turns: {
-        active: 0,
-        queueDepth: 0,
-        completed: 0,
-        failed: 0,
-        averageLatencyMs: 0,
-        maxLatencyMs: 0,
-      },
-      errorsByCode: {},
-    }),
+    getObservabilitySnapshot: createAcpTestObservabilitySnapshot,
     runTurn: vi.fn(
       async (params: {
         cfg: OpenClawConfig;

@@ -59,6 +59,19 @@ evidence. This preserves the installed updater's original fingerprint format.
 Changed committed data or write evidence still refuses migration and automatic
 restoration. The candidate must contain this repair.
 
+Within one database-generation observation, update and Doctor workers reuse a
+verified digest while the file's device, inode, size, and nanosecond birth,
+modification, and change times remain identical. Each family observation still
+checks the database, WAL, and rollback journal; private-copy verification and
+WAL commit checks remain in place. Changed or unavailable identities require
+hashing again. Reuse ends with that observation and does not cross Doctor
+invocations. Reuse also requires nanosecond bigint stat fields and modification
+and change times more than two seconds older than the start of hashing. Recent
+writes can share a coarse filesystem timestamp even when nanosecond fields are
+available, so their digests are recomputed. Millisecond-only stats never enable
+reuse. The runtime performing the observation must contain this change;
+a newer candidate cannot change an older installed updater's own reads.
+
 Update snapshots and database backups accept a database whose only integrity
 findings are `malformed inverted index` reports on canonical, schema-validated
 agent FTS tables. A Node upgrade that changes SQLite tokenization (for example,
@@ -190,6 +203,10 @@ descendants and incomplete process censuses block settlement to prevent overlapp
 updaters. Positive handoff descendants, OpenClaw identities, and retained-runtime
 path holders also block repair. This does not relax Doctor's artifact-custody
 checks or remove retained recovery data.
+
+Authenticated readiness probes recheck the update's live ownership before opening
+their transport and sending RPC frames, including deferred authentication and
+startup retries. Losing ownership stops those probes.
 
 If the retained verifier cannot authenticate to the restarted Gateway, it stops
 retrying that rejection. Local HTTP readiness and runtime version/build identity

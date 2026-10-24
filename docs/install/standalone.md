@@ -296,6 +296,24 @@ state before upgrading; see [Updating](/install/updating).
 
 ## Runtime contents and limits
 
+Worker and child-process targets come from the shared runtime-process manifest.
+The same declarations resolve source workers, installed Node/Bun workers, and
+selected plugin workers. The standalone builder requires every declared output
+before compiling; a filename ending in `.worker.js` does not
+declare an entry. Doctor database inspection, database discovery and backup,
+update helpers, workspace leases, certificate warmup, directory watching, hashing,
+and the shutdown watchdog use explicit module entries. Fixed eval workers are no longer extracted
+from strings during standalone packaging.
+
+The sealed single-file update-recovery helper uses its existing in-process hashing
+fallback so its recorded recovery artifact remains self-contained. Normal
+installations use the declared hashing workers.
+
+Browser MCP and remote repository bootstrap scripts are generated from typed
+sources into bundled script assets. Regenerate them with `pnpm runtime:scripts:gen`;
+`pnpm runtime:scripts:check` verifies freshness before building. The runtime does
+not need to serialize function bodies or retain loose JavaScript for these scripts.
+
 The builder embeds the application modules, bundled plugin entrypoints, worker
 programs, and generated metadata needed by the runtime. It preserves lazy module
 boundaries. The sidecar contains the resources read from disk:

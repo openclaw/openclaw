@@ -199,10 +199,7 @@ describe("before_tool_call hook integration", () => {
   });
 
   it("does not enter the tool body when a slow hook settles after cancellation", async () => {
-    let releaseHook: () => void = () => {};
-    const hookGate = new Promise<void>((resolve) => {
-      releaseHook = resolve;
-    });
+    const { promise: hookGate, resolve: releaseHook } = createDeferred();
     beforeToolCallHook = installBeforeToolCallHook({
       runBeforeToolCallImpl: async () => {
         await hookGate;
@@ -541,10 +538,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
   );
 
   it("rechecks a private source guard after asynchronous before-tool policy", async () => {
-    let releaseHook: (() => void) | undefined;
-    const held = new Promise<void>((resolve) => {
-      releaseHook = resolve;
-    });
+    const { promise: held, resolve: releaseHook } = createDeferred();
     beforeToolCallHook = installBeforeToolCallHook({
       runBeforeToolCallImpl: async () => {
         await held;
@@ -565,7 +559,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
     const pending = expectDefined(source.execute, "guarded source execute")("call-guard", {});
     await vi.waitFor(() => expect(beforeToolCallHook).toHaveBeenCalledOnce());
     authorityActive = false;
-    releaseHook?.();
+    releaseHook();
 
     await expect(pending).rejects.toThrow("delegated authority closed");
     expect(execute).not.toHaveBeenCalled();
@@ -574,14 +568,8 @@ describe("before_tool_call hook deduplication (#15502)", () => {
   it.each(["adapter", "client"] as const)(
     "suppresses the %s body after awaited hook preflight",
     async (kind) => {
-      let releaseHook!: () => void;
-      let markHookStarted!: () => void;
-      const hookStarted = new Promise<void>((resolve) => {
-        markHookStarted = resolve;
-      });
-      const hookRelease = new Promise<void>((resolve) => {
-        releaseHook = resolve;
-      });
+      const { promise: hookStarted, resolve: markHookStarted } = createDeferred();
+      const { promise: hookRelease, resolve: releaseHook } = createDeferred();
       beforeToolCallHook = installBeforeToolCallHook({
         runBeforeToolCallImpl: async () => {
           markHookStarted();
@@ -1164,10 +1152,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
 
 describe("before_tool_call adapter and client tool integration", () => {
   function installAbortBlockingHook() {
-    let markStarted: () => void = () => {};
-    const started = new Promise<void>((resolve) => {
-      markStarted = resolve;
-    });
+    const { promise: started, resolve: markStarted } = createDeferred();
     let observedAbort = false;
     installBeforeToolCallHook({
       runBeforeToolCallImpl: async (_event, ctx) => {
@@ -1305,10 +1290,7 @@ describe("before_tool_call adapter and client tool integration", () => {
   });
 
   it("preserves client tool source order when hooks resolve out of order", async () => {
-    let releaseFirstHook: (() => void) | undefined;
-    const firstHookGate = new Promise<void>((resolve) => {
-      releaseFirstHook = resolve;
-    });
+    const { promise: firstHookGate, resolve: releaseFirstHook } = createDeferred();
     installBeforeToolCallHook({
       runBeforeToolCallImpl: async (event: unknown) => {
         const toolName = (event as { toolName?: string }).toolName;
@@ -1391,9 +1373,6 @@ describe("before_tool_call adapter and client tool integration", () => {
       { name: "second_tool", completed: true },
     ]);
 
-    if (!releaseFirstHook) {
-      throw new Error("Expected first before-tool-call hook release callback to be initialized");
-    }
     releaseFirstHook();
     await firstRun;
 

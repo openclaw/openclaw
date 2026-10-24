@@ -18,13 +18,21 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
     ...actual,
     runUtf8CommandWithTimeout: vi.fn<typeof actual.runUtf8CommandWithTimeout>((argv, options) => {
       assert(typeof options !== "number", "Expected the stats reader's process options");
-      const input = { ...JSON.parse(String(options.input)), moduleUrl: transport.moduleUrl };
-      const pending = actual.runUtf8CommandWithTimeout(argv, {
-        ...options,
-        input: JSON.stringify(input),
-        onOutputChunk: (chunk) => transport.onOutput?.(chunk),
-        signal: transport.controller.signal,
-      });
+      const script = `
+        import { runMemoryStatsReader } from ${JSON.stringify(new URL("./memory-stats-reader.ts", import.meta.url).href)};
+        const { loadLanceDbModule } = await import(${JSON.stringify(transport.moduleUrl)});
+        await runMemoryStatsReader(loadLanceDbModule);
+      `;
+      const entryIndex = argv.findIndex((argument) => argument.endsWith("memory-stats.worker.ts"));
+      assert(entryIndex > 0, "Expected the declared memory stats worker entry");
+      const pending = actual.runUtf8CommandWithTimeout(
+        [...argv.slice(0, entryIndex), "--input-type=module", "--eval", script],
+        {
+          ...options,
+          onOutputChunk: (chunk) => transport.onOutput?.(chunk),
+          signal: transport.controller.signal,
+        },
+      );
       transport.pending.add(pending);
       void pending.finally(() => transport.pending.delete(pending)).catch(() => {});
       return pending;
