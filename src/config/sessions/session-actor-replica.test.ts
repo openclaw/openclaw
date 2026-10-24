@@ -12,7 +12,10 @@ import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transactio
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
 import { patchSessionEntry as patchSdkSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
+import {
+  drainGlobalSingletonLifecycleState,
+  readGlobalSingleton,
+} from "../../shared/global-singleton.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   openOpenClawAgentDatabase,
@@ -172,6 +175,91 @@ function reloadInvalidated(fixture: Fixture) {
   expect(fixture.replica.read()).toBeUndefined();
   return hydrate(fixture);
 }
+
+it("preserves byte charges for shared rows, nested payloads, and each context form", ({
+  fixture,
+}) => {
+  const state = hydrate(fixture);
+  const pool = readGlobalSingleton(Symbol.for("openclaw.sessionActorReplicas"));
+  assert(pool && typeof pool === "object" && "bytes" in pool && typeof pool.bytes === "number");
+  const initialBytes = pool.bytes;
+  const row = {
+    rawSeq: 0,
+    serializedBytes: 100,
+    event: {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "hello" },
+          { type: "toolCall", arguments: { paths: ["a", "b"], options: { recursive: true } } },
+        ],
+      },
+    },
+  };
+  const version = { generation: "g", rawSeq: 0, updatedAt: 1 };
+  const limits = { maxBytes: 4096, maxEvents: 8 };
+  const cases: [SessionActorTranscriptReplica["context"], number][] = [
+    [undefined, 1426],
+    [{ limits, rows: [row], activeLeafEntryId: null }, 2722],
+    [
+      {
+        limits,
+        window: {
+          header: row,
+          rows: [row],
+          activeLeafEntryId: null,
+          totalEvents: 1,
+          earliestFence: 0,
+          truncatedPrefix: true,
+          preceding: { rawSeq: -1, serializedBytes: 20 },
+        },
+      },
+      4078,
+    ],
+    [
+      {
+        limits,
+        exact: {
+          kind: "bounded",
+          snapshot: {
+            version,
+            activeLeafEntryId: null,
+            opaqueParents: new Map(),
+            parents: new Map(),
+            firstKeptRanges: new Map(),
+            persistedSuffixStartSeq: 0,
+            boundaryCount: 0,
+            events: [row.event],
+            serializedBytes: 100,
+            totalEvents: 1,
+            transcriptMutationAt: 1,
+            truncated: true,
+          },
+        },
+      },
+      3488,
+    ],
+  ];
+  for (const [context, expectedBytes] of cases) {
+    const transcript: SessionActorTranscriptReplica = {
+      sessionId: "s",
+      version,
+      tail: { coveredAfterSeq: -1, events: [row] },
+      ...(context ? { context } : {}),
+    };
+    // The same row is charged at every occurrence, even when its size is memoized.
+    for (let repeat = 0; repeat < 2; repeat++) {
+      retainSessionActorTranscriptReplica(state, transcript);
+      expect(pool.bytes).toBe(initialBytes + expectedBytes);
+    }
+    retainSessionActorTranscriptReplica(state, {
+      ...transcript,
+      tail: { ...transcript.tail, events: [row, { ...row, rawSeq: 1 }] },
+    });
+    expect(pool.bytes).toBe(initialBytes + expectedBytes + 978);
+  }
+});
 
 it("keeps transcript replacement charges within the shared byte and entry budgets", async () => {
   await drainGlobalSingletonLifecycleState("restart");

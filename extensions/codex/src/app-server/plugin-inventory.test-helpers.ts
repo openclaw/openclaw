@@ -1,5 +1,19 @@
-import { CODEX_PLUGINS_MARKETPLACE_NAME } from "./config.js";
+import { CODEX_PLUGINS_MARKETPLACE_NAME, type CodexPluginConfig } from "./config.js";
 import type { v2 } from "./protocol.js";
+
+type PluginsConfig = NonNullable<CodexPluginConfig["codexPlugins"]>;
+type PluginEntry = NonNullable<PluginsConfig["plugins"]>[string];
+
+export function codexPluginConfig(options: PluginsConfig = {}): CodexPluginConfig {
+  return { codexPlugins: { enabled: true, ...options } };
+}
+
+export function curatedPlugin(
+  pluginName: string,
+  options: Omit<PluginEntry, "marketplaceName" | "pluginName"> = {},
+): PluginEntry & { marketplaceName: typeof CODEX_PLUGINS_MARKETPLACE_NAME; pluginName: string } {
+  return { marketplaceName: CODEX_PLUGINS_MARKETPLACE_NAME, pluginName, ...options };
+}
 
 export function asPluginInstalled(listed: v2.PluginListResponse): v2.PluginInstalledResponse {
   const { featuredPluginIds: _featuredPluginIds, ...installed } = listed;
@@ -52,7 +66,11 @@ export function pluginSummary(
 export function pluginDetail(
   pluginName: string,
   apps: v2.AppSummary[],
-  marketplace: { marketplaceName?: string; marketplacePath?: string | null } = {},
+  marketplace: {
+    marketplaceName?: string;
+    marketplacePath?: string | null;
+    mcpServers?: string[];
+  } = {},
 ): v2.PluginReadResponse {
   return {
     plugin: {
@@ -65,7 +83,7 @@ export function pluginDetail(
       description: null,
       skills: [],
       apps,
-      mcpServers: [],
+      mcpServers: marketplace.mcpServers ?? [],
     },
   };
 }

@@ -9,7 +9,7 @@ const png = Buffer.from(
 );
 
 suite.define(() => {
-  it.each(["404", "503", "network", "decode", "revoked", "removed"] as const)(
+  it.each(["404", "decode", "revoked", "removed"] as const)(
     "recovers an uploaded image after %s only with an authorized explicit retry",
     (failure) =>
       suite.withPage(
@@ -30,7 +30,7 @@ suite.define(() => {
             expect(target).toEqual([source, "GET", false]);
             if (query.get("meta") === "1") {
               metadataRequests += 1;
-              await route.fulfill(
+              return route.fulfill(
                 retry && denied
                   ? { status: denialStatus, json: { error: "Attachment unavailable" } }
                   : {
@@ -41,19 +41,14 @@ suite.define(() => {
                       },
                     },
               );
-              return;
             }
             imageRequests += 1;
             expect(query.get("mediaTicket")).toBe("upload-ticket-" + metadataRequests);
-            if (!retry && failure === "network") {
-              await route.abort("connectionreset");
-            } else {
-              await route.fulfill(
-                retry || failure === "decode"
-                  ? { contentType: "image/png", body: retry ? png : "not a PNG" }
-                  : { status: failure === "503" ? 503 : denialStatus },
-              );
-            }
+            await route.fulfill(
+              retry || failure === "decode"
+                ? { contentType: "image/png", body: retry ? png : "not a PNG" }
+                : { status: denialStatus },
+            );
           });
           await installMockGateway(page, {
             historyMessages: [

@@ -5,6 +5,7 @@ import { withProviderAcceptanceObserver } from "openclaw/plugin-sdk/provider-tra
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { createRequireRecord, makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { createModel } from "../model.test-support.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -75,16 +76,10 @@ async function compatPayload(
   payload: Record<string, unknown>,
 ) {
   const model: Model = {
-    id,
-    name: id,
+    ...createModel(id, id, { reasoning: true, contextWindow: 262144 }),
     api: "openai-completions",
     provider: "ollama",
     baseUrl: "http://ollama-host:11434",
-    input: ["text"],
-    reasoning: true,
-    contextWindow: 262144,
-    maxTokens: 8192,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
     params,
   };
   let patched: unknown;

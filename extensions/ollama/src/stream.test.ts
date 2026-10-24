@@ -7,6 +7,7 @@ import { requestBodyText, withServer } from "openclaw/plugin-sdk/test-env";
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createModel } from "../model.test-support.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -109,16 +110,10 @@ function denseChunks() {
 const USER = { messages: [{ role: "user" as const, content: "hello", timestamp: 0 }] };
 const MODEL_INFO = { api: "ollama", provider: "ollama", id: "qwen3.5" };
 const STREAM_MODEL = {
+  ...createModel("qwen3.5", "qwen3.5", { reasoning: true, contextWindow: 65536 }),
   api: "ollama",
   provider: "ollama",
-  id: "qwen3.5",
-  name: "qwen3.5",
   baseUrl: "http://127.0.0.1:11434",
-  reasoning: true,
-  input: ["text"],
-  contextWindow: 65536,
-  maxTokens: 8192,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 } satisfies ProviderRuntimeModel;
 
 afterEach(() => {

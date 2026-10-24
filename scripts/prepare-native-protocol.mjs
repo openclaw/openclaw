@@ -25,7 +25,7 @@ function listInputs() {
   const inputs = new Set(files);
   for (const directory of directories) {
     for (const entry of fs.readdirSync(path.join(root, directory), { recursive: true })) {
-      if (/\.(?:ts|mts|mjs|json)$/.test(entry) && !/\.(?:test|spec)\./.test(entry)) {
+      if (/\.(?:ts|mts|mjs|js|json)$/.test(entry) && !/\.(?:test|spec)\./.test(entry)) {
         inputs.add(path.posix.join(directory, entry.split(path.sep).join("/")));
       }
     }

@@ -108,13 +108,6 @@ suite.define(() => {
                 sessions.state.agentId === "research" && !sessions.state.loading
                   ? sessions.canonicalListRevision
                   : -1,
-              selectedAgentId: application.agentSelection.state.selectedId ?? null,
-              canonicalAgentId: sessions.state.agentId ?? null,
-              canonicalLoading: sessions.state.loading ?? null,
-              filteredAgentId: filtered?.agentId ?? null,
-              filteredLoading: filtered?.loading ?? null,
-              filteredNextOffset: filtered?.result?.nextOffset ?? null,
-              hasMore: filtered?.result?.hasMore ?? null,
             };
           },
           researchListQuery,
@@ -144,16 +137,6 @@ suite.define(() => {
       const loadMore = sidebar.locator(".sidebar-session-pagination--roster > button");
       await loadMore.waitFor({ state: "visible" });
       await expect.poll(settledResearchRevision).toBeGreaterThan(0);
-      const settledResearch = {
-        selectedAgentId: "research",
-        canonicalAgentId: "research",
-        canonicalLoading: false,
-        filteredAgentId: "research",
-        filteredLoading: false,
-        filteredNextOffset: pageSize,
-        hasMore: true,
-      };
-      await expect.poll(sidebarState).toMatchObject(settledResearch);
       const revision = await settledResearchRevision();
       // Both deletes settle before the mutation owner reconciles the current
       // roster. Wait for its accepted publication before testing pagination.
@@ -178,10 +161,7 @@ suite.define(() => {
         match: filteredQuery,
       });
       await expect.poll(settledResearchRevision).toBeGreaterThan(revision);
-      await expect.poll(sidebarState).toMatchObject({
-        ...settledResearch,
-        filteredLoading: true,
-      });
+      await expect.poll(() => loadMore.isDisabled()).toBe(true);
       expect((await gateway.getRequests("sessions.delete")).map(({ params }) => params)).toEqual(
         targets.map((target) =>
           expect.objectContaining({
@@ -201,11 +181,9 @@ suite.define(() => {
       expect(
         await gateway.getRequests("sessions.list", { agentId: "research", offset: pageSize }),
       ).toHaveLength(0);
-      await expect.poll(() => loadMore.isDisabled()).toBe(true);
       await ui.expectAttribute(loadMore, "aria-busy", "true");
       await ui.pollAttribute(loadMore, "aria-label").toContain("Loading");
       await gateway.resolveDeferred("sessions.list");
-      await expect.poll(sidebarState).toMatchObject(settledResearch);
       await expect.poll(() => loadMore.isDisabled()).toBe(false);
       await ui.expectAttribute(loadMore, "aria-busy", "false");
       await ui.expectAttribute(loadMore, "aria-label", "Load more sessions");

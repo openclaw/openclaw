@@ -17,6 +17,7 @@ import {
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { useSqliteWorkerFault } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeUserMessage } from "../../test-support/message-fixtures.test-support.js";
 import {
   createFixture,
   createJournalSession,
@@ -175,11 +176,7 @@ describe("Copilot attempt transcript journal", () => {
 
   it("replaces the originally staged user when async resolution changes it", async () => {
     const { journal, recorder } = await createFixture();
-    recorder.resolveMessage.mockResolvedValue({
-      role: "user",
-      content: "resolved user",
-      timestamp: 2,
-    });
+    recorder.resolveMessage.mockResolvedValue(makeUserMessage("resolved user", 2));
 
     await journal.persistInitialUser();
 
@@ -291,11 +288,7 @@ describe("Copilot attempt transcript journal", () => {
       ]),
     );
     const { journal, recorder } = await createFixture();
-    recorder.resolveMessage.mockResolvedValue({
-      role: "user",
-      content: "blocked resolved user",
-      timestamp: 2,
-    });
+    recorder.resolveMessage.mockResolvedValue(makeUserMessage("blocked resolved user", 2));
 
     await journal.persistInitialUser();
 

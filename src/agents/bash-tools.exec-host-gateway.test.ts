@@ -45,6 +45,7 @@ import { createProcessSupervisor } from "../process/supervisor/supervisor.js";
 import type { ProcessSupervisor } from "../process/supervisor/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { captureProcessUnhandledRejections } from "./bash-tools.exec-runtime.test-support.js";
 import type {
   ExecApprovalFollowupFactory,
   ExecApprovalFollowupOutcome,
@@ -218,19 +219,6 @@ type GatewayAllowlistParams = Parameters<typeof processGatewayAllowlist>[0];
 
 function requireSentFollowupText(callIndex = 0): string {
   return sendExecApprovalFollowupResultMock.mock.calls[callIndex]?.[1] ?? "";
-}
-
-function captureProcessUnhandledRejections() {
-  const reasons: unknown[] = [];
-  const originalProcessEmit = process.emit.bind(process);
-  const processEmit = vi.spyOn(process, "emit").mockImplementation((event, ...args) => {
-    if (event === "unhandledRejection") {
-      reasons.push(args[0]);
-      return true;
-    }
-    return originalProcessEmit(event, ...args);
-  });
-  return { reasons, restore: () => processEmit.mockRestore() };
 }
 
 function captureSecurityEvents(): {
