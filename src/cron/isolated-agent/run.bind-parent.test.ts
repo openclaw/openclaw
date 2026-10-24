@@ -446,10 +446,12 @@ it("refuses the stored write when the owner loses authority while bind waits for
   let ownerCurrent = true;
   const update = context.cron.updateWithPrecondition.bind(context.cron);
   // Revoke between the handler's checks and the commit under the cron lock.
-  vi.spyOn(context.cron, "updateWithPrecondition").mockImplementation(async (...args) => {
-    ownerCurrent = false;
-    return await update(...args);
-  });
+  const commit = vi
+    .spyOn(context.cron, "updateWithPrecondition")
+    .mockImplementation(async (...args) => {
+      ownerCurrent = false;
+      return await update(...args);
+    });
   try {
     await expect(
       bindFromParent({
@@ -468,6 +470,6 @@ it("refuses the stored write when the owner loses authority while bind waits for
     context.cron.stop();
     await creatorCron.waitForIdle();
   }
-  expect(context.cron.updateWithPrecondition).toHaveBeenCalledTimes(1);
+  expect(commit).toHaveBeenCalledTimes(1);
   expect((await fixture.read()).find((entry) => entry.id === seeded.id)).toEqual(before);
 });
