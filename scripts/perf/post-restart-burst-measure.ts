@@ -4,6 +4,7 @@ import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
+import { finished as streamFinished } from "node:stream/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.ts";
@@ -21,6 +22,7 @@ import {
 } from "../e2e/lib/mock-inference-facts.ts";
 import { readBody } from "../e2e/lib/mock-openai-http.mjs";
 import { stopChild } from "../lib/gateway-bench-child.ts";
+import { GATEWAY_GC_TRACE_MARKER, readGatewayGcTrace } from "../lib/gateway-bench-profile.ts";
 import { buildGatewayBenchChildArgs, createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import {
@@ -37,6 +39,9 @@ const { values } = parseArgs({
     "mock-port": { type: "string", default: "41059" },
     clients: { type: "string" },
     "reconnect-waves": { type: "boolean", default: false },
+    "cold-row-reads": { type: "boolean", default: false },
+    "row-refresh-owner": { type: "string" },
+    "trace-gc": { type: "boolean", default: false },
     "reconnect-count": { type: "string" },
     waves: { type: "string", default: "10" },
     "start-at": { type: "string" },
@@ -61,7 +66,20 @@ if (port > 65535 || mockPort > 65535 || port === mockPort) {
   throw new Error("ports must be distinct and between 40000 and 65535");
 }
 const reconnectWaves = values["reconnect-waves"];
-const clientCount = integer(values.clients ?? (reconnectWaves ? "40" : "50"), "--clients");
+const coldRowReads = values["cold-row-reads"];
+if ((values["row-refresh-owner"] || values["trace-gc"]) && !coldRowReads) {
+  throw new Error("--row-refresh-owner and --trace-gc require --cold-row-reads");
+}
+const rowRefreshOwner = coldRowReads
+  ? path.resolve(values["row-refresh-owner"] ?? "src/gateway/session-row-projection-refresh.ts")
+  : undefined;
+const rowRefreshOwnerSha256 = rowRefreshOwner
+  ? createHash("sha256").update(readFileSync(rowRefreshOwner)).digest("hex")
+  : undefined;
+const clientCount = integer(
+  values.clients ?? (coldRowReads ? "70" : reconnectWaves ? "40" : "50"),
+  "--clients",
+);
 const reconnectCount = values["reconnect-count"]
   ? integer(values["reconnect-count"], "--reconnect-count")
   : Math.min(30, clientCount - 1);
@@ -69,8 +87,19 @@ const waveCount = integer(values.waves, "--waves");
 const measurementStartAt = values["start-at"]
   ? integer(values["start-at"], "--start-at")
   : undefined;
-if (measurementStartAt !== undefined && !reconnectWaves) {
-  throw new Error("--start-at requires --reconnect-waves");
+if (measurementStartAt !== undefined && !reconnectWaves && !coldRowReads) {
+  throw new Error("--start-at requires --reconnect-waves or --cold-row-reads");
+}
+if (
+  coldRowReads &&
+  (reconnectWaves ||
+    values["writer-reads"] ||
+    values["worktree-churn"] ||
+    values["cheap-handlers"] ||
+    values["transcript-reads"] ||
+    values["sqlite-queues"])
+) {
+  throw new Error("--cold-row-reads cannot be combined with another workload mode");
 }
 if (values["reconnect-count"] !== undefined && !reconnectWaves) {
   throw new Error("--reconnect-count requires --reconnect-waves");
@@ -104,6 +133,12 @@ const fixture: unknown = JSON.parse(
 if (!isRecord(fixture) || fixture.format !== "openclaw-team-shape-v1") {
   throw new Error("--state-dir must contain a generated team-shape fixture; never use live state");
 }
+if (
+  coldRowReads &&
+  (fixture.sessionCount !== 5000 || (fixture.retainedRuns !== 0 && fixture.settledRuns !== true))
+) {
+  throw new Error("--cold-row-reads requires 5000 sessions and --settled-runs (or --runs 0)");
+}
 const worktreeProject = Array.isArray(fixture.projectWorktrees)
   ? fixture.projectWorktrees[0]
   : undefined;
@@ -122,15 +157,19 @@ cfg.gateway = { ...cfg.gateway, auth: { mode: "token", token } };
 if (reconnectWaves) {
   cfg.gateway.trustedProxies = ["127.0.0.1", "::1"];
 }
-applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
+if (!coldRowReads) {
+  applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
+}
 cfg.agents.defaults = { ...cfg.agents.defaults, maxConcurrent: runCount, skipBootstrap: true };
 cfg.memory = { ...cfg.memory, search: { enabled: false } };
 cfg.tools = { codeMode: false };
-cfg.plugins = {
-  ...cfg.plugins,
-  enabled: true,
-  entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
-};
+cfg.plugins = coldRowReads
+  ? { enabled: false }
+  : {
+      ...cfg.plugins,
+      enabled: true,
+      entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
+    };
 if (
   values["writer-reads"] ||
   values["cheap-handlers"] ||
@@ -154,18 +193,19 @@ const previewUrl = "https://github.com/openclaw-fixture/restart/issues/1";
 const previewTitle = "Synthetic post-restart issue";
 const catalogId = "synthetic-restart-catalog";
 const pluginDir = path.join(output, catalogId);
-mkdirSync(pluginDir);
-writeFileSync(
-  path.join(pluginDir, "openclaw.plugin.json"),
-  JSON.stringify({
-    id: catalogId,
-    activation: { onStartup: true },
-    configSchema: { type: "object", additionalProperties: false },
-  }),
-);
-writeFileSync(
-  path.join(pluginDir, "index.mjs"),
-  `export default {
+if (!coldRowReads) {
+  mkdirSync(pluginDir);
+  writeFileSync(
+    path.join(pluginDir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: catalogId,
+      activation: { onStartup: true },
+      configSchema: { type: "object", additionalProperties: false },
+    }),
+  );
+  writeFileSync(
+    path.join(pluginDir, "index.mjs"),
+    `export default {
   id: '${catalogId}', register(api) {
     ${
       values["writer-reads"]
@@ -189,19 +229,75 @@ writeFileSync(
     });
   },
 };\n`,
-);
-cfg.plugins.load = { ...cfg.plugins.load, paths: [...(cfg.plugins.load?.paths ?? []), pluginDir] };
-cfg.plugins.entries = { ...cfg.plugins.entries, [catalogId]: { enabled: true } };
+  );
+  cfg.plugins.load = {
+    ...cfg.plugins.load,
+    paths: [...(cfg.plugins.load?.paths ?? []), pluginDir],
+  };
+  cfg.plugins.entries = { ...cfg.plugins.entries, [catalogId]: { enabled: true } };
+}
 const configPath = path.join(output, "openclaw.json");
 writeFileSync(configPath, JSON.stringify(cfg));
 // Private IPC only, no inspector listener or product RPC. Deltas include startup and recovery.
 const preloadPath = path.join(output, "elu-preload.mjs");
 writeFileSync(
   preloadPath,
-  `import { performance, monitorEventLoopDelay } from 'node:perf_hooks';
+  `import { performance, monitorEventLoopDelay, PerformanceObserver, constants } from 'node:perf_hooks';
 import { isMainThread, MessagePort } from 'node:worker_threads';
 if (isMainThread) {
   if (!process.send) throw new Error('Benchmark requires private IPC');
+  ${
+    coldRowReads
+      ? `const { registerHooks, stripTypeScriptTypes } = await import('node:module');
+  const { readFileSync, writeSync } = await import('node:fs');
+  const { createHash } = await import('node:crypto');
+  const rowOwnerPath = ${JSON.stringify(rowRefreshOwner)};
+  const rowOwnerSha256 = ${JSON.stringify(rowRefreshOwnerSha256)};
+  const rowCounts = { active: false, selectPage: 0, taskSamples: 0, taskMaxMs: 0, taskName: null, taskPhase: null };
+  Object.defineProperty(globalThis, Symbol.for('openclaw.bench.cold-row-counts'), { value: rowCounts });
+  let rowOwnerLoaded = false;
+  let rowSelectionHookLoaded = false;
+  let rowTaskHookLoaded = false;
+  const markColdGc = (phase) => {
+    if (${values["trace-gc"]}) writeSync(1, ${JSON.stringify(GATEWAY_GC_TRACE_MARKER)} + JSON.stringify({ phase, pid: process.pid, profilePath: 'cold-rows' }) + '\\n');
+  };
+  if (${values["trace-gc"]}) {
+    if (typeof globalThis.gc !== 'function') throw new Error('Cold-row trace requires --expose-gc');
+    markColdGc('identify-start');
+    globalThis.gc();
+    markColdGc('identify-stop');
+  }
+  registerHooks({ load(url, context, next) {
+    const loaded = next(url, context);
+    if (url.endsWith('/src/gateway/session-row-projection-refresh.ts')) {
+      const source = readFileSync(rowOwnerPath, 'utf8');
+      if (createHash('sha256').update(source).digest('hex') !== rowOwnerSha256) {
+        throw new Error('Row refresh owner changed after measurement preparation');
+      }
+      loaded.source = stripTypeScriptTypes(source);
+      rowOwnerLoaded = true;
+      process.stdout.write('COLD_ROWS_OWNER ' + JSON.stringify({ path: rowOwnerPath, sha256: rowOwnerSha256 }) + '\\n');
+    }
+    if (url.endsWith('/src/gateway/session-utils-list.ts')) {
+      let source = typeof loaded.source === 'string' ? loaded.source : new TextDecoder().decode(loaded.source);
+      const selection = /const selectPage\\s*=\\s*\\(\\)\\s*=>\\s*\\{/;
+      if (!selection.test(source)) throw new Error('Missing selectPage source counter hook');
+      source = source.replace(selection, '$&if (globalThis[Symbol.for("openclaw.bench.cold-row-counts")].active) globalThis[Symbol.for("openclaw.bench.cold-row-counts")].selectPage++;');
+      rowSelectionHookLoaded = true;
+      return { ...loaded, source };
+    }
+    if (url.endsWith('/src/infra/main-thread-stall.ts')) {
+      let source = typeof loaded.source === 'string' ? loaded.source : new TextDecoder().decode(loaded.source);
+      const task = /function runWithMainThreadTask\\s*\\([^)]*\\)\\s*\\{/;
+      if (!task.test(source)) throw new Error('Missing runWithMainThreadTask source hook');
+      source = source.replace(task, '$&const probe = globalThis[Symbol.for("openclaw.bench.cold-row-counts")]; if (probe.active) { const originalRun = run; run = () => { const at = performance.now(); try { return originalRun(); } finally { const ms = performance.now() - at; probe.taskSamples++; if (ms > probe.taskMaxMs) { probe.taskMaxMs = ms; probe.taskName = name.slice(0, 160); probe.taskPhase = phase?.slice(0, 160) ?? null; } } }; }');
+      rowTaskHookLoaded = true;
+      return { ...loaded, source };
+    }
+    return loaded;
+  } });`
+      : ""
+  }
   ${
     values["sqlite-queues"]
       ? `if (process.env.OPENCLAW_BENCH_QUEUE_START_NS) {
@@ -402,6 +498,63 @@ if (isMainThread) {
   let cpu = process.threadCpuUsage();
   const lag = monitorEventLoopDelay({ resolution: 20 });
   lag.enable();
+  ${
+    coldRowReads
+      ? `const coldLag = monitorEventLoopDelay({ resolution: 10 });
+  const coldCollections = [];
+  let coldStartedAt = Infinity;
+  let coldFinishedAt = Infinity;
+  let coldThreadCpu;
+  let coldProcessCpu;
+  const collectColdGc = (entries) => {
+    for (const entry of entries) {
+      if (entry.startTime >= coldStartedAt && entry.startTime < coldFinishedAt) {
+        coldCollections.push({ kind: entry.detail.kind, ms: entry.duration });
+      }
+    }
+  };
+  const coldGcObserver = new PerformanceObserver((list) => collectColdGc(list.getEntries()));
+  coldGcObserver.observe({ entryTypes: ['gc'] });
+  const gcSummary = (kind) => {
+    const pauses = coldCollections.filter((entry) => kind === undefined || entry.kind === kind).map((entry) => entry.ms).sort((a, b) => a - b);
+    const percentile = (fraction) => pauses[Math.max(0, Math.ceil(pauses.length * fraction) - 1)] ?? null;
+    return { samples: pauses.length, totalMs: pauses.reduce((sum, ms) => sum + ms, 0), p95Ms: percentile(0.95), p99Ms: percentile(0.99), maxMs: pauses.at(-1) ?? null };
+  };
+  process.on('message', async (message) => {
+    if (message?.channel === 'cold-rows-ready') {
+      markColdGc('diagnostics-start');
+      coldStartedAt = performance.now();
+      coldThreadCpu = process.threadCpuUsage();
+      coldProcessCpu = process.cpuUsage();
+      rowCounts.active = true;
+      coldLag.enable();
+      process.send?.({ channel: 'cold-rows-ready', pid: process.pid });
+    }
+    if (message?.channel === 'cold-rows-finish') {
+      coldFinishedAt = performance.now();
+      const threadCpu = process.threadCpuUsage(coldThreadCpu);
+      const processCpu = process.cpuUsage(coldProcessCpu);
+      markColdGc('diagnostics-stop');
+      rowCounts.active = false;
+      coldLag.disable();
+      await new Promise(setImmediate);
+      collectColdGc(coldGcObserver.takeRecords());
+      coldGcObserver.disconnect();
+      if (!rowOwnerLoaded || !rowSelectionHookLoaded || !rowTaskHookLoaded || rowCounts.selectPage === 0 || rowCounts.taskSamples === 0) {
+        throw new Error('Cold row measurement did not load the selected owner, selection, and task hooks');
+      }
+      process.send?.({ channel: 'cold-rows-loop', pid: process.pid,
+        samples: coldLag.count, p95Ms: coldLag.percentile(95)/1e6,
+        p99Ms: coldLag.percentile(99)/1e6, maxMs: coldLag.max/1e6,
+        mainThreadCpuMs: (threadCpu.user + threadCpu.system)/1000,
+        processCpuMs: (processCpu.user + processCpu.system)/1000,
+        selectPageCalls: rowCounts.selectPage, rowOwnerSha256,
+        synchronousTasks: { samples: rowCounts.taskSamples, maxMs: rowCounts.taskMaxMs, task: rowCounts.taskName, phase: rowCounts.taskPhase, boundary: 'inclusive synchronous runWithMainThreadTask callbacks; nested scopes may overlap' },
+        gc: { scope: 'main-isolate', all: gcSummary(), minor: gcSummary(constants.NODE_PERFORMANCE_GC_MINOR), major: gcSummary(constants.NODE_PERFORMANCE_GC_MAJOR) } });
+    }
+  });`
+      : ""
+  }
   setInterval(() => {
     const now = performance.now();
     const after = performance.eventLoopUtilization();
@@ -419,7 +572,7 @@ const env = {
   ...createGatewayBenchEnv(path.join(root, "home"), configPath, { startupTrace: false }),
   OPENCLAW_STATE_DIR: root,
   TMPDIR: path.join(root, "tmp"),
-  OPENAI_API_KEY: "synthetic-fixture",
+  ...(!coldRowReads ? { OPENAI_API_KEY: "synthetic-fixture" } : {}),
   OPENCLAW_SKIP_CHANNELS: "1",
   OPENCLAW_PROFILE: `team-shape-${port}`,
   OPENCLAW_SYSTEMD_UNIT: `openclaw-gateway-team-shape-${port}`,
@@ -441,6 +594,7 @@ let restartAt = 0;
 let loadStartedAt = Number.POSITIVE_INFINITY;
 let closing = false;
 const children: ChildProcess[] = [];
+const childLogs = new Map<ChildProcess, ReturnType<typeof createWriteStream>>();
 const expectedExits = new Set<ChildProcess>();
 const listeners = new Set<ChildProcess>();
 const clients = new Set<ReturnType<typeof createGatewayWsClient>>();
@@ -454,6 +608,19 @@ type EluSample = {
 const eluSamples: EluSample[] = [];
 const transcriptSnapshot = Promise.withResolvers<Record<string, number>>();
 const sqliteQueueSnapshot = Promise.withResolvers<Record<string, unknown>>();
+const coldRowsReady = Promise.withResolvers<void>();
+const coldRowsLoop = Promise.withResolvers<{
+  samples: number;
+  p95Ms: number;
+  p99Ms: number;
+  maxMs: number;
+  mainThreadCpuMs: number;
+  processCpuMs: number;
+  selectPageCalls: number;
+  rowOwnerSha256: string;
+  gc: Record<string, unknown>;
+  synchronousTasks: Record<string, unknown>;
+}>();
 let githubFixtureRequests = 0;
 let vapidPublicKey: string | undefined;
 let timeToSteadyMs: number | null = null;
@@ -578,6 +745,7 @@ async function assertPortAvailable(targetPort: number) {
 function launch(name: string) {
   const log = createWriteStream(path.join(output, `${name}.log`));
   const args = buildGatewayBenchChildArgs(values.entry, port, [
+    ...(values["trace-gc"] ? ["--expose-gc", "--trace-gc-nvp"] : []),
     "--import",
     "./scripts/tsx.mjs",
     "--import",
@@ -612,6 +780,7 @@ function launch(name: string) {
   });
   child.stdout?.pipe(log, { end: false });
   child.stderr?.pipe(log, { end: false });
+  childLogs.set(child, log);
   child.once("close", () => log.end());
   let startupOutput = "";
   const observe = (chunk: Buffer) => {
@@ -631,6 +800,39 @@ function launch(name: string) {
     }
   });
   child.on("message", (sample: unknown) => {
+    if (coldRowReads && recovering && isRecord(sample) && sample.pid === child.pid) {
+      if (sample.channel === "cold-rows-ready") {
+        coldRowsReady.resolve();
+        return;
+      }
+      if (
+        sample.channel === "cold-rows-loop" &&
+        typeof sample.samples === "number" &&
+        typeof sample.p95Ms === "number" &&
+        typeof sample.p99Ms === "number" &&
+        typeof sample.maxMs === "number" &&
+        typeof sample.mainThreadCpuMs === "number" &&
+        typeof sample.processCpuMs === "number" &&
+        typeof sample.selectPageCalls === "number" &&
+        typeof sample.rowOwnerSha256 === "string" &&
+        isRecord(sample.gc) &&
+        isRecord(sample.synchronousTasks)
+      ) {
+        coldRowsLoop.resolve({
+          samples: sample.samples,
+          p95Ms: sample.p95Ms,
+          p99Ms: sample.p99Ms,
+          maxMs: sample.maxMs,
+          mainThreadCpuMs: sample.mainThreadCpuMs,
+          processCpuMs: sample.processCpuMs,
+          selectPageCalls: sample.selectPageCalls,
+          rowOwnerSha256: sample.rowOwnerSha256,
+          gc: sample.gc,
+          synchronousTasks: sample.synchronousTasks,
+        });
+        return;
+      }
+    }
     if (
       recovering &&
       isRecord(sample) &&
@@ -947,7 +1149,7 @@ async function connect(index: number, options?: { proxy?: boolean; attempt?: Con
     // Reconnecting cheap handlers start immediately after auth, without warming a profile read.
     if (
       !options?.proxy &&
-      (!recovering || (!values["cheap-handlers"] && !values["transcript-reads"]))
+      (!recovering || (!coldRowReads && !values["cheap-handlers"] && !values["transcript-reads"]))
     ) {
       const self = await rpc(client, "users.self", {});
       if (
@@ -1509,7 +1711,7 @@ for (const [signal, exitCode] of [
 }
 try {
   await assertPortAvailable(port);
-  if (!reconnectWaves) {
+  if (!reconnectWaves && !coldRowReads) {
     await assertPortAvailable(mockPort);
     await new Promise<void>((resolve, reject) => {
       mock.once("error", reject);
@@ -1529,7 +1731,9 @@ try {
       )),
     );
   }
-  if (reconnectWaves) {
+  if (coldRowReads) {
+    await measureColdRowReads(initial, initialClients);
+  } else if (reconnectWaves) {
     await measureReconnectWaves(initialClients);
   } else {
     await measureRestartBurst(initial, initialClients);
@@ -1537,6 +1741,198 @@ try {
 } finally {
   if (!closing) {
     await cleanup();
+  }
+}
+async function measureColdRowReads(
+  initial: ChildProcess,
+  initialClients: Awaited<ReturnType<typeof connect>>[],
+) {
+  const sender = initialClients[0];
+  if (!sender) {
+    throw new Error("No synthetic sender connected");
+  }
+  const sessionKey = "agent:main:team-shape-session-1";
+  for (let index = 0; index < 3; index++) {
+    await rpc(sender, "board.widget.put", {
+      sessionKey,
+      name: `synthetic-cold-row-${index}`,
+      content: { kind: "html", html: `<p>Synthetic cold row ${index}</p>` },
+    });
+  }
+  for (const client of initialClients) {
+    await closeMeasuredClient(client);
+  }
+  expectedExits.add(initial);
+  await stopChild(initial, { teardownGraceMs: 30_000, killGraceMs: 2000 });
+  if (inspectManagedProcessGroup(initial, { errorPolicy: "indeterminate" }) !== "dead") {
+    throw new Error("Initial Gateway process group did not stop before the cold restart");
+  }
+  console.log(`PHASE cold-row-restart-prepared output=${output}`);
+  if (measurementStartAt !== undefined) {
+    const remaining = measurementStartAt - Date.now();
+    if (remaining < 0) {
+      throw new Error("--start-at deadline passed before cold restart preparation finished");
+    }
+    await delay(remaining);
+  }
+  recovering = true;
+  await assertPortAvailable(port);
+  const startedAtEpochMs = Date.now();
+  const restarted = launch("gateway-cold-rows");
+  await ready(restarted);
+  const readyMs = performance.now() - restartAt;
+  loadStartedAt = performance.now();
+  restarted.send({ channel: "cold-rows-ready" });
+  await Promise.race([
+    coldRowsReady.promise,
+    delay(10_000, undefined, { ref: false }).then(() => {
+      throw new Error("Cold row probe did not start");
+    }),
+  ]);
+  const readShapes = [
+    { name: "sessions.list:sidebar", method: "sessions.list", params: shapes[0]!.params },
+    {
+      name: "sessions.list:agent-roster",
+      method: "sessions.list",
+      params: {
+        source: "agent-roster",
+        rowMode: "sidebar",
+        limit: 100,
+        archived: "all",
+        excludeDock: true,
+        includeDerivedTitles: true,
+        includeLastMessage: true,
+      },
+    },
+    { name: "board.get", method: "board.get", params: { sessionKey } },
+  ];
+  const deadline = loadStartedAt + durationMs;
+  console.log(`PHASE cold-row-ready ${readyMs.toFixed(1)}ms`);
+  const observations = await Promise.allSettled(
+    Array.from({ length: clientCount }, async (_, index) => {
+      const client = await connect(index);
+      connectedClients.add(index);
+      for (let wave = 0; performance.now() < deadline; wave++) {
+        await Promise.all(
+          readShapes.map(async ({ name, method, params }) => {
+            const startedMs = performance.now() - restartAt;
+            let error: string | undefined;
+            try {
+              const response = await rpc(client, method, params);
+              if (method === "board.get") {
+                if (
+                  !isRecord(response) ||
+                  !Array.isArray(response.widgets) ||
+                  response.widgets.length !== 3
+                ) {
+                  throw new Error("Board did not return all three seeded widgets");
+                }
+              } else if (
+                !isRecord(response) ||
+                !Array.isArray(response.sessions) ||
+                !response.sessions.some(
+                  (row: unknown) =>
+                    isRecord(row) &&
+                    typeof row.key === "string" &&
+                    row.key.startsWith("agent:main:team-shape-session-"),
+                )
+              ) {
+                throw new Error("Session list did not return the seeded roster");
+              }
+            } catch (cause) {
+              error = String(cause);
+            }
+            timings.push({
+              method: name,
+              client: index,
+              wave,
+              startedMs,
+              elapsedMs: performance.now() - restartAt - startedMs,
+              ...(error ? { error } : {}),
+            });
+          }),
+        );
+        await delay(Math.max(0, Math.min(pollMs, deadline - performance.now())));
+      }
+    }),
+  );
+  assertAlive();
+  restarted.send({ channel: "cold-rows-finish" });
+  const {
+    mainThreadCpuMs,
+    processCpuMs,
+    selectPageCalls,
+    rowOwnerSha256,
+    gc,
+    synchronousTasks,
+    ...loop
+  } = await Promise.race([
+    coldRowsLoop.promise,
+    delay(10_000, undefined, { ref: false }).then(() => {
+      throw new Error("Cold row probe did not finish");
+    }),
+  ]);
+  const errors = observations.flatMap((observation) =>
+    observation.status === "rejected" ? [String(observation.reason)] : [],
+  );
+  const afterReadyDurationMs = performance.now() - loadStartedAt;
+  let promotion: ReturnType<typeof readGatewayGcTrace> | undefined;
+  if (values["trace-gc"]) {
+    await cleanup();
+    await Promise.all([...childLogs.values()].map((log) => streamFinished(log)));
+    promotion = readGatewayGcTrace(
+      path.join(output, "gateway-cold-rows.log"),
+      "cold-rows",
+      "diagnostics",
+    );
+  }
+  const completedReads = timings.filter((row) => !row.error).length;
+  const result = {
+    output,
+    fixture,
+    scenario: "cold-row-reads",
+    clientCount,
+    readyMs,
+    startedAtEpochMs,
+    afterReadyDurationMs,
+    loop,
+    synchronousTasks,
+    mainThreadCpuMs,
+    processCpuMs,
+    selectPageCalls,
+    rowRefreshOwner: { path: rowRefreshOwner, sha256: rowOwnerSha256 },
+    gc,
+    promotion,
+    promotedBytesPerRead:
+      promotion && completedReads ? promotion.promotedBytes / completedReads : null,
+    connectedClients: connectedClients.size,
+    errors,
+    reads: Object.fromEntries(
+      readShapes.map(({ name, params }) => [
+        name,
+        {
+          params,
+          ...summarize(timings.filter((row) => row.method === name)),
+          firstBatch: summarize(timings.filter((row) => row.method === name && row.wave === 0)),
+        },
+      ]),
+    ),
+    timings,
+    eluSamples,
+  };
+  writeFileSync(path.join(output, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
+  console.log(JSON.stringify({ ...result, timings: undefined, eluSamples: undefined }, null, 2));
+  if (
+    errors.length ||
+    connectedClients.size !== clientCount ||
+    loop.samples === 0 ||
+    timings.some((row) => row.error) ||
+    readShapes.some(
+      ({ name }) =>
+        timings.filter((row) => row.method === name && row.wave === 0).length !== clientCount,
+    )
+  ) {
+    throw new Error(`Incomplete cold row measurement; inspect ${output}/result.json`);
   }
 }
 async function measureRestartBurst(

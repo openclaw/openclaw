@@ -343,6 +343,31 @@ Apply the campaign's paired-delta, sample-count, and absolute pause rules.
 
 ## Gateway startup and restart acceptance
 
+`post-restart-burst-measure.ts --cold-row-reads` measures cold session pages after
+a clean restart. Seed two independent, compact team-shaped fixtures sequentially:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts \
+  --state-dir /path/to/new-fixture --sessions 5000 --runs 6000 --settled-runs \
+  --transcript-mib 0 --projects 0 --port 45637
+node --import ./scripts/tsx.mjs scripts/perf/post-restart-burst-measure.ts \
+  --state-dir /path/to/new-fixture --entry src/entry.ts --cold-row-reads \
+  --clients 70 --seconds 300 --port 45637 --start-at <future-epoch-ms>
+```
+
+This mode pairs synthetic devices and seeds three Board widgets before restarting.
+After readiness, every client immediately reads a sidebar page, an agent-roster
+page, and the Board. It verifies populated responses and reports boot-to-ready,
+first-batch and subsequent latency, page-selection count, CPU, GC, and event-loop
+delay with sample counts. No model or external service is called. The fixture
+keeps session metadata and retained runs but omits transcript bulk and projects.
+Use `--row-refresh-owner /path/to/session-row-projection-refresh.ts` to compare
+an alternate owner in the same source installation; the report verifies its hash.
+Run concurrent pairs under one quiet lock and the production guard, with separate
+fixtures and ports, then swap interleaved CPU placements. Start deadlines must
+allow both preparation phases to finish. Apply the campaign's sample-count and
+paired-delta rules; the 70 first-read samples alone cannot qualify p95 or p99.
+
 Use `scripts/bench-gateway-startup.ts` and `scripts/bench-gateway-restart.ts`
 against an exact-head build and isolated synthetic state. Record the Node version,
 source SHA, workload case, host load, and build command. The `default` case is the
