@@ -106,6 +106,8 @@ it.each(["runtime", "doctor"] as const)(
           "device_auth_tokens",
           "gateway_origin_device_tokens",
           "exec_approvals_config",
+          "local_workspace_projections",
+          "local_workspace_manifest_nodes",
           "sqlite_stat1",
           "sqlite_stat4",
         ],
@@ -162,7 +164,7 @@ it.each(["runtime", "doctor"] as const)(
         heartbeatAt: 200,
         payloadJson: "{}",
       });
-      const ledger = createSqliteAcpEventLedger({ ...options, now: () => 200 });
+      const ledger = createSqliteAcpEventLedger(options);
       await ledger.recordUpdate({
         ...session,
         update: {

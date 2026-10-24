@@ -93,6 +93,8 @@ export const healthHandlers: GatewayRequestHandlers = {
         true,
         {
           ...cachedState,
+          // Readiness follows live admission, never the health snapshot's refresh cadence.
+          coreReady: context.getReadiness?.().coreReady,
           modelRuntime: getPreparedModelRuntimeStartupStatus(),
           ...(eventLoop ? { eventLoop } : {}),
           ...(contextEngines ? { contextEngines } : {}),
@@ -119,6 +121,7 @@ export const healthHandlers: GatewayRequestHandlers = {
         true,
         {
           ...snap,
+          coreReady: context.getReadiness?.().coreReady,
           modelRuntime: getPreparedModelRuntimeStartupStatus(),
           childRuntime: readChildRuntimeViability(),
         },

@@ -57,6 +57,7 @@ describe("configureProgramHelp", () => {
       },
     });
     program.command("models").description("models");
+    program.command("claws").description("claws");
     program.command("status").description("status");
     const plugins = program.command("plugins").description("Manage plugins");
     plugins
@@ -82,12 +83,14 @@ describe("configureProgramHelp", () => {
     expect(rootHelp.error.code).toBe("commander.helpDisplayed");
     expect(rootHelp.stdout).toContain("Hint: commands suffixed with * have subcommands");
     expect(rootHelp.stdout).toContain("models *");
+    expect(rootHelp.stdout).toContain("claws *");
     expect(rootHelp.stdout).toContain("status");
     expect(rootHelp.stdout).not.toContain("status *");
     expect(rootHelp.stdout).toContain("BANNER-LINE");
     expect(rootHelp.stdout).toContain("Examples:");
     expect(rootHelp.stdout).toContain("openclaw setup --baseline");
     expect(rootHelp.stdout).toContain("https://docs.openclaw.ai/cli");
+    expect(rootHelp.stdout).toContain("Support: https://community.openclaw.ai/");
     expect(shortHelp.stdout).toBe(rootHelp.stdout);
     expect(groupHelp.stdout).toContain("Usage: openclaw plugins [options] [command]");
     expect(subcommandHelp.stdout).toContain("Usage: openclaw plugins list [options]");

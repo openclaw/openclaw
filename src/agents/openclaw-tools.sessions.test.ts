@@ -4,7 +4,7 @@ import "./test-helpers/fast-openclaw-tools-sessions.js";
 import path from "node:path";
 import type { Static } from "typebox";
 import { Value } from "typebox/value";
-import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { AgentParamsSchema } from "../../packages/gateway-protocol/src/schema/agent.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { configureExecutionDecisionWorkSink } from "../audit/execution-decision-work.js";
@@ -37,15 +37,16 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-import * as controllerSteer from "../sessions/session-controller.steer.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
 import { resetAdjustedParamsByToolCallIdForTests } from "./agent-tools.before-tool-call.state.js";
 import { testing as embeddedRunsTesting } from "./embedded-agent-runner/runs.test-support.js";
 import { registerSessionsSendParticipantTests } from "./openclaw-tools.sessions-participants.test-support.js";
 import { registerSessionsSendResumeTests } from "./openclaw-tools.sessions-resume.test-support.js";
+import { registerSessionsSendRejectedSteeringTests } from "./openclaw-tools.sessions-steering.rejection.cases.js";
 import {
   activeRun,
+  registerSessionsSendActiveSteeringTests,
   createSessionsSendTestCaller,
 } from "./openclaw-tools.sessions-steering.test-support.js";
 import {
@@ -54,17 +55,16 @@ import {
   registerSessionsSendTimeoutTests,
 } from "./openclaw-tools.sessions-timeout.test-support.js";
 import {
-  createSessionsSendGatewayScope,
   getSessionTool,
-  installMessagingTestRegistry,
+  createSessionsSendGatewayScope,
   mockAcceptedChildFollowup,
+  installMessagingTestRegistry,
   TEST_CONFIG,
   type GatewayCall,
 } from "./openclaw-tools.sessions.test-support.js";
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
 import { compactToolOutputHint, toolSchemaDeclaration } from "./tool-schema-hints.js";
 import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
-import * as sessionsSendFollowup from "./tools/sessions-send-followup-custody.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
 const { callGatewayMock } = await import("./openclaw-tools.sessions.mocks.test-support.js");
@@ -72,7 +72,6 @@ const { callGatewayMock } = await import("./openclaw-tools.sessions.mocks.test-s
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-scoped-session-send-");
 const continuations = observeSessionSendContinuations();
 const mainKey = "agent:main:main";
-const portalKey = "agent:re-portal:main";
 
 async function seedSession(
   sessionKey: string,
@@ -202,7 +201,7 @@ describe("sessions tools", () => {
     expect(peekSystemEventEntries(targetKey)).toEqual([]);
   });
 
-  it("sessions_send steer refuses idle work and followup bypasses an active steering route", async () => {
+  it("sessions_send steer refuses idle work and followup starts a separate turn", async () => {
     const targetKey = "agent:main:cron:followup:run:active";
     await seedSession(targetKey, "active-target");
     mockGatewayResponses({
@@ -220,17 +219,31 @@ describe("sessions tools", () => {
       error: expect.stringContaining("no active run"),
     });
     expect(gatewayCalls("agent")).toHaveLength(0);
+    const defaultIdle = await tool.execute("idle-default", {
+      sessionKey: targetKey,
+      message: "Start synthetic idle work",
+      timeoutSeconds: 0,
+    });
+    expect(defaultIdle.details).toMatchObject({ status: "accepted", targetDisposition: "queued" });
+    await continuations.settle();
+    expect(gatewayCalls("agent")).toHaveLength(1);
+    callGatewayMock.mockClear();
     const queueMessage = await activeRun(targetKey, {
       config: TEST_CONFIG,
+      requesterSessionKey: "agent:main:main",
       sessionId: "active-target",
       sourceReplyDeliveryMode: "automatic",
     });
-    const followup = await tool.execute("followup", {
-      sessionKey: targetKey,
-      message: "Do this next",
-      mode: "followup",
-      timeoutSeconds: 0,
-    });
+    const followup = await withGatewayToolCallerIdentity(
+      createSessionsSendTestCaller("agent:main:main"),
+      () =>
+        tool.execute("followup", {
+          sessionKey: targetKey,
+          message: "Do this next",
+          mode: "followup",
+          timeoutSeconds: 0,
+        }),
+    );
     expect(followup.details).toMatchObject({ status: "accepted", targetDisposition: "queued" });
     expect(queueMessage).not.toHaveBeenCalled();
     expect(gatewayCalls("agent")).toHaveLength(1);
@@ -611,194 +624,27 @@ describe("sessions tools", () => {
     settleContinuations: () => continuations.settle(),
   });
 
-  it.each([
-    {
-      name: "runtime rejection",
-      key: "agent:leasing-ops:cron:monthly-utility:run:run-fast",
-      rejects: true,
-      reason: "runtime_rejected",
-    },
-    {
-      name: "delivery mode mismatch",
-      key: "agent:leasing-ops:cron:monthly-utility:run:run-fast",
-      deliveryMode: "automatic" as const,
-      reason: "source_reply_delivery_mode_mismatch",
-    },
-    {
-      name: "non-Cron run-looking key",
-      key: "agent:leasing-ops:slack:channel:c-room:run:run-fast",
-      streaming: false,
-      reason: "injection_unavailable",
-    },
-  ])(
-    "rejects $name without durable-session fallback",
-    async ({ key, rejects, deliveryMode, streaming, reason }) => {
-      await seedSession(portalKey);
-      const caller = createSessionsSendTestCaller(portalKey);
-      const config = cloneTestConfig();
-      const queueMessage = await activeSession(key, {
-        config,
-        rejects,
-        streaming,
-        sourceReplyDeliveryMode: deliveryMode,
-      });
-      mockGatewayResponses({
-        agent: { runId: "fallback-run", status: "accepted", acceptedAt: 2000 },
-      });
-      const result = await withGatewayToolCallerIdentity(caller, () =>
-        sessionSender(portalKey, "telegram", config).execute("active-send", {
-          sessionKey: key,
-          message: "[TASK-COMPLETE] occupancy ready",
-          timeoutSeconds: 0,
-        }),
-      );
-      expect(result.details).toMatchObject({
-        status: "error",
-        sessionKey: key,
-        error: expect.stringContaining(`queue_message_failed reason=${reason}`),
-      });
-      expect(gatewayCalls("agent")).toHaveLength(0);
-      if (rejects) {
-        expect(result.details).toHaveProperty(
-          "error",
-          expect.stringContaining("caller-active-session"),
-        );
-        expect(result.details).toHaveProperty(
-          "error",
-          expect.not.stringContaining("fallback_failed"),
-        );
-        const queuedText = queueMessage.mock.calls[0]?.[0];
-        expect(queuedText).toContain("[Inter-session message]");
-        expect(queuedText).toContain("[TASK-COMPLETE] occupancy ready");
-        expect(queueMessage).toHaveBeenCalledWith(queuedText, {
-          abortSignal: expect.any(AbortSignal),
-          toolAuthorityFingerprint: expect.any(String),
-          steeringMode: "all",
-          debounceMs: 0,
-          deliveryTimeoutMs: 30_000,
-          waitForTranscriptCommit: true,
-          sourceReplyDeliveryMode: "message_tool_only",
-          onQueueAccepted: expect.any(Function),
-          userTurnTranscriptRecorder: expect.any(Object),
-        });
-      } else {
-        expect(queueMessage).not.toHaveBeenCalled();
-      }
-    },
-  );
-
-  it.each([
-    { name: "steers a child after durable admission", steered: true },
-    {
-      name: "starts the same child during compaction",
-      rejection: "injection_unavailable" as const,
-    },
-  ])("sessions_send $name", async (testCase) => {
-    const { steered, rejection } = testCase;
-    const requesterKey = mainKey;
-    const targetKey = "agent:main:subagent:steering-child";
-    const sessionId = "own-child-active-session";
-    const queueMessage = await activeSession(
-      targetKey,
-      { config: TEST_CONFIG, sessionId, requesterSessionKey: requesterKey },
-      { spawnedBy: requesterKey, spawnDepth: 1 },
-    );
-    const queue = vi.spyOn(controllerSteer, "steerSessionControllerOperation");
-    const prepare = vi.spyOn(sessionsSendFollowup, "prepareSessionsSendFollowup");
-    try {
-      if (rejection) {
-        queue.mockResolvedValueOnce({ status: "rejected", reason: rejection });
-      }
-      mockAcceptedChildFollowup();
-      const caller = createSessionsSendTestCaller(requesterKey);
-      const result = await withPluginRuntimeGatewayRequestScope(
-        createSessionsSendGatewayScope(),
-        () =>
-          withGatewayToolCallerIdentity(caller, () =>
-            sessionSender(requesterKey).execute("child-send", {
-              sessionKey: targetKey,
-              message: "deps are ready",
-              timeoutSeconds: 0,
-            }),
-          ),
-      );
-      expect(result.details).toMatchObject({
-        status: "accepted",
-        sessionKey: targetKey,
-        targetDisposition: steered ? "steered" : "queued",
-        delivery: { status: steered ? "skipped" : "pending" },
-      });
-      expect(queue).toHaveBeenCalledOnce();
-      expect(queue).toHaveBeenCalledWith({
-        operation: expect.objectContaining({ sessionId }),
-        text: expect.stringContaining("deps are ready"),
-        abortOnUnconfirmedTranscript: false,
-        options: {
-          assertCurrent: expect.any(Function),
-          steeringMode: "all",
-          debounceMs: 0,
-          deliveryTimeoutMs: undefined,
-          waitForTranscriptCommit: true,
-          requesterToolAuthority: { requesterOrigin: caller.requesterOrigin, config: TEST_CONFIG },
-          onQueueAccepted: expect.any(Function),
-          userTurnTranscriptRecorder: expect.any(Object),
-        },
-      });
-      if (steered) {
-        expect(queueMessage).toHaveBeenCalledOnce();
-      }
-      const agentCalls = gatewayCalls("agent");
-      expect(agentCalls).toHaveLength(steered ? 0 : 1);
-      expect(prepare).toHaveBeenCalledTimes(steered ? 0 : 1);
-      if (agentCalls.length) {
-        expect(agentCalls[0]?.params).toMatchObject({ sessionKey: targetKey });
-        if (rejection) {
-          expect(queue.mock.invocationCallOrder[0]).toBeLessThan(
-            prepare.mock.invocationCallOrder[0]!,
-          );
-        }
-        expect(prepare.mock.invocationCallOrder[0]).toBeLessThan(
-          callGatewayMock.mock.invocationCallOrder[
-            callGatewayMock.mock.calls.findIndex(([request]) => request.method === "agent")
-          ]!,
-        );
-      }
-    } finally {
-      await continuations.settle();
-      queue.mockRestore();
-      prepare.mockRestore();
-    }
+  registerSessionsSendActiveSteeringTests({
+    mockAcceptedChildFollowup,
+    runChildFollowup: (run) =>
+      withPluginRuntimeGatewayRequestScope(createSessionsSendGatewayScope(), run),
+    getSessionTool,
+    seedSession,
+    callGatewayMock,
+    mockGatewayResponses,
+    settleContinuations: () => continuations.settle(),
+    cloneTestConfig,
+    createSessionsSendTool: (options) =>
+      createSessionsSendTool({ ...options, callGateway: callGatewayMock }),
   });
 
-  it("sessions_send keeps ordinary active session targets on the gateway agent path", async () => {
-    const ordinaryActiveKey = mainKey;
-    await seedSession(portalKey);
-    const queueMessage = await activeSession(ordinaryActiveKey, {
-      config: TEST_CONFIG,
-      sessionId: "ordinary-active-session",
-      sourceReplyDeliveryMode: "automatic",
-    });
-    mockGatewayResponses({
-      agent: { runId: "ordinary-agent-run", status: "accepted", acceptedAt: 2000 },
-    });
-
-    const tool = sessionSender(portalKey, "telegram", cloneTestConfig());
-
-    const result = await tool.execute("call-ordinary-active", {
-      sessionKey: ordinaryActiveKey,
-      message: "ordinary active target should stay gateway routed",
-      timeoutSeconds: 0,
-    });
-
-    expect(result.details).toMatchObject({
-      status: "accepted",
-      runId: "ordinary-agent-run",
-      sessionKey: ordinaryActiveKey,
-    });
-    expect(queueMessage).not.toHaveBeenCalled();
-    const agentCalls = gatewayCalls("agent");
-    expect(agentCalls).toHaveLength(1);
-    expect(agentParams(agentCalls[0] ?? {}).sessionKey).toBe(ordinaryActiveKey);
+  registerSessionsSendRejectedSteeringTests({
+    getSessionTool,
+    cloneTestConfig,
+    seedSession,
+    callGatewayMock,
+    mockGatewayResponses,
+    settleContinuations: () => continuations.settle(),
   });
 
   it("sessions_send falls back from stranded cron run key to durable cron parent", async () => {

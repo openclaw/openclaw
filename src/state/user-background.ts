@@ -29,22 +29,17 @@ async function readBackground<Command extends UserBackgroundReadCommand>(
   command: Command,
   options: UserBackgroundOptions,
 ) {
-  for (;;) {
-    options.signal?.throwIfAborted();
-    options.assertCurrent?.();
-    const isCurrent = await captureUserPreferenceRead(context.admission);
-    const reply = await executeExistingOpenClawStateRead(
-      { path: context.admission.databasePath, env: context.environment },
-      command,
-      { context, current: true, signal: options.signal },
-    );
-    options.signal?.throwIfAborted();
-    options.assertCurrent?.();
-    // An upload/removal or profile merge cannot publish stale bytes after its commit.
-    if (isCurrent()) {
-      return { reply, isCurrent };
-    }
-  }
+  options.signal?.throwIfAborted();
+  options.assertCurrent?.();
+  const isCurrent = await captureUserPreferenceRead(context.admission);
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    command,
+    { context, current: true, signal: options.signal },
+  );
+  options.signal?.throwIfAborted();
+  options.assertCurrent?.();
+  return { reply, isCurrent };
 }
 
 export async function getUserBackground(
@@ -101,7 +96,7 @@ async function mutateBackground(
   if (!reply) {
     return { status: "no_durable_identity" };
   }
-  if (reply.result.status !== "ok" || !reply.profileId) {
+  if (reply.result.status !== "ok") {
     return reply.result;
   }
   const image =

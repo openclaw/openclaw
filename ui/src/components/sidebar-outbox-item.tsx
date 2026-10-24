@@ -3,11 +3,12 @@ import type { ApplicationContext } from "../app/context.ts";
 import { registerSidebarAttentionEnglish } from "../i18n/locales/en-sidebar-attention.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
 import { clampText } from "../lib/format.ts";
-import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
+import { handleNavigationClick } from "../lib/navigation-click.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
-import { projectAgents, projectSessions } from "../lib/reactive/domain-capabilities.ts";
+import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { findUiSessionRow, sessionNavigationTarget } from "../lib/sessions/route-navigation.ts";
 import type { SidebarInboxEntry } from "./sidebar-attention-entries.ts";
 import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
@@ -30,7 +31,7 @@ export function renderSidebarOutboxItem(
   const recoveryScope = context.gateway.snapshot.client?.recoveryScope;
   const gateway = projectGateway(context.gateway);
   const agents = projectAgents(context.agents);
-  const sessions = projectSessions(context.sessions);
+  const sessions = projectOwner(context.sessions, () => undefined);
   const view = createMemo(() => {
     gateway.revision();
     agents.revision();
@@ -116,31 +117,29 @@ export function renderSidebarOutboxItem(
             href={view().target.href}
             aria-label={t("attention.outbox.review")}
             data-issue-row-focus
-            onClick={(event) => {
-              if (!shouldHandleNavigationClick(event)) {
-                return;
-              }
-              event.preventDefault();
-              // A retained DOM handler cannot navigate a retired Gateway or delivery row.
-              if (
-                context.gateway.connectionRevision !== connectionRevision ||
-                context.gateway.snapshot.client?.recoveryScope !== recoveryScope ||
-                !context.sidebarAttention.entries.some(
-                  (current) =>
-                    current.type === "outbox" &&
-                    current.id === initialEntry.id &&
-                    current.sessionKey === initialEntry.sessionKey &&
-                    current.agentId === initialEntry.agentId,
-                )
-              ) {
-                return;
-              }
-              const intent = view();
-              params.onNavigate("chat", intent.target.options);
-              if (intent.entry.dismissal) {
-                context.sidebarAttention.dismiss(intent.entry.dismissal);
-              }
-            }}
+            onClick={(event) =>
+              handleNavigationClick(event, () => {
+                // A retained DOM handler cannot navigate a retired Gateway or delivery row.
+                if (
+                  context.gateway.connectionRevision !== connectionRevision ||
+                  context.gateway.snapshot.client?.recoveryScope !== recoveryScope ||
+                  !context.sidebarAttention.entries.some(
+                    (current) =>
+                      current.type === "outbox" &&
+                      current.id === initialEntry.id &&
+                      current.sessionKey === initialEntry.sessionKey &&
+                      current.agentId === initialEntry.agentId,
+                  )
+                ) {
+                  return;
+                }
+                const intent = view();
+                params.onNavigate("chat", intent.target.options);
+                if (intent.entry.dismissal) {
+                  context.sidebarAttention.dismiss(intent.entry.dismissal);
+                }
+              })
+            }
           >
             {t("attention.outbox.reviewShort")}
           </a>

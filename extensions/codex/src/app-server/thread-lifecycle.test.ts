@@ -2,7 +2,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   GPT5_BEHAVIOR_CONTRACT as CODEX_GPT5_BEHAVIOR_CONTRACT,
   type ModelCompatConfig,
@@ -54,6 +57,7 @@ import {
   createLifecycleRequest,
   createThreadRequestAppServerOptions as createAppServerOptions,
   createThreadRequestAttemptParams as createAttemptParams,
+  DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
   startOrResumeThreadWithEmptySkillCatalog as startOrResumeThreadImpl,
   writeNativeCatalogFixture,
 } from "./thread-lifecycle.test-fixtures.js";
@@ -129,10 +133,6 @@ it("uses direct OpenClaw functions and hosted web search for subscription sharin
   expect(restricted.config?.["features.apps"]).toBe(false);
   expect(restricted.config?.["orchestrator.mcp.enabled"]).toBe(false);
 });
-
-type CodexThreadLifecycleTimingLogger = NonNullable<
-  NonNullable<Parameters<typeof startOrResumeThreadImpl>[0]["timing"]>["log"]
->;
 
 describe("Codex context window config", () => {
   it("forwards only a prepared cap on thread start and resume (#124702)", async () => {
@@ -518,25 +518,6 @@ function sourceThread(params: {
   };
 }
 
-function createTimingLogger(traceEnabled: boolean): CodexThreadLifecycleTimingLogger {
-  return {
-    isEnabled: vi.fn((level: "trace") => level === "trace" && traceEnabled),
-    trace: vi.fn(),
-    warn: vi.fn(),
-  };
-}
-
-function expectSingleLogMessage(
-  log: CodexThreadLifecycleTimingLogger,
-  level: "trace" | "warn",
-): string {
-  const mock = log[level] as ReturnType<typeof vi.fn>;
-  expect(mock).toHaveBeenCalledTimes(1);
-  const message = mock.mock.calls[0]?.[0];
-  expect(typeof message).toBe("string");
-  return message as string;
-}
-
 describe("Codex app-server native code mode config", () => {
   it("never advertises unavailable delegation or session tools", () => {
     const restrictedParams = [
@@ -784,17 +765,9 @@ describe("Codex app-server native code mode config", () => {
         },
       );
       expect(request.config).toEqual({
+        ...DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
         project_doc_max_bytes: lightweight ? 0 : 131_072,
         ...(lightweight ? { "features.hooks": true } : { "features.multi_agent": false }),
-        "features.code_mode": true,
-        "features.code_mode_only": false,
-        "features.goals": false,
-        "tools.update_plan.enabled": false,
-        "features.shell_tool": true,
-        "features.apply_patch_streaming_events": true,
-        suppress_unstable_features_warning: true,
-        "features.standalone_web_search": false,
-        web_search: "cached",
       });
     },
   );
@@ -952,18 +925,7 @@ describe("Codex app-server turn params", () => {
         model: "gpt-5.4-codex",
         approvalPolicy: "on-request",
         approvalsReviewer: "guardian_subagent",
-        config: {
-          project_doc_max_bytes: 131_072,
-          "features.code_mode": true,
-          "features.code_mode_only": false,
-          "features.goals": false,
-          "tools.update_plan.enabled": false,
-          "features.shell_tool": true,
-          "features.apply_patch_streaming_events": true,
-          suppress_unstable_features_warning: true,
-          "features.standalone_web_search": false,
-          web_search: "cached",
-        },
+        config: DEFAULT_CODEX_RUNTIME_THREAD_CONFIG,
         sandbox: "danger-full-access",
         serviceTier: "flex",
         personality: "none",
@@ -1904,6 +1866,8 @@ describe("Codex app-server supervised branch lifecycle", () => {
         | undefined;
       expect(threadRequest?.config).toMatchObject({
         project_doc_max_bytes: 0,
+        "features.tool_suggest": false,
+        "features.recommended_plugins": false,
         mcp_servers: {
           inherited: { enabled: false },
           "request-only": { command: "request-mcp", enabled: false },
@@ -2691,6 +2655,11 @@ describe("Codex app-server supervised branch lifecycle", () => {
   );
 
   it("does not clean the committed canonical thread when post-commit diagnostics fail", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(0);
+    vi.spyOn(embeddedAgentLog, "isEnabled").mockReturnValue(true);
+    vi.spyOn(embeddedAgentLog, "trace").mockImplementation(() => {
+      throw new Error("timing log failed");
+    });
     const attempt = createThreadLifecycleParams();
     const identity = await seedPendingSupervisionBinding(attempt);
     const request = createSupervisedCommitRequest();
@@ -2701,17 +2670,6 @@ describe("Codex app-server supervised branch lifecycle", () => {
         client: { request } as never,
         abandonClient,
         ...lifecycleOptions(attempt),
-        timing: {
-          enabled: true,
-          now: () => 0,
-          log: {
-            isEnabled: () => true,
-            trace: () => {
-              throw new Error("timing log failed");
-            },
-            warn: vi.fn(),
-          },
-        },
       }),
     ).rejects.toThrow("timing log failed");
     expect(
@@ -2864,7 +2822,10 @@ describe("Codex app-server thread lifecycle timing", () => {
 
   it("warns about a slow thread start without trace logging", async () => {
     let nowMs = 0;
-    const log = createTimingLogger(false);
+    vi.spyOn(Date, "now").mockImplementation(() => nowMs);
+    vi.spyOn(embeddedAgentLog, "isEnabled").mockReturnValue(false);
+    const warn = vi.spyOn(embeddedAgentLog, "warn").mockImplementation(() => {});
+    const trace = vi.spyOn(embeddedAgentLog, "trace").mockImplementation(() => {});
     const respond = createLifecycleRequest(async (method: string) => {
       if (method === "thread/start") {
         nowMs += 10_000;
@@ -2875,14 +2836,11 @@ describe("Codex app-server thread lifecycle timing", () => {
     await startOrResumeThread({
       client: { request: respond } as never,
       ...lifecycleOptions(createThreadLifecycleParams()),
-      timing: {
-        enabled: false,
-        now: () => nowMs,
-        log,
-      },
     });
-    const message = expectSingleLogMessage(log, "warn");
-    expect(log.trace).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(1);
+    const message = warn.mock.calls[0]?.[0];
+    expect(typeof message).toBe("string");
+    expect(trace).not.toHaveBeenCalled();
     expect(message).toContain("action=started");
     expect(message).toContain("thread-start-request:10000ms@10000ms");
   });

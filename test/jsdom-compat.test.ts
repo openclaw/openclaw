@@ -51,12 +51,7 @@ describe("jsdom native API boundary", () => {
           }
         `,
         path.join(
-          path.dirname(
-            process
-              .getBuiltinModule("module")
-              .createRequire(path.resolve("ui/package.json"))
-              .resolve("vitest/package.json"),
-          ),
+          path.dirname(require.resolve("vitest/package.json", { paths: [path.resolve("ui")] })),
           "dist/workers/forks.js",
         ),
       ],
@@ -110,9 +105,7 @@ describe("jsdom native API boundary", () => {
   });
 
   it("preserves Blob and multipart file bytes, names, and types in Request", async () => {
-    const file = new File(["exact file bytes"], "report.bin", {
-      type: "application/octet-stream",
-    });
+    const file = new File(["exact file bytes"], "report.bin", { type: "application/octet-stream" });
     const request = new Request("https://example.test/", { method: "POST", body: file });
     expect(await request.text()).toBe("exact file bytes");
     const form = new FormData();
@@ -140,9 +133,7 @@ describe("jsdom native API boundary", () => {
       reader.addEventListener(
         "error",
         () => reject(reader.error ?? new Error("FileReader failed")),
-        {
-          once: true,
-        },
+        { once: true },
       );
     });
     reader.readAsDataURL(new File(["reader bytes"], "reader.txt", { type: "text/plain" }));

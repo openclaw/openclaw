@@ -89,26 +89,20 @@ describe("ClawHub Claw trust", () => {
   });
 
   it.each([
-    ["different digest", { artifactSha256: "b".repeat(64) }],
-    ["missing artifact kind", { artifactKind: null }],
-    ["different artifact kind", { artifactKind: "legacy-zip" }],
-    ["missing digest", { artifactSha256: null }],
-    ["missing npm integrity", { npmIntegrity: null }],
-    ["different npm integrity", { npmIntegrity: "sha512-other" }],
-  ] as const)("refuses %s in a Claw security report", async (_name, releaseOverrides) => {
-    const result = await check(securityResponse("claw", false, "benign", {}, releaseOverrides));
-
+    ["different digest", "claw", { artifactSha256: "b".repeat(64) }, {}],
+    ["missing artifact kind", "claw", { artifactKind: null }, {}],
+    ["different artifact kind", "claw", { artifactKind: "legacy-zip" }, {}],
+    ["missing digest", "claw", { artifactSha256: null }, {}],
+    ["missing npm integrity", "claw", { npmIntegrity: null }, {}],
+    ["different npm integrity", "claw", { npmIntegrity: "sha512-other" }, {}],
+    ["different package family", "code-plugin", {}, {}],
+    ["missing selected artifact", "claw", {}, { expectedClawArtifact: undefined }],
+  ] as const)("refuses %s", async (_label, family, releaseOverrides, options) => {
+    const result = await check(
+      securityResponse(family, false, "benign", {}, releaseOverrides),
+      options,
+    );
     expect(result).toMatchObject({ ok: false, code: "clawhub_security_unavailable" });
-  });
-
-  it.each([
-    ["different package family", "code-plugin", {}],
-    ["missing selected artifact", "claw", { expectedClawArtifact: undefined }],
-  ] as const)("refuses %s", async (_label, family, options) => {
-    await expect(check(securityResponse(family), options)).resolves.toMatchObject({
-      ok: false,
-      code: "clawhub_security_unavailable",
-    });
   });
 
   it("passes the exact warning to an install consent callback before download", async () => {

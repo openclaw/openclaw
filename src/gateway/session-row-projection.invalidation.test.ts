@@ -67,6 +67,41 @@ import { listProjectedSessions } from "./session-utils-list.js";
 
 afterEach(() => vi.restoreAllMocks());
 
+it("indexes and filters the causal creator without publishing its isolation actor", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const cfg = { agents: { entries: { main: {} } } };
+    setRuntimeConfigSnapshot(cfg);
+    const causal = ensureProfileForEmail("causal@example.test");
+    const legacy = ensureProfileForEmail("isolation@example.test");
+    const key = "agent:main:dashboard:creator-projection";
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: key },
+      {
+        sessionId: "creator-projection",
+        updatedAt: 1,
+        createdVia: "spawn",
+        createdActor: {
+          type: "human",
+          source: "profile",
+          id: legacy.id,
+          delegatedBy: { type: "human", source: "profile", id: causal.id },
+        },
+      },
+    );
+    using _ = holdForeground();
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
+    const result = await listProjectedSessions({ projection, opts: { creatorId: causal.id } });
+    expect(result.sessions).toHaveLength(1);
+    expect(result.sessions[0]?.createdActor?.id).toBe(causal.id);
+    expect(result.sessions[0]?.owner?.actor.id).toBe(causal.id);
+    expect(JSON.stringify(result.sessions[0])).not.toContain(legacy.id);
+    expect(projection.listCreatedActors().map((actor) => actor.id)).toContain(causal.id);
+    expect(projection.listCreatedActors().map((actor) => actor.id)).not.toContain(legacy.id);
+    const other = await listProjectedSessions({ projection, opts: { creatorId: legacy.id } });
+    expect(other.sessions).toHaveLength(0);
+  });
+});
+
 it("reuses resident rows across plugin reloads while adopting changed model normalization", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const baseConfig: OpenClawConfig = {
@@ -267,10 +302,12 @@ it("reuses descendants after parent progress while keeping inherited models curr
             undefined,
             context.resolveGatewayContext,
           ),
-        ).snapshot({
-          agentId: "main",
-          key,
-        }).row!;
+        )
+          .getPresentation()
+          .snapshot({
+            agentId: "main",
+            key,
+          }).row!;
       const siblingSnapshot = snapshot(siblingKey);
       const parentSnapshot = snapshot(parentKey);
       const siblingBytes = JSON.stringify(siblingSnapshot);
@@ -528,6 +565,10 @@ it("reuses row identities across lists until their entry, profile, or config cha
       expect(unassigned.owners).toEqual([]);
       expect(unassigned.sessions[0]?.owner).toBeUndefined();
       expect(unassigned.sessions[0]?.participants?.[0]?.label).toBe("Renamed agent");
+      expect((await list()).sessions[0]?.owner).toBeUndefined();
+      Object.assign(cfg.agents.entries, { missing: { identity: { name: "New agent" } } });
+      sessionChanges.emit({ all: true, scope: "config" });
+      expect((await list()).sessions[0]?.owner?.actor.label).toBe("New agent");
       assignSessionOwner(scope, {
         owner: { type: "agent", id: "main" },
         assignedBy: { type: "system", id: "test" },

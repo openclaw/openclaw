@@ -12,7 +12,7 @@ import * as aggregation from "../infra/session-cost-usage-aggregation.js";
 import * as cacheRuntime from "../infra/session-cost-usage-cache-runtime.js";
 import { sessionCostUsageNotifications } from "../infra/session-cost-usage-events.js";
 import { closeAgentWorkAdmissions } from "../sessions/session-controller.lifecycle.js";
-import { sessionChanges } from "../sessions/session-row-changes.js";
+import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SessionCostUsagePublication } from "../shared/usage-types.js";
 import {
@@ -48,12 +48,7 @@ function appendUsage(
   const usage =
     tokens === undefined
       ? undefined
-      : {
-          input: tokens,
-          output: 0,
-          totalTokens: tokens,
-          cost: { total: tokens / 100 },
-        };
+      : { input: tokens, output: 0, totalTokens: tokens, cost: { total: tokens / 100 } };
   return persistSessionTranscriptTurn(target, {
     config,
     messages: [
@@ -117,6 +112,7 @@ it("keeps usage backfill and all-agent totals available while another agent's de
   signal,
 }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const wait = <T>(work: PromiseLike<T>) => withinTest(work, signal);
     const config = { agents: { entries: { main: {}, retiring: {} } } };
     setRuntimeConfigSnapshot(config);
     for (const [agentId, tokens] of [
@@ -147,7 +143,7 @@ it("keeps usage backfill and all-agent totals available while another agent's de
       endMs: timestamp + 2,
     });
     const readSettled = Promise.allSettled([reading]);
-    await withinTest(capturedRoster.promise, signal);
+    await wait(capturedRoster.promise);
     vi.useFakeTimers();
     const queued = new AsyncWorkScope();
     queued.run(() =>
@@ -191,17 +187,13 @@ it("keeps usage backfill and all-agent totals available while another agent's de
       releaseRoster.resolve();
       expect.soft(await cost()).toMatchObject(fresh(10, 0.1));
       releaseBackfill.resolve();
-      await withinTest(startupRoster, signal);
+      await wait(startupRoster);
       await vi.advanceTimersByTimeAsync(0);
-      await withinTest(mainRefreshStarted.promise, signal);
-      const refreshed = await withinTest(
-        Promise.allSettled(refresh.mock.results.map((result) => result.value)),
-        signal,
+      await wait(mainRefreshStarted.promise);
+      const refreshed = await wait(
+        Promise.allSettled(refresh.mock.results.map(({ value }) => value)),
       );
-      await withinTest(
-        queued.runWhenIdle(() => {}),
-        signal,
-      );
+      await wait(queued.runWhenIdle(() => {}));
       await lifetime.stop();
       await queued.drain();
       expect(refreshed).toContainEqual({ status: "fulfilled", value: "refreshed" });
@@ -209,7 +201,7 @@ it("keeps usage backfill and all-agent totals available while another agent's de
       expect.soft(publications.filter((event) => event.usageRefreshFailed)).toEqual([]);
       expect(warn).not.toHaveBeenCalled();
       expect(await cost()).toMatchObject(fresh(10, 0.1));
-      expect(await withinTest(reading, signal)).toMatchObject({ totals: { totalTokens: 10 } });
+      expect(await wait(reading)).toMatchObject({ totals: { totalTokens: 10 } });
     } finally {
       releaseRoster.resolve();
       releaseBackfill.resolve();
@@ -317,6 +309,7 @@ it("projects committed usage after startup preparation without borrowing its exp
   onTestFinished,
 }) => {
   const run = withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const wait = <T>(work: PromiseLike<T>) => withinTest(work, signal);
     const config = mainConfig();
     const target = seedUsage("usage-admission");
     const append = (tokens: number) =>
@@ -361,8 +354,8 @@ it("projects committed usage after startup preparation without borrowing its exp
     );
     let pendingRefreshes = -1;
     try {
-      await withinTest(firstStarted.promise, signal);
-      expect(await withinTest(outcomes[0]!, signal)).toEqual({ ok: true, context: "owner" });
+      await wait(firstStarted.promise);
+      expect(await wait(outcomes[0]!)).toEqual({ ok: true, context: "owner" });
       const initialRequests = requested.mock.calls.length;
       const refusal = createAgentDatabaseInspectionRefusal({
         agentId: target.agentId,
@@ -378,15 +371,15 @@ it("projects committed usage after startup preparation without borrowing its exp
           sessionChanges.emit({ all: true, scope: { agentId: target.agentId, topology: true } });
           await roster.mock.results.at(-1)?.value;
           if (requested.mock.calls.length > initialRequests) {
-            await withinTest(nextStarted.promise, signal);
+            await wait(nextStarted.promise);
           }
           pendingRefreshes = outcomes.length - 1;
         }),
       );
       await roster.mock.results.at(-1)?.value;
-      await withinTest(nextStarted.promise, signal);
+      await wait(nextStarted.promise);
       releaseRefresh.resolve();
-      const settled = await withinTest(Promise.all(outcomes), signal);
+      const settled = await wait(Promise.all(outcomes));
       await lifetime.stop();
       const summary = await cacheRuntime.loadCostUsageSummaryFromCache({
         ...costWindow(config),
@@ -409,4 +402,137 @@ it("projects committed usage after startup preparation without borrowing its exp
   });
   onTestFinished(() => run);
   return run;
+});
+
+it("refreshes only the admitted topology owner from the eligible roster", async ({ signal }) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const config = {
+      agents: { ownership: "explicit" as const, entries: { main: {}, alpha: {}, beta: {} } },
+    };
+    setRuntimeConfigSnapshot(config);
+    await state.writeText("agents/unowned/marker", "Synthetic unowned agent");
+    const requested = vi
+      .spyOn(cacheRuntime, "requestCostUsageCacheRefresh")
+      .mockImplementation(() => {});
+    const roster = vi.spyOn(agentList, "listGatewayAgentsBasic");
+    const waitForRoster = () => withinTest(roster.mock.results.at(-1)!.value, signal);
+    const lifetime = startProjection(config);
+    try {
+      await waitForRoster();
+      expect(requested.mock.calls.map(([request]) => request.agentId)).toEqual([
+        "main",
+        "alpha",
+        "beta",
+      ]);
+      requested.mockClear();
+      for (const agentId of ["alpha", "beta", "alpha"]) {
+        sessionChanges.emit({ all: true, scope: { agentId, topology: true } });
+        await waitForRoster();
+      }
+      expect(requested.mock.calls.map(([request]) => request.agentId)).toEqual([
+        "alpha",
+        "beta",
+        "alpha",
+      ]);
+      requested.mockClear();
+      recordAgentDatabaseAdmissions(
+        [
+          createAgentDatabaseInspectionRefusal({
+            agentId: "alpha",
+            paths: [resolveOpenClawAgentSqlitePath({ agentId: "alpha" })],
+            pending: true,
+            reason: "Synthetic pending preparation",
+          }),
+        ],
+        { source: "startup" },
+      );
+      for (const agentId of ["unowned", "alpha"]) {
+        sessionChanges.emit({ all: true, scope: { agentId, topology: true } });
+        await waitForRoster();
+      }
+      expect(requested).not.toHaveBeenCalled();
+    } finally {
+      await lifetime.stop();
+    }
+  });
+});
+
+it("retains full usage refreshes for shared selectors and unqualified invalidations", async ({
+  signal,
+}) => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const agents = {
+      ownership: "explicit" as const,
+      entries: { main: {}, alpha: {}, beta: {} },
+    };
+    let config: Parameters<typeof costWindow>[0] = { agents };
+    setRuntimeConfigSnapshot(config);
+    const requested = vi
+      .spyOn(cacheRuntime, "requestCostUsageCacheRefresh")
+      .mockImplementation(() => {});
+    const roster = vi.spyOn(agentList, "listGatewayAgentsBasic");
+    const waitForRoster = () => withinTest(roster.mock.results.at(-1)!.value, signal);
+    const lifetime = startSessionCostUsageProjectionLifetime({
+      getConfig: () => config,
+      warn: vi.fn(),
+    });
+    const cases: Array<{
+      name: string;
+      scope: Extract<SessionRowChange, { all: true }>["scope"];
+      store?: string;
+      factsInvalidated?: true;
+    }> = [
+      { name: "unqualified agent", scope: { agentId: "alpha" } },
+      { name: "unknown object scope", scope: {} },
+      { name: "topology without an owner", scope: { topology: true } },
+      {
+        name: "explicit store path",
+        scope: { agentId: "alpha", storePath: state.path("shared.sqlite"), topology: true },
+      },
+      { name: "config", scope: "config" },
+      { name: "stores", scope: "stores" },
+      {
+        name: "forced topology invalidation",
+        scope: { agentId: "alpha", topology: true },
+        factsInvalidated: true,
+      },
+      {
+        name: "shared store selector",
+        scope: { agentId: "alpha", topology: true },
+        store: state.path("shared.sqlite"),
+      },
+      {
+        name: "custom store template",
+        scope: { agentId: "alpha", topology: true },
+        store: state.path("{agentId}", "sessions.json"),
+      },
+      {
+        name: "whitespace store selector",
+        scope: { agentId: "alpha", topology: true },
+        store: " ",
+      },
+    ];
+    try {
+      await waitForRoster();
+      for (const scenario of cases) {
+        config = {
+          agents,
+          ...(scenario.store === undefined ? {} : { session: { store: scenario.store } }),
+        };
+        requested.mockClear();
+        sessionChanges.emit({
+          all: true,
+          scope: scenario.scope,
+          factsInvalidated: scenario.factsInvalidated,
+        });
+        await waitForRoster();
+        expect(
+          requested.mock.calls.map(([request]) => request.agentId),
+          scenario.name,
+        ).toEqual(["main", "alpha", "beta"]);
+      }
+    } finally {
+      await lifetime.stop();
+    }
+  });
 });

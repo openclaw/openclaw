@@ -157,40 +157,28 @@ it("derives presence mode from the default session runtime", () => {
 });
 
 it.each([
-  {
-    name: "ignores an unlocked historical runtime after selecting a different provider",
-    entry: { agentHarnessId: "codex" },
-    expected: "openclaw",
-  },
-  {
-    name: "ignores an unlocked historical runtime behind the default override",
-    entry: { agentHarnessId: "codex", agentRuntimeOverride: "default" },
-    expected: "openclaw",
-  },
-  {
-    name: "preserves locked transcript ownership",
-    entry: { agentHarnessId: "codex", modelSelectionLocked: true },
-    expected: "codex",
-  },
-  {
-    name: "does not let a historical embedded runtime override a Codex model",
-    entry: {
-      agentHarnessId: "openclaw",
-      providerOverride: "openai",
-      modelOverride: "gpt-5.6-sol",
-    },
-    expected: "codex",
-  },
-  {
-    name: "honors an explicit compatible runtime override",
-    entry: {
-      agentRuntimeOverride: "codex",
-      providerOverride: "openai",
-      modelOverride: "gpt-test",
-    },
-    expected: "codex",
-  },
-])("$name", ({ entry, expected }) => {
+  ["ignores unlocked historical runtime", { agentHarnessId: "codex" }, "openclaw"],
+  [
+    "honors default override over history",
+    { agentHarnessId: "codex", agentRuntimeOverride: "default" },
+    "openclaw",
+  ],
+  [
+    "preserves locked transcript ownership",
+    { agentHarnessId: "codex", modelSelectionLocked: true },
+    "codex",
+  ],
+  [
+    "ignores historical embedded runtime for a Codex model",
+    { agentHarnessId: "openclaw", providerOverride: "openai", modelOverride: "gpt-5.6-sol" },
+    "codex",
+  ],
+  [
+    "honors explicit compatible runtime override",
+    { agentRuntimeOverride: "codex", providerOverride: "openai", modelOverride: "gpt-test" },
+    "codex",
+  ],
+] as const)("%s", (_name, entry, expected) => {
   expect(
     sessionRuntime(
       {

@@ -15,7 +15,10 @@ import {
   listControlUiPluginWidgetKinds,
 } from "./control-ui-plugin-tabs.js";
 
-function tab(pluginId: string, overrides: Partial<PluginControlUiDescriptor> = {}) {
+function tab(
+  pluginId: string,
+  overrides: Partial<PluginControlUiDescriptor & { surface: "tab" | "run" | "widget" }> = {},
+) {
   const descriptor: PluginControlUiDescriptor = {
     id: "logbook",
     surface: "tab",
@@ -52,6 +55,16 @@ function activateDescriptors(
   }));
   setActivePluginRegistry(registry);
   return registry;
+}
+
+function activateRoutes(
+  entries: Array<[string, string, Parameters<typeof tab>[1]?]>,
+  routes: Parameters<typeof activateDescriptors>[1],
+) {
+  return activateDescriptors(
+    entries.map(([pluginId, path, overrides]) => tab(pluginId, { path, ...overrides })),
+    routes,
+  );
 }
 
 afterEach(() => {
@@ -235,42 +248,26 @@ it("does not require a cookie grant when gateway auth is disabled", () => {
   expect(projected).not.toHaveProperty("requiresGatewayAuth");
 });
 
-it("coalesces same-plugin tabs that share one read-only cookie path", () => {
-  activateDescriptors(
+it.each([false, true])("coalesces read grants and widens an exact path: %s", (widen) => {
+  const root = "/plugins/logbook";
+  activateRoutes(
     [
-      tab("logbook", { path: "/plugins/logbook/read" }),
-      tab("logbook", {
-        id: "admin",
-        path: "/plugins/logbook/admin",
-        requiredScopes: ["operator.admin"],
-      }),
-    ],
-    [{ pluginId: "logbook", path: "/plugins/logbook", match: "prefix" }],
-  );
-
-  expect(listControlUiPluginTabAuthGrants(["operator.admin"])).toEqual([grant("logbook")]);
-});
-
-it("widens a shared exact cookie path when another visible tab needs prefix matching", () => {
-  activateDescriptors(
-    [
-      tab("logbook", { path: "/plugins/logbook" }),
-      tab("logbook", { id: "child", path: "/plugins/logbook/child" }),
+      ["logbook", widen ? root : `${root}/read`],
+      ["logbook", `${root}/admin`, { id: "admin", requiredScopes: ["operator.admin"] }],
     ],
     [
-      { pluginId: "logbook", path: "/plugins/logbook", match: "exact" },
-      { pluginId: "logbook", path: "/plugins/logbook", match: "prefix" },
+      ...(widen ? [{ pluginId: "logbook", path: root, match: "exact" as const }] : []),
+      { pluginId: "logbook", path: root, match: "prefix" },
     ],
   );
-
   expect(listControlUiPluginTabAuthGrants(["operator.admin"])).toEqual([grant("logbook")]);
 });
 
 it("keeps separate grants for different plugins that share a cookie path", () => {
-  activateDescriptors(
+  activateRoutes(
     [
-      tab("alpha", { id: "alpha", path: "/shared" }),
-      tab("beta", { id: "beta", path: "/shared/child" }),
+      ["alpha", "/shared", { id: "alpha" }],
+      ["beta", "/shared/child", { id: "beta" }],
     ],
     [
       { pluginId: "alpha", path: "/shared", match: "exact" },

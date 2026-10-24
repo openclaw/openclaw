@@ -2,7 +2,7 @@ import crypto from "node:crypto";
 import type { AnyAgentTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { readMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { asBoolean, asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { inspectStrictBase64 } from "../shared/base64.js";
+import { inspectStrictBase64, normalizeBase64ForCompare } from "../shared/base64.js";
 import { humanSize } from "../shared/params.js";
 import {
   FILE_TRANSFER_SUBDIR,
@@ -10,10 +10,6 @@ import {
   FILE_WRITE_TOOL_DESCRIPTOR,
 } from "./descriptors.js";
 import { invokeNodeToolPayload, readRequiredNodePath } from "./node-tool-invoke.js";
-
-function normalizeBase64ForCompare(value: string): string {
-  return value.replace(/=+$/u, "").replace(/-/gu, "+").replace(/_/gu, "/");
-}
 
 function decodeStrictBase64(value: string): Buffer {
   const decodedBytes = inspectStrictBase64(value);

@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { createComponent } from "solid-js";
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import {
   parseApprovalRequestedEvent,
   resolveApprovalRequest,
@@ -11,7 +12,7 @@ import {
 import { i18n } from "../i18n/index.ts";
 import { projectSessionApprovalReplay } from "../pages/chat/session-approval-projection.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { flush } from "../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import {
   ExecApprovalCard,
   SidebarApprovalRow,
@@ -57,6 +58,7 @@ function renderSurface(
   request: ExecApprovalRequest,
   variant: "inline" | "modal" | "sidebar" = "modal",
   onDecision: ExecApprovalCardProps["onDecision"] = vi.fn(),
+  presentation?: "mobile",
 ) {
   const props = { approval: request, busy: false, connected: true, canGrant: true, error: null };
   const view = mountSolid(
@@ -66,14 +68,20 @@ function renderSurface(
             ...props,
             onDecision: (_event, id, decision) => void onDecision(id, decision),
           })
-        : createComponent(ExecApprovalCard, { props: { ...props, variant, onDecision } }),
+        : createComponent(ExecApprovalCard, {
+            props: { ...props, variant, presentation, onDecision },
+          }),
     { container },
   );
   return { ...view, card: container.querySelector<HTMLElement>(".exec-approval-card") };
 }
 
-function renderCard(request: ExecApprovalRequest, variant: "inline" | "modal" = "modal") {
-  return renderSurface(request, variant).card;
+function renderCard(
+  request: ExecApprovalRequest,
+  variant: "inline" | "modal" = "modal",
+  presentation?: "mobile",
+) {
+  return renderSurface(request, variant, undefined, presentation).card;
 }
 
 describe("exec approval card", () => {
@@ -89,9 +97,75 @@ describe("exec approval card", () => {
     vi.restoreAllMocks();
   });
 
+  it("retires a held decision when the displayed approval changes", async () => {
+    const pending = createDeferred();
+    const request = approval({ expiresAtMs: Date.now() + 60_000 });
+    const [props, setProps] = createSignal<ExecApprovalCardProps>({
+      approval: request,
+      variant: "inline",
+      busy: false,
+      connected: true,
+      canGrant: true,
+      error: null,
+      onDecision: () => pending.promise,
+    });
+    const view = mountSolid(
+      () =>
+        createComponent(ExecApprovalCard, {
+          get props() {
+            return props();
+          },
+        }),
+      { container },
+    );
+    const allow = () => view.getByRole("button", { name: "Allow once" }) as HTMLButtonElement;
+    allow().click();
+    await waitForSolid(() => expect(allow().disabled).toBe(true));
+    setProps({ ...props(), approval: { ...request, id: "replacement" } });
+    await waitForSolid(() => {
+      expect(
+        view.container.querySelector(".exec-approval-card")?.getAttribute("data-approval-id"),
+      ).toBe("replacement");
+      expect(allow().disabled).toBe(false);
+    });
+    pending.resolve();
+    view.unmount();
+  });
+
   it("maps plugin error severity to the danger accent", () => {
     const card = renderCard(approval({ pluginSeverity: "error" }));
     expect(card?.classList.contains("exec-approval-card--severity-danger")).toBe(true);
+  });
+
+  it("opens a retained sidebar session link through the current callback", () => {
+    const original = vi.fn((event: MouseEvent) => event.preventDefault());
+    const open = vi.fn((event: MouseEvent) => event.preventDefault());
+    const [updated, setUpdated] = createSignal(false);
+    const request = approval({ expiresAtMs: Date.now() + 60_000 });
+    const view = mountSolid(
+      () =>
+        createComponent(SidebarApprovalRow, {
+          approval: request,
+          busy: false,
+          connected: true,
+          canGrant: true,
+          error: null,
+          openSessionHref: "/chat/synthetic-session",
+          onDecision: vi.fn(),
+          get onOpenSession() {
+            return updated() ? open : original;
+          },
+        }),
+      { container },
+    );
+    const link = container.querySelector<HTMLAnchorElement>(".sidebar-approval-row__open-session")!;
+    setUpdated(true);
+    flush();
+    expect(container.querySelector(".sidebar-approval-row__open-session")).toBe(link);
+    link.click();
+    expect(open).toHaveBeenCalledExactlyOnceWith(expect.any(MouseEvent));
+    expect(original).not.toHaveBeenCalled();
+    view.unmount();
   });
 
   it.each(["add", "update"] as const)(
@@ -307,20 +381,23 @@ describe("exec approval card", () => {
       });
       renderSurface(request, variant, onDecision);
       const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
-      expect(buttons.map((button) => button.textContent?.trim())).toEqual([
-        "Allow once",
-        "Allow while this App is open",
-        "Deny",
-      ]);
+      const expected = [
+        ["Allow once", "allow-once"],
+        ["Allow while this App is open", "allow-always"],
+        ["Deny", "deny"],
+      ] as const;
+      // The right-aligned modal footer keeps its primary decision at the trailing edge.
+      const order = variant === "modal" ? expected.toReversed() : expected;
+      expect(buttons.map((button) => button.textContent?.trim())).toEqual(
+        order.map(([label]) => label),
+      );
       for (const button of buttons) {
         button.click();
       }
       await Promise.all(onDecision.mock.results.map((result) => result.value));
-      expect(client.request.mock.calls).toEqual([
-        ["plugin.approval.resolve", { id: request.id, decision: "allow-once" }],
-        ["plugin.approval.resolve", { id: request.id, decision: "allow-always" }],
-        ["plugin.approval.resolve", { id: request.id, decision: "deny" }],
-      ]);
+      expect(client.request.mock.calls).toEqual(
+        order.map(([, decision]) => ["plugin.approval.resolve", { id: request.id, decision }]),
+      );
     },
   );
 
@@ -366,4 +443,133 @@ describe("exec approval card", () => {
     expect(card?.querySelector('[data-approval-chip="agent"]')).toBeNull();
     expect(card?.textContent).not.toContain("agent:main:session-1");
   });
+
+  it("discloses mobile requests without deciding, retains updates and resets for the next request", () => {
+    const onDecision = vi.fn();
+    const command = "printf '%s\\n' 'a long command that must remain completely readable'";
+    const request = approval({
+      kind: "exec",
+      request: { command, host: "gateway", cwd: "/workspace/project" },
+      expiresAtMs: Date.now() + 60_000,
+    });
+    const [props, setProps] = createSignal<ExecApprovalCardProps>({
+      approval: request,
+      variant: "inline",
+      presentation: "mobile",
+      busy: false,
+      connected: true,
+      canGrant: true,
+      error: null,
+      onDecision,
+    });
+    const view = mountSolid(
+      () =>
+        createComponent(ExecApprovalCard, {
+          get props() {
+            return props();
+          },
+        }),
+      { container },
+    );
+    const disclosure = container.querySelector<HTMLDetailsElement>("details")!;
+    expect(disclosure.open).toBe(false);
+    expect(view.getByRole("timer").textContent).toContain("expires in");
+    expect(view.getByText("Run this command?")).toBeTruthy();
+    disclosure.querySelector("summary")!.click();
+    expect(disclosure.open).toBe(true);
+    expect(view.getByText(command)).toBeTruthy();
+    expect(view.getByText("Directory")).toBeTruthy();
+    expect(view.getByText("/workspace/project")).toBeTruthy();
+    expect(onDecision).not.toHaveBeenCalled();
+
+    setProps({ ...props(), approval: { ...request }, busy: true });
+    flush();
+    expect(container.querySelector("details")).toBe(disclosure);
+    expect(disclosure.open).toBe(true);
+    const allow = view.getByRole<HTMLButtonElement>("button", { name: "Allow once" });
+    expect(allow.disabled).toBe(true);
+    allow.click();
+    expect(onDecision).not.toHaveBeenCalled();
+
+    setProps({ ...props(), busy: false, error: "Approval failed: connection lost" });
+    flush();
+    expect(view.getByRole("alert").textContent).toBe("Approval failed: connection lost");
+    allow.click();
+    expect(onDecision).toHaveBeenCalledExactlyOnceWith("approval-1", "allow-once");
+
+    setProps({ ...props(), approval: { ...request, id: "approval-2" }, canGrant: false });
+    flush();
+    expect(container.querySelector<HTMLDetailsElement>("details")!.open).toBe(false);
+    expect(view.getByRole<HTMLButtonElement>("button", { name: "Allow once" }).disabled).toBe(true);
+  });
+
+  it("cancels an active pointer-triggered mobile disclosure animation on unmount", () => {
+    const view = renderSurface(
+      approval({
+        kind: "exec",
+        request: { command: "echo review", host: "gateway", cwd: "/workspace" },
+        expiresAtMs: Date.now() + 60_000,
+      }),
+      "inline",
+      undefined,
+      "mobile",
+    );
+    const disclosure = container.querySelector<HTMLDetailsElement>("details")!;
+    const cancel = vi.fn();
+    // JSDOM lacks Web Animations; retain the resource returned to the real click handler.
+    const animate = vi.fn(() => ({ cancel, onfinish: null }));
+    Object.defineProperty(disclosure, "animate", { configurable: true, value: animate });
+    disclosure
+      .querySelector("summary")!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+    expect(disclosure.open).toBe(true);
+    expect(animate).toHaveBeenCalledOnce();
+    expect(cancel).not.toHaveBeenCalled();
+    view.unmount();
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    [undefined, undefined, ["Always allow", "Deny", "Allow once"]],
+    [undefined, "always", ["Deny", "Allow once"]],
+    [["deny", "allow-once"], undefined, ["Deny", "Allow once"]],
+  ] as const)(
+    "keeps native mobile eligibility for decisions %j and ask %s",
+    (allowed, ask, labels) => {
+      const card = renderCard(
+        approval({
+          kind: "exec",
+          request: { command: "echo review", allowedDecisions: allowed && [...allowed], ask },
+        }),
+        "inline",
+        "mobile",
+      );
+      expect(
+        Array.from(card!.querySelectorAll("button"), (button) => button.textContent?.trim()),
+      ).toEqual(labels);
+      expect(card!.textContent).not.toContain("Allow Always is unavailable");
+      expect(card!.querySelectorAll("summary")).toHaveLength(1);
+    },
+  );
+
+  it.each(["modal", "plugin"] as const)(
+    "ignores the mobile opt-in for the %s presentation",
+    (surface) => {
+      const card = renderCard(
+        surface === "modal"
+          ? approval({ kind: "exec", request: { command: "echo modal" } })
+          : approval(),
+        surface === "modal" ? "modal" : "inline",
+        "mobile",
+      );
+      expect(card!.textContent).toContain(
+        surface === "modal" ? "Exec approval needed" : "Codex approval",
+      );
+      if (surface === "modal") {
+        expect(card!.textContent).toContain("Always allow here");
+      } else {
+        expect(card!.querySelector("details")).toBeNull();
+      }
+    },
+  );
 });

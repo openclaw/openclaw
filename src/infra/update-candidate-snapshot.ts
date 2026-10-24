@@ -370,6 +370,7 @@ export async function prepareUpdateCandidateStateSnapshot(params: {
             input: JSON.stringify({
               ...request,
               includeLocalStoreVersions: true,
+              includeClientCredentialStoreVersion: true,
               streamProgress: true,
               stateDir: params.stateDir,
               config: params.config,

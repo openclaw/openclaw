@@ -14,6 +14,7 @@ import { loadLocalUserIdentity, loadSettings, patchSettings } from "../../app/se
 import { retryStaleChunkReloadWhenReachable } from "../../app/stale-chunk-reload.ts";
 import { hasSameOriginGatewayTransport } from "../../dev-gateway.ts";
 import { parseSlashCommand } from "../../lib/chat/commands.ts";
+import { currentDisplaySpeechConfig } from "../../lib/config/config-state-model.ts";
 import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
 import { projectOwner, projectSource } from "../../lib/reactive/projection.ts";
@@ -51,6 +52,7 @@ import {
   openSessionWorkspacePreview,
   getSessionWorkspace,
   clearSessionWorkspacePreviews,
+  sessionWorkspaceForHost,
 } from "./components/chat-session-workspace-state.ts";
 import {
   handleChatDraftChange,
@@ -149,6 +151,7 @@ export function createPageState(
     canvasPluginSurfaceUrl: null,
     terminalAvailable: false,
     browserPanelAvailable: false,
+    browserPanelUnavailableReason: "disconnected",
     assistantAgentId: context.agentSelection.state.selectedId,
     sessionKey: initialSessionKey,
     currentSessionId: undefined,
@@ -310,11 +313,12 @@ export function createPageState(
         expectedLeafEntryId: resolveDisplayedLeafEntryId(state),
       }),
     async () => {
-      await context.runtimeConfig.ensureLoaded();
-      return resolveSpeechTextLimit(
-        context.runtimeConfig.state.configSnapshot?.runtimeConfig ??
-          context.runtimeConfig.state.configSnapshot?.config,
-      );
+      let config = currentDisplaySpeechConfig(context.runtimeConfig.state);
+      if (!config || !Object.hasOwn(config, "tts")) {
+        await context.runtimeConfig.ensureLoaded();
+        config = currentDisplaySpeechConfig(context.runtimeConfig.state);
+      }
+      return resolveSpeechTextLimit(config);
     },
   );
   state.loadAssistantIdentity = () => loadPageAssistantIdentity(state);
@@ -404,6 +408,14 @@ export function createPageState(
       transientResourceScope = scope;
     }
     const normalized = normalizeSidebarLayout(layout);
+    // New tab is a live layout fact, not a saved resource or settings schema.
+    // The persistence normalizer deliberately strips it again below.
+    if (layout.newTab && normalized.columns[0]) {
+      normalized.newTab = { ...layout.newTab };
+      if (layout.columns[0]?.activePanelId === layout.newTab.id) {
+        normalized.columns[0].activePanelId = layout.newTab.id;
+      }
+    }
     const previous = state.sidebarLayout;
     const includesResource = (value: SidebarLayout, slot: "desktop" | "browser") =>
       value.columns.some((column) => column.panels.some((panel) => panel.slot === slot));
@@ -480,6 +492,9 @@ export function createPageState(
     if (!normalizedPanelId) {
       return;
     }
+    if (state.sidebarLayout.newTab?.id === normalizedPanelId) {
+      return;
+    }
     const selected = state.sidebarLayout.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.id === normalizedPanelId)?.slot;
@@ -505,6 +520,23 @@ export function createPageState(
         : content?.kind === "file"
           ? { id: `file:${content.path}`, label: content.name }
           : null);
+    if (fileTab && content) {
+      const preview = openSessionWorkspacePreview(state, fileTab.id, fileTab.label, content);
+      if (content.kind === "mcp-app" && preview.content.kind === "mcp-app") {
+        // A second app link changes host context on the retained instance.
+        preview.content = content;
+        preview.label = fileTab.label;
+        const workspace = getSessionWorkspace(state);
+        workspace.previews = [...workspace.previews];
+        sessionWorkspaceForHost(state).publish();
+      }
+    } else {
+      state.sidebarContent = content;
+    }
+    // Internal catalog navigation updates the retained reader, never the panel selection.
+    if (content?.fileTab?.intent === "navigate") {
+      return undefined;
+    }
     const targetSlot = fileTab ? "workspace" : "detail";
     let opened = openSlot(state.sidebarLayout, targetSlot);
     const targetPanel = opened.columns
@@ -518,22 +550,11 @@ export function createPageState(
       availableWidth > 0 && availableWidth >= SIDEBAR_NARROW_BREAKPOINT_PX
         ? (fitSidebarLayout(opened, availableWidth) ?? opened)
         : opened;
-    if (fileTab && content) {
-      const preview = openSessionWorkspacePreview(state, fileTab.id, fileTab.label, content);
-      if (content.kind === "mcp-app" && preview.content.kind === "mcp-app") {
-        // A second app link changes host context on the retained instance.
-        preview.content = content;
-        preview.label = fileTab.label;
-        const workspace = getSessionWorkspace(state);
-        workspace.previews = [...workspace.previews];
-      }
-    } else {
-      state.sidebarContent = content;
-    }
     state.updateSidebarLayout(fitted);
     if (targetPanel) {
       state.updateSidebarActivePanel(targetPanel.id);
     }
+    return targetSlot;
   };
   state.handleCloseSidebar = (slot) => {
     if (slot === "workspace") {
@@ -567,7 +588,7 @@ export function createPageState(
   state.handleCloseImage = () => {
     invalidateImageLightbox(state);
   };
-  projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory"]);
+  projectChatFields(chatHistoryRequests(state), ["historyLoad", "acceptedHistory", "branchQuery"]);
   {
     let value = state.chatQueue;
     const queue = projectSource(state, {
@@ -587,13 +608,18 @@ export function createPageState(
   {
     const source = chatRunPresentation(state);
     const projection = projectOwner(source, (owner) => owner.values);
+    const nonText = projectSource(source, {
+      read: (owner) => owner.values,
+      subscribe: (owner, notify) => owner.subscribeNonText(notify),
+      equality: "revision",
+    });
     for (const key of source.fields) {
       const descriptor = Object.getOwnPropertyDescriptor(state, key)!;
       Object.defineProperty(state, key, {
         ...descriptor,
         get() {
           if (getObserver()) {
-            projection.read();
+            (key === "chatStream" ? projection : nonText).read();
           }
           return Reflect.get(source.values, key);
         },

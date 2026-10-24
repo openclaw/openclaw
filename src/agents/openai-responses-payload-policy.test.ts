@@ -44,9 +44,7 @@ describe("openai responses payload policy", () => {
 
     applyOpenAIResponsesPayloadPolicy(payload, resolved);
 
-    expect(payload).not.toHaveProperty("store");
-    expect(payload).not.toHaveProperty("prompt_cache_key");
-    expect(payload).not.toHaveProperty("prompt_cache_retention");
+    expect(payload).toEqual({});
   });
 
   it("keeps disabled reasoning payloads on native OpenAI responses models that support none", () => {
@@ -119,24 +117,26 @@ describe("openai responses payload policy", () => {
     );
   });
 
-  it("never promotes store for a custom endpoint without the explicit continuation opt-in", () => {
-    const resolved = policy(
-      { provider: "omniroute", baseUrl: "https://omniroute.example.com/v1" },
-      { storeMode: "provider-policy" },
-    );
-    expect(resolved).toMatchObject({ explicitContinuationOptIn: false, explicitStore: undefined });
-  });
-
-  it("promotes store for a custom endpoint once the operator opts a model in explicitly", () => {
+  it.each([
+    [false, undefined, false, undefined],
+    [true, undefined, true, true],
+    [true, "openai-chatgpt-responses", false, false],
+  ] as const)("resolves continuation opt-in=%s for api=%s", (optIn, api, expectedOptIn, store) => {
     const resolved = policy(
       {
         provider: "omniroute",
         baseUrl: "https://omniroute.example.com/v1",
-        compat: { supportsResponsesContinuation: true },
+        ...(api
+          ? { api, provider: "openai", baseUrl: "https://chatgpt.com/backend-api/codex" }
+          : {}),
+        ...(optIn ? { compat: { supportsResponsesContinuation: true } } : {}),
       },
-      { storeMode: "provider-policy" },
+      { storeMode: api ? "disable" : "provider-policy" },
     );
-    expect(resolved).toMatchObject({ explicitContinuationOptIn: true, explicitStore: true });
+    expect(resolved).toMatchObject({
+      explicitContinuationOptIn: expectedOptIn,
+      explicitStore: store,
+    });
   });
 
   it.each(["https://proxy.example.com/v1"])(
@@ -152,17 +152,4 @@ describe("openai responses payload policy", () => {
       expect(payload.store).toBe(false);
     },
   );
-
-  it("never lets the continuation opt-in flip ChatGPT/Codex store:false to true", () => {
-    // The broad Responses API predicate includes ChatGPT, whose no-store contract is separate.
-    const resolved = policy(
-      {
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-        compat: { supportsResponsesContinuation: true },
-      },
-      { storeMode: "disable" },
-    );
-    expect(resolved).toMatchObject({ explicitContinuationOptIn: false, explicitStore: false });
-  });
 });

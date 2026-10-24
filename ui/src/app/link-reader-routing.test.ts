@@ -154,6 +154,14 @@ describe("Plugin reader link routing", () => {
     },
   );
 
+  it("keeps preview opt-out links routed through the original reader handler", () => {
+    const { anchor, accept, click } = setup();
+    anchor.setAttribute("data-link-reader-preview", "off");
+    expect(click()).toBe(false);
+    expect(accept).toHaveBeenCalledOnce();
+    expect((accept.mock.calls[0]![0] as CustomEvent).detail.url).toBe(anchor.href);
+  });
+
   it("does not swallow links without an available and accepting shell", () => {
     const { snapshot, accept, click } = setup();
     snapshot.pluginCapabilities!.methods = [];

@@ -1,22 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
-import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import {
   getCronManagementAuthority,
   withCronManagementGrant,
 } from "../../gateway/cron-creator-authority-grant.js";
+import { consumeCronNextCheckProposal } from "../../infra/agent-run-registry.automation.js";
 import * as runRegistry from "../../infra/agent-run-registry.js";
-import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
-import {
-  createCronCreatorAuthorityCapability,
-  runWithCronCreatorAuthorityCapability,
-} from "../cron-creator-authority-context.js";
 import { createCronTool } from "./cron-tool.js";
+import { withCronManagementCaller } from "./cron-tool.management.test-support.js";
 import type { CronToolOptions } from "./cron-tool.types.js";
-import {
-  getGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "./gateway-caller-context.js";
+import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
 import * as gatewayModule from "./gateway.js";
 
 const jobId = "existing-job";
@@ -30,63 +23,47 @@ async function withAdminTool(
   payload: Record<string, unknown> | undefined,
   run: (tool: ReturnType<typeof createCronTool>, calls: Array<[string, unknown]>) => Promise<void>,
   storedJob?: Record<string, unknown>,
+  readOnly = false,
   creatorOptions: Pick<
     CronToolOptions,
     "config" | "creatorToolAllowlist" | "creatorToolAllowlistCaptureRef"
   > = {},
 ) {
   const runId = "admin-management-tool-run";
-  const sessionKey = "agent:main:control-ui";
-  const { operationalRunInstance } = createTestAdmittedRunContext(runId);
-  const authority = runRegistry.claimAgentRunDelegatedAuthority(operationalRunInstance);
-  const capability = createCronCreatorAuthorityCapability(
+  return withCronManagementCaller(
     runId,
-    origin === "channel-owner" ? { kind: "external", channel: "discord" } : { kind: origin },
-    origin === "channel-owner"
-      ? { source: "channel-owner", isCurrent: () => true }
-      : { source: "control-ui-admin" },
-  )!;
-  const identity: AgentRuntimeIdentity = {
-    kind: "agentRuntime",
-    agentId: "main",
-    sessionKey,
-    operationalRunInstance,
-    delegatedAuthority: { ...authority, kind: "local" },
-  };
-  const calls: Array<[method: string, params: unknown]> = [];
-  const resolveCreatorToolAuthority = vi.fn(async () => {
-    throw new Error("Admin management must not recapture the creator's tool authority");
-  });
-  async function callGatewayTool<T>(method: string, _options: unknown, params: unknown) {
-    const caller = getGatewayToolCallerIdentity();
-    expect(caller?.cronCreatorAuthorityGrant).toBeUndefined();
-    expect(caller?.cronManagementGrant).toBeDefined();
-    return withCronManagementGrant(caller!.cronManagementGrant!, identity, method, async () => {
-      getCronManagementAuthority(identity)!();
-      calls.push([method, params]);
-      return (
-        method === "cron.get" ? { id: jobId, configRevision, payload, ...storedJob } : { id: jobId }
-      ) as T;
-    });
-  }
-  try {
-    await runWithCronCreatorAuthorityCapability(capability, () =>
-      withGatewayToolCallerIdentity({ ...identity, approvalAuthority: authority }, async () => {
-        const options = {
-          ...creatorOptions,
-          runId,
-          agentSessionKey: sessionKey,
-          resolveCreatorToolAuthority,
-        };
-        using _ = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(callGatewayTool);
-        const tool = createCronTool(options);
-        await run(tool, calls);
-        expect(resolveCreatorToolAuthority).not.toHaveBeenCalled();
-      }),
-    );
-  } finally {
-    runRegistry.releaseAgentRunDelegatedAuthority(authority);
-  }
+    async (identity) => {
+      const calls: Array<[method: string, params: unknown]> = [];
+      const resolveCreatorToolAuthority = vi.fn(async () => {
+        throw new Error("Admin management must not recapture the creator's tool authority");
+      });
+      async function callGatewayTool<T>(method: string, _options: unknown, params: unknown) {
+        const caller = getGatewayToolCallerIdentity();
+        expect(caller?.cronCreatorAuthorityGrant).toBeUndefined();
+        expect(caller?.cronManagementGrant).toBeDefined();
+        return withCronManagementGrant(caller!.cronManagementGrant!, identity, method, async () => {
+          getCronManagementAuthority(identity)!();
+          calls.push([method, params]);
+          return (
+            method === "cron.get"
+              ? { id: jobId, configRevision, payload, ...storedJob }
+              : { id: jobId }
+          ) as T;
+        });
+      }
+      const options = {
+        ...creatorOptions,
+        runId,
+        readOnly,
+        agentSessionKey: identity.sessionKey,
+        resolveCreatorToolAuthority,
+      };
+      using _ = vi.spyOn(gatewayModule, "callGatewayTool").mockImplementation(callGatewayTool);
+      await run(createCronTool(options), calls);
+      expect(resolveCreatorToolAuthority).not.toHaveBeenCalled();
+    },
+    origin,
+  );
 }
 
 const command = { kind: "command", argv: ["printf", "proof"] };
@@ -192,7 +169,65 @@ it.each([
         schedule: { kind: "stream", command: ["node", "events.mjs"] },
         state: {},
       },
+      false,
       { config, creatorToolAllowlist: tools, creatorToolAllowlistCaptureRef: capture },
+    );
+  },
+);
+
+it.each([false, true])(
+  "keeps management authority intersected with readOnly=%s",
+  async (readOnly) => {
+    await withAdminTool(
+      "unknown",
+      undefined,
+      async (tool, calls) => {
+        const actions = readOnly ? ["list", "get"] : ["list", "get", "update", "run", "remove"];
+        expect(tool.parameters).toHaveProperty("properties.action.enum", actions);
+        for (const key of ["in", "text", "mode", "contextMessages", "sessionKey"]) {
+          expect(tool.parameters).not.toHaveProperty(`properties.${key}`);
+        }
+        if (readOnly) {
+          expect(tool.parameters).not.toHaveProperty("properties.job");
+        } else {
+          expect(tool.parameters).not.toHaveProperty("properties.job.properties.declarationKey");
+          expect(tool.parameters).toHaveProperty("properties.job.properties.agentId");
+        }
+        for (const includeDisabled of [false, true]) {
+          const result = await tool.execute("manager-inventory", {
+            action: "list",
+            includeDisabled,
+          });
+          expect(result.details).toMatchObject({
+            scope: "gateway",
+            includeDisabled,
+            inventoryHint: expect.stringContaining("Absence does not prove deletion"),
+          });
+        }
+        expect((await tool.execute("manager-get", { action: "get", jobId })).details).toMatchObject(
+          { id: jobId },
+        );
+        if (readOnly) {
+          // Read-only availability must not grant reads absent from the management entitlement.
+          for (const action of ["status", "runs"]) {
+            await expect(tool.execute(`manager-${action}`, { action, jobId })).rejects.toThrow(
+              action === "status"
+                ? "read-only during recovery"
+                : "can only list, get, update, run, or remove automations",
+            );
+          }
+          await expect(tool.execute("manager-remove", { action: "remove", jobId })).rejects.toThrow(
+            /read-only/i,
+          );
+        }
+        expect(calls).toEqual([
+          ["cron.list", { includeDisabled: false, compact: true }],
+          ["cron.list", { includeDisabled: true, compact: true }],
+          ["cron.get", { id: jobId }],
+        ]);
+      },
+      undefined,
+      readOnly,
     );
   },
 );
@@ -228,7 +263,7 @@ describe("cron next_check action", () => {
       RUN_ID,
       {
         sessionKey: `agent:main:cron:${JOB_ID}`,
-        cronRunsByJobId: new Map([[JOB_ID, { nextCheckEnabled }]]),
+        cronRunsByJobId: new Map([[JOB_ID, { nextCheckEnabled, assertCurrent: () => {} }]]),
       },
       { trackOwner: true, ownsContext: true },
     );
@@ -253,11 +288,11 @@ describe("cron next_check action", () => {
     await nextCheck();
 
     runRegistry.claimAgentRunContext(RUN_ID, {
-      cronRunsByJobId: new Map([["next-job", { nextCheckEnabled: true }]]),
+      cronRunsByJobId: new Map([["next-job", { nextCheckEnabled: true, assertCurrent: () => {} }]]),
     });
     await nextCheck("next-job", "30m");
 
-    expect(runRegistry.consumeCronNextCheckProposal(RUN_ID, JOB_ID)).toBe(15 * 60_000);
-    expect(runRegistry.consumeCronNextCheckProposal(RUN_ID, "next-job")).toBe(30 * 60_000);
+    expect(consumeCronNextCheckProposal(RUN_ID, JOB_ID)).toBe(15 * 60_000);
+    expect(consumeCronNextCheckProposal(RUN_ID, "next-job")).toBe(30 * 60_000);
   });
 });

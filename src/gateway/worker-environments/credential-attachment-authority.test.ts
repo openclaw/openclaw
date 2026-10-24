@@ -90,11 +90,9 @@ async function expectUnchangedAfterReopen(
   environmentId: string,
   previous: ReturnType<typeof snapshot>,
 ) {
-  expect(support.testState.store.get(environmentId)).toEqual(previous.environment);
-  expect(support.testState.store.getCredential(environmentId)).toEqual(previous.credential);
+  expect(snapshot(environmentId)).toEqual(previous);
   await support.reopenWorkerEnvironmentStore();
-  expect(support.testState.store.get(environmentId)).toEqual(previous.environment);
-  expect(support.testState.store.getCredential(environmentId)).toEqual(previous.credential);
+  expect(snapshot(environmentId)).toEqual(previous);
 }
 
 function snapshot(environmentId: string) {
@@ -102,6 +100,17 @@ function snapshot(environmentId: string) {
     environment: support.testState.store.get(environmentId),
     credential: support.testState.store.getCredential(environmentId),
   };
+}
+
+async function attachmentFixture(environmentId: string) {
+  await support.seedReady(environmentId);
+  const previous = snapshot(environmentId);
+  const source = caller(environmentId);
+  const generate = vi.fn(() => support.CREDENTIAL);
+  const service = support.createService(support.createProvider(), {
+    generateWorkerCredential: generate,
+  });
+  return { source, generate, service, previous };
 }
 
 describe("attachment precommit authority and committed custody", () => {
@@ -112,13 +121,7 @@ describe("attachment precommit authority and committed custody", () => {
 
   it("rejects a closed caller after the real per-environment queue wait", async () => {
     const environmentId = "attachment-queue";
-    await support.seedReady(environmentId);
-    const previous = snapshot(environmentId);
-    const source = caller(environmentId);
-    const generate = vi.fn(() => support.CREDENTIAL);
-    const service = support.createService(support.createProvider(), {
-      generateWorkerCredential: generate,
-    });
+    const { previous, source, generate, service } = await attachmentFixture(environmentId);
     // This earlier request owns the queue, not the later caller. Its failed
     // packaging releases the queue without changing attachment ownership.
     const gate = bundleGate(new Error("predecessor build unavailable"));
@@ -150,13 +153,7 @@ describe("attachment precommit authority and committed custody", () => {
     "does not mint after %s closure during packaging",
     async (closedOwner) => {
       const environmentId = `attachment-bundle-${closedOwner}`;
-      await support.seedReady(environmentId);
-      const previous = snapshot(environmentId);
-      const source = caller(environmentId);
-      const generate = vi.fn(() => support.CREDENTIAL);
-      const service = support.createService(support.createProvider(), {
-        generateWorkerCredential: generate,
-      });
+      const { previous, source, generate, service } = await attachmentFixture(environmentId);
       const gate = bundleGate();
       const attaching = service
         .attachSession(binding(environmentId, source))
@@ -222,13 +219,8 @@ describe("attachment precommit authority and committed custody", () => {
 
   it("does not lend one queued request another caller's authority", async () => {
     const environmentId = "attachment-independent-callers";
-    await support.seedReady(environmentId);
-    const first = caller(`${environmentId}:first`);
+    const { source: first, generate, service } = await attachmentFixture(environmentId);
     const second = caller(`${environmentId}:second`);
-    const generate = vi.fn(() => support.CREDENTIAL);
-    const service = support.createService(support.createProvider(), {
-      generateWorkerCredential: generate,
-    });
     const gate = bundleGate();
     const original = service
       .attachSession(binding(environmentId, first))

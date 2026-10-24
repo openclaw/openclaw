@@ -1,5 +1,10 @@
 # Changelog
 
+## 2026.10.6
+
+### Changes
+- Version alignment with core OpenClaw release numbers.
+
 ## 2026.10.5
 
 ### Changes

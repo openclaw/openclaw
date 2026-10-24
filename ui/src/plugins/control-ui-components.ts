@@ -174,7 +174,7 @@ export function createControlUiComponents(options: {
       let content: HTMLElement | undefined;
       return component(
         "openclaw-modal-dialog",
-        () => import("../components/modal-dialog.ts"),
+        () => import("../components/modal-dialog.tsx"),
         (next: ControlUiDialogProps) => ({
           "prop:label": next.label,
           "prop:description": next.description ?? "",

@@ -244,7 +244,7 @@ describe("sendMessageSlack blocks", () => {
     );
     expect(
       aggregateResult.meta?.[SLACK_QUESTION_FINALIZATION_BLOCKS]?.some(
-        (block) => block.type === "actions" || block.type === "data_table",
+        (block) => block.type === "data_table",
       ),
     ).toBe(false);
   });

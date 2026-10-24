@@ -31,13 +31,7 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
 });
 
-/** Another live OpenClaw process (the test runner's parent) holds an agent database lease. */
-function holdForeignLease(options: {
-  update: boolean;
-  /** Published updaters run activation Doctor with the external service policy. */
-  externalPolicy?: boolean;
-  own?: boolean;
-}) {
+function holdForeignLease(options: { update: boolean; externalPolicy?: boolean; own?: boolean }) {
   const stateDir = dirs.make("doctor-agent-lease-wait-");
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
@@ -73,10 +67,25 @@ function holdForeignLease(options: {
   };
 }
 
-function startDoctor() {
+function holdState(databasePath: string, gateway = false) {
+  const stateDir = path.dirname(path.dirname(databasePath));
+  return acquireGatewayStateOwner({
+    databasePath,
+    payload: {
+      pid: gateway ? process.pid : process.ppid,
+      processNamespace: readGatewayLockProcessNamespace(),
+      role: gateway ? "gateway" : "agent-embedded",
+      createdAt: new Date().toISOString(),
+      configPath: path.join(stateDir, "openclaw.json"),
+      stateDir,
+    },
+  });
+}
+
+function startDoctor(waitForMaintenance = false) {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
-  const clock = { ms: 0 };
-  vi.spyOn(performance, "now").mockImplementation(() => clock.ms);
+  let now = 0;
+  vi.spyOn(performance, "now").mockImplementation(() => now);
   const listeners = new Set<(message: string) => void>();
   const log = vi.fn((message: unknown) =>
     listeners.forEach((listener) => listener(String(message))),
@@ -84,6 +93,7 @@ function startDoctor() {
   let settled = false;
   const result = beginDoctorMaintenance({
     options: { repair: true, nonInteractive: true },
+    waitForMaintenance,
     root: null,
     runtime: { log, error: vi.fn(), exit: vi.fn() },
   }).then(
@@ -96,10 +106,6 @@ function startDoctor() {
       return { error };
     },
   );
-  const advanceTo = async (ms: number) => {
-    clock.ms = ms;
-    await vi.advanceTimersToNextTimerAsync();
-  };
   // Settles once Doctor logs a matching line, or once admission settles without one.
   const logged = (fragment: string) =>
     Promise.race([
@@ -111,21 +117,54 @@ function startDoctor() {
   return {
     log,
     result,
-    advanceTo,
+    advanceTo: async (ms: number) => {
+      now = ms;
+      await vi.advanceTimersToNextTimerAsync();
+    },
     logged,
     firstWait: logged("Waiting up to"),
     isSettled: () => settled,
   };
 }
 
+async function reachDeadline(doctor: ReturnType<typeof startDoctor>) {
+  await doctor.advanceTo(FALLBACK_DEADLINE_MS - 1);
+  expect(doctor.isSettled()).toBe(false);
+  await doctor.advanceTo(FALLBACK_DEADLINE_MS);
+  return doctor.result;
+}
+
+const failureFacts = (message: string) => [
+  { check: "doctor", code: "agent-database-lease-active", message },
+];
+const refusalMessage = (detail = "An agent database is in use.") =>
+  `Doctor could not enter maintenance. ${detail} Stop the Gateway and other OpenClaw processes or reboot, then rerun openclaw doctor --fix.`;
+
 it.each([
-  { name: "update Doctor", externalPolicy: false },
-  { name: "a published updater's activation Doctor", externalPolicy: true },
+  { name: "update Doctor", update: true, externalPolicy: false, waitForMaintenance: false },
+  {
+    name: "a published updater's activation Doctor",
+    update: true,
+    externalPolicy: true,
+    waitForMaintenance: false,
+  },
+  {
+    name: "startup credential preparation",
+    update: false,
+    externalPolicy: false,
+    waitForMaintenance: true,
+  },
+  {
+    name: "externally managed startup credential preparation",
+    update: false,
+    externalPolicy: true,
+    waitForMaintenance: true,
+  },
 ])(
   "$name waits, holding no state ownership, for another process to close its agent database",
-  async ({ externalPolicy }) => {
-    const holder = holdForeignLease({ update: true, externalPolicy });
-    const doctor = startDoctor();
+  async ({ update, externalPolicy, waitForMaintenance }) => {
+    const holder = holdForeignLease({ update, externalPolicy });
+    const doctor = startDoctor(waitForMaintenance);
     await doctor.firstWait;
     expect(doctor.log).toHaveBeenCalledWith(
       `Waiting up to 1200 s for OpenClaw process ${holder.holderPid} to close an agent database before Doctor maintenance. Let it finish, or stop it to continue sooner.`,
@@ -150,100 +189,67 @@ it.each([
   },
 );
 
-it("fails update Doctor admission at the wait deadline, naming the lease holder", async () => {
-  const holder = holdForeignLease({ update: true });
-  const doctor = startDoctor();
-  await doctor.firstWait;
-  await doctor.advanceTo(FALLBACK_DEADLINE_MS - 1);
-  expect(doctor.isSettled()).toBe(false);
-  await doctor.advanceTo(FALLBACK_DEADLINE_MS);
-  const completed = await doctor.result;
-  const error = "error" in completed ? completed.error : undefined;
-  expect(error).toBeInstanceOf(DoctorMaintenanceRefusalError);
-  expect((error as DoctorMaintenanceRefusalError).refusal).toEqual({
-    kind: "deferred",
-    reason: "agent-database-in-use",
-  });
-  const message = `Doctor could not enter maintenance. Waited 1200 s; OpenClaw process ${holder.holderPid} still has an agent database open. Stop other OpenClaw processes using this state, then retry the update.`;
-  expect((error as Error).message).toBe(message);
-  expect(collectUpdateDoctorFailureFacts(error)).toEqual([
-    { check: "doctor", code: "agent-database-lease-active", message },
-  ]);
-  // A failed admission releases ownership for the holder and the next Doctor.
-  expect(fs.existsSync(holder.ownerPath)).toBe(false);
-});
-
-it("shares one deadline with the state wait, so a long first wait shortens the lease wait", async () => {
-  const lease = holdForeignLease({ update: true });
-  const stateDir = path.dirname(path.dirname(lease.databasePath));
-  const stateHolder = acquireGatewayStateOwner({
-    databasePath: lease.databasePath,
-    payload: {
-      pid: process.ppid,
-      processNamespace: readGatewayLockProcessNamespace(),
-      role: "agent-embedded",
-      createdAt: new Date().toISOString(),
-      configPath: path.join(stateDir, "openclaw.json"),
-      stateDir,
-    },
-  });
-  try {
-    const doctor = startDoctor();
-    await doctor.logged(`Waiting up to 1200 s for the OpenClaw agent-embedded process`);
-    stateHolder.release();
-    await doctor.advanceTo(900_000);
-    // The lease wait gets only what the state wait left of the same deadline.
-    await doctor.logged("to close an agent database");
-    expect(doctor.log).toHaveBeenCalledWith(
-      `Waiting up to 300 s for OpenClaw process ${lease.holderPid} to close an agent database before Doctor maintenance. Let it finish, or stop it to continue sooner.`,
-    );
-    await doctor.advanceTo(FALLBACK_DEADLINE_MS - 1);
-    expect(doctor.isSettled()).toBe(false);
-    await doctor.advanceTo(FALLBACK_DEADLINE_MS);
-    const completed = await doctor.result;
-    expect((completed as { error?: Error }).error?.message).toContain(
-      `Waited 1200 s; OpenClaw process ${lease.holderPid} still has an agent database open.`,
-    );
-  } finally {
-    stateHolder.release();
-  }
-});
+it.each([false, true])(
+  "shares the state/agent wait deadline (state wait=%s)",
+  async (stateWait) => {
+    const holder = holdForeignLease({ update: true });
+    const stateHolder = stateWait ? holdState(holder.databasePath) : undefined;
+    try {
+      const doctor = startDoctor();
+      if (stateHolder) {
+        await doctor.logged("Waiting up to 1200 s for the OpenClaw agent-embedded process");
+        stateHolder.release();
+        await doctor.advanceTo(900_000);
+        await doctor.logged("to close an agent database");
+        expect(doctor.log).toHaveBeenCalledWith(
+          `Waiting up to 300 s for OpenClaw process ${holder.holderPid} to close an agent database before Doctor maintenance. Let it finish, or stop it to continue sooner.`,
+        );
+      } else {
+        await doctor.firstWait;
+      }
+      const completed = await reachDeadline(doctor);
+      const error = "error" in completed ? completed.error : undefined;
+      expect(error).toBeInstanceOf(DoctorMaintenanceRefusalError);
+      const message = refusalMessage(`Waited 1200 s; database held by PID ${holder.holderPid}.`);
+      expect(error).toMatchObject({ message });
+      expect((error as DoctorMaintenanceRefusalError).refusal).toEqual({
+        kind: "deferred",
+        reason: "agent-database-in-use",
+      });
+      expect(collectUpdateDoctorFailureFacts(error)).toEqual(failureFacts(message));
+      // A failed admission releases ownership for the holder and the next Doctor.
+      expect(fs.existsSync(holder.ownerPath)).toBe(false);
+    } finally {
+      stateHolder?.release();
+    }
+  },
+);
 
 it.each([
   { name: "manual doctor --fix", update: false },
   { name: "a lease held by Doctor's own process", update: true, own: true },
   { name: "a live Gateway under the external policy", update: true, gateway: true },
-])("keeps the immediate agent lease refusal for $name", async ({ update, own, gateway }) => {
-  const holder = holdForeignLease({ update, own, externalPolicy: gateway });
-  // The serving Gateway may own the lease; its lifecycle lock would mask the refusal.
-  const serving = gateway
-    ? acquireGatewayStateOwner({
-        databasePath: holder.databasePath,
-        payload: {
-          pid: process.pid,
-          processNamespace: readGatewayLockProcessNamespace(),
-          role: "gateway",
-          createdAt: new Date().toISOString(),
-          configPath: path.join(path.dirname(path.dirname(holder.databasePath)), "openclaw.json"),
-          stateDir: path.dirname(path.dirname(holder.databasePath)),
-        },
-      })
-    : undefined;
-  try {
-    const doctor = startDoctor();
-    const completed = await doctor.result;
-    expect(
-      collectUpdateDoctorFailureFacts("error" in completed ? completed.error : undefined),
-    ).toEqual([
-      {
-        check: "doctor",
-        code: "agent-database-lease-active",
-        message:
-          "Doctor could not enter maintenance. An agent database is in use. Stop other OpenClaw processes using this state, then retry the update.",
-      },
-    ]);
-    expect(doctor.log).not.toHaveBeenCalledWith(expect.stringContaining("Waiting up to"));
-  } finally {
-    serving?.release();
-  }
-});
+  {
+    name: "startup with a live Gateway under the external policy",
+    update: false,
+    gateway: true,
+    waitForMaintenance: true,
+  },
+])(
+  "refuses active agent leases immediately ($name)",
+  async ({ update, own, gateway, waitForMaintenance }) => {
+    const holder = holdForeignLease({ update, own, externalPolicy: gateway });
+    // The serving Gateway may own the lease; its lifecycle lock would mask the refusal.
+    const serving = gateway ? holdState(holder.databasePath, true) : undefined;
+    try {
+      const doctor = startDoctor(waitForMaintenance);
+      const completed = await doctor.result;
+      expect(
+        collectUpdateDoctorFailureFacts("error" in completed ? completed.error : undefined),
+      ).toEqual(failureFacts(refusalMessage()));
+      expect(doctor.log).not.toHaveBeenCalledWith(expect.stringContaining("Waiting up to"));
+    } finally {
+      serving?.release();
+    }
+  },
+);

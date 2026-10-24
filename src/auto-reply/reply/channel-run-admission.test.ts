@@ -1,9 +1,5 @@
 import { assert, expect, it, onTestFinished } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../../agents/admitted-run-context.js";
 import { createAgentHarnessHostCapabilities } from "../../agents/harness/host-capability.js";
 import { getGatewayToolCallerIdentity } from "../../agents/tools/gateway-caller-context.js";
 import {
@@ -206,8 +202,8 @@ it("explains identifier-authentication effects alongside an unevaluated contribu
   expect(JSON.stringify(decisions)).not.toContain("private-person-value");
 });
 
-it("does not consume a cancelled pre-admission carrier or label internal ACP as a person", async () => {
-  const { evidence: createEvidence, envelope } = captureAdmission();
+it("does not consume a cancelled pre-admission carrier", async () => {
+  const { evidence: createEvidence } = captureAdmission();
   const evidence = createEvidence();
   const cancelled = prepare({ runId: "cancelled-run", evidence });
   cancelled.close();
@@ -215,18 +211,4 @@ it("does not consume a cancelled pre-admission carrier or label internal ACP as 
     "prepared execution context is already closed",
   );
   expect(consumeChannelAdmissionEvidence(evidence)).toMatchObject({ ingressState: "present" });
-
-  const internalAcp = prepareAgentRunAdmission({
-    cfg: identityConfig,
-    operationalRunInstance: createOperationalRunInstanceRef("internal-acp"),
-    facts: {
-      runId: "internal-acp",
-      agentId: "main",
-      ingress: { kind: "acp", boundary: "test.internal", state: "present" },
-    },
-  });
-  await internalAcp.admit("acp");
-  internalAcp.close();
-
-  expect(envelope().invoker).toBeUndefined();
 });

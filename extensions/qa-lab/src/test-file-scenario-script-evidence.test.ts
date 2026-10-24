@@ -5,11 +5,11 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveQaArtifactPath } from "./cli-paths.js";
 import { buildQaOccurrenceEvidenceSummary, type QaEvidenceOccurrence } from "./evidence-summary.js";
-import { runQaTestFileScenarios } from "./test-file-scenario-runner.js";
 import {
   buildScriptProducerEvidence,
   makeTestFileScenario,
   QA_TEST_RUNNER_DEFAULTS,
+  runQaTestFileScenariosWithCommand as runQaTestFileScenarios,
   writeNativeVitestReport,
 } from "./test-file-scenario-runner.test-support.js";
 import { readScriptProducerEvidence } from "./test-file-scenario-script-evidence.js";

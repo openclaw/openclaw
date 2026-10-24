@@ -130,7 +130,7 @@ suite.define(() => {
           await detailsLabel.fill("List workspace");
           await detailsLabel.press("Tab");
           await ui.sessionPatch(gateway, own.key, { label: "List workspace" });
-          await ui.button(listRow("List workspace"), "Open session menu").click();
+          await ui.button(listRow("List workspace"), "Open session menu", false).click();
           await ui.menuItem(menu, "Mark as unread").click();
           await ui.sessionPatch(gateway, own.key, { unread: true });
         }
@@ -208,7 +208,7 @@ suite.define(() => {
           await showSessions("?status=archived");
           const archivedRow = listRow("Organized workspace");
           await archivedRow.waitFor();
-          await ui.button(archivedRow, "Open session menu").click();
+          await ui.button(archivedRow, "Open session menu", false).click();
           await support.openSessionMenuSubmenu(page, "Advanced");
           const remove = menu.locator('[data-value="delete"]');
           await remove.waitFor();
@@ -220,6 +220,14 @@ suite.define(() => {
           await archivedRow.waitFor({ state: "detached" });
           await navigate(own.key);
           await ui.expectText(ownRow, "Organized workspace");
+          // Ordinary Unarchive leaves personal pins cleared; only Undo restores them.
+          await ui.expectCount(
+            page.locator(`[data-session-section="pinned"] [data-session-key="${own.key}"]`),
+            0,
+          );
+          await ownRow.hover();
+          await ui.button(ownRow, "Pin session").click();
+          await ui.button(ownRow, "Unpin session").waitFor();
         } else {
           await rename.click({ force: true });
           await archive.click({ force: true });
@@ -232,7 +240,10 @@ suite.define(() => {
           await ui.button(ownRow, "Unpin session").waitFor();
         }
         const pinRef = `session:${own.key}`;
-        await ui.expectCount(page.locator(`.sidebar-rail [data-sidebar-entry="${pinRef}"]`), 1);
+        await ui.expectCount(
+          page.locator(`[data-session-section="pinned"] [data-session-key="${own.key}"]`),
+          1,
+        );
         await expect
           .poll(() =>
             page.evaluate(

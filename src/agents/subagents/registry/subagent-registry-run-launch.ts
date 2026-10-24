@@ -220,9 +220,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
               settleFailedLaunch,
             }),
       );
-      authority = registerParams.collect
-        ? undefined
-        : await captureOperatorToolGatewayContinuationContext();
+      authority = await captureOperatorToolGatewayContinuationContext();
       const operator = authority?.operatorAuthority;
       let operatorRecoverySource: SubagentRunRecord["operatorRecoverySource"];
       if (
@@ -385,7 +383,7 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
                   requesterAgentId,
                 ),
               });
-              if (authority) {
+              if (authority && !registerParams.collect) {
                 subagentRuns.bindCompletionAuthority(entry, authority);
                 custodyTransferred = true;
               }

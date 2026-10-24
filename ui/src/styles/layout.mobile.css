@@ -323,6 +323,8 @@ html.openclaw-native-desktop body .shell--mobile-nav {
   }
 
   .chat-thread {
+    --chat-thread-padding-top: 0px;
+
     margin-top: 0;
     /* Horizontal inset lives on .chat-thread-inner (see layout.css): padding
        on the scroll container floats macOS overlay scrollbars off the edge. */

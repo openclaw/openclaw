@@ -39,6 +39,7 @@ import { normalizeWorkspaceDir } from "../workspace-dir.js";
 import type { AgentWorkspaceReadiness } from "../workspace-readiness.js";
 import {
   ToolInputError,
+  readFiniteNumberParam,
   readNumberParam,
   readPositiveIntegerParam,
   readStringArrayParam,
@@ -213,7 +214,6 @@ async function resolveCapabilityModelCandidatesForTool(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   providers: readonly CapabilityProvider[];
 }): Promise<string[]> {
   const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
@@ -260,7 +260,6 @@ export async function resolveCapabilityModelConfigForTool(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   modelConfig?: AgentModelConfig;
   modelOverride?: string;
   providers: CapabilityProviderSource;
@@ -470,11 +469,20 @@ export async function resolveMediaToolReferenceAccess(params: {
           inboundFallbackDir: "media/inbound",
         })
       : { resolved: resolveHostPath() };
+  // A policy that lets read open host files lets media tools load the same file.
+  const hostReadRoot =
+    params.fsPolicy?.workspaceOnly === false &&
+    !params.sandbox &&
+    !params.isDataUrl &&
+    path.isAbsolute(pathInfo.resolved)
+      ? [path.dirname(pathInfo.resolved)]
+      : [];
   return {
     resolvedPath: params.isDataUrl ? null : pathInfo.resolved,
     localRoots: uniqueStrings([
       ...(workspaceOnly ? hostRoots : [...getDefaultLocalRootsCore(), ...hostRoots]),
       ...(params.fsPolicy?.readOnlyRoots ?? []),
+      ...hostReadRoot,
     ]),
     ...(pathInfo.rewrittenFrom ? { rewrittenFrom: pathInfo.rewrittenFrom } : {}),
   };
@@ -645,16 +653,22 @@ export function resolveMediaToolInboundRoots(options?: {
   );
 }
 
-export function resolvePromptAndModelOverride(
+export function resolveMediaAnalysisParams(
   args: Record<string, unknown>,
   defaultPrompt: string,
 ): {
   prompt: string;
   modelOverride?: string;
+  maxBytesMb?: number;
 } {
   const prompt = normalizeOptionalString(args.prompt) ?? defaultPrompt;
   const modelOverride = normalizeOptionalString(args.model);
-  return { prompt, modelOverride };
+  const maxBytesMb = readFiniteNumberParam(args, "maxBytesMb", {
+    min: 0,
+    minExclusive: true,
+    message: "maxBytesMb must be greater than 0",
+  });
+  return { prompt, modelOverride, maxBytesMb };
 }
 
 export function buildTextToolResult(

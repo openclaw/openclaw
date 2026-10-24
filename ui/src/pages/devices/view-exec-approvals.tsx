@@ -182,7 +182,7 @@ export function ExecApprovals(props: ExecApprovalsState) {
                 <button
                   class="btn"
                   disabled={props.loading || !targetReady()}
-                  onClick={props.onLoad}
+                  onClick={() => props.onLoad()}
                 >
                   {props.loading ? t("common.loading") : t("common.loadApprovals")}
                 </button>

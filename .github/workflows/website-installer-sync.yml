@@ -174,7 +174,7 @@ jobs:
         run: |
           timeout --kill-after=30s 20m docker run --rm \
             -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
-            node:24-${{ matrix.debian }}-slim \
+            node:24.22.1-${{ matrix.debian }}-slim \
             bash -lc 'bash /tmp/install.sh --version latest && openclaw --version'
 
       - name: install-cli.sh in Docker
@@ -183,7 +183,7 @@ jobs:
             -e OPENCLAW_NO_ONBOARD=1 \
             -e OPENCLAW_NO_PROMPT=1 \
             -v "$PWD/dist/installers/install-cli.sh:/tmp/install-cli.sh:ro" \
-            node:24-${{ matrix.debian }}-slim \
+            node:24.22.1-${{ matrix.debian }}-slim \
             bash -lc 'apt-get update -y && apt-get install -y curl && bash /tmp/install-cli.sh --prefix /tmp/openclaw --no-onboard --version latest && /tmp/openclaw/bin/openclaw --version'
 
   debian-installer:
@@ -303,7 +303,7 @@ jobs:
         run: |
           timeout --kill-after=30s 20m docker run --rm -i \
             -v "$PWD/dist/installers/install.sh:/tmp/install.sh:ro" \
-            node:24-${{ matrix.debian }}-slim \
+            node:24.22.1-${{ matrix.debian }}-slim \
             bash -s <<'CONTAINER'
           set -euo pipefail
           apt-get update -qq
@@ -400,7 +400,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: 24.22.1
 
       - name: Assemble standalone installers
         run: node scripts/build-installers.mjs
@@ -426,7 +426,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: 24.22.1
 
       - name: install.ps1 strict option binding
         shell: pwsh
@@ -553,7 +553,7 @@ jobs:
         if: steps.changes.outputs.changed == 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24"
+          node-version: "24.22.1"
 
       - name: Verify website with synced installers
         if: steps.changes.outputs.changed == 'true'

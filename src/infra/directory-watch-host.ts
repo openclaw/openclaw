@@ -8,21 +8,24 @@ export type DirectoryWatch = {
   close(): void;
   on(event: "error", listener: (error: Error) => void): unknown;
 };
+type HostedWatch = EventEmitter & { path: string; recursive: boolean };
 type Host = {
   child: ChildProcessByStdio<Writable, Readable, null>;
-  watches: Map<number, EventEmitter>;
+  watches: Map<number, HostedWatch>;
+  retired: number;
 };
 
 // libuv on macOS rebuilds the loop's shared FSEventStream synchronously on every
 // directory-watch close, waiting on fseventsd; under load one close can block for
 // seconds, and Node's exit cleanup closes leftover watchers the same way. A helper
-// process owns those streams so the caller's loop never closes one, and the helper
-// exits without closing them once its input ends.
+// process owns those streams and never closes one: a close only retires its id, and
+// the helper exits without teardown once its input ends.
 const HOST_SCRIPT = `
 const fs = require("node:fs");
 const { Worker } = require("node:worker_threads");
-// A close can hold this loop on fseventsd for minutes, leaving end of input
-// unread; the worker still ends the helper once its caller process is gone.
+// Node still closes a watch natively when it errors, which can hold this loop on
+// fseventsd for minutes, leaving end of input unread; the worker still ends the
+// helper once its caller process is gone.
 new Worker(
   "const caller = " + Number(process.argv[1]) +
     "; setInterval(() => process.ppid === caller || process.kill(process.pid, 'SIGKILL'), 1000);",
@@ -30,7 +33,7 @@ new Worker(
 )
   .on("error", () => {})
   .unref();
-const watches = new Map();
+const live = new Set();
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
 let buffered = "";
 process.stdin.setEncoding("utf8").on("data", (chunk) => {
@@ -39,19 +42,16 @@ process.stdin.setEncoding("utf8").on("data", (chunk) => {
   for (const line of lines) {
     const { id, path, recursive } = JSON.parse(line);
     if (path === undefined) {
-      watches.get(id)?.close();
-      watches.delete(id);
+      live.delete(id);
       continue;
     }
     try {
-      const watcher = fs.watch(path, { persistent: false, recursive }, (event, filename) =>
-        send({ id, event, filename }),
-      );
-      watcher.on("error", () => {
-        watches.delete(id);
-        send({ id });
-      });
-      watches.set(id, watcher);
+      fs.watch(path, { persistent: false, recursive }, (event, filename) => {
+        if (live.has(id)) {
+          send({ id, event, filename });
+        }
+      }).on("error", () => live.delete(id) && send({ id }));
+      live.add(id);
       // Registration is asynchronous; invalidate once live to cover the startup gap.
       send({ id, event: "change" });
     } catch {
@@ -64,6 +64,10 @@ process.stdin.on("end", () => process.exit(0));
 
 let host: Host | undefined;
 let nextId = 0;
+// Retired native watches stay open until their helper exits; past this many the
+// live watches move to a fresh helper, whose single stream build replaces one
+// rebuild per close.
+const MAX_RETIRED_WATCHES = 64;
 
 function startHost(): Host {
   // The caller passes its PID so a helper that starts after it died still exits.
@@ -74,7 +78,7 @@ function startHost(): Host {
     detached: true,
     env: { ...process.env, NODE_OPTIONS: undefined },
   });
-  const started: Host = { child, watches: new Map() };
+  const started: Host = { child, watches: new Map(), retired: 0 };
   let buffered = "";
   child.stdout.setEncoding("utf8").on("data", (chunk: string) => {
     const lines = (buffered + chunk).split("\n");
@@ -114,6 +118,13 @@ function startHost(): Host {
   return started;
 }
 
+function register(target: Host, id: number, watch: HostedWatch): void {
+  target.watches.set(id, watch);
+  target.child.stdin.write(
+    `${JSON.stringify({ id, path: watch.path, recursive: watch.recursive })}\n`,
+  );
+}
+
 function watchInHost(
   directoryPath: string,
   listener: Listener,
@@ -121,26 +132,32 @@ function watchInHost(
 ): DirectoryWatch {
   // Match fs.watch's synchronous admission so callers can fall back to an ancestor.
   fs.closeSync(fs.openSync(directoryPath, "r"));
-  const current = (host ??= startHost());
   const id = nextId++;
-  const watch = new EventEmitter();
+  const watch = Object.assign(new EventEmitter(), { path: directoryPath, recursive });
   watch.on("change", listener);
-  current.watches.set(id, watch);
-  current.child.stdin.write(`${JSON.stringify({ id, path: directoryPath, recursive })}\n`);
+  register((host ??= startHost()), id, watch);
   return Object.assign(watch, {
     close() {
       watch.removeAllListeners("change");
-      if (!current.watches.delete(id)) {
+      // Live watches always sit in the current helper; a lost one is in none.
+      const current = host;
+      if (!current?.watches.delete(id)) {
         return;
       }
-      if (current.watches.size) {
+      if (current.watches.size && ++current.retired < MAX_RETIRED_WATCHES) {
         current.child.stdin.write(`${JSON.stringify({ id })}\n`);
-      } else {
-        if (host === current) {
-          host = undefined;
-        }
-        current.child.stdin.end();
+        return;
       }
+      host = undefined;
+      if (current.watches.size) {
+        // Each moved watch invalidates once when live again, covering the handoff.
+        const next = (host = startHost());
+        for (const [movedId, moved] of current.watches) {
+          register(next, movedId, moved);
+        }
+        current.watches.clear();
+      }
+      current.child.stdin.end();
     },
   });
 }
@@ -151,9 +168,15 @@ export function watchDirectory(
   listener: Listener,
   recursive = false,
 ): DirectoryWatch {
-  return process.platform === "darwin" && !process.versions.bun
-    ? watchInHost(directoryPath, listener, recursive)
-    : fs.watch(directoryPath, { persistent: false, recursive }, (event, filename) =>
-        listener(event, filename?.toString() ?? undefined),
-      );
+  if (process.platform === "darwin" && !process.versions.bun) {
+    return watchInHost(directoryPath, listener, recursive);
+  }
+  if (recursive) {
+    // Node 24's Linux recursive fallback returns a watch that never reports for a
+    // missing or unreadable root (nodejs/node#65635); callers fall back only on throw.
+    fs.accessSync(directoryPath, fs.constants.R_OK);
+  }
+  return fs.watch(directoryPath, { persistent: false, recursive }, (event, filename) =>
+    listener(event, filename?.toString() ?? undefined),
+  );
 }

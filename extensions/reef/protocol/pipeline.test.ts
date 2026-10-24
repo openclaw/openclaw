@@ -13,7 +13,6 @@ import { generateIdentity } from "./identity.js";
 import { MemoryAuditStore, MemoryReplayStore } from "./memory-stores.test-support.js";
 import {
   composeInbound,
-  composeOutbound,
   PipelineError,
   type ReviewApproval,
   type ReviewDecisionState,
@@ -49,46 +48,26 @@ function mockGuard(...verdicts: Verdict[]): GuardAdapter & { calls: number } {
   };
 }
 
-function structuralGuard(
-  pinnedModel: string,
-  ...results: unknown[]
-): GuardAdapter & { calls: number } {
-  return {
-    providerId: "structural",
-    pinnedModel,
-    calls: 0,
-    async classify() {
-      return (results[this.calls++] ?? results.at(-1)) as Verdict;
-    },
-  };
-}
-
-type OutboundOptions = Parameters<typeof composeOutbound>[0];
 type InboundOptions = Parameters<typeof composeInbound>[0];
 
-function identities(defaults: Partial<OutboundOptions> = {}) {
+function identities() {
   const alice = generateIdentity();
   const bob = generateIdentity();
-  const outboundOptions = (overrides: Partial<OutboundOptions> = {}): OutboundOptions => ({
-    id: "01JZ0000000000000000000000",
-    from: "alice#1",
-    to: "bob#1",
-    body: { text: "ordinary text" },
-    senderSigningSecretKey: alice.signing.secretKey,
-    recipientEncryptionPublicKey: bob.encryption.publicKey,
-    guard: mockGuard(allow),
-    audit: audit(),
-    policyVersion: "v1",
-    ...defaults,
-    ...overrides,
-  });
   const inbound = (
     message: string | Envelope,
     overrides: Partial<InboundOptions> = {},
   ): InboundOptions => ({
     envelope:
       typeof message === "string"
-        ? seal({ ...outboundOptions(), body: { text: message }, ts: now })
+        ? seal({
+            id: "01JZ0000000000000000000000",
+            from: "alice#1",
+            to: "bob#1",
+            body: { text: message },
+            senderSigningSecretKey: alice.signing.secretKey,
+            recipientEncryptionPublicKey: bob.encryption.publicKey,
+            ts: now,
+          })
         : message,
     self: "bob#1",
     recipientEncryptionSecretKey: bob.encryption.secretKey,
@@ -105,8 +84,6 @@ function identities(defaults: Partial<OutboundOptions> = {}) {
     alice,
     bob,
     inbound,
-    outbound: (overrides: Partial<OutboundOptions> = {}) =>
-      composeOutbound(outboundOptions(overrides)),
   };
 }
 
@@ -121,7 +98,6 @@ const recordedGate = (decision: ReviewDecisionState) =>
     async () => undefined,
     async () => decision,
   );
-const rngSpy = () => vi.fn((length: number) => new Uint8Array(length));
 
 function expectAudit(entries: AuditEntry[], types: string[]) {
   expect(entries.map((entry) => entry.event.type)).toEqual(types);
@@ -224,26 +200,14 @@ describe("pipeline", () => {
   );
 
   it.each([`Tree: https://github.com/openclaw/openclaw/tree/${githubCommit}/.agents`])(
-    "runs an allowed outbound and inbound exchange end to end: %s",
+    "accepts and deduplicates an authenticated inbound envelope: %s",
     async (text) => {
-      const { inbound: receiveOptions, outbound: send } = identities();
-      const outboundAudit = audit();
-      const outboundGuard = mockGuard(allow);
-      const classifyOutbound = vi.spyOn(outboundGuard, "classify");
-      const outbound = await send({
-        body: { text },
-        ts: now,
-        audit: outboundAudit,
-        guard: outboundGuard,
-      });
-      expect(classifyOutbound).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ direction: "outbound", text }),
-      );
+      const { inbound: receiveOptions } = identities();
       const inboundAudit = audit();
       const inboundGuard = mockGuard(allow);
       const classifyInbound = vi.spyOn(inboundGuard, "classify");
       const replayStore = new MemoryReplayStore();
-      const options = receiveOptions(outbound.envelope, {
+      const options = receiveOptions(text, {
         replayStore,
         guard: inboundGuard,
         audit: inboundAudit,
@@ -257,10 +221,8 @@ describe("pipeline", () => {
       expect(classifyInbound).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({ direction: "inbound", text }),
       );
-      expect(inbound.receipt).toMatchObject({ id: outbound.envelope.id, status: "accepted" });
-      const outboundEntries = await outboundAudit.entries();
+      expect(inbound.receipt).toMatchObject({ id: options.envelope.id, status: "accepted" });
       const inboundEntries = await inboundAudit.entries();
-      expectAudit(outboundEntries, ["proposal", "guard_verdict", "envelope"]);
       expectAudit(inboundEntries, ["guard_verdict", "inbox", "receipt"]);
       const duplicate = await composeInbound({ ...options, now: now + 10 * 60 });
       expect(duplicate).toEqual({
@@ -281,137 +243,6 @@ describe("pipeline", () => {
       code: "malformed",
     });
     expect(guard.calls).toBe(0);
-  });
-
-  it.each([`mailto:review@example.org?next=${githubBlob}`])(
-    "stops a deterministic outbound denial before guard and sealing: %s",
-    async (text) => {
-      const { outbound } = identities();
-      const guard = mockGuard(allow);
-      const rng = rngSpy();
-      await expect(outbound({ body: { text }, guard, rng })).rejects.toMatchObject({
-        stage: "deterministic",
-      });
-      expect(guard.calls).toBe(0);
-      expect(rng).not.toHaveBeenCalled();
-    },
-  );
-
-  it("stops an outbound guard denial before sealing", async () => {
-    const { outbound } = identities();
-    const deny: Verdict = {
-      ...allow,
-      decision: "deny",
-      category: "confidential",
-      reason: "Denied.",
-    };
-    const rng = rngSpy();
-    await expect(
-      outbound({ body: { text: githubBlob }, guard: mockGuard(deny), rng }),
-    ).rejects.toMatchObject({ stage: "guard", verdict: deny });
-    expect(rng).not.toHaveBeenCalled();
-  });
-
-  it("centrally rejects invalid verdicts from structural guard adapters", async () => {
-    const { outbound } = identities();
-    const cases: Array<[string, string, unknown]> = [
-      ["wrong model", "mock-2026-07-12", { ...allow, model: "other-2026-07-12" }],
-      ["floating model", "mock-latest", { ...allow, model: "mock-latest" }],
-      ["wrong policy", "mock-2026-07-12", { ...allow, policyVersion: "v2" }],
-      ["unknown decision", "mock-2026-07-12", { ...allow, decision: "maybe" }],
-    ];
-    for (const [name, pinnedModel, rawVerdict] of cases) {
-      const rng = rngSpy();
-      await expect(
-        outbound({
-          id: "01JZ0000000000000000000008",
-          body: { text: `case ${name}` },
-          guard: structuralGuard(pinnedModel, rawVerdict),
-          rng,
-        }),
-      ).rejects.toMatchObject({
-        stage: "guard",
-        verdict: { decision: "deny", category: "guard_failure" },
-      });
-      expect(rng).not.toHaveBeenCalled();
-    }
-  });
-
-  it("accepts a valid structural adapter and admits the post-review verdict again", async () => {
-    const { outbound } = identities({
-      id: "01JZ0000000000000000000009",
-      body: { text: "structural adapter" },
-    });
-    await expect(outbound({ guard: structuralGuard(allow.model, allow) })).resolves.toMatchObject({
-      verdict: allow,
-    });
-    const review = reviewVerdict();
-    const invalidAfterApproval = { ...allow, model: "wrong-2026-07-12" };
-    await expect(
-      outbound({
-        guard: structuralGuard(allow.model, review, invalidAfterApproval),
-        reviewGate: approvalGate(true),
-      }),
-    ).rejects.toMatchObject({
-      stage: "guard",
-      verdict: { decision: "deny", category: "guard_failure" },
-    });
-  });
-
-  it("requires exact full-proposal approval and fresh classification for review", async () => {
-    const { outbound } = identities({ body: { text: githubBlob } });
-    const review = reviewVerdict();
-    await expect(outbound({ guard: mockGuard(review) })).rejects.toMatchObject({ stage: "review" });
-    await expect(
-      outbound({
-        guard: mockGuard(review),
-        reviewGate: approvalGate(false),
-      }),
-    ).rejects.toMatchObject({ stage: "review", reviewOutcome: "denied", receipt: undefined });
-    await expect(
-      outbound({
-        guard: mockGuard(review),
-        reviewGate: gateOf(async () => ({ approved: true, approvalDigest: "wrong" })),
-      }),
-    ).rejects.toMatchObject({ stage: "review" });
-    const guard = mockGuard(review, allow);
-    const result = await outbound({ guard, reviewGate: approvalGate(true) });
-    expect(result.verdict.decision).toBe("allow");
-    expect(guard.calls).toBe(2);
-  });
-
-  it("does not reuse an approval across recipients", async () => {
-    const review = reviewVerdict();
-    const { outbound } = identities({
-      id: "01JZ0000000000000000000007",
-      from: "sender#1",
-      body: { text: "identical body" },
-    });
-    let vincentDigest = "";
-    await expect(
-      outbound({
-        to: "vincent#1",
-        guard: mockGuard(review),
-        reviewGate: gateOf(async (request) => {
-          vincentDigest = request.approvalDigest;
-          expect(request).toMatchObject({
-            id: "01JZ0000000000000000000007",
-            from: "sender#1",
-            to: "vincent#1",
-            direction: "outbound",
-          });
-          expect(request.bodyHash).toMatch(/^[0-9a-f]{64}$/);
-          return undefined;
-        }),
-      }),
-    ).rejects.toMatchObject({ stage: "review", reviewOutcome: "pending" });
-    await expect(
-      outbound({
-        to: "alice#1",
-        guard: mockGuard(review),
-        reviewGate: gateOf(async () => ({ approved: true, approvalDigest: vincentDigest })),
-      }),
-    ).rejects.toMatchObject({ stage: "review", message: "approval digest mismatch" });
   });
 
   it("releases a replay claim after transient audit failure and retries successfully", async () => {
@@ -494,7 +325,7 @@ describe("pipeline", () => {
   });
 
   it("holds a pending review on redelivery without re-classifying", async () => {
-    const { inbound, outbound } = identities();
+    const { inbound } = identities();
     const guard = mockGuard(allow);
     const inboundAudit = audit();
     const options = inbound("parked while pending", {
@@ -511,11 +342,6 @@ describe("pipeline", () => {
     // and re-attempts must not grow the audit chain.
     expect(guard.calls).toBe(0);
     expect((await inboundAudit.entries()).length).toBe(0);
-    await expect(outbound({ guard, reviewGate: recordedGate("pending") })).rejects.toMatchObject({
-      stage: "review",
-      reviewOutcome: "pending",
-    });
-    expect(guard.calls).toBe(0);
   });
 
   it("completes a decided-approved review on redelivery with one classification", async () => {

@@ -49,6 +49,34 @@ const samples = [
 ];
 
 describe("plainToolCallTextFilter streamed projection", () => {
+  it("extends protection when an indented code block grows after a whitespace chunk", () => {
+    const chunks = ["    [tool:read] {}\n", "    ", "[tool:write] {}\n"];
+    const source = chunks.join("");
+    const projection = createTextProjection([plainToolCallTextFilter]);
+
+    for (const chunk of chunks) {
+      projection.append(chunk);
+    }
+
+    expect(projection.text).toBe(reference(source));
+    expect(projection.text).toContain("[tool:read] {}");
+    expect(projection.text).toContain("[tool:write] {}");
+  });
+
+  it("refreshes cached ranges when a list-owned fence grows", () => {
+    const chunks = ["- ```text\n  [tool:read] {}", "\n  [tool:write] {}\n"];
+    const source = chunks.join("");
+    const projection = createTextProjection([plainToolCallTextFilter]);
+
+    for (const chunk of chunks) {
+      projection.append(chunk);
+    }
+
+    expect(projection.text).toBe(reference(source));
+    expect(projection.text).toContain("  [tool:read] {}");
+    expect(projection.text).toContain("  [tool:write] {}");
+  });
+
   it("bounds plain-tool-call parse work for citation replies in token-sized deltas", () => {
     const source = [
       "Here is the summary.",

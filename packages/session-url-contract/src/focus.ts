@@ -56,20 +56,6 @@ function normalizePathname(pathname: string): string {
   return withSlash.length > 1 ? withSlash.replace(/\/+$/u, "") : withSlash;
 }
 
-function splitPathSuffix(value: string): { pathname: string; suffix: string } {
-  const delimiter = value.search(/[?#]/u);
-  const suffixIndex = delimiter < 0 ? value.length : delimiter;
-  return { pathname: value.slice(0, suffixIndex), suffix: value.slice(suffixIndex) };
-}
-
-function decodeFocusValue(segment: string): { ok: true; value: string | null } | { ok: false } {
-  try {
-    return { ok: true, value: readNonBlankString(decodeURIComponent(segment)) ?? null };
-  } catch {
-    return { ok: false };
-  }
-}
-
 function parseBrowserFocus(search: string): ControlUiFocusBrowserTarget | null {
   const query = new URLSearchParams(search);
   const value = (key: string): string | null => {
@@ -172,7 +158,11 @@ export function buildControlUiFocusPath(
         : "";
     return `${root}/desktop${control}${selector}`;
   }
-  const { pathname, suffix } = splitPathSuffix(target.path);
+  const path = target.path;
+  const delimiter = path.search(/[?#]/u);
+  const suffixIndex = delimiter < 0 ? path.length : delimiter;
+  const pathname = path.slice(0, suffixIndex);
+  const suffix = path.slice(suffixIndex);
   const normalizedPath = normalizePathname(pathname);
   const dashboardRoot = `${base}/dashboard/`;
   if (!normalizedPath.startsWith(dashboardRoot)) {
@@ -238,12 +228,14 @@ export function parseControlUiFocusLocation(
     ) {
       return { status: "unsupported", basePath: resolvedBasePath };
     }
-    const decoded = decodeFocusValue(encodedValue);
-    if (!decoded.ok) {
+    let value: string | null;
+    try {
+      value = readNonBlankString(decodeURIComponent(encodedValue)) ?? null;
+    } catch {
       return { status: "unsupported", basePath: resolvedBasePath };
     }
-    if (decoded.value) {
-      selector = { kind: selectorKind, value: decoded.value };
+    if (value) {
+      selector = { kind: selectorKind, value };
     }
   }
   return {

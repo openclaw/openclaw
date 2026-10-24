@@ -3,7 +3,10 @@ import fs from "node:fs/promises";
 import { TextDecoder } from "node:util";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "@openclaw/normalization-core/string-coerce";
 import { GatewayProtocolRequestError } from "../../packages/gateway-client/src/protocol-request.js";
 import {
   GATEWAY_CLIENT_MODES,
@@ -253,12 +256,6 @@ function formatActiveGatewayLocalRefusal(identity: GatewayLockIdentity): string 
   return `A Gateway is running for this state directory (pid ${identity.pid}, port ${identity.port}). Run without --local to use it, or stop the Gateway first (${formatCliCommand("openclaw gateway stop")}).`;
 }
 
-function protectJsonStdout(opts: Pick<AgentCliOpts, "json">): void {
-  if (opts.json === true) {
-    routeLogsToStderr();
-  }
-}
-
 function missingAgentMessageError(): Error {
   return new Error(
     `Missing message. Use ${formatCliCommand('openclaw agent --message "..." --agent <id>')} or ${formatCliCommand("openclaw agent --message-file <path> --agent <id>")}.`,
@@ -313,25 +310,6 @@ async function readAgentMessageFile(messageFile: string): Promise<string> {
   }
 }
 
-async function resolveAgentMessageOpts(opts: AgentCliOpts): Promise<AgentDispatchOpts> {
-  const { messageFile: rawMessageFile, ...rest } = opts;
-  const messageFile = rawMessageFile?.trim();
-  const hasInlineMessage = opts.message !== undefined;
-  if (hasInlineMessage && messageFile) {
-    throw new Error("Use either --message or --message-file, not both.");
-  }
-  if (rawMessageFile !== undefined && !messageFile) {
-    throw new Error("--message-file must not be empty.");
-  }
-  const message = messageFile ? await readAgentMessageFile(messageFile) : (opts.message ?? "");
-  if (!message.trim()) {
-    throw messageFile
-      ? new Error(`Message file is empty: ${messageFile}`)
-      : missingAgentMessageError();
-  }
-  return { ...rest, message };
-}
-
 function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
   const raw =
     opts.timeout !== undefined
@@ -343,21 +321,6 @@ function parseTimeoutSeconds(opts: { cfg: OpenClawConfig; timeout?: string }) {
     );
   }
   return raw;
-}
-
-async function formatPayloadForLog(payload: {
-  text?: string;
-  mediaUrls?: string[];
-  mediaUrl?: string | null;
-}) {
-  const { resolveSendableOutboundReplyParts } = await import("openclaw/plugin-sdk/reply-payload");
-  const { formatOutboundPayloadLog } = await import("../infra/outbound/payloads.js");
-  const parts = resolveSendableOutboundReplyParts({
-    text: payload.text,
-    mediaUrls: payload.mediaUrls,
-    mediaUrl: typeof payload.mediaUrl === "string" ? payload.mediaUrl : undefined,
-  });
-  return formatOutboundPayloadLog(parts).trimEnd();
 }
 
 function isCompactControlCommand(message: string): boolean {
@@ -373,28 +336,6 @@ function shouldRetryGatewayDispatchWithShellEnvFallback(err: unknown): boolean {
     isGatewayCredentialsRequiredError(err) ||
     isGatewayExplicitAuthRequiredError(err) ||
     isGatewaySecretRefUnavailableError(err)
-  );
-}
-
-function formatGatewayAgentTransportLossHint(err: unknown): string | undefined {
-  if (!isGatewayTransportError(err)) {
-    return undefined;
-  }
-  // callGateway's wrapper timer gives this CLI path typed transport errors.
-  // Legacy request-timeout strings belong to lower-level and in-process callers.
-  const failureHint = err.kind === "timeout" ? "timed out" : "connection closed";
-  // Transport loss is ambiguous: the Gateway may have accepted and may still
-  // finish this turn. Recommending a blind retry or --local here could
-  // double-execute the message, so point at verification first.
-  const acceptedRun = readCliGatewayRunFailure(err);
-  const acceptedNote = acceptedRun
-    ? ` (accepted run ${acceptedRun.runId}` +
-      (failureHint === "timed out" ? "; use --timeout <seconds> to extend the CLI wait" : "") +
-      ")"
-    : "";
-  return (
-    `Gateway agent call ${failureHint}; the Gateway may still be running this turn${acceptedNote}. ` +
-    "Check `openclaw gateway status` and the session transcript before retrying or rerunning with --local, so the turn does not execute twice."
   );
 }
 
@@ -661,17 +602,6 @@ function returnAfterSignalExit<T>(
   return exitForReceivedSignal(signal, runtime) ? undefined : value;
 }
 
-function buildGatewayJsonResponse(response: GatewayAgentResponse): GatewayAgentResponse {
-  const deliveryStatus = response.result?.deliveryStatus;
-  if (deliveryStatus === undefined) {
-    return response;
-  }
-  return {
-    ...response,
-    deliveryStatus,
-  };
-}
-
 function markAgentRunExitCode(status: unknown): void {
   if (status === undefined || status === null || status === "") {
     return;
@@ -913,7 +843,11 @@ async function agentViaGatewayCommand(
   markAgentRunExitCode(response.status);
 
   if (opts.json) {
-    writeRuntimeJson(runtime, buildGatewayJsonResponse(response));
+    const deliveryStatus = response.result?.deliveryStatus;
+    writeRuntimeJson(
+      runtime,
+      deliveryStatus === undefined ? response : { ...response, deliveryStatus },
+    );
     return response;
   }
 
@@ -940,7 +874,14 @@ async function agentViaGatewayCommand(
   }
 
   for (const payload of payloads) {
-    const out = await formatPayloadForLog(payload);
+    const { resolveSendableOutboundReplyParts } = await import("openclaw/plugin-sdk/reply-payload");
+    const { formatOutboundPayloadLog } = await import("../infra/outbound/payloads.js");
+    const parts = resolveSendableOutboundReplyParts({
+      text: payload.text,
+      mediaUrls: payload.mediaUrls,
+      mediaUrl: typeof payload.mediaUrl === "string" ? payload.mediaUrl : undefined,
+    });
+    const out = formatOutboundPayloadLog(parts).trimEnd();
     if (out) {
       runtime.log(out);
     }
@@ -996,18 +937,33 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
       throw new Error(`${flag} must not be blank`);
     }
   }
-  protectJsonStdout(opts);
-  const messageOpts = await resolveAgentMessageOpts(opts);
+  if (opts.json === true) {
+    routeLogsToStderr();
+  }
+  const { messageFile: rawMessageFile, ...rest } = opts;
+  const messageFile = readNonBlankString(rawMessageFile);
+  if (opts.message !== undefined && messageFile) {
+    throw new Error("Use either --message or --message-file, not both.");
+  }
+  if (rawMessageFile !== undefined && !messageFile) {
+    throw new Error("--message-file must not be empty.");
+  }
+  const message = messageFile ? await readAgentMessageFile(messageFile) : (opts.message ?? "");
+  if (!message.trim()) {
+    throw messageFile
+      ? new Error(`Message file is empty: ${messageFile}`)
+      : missingAgentMessageError();
+  }
   // `/compact` cannot run as a plain CLI agent turn: the slash-command handler
   // rejects CLI-originated senders, so the message would fall through to a
   // normal turn and exit 0 without compacting anything (issue #90640 Gap B).
   // Fail loudly and point at the first-class command instead of no-opping.
-  if (isCompactControlCommand(messageOpts.message)) {
+  if (isCompactControlCommand(message)) {
     throw new Error(
       "Slash commands cannot be executed via --message from the CLI. Use: openclaw sessions compact <key>",
     );
   }
-  const dispatchOpts = await normalizeSessionKeyOptsForDispatch(messageOpts);
+  const dispatchOpts = await normalizeSessionKeyOptsForDispatch({ ...rest, message });
   validateExplicitSessionKeyForDispatch(dispatchOpts);
   const gatewayDispatchOpts = dispatchOpts.runId
     ? dispatchOpts
@@ -1049,9 +1005,25 @@ export async function agentCliCommand(opts: AgentCliOpts, runtime: RuntimeEnv) {
       );
       return returnAfterSignalExit(result, signalBridge.getReceivedSignal(), runtime);
     } catch (err) {
-      const failureHint = isAbortError(err) ? undefined : formatGatewayAgentTransportLossHint(err);
-      if (failureHint) {
-        runtime.error?.(failureHint);
+      if (!isAbortError(err) && isGatewayTransportError(err)) {
+        // callGateway's wrapper timer gives this CLI path typed transport errors.
+        // Legacy request-timeout strings belong to lower-level and in-process callers.
+        const failureHint = err.kind === "timeout" ? "timed out" : "connection closed";
+        // Transport loss is ambiguous: the Gateway may have accepted and may still
+        // finish this turn. Recommending a blind retry or --local here could
+        // double-execute the message, so point at verification first.
+        const acceptedRun = readCliGatewayRunFailure(err);
+        const acceptedNote = acceptedRun
+          ? ` (accepted run ${acceptedRun.runId}` +
+            (failureHint === "timed out"
+              ? "; use --timeout <seconds> to extend the CLI wait"
+              : "") +
+            ")"
+          : "";
+        const diagnosticMessage =
+          `Gateway agent call ${failureHint}; the Gateway may still be running this turn${acceptedNote}. ` +
+          "Check `openclaw gateway status` and the session transcript before retrying or rerunning with --local, so the turn does not execute twice.";
+        runtime.error?.(diagnosticMessage);
       }
       throw err;
     }

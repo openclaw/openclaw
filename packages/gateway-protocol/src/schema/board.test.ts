@@ -26,6 +26,7 @@ const snapshot = {
   revision: 1,
   tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
 };
+const widgetRef = { sessionKey: snapshot.sessionKey, name: "status" };
 
 it("BoardActionParamsSchema: accepts both exact cron triggers and plugin action verbs", () => {
   accepts(BoardActionParamsSchema, {
@@ -69,14 +70,14 @@ it("BoardSnapshotSchema: accepts optional HTML widget view metadata", () => {
     BoardSnapshotSchema,
     withWidget({
       contentKind: "plugin",
-      pluginKind: "diagrams:diagram",
       contentOwner: "registered",
-      registeredContentKind: "diagram",
+      registeredContentKind: "a2ui",
+      pluginKind: "canvas:a2ui",
+      kindLabel: "A2UI",
     }),
   );
   for (const invalid of [
     { contentOwner: "unknown" },
-    { contentOwner: "registered", registeredContentKind: "Invalid Kind" },
     { frameUrl: 42 },
     { presentation: "floating" },
     { heightMode: "elastic" },
@@ -97,11 +98,7 @@ describe("BoardWidgetPutParamsSchema", () => {
   });
 
   it("rejects invalid widget presentation and height modes", () => {
-    const pin = {
-      sessionKey: "agent:main:main",
-      name: "status",
-      content: { kind: "html", html: "<p>ok</p>" },
-    };
+    const pin = { ...widgetRef, content: { kind: "html", html: "<p>ok</p>" } };
     rejects(BoardWidgetPutParamsSchema, { ...pin, presentation: "floating" });
     rejects(BoardWidgetPutParamsSchema, { ...pin, heightMode: "elastic" });
     const resize = { kind: "widget_resize", name: "status", sizeW: 6, sizeH: 4 };
@@ -111,7 +108,7 @@ describe("BoardWidgetPutParamsSchema", () => {
 
   it("requires an active source view for MCP App pins", () => {
     const pin = {
-      sessionKey: "agent:main:main",
+      ...widgetRef,
       name: "weather-app",
       content: { kind: "mcp-app", viewId: "mcp-app-source" },
     };
@@ -132,7 +129,7 @@ describe("BoardWidgetPutParamsSchema", () => {
 
 it("BoardWidgetAppView schemas: binds lease requests to a board widget and returns its expiry", () => {
   const request = {
-    sessionKey: "agent:main:main",
+    ...widgetRef,
     name: "weather-app",
     revision: 3,
     instanceId: "widget-instance",
@@ -145,8 +142,7 @@ it("BoardWidgetAppView schemas: binds lease requests to a board widget and retur
 
 it("BoardWidgetGrantParamsSchema: requires the widget revision and instance being approved", () => {
   const request = {
-    sessionKey: "agent:main:main",
-    name: "status",
+    ...widgetRef,
     decision: "granted",
     revision: 1,
     instanceId: "widget-instance",

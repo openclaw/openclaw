@@ -244,12 +244,9 @@ it("does not let a provisional prior run evict the newer active session owner", 
   await handleLifecycle(harness, { phase: "end", endedAt: 50_000 });
   await handleLifecycle(harness, { phase: "end", endedAt: 80_000 }, { runId: "run-2" });
 
-  expect(
-    observerBroadcasts(harness).some((call) => {
-      const digest = call[1] as SessionObserverDigest;
-      return digest.runId === "run-1" && digest.health === "done";
-    }),
-  ).toBe(false);
+  expect(observerBroadcasts(harness).map((call) => call[1])).not.toContainEqual(
+    expect.objectContaining({ runId: "run-1", health: "done" }),
+  );
   expectBroadcast(harness, { health: "done", runId: "run-2" });
 });
 
@@ -314,7 +311,10 @@ it.each([
 
 it("discards a queued preamble from a reset lifecycle", async () => {
   const readSession = sessionReader({ lifecycleRevision: "lifecycle-a", updatedAt: 0 });
-  const harness = createHarness({ readSession, utilityModelRef: null });
+  const harness = createHarness({
+    readSession,
+    config: { agents: { defaults: { utilityModel: "" } } },
+  });
   await emitEvent(harness, "item", { kind: "preamble", progressText: "Initial work" });
   await advanceAndFlush(100);
   await emitEvent(harness, "item", { kind: "preamble", progressText: "Obsolete queued work" });
@@ -412,10 +412,9 @@ it("does not broadcast a synthesized terminal digest the store rejected", async 
   const harness = await createFailingTerminalHarness({ persistDigest: vi.fn(async () => false) });
   await emitEvent(harness, "lifecycle", { phase: "end", endedAt: 30_000 });
   await advanceAndFlush(0);
-  const terminalBroadcasts = observerBroadcasts(harness).filter(
-    (call) => (call[1] as SessionObserverDigest | undefined)?.health === "done",
+  expect(observerBroadcasts(harness).map((call) => call[1])).not.toContainEqual(
+    expect.objectContaining({ health: "done" }),
   );
-  expect(terminalBroadcasts).toHaveLength(0);
 });
 
 it("suppresses assistant notes while a runtime-context block is still streaming", async () => {

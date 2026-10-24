@@ -1,8 +1,10 @@
+import { StringDecoder } from "node:string_decoder";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import { errorBackoffMs } from "../cron/service/jobs-scheduling.js";
+import { CRON_HOST_EXECUTION_DISABLED_MESSAGE } from "../cron/service/state.js";
 import { CronStreamSourceRetirementError, cronStreamScheduleKey } from "../cron/stream-schedule.js";
-import type { CronJobState, CronJob } from "../cron/types.js";
+import type { CronJobState, CronStoredJob } from "../cron/types.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayScheduledJob, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { markOpenClawExecEnv } from "../infra/openclaw-exec-env.js";
@@ -25,10 +27,16 @@ const MAX_CONSECUTIVE_FAILURES = 5;
 const COUNTER_MAX = 2_147_483_647;
 const STOP_SETTLE_TIMEOUT_MS = 10_000;
 const OWNER_STOP_TIMEOUT_MS = STOP_SETTLE_TIMEOUT_MS * 2;
+const DISABLED_STREAM_ERRORS: Partial<Record<CronStreamStopReason, string>> = {
+  "trust-disabled":
+    "stream sources are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
+  "cron-disabled": "cron is disabled",
+  "host-execution-disabled": CRON_HOST_EXECUTION_DISABLED_MESSAGE,
+};
 
 export type { CronStreamOwnerParams, CronStreamStopReason } from "./cron-stream-owner-types.js";
 
-export function isCronStreamJob(job: CronJob): job is CronStreamJob {
+export function isCronStreamJob(job: CronStoredJob): job is CronStreamJob {
   return job.schedule.kind === "stream";
 }
 
@@ -84,7 +92,7 @@ export class CronStreamJobOwner {
     private readonly params: CronStreamOwnerParams,
   ) {
     this.job = job;
-    this.scheduleKey = cronStreamScheduleKey(job.schedule);
+    this.scheduleKey = cronStreamScheduleKey(job.schedule, job.streamSandbox);
     this.sourceIdentity = sourceIdentityFor(job);
     this.scheduler = params.scheduler.scope();
     this.consecutiveFailures = job.state.streamConsecutiveFailures ?? 0;
@@ -149,7 +157,7 @@ export class CronStreamJobOwner {
     if (this.removalRequested) {
       return;
     }
-    const nextScheduleKey = cronStreamScheduleKey(job.schedule);
+    const nextScheduleKey = cronStreamScheduleKey(job.schedule, job.streamSandbox);
     const nextSourceIdentity = sourceIdentityFor(job);
     // Reconciliation can retain a live run, but cannot revive one fenced by an earlier request.
     const retainRunningSource =
@@ -247,7 +255,7 @@ export class CronStreamJobOwner {
       if (this.run !== run || this.state !== "running" || !this.desiredRunning) {
         return;
       }
-      // Transport exit cannot prove that the host process tree is extinct.
+      // Transport exit cannot prove that the dedicated sandbox workload is extinct.
       try {
         if (run.waitForExtinction) {
           assertCronStreamExtinction(await run.waitForExtinction());
@@ -334,6 +342,17 @@ export class CronStreamJobOwner {
       this.desiredRunning &&
       requestEpoch === this.requestEpoch &&
       !this.removalRequested;
+    const decoders = { stdout: new StringDecoder("utf8"), stderr: new StringDecoder("utf8") };
+    const onOutput = (channel: "stdout" | "stderr", chunk: Buffer) =>
+      this.output.enqueueChunk(channel, decoders[channel].write(chunk), outputSignal);
+    const endOutput = () => {
+      for (const channel of ["stdout", "stderr"] as const) {
+        const tail = decoders[channel].end();
+        if (tail) {
+          this.output.enqueueChunk(channel, tail, outputSignal);
+        }
+      }
+    };
     const ownsPersistedJob = await this.persistState({
       streamStatus: this.consecutiveFailures > 0 ? "restarting" : "starting",
       streamError: undefined,
@@ -360,23 +379,35 @@ export class CronStreamJobOwner {
           throw new Error("Stream source admission is no longer current.");
         }
       };
-      const supervisor = this.params.getProcessSupervisor();
-      this.cleanupHostScope ??= supervisor.acquireScopeCleanup(scopeKey(this.job.id), {
-        processTree: "owned-only",
-      });
-      run = await supervisor.spawn({
-        assertCurrent,
-        scopeKey: scopeKey(this.job.id),
-        replaceExistingScope: true,
-        mode: "child",
-        argv: this.job.schedule.command,
-        ...(this.job.schedule.cwd ? { cwd: this.job.schedule.cwd } : {}),
-        env: markOpenClawExecEnv({ ...process.env }),
-        stdinMode: "pipe-closed",
-        captureOutput: false,
-        onStdout: (chunk) => this.output.enqueueChunk("stdout", chunk, outputSignal),
-        onStderr: (chunk) => this.output.enqueueChunk("stderr", chunk, outputSignal),
-      });
+      if (this.job.streamSandbox) {
+        if (!this.params.spawnSandboxSource) {
+          throw new Error("Sandbox stream execution is unavailable; no host process was started.");
+        }
+        run = await this.params.spawnSandboxSource({
+          job: this.job,
+          assertCurrent,
+          signal: this.scheduler.signal,
+          onOutput,
+        });
+      } else {
+        const supervisor = this.params.getProcessSupervisor();
+        this.cleanupHostScope ??= supervisor.acquireScopeCleanup(scopeKey(this.job.id), {
+          processTree: "owned-only",
+        });
+        run = await supervisor.spawn({
+          assertCurrent,
+          scopeKey: scopeKey(this.job.id),
+          replaceExistingScope: true,
+          mode: "child",
+          argv: this.job.schedule.command,
+          ...(this.job.schedule.cwd ? { cwd: this.job.schedule.cwd } : {}),
+          env: markOpenClawExecEnv({ ...process.env }),
+          stdinMode: "pipe-closed",
+          captureOutput: false,
+          onStdout: (chunk) => this.output.enqueueChunk("stdout", chunk, outputSignal),
+          onStderr: (chunk) => this.output.enqueueChunk("stderr", chunk, outputSignal),
+        });
+      }
     } catch (error) {
       try {
         await this.releaseHostScope();
@@ -431,7 +462,10 @@ export class CronStreamJobOwner {
     void run
       .wait()
       .then(
-        (exit) => this.processExited(exit, run),
+        (exit) => {
+          endOutput();
+          return this.processExited(exit, run);
+        },
         (error: unknown) => {
           this.params.logger.warn(
             { jobId: this.job.id, err: formatErrorMessage(error) },
@@ -495,7 +529,7 @@ export class CronStreamJobOwner {
   ): Promise<void> {
     this.output.cancelMatching();
     if (job) {
-      const key = cronStreamScheduleKey(job.schedule);
+      const key = cronStreamScheduleKey(job.schedule, job.streamSandbox);
       const identity = sourceIdentityFor(job);
       if (
         !this.ownsSource(key, identity) ||
@@ -582,22 +616,16 @@ export class CronStreamJobOwner {
       throw toErrorObject(stopError, "stream source failed to stop");
     }
     this.state = "stopped";
-    const stoppedState: Partial<CronJobState> =
-      reason === "trust-disabled"
+    const disabledError = DISABLED_STREAM_ERRORS[reason];
+    const stoppedState: Partial<CronJobState> = disabledError
+      ? { streamStatus: "disabled", streamError: disabledError }
+      : (reason === "restart-exhausted" || reason === "shutdown") && this.restartExhausted
         ? {
-            streamStatus: "disabled",
-            streamError:
-              "stream sources are disabled because the operator set cron.triggers.enabled: false; remove it or set it to true",
+            streamStatus: "error",
+            streamError: this.restartFailure,
+            streamRestartExhausted: true,
           }
-        : reason === "cron-disabled"
-          ? { streamStatus: "disabled", streamError: "cron is disabled" }
-          : (reason === "restart-exhausted" || reason === "shutdown") && this.restartExhausted
-            ? {
-                streamStatus: "error",
-                streamError: this.restartFailure,
-                streamRestartExhausted: true,
-              }
-            : { streamStatus: "stopped", streamError: undefined };
+        : { streamStatus: "stopped", streamError: undefined };
     await this.persistState({
       ...stoppedState,
       ...(!this.restartExhausted ? { streamRestartExhausted: undefined } : {}),

@@ -242,7 +242,7 @@ export async function resolveFeishuMediaList(params: {
   const out: FeishuMediaInfo[] = [];
   for (const resource of resources) {
     try {
-      const { saved } = await saveMessageResourceFeishu({
+      const saved = await saveMessageResourceFeishu({
         cfg,
         messageId,
         fileKey: resource.key,

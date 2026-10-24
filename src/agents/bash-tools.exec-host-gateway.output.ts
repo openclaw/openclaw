@@ -1,68 +1,24 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import type { ExecAutoReviewDecision } from "../infra/exec-auto-review.js";
 import { tail } from "./bash-process-registry.js";
 import { formatExecApprovalContinuationSourceOutput } from "./bash-tools.exec-approval-output.js";
+import type { ProcessGatewayAllowlistParams } from "./bash-tools.exec-host-gateway.types.js";
 import { appendExecTimeoutRetryGuidance, normalizeNotifyOutput } from "./bash-tools.exec-output.js";
 import type {
   ExecApprovalFollowupFactory,
   ExecApprovalFollowupOutcome,
   ExecToolDetails,
+  ExecToolApprovalReview,
 } from "./bash-tools.exec-types.js";
 import { formatExecDeniedReasonMessage } from "./exec-approval-result.js";
 import type { AgentToolResult } from "./runtime/index.js";
-
-function formatOutcomeExitLabel(outcome: { exitCode: number | null; timedOut: boolean }): string {
-  return outcome.timedOut ? "timeout" : `code ${outcome.exitCode ?? "?"}`;
-}
 
 function formatBytes(value: unknown): string | null {
   if (typeof value !== "number" || !Number.isFinite(value)) {
     return null;
   }
   return `${Math.max(0, Math.round(value))} bytes`;
-}
-
-function formatDiagnosticsContents(manifest: Record<string, unknown>): string[] {
-  const contents = Array.isArray(manifest.contents) ? manifest.contents : [];
-  if (contents.length === 0) {
-    return [];
-  }
-  const lines = [`Contents (${contents.length} files):`];
-  for (const entry of contents.slice(0, 12)) {
-    if (!isRecord(entry)) {
-      continue;
-    }
-    const path = typeof entry.path === "string" ? entry.path : "";
-    if (!path) {
-      continue;
-    }
-    const bytes = formatBytes(entry.bytes);
-    lines.push(`- ${bytes ? `${path} (${bytes})` : path}`);
-  }
-  if (contents.length > 12) {
-    lines.push(`- ... ${contents.length - 12} more`);
-  }
-  return lines;
-}
-
-function formatDiagnosticsPrivacy(manifest: Record<string, unknown>): string[] {
-  const privacy = isRecord(manifest.privacy) ? manifest.privacy : null;
-  if (!privacy) {
-    return [];
-  }
-  const lines = ["Privacy:"];
-  if (typeof privacy.payloadFree === "boolean") {
-    lines.push(`- payload-free: ${privacy.payloadFree ? "yes" : "no"}`);
-  }
-  if (typeof privacy.rawLogsIncluded === "boolean") {
-    lines.push(`- raw logs included: ${privacy.rawLogsIncluded ? "yes" : "no"}`);
-  }
-  const notes = Array.isArray(privacy.notes)
-    ? privacy.notes.filter((note): note is string => typeof note === "string")
-    : [];
-  for (const note of notes.slice(0, 4)) {
-    lines.push(`- ${note}`);
-  }
-  return lines.length > 1 ? lines : [];
 }
 
 function formatDiagnosticsExportSuccess(aggregated: string): string {
@@ -91,33 +47,47 @@ function formatDiagnosticsExportSuccess(aggregated: string): string {
     if (typeof manifest.openclawVersion === "string") {
       lines.push(`OpenClaw version: ${manifest.openclawVersion}`);
     }
-    const contents = formatDiagnosticsContents(manifest);
+    const contents = Array.isArray(manifest.contents) ? manifest.contents : [];
     if (contents.length > 0) {
-      lines.push("", ...contents);
+      lines.push("", `Contents (${contents.length} files):`);
+      for (const entry of contents.slice(0, 12)) {
+        if (!isRecord(entry)) {
+          continue;
+        }
+        const path = typeof entry.path === "string" ? entry.path : "";
+        if (!path) {
+          continue;
+        }
+        const entryBytes = formatBytes(entry.bytes);
+        lines.push(`- ${entryBytes ? `${path} (${entryBytes})` : path}`);
+      }
+      if (contents.length > 12) {
+        lines.push(`- ... ${contents.length - 12} more`);
+      }
     }
-    const privacy = formatDiagnosticsPrivacy(manifest);
-    if (privacy.length > 0) {
-      lines.push("", ...privacy);
+    const privacy = isRecord(manifest.privacy) ? manifest.privacy : null;
+    if (privacy) {
+      const privacyLines = ["Privacy:"];
+      if (typeof privacy.payloadFree === "boolean") {
+        privacyLines.push(`- payload-free: ${privacy.payloadFree ? "yes" : "no"}`);
+      }
+      if (typeof privacy.rawLogsIncluded === "boolean") {
+        privacyLines.push(`- raw logs included: ${privacy.rawLogsIncluded ? "yes" : "no"}`);
+      }
+      const notes = Array.isArray(privacy.notes)
+        ? privacy.notes.filter((note): note is string => typeof note === "string")
+        : [];
+      for (const note of notes.slice(0, 4)) {
+        privacyLines.push(`- ${note}`);
+      }
+      if (privacyLines.length > 1) {
+        lines.push("", ...privacyLines);
+      }
     }
     return lines.join("\n");
   } catch {
     return trimmed;
   }
-}
-
-function formatDiagnosticsExportFailure(params: {
-  outcome: { status: string; reason?: string; aggregated: string };
-  exitLabel: string;
-}): string {
-  const output = normalizeNotifyOutput(tail(params.outcome.aggregated || "", 4000));
-  const lines = [`Diagnostics export failed (${params.exitLabel}).`];
-  if (params.outcome.reason) {
-    lines.push(params.outcome.reason);
-  }
-  if (output) {
-    lines.push("", output);
-  }
-  return lines.join("\n");
 }
 
 export function buildGatewayExecApprovalFollowupSummary(params: {
@@ -127,13 +97,23 @@ export function buildGatewayExecApprovalFollowupSummary(params: {
   trigger?: string;
   approvalFollowupText?: string;
 }): string {
-  const exitLabel = formatOutcomeExitLabel(params.outcome);
+  const exitLabel = params.outcome.timedOut ? "timeout" : `code ${params.outcome.exitCode ?? "?"}`;
   let summary: string;
   if (params.trigger === "diagnostics") {
-    const diagnosticsText =
-      params.outcome.status === "completed" && params.outcome.exitCode === 0
-        ? formatDiagnosticsExportSuccess(params.outcome.aggregated)
-        : formatDiagnosticsExportFailure({ outcome: params.outcome, exitLabel });
+    let diagnosticsText: string;
+    if (params.outcome.status === "completed" && params.outcome.exitCode === 0) {
+      diagnosticsText = formatDiagnosticsExportSuccess(params.outcome.aggregated);
+    } else {
+      const output = normalizeNotifyOutput(tail(params.outcome.aggregated || "", 4000));
+      const lines = [`Diagnostics export failed (${exitLabel}).`];
+      if (params.outcome.reason) {
+        lines.push(params.outcome.reason);
+      }
+      if (output) {
+        lines.push("", output);
+      }
+      diagnosticsText = lines.join("\n");
+    }
     const followupText = params.approvalFollowupText?.trim();
     const body = [diagnosticsText, followupText].filter(Boolean).join("\n\n");
     summary = `Exec finished (gateway id=${params.approvalId}, session=${params.sessionId}, ${exitLabel})\n${body}`;
@@ -192,4 +172,43 @@ export async function resolveGatewayExecApprovalFollowupText(params: {
     const message = error instanceof Error ? error.message : String(error);
     return `Diagnostics follow-up failed: ${message}`;
   }
+}
+
+export function publishGatewayGuardianReview(
+  params: ProcessGatewayAllowlistParams,
+  status: ExecToolApprovalReview["status"],
+  decision?: ExecAutoReviewDecision,
+): void {
+  if (!params.toolCallId) {
+    return;
+  }
+  const approvalReviewOutcome =
+    status === "in_progress" ? "reviewing" : status === "approved" ? "approved" : "denied";
+  const review: ExecToolApprovalReview = {
+    id: `guardian:${params.toolCallId}`,
+    label: "Guardian",
+    status,
+    ...(decision ? { riskLevel: decision.risk, rationale: decision.rationale } : {}),
+  };
+  // Preserve terminal evidence before synchronous listeners can change reviewed operands.
+  if (status !== "in_progress") {
+    params.onApprovalReview?.(review);
+  }
+  if (!params.runId) {
+    return;
+  }
+  emitAgentEvent({
+    runId: params.runId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    stream: "tool",
+    data: {
+      phase: "review",
+      name: "exec",
+      toolCallId: params.toolCallId,
+      hideFromChannelProgress: true,
+      approvalReviewOutcome,
+      review,
+    },
+  });
 }

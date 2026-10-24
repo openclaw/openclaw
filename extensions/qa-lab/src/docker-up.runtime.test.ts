@@ -2,10 +2,12 @@
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import type { QaDockerRunCommand as RunCommand } from "openclaw/plugin-sdk/qa-runtime";
+import type {
+  QaDockerFetchLike as FetchLike,
+  QaDockerRunCommand as RunCommand,
+} from "openclaw/plugin-sdk/qa-runtime";
 import { shellEscape as shellQuote } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { afterAll, describe, expect, it, vi } from "vitest";
-import type { FetchLike } from "./docker-runtime.js";
 import { runQaDockerUp as runQaDockerUpDefault } from "./docker-up.runtime.js";
 
 const io = vi.hoisted(() => ({

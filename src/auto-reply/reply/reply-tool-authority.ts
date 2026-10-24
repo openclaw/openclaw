@@ -18,6 +18,7 @@ import {
   bindReplyToolAuthorityCallerRead,
   recordPreparedToolAuthorityRead,
   type PreparedQuestionCallerRead,
+  type ReplyToolAuthorityCaller,
 } from "../../agents/harness/host-private-capabilities.js";
 import { readOperatorModelPolicyMembership } from "../../agents/operator-model-policy.js";
 import {
@@ -53,19 +54,19 @@ import type {
   ReplyToolAuthorityRoute,
   ReplyToolAuthoritySnapshot,
 } from "../../sessions/session-controller.contracts.js";
+import {
+  captureReplyMessageJoinObservation,
+  type ReplyMessageJoinObservation,
+} from "../../sessions/session-controller.message-join-observation.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { MessageInjectionRequesterMismatchError } from "./message-injection-authority.js";
+import { MessageInjectionPolicyMismatchError } from "./message-injection-authority.js";
 import {
   captureReplyToolAuthoritySession,
   retainReplyToolAuthorityClassification,
   withReplyToolAuthorityCohort,
   type CapturedReplyToolAuthoritySession,
 } from "./reply-tool-authority-cohort.js";
-import {
-  applyReplyToolAuthorityOverlay,
-  applyReplyToolAuthorityRequester,
-  isSameReplyToolAuthorityConversation,
-} from "./reply-tool-authority-inbound.js";
+import { projectReplyToolAuthorityInput } from "./reply-tool-authority-inbound.js";
 import {
   captureMemoryReplyToolAuthoritySession,
   prepareMemoryReplyToolAuthorityCaller,
@@ -315,10 +316,25 @@ function resolvePreparedReplyToolAuthorityFingerprint(
   );
 }
 
+/** Capture original execution settings when the reply owner admits the turn. */
+export function prepareReplyRunToolAuthority(
+  input: ReplyToolAuthorityInput,
+  sessionEntry: SessionEntry | undefined,
+  resolveReader?: () => SessionEntryCohortReader | undefined,
+) {
+  return prepareReplyToolAuthority(
+    input,
+    undefined,
+    resolveReader,
+    captureReplyMessageJoinObservation({ run: input.run, sessionEntry }),
+  );
+}
+
 export function prepareReplyToolAuthority(
   run: ReplyToolAuthorityInput,
   narrow?: ReplyToolAuthorityNarrow,
   resolveReader?: () => SessionEntryCohortReader | undefined,
+  joinObservation?: ReplyMessageJoinObservation,
 ): ReplyToolAuthoritySnapshot &
   Required<
     Pick<
@@ -326,6 +342,7 @@ export function prepareReplyToolAuthority(
       "fingerprintAsync" | "projectAsync" | "projectRequester" | "projectRequesterAsync" | "close"
     >
   > {
+  const capturedJoinObservation = joinObservation ? structuredClone(joinObservation) : undefined;
   const handoff = run.run.trustedInternalHandoff;
   const toolsAllow = run.toolsAllow ? [...run.toolsAllow] : undefined;
   const intersection = run.toolsAllow
@@ -375,46 +392,8 @@ export function prepareReplyToolAuthority(
     messageChannel: snapshot.originatingChannel,
     operatorAuthority: snapshot.operatorAuthority,
   });
-  const projectInput = (caller?: ReplyToolAuthorityOverlay | ReplyToolAuthorityRequester) => {
-    const incomingRequester =
-      caller && !("requesterOrigin" in caller) && caller.allowCollaborativeSteering
-        ? resolveRequesterPrincipalKey({ ...caller, messageChannel: caller.originatingChannel })
-        : undefined;
-    if (
-      caller &&
-      !("requesterOrigin" in caller) &&
-      caller.allowCollaborativeSteering &&
-      requesterPrincipalKey &&
-      incomingRequester &&
-      incomingRequester !== requesterPrincipalKey &&
-      (!caller.inputProvenance || caller.inputProvenance.kind === "external_user") &&
-      isSameReplyToolAuthorityConversation(snapshot, caller)
-    ) {
-      assertCurrentOperatorAuthority(caller.operatorAuthority);
-      // Only the policy projection uses the incumbent. The input and its author
-      // remain unchanged, including if injection later falls back to a new turn.
-      return snapshot;
-    }
-    const incoming = !caller
-      ? snapshot
-      : "requesterOrigin" in caller
-        ? applyReplyToolAuthorityRequester(snapshot, caller)
-        : applyReplyToolAuthorityOverlay(snapshot, caller);
-    // Unidentified executions may run, but cannot lend their identity to new human input.
-    if (
-      caller &&
-      (!requesterPrincipalKey ||
-        requesterPrincipalKey !==
-          resolveRequesterPrincipalKey({
-            ...incoming.run,
-            messageChannel: incoming.originatingChannel,
-            operatorAuthority: incoming.operatorAuthority,
-          }))
-    ) {
-      throw new MessageInjectionRequesterMismatchError();
-    }
-    return incoming;
-  };
+  const projectInput = (caller?: ReplyToolAuthorityCaller) =>
+    projectReplyToolAuthorityInput(snapshot, caller);
   const env = { ...process.env };
   const sessionKey = snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey;
   const agentId = sessionKey
@@ -614,111 +593,127 @@ export function prepareReplyToolAuthority(
     projectRequesterAsync: projectAsync,
     projectRequester: project,
   };
-  bindReplyToolAuthorityCallerRead(
-    result.projectAsync,
-    async (caller, expected, route, assertActive) => {
-      const projected = projectInput(caller);
-      const policyInputs = projected === snapshot ? [snapshot] : [snapshot, projected];
-      const assertCallerCurrent = () => {
-        if (caller && !("requesterOrigin" in caller)) {
-          assertCurrentOperatorAuthority(caller.operatorAuthority);
-        }
-      };
-      if (readMemoryEntry) {
-        const policy = await prepareSessionCapabilityRead(() => {
-          assertCallerCurrent();
-          return policyInputs.every(
-            (input) =>
-              resolvePreparedReplyToolAuthorityFingerprint(
-                input,
-                route,
-                readMemoryEntry(),
-                undefined,
-                memoryCapabilities,
-              ) === expected,
+  bindReplyToolAuthorityCallerRead(result.projectAsync, (caller, expected, route, assertActive) => {
+    const assertCurrent = () => {
+      assertActive();
+      assertOpen();
+    };
+    assertCurrent();
+    return {
+      assertCurrent,
+      joinObservation: capturedJoinObservation,
+      prepare: async () => {
+        const projected = projectInput(caller);
+        const policyInputs = projected === snapshot ? [snapshot] : [snapshot, projected];
+        const assertCallerCurrent = () => {
+          const participant = caller && "kind" in caller ? caller.caller : caller;
+          if (participant && !("requesterOrigin" in participant)) {
+            assertCurrentOperatorAuthority(participant.operatorAuthority);
+          }
+        };
+        if (readMemoryEntry) {
+          const policy = await prepareSessionCapabilityRead(() => {
+            assertCallerCurrent();
+            if (
+              !policyInputs.every(
+                (input) =>
+                  resolvePreparedReplyToolAuthorityFingerprint(
+                    input,
+                    route,
+                    readMemoryEntry(),
+                    undefined,
+                    memoryCapabilities,
+                  ) === expected,
+              )
+            ) {
+              throw new MessageInjectionPolicyMismatchError("tool_authority_mismatch");
+            }
+            return true;
+          });
+          releases.add(policy.release);
+          const prepared = prepareMemoryReplyToolAuthorityCaller(
+            readMemoryEntry,
+            assertActive,
+            () => policy.read(),
           );
+          recordPreparedToolAuthorityRead({
+            ...prepared,
+            assertLegacyCurrent: () => prepared.assertPrepared([]),
+          });
+          return prepared;
+        }
+        // The consuming phase rereads this plan's original sources before checking policy.
+        if (!captured) {
+          await prepare(snapshot, route);
+        }
+        assertActive();
+        const original = captured;
+        const plan = capturedReadPlan;
+        if (original && !plan) {
+          throw new Error("Tool authority classification source is unavailable");
+        }
+        const assertSources = () => {
+          assertActive();
+          assertCallerCurrent();
+          plan?.assertCurrent();
+        };
+        const assertEntry = (entry: SessionEntry | undefined) => {
+          assertSources();
+          if (
+            original &&
+            (entry?.sessionId !== original.sessionId ||
+              entry?.lifecycleRevision !== original.lifecycleRevision)
+          ) {
+            throw new Error(
+              "Tool authority classification session changed (caller session identity)",
+            );
+          }
+          for (const input of policyInputs) {
+            if (
+              resolvePreparedReplyToolAuthorityFingerprint(input, route, entry, narrow) !== expected
+            ) {
+              throw new MessageInjectionPolicyMismatchError("tool_authority_mismatch");
+            }
+          }
+          assertSources();
+        };
+        const reads = plan?.reads ?? [];
+        let currentEntry: SessionEntry | undefined;
+        let receipt: ReturnType<typeof retainEntry> | undefined;
+        const installCurrent = (
+          currentReads: Parameters<PreparedQuestionCallerRead["assertPrepared"]>[0],
+        ) => {
+          assertSources();
+          currentEntry = plan?.selectPrepared(currentReads);
+          receipt?.release();
+          receipt = retainEntry(currentEntry);
+        };
+        await withSessionEntriesFromStoresInWorker(reads, installCurrent);
+        const policy = await prepareSessionCapabilityRead(() => {
+          receipt?.assertCurrent();
+          assertEntry(currentEntry);
         });
         releases.add(policy.release);
-        const prepared = prepareMemoryReplyToolAuthorityCaller(readMemoryEntry, assertActive, () =>
-          policy.read(),
-        );
+        const assertPrepared: PreparedQuestionCallerRead["assertPrepared"] = (currentReads) => {
+          installCurrent(currentReads);
+          policy.read();
+        };
+        const prepared: PreparedQuestionCallerRead = {
+          reads,
+          assertPrepared,
+          prepareCurrent: () => withSessionEntriesFromStoresInWorker(reads, assertPrepared),
+          retainCurrent() {
+            policy.read();
+            return { assertCurrent: policy.read, release() {} };
+          },
+        };
         recordPreparedToolAuthorityRead({
           ...prepared,
-          assertLegacyCurrent: () => prepared.assertPrepared([]),
+          assertLegacyCurrent: policy.read,
         });
         return prepared;
-      }
-      // The consuming phase rereads this plan's original sources before checking policy.
-      if (!captured) {
-        await prepare(snapshot, route);
-      }
-      assertActive();
-      const original = captured;
-      const plan = capturedReadPlan;
-      if (original && !plan) {
-        throw new Error("Tool authority classification source is unavailable");
-      }
-      const assertSources = () => {
-        assertActive();
-        assertCallerCurrent();
-        plan?.assertCurrent();
-      };
-      const assertEntry = (entry: SessionEntry | undefined) => {
-        assertSources();
-        if (
-          original &&
-          (entry?.sessionId !== original.sessionId ||
-            entry?.lifecycleRevision !== original.lifecycleRevision)
-        ) {
-          throw new Error(
-            "Tool authority classification session changed (caller session identity)",
-          );
-        }
-        for (const input of policyInputs) {
-          if (
-            resolvePreparedReplyToolAuthorityFingerprint(input, route, entry, narrow) !== expected
-          ) {
-            throw new Error("question answer caller policy does not match its creator");
-          }
-        }
-        assertSources();
-      };
-      const reads = plan?.reads ?? [];
-      let currentEntry: SessionEntry | undefined;
-      let receipt: ReturnType<typeof retainEntry> | undefined;
-      const installCurrent = (
-        currentReads: Parameters<PreparedQuestionCallerRead["assertPrepared"]>[0],
-      ) => {
-        assertSources();
-        currentEntry = plan?.selectPrepared(currentReads);
-        receipt?.release();
-        receipt = retainEntry(currentEntry);
-      };
-      await withSessionEntriesFromStoresInWorker(reads, installCurrent);
-      const policy = await prepareSessionCapabilityRead(() => {
-        receipt?.assertCurrent();
-        assertEntry(currentEntry);
-      });
-      releases.add(policy.release);
-      const assertPrepared: PreparedQuestionCallerRead["assertPrepared"] = (currentReads) => {
-        installCurrent(currentReads);
-        policy.read();
-      };
-      const prepared: PreparedQuestionCallerRead = {
-        reads,
-        assertPrepared,
-        prepareCurrent: () => withSessionEntriesFromStoresInWorker(reads, assertPrepared),
-        retainCurrent() {
-          policy.read();
-          return { assertCurrent: policy.read, release() {} };
-        },
-      };
-      recordPreparedToolAuthorityRead({
-        ...prepared,
-        assertLegacyCurrent: policy.read,
-      });
-      return prepared;
-    },
-  );
+      },
+    };
+  });
   return result;
 }

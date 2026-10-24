@@ -4,18 +4,17 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 import {
   activated,
   candidate,
-  configSnapshot,
+  expectLocalActivation,
   expectCount,
-  expectText,
-  localSetupFeatures,
+  installLocalSetupGateway,
+  localPrepareOptions,
   makeDetection,
   returnToLocalModelSettings,
   runningStep,
-  runningWizard,
   setupContext,
   setupRpc as rpc,
 } from "./model-setup-fixtures.test-support.ts";
-import { installSetupGateway, openModelSetup } from "./model-setup.test-support.ts";
+import { openModelSetup } from "./model-setup.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI LM Studio setup mocked Gateway E2E",
@@ -23,17 +22,7 @@ const suite = createControlUiE2eSuite({
   unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
-const prepareOptions = [
-  {
-    id: "lmstudio",
-    brandId: "lmstudio",
-    label: "LM Studio",
-    hint: "Connect to a running LM Studio server and use an already loaded model",
-    actionLabel: "Connect server",
-    icon: "https://cdn.simpleicons.org/lmstudio",
-    website: "https://lmstudio.ai/download",
-  },
-];
+const prepareOptions = localPrepareOptions().filter(({ id }) => id === "lmstudio");
 
 suite.define(() => {
   it("connects, retries, verifies, and keeps LM Studio visible in settings", async () => {
@@ -42,47 +31,29 @@ suite.define(() => {
       async ({ page }) => {
         const initialDetection = makeDetection({ prepareOptions });
         const modelRef = "lmstudio/qwen3-8b-instruct";
-        const globalModel = "openai/gpt-5";
-        const initialConfig = { agents: { defaults: { model: globalModel } } };
-        const gateway = await installSetupGateway(page, {
-          agentModel: globalModel,
-          models: [{ id: "gpt-5", name: "GPT-5", provider: "openai", available: true }],
-          featureMethods: localSetupFeatures,
-          methodResponses: {
-            "config.get": configSnapshot(initialConfig, "before-local-activation"),
-            [rpc.detect]: initialDetection,
-            [rpc.prepare]: runningWizard("lmstudio-prepare-session"),
-            [rpc.activate]: runningWizard("activation-session"),
-            [rpc.next]: {
-              sequence: [
-                runningStep("lmstudio-base-url", "text", "LM Studio base URL", {
-                  initialValue: "http://localhost:1234/v1",
-                }),
-                runningStep("lmstudio-api-key", "text", "LM Studio API key", {
-                  placeholder: "Leave blank if auth is disabled",
-                  sensitive: true,
-                }),
-                runningStep(
-                  "lmstudio-retry",
-                  "note",
-                  [
-                    "LM Studio could not be reached at http://localhost:1234/v1.",
-                    "Start LM Studio (or run lms server start), then continue to retry.",
-                  ].join("\n"),
-                  { title: "LM Studio" },
-                ),
-                runningStep(
-                  "lmstudio-retry-confirm",
-                  "confirm",
-                  "Retry this LM Studio connection now?",
-                  { initialValue: true },
-                ),
-                { done: true, status: "done" },
-                activated(modelRef),
-              ],
-            },
-          },
-        });
+        const gateway = await installLocalSetupGateway(page, initialDetection, "lmstudio", [
+          runningStep("lmstudio-base-url", "text", "LM Studio base URL", {
+            initialValue: "http://localhost:1234/v1",
+          }),
+          runningStep("lmstudio-api-key", "text", "LM Studio API key", {
+            placeholder: "Leave blank if auth is disabled",
+            sensitive: true,
+          }),
+          runningStep(
+            "lmstudio-retry",
+            "note",
+            [
+              "LM Studio could not be reached at http://localhost:1234/v1.",
+              "Start LM Studio (or run lms server start), then continue to retry.",
+            ].join("\n"),
+            { title: "LM Studio" },
+          ),
+          runningStep("lmstudio-retry-confirm", "confirm", "Retry this LM Studio connection now?", {
+            initialValue: true,
+          }),
+          { done: true, status: "done" },
+          activated(modelRef),
+        ]);
 
         const response = await openModelSetup(page, suite.server.baseUrl);
         expect(response?.status()).toBe(200);
@@ -115,18 +86,7 @@ suite.define(() => {
           ],
         });
         await page.getByRole("button", { name: "Continue" }).click();
-        await page.getByRole("heading", { name: "Connection verified" }).waitFor();
-        await expectText(page.locator(".model-setup-success"), modelRef);
-        await expectText(page.locator(".model-setup-success"), "Verified in", true);
-        await expectCount(page.locator('.model-setup-success [data-provider-icon="lmstudio"]'), 1);
-
-        const activate = await gateway.waitForRequest(rpc.activate);
-        expect(activate.params).toEqual({
-          sessionId: expect.any(String),
-          kind: "provider-auto:lmstudio",
-          agentId: "main",
-          modelRef,
-        });
+        await expectLocalActivation(page, gateway, "lmstudio", modelRef);
 
         await page.setViewportSize({ height: 844, width: 390 });
 

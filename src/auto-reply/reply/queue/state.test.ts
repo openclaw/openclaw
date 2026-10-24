@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { makeCronJob } from "../../../cron/delivery.test-helpers.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "../../../cron/scheduled-occurrence.test-support.js";
 import {
   submitSessionControllerInput,
   retireSessionControllerInput,
@@ -10,6 +12,7 @@ import {
   type SessionControllerMailbox,
 } from "../../../sessions/session-controller.mailbox.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.target.js";
+import type { ScheduledSessionAutomation } from "../session-event-contract.js";
 import { enqueueFollowupRun } from "./enqueue.js";
 import {
   clearFollowupQueue,
@@ -112,6 +115,20 @@ function retarget(run: Partial<FollowupRun["run"]>, params: Parameters<typeof re
   addSources(queue, makeSource(makeRun(run)));
   refresh(params);
   return queue.items[0]?.run;
+}
+
+function scheduledAutomation(sessionModelOverrideSource?: "auto" | "user") {
+  return {
+    occurrence: TEST_SCHEDULED_OCCURRENCE,
+    job: makeCronJob({ sessionTarget: `session:${QUEUE_KEY}` }),
+    admissionSource: "operator-schedule",
+    assertCurrent() {},
+    modelFallbackPolicy: {
+      useSubagentFallbacks: false,
+      inheritDefaultFallbacksForAgentStringModel: false,
+      ...(sessionModelOverrideSource ? { sessionModelOverrideSource } : {}),
+    },
+  } satisfies ScheduledSessionAutomation;
 }
 
 const modelThinking = (thinking: string) => ({ params: { thinking } });
@@ -246,6 +263,50 @@ describe("refreshQueuedFollowupSession", () => {
       hasSessionModelOverride: false,
       modelOverrideSource: undefined,
     });
+  });
+
+  it.each([
+    { name: "clears", admitted: "user" as const, next: undefined },
+    { name: "adopts", admitted: undefined, next: "user" as const },
+    { name: "follows", admitted: "user" as const, next: "auto" as const },
+  ])(
+    "$name queued scheduled fallback provenance with the retargeted session selection",
+    ({ admitted, next }) => {
+      const automation = scheduledAutomation(admitted);
+      const run = retarget(
+        { scheduledAutomation: automation },
+        {
+          nextProvider: "openai",
+          nextModel: "gpt-4o",
+          nextRouteResolution: "resolved",
+          nextModelOverrideSource: next,
+        },
+      );
+
+      expect(run?.scheduledAutomation).toEqual({
+        ...automation,
+        modelFallbackPolicy: {
+          useSubagentFallbacks: false,
+          inheritDefaultFallbacksForAgentStringModel: false,
+          sessionModelOverrideSource: next,
+        },
+      });
+      expect(run?.scheduledAutomation?.job).toBe(automation.job);
+      expect(automation.modelFallbackPolicy).toEqual(
+        scheduledAutomation(admitted).modelFallbackPolicy,
+      );
+    },
+  );
+
+  it("keeps queued scheduled fallback provenance through session-only refreshes", () => {
+    const automation = scheduledAutomation("user");
+    const run = retarget(
+      { scheduledAutomation: automation },
+      { previousSessionId: "session-1", nextSessionId: "session-2" },
+    );
+
+    expect(run?.sessionId).toBe("session-2");
+    expect(run?.scheduledAutomation).toBe(automation);
   });
 
   it("preserves queued Sol Ultra work when switching to Codex Luna", () => {
@@ -428,6 +489,30 @@ describe("refreshQueuedFollowupSession", () => {
 });
 
 describe("getFollowupQueue", () => {
+  it.each([
+    { mode: "collect", debounceMs: -12, cap: 9.8, dropPolicy: "new" },
+    { mode: "steer", cap: 0 },
+  ] as const)("normalizes supplied settings and retains omitted/invalid values: %j", (settings) => {
+    const queue = getFollowupQueue(QUEUE_KEY, {
+      mode: "followup",
+      debounceMs: 1000,
+      cap: 20,
+      dropPolicy: "summarize",
+    });
+    const updated = getFollowupQueue(QUEUE_KEY, settings);
+    expect(updated).toBe(queue);
+    expect({
+      mode: updated.mode,
+      debounceMs: updated.debounceMs,
+      cap: updated.cap,
+      dropPolicy: updated.dropPolicy,
+    }).toEqual(
+      settings.mode === "collect"
+        ? { mode: "collect", debounceMs: 0, cap: 9, dropPolicy: "new" }
+        : { mode: "steer", debounceMs: 1000, cap: 20, dropPolicy: "summarize" },
+    );
+  });
+
   it("settles evicted summary sources and retains surviving delivery correlations", () => {
     const sources = Array.from({ length: 4 }, (_, index) => ({
       prompt: `queued message ${index}`,

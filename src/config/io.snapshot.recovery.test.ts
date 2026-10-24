@@ -49,12 +49,27 @@ function clobberFiles(root: string) {
   return fs.readdirSync(root).filter((name) => name.startsWith("openclaw.json.clobbered."));
 }
 
-function expectUnchanged(root: string, configPath: string, original: string) {
+function expectUnchanged(root: string, configPath: string, original: string, backup?: string) {
   expect(fs.readFileSync(configPath, "utf8")).toBe(original);
   expect(clobberFiles(root)).toEqual([]);
+  if (backup !== undefined) {
+    expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(backup);
+  }
 }
 
-function fixture(options: ConfigIoFactoryOptions = {}) {
+function expectArchived(root: string, original: string) {
+  const clobbered = clobberFiles(root);
+  expect(clobbered).toHaveLength(1);
+  expect(fs.readFileSync(path.join(root, clobbered[0]!), "utf8")).toBe(original);
+}
+
+const withPromises = (overrides: Partial<typeof fs.promises>) => ({
+  fs: { ...fs, promises: { ...fs.promises, ...overrides } },
+});
+
+function fixture(
+  options: ConfigIoFactoryOptions | ((configPath: string) => ConfigIoFactoryOptions) = {},
+) {
   const root = tempDirs.make("openclaw-prepared-config-recovery-");
   const configPath = path.join(root, "openclaw.json");
   const original = '{ "update": { "channel": "beta" } }\n';
@@ -80,7 +95,7 @@ function fixture(options: ConfigIoFactoryOptions = {}) {
     homedir: () => root,
     observe: false,
     logger: { warn: vi.fn(), error: vi.fn() },
-    ...options,
+    ...(typeof options === "function" ? options(configPath) : options),
   });
   return { root, configPath, original, backup, databasePath, env, io };
 }
@@ -158,11 +173,10 @@ describe("prepared config recovery", () => {
       }
       const before = kind === "externally-owned" ? manifest(root) : undefined;
       await expect(prepare(io)).resolves.toBeNull();
-      expect(fs.readFileSync(configPath, "utf8")).toBe(original);
+      expectUnchanged(root, configPath, original);
       if (kind === "unparseable") {
         expect(fs.readFileSync(backupPath, "utf8")).toBe(bytes);
       }
-      expect(clobberFiles(root)).toEqual([]);
       if (kind === "externally-owned") {
         expect(manifest(root)).toEqual(before);
       }
@@ -174,35 +188,31 @@ describe("prepared config recovery", () => {
     async (phase) => {
       const readError = Object.assign(new Error("backup device unavailable"), { code: "EIO" });
       let armed = false;
-      const isBackup = (target: fs.PathLike | number) => String(target).endsWith(".bak");
+      const guard = <F extends (...args: never[]) => unknown>(
+        read: F,
+        boundary: string,
+        async = false,
+      ): F =>
+        new Proxy(read, {
+          apply(target, self, args) {
+            if (armed && String(args[0]).endsWith(".bak") && phase === boundary) {
+              if (async) {
+                return Promise.reject(readError);
+              }
+              throw readError;
+            }
+            return Reflect.apply(target, self, args);
+          },
+        });
       const { root, configPath, original, backup, io } = fixture({
         fs: {
           ...fs,
-          readFileSync: ((target: fs.PathOrFileDescriptor, options?: unknown) => {
-            if (armed && isBackup(target) && phase === "sync-read") {
-              throw readError;
-            }
-            return fs.readFileSync(target, options as Parameters<typeof fs.readFileSync>[1]);
-          }) as typeof fs.readFileSync,
-          statSync: ((target: fs.PathLike, options?: { throwIfNoEntry?: boolean }) => {
-            if (armed && isBackup(target) && phase === "sync-stat") {
-              throw readError;
-            }
-            return fs.statSync(target, options);
-          }) as typeof fs.statSync,
+          readFileSync: guard(fs.readFileSync, "sync-read"),
+          statSync: guard(fs.statSync, "sync-stat"),
           promises: {
             ...fs.promises,
-            readFile: ((target: fs.PathLike, options?: unknown) =>
-              armed && isBackup(target) && phase === "async-read"
-                ? Promise.reject(readError)
-                : fs.promises.readFile(
-                    target,
-                    options as Parameters<typeof fs.promises.readFile>[1],
-                  )) as typeof fs.promises.readFile,
-            stat: ((target: fs.PathLike) =>
-              armed && isBackup(target) && phase === "async-stat"
-                ? Promise.reject(readError)
-                : fs.promises.stat(target)) as typeof fs.promises.stat,
+            readFile: guard(fs.promises.readFile, "async-read", true),
+            stat: guard(fs.promises.stat, "async-stat", true),
           },
         },
       });
@@ -214,9 +224,7 @@ describe("prepared config recovery", () => {
         armed = true;
         await expect(plan.apply()).rejects.toBe(readError);
       }
-      expect(fs.readFileSync(configPath, "utf8")).toBe(original);
-      expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(backup);
-      expect(clobberFiles(root)).toEqual([]);
+      expectUnchanged(root, configPath, original, backup);
     },
   );
 
@@ -231,9 +239,7 @@ describe("prepared config recovery", () => {
       },
     });
     await expect(prepare(io)).rejects.toMatchObject({ code: "CONFIG_READ_FAILED" });
-    expect(fs.readFileSync(configPath, "utf8")).toBe(original);
-    expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(backup);
-    expect(clobberFiles(root)).toEqual([]);
+    expectUnchanged(root, configPath, original, backup);
   });
 
   it.each(["completed", "during-apply"] as const)(
@@ -258,9 +264,7 @@ describe("prepared config recovery", () => {
           : undefined,
       );
       expect(fs.readFileSync(configPath, "utf8")).toBe(backup);
-      const clobbered = clobberFiles(root);
-      expect(clobbered).toHaveLength(1);
-      expect(fs.readFileSync(path.join(root, clobbered[0]!), "utf8")).toBe(original);
+      expectArchived(root, original);
       if (previousHealth) {
         expect(readConfigHealthStateFromStore(deps)).toEqual(previousHealth);
       } else {
@@ -275,31 +279,26 @@ describe("prepared config recovery", () => {
   it.each(["async", "sync"] as const)(
     "%s recovery tolerates an unreadable backup stat",
     async (mode) => {
-      const { root, configPath, backup, env } = fixture();
-      const backupPath = `${configPath}.bak`;
       const statError = Object.assign(new Error("EACCES: stat denied"), { code: "EACCES" });
-      const io = createConfigIO({
-        env,
-        configPath,
-        homedir: () => root,
-        logger: { warn: vi.fn(), error: vi.fn() },
+      const { configPath, backup, io } = fixture((targetPath) => ({
+        observe: undefined,
         fs: {
           ...fs,
           promises: {
             ...fs.promises,
             stat: ((target: fs.PathLike) =>
-              target === backupPath
+              target === `${targetPath}.bak`
                 ? Promise.reject(statError)
                 : fs.promises.stat(target)) as typeof fs.promises.stat,
           },
           statSync: ((target: fs.PathLike, options?: { throwIfNoEntry?: boolean }) => {
-            if (target === backupPath) {
+            if (target === `${targetPath}.bak`) {
               throw statError;
             }
             return fs.statSync(target, options);
           }) as typeof fs.statSync,
         },
-      });
+      }));
 
       const recovered =
         mode === "async"
@@ -325,9 +324,7 @@ describe("prepared config recovery", () => {
       const plan = await recovery(io);
       await plan.apply();
       expect(fs.readFileSync(configPath, "utf8")).toBe(backup);
-      const clobbered = clobberFiles(root);
-      expect(clobbered).toHaveLength(1);
-      expect(fs.readFileSync(path.join(root, clobbered[0]!), "utf8")).toBe(original);
+      expectArchived(root, original);
       const health = readConfigHealthStateFromStore({
         env,
         homedir: () => root,
@@ -349,19 +346,21 @@ describe("prepared config recovery", () => {
       expect(fs.existsSync(`${databasePath}-wal`)).toBe(false);
       const before = manifest(root);
       const plan = await recovery(io);
-      expect(plan.snapshot.raw).toBe(backup);
-      expect(plan.snapshot.path).toBe(configPath);
-      expect(plan.snapshot.config.gateway).toMatchObject({ mode: "local", port: 18720 });
-      expect(plan.snapshot.config.agents?.defaults?.compaction?.mode).toBe("safeguard");
-      expect(plan.snapshot.valid).toBe(true);
+      expect(plan.snapshot).toMatchObject({
+        raw: backup,
+        path: configPath,
+        valid: true,
+        config: {
+          gateway: { mode: "local", port: 18720 },
+          agents: { defaults: { compaction: { mode: "safeguard" } } },
+        },
+      });
       expect(env).not.toHaveProperty("RECOVERY_MARKER");
       expect(manifest(root)).toEqual(before);
 
       await plan.apply();
       expect(fs.readFileSync(configPath, "utf8")).toBe(backup);
-      const clobbered = clobberFiles(root);
-      expect(clobbered).toHaveLength(1);
-      expect(fs.readFileSync(path.join(root, clobbered[0]!), "utf8")).toBe(original);
+      expectArchived(root, original);
       const persisted = await io.readConfigFileSnapshotWithPluginMetadata();
       expect(persisted.snapshot).toEqual(plan.snapshot);
     },
@@ -394,22 +393,18 @@ describe("prepared config recovery", () => {
         observe: false,
         homedir: () => root,
         logger: { warn: vi.fn(), error: vi.fn() },
-        fs: {
-          ...fs,
-          promises: {
-            ...fs.promises,
-            writeFile: async (pathname, data, options) => {
-              await fs.promises.writeFile(pathname, data, options);
-              if (typeof pathname === "string" && pathname.startsWith(`${configPath}.clobbered.`)) {
-                if (lease) {
-                  lease.release();
-                } else {
-                  await fs.promises.writeFile(changedPath, concurrentRaw);
-                }
+        ...withPromises({
+          writeFile: async (pathname, data, options) => {
+            await fs.promises.writeFile(pathname, data, options);
+            if (typeof pathname === "string" && pathname.startsWith(`${configPath}.clobbered.`)) {
+              if (lease) {
+                lease.release();
+              } else {
+                await fs.promises.writeFile(changedPath, concurrentRaw);
               }
-            },
+            }
           },
-        },
+        }),
       });
       const plan = await recovery(io);
       await expect(plan.apply(lease?.heartbeat)).rejects.toThrow(
@@ -421,9 +416,7 @@ describe("prepared config recovery", () => {
         expect(fs.readFileSync(changedPath, "utf8")).toBe(concurrentRaw);
       }
       expect(fs.readFileSync(configPath, "utf8")).toBe(original);
-      const clobbered = clobberFiles(root);
-      expect(clobbered).toHaveLength(1);
-      expect(fs.readFileSync(path.join(root, clobbered[0]!), "utf8")).toBe(original);
+      expectArchived(root, original);
     },
   );
 
@@ -431,49 +424,34 @@ describe("prepared config recovery", () => {
     const warn = vi.fn();
     const { root, configPath, original, backup, io } = fixture({
       logger: { warn, error: vi.fn() },
-      fs: {
-        ...fs,
-        promises: {
-          ...fs.promises,
-          writeFile: async (target, data, options) => {
-            if (typeof target === "string" && target.includes(".clobbered.")) {
-              throw Object.assign(new Error("snapshot disk full"), { code: "ENOSPC" });
-            }
-            return fs.promises.writeFile(target, data, options);
-          },
+      ...withPromises({
+        writeFile: async (target, data, options) => {
+          if (typeof target === "string" && target.includes(".clobbered.")) {
+            throw Object.assign(new Error("snapshot disk full"), { code: "ENOSPC" });
+          }
+          return fs.promises.writeFile(target, data, options);
         },
-      },
+      }),
     });
     const plan = await recovery(io);
 
     await expect(plan.apply()).rejects.toThrow("Config backup recovery deferred");
 
-    expectUnchanged(root, configPath, original);
-    expect(fs.readFileSync(`${configPath}.bak`, "utf8")).toBe(backup);
+    expectUnchanged(root, configPath, original, backup);
     expect(warn).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("recovery deferred"));
   });
 
   it("rejects failed replacement while retaining the original and its clobbered snapshot", async () => {
-    const { root, configPath, original, env } = fixture();
-    const io = createConfigIO({
-      configPath,
-      env,
-      observe: false,
-      homedir: () => root,
-      logger: { warn: vi.fn(), error: vi.fn() },
-      fs: {
-        ...fs,
-        promises: {
-          ...fs.promises,
-          rename: async (source, target) => {
-            if (target === configPath) {
-              throw Object.assign(new Error("recovery replacement denied"), { code: "EACCES" });
-            }
-            await fs.promises.rename(source, target);
-          },
+    const { root, configPath, original, io } = fixture((targetPath) => ({
+      ...withPromises({
+        rename: async (source, target) => {
+          if (target === targetPath) {
+            throw Object.assign(new Error("recovery replacement denied"), { code: "EACCES" });
+          }
+          await fs.promises.rename(source, target);
         },
-      },
-    });
+      }),
+    }));
     const plan = await recovery(io);
     await expect(plan.apply()).rejects.toThrow("recovery replacement denied");
     expect(fs.readFileSync(configPath, "utf8")).toBe(original);

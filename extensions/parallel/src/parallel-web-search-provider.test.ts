@@ -89,7 +89,12 @@ function pushMcpHandshake(
     jsonResponse({
       jsonrpc: "2.0",
       id: "c",
-      result: { content: [{ type: "text", text: JSON.stringify(toolPayload) }] },
+      result: {
+        content: [
+          ...["{", "null", "[]", "42"].map((text) => ({ type: "text", text })),
+          { type: "text", text: JSON.stringify(toolPayload) },
+        ],
+      },
     }),
   );
 }
@@ -470,7 +475,7 @@ describe("parallel-free MCP transport", () => {
       freeTool().execute({ search_queries: [`parallel envelope ${expectedPrefix}`] }),
     ).rejects.toThrow(expectedPrefix);
   });
-  it("runs the 3-step handshake and maps results into the public tool shape", async () => {
+  it("runs the handshake and skips invalid text blocks before mapping the public result", async () => {
     const callerSessionId = `sess-${"a".repeat(40)}`;
     pushMcpHandshake(
       {

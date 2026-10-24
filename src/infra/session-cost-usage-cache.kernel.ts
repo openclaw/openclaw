@@ -1,4 +1,3 @@
-import { expressionBuilder } from "kysely";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import { chunkItems } from "../utils/chunk-items.js";
 import {
@@ -6,6 +5,7 @@ import {
   getNodeSqliteKysely,
   iterateSqliteQuerySync,
 } from "./kysely-sync.js";
+import { boundedUsageCacheColumn, usageCacheJsonText } from "./session-cost-usage-expressions.js";
 import {
   USAGE_COST_PARTITION_SCOPE,
   usageCostPartitionKey,
@@ -29,7 +29,6 @@ const RETIRED_ROLLUP_SCOPES = ["session-cost-usage-rollup-v1", "session-cost-usa
 const ROLLUP_PRUNE_BATCH_SIZE = 32;
 
 type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
-const cacheExpressions = expressionBuilder<AgentCacheDatabase, "cache_entries">();
 
 export type SessionCostUsageRollupRow = {
   key: string;
@@ -44,12 +43,6 @@ type SessionCostUsageJson = string | Uint8Array;
 export type SessionCostUsageRollupSnapshot = Omit<SessionCostUsageRollupRow, "valueJson"> & {
   valueJson: SessionCostUsageJson;
 };
-
-function cacheJsonText(value: SessionCostUsageJson) {
-  return typeof value === "string"
-    ? value
-    : cacheExpressions.cast<string>(cacheExpressions.val(value), "text");
-}
 
 export type SessionCostUsageDeferredMetadata = {
   checkpoint: UsageCostFreshnessCheckpoint;
@@ -94,30 +87,8 @@ export function readSessionCostUsageRollupRowsInDatabase(
       .selectFrom("cache_entries")
       .select(["key", "updated_at"])
       .select((eb) => [
-        (budget
-          ? eb
-              .case()
-              .when(eb.fn<number>("octet_length", ["value_json"]), "<=", 64 * 1024)
-              .then(eb.ref("value_json"))
-              .else(null)
-              .end()
-          : eb.ref("value_json")
-        ).as("value_json"),
-        (options?.includeBody
-          ? budget
-            ? eb
-                .case()
-                .when(
-                  eb.fn<number>("length", ["blob"]),
-                  "<=",
-                  Math.min(1024 * 1024, budget.remainingBytes),
-                )
-                .then(eb.ref("blob"))
-                .else(null)
-                .end()
-            : eb.ref("blob")
-          : eb.val(null)
-        ).as("blob"),
+        boundedUsageCacheColumn("value_json", budget).as("value_json"),
+        (options?.includeBody ? boundedUsageCacheColumn("blob", budget) : eb.val(null)).as("blob"),
         eb.fn<number>("coalesce", [eb.fn<number>("length", ["blob"]), eb.val(0)]).as("body_bytes"),
         eb.fn<number>("octet_length", ["value_json"]).as("header_bytes"),
       ])
@@ -189,7 +160,7 @@ export function readSessionCostUsageRollupRowsInDatabase(
   return result;
 }
 
-export function writeSessionCostUsageRollupInDatabase(
+export function writeSessionCostUsageRollupsInDatabase(
   db: EngineConnection,
   params: {
     rollupId: string;
@@ -199,31 +170,31 @@ export function writeSessionCostUsageRollupInDatabase(
     partitions?: UsageCostPartition[];
     removedDates?: string[];
     replacePartitions?: boolean;
-  },
+  }[],
 ): boolean {
   return withSqliteDatabaseWriteScope(db, [ROLLUP_SCOPE], () => {
     const kysely = getNodeSqliteKysely<AgentCacheDatabase>(db);
-    if (params.partitions || params.removedDates || params.replacePartitions) {
+    if (params.some((row) => row.partitions || row.removedDates || row.replacePartitions)) {
       deleteSessionCostUsagePartitionsInDatabase(db, params);
     }
-    const rows = [
+    const rows = params.flatMap((row) => [
       {
         scope: ROLLUP_SCOPE,
-        key: params.rollupId,
-        value_json: cacheJsonText(params.valueJson),
-        blob: params.blob,
+        key: row.rollupId,
+        value_json: usageCacheJsonText(row.valueJson),
+        blob: row.blob,
         expires_at: null,
-        updated_at: params.updatedAt,
+        updated_at: row.updatedAt,
       },
-      ...(params.partitions ?? []).map((partition) => ({
+      ...(row.partitions ?? []).map((partition) => ({
         scope: USAGE_COST_PARTITION_SCOPE,
-        key: usageCostPartitionKey(params.rollupId, partition.date),
+        key: usageCostPartitionKey(row.rollupId, partition.date),
         value_json: partition.valueJson,
         blob: partition.blob,
         expires_at: null,
-        updated_at: params.updatedAt,
+        updated_at: row.updatedAt,
       })),
-    ];
+    ]);
     for (const batch of chunkItems(rows, 100)) {
       executeSqliteQuerySync(
         db,
@@ -285,7 +256,7 @@ export function pruneSessionCostUsageRollupsInDatabase(
               batch.map((row) =>
                 eb.and([
                   eb("key", "=", row.key),
-                  eb("value_json", "=", cacheJsonText(row.valueJson)),
+                  eb("value_json", "=", usageCacheJsonText(row.valueJson)),
                   eb("updated_at", "=", row.updatedAt),
                 ]),
               ),

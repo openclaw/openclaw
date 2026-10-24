@@ -28,9 +28,6 @@ function startTask(kind = "image", requesterSessionKey = sessionKey) {
     sourceId: `${kind}_generate:test`,
     requesterSessionKey,
     status: "running",
-    createdAt: 1,
-    startedAt: 1,
-    lastEventAt: 1,
   });
   if (!task) {
     throw new Error("expected native media task");
@@ -41,8 +38,6 @@ function completeTask(runId: string, endedAt: number) {
   updateMediaGenerationOperation(runId, {
     status: "succeeded",
     endedAt,
-    lastEventAt: endedAt,
-    terminalSummary: "Generated media.",
   });
   clearGeneratedMediaTaskActivity(runId);
 }

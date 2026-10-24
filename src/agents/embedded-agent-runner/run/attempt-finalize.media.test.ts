@@ -44,74 +44,41 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
     completed?: AssistantStopReason;
     yielded?: boolean;
   };
-  type TerminalCase = readonly [
-    name: string,
-    terminal: EmbeddedRunAttemptResult["terminal"],
-    currentStopReason: AssistantStopReason,
-    expectedStopReason: string | undefined,
-    expectedFinalStatus: "success" | "error" | "interrupted",
-    options: TerminalCaseOptions,
-  ];
+  type TerminalCase = {
+    name: string;
+    terminal: EmbeddedRunAttemptResult["terminal"];
+    currentStopReason: AssistantStopReason;
+    expectedStopReason: string | undefined;
+    expectedFinalStatus: "success" | "error" | "interrupted";
+    options: TerminalCaseOptions;
+  };
+  const ok = { kind: "ok" } as const;
+  const externalAbort = { kind: "aborted", source: "external" } as const;
+  const yieldAbort = { kind: "aborted", source: "yield_cleanup" } as const;
+  const failure = { source: "prompt", error: new Error("prompt failed") } as const;
+  const yielded = { last: "aborted", completed: "stop", yielded: true } as const;
+  const timeout = { kind: "timeout", phase: "prompt", source: "runtime" } as const;
 
-  it.each<TerminalCase>([
-    ["current over stale", { kind: "ok" }, "stop", "stop", "success", { last: "aborted" }],
-    ["normal completion", { kind: "ok" }, "length", "stop", "success", { completed: "stop" }],
-    // The fixture assistant carries visible text, which finalization promotes
-    // to terminal text for a length stop, so this is a delivered partial
-    // reply and the trajectory must record it as success.
-    ["length truncation with visible text", { kind: "ok" }, "length", "length", "success", {}],
-    [
-      "yield plus prompt timeout",
-      { kind: "timeout", phase: "prompt", source: "runtime" },
-      "stop",
-      undefined,
-      "interrupted",
-      { last: "aborted", completed: "stop", yielded: true },
-    ],
-    [
-      "yield plus external abort",
-      { kind: "aborted", source: "external" },
-      "stop",
-      "aborted",
-      "interrupted",
-      { last: "aborted", completed: "stop", yielded: true },
-    ],
-    [
-      "external abort over prompt failure",
-      {
-        kind: "aborted",
-        source: "external",
-        failure: { source: "prompt", error: new Error("prompt failed") },
-      },
-      "stop",
-      "aborted",
-      "interrupted",
-      {},
-    ],
-    ["partial provider error", { kind: "ok" }, "error", "error", "error", { texts: ["x"] }],
-    [
-      "yield cleanup plus prompt failure",
-      {
-        kind: "aborted",
-        source: "yield_cleanup",
-        failure: { source: "prompt", error: new Error("prompt failed") },
-      },
-      "error",
-      undefined,
-      "error",
-      { last: "aborted", completed: "stop", yielded: true },
-    ],
-    [
-      "yield over completed assistant",
-      { kind: "aborted", source: "yield_cleanup" },
-      "length",
-      "end_turn",
-      "success",
-      { last: "aborted", completed: "stop", yielded: true },
-    ],
-  ])(
-    "%s",
-    (_name, terminal, currentStopReason, expectedStopReason, expectedFinalStatus, options) => {
+  it.each`
+    name                                     | terminal                         | currentStopReason | expectedStopReason | expectedFinalStatus | options
+    ${"current over stale"}                  | ${ok}                            | ${"stop"}         | ${"stop"}          | ${"success"}        | ${{ last: "aborted" }}
+    ${"normal completion"}                   | ${ok}                            | ${"length"}       | ${"stop"}          | ${"success"}        | ${{ completed: "stop" }}
+    ${"length truncation with visible text"} | ${ok}                            | ${"length"}       | ${"length"}        | ${"success"}        | ${{}}
+    ${"yield plus prompt timeout"}           | ${timeout}                       | ${"stop"}         | ${undefined}       | ${"interrupted"}    | ${yielded}
+    ${"yield plus external abort"}           | ${externalAbort}                 | ${"stop"}         | ${"aborted"}       | ${"interrupted"}    | ${yielded}
+    ${"external abort over prompt failure"}  | ${{ ...externalAbort, failure }} | ${"stop"}         | ${"aborted"}       | ${"interrupted"}    | ${{}}
+    ${"partial provider error"}              | ${ok}                            | ${"error"}        | ${"error"}         | ${"error"}          | ${{ texts: ["x"] }}
+    ${"yield cleanup plus prompt failure"}   | ${{ ...yieldAbort, failure }}    | ${"error"}        | ${undefined}       | ${"error"}          | ${yielded}
+    ${"yield over completed assistant"}      | ${yieldAbort}                    | ${"length"}       | ${"end_turn"}      | ${"success"}        | ${yielded}
+  `(
+    "$name",
+    ({
+      terminal,
+      currentStopReason,
+      expectedStopReason,
+      expectedFinalStatus,
+      options,
+    }: TerminalCase) => {
       const events = captureTrajectory({
         terminal,
         assistantTexts: options.texts ?? [],
@@ -123,10 +90,10 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
         yieldDetected: options.yielded,
       });
 
-      expect(events["model.completed"]).toHaveProperty("stopReason", expectedStopReason);
-      expect(events["trace.artifacts"]).toHaveProperty("stopReason", expectedStopReason);
+      for (const name of ["model.completed", "trace.artifacts", "session.ended"]) {
+        expect(events[name]).toHaveProperty("stopReason", expectedStopReason);
+      }
       expect(events["trace.artifacts"]).toHaveProperty("finalStatus", expectedFinalStatus);
-      expect(events["session.ended"]).toHaveProperty("stopReason", expectedStopReason);
     },
   );
 
@@ -152,25 +119,12 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
   );
 
   it("records canonical message snapshots without reprojecting them", () => {
+    const media = [{ path: "/media/canonical.png", contentType: "image/png" }];
+    const message = castAgentMessage({ role: "user", content: "inspect", __openclaw: { media } });
+    const expected = structuredClone(message);
     const events = captureTrajectory({
-      messagesSnapshot: [
-        castAgentMessage({
-          role: "user",
-          content: "inspect",
-          __openclaw: {
-            media: [{ path: "/media/canonical.png", contentType: "image/png" }],
-          },
-        }),
-      ],
+      messagesSnapshot: [message],
     });
-    const captured = (
-      events["model.completed"]?.messagesSnapshot as Array<Record<string, unknown>> | undefined
-    )?.[0];
-
-    expect(captured).not.toHaveProperty("MediaPath");
-    expect(captured).not.toHaveProperty("MediaType");
-    expect(captured?.["__openclaw"]).toMatchObject({
-      media: [{ path: "/media/canonical.png", contentType: "image/png" }],
-    });
+    expect(events["model.completed"]?.messagesSnapshot).toEqual([expected]);
   });
 });

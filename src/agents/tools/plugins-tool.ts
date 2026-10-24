@@ -151,13 +151,22 @@ export function createPluginsTool(options?: {
           request = {};
           break;
         case "reloadAndResume": {
-          const { handoffPluginReload } = await import("./plugins-reload-handoff.js");
-          return await handoffPluginReload({
+          const { handoffSessionTool } = await import("./session-tool-handoff.js");
+          const reloadRequest = { plugins: [{ pluginId: required("pluginId") }], ...consent };
+          return await handoffSessionTool({
             ...options,
+            name: "Plugin reload",
             operation,
             requestOwners,
             signal,
-            request: { plugins: [{ pluginId: required("pluginId") }], ...consent },
+            run: ({ assertCurrent, signal: handoffSignal }) =>
+              callAgentToolGatewayRequest({
+                method: "plugins.reload",
+                params: reloadRequest,
+                sessionMutationCommitGuard: assertCurrent,
+                signal: handoffSignal,
+                timeoutMs: null,
+              }),
             formatResult: (payload) => JSON.stringify(pluginsToolResult(payload).details),
           });
         }

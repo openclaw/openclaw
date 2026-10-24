@@ -9,6 +9,7 @@ import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { cronJob, cronList } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI automation condition-trigger authoring",
@@ -25,19 +26,13 @@ beforeEach(() => {
 });
 const proofStage = process.env.OPENCLAW_TRIGGER_UI_PROOF_STAGE ?? "after";
 
-const scriptJob: CronJob = {
-  id: "existing-script-automation",
+const scriptJob = cronJob("existing-script-automation", "Script health check", {
   configRevision: "existing-script-revision",
-  name: "Script health check",
-  enabled: true,
   createdAtMs: Date.parse("2026-05-29T08:00:00.000Z"),
   updatedAtMs: Date.parse("2026-05-29T08:05:00.000Z"),
-  schedule: { kind: "every", everyMs: 60_000 },
   sessionTarget: "isolated",
-  wakeMode: "next-heartbeat",
   payload: { kind: "script", script: "return { ready: true };" },
-  state: {},
-};
+});
 
 const pageOptions = {
   locale: "en-US",
@@ -55,17 +50,7 @@ async function newTask(page: Page, name: string, message: string) {
 }
 const advanced = (page: Page) => page.locator("details.cron-advanced > summary").click();
 
-function listResponse(jobs: CronJob[]) {
-  return {
-    jobs,
-    snapshotRevision: "trigger-authoring-fixture",
-    total: jobs.length,
-    offset: 0,
-    limit: 50,
-    hasMore: false,
-    nextOffset: null,
-  };
-}
+const listResponse = (jobs: CronJob[]) => cronList(jobs, "trigger-authoring-fixture");
 
 function cronMethodResponses(jobs: CronJob[]) {
   return {

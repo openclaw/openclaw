@@ -47,7 +47,7 @@ async function writeBridgePage(
 }
 
 describe("memory-wiki corpus supplement visibility", () => {
-  it("enforces bridge ownership through direct and registered corpus fallbacks", async () => {
+  it("enforces bridge ownership through registered corpus fallbacks", async () => {
     const { rootDir, config } = await createVault({
       initialize: true,
       config: { vault: { scope: "global" } },
@@ -64,33 +64,6 @@ describe("memory-wiki corpus supplement visibility", () => {
       resolveConfig: (agentId, currentAppConfig) =>
         resolveMemoryWikiAgentConfig({ config, appConfig: currentAppConfig, agentId }),
     });
-    const caller = {
-      agentId: "main",
-      agentSessionKey: "agent:main:child-session",
-      query: "REDACTED-FOREIGN-MARKER",
-    };
-
-    expect(await supplement.search({ ...caller, sandboxed: true })).toEqual([]);
-    expect(
-      await supplement.get({
-        ...caller,
-        sandboxed: true,
-        lookup: "secondary-private",
-      }),
-    ).toBeNull();
-    expect(
-      (await supplement.search({ ...caller, sandboxed: false })).map((result) => result.path),
-    ).toEqual(["sources/secondary-private.md"]);
-    expect(
-      (
-        await supplement.get({
-          ...caller,
-          sandboxed: false,
-          lookup: "secondary-private",
-        })
-      )?.content,
-    ).toContain("REDACTED-FOREIGN-MARKER");
-
     clearMemoryPluginState();
     try {
       registerMemoryCorpusSupplement("memory-wiki", supplement);
@@ -99,61 +72,41 @@ describe("memory-wiki corpus supplement visibility", () => {
       const sandboxedSearch = memoryCoreTool("memory_search", "main", "child-session", true);
       const openGet = memoryCoreTool("memory_get", "main", "child-session", false);
       const openSearch = memoryCoreTool("memory_search", "main", "child-session", false);
-
-      const foreignGet = await sandboxedGet.execute("memory-get-foreign", {
-        path: "sources/secondary-private.md",
-        corpus: "wiki",
-      });
-      const unownedGet = await sandboxedGet.execute("memory-get-unowned", {
-        path: "sources/unowned-private.md",
-        corpus: "wiki",
-      });
-      const ownGet = await sandboxedGet.execute("memory-get-own", {
-        path: "sources/main-private.md",
-        corpus: "wiki",
-      });
-      const foreignSearch = await sandboxedSearch.execute("memory-search-foreign", {
-        query: "REDACTED-FOREIGN-MARKER",
-        corpus: "wiki",
-      });
-      const ownSearch = await sandboxedSearch.execute("memory-search-own", {
-        query: "REDACTED-OWN-MARKER",
-        corpus: "wiki",
-      });
-      const openForeignGet = await openGet.execute("memory-get-open-foreign", {
-        path: "sources/secondary-private.md",
-        corpus: "wiki",
-      });
-      const openForeignSearch = await openSearch.execute("memory-search-open-foreign", {
-        query: "REDACTED-FOREIGN-MARKER",
-        corpus: "wiki",
-      });
-
-      expect(assertToolDetailsRecord(foreignGet.details)).toMatchObject({
-        text: "",
-        status: "not_found",
-        corpora: [{ corpus: "wiki", outcome: "ok" }],
-      });
-      expect(assertToolDetailsRecord(unownedGet.details)).toMatchObject({
-        text: "",
-        status: "not_found",
-        corpora: [{ corpus: "wiki", outcome: "ok" }],
-      });
-      expect(assertToolDetailsRecord(ownGet.details)).toMatchObject({
+      async function get(slug: string, sandboxed = true) {
+        const tool = sandboxed ? sandboxedGet : openGet;
+        const result = await tool.execute(`get-${slug}`, {
+          path: `sources/${slug}-private.md`,
+          corpus: "wiki",
+        });
+        return assertToolDetailsRecord(result.details);
+      }
+      async function search(marker: string, sandboxed = true) {
+        const tool = sandboxed ? sandboxedSearch : openSearch;
+        const result = await tool.execute(`search-${marker}`, { query: marker, corpus: "wiki" });
+        return assertToolDetailsRecord(result.details).results;
+      }
+      for (const slug of ["secondary", "unowned"]) {
+        expect(await get(slug)).toMatchObject({
+          text: "",
+          status: "not_found",
+          corpora: [{ corpus: "wiki", outcome: "ok" }],
+        });
+      }
+      expect(await get("main")).toMatchObject({
         status: "ok",
         path: "sources/main-private.md",
         text: expect.stringContaining("REDACTED-OWN-MARKER"),
       });
-      expect(assertToolDetailsRecord(foreignSearch.details).results).toEqual([]);
-      expect(assertToolDetailsRecord(ownSearch.details).results).toEqual([
+      expect(await search("REDACTED-FOREIGN-MARKER")).toEqual([]);
+      expect(await search("REDACTED-OWN-MARKER")).toEqual([
         expect.objectContaining({ path: "sources/main-private.md" }),
       ]);
-      expect(assertToolDetailsRecord(openForeignGet.details)).toMatchObject({
+      expect(await get("secondary", false)).toMatchObject({
         status: "ok",
         path: "sources/secondary-private.md",
         text: expect.stringContaining("REDACTED-FOREIGN-MARKER"),
       });
-      expect(assertToolDetailsRecord(openForeignSearch.details).results).toEqual([
+      expect(await search("REDACTED-FOREIGN-MARKER", false)).toEqual([
         expect.objectContaining({ path: "sources/secondary-private.md" }),
       ]);
     } finally {

@@ -12,11 +12,10 @@ import {
   claudeTextDelta,
   createClaudeParser,
   joinJsonlFrames,
+  finishCliFrames,
+  localCliBackend as localBackend,
+  claudeMessageStart,
 } from "./cli-output.test-helpers.js";
-
-function claudeMessageStart(id?: string) {
-  return claudeStreamEvent({ type: "message_start", ...(id ? { message: { id } } : {}) });
-}
 
 function claudeThinkingDelta(thinking: string, index?: number | string) {
   return claudeStreamEvent({
@@ -37,12 +36,6 @@ const thought = (thinking: string, signature?: string) => ({
   signature,
 });
 const answer = { type: "text", text: "Answer." };
-const localBackend: CliJsonlStreamingParserOptions["backend"] = {
-  command: "local-cli",
-  output: "jsonl",
-  jsonlDialect: "claude-stream-json",
-  sessionIdFields: ["session_id"],
-};
 
 describe("createCliJsonlStreamingParser reasoning", () => {
   function createClaudeTaggedReasoningHarness(
@@ -398,8 +391,7 @@ describe("createCliJsonlStreamingParser reasoning", () => {
   ])("$name", ({ frames, expected }) => {
     const { parser, thinking } = createClaudeTaggedReasoningHarness({ onAssistantDelta: () => {} });
 
-    parser.push(joinJsonlFrames(...frames));
-    parser.finish();
+    finishCliFrames(parser, ...frames);
 
     expect(thinking).toEqual(expected);
   });

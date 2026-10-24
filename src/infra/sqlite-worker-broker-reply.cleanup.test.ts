@@ -43,9 +43,7 @@ vi.mock("./sqlite-worker-transfer.js", () =>
 );
 
 function jobWithCleanup(admissionFailures: readonly unknown[] = [], dispatched = true) {
-  const record = (event: string) => {
-    effects.events.push(event);
-  };
+  const record = (event: string) => void effects.events.push(event);
   const slotCustody = new SqliteWorkerSlotCustody();
   const custody = slotCustody.createRequest();
   custody.activate();

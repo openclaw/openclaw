@@ -217,13 +217,6 @@ describe("OpenClaw profile reader", () => {
             },
           },
         },
-        legacyOpenClawProfile: {
-          agent: {
-            tools: {
-              profile: toolProfile,
-            },
-          },
-        },
       });
     },
   );
@@ -350,8 +343,6 @@ describe("OpenClaw profile reader", () => {
     });
     expect(migrated.openClawProfile?.agent).not.toHaveProperty("model");
     expect(migrated.openClawProfile?.agent).not.toHaveProperty("subagents");
-    expect(migrated.legacyOpenClawProfile?.agent).not.toHaveProperty("model");
-    expect(migrated.legacyOpenClawProfile?.agent).not.toHaveProperty("subagents");
   });
 
   it("rejects a hardlinked profile", async () => {

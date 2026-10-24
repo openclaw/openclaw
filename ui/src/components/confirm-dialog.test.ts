@@ -102,6 +102,34 @@ describe("showConfirmDialog", () => {
     }
   });
 
+  it.each(["confirm", "alternative"] as const)(
+    "keeps grouped choices gated by acknowledgement and live authority: %s",
+    async (choice) => {
+      let allowed = true;
+      const pending = showConfirmChoiceDialog({
+        message: "Choose a scope",
+        alternativeLabel: "Only this session",
+        confirmLabel: "All sessions",
+        groupChoicesOnMobile: true,
+        requiredAcknowledgement: "I understand",
+        canConfirm: () => allowed,
+      });
+      const { dialog } = await getRenderedModalDialog(document.body);
+      const selected = findButton(choice === "confirm" ? "All sessions" : "Only this session");
+      expect(selected.disabled).toBe(true);
+      setCheckbox('input[type="checkbox"]', true);
+      flush();
+      expect(selected.disabled).toBe(false);
+      // A stale enabled appearance must not bypass the live click guard.
+      allowed = false;
+      selected.click();
+      expect(dialog.open).toBe(true);
+      allowed = true;
+      selected.click();
+      await expect(pending).resolves.toBe(choice);
+    },
+  );
+
   it("rejects a reentrant confirmation instead of stacking or replaying it", async () => {
     const first = showConfirmDialog({ title: "First", message: "First action" });
     const second = showConfirmDialog({ title: "Second", message: "Second action" });
@@ -126,9 +154,9 @@ describe("showConfirmDialog", () => {
     });
     await getRenderedModalDialog(document.body);
     expect([...document.body.querySelectorAll("button")].map((item) => item.textContent)).toEqual([
-      "This session",
-      "All sessions",
       "Cancel",
+      "All sessions",
+      "This session",
     ]);
     expect(findButton("This session").classList.contains("primary")).toBe(true);
     expect(findButton("All sessions").className).toBe("btn");
@@ -138,28 +166,45 @@ describe("showConfirmDialog", () => {
   });
 
   it.each(
-    [false, true].flatMap((choice) => ["abort", "dismiss"].map((action) => ({ choice, action }))),
-  )("cancels choice=$choice on $action without stacking", async ({ choice, action }) => {
-    const controller = new AbortController();
-    const options = { message: "Continue?", signal: controller.signal };
-    const pending = choice
-      ? showConfirmChoiceDialog({ ...options, alternativeLabel: "Alternative" })
-      : showConfirmDialog(options);
-    const { modal } = await getRenderedModalDialog(document.body);
-    if (choice) {
-      await expect(showConfirmDialog({ message: "Second" })).resolves.toBe(false);
-      await expect(
-        showConfirmChoiceDialog({ message: "Third", alternativeLabel: "Other" }),
-      ).resolves.toBeNull();
-    }
-    if (action === "abort") {
-      controller.abort();
-    } else {
-      modal.dispatchEvent(new CustomEvent("modal-cancel"));
-    }
-    await expect(pending).resolves.toBe(choice ? null : false);
-    if (choice || action === "abort") {
-      expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
-    }
-  });
+    [
+      { choice: false, grouped: false },
+      { choice: true, grouped: false },
+      { choice: true, grouped: true },
+    ].flatMap((mode) =>
+      ["abort", "dismiss"].map((action) => ({
+        choice: mode.choice,
+        grouped: mode.grouped,
+        action,
+      })),
+    ),
+  )(
+    "cancels choice=$choice grouped=$grouped on $action without stacking",
+    async ({ choice, grouped, action }) => {
+      const controller = new AbortController();
+      const options = { message: "Continue?", signal: controller.signal };
+      const pending = choice
+        ? showConfirmChoiceDialog({
+            ...options,
+            alternativeLabel: "Alternative",
+            groupChoicesOnMobile: grouped,
+          })
+        : showConfirmDialog(options);
+      const { modal } = await getRenderedModalDialog(document.body);
+      if (choice) {
+        await expect(showConfirmDialog({ message: "Second" })).resolves.toBe(false);
+        await expect(
+          showConfirmChoiceDialog({ message: "Third", alternativeLabel: "Other" }),
+        ).resolves.toBeNull();
+      }
+      if (action === "abort") {
+        controller.abort();
+      } else {
+        modal.dispatchEvent(new CustomEvent("modal-cancel"));
+      }
+      await expect(pending).resolves.toBe(choice ? null : false);
+      if (choice || action === "abort") {
+        expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
+      }
+    },
+  );
 });

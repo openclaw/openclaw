@@ -106,7 +106,7 @@ export function registerGatewayCancellationTests({
     },
   );
 
-  it("settles aborted sources and effects while retaining unfinished source cleanup", async () => {
+  it("reports remaining effect custody after aborted sources settle", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const active = [];
     for (let index = 0; index < 5; index++) {
@@ -123,6 +123,18 @@ export function registerGatewayCancellationTests({
       onInterrupt: () => background.release(),
     });
     const cleanup = createDeferredCore();
+    const effectCleanup = createDeferredCore();
+    const retainedEffect = await beginSessionEffect({
+      target: captureSessionTarget({
+        storeScope: "/synthetic/gateway-close/sessions.sqlite",
+        sessionKey: "agent:main:retained-effect",
+        incarnation: "retained-effect",
+      }),
+      run: { runId: "retained-effect-run" },
+      resolveGatewayContext: resolveClosingGatewayContext,
+      onInterrupt: () => retainedEffect.release(),
+    });
+    const effectWork = retainedEffect.run(() => effectCleanup.promise);
     const retained = active[0]!.source;
     trackSessionControllerSourceWork(retained.input, cleanup.promise);
     const sourcesSettled = Promise.all([
@@ -143,10 +155,20 @@ export function registerGatewayCancellationTests({
       expect(formatGatewayPendingCloseSteps()).toMatch(
         /session-sources=\d+ms sources=1.0 operations=0.0 sourceWork=1.0/,
       );
-      expect(formatGatewayPendingCloseSteps()).not.toContain("session-effects=");
+      expect(formatGatewayPendingCloseSteps()).toMatch(
+        /session-effects=\d+ms effects=1.0 phase=acquired sessionKey=agent:main:retained-effect runId=retained-effect-run interrupted=true/,
+      );
+      cleanup.resolve();
+      await retained.input.settlement.promise;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(formatGatewayPendingCloseSteps()).not.toContain("session-sources=");
+      expect(formatGatewayPendingCloseSteps()).toContain("effects=1.0");
       expect(closed).not.toHaveBeenCalled();
     } finally {
       cleanup.resolve();
+      effectCleanup.resolve();
+      await effectWork;
+      retainedEffect.release();
       background.release();
       await closing;
     }

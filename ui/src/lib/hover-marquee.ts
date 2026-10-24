@@ -6,7 +6,17 @@ const MARQUEE_SPEED_PX_PER_SEC = 40;
 const MARQUEE_HOVER_DELAY_MS = 500;
 const MARQUEE_LOOP_TRAVEL_FRACTION = 0.4;
 
-export type MarqueeOptions = { delay?: number; speed?: number; loop?: boolean };
+export type MarqueeOptions = {
+  delay?: number;
+  speed?: number;
+  loop?: boolean;
+  /** Stable interaction host, resolved when this label first becomes visible. */
+  host?: () => HTMLElement | undefined;
+  /** Measure overflow and retain its end fade, without starting a scroll timer. */
+  stationary?: boolean;
+  /** Without an interaction host, retain a measured fade without scrolling. */
+  stationaryWithoutHost?: boolean;
+};
 
 /** Geometry and animation stay in one ref-owned DOM island, outside reactive state. */
 export function createHoverMarquee(input: () => MarqueeOptions & { className: string }) {
@@ -14,6 +24,7 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
   let label: HTMLElement;
   let text: HTMLElement;
   let host: HTMLElement | undefined;
+  let stationaryHost = false;
   let observer: ResizeObserver | undefined;
   let contentObserver: MutationObserver | undefined;
   let visibilityObserver: IntersectionObserver | undefined;
@@ -36,6 +47,46 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
     timer = undefined;
     readyToScroll = false;
     label?.classList.remove("hover-marquee--scrolling");
+  };
+  const active = () =>
+    host &&
+    (host.matches(":hover, :focus-visible") ||
+      (host.contains(label.ownerDocument.activeElement) &&
+        label.ownerDocument.activeElement?.matches(":focus-visible")) ||
+      // Touch menus keep revealing their trigger while focus moves into the portal.
+      (options.loop && host.getAttribute("aria-expanded") === "true"));
+  const start = () => {
+    if (timer === undefined && !label.classList.contains("hover-marquee--scrolling")) {
+      timer = window.setTimeout(() => {
+        timer = undefined;
+        readyToScroll = true;
+        schedule();
+      }, options.delay ?? MARQUEE_HOVER_DELAY_MS);
+    }
+  };
+  const enter = () => {
+    // Resize/content observers own the resting fade; brief navigation needs no geometry.
+    if (
+      !options.stationary &&
+      !stationaryHost &&
+      visible &&
+      !motion?.matches &&
+      label.classList.contains("hover-marquee--overflowing")
+    ) {
+      start();
+    }
+  };
+  const leave = (event: Event) => {
+    if (
+      event instanceof FocusEvent &&
+      event.relatedTarget instanceof Node &&
+      host?.contains(event.relatedTarget)
+    ) {
+      return;
+    }
+    if (!active()) {
+      stop();
+    }
   };
   const clearOverflow = () => {
     label.classList.toggle("hover-marquee--overflowing", false);
@@ -63,18 +114,28 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
       return undefined;
     }
     if (!host) {
-      host =
-        label.closest<HTMLElement>(
-          ".session-row-host, .sidebar-recent-sessions__head, .sidebar-identity-card, .sidebar-agent-card__main, .sidebar-workspace-header__main",
-        ) ?? undefined;
+      host = options.host
+        ? options.host()
+        : (label.closest<HTMLElement>(
+            ".session-row-host, .sidebar-recent-sessions__head, .sidebar-identity-card, .sidebar-agent-card__main, .sidebar-workspace-header__main",
+          ) ?? undefined);
+      if (!host && options.stationaryWithoutHost) {
+        host = label;
+        stationaryHost = true;
+      }
       if (!host) {
         return undefined;
       }
-      for (const event of ["pointerenter", "pointerleave", "focusin", "focusout"]) {
-        stopListeners.push(listen(host, event, schedule));
+      if (!stationaryHost) {
+        for (const event of ["pointerenter", "focusin"]) {
+          stopListeners.push(listen(host, event, enter));
+        }
+        for (const event of ["pointerleave", "focusout"]) {
+          stopListeners.push(listen(host, event, leave));
+        }
+        motion = matchMedia("(prefers-reduced-motion: reduce)");
+        stopListeners.push(listen(motion, "change", schedule));
       }
-      motion = matchMedia("(prefers-reduced-motion: reduce)");
-      stopListeners.push(listen(motion, "change", schedule));
       // Transforms do not resize text, so scrolling cannot invalidate its measurement.
       observer = new ResizeObserver(schedule);
       observer.observe(label);
@@ -87,10 +148,12 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
         attributes: true,
         attributeFilter: ["dir"],
       });
-      contentObserver.observe(host, {
-        attributes: true,
-        attributeFilter: ["aria-expanded", "dir"],
-      });
+      if (host !== label) {
+        contentObserver.observe(host, {
+          attributes: true,
+          attributeFilter: ["aria-expanded", "dir"],
+        });
+      }
       contentObserver.observe(label.ownerDocument.documentElement, {
         attributes: true,
         attributeFilter: ["dir"],
@@ -112,13 +175,7 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
     if (!clipped) {
       return clearOverflow;
     }
-    const active =
-      host.matches(":hover, :focus-visible") ||
-      (host.contains(label.ownerDocument.activeElement) &&
-        label.ownerDocument.activeElement?.matches(":focus-visible")) ||
-      // Touch menus keep revealing their trigger while focus moves into the portal.
-      (options.loop && host.getAttribute("aria-expanded") === "true");
-    if (!active || !visible || motion?.matches) {
+    if (options.stationary || stationaryHost || !active() || !visible || motion?.matches) {
       return () => {
         label.classList.toggle("hover-marquee--overflowing", clipped);
         stop();
@@ -147,12 +204,8 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
       if (readyToScroll) {
         readyToScroll = false;
         label.classList.add("hover-marquee--scrolling");
-      } else if (timer === undefined && !scrolling) {
-        timer = window.setTimeout(() => {
-          timer = undefined;
-          readyToScroll = true;
-          schedule();
-        }, options.delay ?? MARQUEE_HOVER_DELAY_MS);
+      } else {
+        start();
       }
     };
   };
@@ -164,7 +217,9 @@ export function createHoverMarquee(input: () => MarqueeOptions & { className: st
       next.className !== options.className ||
       next.delay !== options.delay ||
       next.speed !== options.speed ||
-      next.loop !== options.loop
+      next.loop !== options.loop ||
+      next.stationary !== options.stationary ||
+      next.stationaryWithoutHost !== options.stationaryWithoutHost
     ) {
       schedule();
     }

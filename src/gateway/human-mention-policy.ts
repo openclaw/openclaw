@@ -16,7 +16,7 @@ import { updateSessionProfileInvolvementAsync } from "../config/sessions/session
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
-import { operatorScopeSatisfied, roleScopesAllow } from "../shared/operator-scope-compat.js";
+import { operatorScopeSatisfied } from "../shared/operator-scope-compat.js";
 import { readUserProfileVersion } from "../state/user-profile-events.js";
 import { readUserProfileDirectory } from "../state/user-profile-reads.js";
 import {
@@ -51,14 +51,6 @@ type MentionTarget = {
   entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito">;
 };
 type MentionReader = { profile: MentionProfile; canRead: (target: MentionTarget) => boolean };
-
-function scopesAllowRead(scopes: readonly string[]): boolean {
-  return roleScopesAllow({
-    role: "operator",
-    requestedScopes: [READ_SCOPE],
-    allowedScopes: scopes,
-  });
-}
 
 /** UI labels are text, never identity or an email-address fallback. */
 export function humanMentionDisplayLabel(label: string | undefined, profileId: string): string {
@@ -183,7 +175,7 @@ export function createHumanMentionPolicy(params: {
     }
     const policy = resolveOperatorRolePolicyForProfile(profile.profileId, cfg);
     const scopes = policy?.scopes ?? [READ_SCOPE];
-    if (!scopesAllowRead(scopes)) {
+    if (!operatorScopeSatisfied(SESSION_READ_SCOPE, scopes)) {
       return undefined;
     }
     if (scopes.includes(ADMIN_SCOPE)) {

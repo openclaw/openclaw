@@ -9,6 +9,7 @@ import {
   createControlUiMockSameOriginGatewayScript,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -39,10 +40,10 @@ const suite = createControlUiE2eSuite({
 const scenarios = (["boot", "direct", "sidebar"] as const).flatMap((entry) =>
   [4, 160].flatMap((count) =>
     [1440, 390].flatMap((width) =>
-      (["no-preference", "reduce"] as const).flatMap((reducedMotion) =>
-        (["light", "dark"] as const).map(
-          (colorScheme) => [entry, count, width, reducedMotion, colorScheme] as const,
-        ),
+      // Theme does not change entry geometry; cover both without replaying every case.
+      (["no-preference", "reduce"] as const).map(
+        (reducedMotion) =>
+          [entry, count, width, reducedMotion, count === 4 ? "light" : "dark"] as const,
       ),
     ),
   ),
@@ -79,7 +80,9 @@ function recordEntryFrames({ target, enabled, lastEntryId }: RecorderOptions) {
     const viewport = thread?.getBoundingClientRect();
     const elements = [
       document.querySelector(".shell"),
-      ...(pane?.querySelectorAll(".chat-pane__header, .chat, .chat-bubble[data-entry-id]") ?? []),
+      ...(pane?.querySelectorAll(
+        ".chat-pane__header, .agent-chat__header--mobile, .chat, .chat-bubble[data-entry-id]",
+      ) ?? []),
     ];
     const samples: EntrySample[] = [];
     for (const element of elements) {
@@ -100,7 +103,11 @@ function recordEntryFrames({ target, enabled, lastEntryId }: RecorderOptions) {
         id = ++nextId;
         ids.set(element, id);
       }
-      const kind = entryId ?? element.className;
+      const kind =
+        entryId ??
+        (element.matches(".chat-pane__header, .agent-chat__header--mobile")
+          ? "session-header"
+          : element.className);
       samples.push({ id, kind, y: rect.y, height: rect.height });
       if (entryId === lastEntryId) {
         lastEntryPaintedAt ??= time;
@@ -137,7 +144,7 @@ function assertEntryFrames(frames: EntryFrame[], lastEntryId: string) {
     }
   }
   const observed = Array.from(samplesById.values());
-  for (const kind of ["chat-pane__header", "chat", "shell", lastEntryId]) {
+  for (const kind of ["session-header", "chat", "shell", lastEntryId]) {
     const samples = observed.find((rows) => rows[0].kind.split(" ").includes(kind));
     expect(samples?.length, `${kind} painted frame coverage`).toBeGreaterThanOrEqual(10);
     const duration = samples!.at(-1)!.time - samples![0].time;
@@ -223,10 +230,7 @@ suite.define(() => {
           if (entry === "sidebar") {
             await page.getByText(chooseSession).waitFor();
             if (width === 390) {
-              await page
-                .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-                .first()
-                .click();
+              await navigationDrawerToggle(page).click();
             }
             const link = page.locator(
               `[data-session-key="${target}"] a.sidebar-recent-session__link`,

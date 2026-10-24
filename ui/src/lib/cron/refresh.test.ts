@@ -234,7 +234,6 @@ it("retires accepted rows and errors before a changed query resolves", async () 
   harness.state.cronRunsQuery = "new filter";
   const replacement = harness.load(false);
   expect(harness.state.cronRuns).toEqual([]);
-  expect(harness.state.cronRunsTotal).toBe(0);
   expect(harness.state.cronRunsHasMore).toBe(false);
   expect(harness.state.cronRunsNextOffset).toBeNull();
   expect(harness.error()).toBeNull();

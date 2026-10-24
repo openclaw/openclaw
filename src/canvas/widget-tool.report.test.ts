@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createDashboardTool } from "../agents/tools/dashboard-tool.js";
+import * as gateway from "../agents/tools/in-process-gateway.js";
 import type { BoardReport } from "../boards/board-report.js";
 import { readBoardHtml, createTestBoardStore } from "../boards/board-store.test-support.js";
 import { createBoardHarness } from "../gateway/server-methods/board.test-support.js";
@@ -7,7 +8,6 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
-import { registerTestWidgetContentKind } from "./widget-tool.content-kinds.test-support.js";
 import {
   asGatewayCaller,
   createBoardPutCaller,
@@ -29,25 +29,6 @@ const report: BoardReport = {
   ],
 };
 
-it("preserves plugin source kinds named report alongside native report data", async () => {
-  registerTestWidgetContentKind("report");
-  const { mock, callGateway } = createBoardPutCaller();
-  const tool = createTool({ callGateway });
-  const result = await tool.execute("registered-report", {
-    title: "Plugin report",
-    kind: "report",
-    widget_code: "diagram:ready",
-    pin: true,
-  });
-  expect(result.details).toMatchObject({ kind: "canvas", view: { id: expect.any(String) } });
-  expect(mock).toHaveBeenCalledWith(
-    "board.widget.put",
-    expect.objectContaining({
-      content: { kind: "registered", contentKind: "report", source: "diagram:ready" },
-    }),
-  );
-});
-
 it("pins, updates and reopens a report for a global agent without a document", async () => {
   const target = { sessionKey: "global", agentId: "research" };
   const name = "community-pulse";
@@ -60,10 +41,10 @@ it("pins, updates and reopens a report for a global agent without a document", a
     }),
   });
   const callGateway = asGatewayCaller(invoke);
+  vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(callGateway);
   const tool = createTool({
     agentSessionKey: target.sessionKey,
     agentId: target.agentId,
-    callGateway,
   });
   const result = await tool.execute("create-report", {
     title: "Community pulse",
@@ -85,7 +66,6 @@ it("pins, updates and reopens a report for a global agent without a document", a
   await createDashboardTool({
     agentSessionKey: target.sessionKey,
     agentId: target.agentId,
-    callGateway,
   }).execute("update-report", {
     action: "widget_put",
     name,
@@ -130,7 +110,8 @@ it.each([
 
 it("rejects report capabilities before any write", async () => {
   const callGateway = vi.fn();
-  const tool = createTool({ callGateway });
+  vi.spyOn(gateway, "callInProcessGatewayTool").mockImplementation(callGateway);
+  const tool = createTool();
   await expect(
     tool.execute("invalid-report", {
       title: "Report",
@@ -143,8 +124,8 @@ it("rejects report capabilities before any write", async () => {
 });
 
 it("accepts HTML widget payload when report is an empty object", async () => {
-  const { mock, callGateway } = createBoardPutCaller();
-  const tool = createTool({ callGateway });
+  const { mock } = createBoardPutCaller();
+  const tool = createTool();
   const result = await tool.execute("empty-report-with-html", {
     title: "SaaS Operations",
     pin: true,

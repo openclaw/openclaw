@@ -37,7 +37,7 @@ const REQUIRED_AI_RUNTIME_ENTRIES = [
   whenExported: whenExported ? `./${subpath}` : undefined,
 }));
 
-function listBundleDependencies(packageJson: unknown): string[] {
+export function listBundleDependencies(packageJson: unknown): string[] {
   if (!isRecord(packageJson)) {
     return [];
   }

@@ -10,6 +10,7 @@ import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
 import { GATEWAY_RESTART_TEST_KILL_MS } from "../../test/helpers/gateway-restart-budget.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { createOpenClawTestInstance } from "../../test/helpers/openclaw-test-instance.js";
+import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { generateStoredDeviceIdentity } from "../infra/device-identity-store.js";
@@ -21,6 +22,7 @@ import {
 } from "./gateway-provider-fixture.test-support.js";
 import {
   printRecoveryFailureDiagnostics,
+  readRecoveryDiagnosticSnapshot,
   RECOVERY_PROBE_ID,
   writeRecoveryDiagnosticProbe,
 } from "./gateway.sessions-send-recovery.diagnostics.test-support.js";
@@ -34,10 +36,18 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
   async (shutdownSignal, test) => {
     await runQaGatewayTestFixture(test, async ({ signal, verifyCleanup }) => {
       const observed: string[] = [];
+      const benchmarkPort = Number(process.env.OPENCLAW_RECOVERY_BENCH_PORT) || undefined;
       const providerRequests: unknown[] = [];
       const accepted = new Map<string, string>();
       const target = "agent:main:dashboard:peer-target";
       const steerTarget = "agent:main:dashboard:steer-target";
+      const parallelTargets = Array.from(
+        { length: 3 },
+        (_, index) => `agent:main:dashboard:parallel-${index}`,
+      );
+      const parallelHeld = new Set<number>();
+      const parallelResponses = new Map<number, ServerResponse>();
+      const parallelObserved: string[][] = parallelTargets.map(() => []);
       let hold = true;
       let held = false;
       let recoveredThemeCalls = 0;
@@ -46,6 +56,18 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
       let steerToolStarted = false;
       let steerContinuations = 0;
       let recoveredResponse: ServerResponse | undefined;
+      const recoveredResponseReady = createDeferred();
+      const parallelResponsesReady = createDeferred();
+      const releaseHeldResponse = (response: ServerResponse | undefined) => {
+        if (!response || response.destroyed || response.writableEnded) {
+          return;
+        }
+        writeOpenAiResponsesText(response, {
+          text: "RECEIVED",
+          messageId: randomUUID(),
+          responseId: randomUUID(),
+        });
+      };
       const continueSteer = (response: ServerResponse) => {
         // Keep the receiver alive while the sender finishes asynchronous admission.
         expect(++steerContinuations).toBeLessThanOrEqual(8);
@@ -71,6 +93,23 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           );
           const text = JSON.stringify(input[userIndex]?.content ?? "");
           const outputIndex = input.findLastIndex((item) => item.type === "function_call_output");
+          const parallelHold = text.match(/HOLD_PARALLEL_([0-9]+)/u);
+          if (hold && parallelHold) {
+            parallelHeld.add(Number(parallelHold[1]));
+            return;
+          }
+          const parallelInput = text.match(/PARALLEL_INPUT_([0-9]+)_([0-9]+)/u);
+          if (parallelInput) {
+            const index = Number(parallelInput[1]);
+            parallelObserved[index]!.push(parallelInput[0]);
+            if (parallelInput[2] === "1") {
+              parallelResponses.set(index, response);
+              if (parallelResponses.size === parallelTargets.length) {
+                parallelResponsesReady.resolve();
+              }
+              return;
+            }
+          }
           providerRequests.push({
             hold,
             userIndex,
@@ -159,6 +198,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           }
           if (!hold && marker === "CHAT_UPDATE_1" && !recoveredResponse) {
             recoveredResponse = response;
+            recoveredResponseReady.resolve();
             return;
           }
           writeOpenAiResponsesText(response, {
@@ -177,10 +217,17 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           }
         });
       });
-      const baseUrl = await listenProvider(providerServer);
+      const baseUrl = benchmarkPort
+        ? await (async () => {
+            providerServer.listen(benchmarkPort + 1, "127.0.0.1");
+            await once(providerServer, "listening", { signal });
+            return `http://127.0.0.1:${benchmarkPort + 1}/v1`;
+          })()
+        : await listenProvider(providerServer);
       const profile = `peer-recovery-${randomUUID()}`;
       const gateway = await createOpenClawTestInstance({
         name: "peer-input-recovery",
+        port: benchmarkPort,
         cwd: process.cwd(),
         signal,
         verifyCleanup,
@@ -192,6 +239,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           NODE_ENV: "production",
           OPENCLAW_PROFILE: profile,
           OPENCLAW_TEST_MINIMAL_GATEWAY: "0",
+          OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
         },
       });
       let client: Awaited<ReturnType<typeof acquireGatewayTestClient>> | undefined;
@@ -246,6 +294,15 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         idempotencyKey: string;
         queueMode: "followup";
       }> = [];
+      let beforeRestartLogs: number | undefined;
+      let startupSnapshot: unknown;
+      const cancelledChatId = randomUUID();
+      const inputMarkers = () =>
+        Object.fromEntries([
+          ...[...accepted].map(([marker, runId]) => [runId, marker]),
+          ...chatRequests.map(({ idempotencyKey, message }) => [idempotencyKey, message.trim()]),
+          [cancelledChatId, "CANCELLED_CHAT"],
+        ]);
       const expectedDelivery = expectedUpdates.flatMap((message, i) => [
         message,
         `CHAT_UPDATE_${i + 1}`,
@@ -281,13 +338,14 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           { signal },
         );
       const archivedSource = "agent:main:dashboard:archived-source";
+      let restarting: Promise<void> | undefined;
       try {
         const diagnosticPlugin = gateway.state.path("recovery-proof");
         await writeRecoveryDiagnosticProbe(diagnosticPlugin);
         const provider = buildMockOpenAiResponsesProvider(baseUrl);
         const config = {
           diagnostics: { enabled: true },
-          logging: { file: gateway.state.path("gateway.log") },
+          logging: { level: "debug", file: gateway.state.path("gateway.log") },
           gateway: {
             port: gateway.port,
             auth: { mode: "token", token: gateway.gatewayToken },
@@ -296,11 +354,11 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           agents: {
             ownership: "explicit",
             defaults: {
+              maxConcurrent: 8,
               workspace: gateway.state.workspaceDir,
               skipBootstrap: true,
               utilityModel: "",
               skills: [],
-              heartbeat: { every: "0m" },
               model: { primary: provider.modelRef, fallbacks: [] },
               models: {
                 [provider.modelRef]: {
@@ -354,6 +412,7 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           resetSource,
           revokedSource,
           archivedSource,
+          ...parallelTargets,
         ]) {
           const created = await client.request<{ sessionId: string }>(
             "sessions.create",
@@ -388,6 +447,24 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         continueSteer(steerResponse!);
         await steering;
         await expectPersistedSteer();
+        for (const [index, key] of parallelTargets.entries()) {
+          await start(key, `HOLD_PARALLEL_${index}`);
+          await vi.waitFor(() => expect(parallelHeld.has(index)).toBe(true), {
+            timeout: 30_000,
+          });
+          for (const ordinal of [1, 2]) {
+            await client.request(
+              "chat.send",
+              {
+                sessionKey: key,
+                message: `PARALLEL_INPUT_${index}_${ordinal}`,
+                idempotencyKey: randomUUID(),
+                queueMode: "followup",
+              },
+              { signal },
+            );
+          }
+        }
         for (const message of expectedUpdates) {
           await send(source, message);
           const request = {
@@ -406,7 +483,6 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         await send(resetSource, "RESET_SOURCE_UPDATE");
         await send(revokedSource, "REVOKED_UPDATE");
         await send(archivedSource, "ARCHIVED_SOURCE_UPDATE");
-        const cancelledChatId = randomUUID();
         await client.request(
           "chat.send",
           {
@@ -461,29 +537,63 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           expect(oldProcess?.signalCode).not.toBe("SIGKILL");
         }
         hold = false;
-        await gateway.startGateway();
-        expect(gateway.child?.pid).not.toBe(firstPid);
-        client = await connect();
-        await expectPersistedSteer();
+        // Capture after the old child is gone, so this read cannot affect which
+        // accepted writes survive its crash. Emit it only if the scenario fails.
+        startupSnapshot = await readRecoveryDiagnosticSnapshot(
+          path.join(gateway.state.agentDir("main"), "openclaw-agent.sqlite"),
+          target,
+          chatRequests[4]!.idempotencyKey,
+          inputMarkers(),
+        ).catch(() => ({ unavailable: true }));
+        beforeRestartLogs = gateway.logs().length;
+        const startAt = Number(process.env.OPENCLAW_RECOVERY_BENCH_START_AT);
+        if (startAt) {
+          expect(startAt).toBeGreaterThan(Date.now());
+          await new Promise((resolve) => {
+            setTimeout(resolve, startAt - Date.now());
+          });
+        }
+        const startup = (restarting = gateway.startGateway());
+        const awaitRecovery = <T>(gate: PromiseLike<T>) =>
+          withinTest(Promise.race([gate, startup.then(() => gate)]), signal);
         try {
-          await vi.waitFor(() => expect(recoveredResponse).toBeDefined(), { timeout: 60_000 });
+          await awaitRecovery(recoveredResponseReady.promise);
         } catch (error) {
           throw new Error(
             `Recovery did not reach the first chat input: ${JSON.stringify({ observed, providerRequests })}\n${gateway.logs()}`,
             { cause: error },
           );
         }
-        // Stored text is trimmed; the original request identity must still dedupe
-        // an original-payload retry while recovery owns an active reservation.
-        const activeRetry = await client.request<{ runId: string }>("chat.send", chatRequests[0], {
+        // Startup may settle before or after held model calls; only its failure aborts waiting.
+        // Require successful startup after releasing the provider responses below.
+        // A held turn in one session must not keep other sessions from replaying.
+        await awaitRecovery(parallelResponsesReady.promise);
+        expect(parallelObserved).toEqual(
+          parallelTargets.map((_, index) => [`PARALLEL_INPUT_${index}_1`]),
+        );
+        const recoveryTrace = () =>
+          gateway
+            .logs()
+            .slice(beforeRestartLogs)
+            .match(/startup (?:trace|phase): sidecars\.subagent-recovery ([0-9.]+)ms/u);
+        await awaitRecovery(
+          vi.waitFor(() => expect(recoveryTrace()).not.toBeNull(), { timeout: 10_000 }),
+        );
+        const recoveryMs = Number(recoveryTrace()![1]);
+        for (const response of parallelResponses.values()) {
+          releaseHeldResponse(response);
+        }
+        releaseHeldResponse(recoveredResponse);
+        await startup;
+        expect(gateway.child?.pid).not.toBe(firstPid);
+        client = await connect();
+        await expectPersistedSteer();
+        // Stored text is trimmed; the recovery-to-fresh-admission handoff must
+        // still dedupe the original request identity immediately after readiness.
+        const handoffRetry = await client.request<{ runId: string }>("chat.send", chatRequests[0], {
           signal,
         });
-        expect(activeRetry.runId).toBe(chatRequests[0]!.idempotencyKey);
-        writeOpenAiResponsesText(recoveredResponse!, {
-          text: "RECEIVED",
-          messageId: randomUUID(),
-          responseId: randomUUID(),
-        });
+        expect(handoffRetry.runId).toBe(chatRequests[0]!.idempotencyKey);
         await vi.waitFor(
           () => expect(observed, JSON.stringify(providerRequests)).toEqual(expectedDelivery),
           {
@@ -492,10 +602,75 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           },
         );
         await vi.waitFor(
+          () =>
+            expect(parallelObserved).toEqual(
+              parallelTargets.map((_, index) => [
+                `PARALLEL_INPUT_${index}_1`,
+                `PARALLEL_INPUT_${index}_2`,
+              ]),
+            ),
+          { timeout: 60_000 },
+        );
+        for (const [index, key] of parallelTargets.entries()) {
+          const parallelHistory = await client.request<{
+            messages: Array<{ role?: string; content?: unknown }>;
+            pendingInputs: ChatPendingInputsPage;
+          }>("chat.history", { sessionKey: key }, { signal });
+          expect(parallelHistory.pendingInputs.items).toEqual([]);
+          for (const ordinal of [1, 2]) {
+            expect(
+              parallelHistory.messages.filter(
+                (message) =>
+                  message.role === "user" &&
+                  JSON.stringify(message.content).includes(`PARALLEL_INPUT_${index}_${ordinal}`),
+              ),
+            ).toHaveLength(1);
+          }
+        }
+        await vi.waitFor(
           () => expect(gateway.logs()).toContain("Session delivery recovery blocked for "),
           { timeout: 30_000 },
         );
         expect(recoveredThemeCalls).toBe(1);
+        const replayTimings = Object.fromEntries(
+          [
+            "sourceLoadMs",
+            "sessionLoadMs",
+            "authorityRestoreMs",
+            "communicationAdmissionMs",
+            "dispatchAckMs",
+            "retryWaitMs",
+          ].map((phase) => [phase, { count: 0, maxMs: 0 }]),
+        );
+        let replayInputs = 0;
+        for (const match of gateway
+          .logs()
+          .slice(beforeRestartLogs)
+          .matchAll(/Pending input replay: (\{[^\n]+\})/gu)) {
+          const sample = asOptionalRecord(JSON.parse(match[1]!));
+          if (!sample) {
+            continue;
+          }
+          replayInputs++;
+          for (const [phase, timing] of Object.entries(replayTimings)) {
+            const value = sample[phase];
+            if (typeof value === "number" && value > 0) {
+              timing.count++;
+              timing.maxMs = Math.max(timing.maxMs, value);
+            }
+          }
+        }
+        console.log(
+          `[pending-input-recovery] ${JSON.stringify({
+            shutdownSignal,
+            sessions: parallelTargets.length + 1,
+            inputs: expectedDelivery.length + parallelTargets.length * 2,
+            recoveryMs,
+            heldSessions: parallelResponses.size + 1,
+            replayInputs,
+            replayTimings,
+          })}`,
+        );
         expect(await client.request("users.self", {}, { signal })).toMatchObject({
           profile: { id: requester.profile.id },
         });
@@ -557,6 +732,12 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
         expect(finalHistory).not.toContain(`From ${archivedSource}`);
         expect(gateway.logs()).not.toContain('"archived":true');
         expect(observed, JSON.stringify(providerRequests)).toEqual(expectedDelivery);
+        expect(parallelObserved).toEqual(
+          parallelTargets.map((_, index) => [
+            `PARALLEL_INPUT_${index}_1`,
+            `PARALLEL_INPUT_${index}_2`,
+          ]),
+        );
       } catch (error) {
         await printRecoveryFailureDiagnostics({
           client,
@@ -564,9 +745,19 @@ it.for(["SIGTERM", "SIGKILL"] as const)(
           sessionKey: target,
           runId: chatRequests[4]?.idempotencyKey,
           frames: providerRequests,
+          restartedLogs:
+            beforeRestartLogs === undefined ? "" : gateway.logs().slice(beforeRestartLogs),
+          startupSnapshot,
+          logPath: gateway.state.path("gateway.log"),
+          markers: inputMarkers(),
         }).catch(() => console.error("[session-recovery-failure] diagnostics unavailable"));
         throw error;
       } finally {
+        for (const response of parallelResponses.values()) {
+          releaseHeldResponse(response);
+        }
+        releaseHeldResponse(recoveredResponse);
+        await restarting?.catch(() => undefined);
         await client?.stopAndWait();
         await gateway.cleanup();
         await closeProvider(providerServer);

@@ -139,7 +139,6 @@ async function patchGatewayConfig(params: {
   gateway: FlowPreparationInput["gateway"];
   patch: Record<string, unknown>;
   replacePaths?: string[];
-  restartDelayMs?: number;
 }) {
   const snapshot = (await params.gateway.call(
     "config.get",
@@ -160,7 +159,7 @@ async function patchGatewayConfig(params: {
       raw: JSON.stringify(params.patch, null, 2),
       baseHash: snapshot.hash,
       ...(params.replacePaths?.length ? { replacePaths: params.replacePaths } : {}),
-      restartDelayMs: params.restartDelayMs ?? 0,
+      restartDelayMs: 0,
     },
     { deadlineMs: params.deadlineMs, timeoutMs: 60_000 },
   )) as MatrixQaConfigPatchResult;
@@ -345,9 +344,10 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
     // and consume the next scenario's first preview before its predicate exists.
     resetObserverState();
 
-    const waitGatewayAccountReady: NonNullable<
-      MatrixQaScenarioContext["waitGatewayAccountReady"]
-    > = (accountId, opts) =>
+    const waitGatewayAccountReady: MatrixQaScenarioContext["waitGatewayAccountReady"] = (
+      accountId,
+      opts,
+    ) =>
       waitForMatrixAccountReady({
         afterStartAt: opts?.afterStartAt,
         accountId,
@@ -434,19 +434,6 @@ export function createMatrixQaScenarioEnvironment(params: MatrixQaScenarioEnviro
       sutUserId: params.provisioning.sut.userId,
       timeoutMs: input.timeoutMs,
       topology: params.provisioning.topology,
-      patchGatewayConfig: async (
-        patch: Record<string, unknown>,
-        opts?: { replacePaths?: string[]; restartDelayMs?: number },
-      ) => {
-        await patchGatewayConfig({
-          // This callback runs during actions, after the preparation budget may expire.
-          deadlineMs: Date.now() + input.timeoutMs,
-          gateway: input.gateway,
-          patch,
-          replacePaths: opts?.replacePaths,
-          restartDelayMs: opts?.restartDelayMs,
-        });
-      },
       readGatewayAccountStartAt: async (accountId: string) =>
         (await readLiveQaChannelAccounts(input.gateway, "matrix")).find(
           (account) => account.accountId === accountId,

@@ -118,6 +118,9 @@ function success(subscription: BoundWebPushSubscription) {
   return { ok: true, subscriptionId: subscription.subscriptionId, statusCode: 201 };
 }
 
+const expectSend = (expected: object) =>
+  expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining(expected));
+
 function deliveryOptions(TTL: number, topic = expect.stringMatching(/^[A-Za-z0-9_-]{32}$/u)) {
   return { TTL, urgency: "high", timeout: 10_000, topic };
 }
@@ -151,6 +154,7 @@ async function createDelivery(getRuntimeConfig: () => OpenClawConfig = () => ({}
 function boundSubscription(
   deviceId: string,
   userProfileId: string | null,
+  preferences: Partial<BoundWebPushSubscription["devicePreferences"]> = {},
 ): BoundWebPushSubscription {
   return {
     subscriptionId: `subscription-${deviceId}-${userProfileId ?? "owner"}`,
@@ -160,7 +164,7 @@ function boundSubscription(
     updatedAtMs: 1,
     deviceId,
     userProfileId,
-    devicePreferences: { enabled: true, label: "" },
+    devicePreferences: { enabled: true, label: "", ...preferences },
   };
 }
 
@@ -220,8 +224,7 @@ beforeEach(() => {
 it.each(["identified", "private"] as const)(
   "preserves %s avatar privacy on approval request and replacement",
   async (detailLevel) => {
-    const subscription = boundSubscription("avatar-device", null);
-    subscription.devicePreferences.detailLevel = detailLevel;
+    const subscription = boundSubscription("avatar-device", null, { detailLevel });
     bindSubscriptions(subscription);
     mocks.send.mockResolvedValue([success(subscription)]);
     const avatar = `data:image/png;base64,${encodePngRgba(Buffer.from([255, 150, 0, 255]), 1, 1).toString("base64")}`;
@@ -331,28 +334,24 @@ it("sanitizes identified approval labels without changing agent filters", async 
     { command: "echo ok", agentId },
     60_000,
   );
-  const subscription = boundSubscription("browser-device", null);
-  subscription.devicePreferences = {
-    enabled: true,
+  const subscription = boundSubscription("browser-device", null, {
     label: "Phone\u202E",
     detailLevel: "identified",
     agentIds: [agentId],
-  };
-  mocks.subscriptions.mockResolvedValue([subscription]);
+  });
+  bindSubscriptions(subscription);
   mocks.pairings.mockReturnValue({
     paired: [pairedOperator("browser-device", ["operator.admin"])],
   });
   mocks.send.mockResolvedValue([{ ok: true, subscriptionId: subscription.subscriptionId }]);
   await expect((await createDelivery()).handleRequested(record)).resolves.toBe(true);
 
-  expect(mocks.send).toHaveBeenCalledWith(
-    expect.objectContaining({
-      payload: expect.objectContaining({
-        title: "Phone\\u{202E} · OpenClaw approval requested",
-        body: "Open OpenClaw to review an approval for agent\\u{A}\\u{202E}.",
-      }),
+  expectSend({
+    payload: expect.objectContaining({
+      title: "Phone\\u{202E} · OpenClaw approval requested",
+      body: "Open OpenClaw to review an approval for agent\\u{A}\\u{202E}.",
     }),
-  );
+  });
   expect(record.request.agentId).toBe(agentId);
 });
 
@@ -384,7 +383,7 @@ it("rechecks the profile role and excludes unbound role-based subscriptions", as
   const delivery = await createDelivery(() => ({ gateway: { roles: { definitions: {} } } }));
   await expect(delivery.handleRequested(record)).resolves.toBe(true);
 
-  expect(mocks.send).toHaveBeenCalledWith(expect.objectContaining({ subscriptions: [current] }));
+  expectSend({ subscriptions: [current] });
 });
 
 it("reads runtime role policy after transport preparation", async (testContext) => {
@@ -461,14 +460,10 @@ it("recomputes the remaining TTL after transport preparation", async (testContex
   preparation.resolve(mocks.send);
 
   await expect(delivery).resolves.toBe(true);
-  expect(mocks.send).toHaveBeenCalledWith(
-    expect.objectContaining({
-      payload: expect.objectContaining({
-        url: "approve/exec%3Attl-after-preparation",
-      }),
-      deliveryOptions: deliveryOptions(30),
-    }),
-  );
+  expectSend({
+    payload: expect.objectContaining({ url: "approve/exec%3Attl-after-preparation" }),
+    deliveryOptions: deliveryOptions(30),
+  });
 });
 
 it("retains ambiguous request targets for terminal replacement and prunes definite failures", async (testContext) => {

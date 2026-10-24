@@ -50,7 +50,7 @@ export function CommentPreviewRow(props: { comment: CommentPreview; children?: J
   );
 }
 
-type ChipProps = {
+export function CommentPreviewChip(props: {
   count: number;
   children?: JSX.Element;
   onReveal?: () => void;
@@ -58,9 +58,7 @@ type ChipProps = {
   elementRef?: (element: Element | undefined) => void;
   previewRef?: (element: HTMLElement) => void;
   triggerRef?: (element: HTMLButtonElement) => void;
-};
-
-export function CommentPreviewChip(props: ChipProps) {
+}) {
   const ref = scrollRef();
   let trigger: HTMLButtonElement | undefined;
   return (

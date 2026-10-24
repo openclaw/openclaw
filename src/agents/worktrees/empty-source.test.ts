@@ -10,6 +10,7 @@ import { gitNullConfigPath } from "../../infra/git-exec.js";
 import * as commandExec from "../../process/exec.js";
 import * as stateLease from "../../state/openclaw-state-lease.js";
 import { withWorktreeAllocationLease as withAllocation } from "./allocation.js";
+import { isEmptyWorktreeSource } from "./empty-source.js";
 import { requireGit, runGit } from "./git.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
@@ -75,6 +76,22 @@ describe("empty managed workspaces", () => {
     expect(await fs.readdir(path.dirname(source))).toEqual([path.basename(source)]);
     expect(fsSync.existsSync(bootstrapEnv.GIT_DIR)).toBe(false);
     expect(fsSync.existsSync(bootstrapEnv.GIT_INDEX_FILE)).toBe(false);
+    expect(
+      await isEmptyWorktreeSource({
+        env: bootstrapEnv,
+        ownerId: "agent:main:same-session",
+        repoRoot: source,
+        commitGuard: () => {},
+      }),
+    ).toBe(true);
+    expect(
+      await isEmptyWorktreeSource({
+        env,
+        ownerId: "agent:main:another-session",
+        repoRoot: source,
+        commitGuard: () => {},
+      }),
+    ).toBe(false);
   });
 
   it("isolates files, history, remotes, and config while retaining snapshot recovery", async () => {

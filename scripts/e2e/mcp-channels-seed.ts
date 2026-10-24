@@ -19,13 +19,6 @@ async function main() {
           enabled: false,
         },
       },
-      agents: {
-        defaults: {
-          heartbeat: {
-            every: "0m",
-          },
-        },
-      },
       plugins: {
         enabled: false,
       },

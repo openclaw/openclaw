@@ -7,7 +7,7 @@ import {
   PALETTE_PATTERNS,
   PALETTE_RIGHT_CLAW_PROPS,
 } from "./lobster-pet-palette-sprites.tsx";
-import { staticSprite } from "./lobster-pet-sprite.tsx";
+import { LobsterClosedEyes, staticSprite } from "./lobster-pet-sprite.tsx";
 import {
   ACTUAL_LOBSTER,
   ASCII_LOBSTER,
@@ -153,17 +153,10 @@ export function LobsterSvg(props: LobsterSvgProps) {
                 <circle cx="46" cy="30.8" r="1.6" fill="var(--lob-glint, #00e5cc)" />
               </g>
             ) : null}
-            <g
-              class="lob-eye-closed"
-              stroke="#0a1014"
-              stroke-width="3"
-              stroke-linecap="round"
-              fill="none"
-              style={closedEyeStyle()}
-            >
+            <LobsterClosedEyes stroke-width="3" style={closedEyeStyle()}>
               <path d="M39 33 Q45 28 51 33" />
               <path d="M69 33 Q75 28 81 33" />
-            </g>
+            </LobsterClosedEyes>
           </>
         )}
         {hasRetroGeometry() ? (

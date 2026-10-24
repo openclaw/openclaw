@@ -689,6 +689,7 @@ describe("createChatSendMessageInjectionStarter", () => {
       },
       session: {
         agentId: "main",
+        resolvedSessionModel: { provider: "openai", model: "test-model" },
         cfg: {},
         entry: undefined,
         sessionKey,

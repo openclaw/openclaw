@@ -27,9 +27,15 @@ import type { SkillWorkshopRunOptions } from "./tools/skill-workshop-tool-factor
 
 /** Options shared by the coding-tool factory and its OpenClaw tool surface. */
 export type OpenClawSharedToolsOptions = {
+  /** Session-owned declaration used only for tool listing, never invocation authority. */
+  listingClientCaps?: string[];
+  /** Creator policy retained by the scheduled session owner. */
+  scheduledToolPolicy?: import("./scheduled-tool-policy.js").ScheduledToolPolicyContext;
   /** Complete model-discoverable catalog, prepared by the current host. */
   installedSkills?: readonly InstalledSkill[];
   skillsSnapshot?: SkillSnapshot;
+  /** Restrict mixed tool owners to reads before the recovery surface is filtered. */
+  forceRestartSafeTools?: boolean;
   /**
    * Overrides the originating-channel sender for blocking questions. An actual
    * harness prompt reservation retains delivery ownership.
@@ -101,10 +107,6 @@ export type OpenClawSharedToolsOptions = {
   disableMessageTool?: boolean;
   swarmCollector?: boolean;
   swarmOutputSchema?: Record<string, unknown>;
-  /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
-  enableHeartbeatTool?: boolean;
-  /** Offer the heartbeat tool definition without accepting responses outside heartbeat runs. */
-  offerHeartbeatTool?: boolean;
   /** Host-only observation after a canonical progress-card replacement commits. */
   onProgressCardPlanSaved?: (unfinished: boolean) => void;
   onYield?: SessionsYieldCallback;
@@ -148,6 +150,8 @@ export type OpenClawToolsOptions = {
   gatewayCallerLocal?: boolean;
   /** True only for a validated scheduled tool policy. */
   gatewayCallerScheduled?: boolean;
+  /** Sessions a scheduled run's board, widget and media tools act on, from its execution context. */
+  scheduledToolTargets?: import("../cron/execution-context-registry.js").ScheduledToolTargets;
   /** Delivery target for topic/thread routing. */
   agentTo?: string;
   /** Thread/topic identifier for routing replies to the originating thread. */
@@ -166,6 +170,7 @@ export type OpenClawToolsOptions = {
   sandboxWorkspaceMediaReadAllowed?: boolean;
   fsPolicy?: ToolFsPolicy;
   sandboxed?: boolean;
+  cronSandboxContext?: CronToolOptions["sandboxContext"];
   pluginToolAllowlist?: string[];
   pluginToolDenylist?: string[];
   /** Prepared profile authority for the gateway tool's configuration-read actions. */

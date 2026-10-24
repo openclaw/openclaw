@@ -1,5 +1,5 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
 import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
@@ -164,6 +164,7 @@ describe("device pairing tokens", () => {
   });
 
   beforeEach(async () => {
+    vi.stubEnv("OPENCLAW_STATE_DIR", baseDir);
     await withDevicePairingLock(async () => {});
     persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, baseDir, "both");
     persistDeviceBootstrapTokenRecords({}, baseDir);
@@ -576,7 +577,7 @@ describe("device pairing tokens", () => {
 
   test("binds shared-auth browser tokens to their issuing generation through upgrades and rotation", async () => {
     await pairDevice(["operator.read"], browserIdentity);
-    const params = { deviceId: "browser-device-1", role: "operator", baseDir };
+    const params = { deviceId: "browser-device-1", role: "operator" };
     const verify = (token: string, generation: string, scopes = ["operator.read"]) =>
       verifyDeviceToken({
         ...params,
@@ -653,7 +654,7 @@ describe("device pairing tokens", () => {
 
   test("keeps ambiguous legacy device tokens valid across shared gateway auth rotation", async () => {
     const token = await setupOperatorToken(["operator.read"]);
-    const params = { deviceId: "device-1", role: "operator", scopes: ["operator.read"], baseDir };
+    const params = { deviceId: "device-1", role: "operator", scopes: ["operator.read"] };
     const verify = (bearer: string) =>
       verifyDeviceToken({
         ...params,
@@ -697,6 +698,7 @@ describe("device pairing tokens", () => {
     const approved = await approveBootstrapDevicePairing(
       request.requestId,
       PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      {},
       baseDir,
     );
     expect(approved).toMatchObject({ status: "approved" });
@@ -744,6 +746,7 @@ describe("device pairing tokens", () => {
     const approved = await approveBootstrapDevicePairing(
       request.requestId,
       PAIRING_SETUP_BOOTSTRAP_PROFILE,
+      {},
       baseDir,
     );
     expect(approved).toMatchObject({ status: "approved" });
@@ -783,6 +786,7 @@ describe("device pairing tokens", () => {
           "operator.write",
         ],
       },
+      {},
       baseDir,
     );
     expect(approved).toMatchObject({ status: "approved" });
@@ -797,7 +801,6 @@ describe("device pairing tokens", () => {
         deviceId: "device-1",
         role: "operator",
         scopes: ["operator.admin"],
-        baseDir,
       }),
     ).resolves.toBeNull();
     expect(await getPairedDevice("device-1", baseDir)).toEqual(paired);
@@ -809,7 +812,7 @@ describe("device pairing tokens", () => {
       scopes: ["operator.approvals", "operator.read", "operator.write"],
     };
     const first = await requestBootstrap(profile);
-    await approveBootstrapDevicePairing(first.request.requestId, profile, baseDir);
+    await approveBootstrapDevicePairing(first.request.requestId, profile, {}, baseDir);
     await mutatePairedDevice(baseDir, "device-1", (device) => {
       device.approvedScopes = ["operator.admin"];
       device.scopes = ["operator.admin"];
@@ -817,7 +820,7 @@ describe("device pairing tokens", () => {
 
     const repair = await requestBootstrap({ ...profile, publicKey: "rotated-public-key" });
     await expect(
-      approveBootstrapDevicePairing(repair.request.requestId, profile, baseDir),
+      approveBootstrapDevicePairing(repair.request.requestId, profile, {}, baseDir),
     ).resolves.toMatchObject({ status: "approved" });
 
     const paired = await getPairedDevice("device-1", baseDir);
@@ -827,7 +830,6 @@ describe("device pairing tokens", () => {
         deviceId: "device-1",
         role: "operator",
         scopes: ["operator.admin"],
-        baseDir,
       }),
     ).resolves.toBeNull();
   });
@@ -857,7 +859,6 @@ describe("device pairing tokens", () => {
         deviceId: "device-1",
         role: "operator",
         scopes: ["operator.admin"],
-        baseDir,
       };
       const result =
         operation === "verification"
@@ -915,6 +916,7 @@ describe("device pairing tokens", () => {
           : await approveBootstrapDevicePairing(
               requestId,
               PAIRING_SETUP_BOOTSTRAP_PROFILE,
+              {},
               baseDir,
             );
 

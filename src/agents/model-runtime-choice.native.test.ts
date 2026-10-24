@@ -2,15 +2,20 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { prepareModelSelectionRuntime } from "../auto-reply/reply/model-runtime-normalization.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { createDeferredCore } from "../shared/deferred.js";
+import { testing as cliBackendsTesting } from "./cli-backends.test-support.js";
 import type { ModelCatalogEntry } from "./model-catalog.js";
-import { preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
+import { prepareModelChoice, preparePublishedModelRuntimeChoice } from "./model-runtime-choice.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
 import { bindPreparedModelRuntimeAuth } from "./prepared-model-runtime-auth.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.types.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 const published = vi.hoisted((): { owner?: PreparedModelRuntimeSnapshot } => ({}));
-vi.mock("./prepared-model-catalog.js", () => ({
+vi.mock("./prepared-model-catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./prepared-model-catalog.js")>()),
   getPublishedPreparedModelCatalogOwnerSnapshot: () => published.owner,
   materializePreparedModelCatalogOwner: (owner: PreparedModelRuntimeSnapshot) => owner,
   loadProviderScopedThinkingCatalog: async () => {
@@ -19,11 +24,21 @@ vi.mock("./prepared-model-catalog.js", () => ({
     }
     return published.owner.modelCatalog.entries;
   },
+  withPreparedModelCatalogOwner: async <T>(
+    _params: unknown,
+    read: (owner: PreparedModelRuntimeSnapshot) => T | Promise<T>,
+  ) => {
+    if (!published.owner) {
+      throw new Error("No published test model owner");
+    }
+    return await read(published.owner);
+  },
 }));
 beforeEach(() => {
   published.owner = undefined;
 });
 afterEach(() => {
+  cliBackendsTesting.resetDepsForTest();
   vi.unstubAllEnvs();
 });
 const request = { agentId: "main", provider: "fixture", model: "model" };
@@ -39,6 +54,72 @@ const custom: OpenClawConfig = {
     },
   },
 };
+
+it.each([
+  ["published", "before request"],
+  ["published", "after response"],
+  ["support", "before request"],
+  ["support", "after response"],
+] as const)("revalidates %s off-catalog discovery authority %s", async (entrypoint, revocation) => {
+  let current = revocation !== "before request";
+  const started = createDeferredCore();
+  const finish = createDeferredCore();
+  const model = makeProviderModelFixture({
+    provider: "fixture",
+    id: "off-catalog",
+    api: "openai-responses",
+    baseUrl: "https://dynamic.invalid/v1",
+  });
+  const prepareDynamicModel = vi.fn(async () => {
+    started.resolve();
+    if (revocation === "after response") {
+      await finish.promise;
+    }
+    return model;
+  });
+  const registry = createEmptyPluginRegistry();
+  registry.providers.push({
+    pluginId: "fixture",
+    source: "fixture",
+    provider: { id: "fixture", label: "Fixture", auth: [], prepareDynamicModel },
+  });
+  const cfg: OpenClawConfig = {};
+  published.owner = createModelRuntimeChoiceOwnerFixture(cfg, () => current, {
+    pluginRegistry: registry,
+    modelCatalog: { entries: [], routeVariants: [] },
+    metadataSnapshot: createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "fixture", providers: ["fixture"] }],
+    }),
+  });
+  const choice =
+    entrypoint === "published"
+      ? preparePublishedModelRuntimeChoice({
+          ...request,
+          cfg,
+          model: "off-catalog",
+          runtimeId: "openclaw",
+        })
+      : prepareModelChoice({
+          cfg,
+          agentId: "main",
+          raw: "fixture/off-catalog",
+          source: "override",
+        });
+  const unavailable =
+    entrypoint === "published"
+      ? expect(choice).rejects.toThrow("Model catalog changed")
+      : expect(choice).resolves.toMatchObject({
+          kind: "unavailable",
+          error: "Model configuration changed during selection. Retry the request.",
+        });
+  if (revocation === "after response") {
+    await Promise.race([started.promise, choice]);
+    current = false;
+    finish.resolve();
+  }
+  await unavailable;
+  expect(prepareDynamicModel).toHaveBeenCalledTimes(revocation === "before request" ? 0 : 1);
+});
 
 it.each(["worker", "gateway", "optional", "account"] as const)(
   "admits an explicit keyless OpenClaw selection only for required worker inference (%s)",
@@ -102,6 +183,64 @@ it("reports missing sign-in instead of a catalog refresh", async () => {
     kind: "unavailable",
     message:
       'Runtime "openclaw" is not available for fixture/model: sign-in needed. Connect its provider account, or choose another model.',
+  });
+});
+
+it("keeps the configured Claude CLI runtime when switching models with saved setup tokens", async () => {
+  vi.stubEnv("ANTHROPIC_API_KEY", "");
+  cliBackendsTesting.setDepsForTest({
+    resolveRuntimeCliBackends: () => [
+      {
+        id: "claude-cli",
+        modelProvider: "anthropic",
+        pluginId: "anthropic",
+        config: { command: "claude" },
+      },
+    ],
+  });
+  const entry: ModelCatalogEntry = {
+    provider: "anthropic",
+    id: "claude-sonnet-5",
+    name: "Claude Sonnet",
+    api: "anthropic-messages",
+  };
+  const cfg: OpenClawConfig = {
+    agents: {
+      defaults: {
+        model: { primary: "anthropic/claude-opus-5" },
+        models: { "anthropic/*": { agentRuntime: { id: "claude-cli" } } },
+      },
+    },
+  };
+  const owner = createModelRuntimeChoiceOwnerFixture(cfg, undefined, {
+    modelCatalog: { entries: [entry], routeVariants: [entry] },
+    authModes: {},
+    metadataSnapshot: createPluginMetadataSnapshotFixture({
+      plugins: [{ id: "anthropic", providers: ["anthropic"], cliBackends: ["claude-cli"] }],
+    }),
+  });
+  bindPreparedModelRuntimeAuth(owner, {
+    store: {
+      version: 1,
+      profiles: {
+        first: { type: "token", provider: "anthropic", token: "synthetic-first-token" },
+        second: { type: "token", provider: "anthropic", token: "synthetic-second-token" },
+      },
+    },
+  });
+  published.owner = owner;
+  const selection = await prepareModelSelectionRuntime({
+    cfg,
+    agentId: "main",
+    provider: entry.provider,
+    model: entry.id,
+    sessionEntry: { modelProvider: "anthropic" },
+    catalog: [entry],
+    hydrateThinkingCatalog: false,
+  });
+  expect(selection).toMatchObject({
+    status: "ready",
+    runtime: { kind: "set", runtime: "claude-cli" },
   });
 });
 

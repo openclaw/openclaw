@@ -7,6 +7,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { clawHubSecurityResponse } from "../plugins/clawhub.test-fixtures.js";
 import {
   clearLoadInstalledPluginIndexInstallRecordsCache,
   readPersistedInstalledPluginIndexInstallRecordsAsync,
@@ -20,6 +21,7 @@ const PACKAGE = "@openclaw/brave-plugin";
 const VERSION = "1.0.0";
 const PLUGIN = "brave";
 const PAYLOAD = "export default function register() {}\n";
+const readText = (file: string) => fs.readFile(file, "utf8");
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
@@ -57,14 +59,7 @@ async function startClawHubFixture(packageDir: string) {
             release: { version: VERSION },
             overview: "Synthetic recovery fixture.",
             securityAuditUrl: `http://${request.headers.host}${pathname}`,
-            trust: {
-              scanStatus: "clean",
-              moderationState: null,
-              blockedFromDownload: false,
-              reasons: [],
-              pending: false,
-              stale: false,
-            },
+            trust: clawHubSecurityResponse().trust,
           };
         } else if (pathname === `${packagePath}/download`) {
           response.writeHead(200, { "content-type": "application/zip" });
@@ -218,22 +213,23 @@ it("confines invalid-config recovery to npm catalog and canonical-ID owners thro
       const cliEntry = scenario.unbundled
         ? ["--import", offlineCatalogBootstrap, "openclaw.mjs"]
         : ["openclaw.mjs"];
+      const run = async (...args: string[]) => {
+        const result = await runNodeScript([...cliEntry, ...args], env, 30_000, {
+          cwd: process.cwd(),
+        });
+        const output = `${result.stdout}\n${result.stderr}`;
+        expect(result.error, output).toBeUndefined();
+        return { ...result, output };
+      };
       await seedInstalledPluginIndex({ [PLUGIN]: originalRecord }, { stateDir, config, env });
       await closeOpenClawStateDatabaseAsync();
       const beforeRecords = await readRecords(stateDir);
-      const validation = await runNodeScript(
-        [...cliEntry, "config", "validate", "--json"],
-        env,
-        30_000,
-        { cwd: process.cwd() },
-      );
-      const validationOutput = `${validation.stdout}\n${validation.stderr}`;
-      expect(validation.error, validationOutput).toBeUndefined();
+      const validation = await run("config", "validate", "--json");
       if (!scenario.valid) {
-        expect(validation.status, validationOutput).not.toBe(0);
-        expect(validationOutput).toContain(`invalid config for plugin ${PLUGIN}:`);
+        expect(validation.status, validation.output).not.toBe(0);
+        expect(validation.output).toContain(`invalid config for plugin ${PLUGIN}:`);
       } else {
-        expect(validation.status, validationOutput).toBe(0);
+        expect(validation.status, validation.output).toBe(0);
       }
       const npmRoot = path.join(stateDir, "npm");
       await fs.mkdir(npmRoot, { recursive: true });
@@ -242,52 +238,28 @@ it("confines invalid-config recovery to npm catalog and canonical-ID owners thro
       await fs.writeFile(catalogRequestsPath, "");
       npmRequests.length = 0;
       clawhub.requests.length = 0;
-      const result = await runNodeScript(
-        [
-          ...cliEntry,
-          "plugins",
-          "install",
-          scenario.spec,
-          "--force",
-          "--no-enable",
-          "--accept-capabilities",
-        ],
-        env,
-        30_000,
-        { cwd: process.cwd() },
+      const result = await run(
+        "plugins",
+        "install",
+        scenario.spec,
+        "--force",
+        "--no-enable",
+        "--accept-capabilities",
       );
-      const output = `${result.stdout}\n${result.stderr}`;
-      expect(result.error, output).toBeUndefined();
+      const { output } = result;
       const records = await readRecords(stateDir);
-      const catalogRequests = (await fs.readFile(catalogRequestsPath, "utf8"))
-        .split("\n")
-        .filter(Boolean);
-      expect(await fs.readFile(sentinel, "utf8")).toBe("existing payload stays intact\n");
-      if (process.env.OPENCLAW_E2E_VERBOSE === "1") {
-        console.info(
-          JSON.stringify({
-            spec: scenario.spec,
-            invalidConfig: !scenario.valid,
-            bundled: !scenario.unbundled,
-            exit: result.status,
-            npmRequests: npmRequests.length,
-            clawhubRequests: clawhub.requests.length,
-            hostedCatalogRequests: catalogRequests.length,
-            persistedSource: records?.[PLUGIN]?.source,
-            configChanged: (await fs.readFile(configPath, "utf8")) !== originalConfig,
-          }),
-        );
-      }
+      const catalogRequests = (await readText(catalogRequestsPath)).split("\n").filter(Boolean);
+      expect(await readText(sentinel)).toBe("existing payload stays intact\n");
       if (scenario.source === null) {
         expect(result.status, output).not.toBe(0);
         expect(output).toContain(`invalid config for plugin ${PLUGIN}:`);
         expect(npmRequests, scenario.spec).toEqual([]);
         expect(clawhub.requests, scenario.spec).toEqual([]);
-        expect(await fs.readFile(configPath, "utf8")).toBe(originalConfig);
+        expect(await readText(configPath)).toBe(originalConfig);
         expect(records).toEqual(beforeRecords);
         expect(await fs.readdir(npmRoot)).toEqual(["untouched.txt"]);
-        expect(await fs.readFile(oldManifestPath, "utf8")).toBe(JSON.stringify(oldManifest));
-        expect(await fs.readFile(path.join(oldPluginPath, "dist/index.js"), "utf8")).toBe(PAYLOAD);
+        expect(await readText(oldManifestPath)).toBe(JSON.stringify(oldManifest));
+        expect(await readText(path.join(oldPluginPath, "dist/index.js"))).toBe(PAYLOAD);
         await expect(fs.access(path.join(stateDir, "extensions"))).rejects.toHaveProperty(
           "code",
           "ENOENT",
@@ -298,14 +270,14 @@ it("confines invalid-config recovery to npm catalog and canonical-ID owners thro
         expect(catalogRequests).toContain('"https://clawhub.ai/v1/feeds/plugins"');
       }
       expect(result.status, output).toBe(0);
-      const persistedConfig = JSON.parse(await fs.readFile(configPath, "utf8")) as OpenClawConfig;
+      const persistedConfig = JSON.parse(await readText(configPath)) as OpenClawConfig;
       expect(persistedConfig.channels).toEqual(config.channels);
       expect(persistedConfig.plugins?.entries?.[PLUGIN]).toEqual(config.plugins?.entries?.[PLUGIN]);
       expect(records?.[PLUGIN], output).toMatchObject({ source: scenario.source });
       const installPath = records?.[PLUGIN]?.installPath;
       expect(installPath).toBeTruthy();
       expect(installPath).not.toBe(oldPluginPath);
-      expect(await fs.readFile(path.join(installPath!, "dist/index.js"), "utf8")).toBe(PAYLOAD);
+      expect(await readText(path.join(installPath!, "dist/index.js"))).toBe(PAYLOAD);
       if (scenario.source === "npm") {
         expect(npmRequests.some((request) => request.includes("/-/"))).toBe(true);
         expect(clawhub.requests).toEqual([]);
@@ -318,15 +290,8 @@ it("confines invalid-config recovery to npm catalog and canonical-ID owners thro
         expect(npmRequests).toEqual([]);
         expect(clawhub.requests).toEqual([]);
       }
-      const repairedValidation = await runNodeScript(
-        [...cliEntry, "config", "validate", "--json"],
-        env,
-        30_000,
-        { cwd: process.cwd() },
-      );
-      const repairedOutput = `${repairedValidation.stdout}\n${repairedValidation.stderr}`;
-      expect(repairedValidation.error, repairedOutput).toBeUndefined();
-      expect(repairedValidation.status, repairedOutput).toBe(0);
+      const repairedValidation = await run("config", "validate", "--json");
+      expect(repairedValidation.status, repairedValidation.output).toBe(0);
       expect(JSON.parse(repairedValidation.stdout)).toMatchObject({ valid: true });
     }
   } finally {

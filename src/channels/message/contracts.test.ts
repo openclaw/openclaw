@@ -8,14 +8,22 @@ import {
 } from "./contracts.js";
 import { durableFinalDeliveryCapabilities } from "./types.js";
 
-function verifiedEntries<T extends { status: string }>(results: readonly T[]): T[] {
-  return results.filter((result) => result.status === "verified");
-}
-
-function expectOnlyVerifiedOrNotDeclared(results: readonly { status: string }[]): void {
+function expectProofs(
+  results: readonly { status: string }[],
+  proofs: Record<string, ReturnType<typeof vi.fn>>,
+  total: number,
+  key = "capability",
+): void {
+  expect(results.filter((result) => result.status === "verified")).toEqual(
+    Object.keys(proofs).map((name) => ({ [key]: name, status: "verified" })),
+  );
+  expect(results).toHaveLength(total);
   expect(
     results.every((result) => result.status === "verified" || result.status === "not_declared"),
   ).toBe(true);
+  for (const proof of Object.values(proofs)) {
+    expect(proof).toHaveBeenCalledTimes(1);
+  }
 }
 
 describe("durable final capability contracts", () => {
@@ -23,13 +31,8 @@ describe("durable final capability contracts", () => {
     await expect(
       verifyDurableFinalCapabilityProofs({
         adapterName: "demo",
-        capabilities: {
-          text: true,
-          nativeQuote: true,
-        },
-        proofs: {
-          text: () => {},
-        },
+        capabilities: { text: true, nativeQuote: true },
+        proofs: { text: () => {} },
       }),
     ).rejects.toThrow(
       'demo declares durable final capability "nativeQuote" without a contract proof',
@@ -37,98 +40,37 @@ describe("durable final capability contracts", () => {
   });
 
   it("runs proofs from channel message adapter declarations", async () => {
-    const text = vi.fn();
-    const media = vi.fn();
-
+    const proofs = { text: vi.fn(), media: vi.fn() };
     const results = await verifyChannelMessageAdapterCapabilityProofs({
       adapterName: "demo",
-      adapter: {
-        durableFinal: {
-          capabilities: {
-            text: true,
-            media: true,
-          },
-        },
-      },
-      proofs: {
-        text,
-        media,
-      },
+      adapter: { durableFinal: { capabilities: { text: true, media: true } } },
+      proofs,
     });
-    expect(verifiedEntries(results)).toEqual([
-      { capability: "text", status: "verified" },
-      { capability: "media", status: "verified" },
-    ]);
-    expect(results).toHaveLength(durableFinalDeliveryCapabilities.length);
-    expectOnlyVerifiedOrNotDeclared(results);
-    expect(text).toHaveBeenCalledTimes(1);
-    expect(media).toHaveBeenCalledTimes(1);
+    expectProofs(results, proofs, durableFinalDeliveryCapabilities.length);
   });
 
   it("runs live preview finalizer proofs from channel message adapter declarations", async () => {
-    const finalEdit = vi.fn();
-    const normalFallback = vi.fn();
-
+    const proofs = { finalEdit: vi.fn(), normalFallback: vi.fn() };
     const results = await verifyChannelMessageLiveFinalizerProofs({
       adapterName: "demo",
-      adapter: {
-        live: {
-          finalizer: {
-            capabilities: {
-              finalEdit: true,
-              normalFallback: true,
-            },
-          },
-        },
-      },
-      proofs: {
-        finalEdit,
-        normalFallback,
-      },
+      adapter: { live: { finalizer: { capabilities: { finalEdit: true, normalFallback: true } } } },
+      proofs,
     });
-    expect(verifiedEntries(results)).toEqual([
-      { capability: "finalEdit", status: "verified" },
-      { capability: "normalFallback", status: "verified" },
-    ]);
-    expect(results).toHaveLength(5);
-    expectOnlyVerifiedOrNotDeclared(results);
-    expect(finalEdit).toHaveBeenCalledTimes(1);
-    expect(normalFallback).toHaveBeenCalledTimes(1);
+    expectProofs(results, proofs, 5);
   });
 
   it("runs live capability proofs from channel message adapter declarations", async () => {
-    const draftPreview = vi.fn();
-    const previewFinalization = vi.fn();
-
+    const proofs = { draftPreview: vi.fn(), previewFinalization: vi.fn() };
     const results = await verifyChannelMessageLiveCapabilityAdapterProofs({
       adapterName: "demo",
-      adapter: {
-        live: {
-          capabilities: {
-            draftPreview: true,
-            previewFinalization: true,
-          },
-        },
-      },
-      proofs: {
-        draftPreview,
-        previewFinalization,
-      },
+      adapter: { live: { capabilities: { draftPreview: true, previewFinalization: true } } },
+      proofs,
     });
-    expect(verifiedEntries(results)).toEqual([
-      { capability: "draftPreview", status: "verified" },
-      { capability: "previewFinalization", status: "verified" },
-    ]);
-    expect(results).toHaveLength(5);
-    expectOnlyVerifiedOrNotDeclared(results);
-    expect(draftPreview).toHaveBeenCalledTimes(1);
-    expect(previewFinalization).toHaveBeenCalledTimes(1);
+    expectProofs(results, proofs, 5);
   });
 
   it("runs receive ack policy proofs from channel message adapter declarations", async () => {
-    const afterReceiveRecord = vi.fn();
-    const afterAgentDispatch = vi.fn();
-
+    const proofs = { after_receive_record: vi.fn(), after_agent_dispatch: vi.fn() };
     const results = await verifyChannelMessageReceiveAckPolicyAdapterProofs({
       adapterName: "demo",
       adapter: {
@@ -137,18 +79,8 @@ describe("durable final capability contracts", () => {
           supportedAckPolicies: ["after_receive_record", "after_agent_dispatch"],
         },
       },
-      proofs: {
-        after_receive_record: afterReceiveRecord,
-        after_agent_dispatch: afterAgentDispatch,
-      },
+      proofs,
     });
-    expect(verifiedEntries(results)).toEqual([
-      { policy: "after_receive_record", status: "verified" },
-      { policy: "after_agent_dispatch", status: "verified" },
-    ]);
-    expect(results).toHaveLength(4);
-    expectOnlyVerifiedOrNotDeclared(results);
-    expect(afterReceiveRecord).toHaveBeenCalledTimes(1);
-    expect(afterAgentDispatch).toHaveBeenCalledTimes(1);
+    expectProofs(results, proofs, 4, "policy");
   });
 });

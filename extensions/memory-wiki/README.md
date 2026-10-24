@@ -153,6 +153,10 @@ Key beliefs can live in structured `claims` frontmatter with per-claim evidence,
 
 When `render.createBacklinks` is enabled, compile adds repeatable `## Related` blocks to pages. Those blocks list source pages, pages that reference the current page, and nearby pages that share the same source ids.
 
+Local Markdown link paths are percent-decoded for lint and generated backlinks:
+`[Target](%74arget.md)` resolves to `target.md`. Malformed percent escapes remain
+literal, and Obsidian wikilinks keep their existing syntax.
+
 When `render.createDashboards` is enabled, compile also maintains report dashboards under `reports/` for open questions, contradictions, low-confidence pages, and stale pages.
 
 Unmanaged raw Markdown can live under `sources/` without OpenClaw page frontmatter. Add `<!-- openclaw:wiki:raw-source -->` near the top of the page body to opt it out of wiki page metadata and freshness lint; generated or source-sync tracked imports still require their structured metadata.
@@ -245,3 +249,4 @@ unknown ids fail in multi-agent setups.
 - Rollback quarantine clears immediately for an in-process compile. After a separate compiler process publishes, refresh the plugin lifecycle so the daemon can validate that durable publication.
 - Pre-publication-epoch cache rows are rebuildable misses, not migrated state; the next compile replaces them.
 - Obsidian CLI support requires the official `obsidian` CLI to be installed and available on `PATH`.
+- Whole-vault scans for `wiki_search`, `wiki_get` id lookups and misses, and `wiki_apply` metadata updates run in a plugin-owned pool of two worker threads, handing their shared compute slot or worker to a waiting task at the next 64-page checkpoint (deadlines stay with the caller: `wiki_search` keeps its 30-second deadline, other scans run to completion as before); single-page reads (`wiki_get` by exact path, by basename or by claim id) stay on the calling thread, and the gateway main thread only merges returned results and reads a lookup's one matched page, so the gateway event loop stays responsive and short reads never wait behind a scan.

@@ -281,6 +281,26 @@ describe("Nostr outbound relay failover", () => {
     );
   });
 
+  it("retries a recovered relay on the next explicit send after repeated rejections", async () => {
+    const options = { accepted: false, reason: "fixture relay unavailable" };
+    const recovering = await relay(options);
+    const bus = await startBus([recovering.url]);
+    for (let attempt = 0; attempt < 5; attempt++) {
+      await expect(bus.sendDm(RECIPIENT_PUBKEY, `rejected ${attempt}`)).rejects.toThrow(
+        options.reason,
+      );
+    }
+
+    options.accepted = true;
+    const id = await bus.sendDm(RECIPIENT_PUBKEY, "relay recovered");
+
+    expect(recovering.events).toHaveLength(6);
+    expect(recovering.acknowledgements.at(-1)).toEqual(["OK", id, true, options.reason]);
+    expect(decrypt(RECIPIENT_KEY, bus.publicKey, recovering.events[5]!.content)).toBe(
+      "relay recovered",
+    );
+  });
+
   describe("registered message sender", () => {
     it("falls back past connection and publish failures, accounting only for EVENT handoffs", async () => {
       const refused = await relay({ rejectUpgrade: true });

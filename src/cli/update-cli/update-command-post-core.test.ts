@@ -13,7 +13,7 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { killPidIfAlive, readPidFile, waitForPidToExit } from "../../test-utils/process-tree.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
-import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
+import { createPostCorePluginUpdateResult } from "./update-command-plugins-internals.js";
 import {
   continuePostCoreUpdateInFreshProcess,
   preparePostCorePluginInstallRecordsForFreshProcess,
@@ -26,19 +26,7 @@ import {
 } from "./update-command-post-core.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const pluginUpdate: PostCorePluginUpdateResult = {
-  status: "ok",
-  changed: true,
-  sync: {
-    changed: false,
-    switchedToBundled: [],
-    switchedToNpm: [],
-    warnings: [],
-    errors: [],
-  },
-  npm: { changed: false, outcomes: [] },
-  integrityDrifts: [],
-};
+const pluginUpdate = createPostCorePluginUpdateResult({ status: "ok", changed: true });
 
 afterEach(() => vi.restoreAllMocks());
 const withTempDir = () => tempDirs.make("openclaw-post-core-records-");
@@ -269,10 +257,7 @@ describe("readPostCorePluginInstallRecordsFile", () => {
     await fs.writeFile(filePath, raw, "utf-8");
 
     await expect(readPostCorePluginInstallRecordsFile(filePath)).rejects.toThrow(
-      `${reason}: ${filePath}`,
-    );
-    await expect(readPostCorePluginInstallRecordsFile(filePath)).rejects.toThrow(
-      "Run openclaw doctor to inspect and repair plugin installation state.",
+      `${reason}: ${filePath}. Run openclaw doctor to inspect and repair plugin installation state.`,
     );
   });
 

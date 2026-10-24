@@ -1,6 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
 import * as ts from "typescript/ast";
+import { packageActivationRuntimeEntrypoint } from "../../src/infra/package-update-activation-runtime-assets.ts";
+import { managedHandoffRuntimeEntrypoint } from "../../src/infra/update-managed-service-handoff-runtime-assets.ts";
 import { createNativeTypeScriptParser } from "./native-typescript.mts";
 import { controlUiBuildSiblingPid } from "./output-root-guard.mjs";
 import { isRecord as object } from "./record-shared.mjs";
@@ -86,7 +88,11 @@ function portable(value: string): string {
 
 function moduleFiles(root: string): string[] {
   const standaloneEntries = Object.keys(standaloneRuntimeProcessBuildEntries);
-  const standaloneFiles = new Set(standaloneEntries.map((name) => `${name}.js`));
+  const standaloneFiles = new Set([
+    ...standaloneEntries.map((name) => `${name}.js`),
+    managedHandoffRuntimeEntrypoint.distWorkerPath,
+    packageActivationRuntimeEntrypoint.distWorkerPath,
+  ]);
   const independentDirectories = new Set([
     "config-doctor",
     "state-retention",

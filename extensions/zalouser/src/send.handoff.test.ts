@@ -256,9 +256,13 @@ describe("Zalouser registered send handoff", () => {
     }
   });
 
-  it.each(["image upload", "upload completion", "voice HEAD"] as const)(
+  it.each([
+    ["image upload", ["/api/message/photo_original/upload"]],
+    ["upload completion", ["/api/message/asyncfile/upload"]],
+    ["voice HEAD", ["/api/message/asyncfile/upload", "/voice.aac"]],
+  ] as const)(
     "does not mark %s as visible delivery or send after its wait",
-    async (stage) => {
+    async (stage, paths) => {
       if (stage !== "image upload") {
         useAudioFixture();
       }
@@ -290,13 +294,7 @@ describe("Zalouser registered send handoff", () => {
       caller.abort(new Error("caller canceled"));
       wait.release.resolve();
       await expect(send).rejects.toThrow("caller canceled");
-      expect(harness.requests.map(({ path }) => path)).toEqual(
-        stage === "image upload"
-          ? ["/api/message/photo_original/upload"]
-          : stage === "upload completion"
-            ? ["/api/message/asyncfile/upload"]
-            : ["/api/message/asyncfile/upload", "/voice.aac"],
-      );
+      expect(harness.requests.map(({ path }) => path)).toEqual(paths);
     },
   );
 

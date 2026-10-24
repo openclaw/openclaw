@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { runEmbeddedAgent } from "../../../agents/embedded-agent.js";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { replaceTranscriptEvents } from "../../../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
@@ -13,12 +14,15 @@ import {
   triggerInternalHook,
   unregisterInternalHook,
 } from "../../internal-hooks.js";
-import { generateSlugViaLLM } from "../../llm-slug-generator.js";
 import { captureSessionMemoryTranscript } from "./capture.js";
 
 // Avoid calling the embedded OpenClaw agent (global command lane); keep this unit test deterministic.
-vi.mock("../../llm-slug-generator.js", () => ({
-  generateSlugViaLLM: vi.fn().mockResolvedValue("simple-math"),
+vi.mock("../../../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../agents/embedded-agent.js")>()),
+  runEmbeddedAgent: vi.fn<typeof runEmbeddedAgent>().mockResolvedValue({
+    payloads: [{ text: "simple-math" }],
+    meta: { durationMs: 0 },
+  }),
 }));
 
 const loggerMocks = vi.hoisted(() => ({
@@ -33,9 +37,14 @@ const memoryProvenanceMocks = vi.hoisted(() => ({
   recordMemoryArtifactWriteProvenance: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock("../../../logging/subsystem.js", () => ({
-  createSubsystemLogger: () => loggerMocks,
-}));
+vi.mock("../../../logging/subsystem.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../../../logging/subsystem.js")>();
+  return {
+    ...original,
+    createSubsystemLogger: (...args: Parameters<typeof original.createSubsystemLogger>) =>
+      Object.assign(original.createSubsystemLogger(...args), loggerMocks),
+  };
+});
 
 vi.mock("../../../memory/memory-artifact-provenance.js", () => ({
   normalizeMemoryArtifactRelativePath: (relativePath: string) => relativePath,
@@ -309,7 +318,7 @@ describe("session-memory hook", () => {
       { role: "user", content: "Hello there" },
       { role: "assistant", content: "Hi! How can I help?" },
     ]);
-    const generateSlug = vi.mocked(generateSlugViaLLM);
+    const generateSlug = vi.mocked(runEmbeddedAgent);
     generateSlug.mockClear();
     await withEnvAsync(
       {

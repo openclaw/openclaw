@@ -122,7 +122,7 @@ describe("warm boot profile validation", () => {
     const runtime = bootstrapApplication();
     expect(runtime.warmBoot).toBe(true);
     fixture.gateway.connect();
-    fixture.current().opts.onClose?.({
+    fixture.current().testOptions.onClose?.({
       code: 4008,
       reason: "pairing required",
       willRetry: true,
@@ -131,7 +131,7 @@ describe("warm boot profile validation", () => {
     expect(runtime.warmBoot).toBe(false);
     fixture
       .current()
-      .opts.onClose?.({ code: 1006, reason: "network unavailable", willRetry: true });
+      .testOptions.onClose?.({ code: 1006, reason: "network unavailable", willRetry: true });
     expect(fixture.gateway.snapshot.lastErrorCode).toBeNull();
     expect(runtime.warmBoot).toBe(false);
     expect(localStorage.getItem(BOOT_RECORD_PREFIX + scope)).toBeNull();

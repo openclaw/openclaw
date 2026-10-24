@@ -9,10 +9,31 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const { createVault } = createMemoryWikiTestHarness();
 
+const chmodFaultUnavailable = process.platform === "win32" || process.getuid?.() === 0;
+
 afterEach(() => {
   __setFsSafeTestHooksForTest(undefined);
   vi.restoreAllMocks();
 });
+
+function sortedPaths(results: Array<{ path?: string }>): string[] {
+  return results
+    .map((result) => result.path ?? "")
+    .toSorted((left, right) => left.localeCompare(right));
+}
+
+/** Page opens on this thread; the reader pool's workers open pages without this hook. */
+function recordPageOpens() {
+  const opened: string[] = [];
+  __setFsSafeTestHooksForTest({
+    beforeOpen: (filePath) => {
+      if (filePath.endsWith(".md")) {
+        opened.push(path.basename(filePath));
+      }
+    },
+  });
+  return opened;
+}
 
 function writePage(file: string, frontmatter: Record<string, unknown>, body: string) {
   return fs.writeFile(file, renderWikiMarkdown({ frontmatter, body }));
@@ -34,36 +55,6 @@ async function createReadVault(
 }
 
 describe("wiki query page reads", () => {
-  it("reads only compiled metadata candidates for distributed query tokens", async () => {
-    const { rootDir, config, targetPath, relativePath } = await createReadVault(
-      {
-        pageType: "source",
-        id: "source.quartz",
-        title: "Cobalt",
-        aliases: ["amber"],
-        questions: ["lantern"],
-      },
-      "# Cobalt\n\nSelected evidence.\n",
-    );
-    const unrelatedPath = path.join(rootDir, "sources", "unrelated.md");
-    await writePage(unrelatedPath, { pageType: "source", title: "Unrelated" }, "# Unrelated\n");
-    const query = "cobalt quartz amber lantern";
-    const liveResults = await searchMemoryWiki({ config, query, maxResults: 1 });
-    expect(liveResults[0]?.path).toBe(relativePath);
-    await compileMemoryWikiVault(config);
-    const openedPages: string[] = [];
-    __setFsSafeTestHooksForTest({
-      beforeOpen: (filePath) => {
-        if (filePath.endsWith(".md")) {
-          openedPages.push(filePath);
-        }
-      },
-    });
-    await expect(searchMemoryWiki({ config, query, maxResults: 1 })).resolves.toEqual(liveResults);
-    expect(openedPages).toContain(targetPath);
-    expect(openedPages).not.toContain(unrelatedPath);
-  });
-
   it.each(["large", "hardlinked"] as const)(
     "keeps exact, basename and ID reads equivalent for a %s page",
     async (kind) => {
@@ -135,12 +126,14 @@ describe("wiki query page reads", () => {
     });
   });
 
-  it.each(["exact", "basename", "search"] as const)(
-    "rejects a page swapped outside the vault during %s reads",
+  // Exact reads open the lookup path directly and compiled candidates are read by
+  // path, so a page replaced by a symlink is reached and must be refused. Directory
+  // walks skip symlinks, which is why the whole-vault routes cannot reach one here.
+  it.each(["exact", "search"] as const)(
+    "rejects a compiled or exact page swapped outside the vault during %s reads",
     async (route) => {
       const { config, targetPath, relativePath } = await createReadVault();
       const outside = await createReadVault();
-      const canonicalTarget = await fs.realpath(targetPath);
       await fs.writeFile(
         outside.targetPath,
         (await fs.readFile(outside.targetPath, "utf8")).replace(
@@ -148,36 +141,98 @@ describe("wiki query page reads", () => {
           "outside-vault marker",
         ),
       );
-      let swapped = false;
-      const swap = async () => {
-        if (swapped) {
-          return;
-        }
-        swapped = true;
-        await fs.unlink(targetPath);
-        await fs.symlink(outside.targetPath, targetPath);
-      };
-      __setFsSafeTestHooksForTest({
-        beforeOpen: async (filePath) => {
-          if (path.resolve(filePath) === canonicalTarget) {
-            await swap();
-          }
-        },
-      });
-      const readdir = vi.spyOn(fs, "readdir");
+      if (route === "search") {
+        await compileMemoryWikiVault(config);
+      }
+      await fs.unlink(targetPath);
+      await fs.symlink(outside.targetPath, targetPath);
       const read =
         route === "search"
           ? searchMemoryWiki({ config, query: "Alpha" })
-          : getMemoryWikiPage({ config, lookup: route === "exact" ? relativePath : "alpha" });
+          : getMemoryWikiPage({ config, lookup: relativePath });
 
       await expect(read).rejects.toMatchObject({
         name: "FsSafeError",
         code: expect.stringMatching(/symlink|path-mismatch/u),
       });
-      expect(swapped).toBe(true);
-      if (route === "exact") {
-        expect(readdir).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps whole-vault searches and id lookups off the calling thread (#166304)", async () => {
+    const { rootDir, config, relativePath } = await createReadVault();
+    await writePage(
+      path.join(rootDir, "concepts", "beta.md"),
+      { pageType: "concept", id: "concept.beta", title: "Beta" },
+      "# Beta\n\nanother readable line\n",
+    );
+    const opened = recordPageOpens();
+
+    // Without a compiled digest the search reads every page, and an id lookup or a miss
+    // resolves against every page; only the lookup's matched page is read here again.
+    const results = await searchMemoryWiki({ config, query: "readable line" });
+    expect(opened).toEqual([]);
+    await expect(getMemoryWikiPage({ config, lookup: "source.alpha" })).resolves.toMatchObject({
+      path: relativePath,
+    });
+    await expect(getMemoryWikiPage({ config, lookup: "absent" })).resolves.toBeNull();
+
+    expect(sortedPaths(results)).toEqual(["concepts/beta.md", relativePath]);
+    expect(opened).toEqual(["alpha.md"]);
+  });
+
+  it.skipIf(chmodFaultUnavailable)(
+    "reads only compiled metadata candidates for distributed query tokens",
+    async () => {
+      const { rootDir, config, targetPath, relativePath } = await createReadVault();
+      await writePage(
+        targetPath,
+        {
+          pageType: "source",
+          id: "source.quartz",
+          title: "Cobalt",
+          aliases: ["amber"],
+          questions: ["lantern"],
+        },
+        "# Cobalt\n\nSelected evidence.\n",
+      );
+      const unrelatedPath = path.join(rootDir, "sources", "unrelated.md");
+      await writePage(unrelatedPath, { pageType: "source", title: "Unrelated" }, "# Unrelated\n");
+      const query = "cobalt quartz amber lantern";
+      const liveResults = await searchMemoryWiki({ config, query, maxResults: 1 });
+      expect(liveResults[0]?.path).toBe(relativePath);
+      await compileMemoryWikiVault(config);
+      // A whole-vault read would fail on this page, so the search must stay on the
+      // candidates the digest admits for the distributed tokens.
+      await fs.chmod(unrelatedPath, 0o000);
+
+      try {
+        await expect(searchMemoryWiki({ config, query, maxResults: 1 })).resolves.toEqual(
+          liveResults,
+        );
+      } finally {
+        await fs.chmod(unrelatedPath, 0o644);
       }
     },
   );
+
+  it("backfills underfilled digest candidates from the rest of the vault", async () => {
+    const { rootDir, config, relativePath } = await createReadVault();
+    await writePage(
+      path.join(rootDir, "sources", "watch.md"),
+      { pageType: "source", id: "source.watch", title: "Watch", aliases: ["keeps watch"] },
+      "# Watch\n\nNight shift.\n",
+    );
+    await writePage(
+      path.join(rootDir, "entities", "keeper.md"),
+      { pageType: "entity", id: "entity.keeper", title: "Lantern Keeper" },
+      "# Lantern Keeper\n\nKeeps the harbor ledger.\n",
+    );
+    await compileMemoryWikiVault(config);
+
+    // Only the alias is in the digest; the keeper matches in its body alone.
+    const results = await searchMemoryWiki({ config, query: "keeps", maxResults: 10 });
+
+    expect(sortedPaths(results)).toEqual(["entities/keeper.md", "sources/watch.md"]);
+    expect(results.map((result) => result.path)).not.toContain(relativePath);
+  });
 });

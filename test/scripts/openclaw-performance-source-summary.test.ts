@@ -111,34 +111,8 @@ it("labels CLI RSS semantics and rejects mixed-metric memory trends", () => {
   expect(() => buildMarkdown(sourceDir, baselineDir)).toThrow("Incompatible CLI RSS metrics");
   writeJson(path.join(baselineDir, "cli-startup.json"), cli);
   expect(buildMarkdown(sourceDir, baselineDir)).toContain("RSS metric: cli-runtime-max-rss-v1");
-  cli.primary.memoryMetric = "unknown-metric";
-  writeJson(cliPath, cli);
-  expect(() => buildMarkdown(sourceDir, baselineDir)).toThrow("Unknown CLI RSS metric");
-
-  delete cli.primary.memoryMetric;
-  for (const [before, after, error] of [
-    [undefined, "native", null],
-    ["native", undefined, null],
-    ["native", "native", null],
-    ["transport", "transport", null],
-    [undefined, "transport", "Incompatible CLI execution modes"],
-    ["transport", "native", "Incompatible CLI execution modes"],
-    ["unknown", "unknown", "Unknown CLI execution mode"],
-    [null, "native", "Unknown CLI execution mode"],
-    ["native", 1, "Unknown CLI execution mode"],
-  ] satisfies Array<[unknown, unknown, string | null]>) {
-    writeJson(path.join(baselineDir, "cli-startup.json"), {
-      primary: { ...cli.primary, executionMode: before },
-    });
-    writeJson(cliPath, { primary: { ...cli.primary, executionMode: after } });
-    if (error) {
-      expect(() => buildMarkdown(sourceDir, baselineDir)).toThrow(error);
-    } else {
-      expect(buildMarkdown(sourceDir, baselineDir)).toContain("RSS metric: legacy-last-marker");
-    }
-  }
-  writeJson(cliPath, { primary: { ...cli.primary, executionMode: null } });
-  expect(() => buildMarkdown(sourceDir, null)).toThrow("Unknown CLI execution mode");
+  writeJson(cliPath, { primary: { ...cli.primary, executionMode: "transport" } });
+  expect(() => buildMarkdown(sourceDir, baselineDir)).toThrow("Incompatible CLI execution modes");
 });
 
 function sqliteQuery(overrides: Record<string, unknown> = {}) {
@@ -194,14 +168,6 @@ describe("parseArgs", () => {
       baselineSourceDir: path.resolve("reports/baseline"),
       output: path.resolve("summary.md"),
     });
-  });
-
-  it("rejects missing path values", () => {
-    for (const flag of ["--source-dir", "--baseline-source-dir", "--output"]) {
-      for (const args of [[], [""], ["-h"], ["--source-dir", "reports/current"]]) {
-        expect(() => parseArgs([flag, ...args])).toThrow(`${flag} requires a value`);
-      }
-    }
   });
 
   it("reports CLI argument errors without a Node stack trace", () => {

@@ -273,12 +273,14 @@ describe("streamProxy", () => {
       ...proxyOptions,
       sessionId: "run-session",
       promptCacheKey: "stable-cache-key",
+      promptCacheTtl: "12h",
     }).result();
 
     const body = requestBody(fetchMock);
     expect(body.options).toMatchObject({
       sessionId: "run-session",
       promptCacheKey: "stable-cache-key",
+      promptCacheTtl: "12h",
     });
   });
 

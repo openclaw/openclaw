@@ -26,6 +26,7 @@ import { SessionMutationAuthorizationChangedError } from "../session-mutation-au
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { readSessionMessagesPageWithStatsAsync } from "../session-transcript-readers.js";
 import { SOURCE_PAGE_MAX_MESSAGES } from "../session-transcript-source-pages.js";
+import { respondError } from "./response.js";
 import { retainSessionScopedRead } from "./session-scoped-read.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { defineValidatedGatewayMethod } from "./validation.js";
@@ -234,9 +235,7 @@ export const canvasHandlers: GatewayRequestHandlers = {
         await respondWithCanvasHtml(
           invocation,
           async () => {
-            const document = await readCanvasDocumentHtmlSource(invocation.params.docId, {
-              maxBytes: WIDGET_HTML_MAX_UTF8_BYTES,
-            });
+            const document = await readCanvasDocumentHtmlSource(invocation.params.docId);
             if (
               document.cspSandbox !== "scripts" ||
               Buffer.byteLength(document.html, "utf8") > WIDGET_HTML_MAX_UTF8_BYTES
@@ -263,13 +262,10 @@ export const canvasHandlers: GatewayRequestHandlers = {
       const { html } = invocation.params;
       // JSON Schema limits characters; the file-preview contract limits UTF-8 bytes.
       if (Buffer.byteLength(html, "utf8") > CANVAS_DOCUMENT_PREVIEW_MAX_BYTES) {
-        invocation.respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "invalid canvas.document.preview params: html must not exceed 2 MiB of UTF-8 data",
-          ),
+        respondError(
+          invocation.respond,
+          ErrorCodes.INVALID_REQUEST,
+          "invalid canvas.document.preview params: html must not exceed 2 MiB of UTF-8 data",
         );
         return;
       }

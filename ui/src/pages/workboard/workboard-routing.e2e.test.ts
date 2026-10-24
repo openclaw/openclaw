@@ -153,7 +153,7 @@ suite.define(() => {
         routeId: "workboard",
         search: "?agent=main",
       });
-      await page.locator(".workboard-page-title", { hasText: "Workboard" }).waitFor();
+      await page.locator(".workboard-page-title", { hasText: "All boards" }).waitFor();
       expect(await page.evaluate(() => history.length)).toBe(historyBeforeMissingBoard + 1);
     } finally {
       await close();

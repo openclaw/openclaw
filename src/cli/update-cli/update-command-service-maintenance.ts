@@ -269,7 +269,7 @@ async function stopManagedServiceBeforeMutableUpdate(
             endedAtMs: Date.now(),
             detail: message,
           },
-          { env: updateRun?.env },
+          updateRun,
         );
       } catch {
         (params.warn ?? defaultRuntime.error)(

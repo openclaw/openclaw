@@ -6,6 +6,7 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import { restoreSubagentRunsFromDisk } from "./subagent-registry-persistence.js";
 import { subscribeSubagentRunChanges } from "./subagent-registry-publication.js";
 import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
+import * as readTopology from "./subagent-registry-read-topology.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { registerSubagentCollectorPublicationCases } from "./subagent-registry-state.collector.test-support.js";
 import { persistRegistryFixture } from "./subagent-registry-state.fixture.test-support.js";
@@ -171,6 +172,7 @@ describe("subagent registry state read cache", () => {
     runs.set(selected.runId, selected);
     mocks.readCompactRuns.mockReturnValue(runs);
     await prepareSubagentSessionListReadCache();
+    const topology = vi.spyOn(readTopology, "buildSubagentRunReadTopology");
     const read = () => listControlledSubagentRunFacts(parent, "main", {});
     expect(read().map((entry) => entry.runId)).toEqual([selected.runId]);
     const scan = vi.spyOn(runs, "values");
@@ -194,6 +196,42 @@ describe("subagent registry state read cache", () => {
     expect(read()).toEqual([]);
     expect(scan).not.toHaveBeenCalled();
     expect(iterate).not.toHaveBeenCalled();
+    expect(topology).not.toHaveBeenCalled();
+  });
+
+  it("keeps control selection grouped and distinguishes agents sharing a child key", async () => {
+    const parent = "agent:main:parent";
+    const old = {
+      ...createRun("old"),
+      childSessionKey: "global",
+      childAgentId: "main",
+      requesterSessionKey: parent,
+      generation: 1,
+    };
+    const sibling = { ...createRun("sibling"), requesterSessionKey: parent };
+    const latest = { ...old, runId: "latest", generation: 2 };
+    const foreign = {
+      ...old,
+      runId: "foreign",
+      childAgentId: "research",
+      requesterSessionKey: "agent:main:other",
+      generation: 3,
+    };
+    mocks.readCompactRuns.mockReturnValue(
+      new Map([old, sibling, latest, foreign].map((entry) => [entry.runId, entry])),
+    );
+    await prepareSubagentSessionListReadCache();
+    const read = () =>
+      listControlledSubagentRunFacts(parent, "main", {}).map((entry) => entry.runId);
+    expect(read()).toEqual([latest.runId, sibling.runId]);
+    const moved = {
+      ...latest,
+      runId: "moved",
+      requesterSessionKey: foreign.requesterSessionKey,
+      generation: 4,
+    };
+    persistRegistryFixture(new Map([[moved.runId, moved]]), [moved.runId]);
+    expect(read()).toEqual([sibling.runId]);
   });
 
   it("scopes compact reads while preserving owner writes and live controller moves", async () => {

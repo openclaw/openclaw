@@ -29,7 +29,6 @@ import {
 } from "../../app/question-prompt.ts";
 import { loadSettings } from "../../app/settings.ts";
 import type { SidebarSessionMutationResult } from "../../components/app-sidebar-session-types.ts";
-import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -124,6 +123,7 @@ export function mountBoardPanel(
 export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   readonly updateComplete: Promise<boolean>;
   readonly element: HTMLElement;
+  readonly headerElement: HTMLElement | null;
   render: ChatPaneRuntime["render"];
   readonly transcript: ChatTranscript;
   readonly history: ChatPaneRuntime["history"];
@@ -146,6 +146,8 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   context: ApplicationContext;
   state: ChatPageHost;
   connectedClient: GatewayBrowserClient | null;
+  routeResolutionPending: boolean;
+  synchronizeInputs: ChatPaneRuntime["synchronizeInputs"];
   applyGatewaySnapshot: (snapshot: ApplicationContext["gateway"]["snapshot"]) => void;
   connectedCallback: () => void;
   connectionGeneration: number;
@@ -181,7 +183,6 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   refreshSessionPullRequests: (options?: { refresh?: boolean; automatic?: boolean }) => boolean;
   sessionPullRequests: ControlUiSessionPullRequest[];
   sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
-  githubRepo: MarkdownRenderOptions["githubRepo"];
   suggestionChatProps: (
     connected: boolean,
     archived: boolean,
@@ -471,6 +472,11 @@ export function createSessionContext(
         assistantIdentity: { name: "Molty" },
         terminalEnabled: false,
       },
+    },
+    runtimeConfig: {
+      state: { configNeedsApply: false, configSnapshot: null },
+      ensureLoaded: async () => undefined,
+      subscribe: () => () => {},
     },
     chatSubmissions: createChatSubmissions(),
     nativeChatDrafts: { subscribe: () => () => undefined },

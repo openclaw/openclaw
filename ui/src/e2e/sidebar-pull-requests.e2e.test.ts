@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import type { ControlUiSessionPullRequest } from "../../../src/gateway/control-ui-contract.js";
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../src/gateway/control-ui-contract.js";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import {
   captureUiProof,
   chatSessionListResponse,
@@ -110,10 +111,7 @@ suite.define(() => {
         expect(await trigger.evaluate((element) => element === document.activeElement)).toBe(true);
 
         await page.setViewportSize({ width: 600, height: 700 });
-        await page
-          .locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible")
-          .first()
-          .click();
+        await navigationDrawerToggle(page).click();
         await trigger.focus();
         await expect.poll(() => card.count()).toBe(1);
         const bounds = await card.boundingBox();

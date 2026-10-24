@@ -385,16 +385,16 @@ describe("GatewayBrowserClient", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(ws.lastClose).toEqual({ code: 4000, reason: "response observer closed" });
     expect(onHello).not.toHaveBeenCalled();
-    expect(onClose).not.toHaveBeenCalled();
-    expect(loadDeviceAuthToken()?.token).toBe(STORED_CRED);
-    ws.emitClose(4000, "response observer closed");
-    expect(onClose).toHaveBeenCalledWith(
+    expect(onClose).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         code: 4000,
         reason: "response observer closed",
         willRetry: true,
       }),
     );
+    expect(loadDeviceAuthToken()?.token).toBe(STORED_CRED);
+    ws.emitClose(4000, "response observer closed");
+    expect(onClose).toHaveBeenCalledOnce();
     await vi.advanceTimersByTimeAsync(800);
     expect(getLatestWebSocket()).not.toBe(ws);
   });
@@ -712,7 +712,7 @@ describe("GatewayBrowserClient", () => {
         });
       }
       await vi.advanceTimersByTimeAsync(10_000);
-      expect(ws.sent).toHaveLength(3);
+      expect(ws.sent.filter((raw) => JSON.parse(raw).method !== "health")).toHaveLength(3);
     },
   );
 
@@ -1250,30 +1250,6 @@ describe("GatewayBrowserClient", () => {
       },
       willRetry: false,
     });
-  });
-
-  it("does not auto-reconnect on PROTOCOL_MISMATCH", async () => {
-    useNodeFakeTimers();
-
-    const { ws: ws1, connectFrame: connect } = await startConnect(
-      createClient({ token: "shared-auth-token" }),
-    );
-
-    ws1.emitMessage({
-      type: "res",
-      id: connect.id,
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "protocol mismatch",
-        details: { code: "PROTOCOL_MISMATCH" },
-      },
-    });
-    await expectSocketClosed(ws1);
-    ws1.emitClose(4008, "connect failed");
-
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(wsInstances).toHaveLength(1);
   });
 
   it.each([

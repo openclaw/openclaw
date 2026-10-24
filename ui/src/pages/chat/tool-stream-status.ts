@@ -3,7 +3,6 @@ import {
   normalizeNullableString as toTrimmedString,
   normalizeLowercaseStringOrEmpty,
 } from "@openclaw/normalization-core/string-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionOperationEvent } from "../../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
@@ -231,6 +230,9 @@ export function handleSessionOperationEvent(
 function handleCompactionEvent(host: ToolStreamHost, payload: AgentEventPayload) {
   const data = payload.data ?? {};
   const phase = typeof data.phase === "string" ? data.phase : "";
+  if (phase !== "start" && phase !== "end") {
+    return;
+  }
   const completed = data.completed === true;
   const itemId = toTrimmedString(data.itemId) ?? undefined;
 
@@ -402,7 +404,6 @@ export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayl
         state: "status",
         runId: payload.runId,
         phase: "fallback",
-        message: formatUiExternalText(truncateUtf16Safe(model, 256)),
         seq: payload.seq,
       });
     }
@@ -415,7 +416,6 @@ export function handleStreamStatus(host: ToolStreamHost, payload: AgentEventPayl
         state: "status",
         runId: payload.runId,
         phase: "retrying",
-        message: formatUiExternalText(truncateUtf16Safe(message, 256)),
         ...(typeof payload.data.retryAt === "number" && Number.isFinite(payload.data.retryAt)
           ? { retryAt: payload.data.retryAt }
           : {}),

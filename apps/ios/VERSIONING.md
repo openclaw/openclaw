@@ -167,6 +167,26 @@ An already running simulator stops the command before capture; shut it down
 when it is no longer in use and rerun. This changes only the screenshot
 environment, not the app's rendered states.
 
+Each iPhone or iPad runs its four screenshot tests in one XCTest session. Every
+test launches and terminates the app independently, using its explicit destination
+and screenshot fixtures. The lane requires all four tests to pass exactly once
+and all four fresh PNGs to exist; failures stop capture without retrying. One
+result bundle and one attempt record are retained per device.
+
+Immediately before Watch capture, the shared lane resolves the runtime and creates
+its simulator. CI can repair a missing or unavailable Watch runtime once, including
+when it disappears during the phone or tablet captures. The repair replaces only
+the selected Watch runtime's registered image, or installs it if absent, and logs
+runtime availability, image state, and mounted-path existence without filesystem
+paths. Local runs leave runtime installation to the operator. Boot and capture
+failures still stop the lane without retrying screenshots.
+
+If Apple removes the Watch runtime registration but cannot reclaim its MobileAsset,
+CI follows Apple's recovery instruction once: scan and mount orphaned runtimes,
+resolve the selected Watch image again, and retry its deletion before downloading.
+Other errors or a second deletion failure stop the repair. The replacement must
+report `Ready` with an existing mounted runtime directory before simulator creation.
+
 The screenshot-only job enables `OPENCLAW_SNAPSHOT_DIAGNOSTICS=1`. To collect the
 same diagnostics locally:
 
@@ -174,9 +194,13 @@ same diagnostics locally:
 OPENCLAW_SNAPSHOT_DIAGNOSTICS=1 pnpm ios:screenshots
 ```
 
-Sanitized startup, resource, and crash facts are recorded in
-`apps/ios/build/screenshot-diagnostics.json`. The separate
-`capture-attempts.json` ledger keeps its existing schema for release evidence.
+Phase timings, simulator counts, and sanitized startup and crash facts are recorded in
+`apps/ios/build/screenshot-diagnostics.json`. Resource observations come from the
+separate [background timeline](fastlane/SETUP.md#temporary-resource-investigation),
+without blocking screenshot phases on native resource probes. The separate
+`capture-attempts.json` ledger records device invocations in schema version 2.
+The release evidence manifest uses the same version and includes the exact four
+passing test identities for each iPhone and iPad bundle.
 GitHub retains both files and fixture PNGs in
 `ios-screenshots-<run-id>-<run-attempt>`. Raw Xcode logs and XCTest result bundles
 are excluded from the uploaded diagnostics.

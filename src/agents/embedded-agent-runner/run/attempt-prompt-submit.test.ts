@@ -30,7 +30,7 @@ import {
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
 import {
-  createCompactionHandlers,
+  createCompactionExtension,
   createResourceLoader,
 } from "../../sessions/agent-session-loop-resource-loader.test-support.js";
 import {
@@ -38,6 +38,7 @@ import {
   estimateCompactedRequestTokens,
   withCompactionQueuedContext,
 } from "../../sessions/compaction/request-budget.js";
+import type { ExtensionFactory } from "../../sessions/extensions/types.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import {
   beginPromptCacheObservation,
@@ -247,7 +248,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
       settingsManager,
       sessionManager,
       systemPrompt,
-      resourceLoader: createResourceLoader(),
+      resourceLoader: await createResourceLoader(),
     });
     const convert = session.agent.convertToLlm;
     session.agent.convertToLlm = (messages) =>
@@ -327,23 +328,18 @@ describe("submitEmbeddedAttemptPrompt", () => {
     "retires runtime-only context and preserves the next user when preflight is %s",
     async (outcome) => {
       let calls = 0;
-      const handlers = new Map<string, Array<() => Promise<unknown>>>([
-        [
-          "input",
-          [
-            async () => ({
-              action: calls++ === 0 && outcome === "handled" ? "handled" : "continue",
-            }),
-          ],
-        ],
-      ]);
+      const handlers: ExtensionFactory = (api) => {
+        api.on("input", async () => ({
+          action: calls++ === 0 && outcome === "handled" ? "handled" : "continue",
+        }));
+      };
       streamMocks.streamSimple.mockImplementation((model) =>
         createAssistantResultStream(createAssistant(model, "done")),
       );
       const sessionManager = guardSessionManager(SessionManager.inMemory());
       const { session, modelRegistry } = await createTestSession({
         sessionManager,
-        resourceLoader: createResourceLoader(handlers),
+        resourceLoader: await createResourceLoader(handlers),
       });
       const authCheck = vi.spyOn(modelRegistry, "hasConfiguredAuth");
       if (outcome === "rejected") {
@@ -465,7 +461,7 @@ describe("submitEmbeddedAttemptPrompt", () => {
     collectRequests(requests, "recovered", true);
     const { session, sessionManager } = await createTestSession({
       settingsManager: createAutoCompactionSettings(),
-      resourceLoader: createResourceLoader(createCompactionHandlers()),
+      resourceLoader: await createResourceLoader(createCompactionExtension()),
     });
     await submitSession(session, {
       appendOnlyRuntimeContext: true,
@@ -579,7 +575,6 @@ describe("submitEmbeddedAttemptPrompt", () => {
           hasBaselineTools: () => false,
           applyPromptBuildToolsAllow: () => [],
           setActiveSessionSystemPrompt: vi.fn(),
-          setLeasedSteering: vi.fn(),
         });
         await submitEmbeddedAttemptPrompt({
           ...input,
@@ -625,12 +620,10 @@ describe("submitEmbeddedAttemptPrompt", () => {
         ...buildRuntimeContextCustomMessage("runtime context")!,
         timestamp: 2,
       };
-      const steering = { leaseId: "lease-1", runIds: ["missing-run"], isCurrent: () => true };
       const submitting = submitEmbeddedAttemptPrompt({
         ...input,
         activeSession,
         images: [image],
-        leasedSteering: runtimeOnly ? steering : undefined,
         runtimeContextMessage: runtimeOnly ? undefined : runtimeContextMessage,
         runtimeOnly,
         promptActiveSession: async (prompt, options) => {
@@ -652,10 +645,8 @@ describe("submitEmbeddedAttemptPrompt", () => {
       });
       if (runtimeOnly) {
         await submitting;
-        expect(input.onSteeringAcknowledged).toHaveBeenCalledOnce();
       } else {
         await expect(submitting).rejects.toThrow("provider failed");
-        expect(input.onSteeringAcknowledged).not.toHaveBeenCalled();
         expect(activeSession.messages).not.toContain(runtimeContextMessage);
       }
       expect(activeSession.agent).toMatchObject({

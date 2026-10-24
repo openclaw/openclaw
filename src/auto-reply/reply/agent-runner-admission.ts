@@ -1,0 +1,203 @@
+import type { AdmittedRunContext } from "../../agents/admitted-run-context.js";
+import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
+import { readChannelContextGatewayContextResolver } from "../../channels/message-access/admission-evidence.js";
+import { selectLiveRuntimeConfig } from "../../config/runtime-snapshot.js";
+import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
+import { captureOwnedTranscriptWriteAssertion } from "../../config/sessions/transcript-write-context.js";
+import { resolveCronJobConfigRevision } from "../../cron/config-revision.js";
+import { prepareCronRunAdmission } from "../../cron/run-admission.js";
+import { isCronOneShotContinuationJob } from "../../cron/service/one-shot-schedule.js";
+import { resolveCronAuthenticatedChannelRequester } from "../../cron/tools-allow-provenance.js";
+import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
+import { captureAgentRunLifecycleGeneration } from "../../infra/agent-events.js";
+import { claimAgentRunContext, releaseAgentRunContext } from "../../infra/agent-run-registry.js";
+import { drainAgentRunTerminalWrites } from "../../infra/agent-run-terminal-writes.js";
+import { registerCronRunExecSource } from "../../infra/cron-run-exec-source.js";
+import {
+  bindGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+} from "../../plugins/runtime/gateway-request-scope.js";
+import { captureCommandOwnerAssertion } from "../command-owner-authority.js";
+import type { AgentTurnParams } from "./agent-runner-execution.types.js";
+import { resolveReplyScheduledToolPolicy } from "./agent-runner-run-params.js";
+import { prepareChannelRunAdmission } from "./channel-run-admission.js";
+import { resolveFollowupAbortSignal } from "./queue/types.js";
+
+/** Owns reply admission and closes its delivery grant after deferred and terminal writes settle. */
+export function prepareReplyTurnExecution(params: AgentTurnParams, runId: string) {
+  const admittedRunContext: { current?: AdmittedRunContext } = {};
+  const gatewayContextResolver =
+    readChannelContextGatewayContextResolver(params.sessionCtx) ??
+    getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+  const automation = params.followupRun.run.scheduledAutomation;
+  const sessionKey = params.sessionKey ?? params.followupRun.run.sessionKey;
+  const assertSourceCurrent = composeSessionSourceAssertion([
+    captureOwnedTranscriptWriteAssertion({
+      agentId: params.followupRun.run.agentId,
+      sessionId: params.followupRun.run.sessionId,
+      sessionKey,
+      storePath: params.storePath,
+    }),
+    params.followupRun.run.senderIsOwner === true
+      ? captureCommandOwnerAssertion(params.followupRun.run)
+      : undefined,
+    params.followupRun.run.internalEventExecution?.assertCurrent,
+    automation?.assertCurrent,
+  ]);
+  if (automation && !sessionKey) {
+    throw new Error("A scheduled session turn requires its admitted session key");
+  }
+  const onAdmitted = (context: AdmittedRunContext) => {
+    bindGatewayContextResolver(context, gatewayContextResolver);
+    admittedRunContext.current = context;
+    params.followupRun.run.skillLibraryAuthoring?.bind(context);
+  };
+  const cronAdmission =
+    automation && sessionKey
+      ? prepareCronRunAdmission({
+          scheduledExecution: automation.occurrence.mint({
+            cfg: selectLiveRuntimeConfig(params.followupRun.run.config),
+            agentId: params.followupRun.run.agentId,
+            runId,
+            runSessionKey: sessionKey,
+            toolsAllow: resolveCronRunToolsAllow(automation.job),
+            operatorAuthorityRestored: params.followupRun.operatorAuthority !== undefined,
+          }),
+          admissionSource: automation.admissionSource,
+          assertSourceCurrent,
+          cfg: selectLiveRuntimeConfig(params.followupRun.run.config),
+          agentId: params.followupRun.run.agentId,
+          runId,
+          sessionId: params.followupRun.run.sessionId,
+          sessionKey,
+          jobId: automation.job.id,
+          deliveryAttemptFence: automation.deliveryAttemptFence ?? null,
+          operatorAuthority: params.followupRun.operatorAuthority,
+          channelRequester: resolveCronAuthenticatedChannelRequester(automation.job),
+          toolsAllow: resolveCronRunToolsAllow(automation.job),
+          scheduledToolPolicy: resolveReplyScheduledToolPolicy(params.followupRun.run),
+          executionIdentity: automation.executionIdentity,
+          ingressBoundary: "cron.session-agent",
+          resolveGatewayContext: gatewayContextResolver,
+          onAdmitted,
+        })
+      : undefined;
+  const preparedRunAdmission =
+    cronAdmission?.preparedRunAdmission ??
+    prepareChannelRunAdmission({
+      sourceContext: params.followupRun.run,
+      cfg: selectLiveRuntimeConfig(params.followupRun.run.config),
+      runId,
+      agentId: params.followupRun.run.agentId,
+      ingressKind: "channel",
+      boundary: "auto-reply.agent-runner",
+      operatorAuthority: params.followupRun.operatorAuthority,
+      evidence: params.followupRun.channelAdmissionEvidence,
+      gatewayLocalUserIngress: params.followupRun.gatewayLocalUserIngress,
+      assertSourceCurrent,
+      onAdmitted,
+    });
+  let releaseCronSource: (() => void) | undefined;
+  const closeAdmission = () => {
+    try {
+      (cronAdmission?.close ?? preparedRunAdmission.close)();
+    } finally {
+      releaseCronSource?.();
+    }
+  };
+  try {
+    if (cronAdmission && automation) {
+      releaseCronSource = registerCronRunExecSource(runId, {
+        agentId: params.followupRun.run.agentId,
+        jobId: automation.job.id,
+        jobName: automation.job.name,
+        jobConfigRevision: resolveCronJobConfigRevision(automation.job),
+        standingGrantAuthority: cronAdmission.standingGrantAuthority,
+      });
+    }
+    const controllerAbortSignal = params.replyOperation?.abortSignal;
+    const callerAbortSignal = params.opts?.abortSignal;
+    const deferredLifecycle = createDeferredEmbeddedRunLifecycleManager({
+      replyOperation: params.replyOperation,
+      runId,
+      agentId: params.followupRun.run.agentId,
+      sessionId: params.followupRun.run.sessionId,
+      sessionKey: params.sessionKey,
+      sessionFile: params.followupRun.run.sessionFile,
+      abortSignal: resolveFollowupAbortSignal({
+        abortSignal:
+          controllerAbortSignal && callerAbortSignal
+            ? AbortSignal.any([controllerAbortSignal, callerAbortSignal])
+            : (controllerAbortSignal ?? callerAbortSignal),
+        operatorAuthority: params.followupRun.operatorAuthority,
+      }),
+    });
+    return {
+      preparedRunAdmission,
+      admittedRunContext,
+      deferredLifecycle,
+      scheduledMessageActionTurnCapability: cronAdmission?.messageActionTurnCapability,
+      async close() {
+        try {
+          await deferredLifecycle.complete();
+        } finally {
+          await drainAgentRunTerminalWrites(preparedRunAdmission.operationalRunInstance).finally(
+            closeAdmission,
+          );
+        }
+      },
+    };
+  } catch (error) {
+    closeAdmission();
+    throw error;
+  }
+}
+
+/** Retains the scheduled run's registry claim through terminal settlement. */
+export function prepareReplyTurnRunSource(params: AgentTurnParams, runId: string) {
+  const automation = params.followupRun.run.scheduledAutomation;
+  let runContextOwnerToken: string | undefined;
+  return {
+    claim() {
+      automation?.assertCurrent();
+      if (automation) {
+        runContextOwnerToken = claimAgentRunContext(
+          runId,
+          {
+            sessionKey: params.sessionKey ?? params.followupRun.run.sessionKey,
+            sessionId: params.followupRun.run.sessionId,
+            agentId: params.followupRun.run.agentId,
+            lifecycleGeneration: captureAgentRunLifecycleGeneration(runId),
+            cronRunsByJobId: new Map([
+              [
+                automation.job.id,
+                {
+                  nextCheckEnabled:
+                    automation.job.pacing !== undefined ||
+                    isCronOneShotContinuationJob(automation.job),
+                  assertCurrent: () => {
+                    automation.assertCurrent();
+                    if (
+                      !params.replyOperation ||
+                      params.replyOperation.result ||
+                      params.replyOperation.abortSignal.aborted
+                    ) {
+                      throw new Error("Automation reply owner has closed");
+                    }
+                  },
+                },
+              ],
+            ]),
+          },
+          { trackOwner: true, ownsContext: true },
+        );
+        if (!runContextOwnerToken) {
+          throw new Error("The scheduled run context already has an exclusive owner");
+        }
+      }
+    },
+    close() {
+      releaseAgentRunContext(runId, runContextOwnerToken);
+    },
+  };
+}

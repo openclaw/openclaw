@@ -5,6 +5,7 @@ import {
   type SqliteLifecycleTargetSnapshot,
 } from "./session-accessor.sqlite-entry-equality.js";
 import {
+  readSessionEntryRow,
   readSessionEntrySelectionSnapshot,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
@@ -26,7 +27,6 @@ export function applyManualCompactInTransaction(
     events: TranscriptEvent[];
     nowMs?: number;
   },
-  projection?: { scheduleProjectionReconcile: false; onProjectionReconcileNeeded?: () => void },
 ) {
   assertSqliteTranscriptSnapshotUnchanged(database, scope.sessionId, input.rows);
   const current = readSessionEntrySelectionSnapshot(database, scope.sessionKey, true);
@@ -39,8 +39,15 @@ export function applyManualCompactInTransaction(
   if (!previous || previous.sessionId !== scope.sessionId) {
     throw new Error(`SQLite session changed before compacting ${scope.sessionId}`);
   }
-  replaceSqliteTranscriptEventsInTransaction(database, scope, input.events, projection);
-  const next = projectManuallyCompactedSessionEntry(previous, input.nowMs);
+  replaceSqliteTranscriptEventsInTransaction(database, scope, input.events, {
+    scheduleProjectionReconcile: false,
+  });
+  const next = projectManuallyCompactedSessionEntry(
+    previous.priorWorkspace
+      ? (readSessionEntryRow(database, scope.sessionKey)?.entry ?? previous)
+      : previous,
+    input.nowMs,
+  );
   // Accounting and harness bindings describe the same transcript generation.
   writeSessionEntry(database, scope.sessionKey, next, { previousEntry: previous });
   return {

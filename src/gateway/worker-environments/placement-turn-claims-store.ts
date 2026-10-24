@@ -281,11 +281,7 @@ export function createPlacementTurnClaimWorkerOps(runtime: {
             command.type !== "placementTurns.releaseIfOwned"
           ) {
             publication?.invalidate();
-            throw new AcceptedWorkspacePublicationIndeterminateError(
-              "commit",
-              error,
-              new Error("Workspace result settlement is unavailable"),
-            );
+            throw new AcceptedWorkspacePublicationIndeterminateError("commit", error);
           }
           // Native settlement precedes readback. Never replay an uncertain claim or release.
           const reply = await (async () => {

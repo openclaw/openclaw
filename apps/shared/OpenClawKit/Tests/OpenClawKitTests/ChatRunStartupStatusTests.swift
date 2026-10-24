@@ -403,17 +403,33 @@ struct ChatRunStartupTransportTests {
         #expect(model.runStartupStatus == nil)
     }
 
-    @Test func `advertised but unowned output cannot clear startup`() throws {
+    @Test func `a run another client started is taken up at its first status`() throws {
         let model = OpenClawChatViewModel(sessionKey: "main", transport: StartupStatusTransport())
+        defer { model.clearPendingRuns() }
         model.activeSessionRunIDs = ["r"]
         try self.chat(
             #"{"runId":"r","sessionKey":"main","state":"status","phase":"starting_model","seq":3}"#,
             model: model)
+        #expect(model.pendingRuns == ["r"])
         #expect(model.runStartupStatus == "Waiting for a response…")
+        #expect(model.streamingAssistantText == nil)
         try self.agent(
-            #"{"runId":"r","seq":4,"stream":"assistant","data":{"text":"Unowned output"}}"#,
+            #"{"runId":"r","seq":4,"stream":"tool","data":{"phase":"start","name":"read","toolCallId":"t"}}"#,
             model: model)
-        #expect(model.runStartupStatus == "Waiting for a response…")
+        #expect(model.turnToolCallsById["t"]?.runID == "r")
+        #expect(model.runStartupStatus == nil)
+        #expect(model.streamingAssistantText == nil)
+    }
+
+    @Test func `a status for another session takes up nothing`() throws {
+        let model = OpenClawChatViewModel(sessionKey: "main", transport: StartupStatusTransport())
+        defer { model.clearPendingRuns() }
+        try self.chat(
+            #"{"runId":"r","sessionKey":"elsewhere","state":"status","phase":"starting_model","seq":3}"#,
+            model: model)
+        #expect(model.pendingRuns.isEmpty)
+        #expect(model.runStartup == nil)
+        #expect(model.streamingAssistantText == nil)
     }
 
     @Test func `selected run replacement and session cleanup discard previous startup`() throws {

@@ -1,6 +1,7 @@
 import crypto from "node:crypto";
 import { createServer as createHttpServer, type ServerResponse } from "node:http";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveBundleMcpServerInstructions } from "../agents/agent-bundle-mcp-instructions.js";
 import { withAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";
 import { acknowledgeInternalToolResult } from "../agents/runtime/internal-hooks.js";
 import { withPreparedSessionCapabilityRead } from "../agents/subagents/spawn/subagent-session-store.js";
@@ -137,10 +138,7 @@ function jsonRpcInternalError(parsed: unknown) {
 }
 
 /** Starts a new MCP loopback HTTP server and registers its bearer tokens. */
-async function startMcpLoopbackServer(
-  port: number,
-  work: GatewayConnectionWork,
-): Promise<() => Promise<void>> {
+async function startMcpLoopbackServer(work: GatewayConnectionWork): Promise<() => Promise<void>> {
   // Shutdown preloads this module even when no MCP listener is needed.
   const [
     { handleMcpJsonRpc },
@@ -316,6 +314,9 @@ async function startMcpLoopbackServer(
                   ...(boundClientGrant?.skillLibraryAuthoring
                     ? { skillLibraryAuthoring: boundClientGrant.skillLibraryAuthoring }
                     : {}),
+                  ...(boundClientGrant?.bundledTools
+                    ? { bundledTools: boundClientGrant.bundledTools }
+                    : {}),
                 }),
             );
           } catch (error) {
@@ -352,6 +353,10 @@ async function startMcpLoopbackServer(
             stopKeepalive = keepMcpResponseAlive(res, "application/json", "\n");
           }
           const responses: object[] = [];
+          const serverInstructions = resolveBundleMcpServerInstructions(
+            boundClientGrant?.bundledTools,
+            new Set(scopedTools.toolSchema.map((entry) => entry.name)),
+          );
           for (const [messageIndex, message] of messages.entries()) {
             if (!isJsonRpcRequest(message)) {
               responses.push(
@@ -382,6 +387,7 @@ async function startMcpLoopbackServer(
                   message,
                   tools: scopedTools.tools,
                   toolSchema: scopedTools.toolSchema,
+                  ...(serverInstructions ? { serverInstructions } : {}),
                   hookContext: {
                     agentId: scopedTools.agentId,
                     config: cfg,
@@ -539,7 +545,7 @@ async function startMcpLoopbackServer(
 
   await new Promise<void>((resolve, reject) => {
     httpServer.once("error", reject);
-    httpServer.listen(port, "127.0.0.1", () => {
+    httpServer.listen(0, "127.0.0.1", () => {
       httpServer.removeListener("error", reject);
       resolve();
     });
@@ -578,7 +584,7 @@ async function startMcpLoopbackServer(
 }
 
 /** Waits for the process-owned MCP loopback server, starting one if needed. */
-export async function ensureMcpLoopbackServer(port = 0): Promise<void> {
+export async function ensureMcpLoopbackServer(): Promise<void> {
   if (closeActiveMcpLoopbackServer) {
     return;
   }
@@ -589,7 +595,7 @@ export async function ensureMcpLoopbackServer(port = 0): Promise<void> {
     activeMcpLoopbackServerPromise = runInDetachedAsyncContext(() =>
       withPluginRuntimeGatewayContextResolver(
         resolveGatewayContext,
-        () => work.run(() => startMcpLoopbackServer(port, work)),
+        () => work.run(() => startMcpLoopbackServer(work)),
         { inheritRequestScope: false },
       ),
     )

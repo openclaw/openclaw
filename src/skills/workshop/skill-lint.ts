@@ -16,10 +16,8 @@ const SHOUTING = /\bIMPORTANT\b/g;
 const NEGATION_LINE = /^(?:[-*+]|\d+[.)])?\s*(?:\*\*)?(?:never|don['’]t|do not)\b/i;
 const NARRATIVE_LINE = /^(?:[-*+]\s*)?(?:\*\*)?(?:UPDATE|NOTE|EDIT)\b|\b20\d\d-\d\d-\d\d\b/;
 
-type SkillLintFinding = { rule: string; message: string };
-
 /** Authoring-convention findings for one SKILL.md, most useful first. */
-function lintSkillMarkdown(content: string): SkillLintFinding[] {
+function lintSkillMarkdown(content: string): { rule: string; message: string }[] {
   const description = (parseFrontmatterBlock(content).description ?? "").trim();
   const body = stripFrontmatterBlock(content);
   // Code is quoted material; only prose carries authoring style.

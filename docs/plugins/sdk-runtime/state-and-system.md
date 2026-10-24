@@ -69,21 +69,42 @@ keep the existing synchronous fallback.
     System-level utilities.
 
     ```typescript
-    const accepted = api.runtime.system.enqueueSystemEvent(text, options);
-    api.runtime.system.requestHeartbeat({
-      source: "other",
-      intent: "event",
-      reason: "plugin-event",
+    const expectedTarget = await api.runtime.system.captureSessionEventTarget(agentId, sessionKey);
+    // Capture before asynchronous work so its completion keeps the original target.
+    const text = await preparePluginEvent();
+    const receipt = api.runtime.system.enqueueSessionEvent(text, {
+      agentId,
+      sessionKey,
+      expectedTarget,
     });
-    api.runtime.system.requestHeartbeatNow({ reason: "plugin-event" }); // Deprecated compatibility alias.
-    const heartbeatResult = await api.runtime.system.runHeartbeatOnce({
-      reason: "plugin-triggered-check",
-    });
+    const admission = await receipt.accepted;
+    if (!admission.ok) throw new Error(admission.error);
+    const outcome = await receipt.settled;
+    if (outcome.status !== "completed") throw new Error(outcome.error ?? outcome.status);
     const output = await api.runtime.system.runCommandWithTimeout(cmd, args, opts);
     const hint = api.runtime.system.formatNativeDependencyHint(pkg);
     ```
 
-    `requestHeartbeatNow(...)` is tracked as `plugin-runtime-api-compat-aliases` in the [compatibility registry](/plugins/compatibility#current-compatibility-areas) with a `removeAfter` date of 2026-10-01; use `requestHeartbeat({ source, intent, reason })` in new code.
+    `enqueueSystemEvent(...)` is passive: it queues context without starting a
+    turn. `enqueueSessionEvent(...)` admits immediate work through the ordinary
+    session controller and returns a receipt. Acceptance confirms admission;
+    settlement reports `completed`, `failed`, or `cancelled`, separately from
+    whether a reply was delivered. Commit producer bookkeeping only after
+    acceptance and inspect settlement before reporting completion.
+
+    `captureSessionEventTarget(agentId, sessionKey)` returns an opaque handle
+    bound to the original session generation and captured authority. Capture it
+    before asynchronous work and pass it as `expectedTarget`; copied or
+    fabricated handles are rejected. The runtime rechecks plugin and Gateway
+    ownership across admission and effects. A reset or revoked target cannot be
+    replaced silently with a new conversation.
+
+    Event options require `agentId` and `sessionKey`; optional fields are
+    `contextKey`, `deliveryContext`, `abortSignal`, `expectedTarget`, and
+    `createIfMissing: true`. Use `createIfMissing` only for authorized fresh
+    ingress, not a completion bound to an earlier target. The runtime fixes the
+    source to the plugin; callers cannot supply internal automation or operator
+    authority. `receipt.cancel()` requests cancellation through the same owner.
 
     The `openclaw/plugin-sdk/system-event-runtime` helpers resolve legacy session
     aliases at the SDK boundary. Pass a resolved `agentId` alongside `sessionKey`
@@ -95,7 +116,9 @@ keep the existing synchronous fallback.
     configured-owner alias resolution and reject ambiguous agent selection.
     Explicit owners that cannot normalize to an agent ID are rejected.
 
-    `runHeartbeatOnce(...)` runs a single heartbeat cycle immediately, bypassing the normal coalesce timer. Delivery defaults to the configured operator DM (`commands.ownerAllowFrom`, then channel `allowFrom`); pass `{ heartbeat: { target: "none" } }` for an internal-only run.
+    Heartbeat wake/run methods have been removed. Use ordinary
+    [automation jobs](/automation/cron-jobs) for periodic work; see the
+    [SDK removal mappings](/plugins/sdk-migration/removed-surfaces#heartbeat-executor-and-wake-helpers).
 
     `runCommandWithTimeout(...)` returns captured `stdout` and `stderr`, optional
     truncation counts, `code`, `signal`, `killed`, `termination`, and

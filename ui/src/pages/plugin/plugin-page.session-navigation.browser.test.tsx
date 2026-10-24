@@ -1,3 +1,4 @@
+import { createRouter, definePage } from "@openclaw/uirouter";
 import type { CDPSession } from "@vitest/browser-playwright";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cdp } from "vitest/browser";
@@ -16,14 +17,13 @@ import {
   createApplicationGateway,
   createSolidApplicationContextProvider,
 } from "../../test-helpers/solid-application-context.tsx";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import type { ControlUiPluginSessionOpenMessage } from "./plugin-frame-session-navigation.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { PluginPage } from "./plugin-page.tsx";
 
 const pluginPath = "/plugins/example/panel";
 const externalPath = "https://unrelated.example/panel";
 const sessionKey = "agent:writer:subagent:11111111-2222-4333-8444-555555555555";
-const message: ControlUiPluginSessionOpenMessage = {
+const message = {
   type: "openclaw-plugin-session-open",
   sessionKey,
 };
@@ -86,14 +86,20 @@ async function mount(options: MountOptions = {}) {
     },
   } satisfies Partial<typeof gateway.snapshot>);
   const rows = options.boardFace ? [{ key: sessionKey, boardFace: options.boardFace }] : [];
+  const router = createRouter({
+    routes: [definePage({ id: "plugin", path: "/plugin", component: () => ({}) })],
+  });
+  dispose.push(() => router.stop());
+  const refresh = vi.fn(async () => config);
   const context = {
     basePath: "/console",
     gateway,
-    config: { current: config, refresh: vi.fn(async () => config) },
+    config: { current: config, refresh },
     agents: { state: { agentsList: { defaultId: "main", agents: [] } } },
     agentSelection: { state: { selectedId: "main" }, set: actions.selectAgent },
     sessions: { state: { result: { sessions: rows } } },
     navigate: actions.navigate,
+    router,
   } as unknown as ApplicationContext;
   const mounted = mountSolid(
     () => <PluginPage pluginId={descriptor.pluginId} tabId={descriptor.id} />,
@@ -112,6 +118,7 @@ async function mount(options: MountOptions = {}) {
     descriptor,
     gateway,
     snapshot,
+    refresh,
     unmount,
     notify: () => publish(snapshot),
   };
@@ -279,6 +286,8 @@ it.each(["reconnect", "descriptor"] as const)("retires %s frames", async (change
   if (change === "reconnect") {
     fixture.snapshot.phase = "reconnecting";
     fixture.notify();
+    flush();
+    expect(fixture.getFrame()).toBeNull();
     fixture.snapshot.phase = "connected";
     fixture.notify();
     dispatch(staleWindow);
@@ -287,6 +296,7 @@ it.each(["reconnect", "descriptor"] as const)("retires %s frames", async (change
       const frame = fixture.getFrame();
       expect(frame !== null && frame !== fixture.frame).toBe(true);
     });
+    expect(fixture.refresh).toHaveBeenCalledTimes(2);
   } else {
     for (const path of ["/plugins/example/other", pluginPath]) {
       fixture.descriptor.path = path;

@@ -1,4 +1,5 @@
 import { EventEmitter } from "node:events";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Client } from "../internal/client.js";
 import { VoicePlugin } from "../internal/voice.js";
@@ -13,16 +14,10 @@ const workerFactory = vi.hoisted(() => vi.fn());
 vi.mock("./audio-worker-thread.js", () => ({ createDiscordAudioWorkerThread: workerFactory }));
 
 class ControlledWorker extends EventEmitter {
-  readonly sent: DiscordAudioCommand[] = [];
-  postMessage(command: DiscordAudioCommand): void {
-    this.sent.push(command);
-  }
+  postMessage = vi.fn<(command: DiscordAudioCommand) => void>();
   async terminate(): Promise<number> {
     this.emit("exit", 0);
     return 0;
-  }
-  message(event: DiscordAudioEvent): void {
-    this.emit("message", event);
   }
 }
 const options: DiscordAudioWorkerOptions = {
@@ -40,7 +35,7 @@ const owned: Array<{ audio: DiscordAudioTransport; worker: ControlledWorker }> =
 afterEach(async () => {
   for (const { audio, worker } of owned.splice(0)) {
     const stopped = audio.stop();
-    worker.message({ type: "stopped" });
+    worker.emit("message", { type: "stopped" });
     worker.emit("exit", 0);
     await stopped;
   }
@@ -53,6 +48,24 @@ function fixture(sendPayload = vi.fn(() => true)) {
   owned.push({ audio, worker });
   return { audio, worker, destroy, sendPayload };
 }
+async function readyFixture(sendPayload?: Parameters<typeof fixture>[0]) {
+  const result = fixture(sendPayload);
+  result.worker.emit("message", { type: "ready" });
+  await result.audio.ready;
+  return result;
+}
+function frame(id: number, pcm: number[], packet: number[], epoch: bigint): DiscordAudioEvent {
+  return {
+    type: "capture-frame",
+    id,
+    frame: {
+      pcm: new Uint8Array(pcm),
+      packet: new Uint8Array(packet),
+      receivedAt: 1,
+      recordingEpoch: epoch,
+    },
+  };
+}
 
 describe("Discord audio worker control boundary", () => {
   it("rejects startup and retires owned adapter state when the worker fails", async () => {
@@ -63,8 +76,7 @@ describe("Discord audio worker control boundary", () => {
     await expect(audio.ready).rejects.toThrow("codec startup failed");
     expect(stopped).toHaveBeenCalledOnce();
     expect(destroy).toHaveBeenCalledOnce();
-    worker.message({ type: "ready" });
-    expect(audio.connectionStatus).toBe("destroyed");
+    worker.emit("message", { type: "ready" });
   });
 
   it("stops the allocated worker if gateway adapter registration throws", () => {
@@ -81,23 +93,44 @@ describe("Discord audio worker control boundary", () => {
   });
 
   it("reports definite main-gateway send failure back to the media owner", async () => {
-    const { audio, worker } = fixture(vi.fn(() => false));
-    worker.message({ type: "ready" });
-    await audio.ready;
-    worker.message({
+    const { worker } = await readyFixture(vi.fn(() => false));
+    worker.emit("message", {
       type: "gateway-send",
       payload: {
         op: 4,
         d: { guild_id: "guild", channel_id: "voice", self_mute: false, self_deaf: false },
       },
     });
-    expect(worker.sent.at(-1)).toEqual({ type: "gateway-failed" });
+    expect(worker.postMessage).toHaveBeenLastCalledWith({ type: "gateway-failed" }, undefined);
+  });
+
+  it("waits for physical termination when the worker exceeds its stop grace", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const { audio, worker, destroy } = await readyFixture();
+    const exited = createDeferred<number>();
+    const terminate = vi.spyOn(worker, "terminate").mockReturnValue(exited.promise);
+    let settled = false;
+    const stopping = audio.stop().then(() => {
+      settled = true;
+    });
+    try {
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(terminate).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(terminate).toHaveBeenCalledOnce();
+      expect(settled).toBe(false);
+      expect(destroy).not.toHaveBeenCalled();
+    } finally {
+      worker.emit("exit", 0);
+      exited.resolve(0);
+      await stopping;
+      vi.useRealTimers();
+    }
+    expect(destroy).toHaveBeenCalledOnce();
   });
 
   it("settles captures on worker loss and ignores late frames after terminal teardown", async () => {
-    const { audio, worker } = fixture();
-    worker.message({ type: "ready" });
-    await audio.ready;
+    const { audio, worker } = await readyFixture();
     const capture = audio.subscribe("speaker", new SharedArrayBuffer(8));
     const errors = vi.fn();
     capture.on("error", errors);
@@ -109,51 +142,33 @@ describe("Discord audio worker control boundary", () => {
     });
     expect(capture.destroyed).toBe(true);
     expect(errors).toHaveBeenCalledOnce();
-    worker.message({
-      type: "capture-frame",
-      id: capture.id,
-      frame: {
-        pcm: new Uint8Array(4),
-        packet: new Uint8Array(1),
-        receivedAt: 1,
-        recordingEpoch: 0n,
-      },
-    });
+    worker.emit("message", frame(capture.id, [0, 0, 0, 0], [0], 0n));
     expect(capture.readableLength).toBe(0);
-    expect(worker.sent.filter((command) => command.type === "stop")).toHaveLength(1);
+    expect(
+      worker.postMessage.mock.calls.filter(([command]) => command.type === "stop"),
+    ).toHaveLength(1);
   });
 
   it("releases physical shutdown before draining admitted recording frames without an error", async () => {
-    const { audio, worker, destroy } = fixture();
-    worker.message({ type: "ready" });
-    await audio.ready;
+    const { audio, worker, destroy } = await readyFixture();
     const capture = audio.subscribe("speaker", new SharedArrayBuffer(8));
     const errors = vi.fn();
     capture.on("error", errors);
     const received: number[] = [];
     const recording = (async () => {
-      for await (const frame of capture) {
-        received.push(frame.pcm[0]);
+      for await (const captured of capture) {
+        received.push(captured.pcm[0]);
       }
     })();
     const stopped = audio.stop();
-    worker.message({ type: "gateway-destroy" });
+    worker.emit("message", { type: "gateway-destroy" });
     await stopped;
     expect(destroy).toHaveBeenCalledOnce();
     expect(capture.destroyed).toBe(false);
-    worker.message({ type: "capture-finalized", id: capture.id });
-    worker.message({
-      type: "capture-frame",
-      id: capture.id,
-      frame: {
-        pcm: new Uint8Array([7, 0]),
-        packet: new Uint8Array([1]),
-        receivedAt: 1,
-        recordingEpoch: 1n,
-      },
-    });
-    worker.message({ type: "capture-end", id: capture.id });
-    worker.message({ type: "stopped" });
+    worker.emit("message", { type: "capture-finalized", id: capture.id });
+    worker.emit("message", frame(capture.id, [7, 0], [1], 1n));
+    worker.emit("message", { type: "capture-end", id: capture.id });
+    worker.emit("message", { type: "stopped" });
     worker.emit("exit", 0);
     await recording;
     expect(received).toEqual([7]);

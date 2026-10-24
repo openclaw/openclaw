@@ -9,7 +9,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resetActiveCronTaskRunsForTests } from "../cron/service/active-run-cancellation.test-support.js";
 import { resolveSelectedCronJobsStorePath } from "../cron/store/paths.js";
 import type { CronJobCreate } from "../cron/types.js";
-import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import type { ManagedRun, RunExit } from "../process/supervisor/types.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 
@@ -20,12 +19,11 @@ type RunCronIsolatedAgentTurnMock = (params: {
 const {
   enqueueSystemEventMock,
   systemEventReceiptRemoveMock,
-  requestHeartbeatMock,
-  requestHeartbeatAndWaitMock,
   loadConfigMock,
   fetchWithSsrFGuardMock,
   sendCronAnnouncePayloadStrictMock,
   runCronIsolatedAgentTurnMock,
+  runCronSessionTurnMock,
   getGlobalHookRunnerMock,
   runCronChangedMock,
   abortAndDrainEmbeddedAgentRunMock,
@@ -39,10 +37,6 @@ const {
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   systemEventReceiptRemoveMock: vi.fn(() => true),
-  requestHeartbeatMock: vi.fn(),
-  requestHeartbeatAndWaitMock: vi.fn<(...args: unknown[]) => Promise<HeartbeatRunResult>>(
-    async () => ({ status: "ran", durationMs: 1 }),
-  ),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
   sendCronAnnouncePayloadStrictMock: vi.fn<
@@ -62,6 +56,9 @@ const {
     status: "ok",
     summary: "ok",
   })),
+  runCronSessionTurnMock: vi.fn<typeof import("../cron/session-run.js").runCronSessionTurn>(
+    async () => ({ status: "ok", summary: "ok" }),
+  ),
   runCronChangedMock: vi.fn(async (_event: unknown, _context?: unknown) => {}),
   getGlobalHookRunnerMock: vi.fn(() => ({
     hasHooks: (hookName: string) => hookName === "cron_changed",
@@ -115,42 +112,15 @@ const {
   isAgentDeletionBlockedMock: vi.fn((_agentId: string) => false),
 }));
 
-function enqueueSystemEvent(text: string, opts?: unknown) {
-  return enqueueSystemEventMock(text, opts);
-}
-
-function enqueueSystemEventWithReceipt(text: string, opts?: unknown) {
-  const result = enqueueSystemEventMock(text, opts);
-  if (result === false || result === null) {
-    return null;
-  }
-  return systemEventReceiptRemoveMock;
-}
-
-// mock-isolation: Keep system events in the fixture; real enqueueing persists and wakes session work.
-vi.mock("../infra/system-events.js", () => ({
-  enqueueSystemEvent,
-  enqueueSystemEventWithReceipt,
-}));
-
-vi.mock("../infra/heartbeat-wake.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
-    "../infra/heartbeat-wake.js",
-  );
+// mock-isolation: Legacy enqueue wiring is synthetic; automation notice preparation stays real.
+vi.mock("../infra/system-events.js", async (importOriginal) => {
+  const { createCronSystemEventMocks } =
+    await import("./server-cron.system-event-receipt.test-support.js");
   return {
-    ...actual,
-    requestHeartbeat: requestHeartbeatMock,
-    requestHeartbeatAndWait: requestHeartbeatAndWaitMock,
+    ...(await importOriginal<typeof import("../infra/system-events.js")>()),
+    ...createCronSystemEventMocks(enqueueSystemEventMock, systemEventReceiptRemoveMock),
   };
 });
-
-// mock-isolation: Keep heartbeat enrollment inert while testing cron lifecycle wiring.
-vi.mock("../infra/heartbeat-runner.js", () => ({
-  // Heartbeat monitor convergence enumerates agents at cron start; keep it
-  // inert so these tests exercise cron wiring, not heartbeat enrollment.
-  resolveHeartbeatAgents: () => [],
-  resolveHeartbeatSchedulerSeed: () => "test-seed",
-}));
 
 vi.mock("../infra/restart-coordinator.js", async () => {
   const actual = await vi.importActual<typeof import("../infra/restart-coordinator.js")>(
@@ -195,6 +165,13 @@ vi.mock("../cron/delivery.js", async () => {
 vi.mock("../cron/isolated-agent.js", () => ({
   runCronIsolatedAgentTurn: runCronIsolatedAgentTurnMock,
 }));
+
+// mock-isolation: Adapter routing retains Cron custody without invoking controller/model execution.
+vi.mock("../cron/session-run.js", () => ({
+  runCronSessionTurn: runCronSessionTurnMock,
+}));
+
+export { runCronIsolatedAgentTurnMock, runCronSessionTurnMock };
 
 // mock-isolation: Hooks are fixture-owned so registered host plugins cannot run during cron tests.
 vi.mock("../plugins/hook-runner-global.js", () => ({
@@ -323,6 +300,15 @@ export function addSystemEventJob(
   return addCronJob(service, name, { kind: "systemEvent", text }, overrides);
 }
 
+export function addAgentTurnJob(
+  service: CronServiceFixture,
+  name: string,
+  message: string,
+  overrides: CronJobOverrides = {},
+) {
+  return addCronJob(service, name, { kind: "agentTurn", message }, overrides);
+}
+
 function runExit(overrides: Partial<RunExit> = {}): RunExit {
   return {
     reason: "manual-cancel",
@@ -377,12 +363,11 @@ export function resetGatewayCronMocks() {
   resetActiveCronTaskRunsForTests();
   enqueueSystemEventMock.mockClear();
   systemEventReceiptRemoveMock.mockClear();
-  requestHeartbeatMock.mockClear();
-  requestHeartbeatAndWaitMock.mockReset();
   loadConfigMock.mockClear();
   fetchWithSsrFGuardMock.mockClear();
   sendCronAnnouncePayloadStrictMock.mockClear();
   runCronIsolatedAgentTurnMock.mockClear();
+  runCronSessionTurnMock.mockClear();
   runCronChangedMock.mockClear();
   getGlobalHookRunnerMock.mockClear();
   abortAndDrainEmbeddedAgentRunMock.mockClear();

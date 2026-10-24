@@ -173,7 +173,8 @@ export function maintainSessionTranscriptIndexStatus(db: EngineConnection): {
   )!;
   // An unknown sibling revision only blocks the clean receipt; resetting here would rescan
   // the first batch forever and never reach later dirty sessions.
-  if (state.schema_version !== schema.schemaVersion) {
+  const resetPending = state.schema_version !== schema.schemaVersion;
+  if (resetPending) {
     executeSqliteQuerySync(db, temporary.deleteFrom("openclaw_transcript_index_pending"));
     state.complete = 0;
     state.after_session = null;
@@ -184,15 +185,17 @@ export function maintainSessionTranscriptIndexStatus(db: EngineConnection): {
     state.sibling_write_revision = siblingWriteRevision ?? -1;
   }
   const candidates = new Set(
-    executeSqliteQuerySync(
-      db,
-      temporary
-        .selectFrom("openclaw_transcript_index_pending")
-        .select("session_id")
-        .where("state", "=", 0)
-        .orderBy("session_id")
-        .limit(state.complete ? MAX_SESSIONS : MAX_SESSIONS / 2),
-    ).rows.map((row) => row.session_id),
+    resetPending
+      ? []
+      : executeSqliteQuerySync(
+          db,
+          temporary
+            .selectFrom("openclaw_transcript_index_pending")
+            .select("session_id")
+            .where("state", "=", 0)
+            .orderBy("session_id")
+            .limit(state.complete ? MAX_SESSIONS : MAX_SESSIONS / 2),
+        ).rows.map((row) => row.session_id),
   );
   // Reserve traversal work despite local churn; TEMP candidates retain deleted sessions.
   let reachedTraversalEnd = false;
@@ -234,7 +237,8 @@ export function maintainSessionTranscriptIndexStatus(db: EngineConnection): {
                 )
                 .select("needs_reconcile")
                 .as("needs_reconcile"),
-            ),
+            )
+            .orderBy("candidate.value"),
         ).rows;
   const pending: { session_id: string; state: number }[] = [];
   const remainingRows = projectionTables.map(() => MAX_ORPHAN_ROWS);
@@ -290,16 +294,19 @@ export function maintainSessionTranscriptIndexStatus(db: EngineConnection): {
       temporary.insertInto("openclaw_transcript_index_pending").values(pending),
     );
   }
+  // After a reset, this transaction rebuilt the entire queue from these candidates.
   const hasUnknown =
     state.complete !== 0 &&
-    executeSqliteQueryTakeFirstSync(
-      db,
-      temporary
-        .selectFrom("openclaw_transcript_index_pending")
-        .select("session_id")
-        .where("state", "=", 0)
-        .limit(1),
-    ) !== undefined;
+    (resetPending
+      ? pending.some((row) => row.state === 0)
+      : executeSqliteQueryTakeFirstSync(
+          db,
+          temporary
+            .selectFrom("openclaw_transcript_index_pending")
+            .select("session_id")
+            .where("state", "=", 0)
+            .limit(1),
+        ) !== undefined);
   // Rebuild known work after enumeration without waiting for sibling writers to become quiet.
   const traversalComplete = reachedTraversalEnd || (state.complete !== 0 && !hasUnknown);
   // Resume fair traversal when local churn outgrows queue classification. Sibling commits
@@ -325,14 +332,16 @@ export function maintainSessionTranscriptIndexStatus(db: EngineConnection): {
       })
       .where("id", "=", 1),
   );
-  const sessionIds = executeSqliteQuerySync(
-    db,
-    temporary
-      .selectFrom("openclaw_transcript_index_pending")
-      .select("session_id")
-      .where("state", "=", 1)
-      .orderBy("session_id"),
-  ).rows.map((row) => row.session_id);
+  const sessionIds = resetPending
+    ? pending.filter((row) => row.state === 1).map((row) => row.session_id)
+    : executeSqliteQuerySync(
+        db,
+        temporary
+          .selectFrom("openclaw_transcript_index_pending")
+          .select("session_id")
+          .where("state", "=", 1)
+          .orderBy("session_id"),
+      ).rows.map((row) => row.session_id);
   return {
     sessionIds,
     hasMore: siblingWriteRevision === undefined || !state.complete || hasUnknown,

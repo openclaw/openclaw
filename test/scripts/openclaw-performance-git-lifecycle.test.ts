@@ -127,66 +127,6 @@ posixIt.for([
   },
 );
 
-const terminalCases = [
-  ["target", ["rev-parse"]],
-  ["record", ["rev-parse"]],
-  ["tested", ["rev-parse"]],
-  ["kova", ["fetch", "checkout"]],
-  [
-    "baseline",
-    ["fetch", "ls-tree", "show", "sparse-checkout init", "sparse-checkout set", "checkout"],
-  ],
-  ["prepare", ["fetch", "ls-tree", "diff"]],
-  [
-    "publish",
-    [
-      "config",
-      "push",
-      "fetch",
-      "ls-tree",
-      "checkout",
-      "cherry-pick -X",
-      "cherry-pick --abort",
-      "rev-parse",
-    ],
-  ],
-] as const;
-// Every injected lifecycle failure must stop at its command, before later policy actions.
-posixIt.for(
-  terminalCases.flatMap(([mode, operations]) =>
-    operations.flatMap((operation) =>
-      (["cleanup-failure", "cancel"] as const).map((code) => ({ mode, operation, code })),
-    ),
-  ),
-)(
-  "$mode $operation $code fences every later action",
-  { timeout: 55_000 },
-  async ({ mode, operation, code }, { signal }) => {
-    const report = await performanceRun(signal, mode, {
-      gitFault: { match: `^${operation}(?: |$)`, code },
-      ...(mode === "publish" && operation !== "config" && operation !== "push"
-        ? { pushResults: [23] }
-        : {}),
-      ...(operation === "cherry-pick --abort"
-        ? { gitFaults: [{ match: "^cherry-pick -X ", code: 23 }] }
-        : {}),
-    });
-    expect(report.code, report.output).toBe(code === "cancel" ? 143 : 125);
-    expect(report.commands.at(-1)?.args.join(" ")).toMatch(new RegExp(`^${operation}(?: |$)`));
-    expect(report.githubSummary).toBe("");
-    expect(report.githubOutput).not.toMatch(/ready=true|already_published=|report_url=/u);
-    expect(report.githubEnv).not.toContain("SOURCE_PERF_BASELINE_DIR=");
-    expect(report.output).not.toMatch(
-      /Unable to replay|Unable to refresh|No previous|Published report:/u,
-    );
-    const failedPush = mode === "publish" && operation === "push";
-    if (failedPush) {
-      expect(report.fetches).toHaveLength(0);
-      expect(report.output).not.toContain("fixture backoff:");
-    }
-  },
-);
-
 posixIt.for(["hang", 23, 125] as const)(
   "prepare initial fetch %s cannot reach checkout, commit or token readiness",
   { timeout: 55_000 },

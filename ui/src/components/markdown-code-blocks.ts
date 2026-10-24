@@ -17,6 +17,7 @@ registerCodeBlocksEnglish();
 const blockArtCopyPayloadPrefix = "openclaw:block-art-code:";
 const blockArtCodeBlockCopyPayloadEncoding = "block-art-json";
 const CODE_PREVIEW_LINE_COUNT = 7;
+const CODE_STICKY_ACTIONS_LINE_THRESHOLD = 300;
 
 type Highlighter = typeof import("./markdown-highlight-runtime.ts").highlightCodeHtml;
 const [readHighlighter, setHighlighter] = createSignal<Highlighter | null | undefined>(undefined);
@@ -111,8 +112,20 @@ function handleCodeBlockDisclosure(target: Element): void {
   }
   const expandButton = target.closest<HTMLButtonElement>(".code-block-expand");
   if (expandButton) {
+    const transferFocus = expandButton.matches(":focus-visible");
     wrapper.classList.add("is-expanded");
     expandButton.setAttribute("aria-expanded", "true");
+    // Revealing hides this one-way control. Keep keyboard readers on the code
+    // without moving pointer focus or scrolling the transcript to the block's start.
+    if (transferFocus) {
+      const viewport = expandButton.ownerDocument.getElementById(
+        expandButton.getAttribute("aria-controls") ?? "",
+      );
+      if (viewport) {
+        viewport.tabIndex = -1;
+        viewport.focus({ preventScroll: true });
+      }
+    }
   }
   const jsonMode = target.closest<HTMLButtonElement>(".code-block-json-mode");
   if (jsonMode) {
@@ -203,11 +216,13 @@ export function renderMarkdownCodeBlock(
   if (!copyEnabled && !interactive) {
     return codeBlock;
   }
+  const lineCount = countCodeBlockLines(text);
+  const wrapperClass = `code-block-wrapper${lineCount > CODE_STICKY_ACTIONS_LINE_THRESHOLD ? " code-block-wrapper--long" : ""}`;
   const copyButton = copyEnabled ? renderCodeBlockCopyButton(options.copyText ?? text) : "";
   // Reveal and wrap controls are inert without a host that runs the code-block
   // lifecycle, so only interaction-owning hosts get the collapsible markup.
   if (!interactive) {
-    return `<div class="code-block-wrapper">${renderCodeBlockHeader(lang, copyButton)}${codeBlock}</div>`;
+    return `<div class="${wrapperClass}">${renderCodeBlockHeader(lang, copyButton)}${codeBlock}</div>`;
   }
   const jsonSource =
     !blockArt && highlight !== false && (!lang || lang.toLowerCase() === "json")
@@ -216,7 +231,7 @@ export function renderMarkdownCodeBlock(
   const tree = jsonSource ? renderMarkdownJsonTree(jsonSource) : "";
   const hiddenLineCount = ["text", "md", "markdown"].includes(lang.trim().toLowerCase())
     ? 0
-    : Math.max(0, countCodeBlockLines(text) - CODE_PREVIEW_LINE_COUNT);
+    : Math.max(0, lineCount - CODE_PREVIEW_LINE_COUNT);
   const hiddenCount = { count: String(hiddenLineCount) };
   const expandLabel = t(
     hiddenLineCount === 1 ? "chat.codeBlock.showHiddenLine" : "chat.codeBlock.showHiddenLines",
@@ -230,12 +245,12 @@ export function renderMarkdownCodeBlock(
     ? `<button type="button" class="code-block-expand" data-markdown-key="expand" aria-label="${escapeHtml(expandLabel)}" aria-expanded="false"><span class="code-block-chevron" aria-hidden="true"></span><span>${escapeHtml(hiddenLabel)}</span></button>`
     : "";
   const wrapLabel = escapeHtml(t("chat.codeBlock.enableWrap"));
-  const wrapButton = `<button type="button" class="code-block-wrap" data-markdown-key="wrap" aria-label="${wrapLabel}" title="${wrapLabel}" aria-pressed="false"><span class="code-block-wrap__enable" aria-hidden="true"></span><span class="code-block-wrap__disable" aria-hidden="true"></span></button>`;
+  const wrapButton = `<button type="button" class="code-block-wrap" data-markdown-key="wrap" aria-label="${wrapLabel}" title="${wrapLabel}" aria-pressed="false"><span class="code-block-wrap__icon" aria-hidden="true"></span></button>`;
   const header = renderCodeBlockHeader(
     lang,
     `${tree ? renderMarkdownJsonModes() : ""}${wrapButton}${copyButton}`,
   );
-  return `<div class="code-block-wrapper${tree ? " code-block-wrapper--json" : ""}${hiddenLineCount ? " is-collapsible" : ""}">${header}${tree}<div class="code-block-viewport" data-markdown-key="viewport">${codeBlock}</div>${expandButton}</div>`;
+  return `<div class="${wrapperClass}${tree ? " code-block-wrapper--json" : ""}${hiddenLineCount ? " is-collapsible" : ""}">${header}${tree}<div class="code-block-viewport" data-markdown-key="viewport">${codeBlock}</div>${expandButton}</div>`;
 }
 
 function countCodeBlockLines(text: string): number {

@@ -9,6 +9,10 @@ import {
 } from "./worker-operation-registry.js";
 
 const loaders = {
+  sandboxPersistentExec: () =>
+    import("../agents/sandbox/persistent-exec-store.kernel.js").then(
+      (m) => m.sandboxPersistentExecReadOperations,
+    ),
   worktrees: async () => {
     const [
       { worktreeReadOperations },
@@ -87,6 +91,10 @@ const loaders = {
     ),
   // Session-state handlers also require this kernel in the read-worker graph.
   sessionUpstream: async () => sessionUpstreamReadOperations,
+  automationProactive: () =>
+    import("../cron/proactive-job-receipt.read.worker.js").then(
+      (m) => m.proactiveJobReceiptReadOperations,
+    ),
   // Schema readers already require this kernel in the read-worker graph.
   diagnostic: async () => diagnosticReadOperations,
   restartLifecycle: () =>

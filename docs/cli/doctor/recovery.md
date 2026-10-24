@@ -123,6 +123,12 @@ OpenClaw process, such as a CLI command, to release state or close its agent
 database, printing the holder's PID and progress (see [how updates run](/cli/update/how-updates-run#when-restart-is-skipped-or-fails)). A shared-state database from a newer OpenClaw build
 stays unchanged; rerun Doctor with a build that supports that database version.
 
+On Windows, Doctor can release a legacy agent database lease with no recorded
+process-start identity when its acquisition predates the current boot by more
+than five minutes. It warns with the released lease ID. Same-boot leases and
+leases whose boot time cannot be read still block maintenance: stop the Gateway
+and other OpenClaw processes, or reboot, then rerun `openclaw doctor --fix`.
+
 If Doctor's output pipe closes (for example, `openclaw doctor --fix | head -20`),
 or Doctor receives SIGINT, SIGTERM, or SIGPIPE during maintenance, it waits for
 admitted repair work and service restoration before exiting. An ordinary repair

@@ -72,11 +72,6 @@ export class CodexCatalogWorker {
         // Keep malformed-payload diagnostics off the main thread.
       }
       if (parsed !== undefined) {
-        // Cache callbacks observe closure and cancellation before asynchronous delivery.
-        await Promise.resolve();
-        if (this.closed) {
-          return undefined;
-        }
         const attempt = attempts.get(route.id);
         const projection = attempt?.catalogProjection;
         return projectCodexCatalogMessage(

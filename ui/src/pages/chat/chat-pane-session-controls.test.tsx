@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { createComponent, createMemo, Show } from "solid-js";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type {
   ChatAccountSelection,
   UsersListModelAccountsResult,
@@ -25,6 +25,7 @@ import {
   type GatewayRequestHandler,
 } from "../../test-helpers/gateway-client.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
+import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
@@ -39,10 +40,12 @@ import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { ChatModelAccountSectionView } from "./components/chat-model-account-control.tsx";
+import { expandModelProviders } from "./components/chat-model-picker.test-support.tsx";
 import { ChatPermissionPicker } from "./components/chat-permission-picker.tsx";
 import { adoptStartedChatRun, reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
 type ComposerControlsParams = Parameters<typeof renderChatPaneComposerControls>[0];
+beforeEach(installModelPickerLayout);
 
 function renderControls(
   state: ChatPageHost,
@@ -320,6 +323,10 @@ describe("chat pane composer controls", () => {
       const state = makeChatHost({
         connected,
         requestHandlers: {},
+        sessionsResult: createSessionsListResult({
+          model: "cached-model",
+          modelProvider: "openai",
+        }),
         chatModelCatalog: cached
           ? [{ id: "cached-model", name: "Cached Model", provider: "openai", available: false }]
           : [],
@@ -340,6 +347,8 @@ describe("chat pane composer controls", () => {
       await waitForSolid(() =>
         expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
       );
+
+      expandModelProviders(container);
 
       expect(container.querySelectorAll(".chat-composer-model-control")).toHaveLength(1);
       expect(container.querySelector('[data-chat-provider-usage="true"]')).toBeNull();

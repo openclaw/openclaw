@@ -402,7 +402,7 @@ export function runWriter(
   );
 }
 
-export function runUnifiedBuild(command: CommandFixture, root: string) {
+export function runUnifiedBuild(command: CommandFixture, root: string, runtimeConfig: string) {
   return runFixtureModule(
     command,
     root,
@@ -413,8 +413,8 @@ await withDistArtifactOwnership(process.cwd(), async () => {
   const steps = resolveBuildAllSteps("full").filter(step =>
     ["tsdown", "write-unified-entry-dts"].includes(step.label)).map(step =>
       step.label === "tsdown"
-        // This fixture materializes only the unified source graph.
-        ? { ...step, args: [...step.args, "--config", "tsdown.config.ts", "--filter", ${JSON.stringify(TSDOWN_UNIFIED_CONFIG_GROUP)}] }
+        // Keep runtime compilation on the caller-selected fixture graph.
+        ? { ...step, args: [...step.args, "--config", ${JSON.stringify(runtimeConfig)}, "--filter", ${JSON.stringify(TSDOWN_UNIFIED_CONFIG_GROUP)}] }
         : step);
   const result = await runBuildAllSteps("full", { steps });
   process.exitCode = result.exitCode;

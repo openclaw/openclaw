@@ -1,7 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import { loadCodexDynamicToolBuildTestFixture } from "../extensions/codex/test-api.js";
-import { preparePluginHarnessParams } from "../src/agents/harness/plugin-attempt-params.js";
+import { preparePluginHarnessParams as prepareHarness } from "../src/agents/harness/plugin-attempt-params.js";
 import { resolveSessionStorePathCore } from "../src/config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../src/config/sessions/session-accessor.entry.js";
 import type { SessionEntry } from "../src/config/sessions/types.js";
@@ -11,6 +11,16 @@ import { createSessionRowCapabilityReader } from "../src/gateway/session-row-pro
 import { withPluginRuntimeGatewayContextResolver } from "../src/plugins/runtime/gateway-request-scope.js";
 import { beginAgentDeletionJournal } from "../src/test-utils/agent-deletion-journal.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
+
+const harness = {
+  id: "codex",
+  label: "Codex",
+  conversationToolPolicySupport: "exact" as const,
+  supports: () => ({ supported: true as const }),
+  async runAttempt() {
+    throw new Error("Policy preparation must not dispatch a native turn");
+  },
+};
 
 it.each(["before preparation", "during tool construction"])(
   "builds harness search policy when deletion dirties topology %s",
@@ -27,14 +37,8 @@ it.each(["before preparation", "during tool construction"])(
         inheritedToolPolicyVersion: 1,
         inheritedToolDeny: ["web_search"],
       };
-      await upsertSessionEntryCore(
-        {
-          agentId: "main",
-          sessionKey,
-          storePath: resolveSessionStorePathCore(undefined, { agentId: "main" }),
-        },
-        entry,
-      );
+      const storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+      await upsertSessionEntryCore({ agentId: "main", sessionKey, storePath }, entry);
       let topologyDirty = false;
       const readProjection = createSessionRowCapabilityReader({
         state: () => ({ disposed: false, topologyDirty }),
@@ -81,21 +85,7 @@ it.each(["before preparation", "during tool construction"])(
           if (deletionTiming === "before preparation") {
             beginDeletion();
           }
-          const prepared = await preparePluginHarnessParams(
-            params,
-            {
-              id: "codex",
-              label: "Codex",
-              conversationToolPolicySupport: "exact",
-              supports: () => ({ supported: true }),
-              async runAttempt() {
-                throw new Error("Policy preparation must not dispatch a native turn");
-              },
-            },
-            false,
-            () => {},
-            false,
-          );
+          const prepared = await prepareHarness(params, harness, false, () => {}, false);
           const tools = await buildDynamicToolsForTest(prepared, workspaceDir, {
             onPersistentWebSearchPolicyResolved: (value) => (persistent = value),
             onWebSearchPolicyResolved: (value) => (allowed = value),

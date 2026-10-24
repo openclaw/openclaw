@@ -261,6 +261,43 @@ describe("Doctor with a deleted agent database", () => {
     );
   });
 
+  it("keeps a configured inheritance owner's credentials when it is deleted after detection", async () => {
+    const sourcePath = legacyDatabase({
+      agentId: "ops",
+      path: path.join(stateDir, "agents", "ops", "agent", "openclaw-agent.sqlite"),
+    });
+    {
+      using source = new DatabaseSync(sourcePath);
+      source
+        .prepare("INSERT INTO auth_profile_store VALUES ('primary', ?, 1)")
+        .run(JSON.stringify(profile("synthetic-owner-key")));
+    }
+    const detected = detectSharedAuthStoreMigration({
+      stateDir,
+      env,
+      doctorOnlyStateMigrations: true,
+      config: {
+        agents: { defaults: { authInheritance: { agentId: "ops" } }, entries: { ops: {} } },
+      },
+    });
+    deleteAgent("ops", path.dirname(sourcePath), "delete-inherited-auth");
+    const bytes = fs.readFileSync(sourcePath);
+
+    const result = await migrateSharedAuthStore({ detected, stateDir, env });
+
+    expect(result).toMatchObject({ changes: [], outcome: "skipped" });
+    expect(result.warnings.join("\n")).toContain("held for agent ops");
+    expect(fs.readFileSync(sourcePath)).toEqual(bytes);
+    using state = new DatabaseSync(resolveOpenClawStateSqlitePath(env), { readOnly: true });
+    expect(
+      state
+        .prepare(
+          "SELECT state_key FROM config_machine_state WHERE state_key IN ('auth.sharedStore', 'authProfiles.store')",
+        )
+        .all(),
+    ).toEqual([]);
+  });
+
   it("records shared auth as held for deleted main even with a surviving physical registration", async () => {
     const sourcePath = legacyDatabase({
       agentId: "alive",
@@ -292,7 +329,7 @@ describe("Doctor with a deleted agent database", () => {
     await expect(
       noteStateIntegrity(
         { agents: { ownership: "explicit", entries: { main: {} } }, plugins: { enabled: false } },
-        { confirmRuntimeRepair: async () => false, note },
+        { confirmRuntimeRepair: async () => false },
       ),
     ).resolves.toBeUndefined();
     expect(fs.readFileSync(sourcePath)).toEqual(bytes);

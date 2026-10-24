@@ -52,6 +52,7 @@ import {
   releaseWorktreeRunLeaseRowAsync,
 } from "./run-lease-store.js";
 import {
+  makeWorktreeRecord,
   materializeManagedWorktreeFixture,
   useManagedWorktreeTestRepository,
 } from "./service.test-support.js";
@@ -128,19 +129,12 @@ async function fixture() {
   const root = dirs.make("worktree-run-end-worker-");
   const env = { ...process.env, OPENCLAW_STATE_DIR: root };
   const database = openOpenClawStateDatabase({ env });
-  await insert(env, {
-    id: "synthetic",
-    name: "synthetic",
-    repoFingerprint: "0123456789abcdef",
-    repoRoot: root,
-    path: root,
-    branch: "synthetic",
-    baseRef: "HEAD",
-    ownerKind: "session",
-    ownerId: "agent:main:synthetic",
-    createdAt: 1,
-    lastActiveAt: 1,
-  });
+  await insert(
+    env,
+    makeWorktreeRecord(root, "synthetic", {
+      ownerId: "agent:main:synthetic",
+    }),
+  );
   const claim = {
     worktreeId: "synthetic",
     token: "first",
@@ -457,11 +451,13 @@ it("preserves committed bytes after reply loss, rolls back refused commits, and 
     await expect(chunk(1)).rejects.toSatisfy((error: unknown) => {
       expect(error).toMatchObject({ code: "outcome-unknown" });
       expect(formatErrorMessageWithCode(error)).toContain(replyFailure.message);
+      const storageOutcome = classifyGatewayStorageFailure(error);
+      expect(storageOutcome).toBe("session_actor_reconciliation");
       expect(
         renderAssistantRequestFailureCopy({
-          storageFailure: classifyGatewayStorageFailure(error),
+          storageFailure: storageOutcome,
         }),
-      ).toContain("disk is full. Free up space");
+      ).toMatch(/check.*history.*before trying again/i);
       return true;
     });
     expect(assertCurrent).toThrow("owner or lifecycle changed");

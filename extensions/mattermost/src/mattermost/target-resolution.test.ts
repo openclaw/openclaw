@@ -1,6 +1,11 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MattermostClient } from "./client.js";
-import { parseMattermostTarget, resolveMattermostOpaqueTarget } from "./target-resolution.js";
+import {
+  parseMattermostTarget,
+  resolveMattermostOpaqueTarget,
+  type MattermostTarget,
+} from "./target-resolution.js";
 
 const {
   resolveMattermostAccount,
@@ -33,7 +38,7 @@ const directoryAccount = (accountId: string, enabled = true) => ({
 
 async function expectRepeatedResolution(input: string, kind: "channel" | "group") {
   const params = { input, client: fixtureClient() };
-  const expected = { kind, id: input, to: `channel:${input}` };
+  const expected = { kind, to: `channel:${input}` };
   await expect(resolveMattermostOpaqueTarget(params)).resolves.toEqual(expected);
   await expect(resolveMattermostOpaqueTarget(params)).resolves.toEqual(expected);
 }
@@ -64,12 +69,34 @@ describe("mattermost target resolution", () => {
     vi.useRealTimers();
   });
 
-  it("recognizes ID-shaped values", () => {
-    expect(parseMattermostTarget("abcd1234abcd1234abcd1234ab")).toEqual({
-      kind: "channel",
-      id: "abcd1234abcd1234abcd1234ab",
-    });
-    expect(parseMattermostTarget("short")).toEqual({ kind: "channel-name", name: "short" });
+  it.each<[string, MattermostTarget]>([
+    ["abcd1234abcd1234abcd1234ab", { kind: "channel", id: "abcd1234abcd1234abcd1234ab" }],
+    ["channel:abcd1234abcd1234abcd1234ab", { kind: "channel", id: "abcd1234abcd1234abcd1234ab" }],
+    ["short", { kind: "channel-name", name: "short" }],
+    [" CHANNEL: #General ", { kind: "channel-name", name: "General" }],
+    [
+      "channel:ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+      { kind: "channel-name", name: "ABCDEFGHIJKLMNOPQRSTUVWXYZ" },
+    ],
+    ["channel:##general", { kind: "channel-name", name: "#general" }],
+    ["channel:@alice", { kind: "channel-name", name: "@alice" }],
+    ["channel:user:abc", { kind: "channel-name", name: "user:abc" }],
+    ["channel:mattermost:abc", { kind: "channel-name", name: "mattermost:abc" }],
+    ["channel:channel:general", { kind: "channel-name", name: "channel:general" }],
+    [" USER: abc ", { kind: "user", id: "abc" }],
+    ["mattermost:abc", { kind: "user", id: "abc" }],
+    [" @alice ", { kind: "user", username: "alice" }],
+  ])("parses target %j without reinterpreting channel names", (input, expected) => {
+    expect(parseMattermostTarget(input)).toEqual(expected);
+  });
+
+  it.each([
+    ["channel: ", "Channel id is required for Mattermost sends"],
+    ["channel: # ", "Channel name is required for Mattermost sends"],
+    ["user: ", "User id is required for Mattermost sends"],
+    ["mattermost: ", "User id is required for Mattermost sends"],
+  ])("rejects empty explicit target %j", (input, message) => {
+    expect(() => parseMattermostTarget(input)).toThrow(message);
   });
 
   it("skips explicit targets before account resolution", async () => {
@@ -113,7 +140,9 @@ describe("mattermost target resolution", () => {
     expect(fetchMattermostUser).toHaveBeenCalledTimes(1);
 
     vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-    await resolveMattermostOpaqueTarget(params);
+    fetchMattermostUser.mockRejectedValueOnce(new Error("Mattermost API 404 Not Found"));
+    fetchMattermostChannel.mockResolvedValue({ type: "P" });
+    await expect(resolveMattermostOpaqueTarget(params)).resolves.toMatchObject({ kind: "group" });
     expect(fetchMattermostUser).toHaveBeenCalledTimes(2);
   });
 
@@ -130,6 +159,55 @@ describe("mattermost target resolution", () => {
     await expectRepeatedResolution("fail1234abcd1234abcd1234ab", "channel");
     expect(fetchMattermostUser).toHaveBeenCalledTimes(2);
     expect(fetchMattermostChannel).toHaveBeenCalledTimes(2);
+    fetchMattermostChannel.mockResolvedValue({ type: "P" });
+    await expect(
+      resolveMattermostOpaqueTarget({
+        input: "fail1234abcd1234abcd1234ab",
+        client: fixtureClient(),
+      }),
+    ).resolves.toMatchObject({ kind: "group" });
+    expect(fetchMattermostChannel).toHaveBeenCalledTimes(3);
+  });
+
+  it("coalesces cold lookups only within the same credential and server", async () => {
+    const release = createDeferred<void>();
+    const input = "j".repeat(26);
+    fetchMattermostUser.mockImplementation(async () => {
+      await release.promise;
+      return { id: input };
+    });
+    const client = fixtureClient("joined-token");
+    const pending = [
+      resolveMattermostOpaqueTarget({ input, client }),
+      resolveMattermostOpaqueTarget({ input, client }),
+      resolveMattermostOpaqueTarget({ input, client: fixtureClient("other-token") }),
+      resolveMattermostOpaqueTarget({
+        input,
+        client: fixtureClient("joined-token", "https://other.example.com"),
+      }),
+    ];
+    release.resolve();
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(3);
+    expect(await Promise.all(pending)).toEqual(
+      Array.from({ length: 4 }, () => ({ kind: "user", to: `user:${input}` })),
+    );
+  });
+
+  it("bounds retained targets without refreshing insertion order on a cache hit", async () => {
+    fetchMattermostUser.mockResolvedValue({ id: "bounded-user" });
+    const client = fixtureClient("bounded-token");
+    const resolve = (index: number) =>
+      resolveMattermostOpaqueTarget({ input: index.toString(36).padStart(26, "0"), client });
+    for (let index = 0; index < 1024; index++) {
+      await resolve(index);
+    }
+    await resolve(0);
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(1024);
+    await resolve(1024);
+    await resolve(1024);
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(1025);
+    await resolve(0);
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(1026);
   });
 
   it("uses the configured account for directory discovery", async () => {

@@ -340,6 +340,12 @@ describe("voice-call CLI status fallback", () => {
         "Gateway responded but voicecall failed: Voice call runtime generation is retired; use the current registration",
     },
     {
+      name: "missing continue method",
+      error: gatewayRequestError("unknown method: voicecall.continue.start"),
+      args: continueArgs,
+      message: "Gateway responded but voicecall failed: unknown method: voicecall.continue.start",
+    },
+    {
       name: "credential",
       error: gatewayCredentialsError("gateway voicecall.status requires credentials"),
       args: ["status", "--json"],
@@ -352,6 +358,7 @@ describe("voice-call CLI status fallback", () => {
       const ensureRuntime = vi.fn();
       await expect(runCli(buildProgram({}, {}, ensureRuntime), args)).rejects.toThrow(message);
       expect(ensureRuntime).not.toHaveBeenCalled();
+      expect(callGatewayFromCliMock).toHaveBeenCalledOnce();
       if (name === "credential") {
         expect(loadActiveCallsFromStoreMock).not.toHaveBeenCalled();
       }
@@ -613,20 +620,6 @@ describe("voice-call CLI status fallback", () => {
       "voicecall.start",
       { json: true, timeout: String(MAX_TIMER_TIMEOUT_MS) },
       { to: "+15550001111", mode: "conversation" },
-      { progress: false },
-    );
-  });
-
-  it("caps oversized legacy continue timeouts through the command", async () => {
-    callGatewayFromCliMock
-      .mockRejectedValueOnce(gatewayRequestError("unknown method: voicecall.continue.start"))
-      .mockResolvedValueOnce({ success: true, transcript: "done" });
-    const program = buildProgram({}, { transcriptTimeoutMs: Number.MAX_SAFE_INTEGER });
-    await runCli(program, continueArgs);
-    expect(callGatewayFromCliMock).toHaveBeenLastCalledWith(
-      "voicecall.continue",
-      { json: true, timeout: String(MAX_TIMER_TIMEOUT_MS) },
-      { callId: "call-1", message: "hello" },
       { progress: false },
     );
   });

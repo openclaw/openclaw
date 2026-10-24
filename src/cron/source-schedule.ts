@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { cronStreamScheduleKey } from "./stream-schedule.js";
-import type { CronJob, CronSchedule } from "./types.js";
+import type { CronJob, CronSchedule, CronStoredJob } from "./types.js";
 
 export function isCronEventSchedule(
   value: unknown,
@@ -20,9 +20,12 @@ export function createCronSourceIdentity(): string {
   return randomUUID();
 }
 
-export function cronSourceScheduleKey(schedule: CronSchedule): string | undefined {
+export function cronSourceScheduleKey(
+  schedule: CronSchedule,
+  streamSandbox?: CronStoredJob["streamSandbox"],
+): string | undefined {
   if (schedule.kind === "stream") {
-    return cronStreamScheduleKey(schedule);
+    return cronStreamScheduleKey(schedule, streamSandbox);
   }
   if (schedule.kind === "event") {
     return stableStringify({
@@ -52,26 +55,27 @@ export function setCronSourceIdentity(
 }
 
 /** Shared admission fence for every externally driven source, including stream batches. */
-export function ownsCronSource(job: CronJob, scheduleKey: string, identity: string): boolean {
+export function ownsCronSource(job: CronStoredJob, scheduleKey: string, identity: string): boolean {
   return (
-    cronSourceScheduleKey(job.schedule) === scheduleKey && cronSourceIdentity(job) === identity
+    cronSourceScheduleKey(job.schedule, job.streamSandbox) === scheduleKey &&
+    cronSourceIdentity(job) === identity
   );
 }
 
 /** Configuration commits, not adapters, own source generation changes (including A→B→A). */
 export function reconcileCronSourceIdentity(
-  previous: CronJob,
-  next: CronJob,
+  previous: CronStoredJob,
+  next: CronStoredJob,
   streamRestartExhaustedRequested = false,
 ): void {
-  const key = cronSourceScheduleKey(next.schedule);
+  const key = cronSourceScheduleKey(next.schedule, next.streamSandbox);
   if (key === undefined) {
     setCronSourceIdentity(next, undefined);
     return;
   }
   const identity = cronSourceIdentity(previous);
   const changed =
-    cronSourceScheduleKey(previous.schedule) !== key ||
+    cronSourceScheduleKey(previous.schedule, previous.streamSandbox) !== key ||
     (previous.enabled ?? true) !== (next.enabled ?? true) ||
     Boolean(previous.state.autoDisabled) !== Boolean(next.state.autoDisabled) ||
     (next.schedule.kind === "stream" &&

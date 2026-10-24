@@ -417,11 +417,11 @@ describe("buildAgentSystemPrompt", () => {
       ["## Directory Roles", "User can toggle with /elevated on|off|ask|full."],
     ],
   ])("%s", expectPromptCase);
-  it("offers routine promotion only when the automations tool is available", () => {
+  it("conditions routine promotion on the available automation actions", () => {
     const withAutomations = renderPrompt({ toolNames: ["automations"] });
     const withoutAutomations = renderPrompt({ toolNames: ["read"] });
 
-    expect(withAutomations).toContain("asked a 3rd time");
+    expect(withAutomations).toContain("currently exposes list, add, run, and remove:");
     expect(withoutAutomations).not.toContain("asked a 3rd time");
   });
 

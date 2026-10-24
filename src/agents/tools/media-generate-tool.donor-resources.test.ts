@@ -201,22 +201,19 @@ module.exports = { id: '${id}', register(api) {
         }
         releasePublication = retainPreparedPluginGeneration(prepared.pluginGeneration);
         const snapshot = media.snapshot(prepared);
-        const scheduled: Array<() => Promise<void>> = [];
         const sessionKey = "agent:main:discord:direct:donor-proof";
-        const { completed, failed } = media.admitTask(lifecycle, sessionKey);
+        const { completed, failed, settlement } = media.admitTask(lifecycle, sessionKey);
         const tool = createImageGenerateTool({
           config,
           agentDir: state.agentDir(),
           workspaceDir: state.workspaceDir,
           preparedModelRuntime: snapshot,
           agentSessionKey: sessionKey,
-          scheduleBackgroundWork: (work) => scheduled.push(work),
         });
         assert(tool, "Missing image tool");
-        expect(
-          (await tool.execute("donor-call", { prompt: "A synthetic resource proof" })).details,
-        ).toMatchObject({ status: "started" });
-        completion = scheduled[0]!();
+        const started = await tool.execute("donor-call", { prompt: "A synthetic resource proof" });
+        completion = settlement.wait().then(() => {});
+        expect(started.details).toMatchObject({ status: "started" });
         await media.waitForPhase(callback.entered, completion);
         releasingOwners = Promise.allSettled([
           construction[Symbol.asyncDispose](),

@@ -34,6 +34,7 @@ const STATIC_MODEL_OVERRIDES = new Map<string, Partial<ModelDefinitionConfig>>([
     "claude-opus-4.6-1m",
     {
       name: "Claude Opus 4.6 (1M context)",
+      family: "anthropic",
       api: "anthropic-messages",
       reasoning: true,
       contextWindow: 1_000_000,
@@ -46,6 +47,7 @@ const STATIC_MODEL_OVERRIDES = new Map<string, Partial<ModelDefinitionConfig>>([
     "claude-opus-4.7-1m-internal",
     {
       name: "Claude Opus 4.7 (1M context)",
+      family: "anthropic",
       api: "anthropic-messages",
       reasoning: true,
       contextWindow: 1_000_000,

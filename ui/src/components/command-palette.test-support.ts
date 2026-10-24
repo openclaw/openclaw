@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, onTestFinished, vi } from "vitest";
+import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionsListResult } from "../api/types.ts";
 import { createAgentSelectionCapability } from "../app/agent-selection.ts";
 import { createApplicationConfigCapability } from "../app/config.ts";
@@ -148,6 +149,27 @@ export function createSessionResult(key: string, displayName: string): SessionsL
     defaults: {},
     sessions: [{ key, kind: "direct", displayName, updatedAt: 1 }],
   } as SessionsListResult;
+}
+
+export function transcriptResult(
+  roster: SessionsListResult,
+  snippet: string,
+): SessionsSearchResult {
+  const sessionKey = roster.sessions[0]!.key;
+  return {
+    sessions: roster.sessions,
+    results: [
+      {
+        sessionKey,
+        sessionId: sessionKey.split(":").at(-1)!,
+        messageId: "message",
+        role: "assistant",
+        timestamp: 1,
+        score: 1,
+        snippet,
+      },
+    ],
+  };
 }
 
 export async function mountPalette(context = createContext(createGateway(true).gateway)) {

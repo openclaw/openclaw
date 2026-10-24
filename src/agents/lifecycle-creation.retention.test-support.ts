@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { once } from "node:events";
 import { MessageChannel, receiveMessageOnPort } from "node:worker_threads";
-import type { Model } from "../llm/types.js";
 import { collectForRetentionCheck } from "../test-utils/retention.js";
 import type { ProviderLocalServiceLease } from "./provider-local-service-target.js";
 import {
@@ -10,19 +9,13 @@ import {
   getManagedProviderLocalServiceDiagnosticsForTest,
 } from "./provider-local-service.js";
 import { createProviderLocalServiceTestFixture } from "./provider-local-service.test-support.js";
+import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
-const [root] = process.argv.slice(2);
-assert.ok(root, "Lifecycle retention fixture requires its temporary directory");
-
-class LifecycleCreationCaller {
-  readonly prompt = Buffer.alloc(1024 * 1024, "synthetic");
-  constructor(readonly label: string) {}
-}
-const callerContext = new AsyncLocalStorage<LifecycleCreationCaller>();
+const callerContext = new AsyncLocalStorage<{ label: string; prompt: Buffer }>();
 const references: { label: string; reference: WeakRef<object> }[] = [];
 
 async function completedCaller(label: string, operation: () => Promise<void> | void) {
-  const caller = new LifecycleCreationCaller(label);
+  const caller = { label, prompt: Buffer.alloc(1024 * 1024, "synthetic") };
   references.push(
     { label, reference: new WeakRef(caller) },
     { label: `${label} prompt`, reference: new WeakRef(caller.prompt) },
@@ -34,18 +27,15 @@ async function completedCaller(label: string, operation: () => Promise<void> | v
 }
 
 const { complete } = await import("../llm/stream.js");
-const model: Model<"openai-completions"> = {
+const model = makeProviderModelFixture<"openai-completions">({
   id: "synthetic",
   name: "Synthetic",
   api: "openai-completions",
   provider: "synthetic",
   baseUrl: "http://127.0.0.1:1",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 4096,
   maxTokens: 128,
-};
+});
 await completedCaller("LLM initialization", async () => {
   const stopped = new Error("synthetic request finished after host initialization");
   await assert.rejects(
@@ -75,7 +65,6 @@ try {
 const fixture = createProviderLocalServiceTestFixture();
 try {
   const port = await fixture.claimPort();
-  const healthUrl = `http://127.0.0.1:${port}/models`;
   const target = {
     providerId: "synthetic-retention",
     baseUrl: `http://127.0.0.1:${port}`,
@@ -85,7 +74,7 @@ try {
         "-e",
         `require("node:http").createServer((req,res)=>res.end(String(process.pid))).listen(${port},"127.0.0.1");`,
       ],
-      healthUrl,
+      healthUrl: `http://127.0.0.1:${port}/models`,
       readyTimeoutMs: 10_000,
       idleStopMs: 600_000,
     },

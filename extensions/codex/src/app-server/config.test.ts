@@ -32,11 +32,23 @@ const userReviewPolicy = { ...autoReviewPolicy, approvalsReviewer: "user" };
 const readOnlyAutoReviewPolicy = { ...autoReviewPolicy, sandbox: "read-only" };
 const readOnlyUserReviewPolicy = { ...userReviewPolicy, sandbox: "read-only" };
 const perCommandPolicy = { ...fullAccessPolicy, approvalPolicy: "untrusted" };
+type RuntimeParams = NonNullable<Parameters<typeof resolveRuntimeForTest>[0]>;
+type RuntimePolicy = Parameters<typeof expectRuntimePolicy>[1];
+type Approvals = NonNullable<NonNullable<Parameters<typeof resolveExecPolicy>[1]>["approvals"]>;
+const approvals = (
+  defaults: Approvals["defaults"],
+  agents: Approvals["agents"] = {},
+): Approvals => ({ version: 1, defaults, agents });
+const localUrl = "ws://127.0.0.1:39175";
+const remoteUrl = "wss://codex-app-server.example.internal/ws";
+const restrictedSandbox = 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n';
+const legacyAsk = resolveExecPolicy({ security: "full", ask: "always" });
+const plugin = (appServer: unknown): RuntimeParams => ({ pluginConfig: { appServer } });
+const yolo = { mode: "yolo", ...fullAccessPolicy };
+const inlineCommand =
+  "node C:\\Users\\me\\.openclaw\\npm\\node_modules\\@openai\\codex\\bin\\codex.js";
 
-function resolveAppServer(
-  appServer: unknown,
-  options: Omit<NonNullable<Parameters<typeof resolveRuntimeForTest>[0]>, "pluginConfig"> = {},
-) {
+function resolveAppServer(appServer: unknown, options: Omit<RuntimeParams, "pluginConfig"> = {}) {
   return resolveRuntimeForTest({ ...options, pluginConfig: { appServer } });
 }
 
@@ -58,15 +70,37 @@ const computerUseDefaults = {
   strictReadiness: false,
   autoRepair: false,
 };
+const canUseReviewer = (
+  context: Parameters<typeof canUseCodexModelBackedApprovalsReviewerForModel>[0] = {},
+) =>
+  canUseCodexModelBackedApprovalsReviewerForModel({
+    modelProvider: "openai",
+    model: "gpt-5.5",
+    ...context,
+  });
+const baseOpenai = { baseUrl: "https://api.openai.com/v1", models: [] };
+const proxyHeaders = { "x-openclaw-reviewer-proxy": "local" };
+const marketplacePlugin = (pluginName: string) => ({
+  marketplaceName: "openai-curated",
+  pluginName,
+});
+const pluginPolicy = (configKey: string, enabled: boolean, mode: "allow" | "auto" | "deny") => ({
+  ...marketplacePlugin(configKey),
+  configKey,
+  enabled,
+  allowDestructiveActions: mode !== "deny",
+  destructiveApprovalMode: mode,
+});
+const clientStart = {
+  transport: "websocket",
+  command: "codex",
+  args: [],
+  headers: {},
+  url: localUrl,
+} satisfies Parameters<typeof codexAppServerStartOptionsKey>[0];
 
 describe("Codex app-server config", () => {
-  it.each<
-    [
-      string,
-      NonNullable<Parameters<typeof resolveRuntimeForTest>[0]>,
-      Parameters<typeof expectRuntimePolicy>[1],
-    ]
-  >([
+  it.each<[string, RuntimeParams, RuntimePolicy]>([
     [
       "allows environment guardian mode with native TOML endpoint syntax",
       {
@@ -108,14 +142,7 @@ describe("Codex app-server config", () => {
     [
       "forces prompting when explicit no-prompt config cannot use model-backed review",
       {
-        pluginConfig: {
-          appServer: {
-            mode: "guardian",
-            approvalPolicy: "never",
-            sandbox: "danger-full-access",
-            approvalsReviewer: "auto_review",
-          },
-        },
+        ...plugin({ ...fullAccessPolicy, mode: "guardian", approvalsReviewer: "auto_review" }),
         modelProvider: "lmstudio",
         model: "local-model",
       },
@@ -124,14 +151,7 @@ describe("Codex app-server config", () => {
     [
       "preserves explicit read-only app-server sandbox for auto mode",
       {
-        pluginConfig: {
-          appServer: {
-            mode: "yolo",
-            approvalPolicy: "never",
-            sandbox: "read-only",
-            approvalsReviewer: "user",
-          },
-        },
+        ...plugin({ ...yolo, sandbox: "read-only" }),
         execMode: "auto",
         modelProvider: "openai",
         env: {},
@@ -141,7 +161,6 @@ describe("Codex app-server config", () => {
     [
       "preserves explicit read-only app-server sandbox for ask mode",
       {
-        pluginConfig: {},
         execMode: "ask",
         env: {
           OPENCLAW_CODEX_APP_SERVER_MODE: "yolo",
@@ -163,7 +182,7 @@ describe("Codex app-server config", () => {
     [
       "honors managed policy that permits mandatory per-command approvals",
       {
-        execPolicy: resolveExecPolicy({ security: "full", ask: "always" }),
+        execPolicy: legacyAsk,
         requirementsToml: 'allowed_approval_policies = ["on-request", "untrusted"]',
       },
       perCommandPolicy,
@@ -171,11 +190,11 @@ describe("Codex app-server config", () => {
     [
       "clamps legacy full exec with ask when an OpenClaw sandbox is active",
       {
-        execPolicy: resolveExecPolicy({ security: "full", ask: "always" }),
+        execPolicy: legacyAsk,
         openClawSandboxActive: true,
-        requirementsToml: 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n',
+        requirementsToml: restrictedSandbox,
       },
-      { approvalPolicy: "untrusted", sandbox: "workspace-write", approvalsReviewer: "user" },
+      { ...userReviewPolicy, approvalPolicy: "untrusted" },
     ],
   ])("%s", (_name, params, policy) => {
     const runtime = resolveRuntimeForTest(params);
@@ -183,45 +202,36 @@ describe("Codex app-server config", () => {
     expect(shouldAutoApproveCodexAppServerApprovals(runtime)).toBe(false);
   });
 
-  it.each<[string, NonNullable<Parameters<typeof resolveRuntimeForTest>[0]>, string]>([
+  it.each<[string, RuntimeParams, string]>([
     [
       "rejects additional session homes for websocket app servers",
       {
         pluginConfig: {
-          appServer: { transport: "websocket", url: "ws://127.0.0.1:39175" },
+          appServer: { transport: "websocket", url: localUrl },
           sessionCatalog: { homes: ["/srv/codex-extra"] },
         },
-        env: {},
       },
       "plugins.entries.codex.config.sessionCatalog.homes requires appServer.transport=stdio",
     ],
     [
       "rejects remote websocket app-servers without identity-bearing auth",
-      {
-        pluginConfig: {
-          appServer: { transport: "websocket", url: "wss://codex-app-server.example.internal/ws" },
-        },
-      },
+      plugin({ transport: "websocket", url: remoteUrl }),
       "remote Codex app-server WebSocket URLs require appServer.authToken or an Authorization header",
     ],
     [
       "rejects Unix app-server connections outside the shared user home",
-      { pluginConfig: { appServer: { transport: "unix", homeScope: "agent" } } },
+      plugin({ transport: "unix", homeScope: "agent" }),
       "plugins.entries.codex.config.appServer.transport=unix requires appServer.homeScope=user",
     ],
     [
       "rejects non-Unix URLs for Unix app-server connections",
-      {
-        pluginConfig: {
-          appServer: { transport: "unix", homeScope: "user", url: "ws://127.0.0.1:39175" },
-        },
-      },
+      plugin({ transport: "unix", homeScope: "user", url: localUrl }),
       "plugins.entries.codex.config.appServer.url must use unix:// when appServer.transport is unix",
     ],
     [
       "fails closed when Guardian local-model fallback needs user approvals but requirements disallow them",
       {
-        pluginConfig: { appServer: { mode: "guardian" } },
+        ...plugin({ mode: "guardian" }),
         modelProvider: "lmstudio",
         model: "local-model",
         requirementsToml: 'allowed_approvals_reviewers = ["auto_review"]\n',
@@ -236,15 +246,15 @@ describe("Codex app-server config", () => {
     [
       "fails closed when legacy full exec with ask cannot use full Codex sandbox",
       {
-        execPolicy: resolveExecPolicy({ security: "full", ask: "always" }),
-        requirementsToml: 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n',
+        execPolicy: legacyAsk,
+        requirementsToml: restrictedSandbox,
       },
       "legacy full exec security with ask requires Codex app-server danger-full-access",
     ],
     [
       "fails closed when managed policy forbids mandatory per-command approvals",
       {
-        execPolicy: resolveExecPolicy({ security: "full", ask: "always" }),
+        execPolicy: legacyAsk,
         requirementsToml: 'allowed_approval_policies = ["on-request", "never"]',
       },
       "tools.exec.ask=always requires Codex app-server per-command approvals",
@@ -285,7 +295,7 @@ describe("Codex app-server config", () => {
       {
         mode: "guardian",
         transport: "websocket",
-        url: "ws://127.0.0.1:39175",
+        url: localUrl,
         headers: { "X-Test": "yes" },
         approvalPolicy: "on-failure",
         sandbox: "danger-full-access",
@@ -314,7 +324,7 @@ describe("Codex app-server config", () => {
     });
     expectFields(runtime.start, "runtime start", {
       transport: "websocket",
-      url: "ws://127.0.0.1:39175",
+      url: localUrl,
       headers: { "X-Test": "yes" },
     });
     expect(runtime.start).not.toHaveProperty("clearEnv");
@@ -338,11 +348,7 @@ describe("Codex app-server config", () => {
       },
     });
 
-    const networkProxy = runtime.networkProxy;
-    if (!networkProxy) {
-      throw new Error("Expected network proxy runtime config");
-    }
-    expect(networkProxy).toEqual({
+    expect(runtime.networkProxy).toEqual({
       profileName: "mock-proxy",
       configFingerprint: expect.any(String),
       configPatch: {
@@ -350,10 +356,7 @@ describe("Codex app-server config", () => {
         default_permissions: "mock-proxy",
         permissions: {
           "mock-proxy": {
-            filesystem: {
-              ":minimal": "read",
-              ":project_roots": { ".": "write" },
-            },
+            filesystem: { ":minimal": "read", ":project_roots": { ".": "write" } },
             network: {
               enabled: true,
               mode: "limited",
@@ -375,26 +378,18 @@ describe("Codex app-server config", () => {
   it("uses read-only filesystem rules for read-only network proxy profiles", () => {
     const runtime = resolveAppServer({
       sandbox: "read-only",
-      networkProxy: {
-        enabled: true,
-        domains: { "example.com": "allow" },
-      },
+      networkProxy: { enabled: true, domains: { "example.com": "allow" } },
     });
     const profileName = runtime.networkProxy?.profileName;
-    const permissions = runtime.networkProxy?.configPatch.permissions as Record<
-      string,
-      { filesystem: { ":project_roots": { ".": string } } }
-    >;
-
     expect(profileName).toMatch(/^openclaw-network-[a-f0-9]{16}$/u);
     expect(runtime.networkProxy?.configPatch.default_permissions).toBe(profileName);
-    expect(permissions[profileName ?? ""]?.filesystem[":project_roots"]["."]).toBe("read");
+    expect(runtime.networkProxy?.configPatch.permissions).toMatchObject({
+      [profileName ?? ""]: { filesystem: { ":project_roots": { ".": "read" } } },
+    });
   });
 
   it("falls back for non-positive app-server timer config", () => {
-    const runtime = resolveAppServer({ requestTimeoutMs: 0 });
-
-    expect(runtime).toMatchObject({ requestTimeoutMs: 60_000 });
+    expect(resolveAppServer({ requestTimeoutMs: 0 }).requestTimeoutMs).toBe(60_000);
   });
 
   it("normalizes app-server environment variables to clear", () => {
@@ -409,7 +404,7 @@ describe("Codex app-server config", () => {
   it("passes resolved app-server SecretInput strings through to auth token and headers", () => {
     const runtime = resolveAppServer({
       transport: "websocket",
-      url: "wss://codex-app-server.example.internal/ws",
+      url: remoteUrl,
       authToken: " resolved-capability-token ",
       remoteWorkspaceRoot: " /srv/workspaces ",
       headers: {
@@ -467,24 +462,12 @@ describe("Codex app-server config", () => {
   });
 
   it("preserves an explicitly read-only sandbox for forced private-QA Codex runtime", () => {
-    const privateQaCodexEnv = {
-      OPENCLAW_BUILD_PRIVATE_QA: "1",
-      OPENCLAW_QA_FORCE_RUNTIME: "codex",
-    };
     const runtime = resolveAppServer(
-      {
-        mode: "yolo",
-        approvalPolicy: "never",
-        sandbox: "read-only",
-      },
-      { env: privateQaCodexEnv },
+      { mode: "yolo", approvalPolicy: "never", sandbox: "read-only" },
+      { env: { OPENCLAW_BUILD_PRIVATE_QA: "1", OPENCLAW_QA_FORCE_RUNTIME: "codex" } },
     );
 
-    expectRuntimePolicy(runtime, {
-      approvalPolicy: "never",
-      sandbox: "read-only",
-      approvalsReviewer: "user",
-    });
+    expectRuntimePolicy(runtime, { ...fullAccessPolicy, sandbox: "read-only" });
     expect(codexSandboxPolicyForTurn(runtime.sandbox, "/qa/workspace", runtime.start.args)).toEqual(
       { type: "readOnly", networkAccess: false },
     );
@@ -502,13 +485,11 @@ describe("Codex app-server config", () => {
   });
 
   it("resolves opt-in user-home coexistence only for local stdio", () => {
-    const runtime = resolveAppServer({ homeScope: "user" });
-
-    expect(runtime.start.homeScope).toBe("user");
+    expect(resolveAppServer({ homeScope: "user" }).start.homeScope).toBe("user");
     expect(() =>
       resolveAppServer({
         transport: "websocket",
-        url: "ws://127.0.0.1:39175",
+        url: localUrl,
         homeScope: "user",
       }),
     ).toThrow(
@@ -523,26 +504,11 @@ describe("Codex app-server config", () => {
         'openai_base_url = "http://localhost:8080/v1"\n',
       );
 
-      expect(
-        canUseCodexModelBackedApprovalsReviewerForModel({
-          modelProvider: "openai",
-          model: "gpt-5.5",
-          env: { CODEX_HOME: codexHome },
-          homeScope: "user",
-        }),
-      ).toBe(false);
+      expect(canUseReviewer({ env: { CODEX_HOME: codexHome }, homeScope: "user" })).toBe(false);
     });
   });
 
   it("treats only explicit OpenAI model context as safe for Codex-backed auto-review", () => {
-    const canUseReviewer = (
-      context: Parameters<typeof canUseCodexModelBackedApprovalsReviewerForModel>[0] = {},
-    ) =>
-      canUseCodexModelBackedApprovalsReviewerForModel({
-        modelProvider: "openai",
-        model: "gpt-5.5",
-        ...context,
-      });
     expect(canUseReviewer()).toBe(true);
     expect(canUseReviewer({ modelProvider: "codex", model: "openai/gpt-5.5" })).toBe(true);
     expect(canUseCodexModelBackedApprovalsReviewerForModel({})).toBe(false);
@@ -596,16 +562,11 @@ describe("Codex app-server config", () => {
     for (const openai of [
       { baseUrl: "http://localhost:8080/v1", models: [] },
       {
-        baseUrl: "https://api.openai.com/v1",
+        ...baseOpenai,
         request: { proxy: { mode: "explicit-proxy" as const, url: "http://localhost:8080" } },
-        models: [],
       },
-      {
-        baseUrl: "https://api.openai.com/v1",
-        headers: { "x-openclaw-reviewer-proxy": "local" },
-        models: [],
-      },
-      { baseUrl: "https://api.openai.com/v1", authHeader: false, models: [] },
+      { ...baseOpenai, headers: proxyHeaders },
+      { ...baseOpenai, authHeader: false },
       {
         baseUrl: "https://api.openai.com/v1",
         models: [
@@ -617,7 +578,7 @@ describe("Codex app-server config", () => {
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
             contextWindow: 128_000,
             maxTokens: 8_192,
-            headers: { "x-openclaw-reviewer-proxy": "local" },
+            headers: proxyHeaders,
           },
         ],
       },
@@ -636,18 +597,13 @@ describe("Codex app-server config", () => {
         enabled: true,
         allow_destructive_actions: "auto",
         plugins: {
-          "google-calendar": { marketplaceName: "openai-curated", pluginName: "google-calendar" },
+          "google-calendar": marketplacePlugin("google-calendar"),
           slack: {
-            marketplaceName: "openai-curated",
-            pluginName: "slack",
+            ...marketplacePlugin("slack"),
             enabled: false,
             allow_destructive_actions: false,
           },
-          gmail: {
-            marketplaceName: "openai-curated",
-            pluginName: "gmail",
-            allow_destructive_actions: true,
-          },
+          gmail: { ...marketplacePlugin("gmail"), allow_destructive_actions: true },
         },
       },
     });
@@ -660,50 +616,23 @@ describe("Codex app-server config", () => {
       allowDestructiveActions: true,
       destructiveApprovalMode: "auto",
       pluginPolicies: [
-        {
-          configKey: "gmail",
-          marketplaceName: "openai-curated",
-          pluginName: "gmail",
-          enabled: true,
-          allowDestructiveActions: true,
-          destructiveApprovalMode: "allow",
-        },
-        {
-          configKey: "google-calendar",
-          marketplaceName: "openai-curated",
-          pluginName: "google-calendar",
-          enabled: true,
-          allowDestructiveActions: true,
-          destructiveApprovalMode: "auto",
-        },
-        {
-          configKey: "slack",
-          marketplaceName: "openai-curated",
-          pluginName: "slack",
-          enabled: false,
-          allowDestructiveActions: false,
-          destructiveApprovalMode: "deny",
-        },
+        pluginPolicy("gmail", true, "allow"),
+        pluginPolicy("google-calendar", true, "auto"),
+        pluginPolicy("slack", false, "deny"),
       ],
     });
   });
 
-  it.each(["../marketplace"])(
-    "rejects unsafe native plugin marketplace identity %j",
-    (marketplaceName) => {
-      const config = readCodexPluginConfig({
-        codexPlugins: {
-          enabled: true,
-          plugins: {
-            gmail: { marketplaceName, pluginName: "gmail" },
-          },
-        },
-      });
-
-      expect(config.codexPlugins).toBeUndefined();
-      expect(resolveCodexPluginsPolicy(config).pluginPolicies).toStrictEqual([]);
-    },
-  );
+  it("rejects unsafe native plugin marketplace identity", () => {
+    const config = readCodexPluginConfig({
+      codexPlugins: {
+        enabled: true,
+        plugins: { gmail: { marketplaceName: "../marketplace", pluginName: "gmail" } },
+      },
+    });
+    expect(config.codexPlugins).toBeUndefined();
+    expect(resolveCodexPluginsPolicy(config).pluginPolicies).toStrictEqual([]);
+  });
 
   it("reads effective native Computer Use state before managed spawn", () => {
     const startOptions = resolveRuntimeForTest({ pluginConfig: {} }).start;
@@ -714,16 +643,17 @@ describe("Codex app-server config", () => {
         codexConfigToml,
       }).managedCommandOrder;
 
-    expect(
-      resolveForConfig('[plugins."computer-use@openai-bundled"]\nenabled = false\n'),
-    ).toBeUndefined();
-    expect(resolveForConfig('[plugins."computer-use@openai-bundled"]\n')).toBe("desktop-first");
-    expect(
-      resolveForConfig(
+    for (const [toml, expected] of [
+      ['[plugins."computer-use@openai-bundled"]\nenabled = false\n', undefined],
+      ['[plugins."computer-use@openai-bundled"]\n', "desktop-first"],
+      [
         'model_context_window = 9223372036854775807\ndeveloper_instructions = """\n[plugins."computer-use@openai-bundled"]\nenabled = true\n"""\n',
-      ),
-    ).toBeUndefined();
-    expect(resolveForConfig("[plugins.invalid")).toBe("desktop-first");
+        undefined,
+      ],
+      ["[plugins.invalid", "desktop-first"],
+    ] as const) {
+      expect(resolveForConfig(toml)).toBe(expected);
+    }
 
     const customIdentityStartOptions = resolveRuntimeForTest({
       pluginConfig: { computerUse: { pluginName: "custom-computer-use" } },
@@ -758,23 +688,13 @@ describe("Codex app-server config", () => {
     });
   });
 
-  it("rejects Codex app-server command overrides that include inline arguments", () => {
-    expect(() =>
-      resolveAppServer({
-        command: "node C:\\Users\\me\\.openclaw\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
-      }),
-    ).toThrow(
-      "plugins.entries.codex.config.appServer.command must be only the Codex app-server executable path",
+  it.each<[RuntimeParams, string]>([
+    [plugin({ command: inlineCommand }), "plugins.entries.codex.config.appServer.command"],
+    [{ env: { OPENCLAW_CODEX_APP_SERVER_BIN: inlineCommand } }, "OPENCLAW_CODEX_APP_SERVER_BIN"],
+  ])("rejects inline arguments from %j", (params, field) => {
+    expect(() => resolveRuntimeForTest(params)).toThrow(
+      `${field} must be only the Codex app-server executable path`,
     );
-    expect(() =>
-      resolveRuntimeForTest({
-        pluginConfig: {},
-        env: {
-          OPENCLAW_CODEX_APP_SERVER_BIN:
-            "node C:\\Users\\me\\.openclaw\\npm\\node_modules\\@openai\\codex\\bin\\codex.js",
-        },
-      }),
-    ).toThrow("OPENCLAW_CODEX_APP_SERVER_BIN must be only the Codex app-server executable path");
   });
 
   it("resolves Computer Use setup from plugin config and environment fallbacks", () => {
@@ -827,14 +747,11 @@ describe("Codex app-server config", () => {
     }
   });
 
-  it.each(["allowlist"] as const)(
-    "blocks Codex app-server local execution for normalized OpenClaw %s exec mode",
-    (execMode) => {
-      expect(() => resolveRuntimeForTest({ pluginConfig: {}, execMode })).toThrow(
-        `Codex app-server local execution is unavailable because effective tools.exec.mode=${execMode}`,
-      );
-    },
-  );
+  it("blocks Codex app-server local execution for normalized allowlist exec mode", () => {
+    expect(() => resolveRuntimeForTest({ execMode: "allowlist" })).toThrow(
+      "Codex app-server local execution is unavailable because effective tools.exec.mode=allowlist",
+    );
+  });
 
   it("enforces canonical per-agent exec deny before starting Codex app-server", () => {
     const execPolicy = resolveOpenClawExecPolicyForCodexAppServer({
@@ -855,11 +772,7 @@ describe("Codex app-server config", () => {
     const execPolicy = resolveExecPolicy(
       { mode: "full" },
       {
-        approvals: {
-          version: 1,
-          defaults: { security: "deny" },
-          agents: {},
-        },
+        approvals: approvals({ security: "deny" }),
       },
     );
 
@@ -867,11 +780,7 @@ describe("Codex app-server config", () => {
     let error: unknown;
     try {
       resolveAppServer(
-        {
-          mode: "yolo",
-          approvalPolicy: "never",
-          sandbox: "danger-full-access",
-        },
+        { mode: "yolo", approvalPolicy: "never", sandbox: "danger-full-access" },
         { execPolicy },
       );
     } catch (cause) {
@@ -892,11 +801,7 @@ describe("Codex app-server config", () => {
       { mode: "ask" },
       {
         permissionMode: "full",
-        approvals: {
-          version: 1,
-          defaults: { ask: "always" },
-          agents: {},
-        },
+        approvals: approvals({ ask: "always" }),
       },
     );
 
@@ -908,24 +813,14 @@ describe("Codex app-server config", () => {
       { mode: "full" },
       {
         agentId: "codex-agent",
-        approvals: {
-          version: 1,
-          defaults: { security: "full" },
-          agents: {
-            "codex-agent": { security: "deny" },
-          },
-        },
+        approvals: approvals({ security: "full" }, { "codex-agent": { security: "deny" } }),
       },
     );
 
     expect(execPolicy.mode).toBe("deny");
     expect(() =>
       resolveAppServer(
-        {
-          mode: "yolo",
-          approvalPolicy: "never",
-          sandbox: "danger-full-access",
-        },
+        { mode: "yolo", approvalPolicy: "never", sandbox: "danger-full-access" },
         { execPolicy },
       ),
     ).toThrow(
@@ -942,7 +837,7 @@ describe("Codex app-server config", () => {
     {
       name: "host",
       options: {
-        approvals: { version: 1 as const, defaults: { ask: "always" as const }, agents: {} },
+        approvals: approvals({ ask: "always" }),
       },
       sandbox: "read-only",
       policy: { approvalPolicy: "untrusted", sandbox: "read-only", approvalsReviewer: "user" },
@@ -951,11 +846,7 @@ describe("Codex app-server config", () => {
       name: "agent",
       options: {
         agentId: "codex-agent",
-        approvals: {
-          version: 1 as const,
-          defaults: { ask: "off" as const },
-          agents: { "codex-agent": { ask: "always" as const } },
-        },
+        approvals: approvals({ ask: "off" }, { "codex-agent": { ask: "always" } }),
       },
       sandbox: "workspace-write",
       policy: perCommandPolicy,
@@ -1014,14 +905,15 @@ describe("Codex app-server config", () => {
         },
       }),
     },
+    {
+      name: "managed Git settings",
+      secrets: ["git-first", "git-second"] as const,
+      options: (secret: string) => ({ managedGitConfigParameters: secret }),
+    },
   ])("isolates shared clients by $name without exposing secrets", ({ secrets, options }) => {
     const keyFor = (secret: string) =>
       codexAppServerStartOptionsKey({
-        transport: "websocket",
-        command: "codex",
-        args: [],
-        headers: {},
-        url: "ws://127.0.0.1:39175",
+        ...clientStart,
         ...options(secret),
       });
     const [firstSecret, secondSecret] = secrets;
@@ -1036,29 +928,22 @@ describe("Codex app-server config", () => {
   it.each(["authBindingFingerprint", "agentDir"] as const)(
     "isolates shared clients by %s",
     (field) => {
-      const options = {
-        transport: "stdio" as const,
-        command: "codex",
-        args: ["app-server"],
-        headers: {},
-      };
       const keyFor = (value: string) =>
-        codexAppServerStartOptionsKey(options, {
-          authProfileId: "openai:work",
-          [field]: value,
-        });
+        codexAppServerStartOptionsKey(
+          { transport: "stdio", command: "codex", args: ["app-server"], headers: {} },
+          {
+            authProfileId: "openai:work",
+            [field]: value,
+          },
+        );
       expect(keyFor("/tmp/identity-a")).not.toEqual(keyFor("/tmp/identity-b"));
     },
   );
 
   it("keeps secret-derived shared-client keys stable across module reloads", async () => {
     const startOptions = {
-      transport: "websocket" as const,
-      command: "codex",
-      args: [],
-      url: "ws://127.0.0.1:39175",
+      ...clientStart,
       authToken: "tok_reload",
-      headers: {},
       env: { OPENAI_API_KEY: "sk-reload" },
     };
     const first = codexAppServerStartOptionsKey(startOptions);
@@ -1071,4 +956,3 @@ describe("Codex app-server config", () => {
     expect(first).not.toContain("sk-reload");
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

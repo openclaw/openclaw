@@ -233,11 +233,13 @@ suite.define(() => {
         const reader = page.locator("openclaw-link-reader-panel");
         await reader.getByRole("heading", { name: reviewRequest.title, exact: true }).waitFor();
         expect(new URL(page.url()).pathname).toBe("/activity");
-        const external = reader.locator("a[data-link-reader-external]").first();
+        const external = reader
+          .locator(".lr-toolbar")
+          .getByRole("link", { name: "Open on " + TEST_LINK_READER.label, exact: true });
         expect(await external.getAttribute("href")).toBe(reviewRequest.url);
-        const popupPromise = page.waitForEvent("popup");
-        await external.click();
-        const popup = await popupPromise;
+        expect(await external.getAttribute("target")).toBe("_blank");
+        expect(await external.getAttribute("rel")).toBe("noopener noreferrer");
+        const [popup] = await Promise.all([page.waitForEvent("popup"), external.click()]);
         await popup.waitForLoadState("domcontentloaded");
         expect(popup.url()).toBe(reviewRequest.url);
         expect(new URL(page.url()).pathname).toBe("/activity");

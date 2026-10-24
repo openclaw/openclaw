@@ -2,11 +2,12 @@ import assert from "node:assert/strict";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { expect, test, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createAgentRunDirectAbortError } from "../../agents/run-termination.js";
 import * as sandboxWorkspace from "../../agents/sandbox/context.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { initializeGitFixture } from "../../agents/worktrees/git-fixture.test-support.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { insertRegistryWorktree, updateRegistryWorktree } from "../../agents/worktrees/registry.js";
 import * as staging from "../../auto-reply/reply/stage-sandbox-media.js";
@@ -16,7 +17,10 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { createChatAbortOps } from "../chat-abort-ops.js";
 import { abortChatRunById } from "../chat-abort.js";
 import * as attachments from "../chat-attachments.js";
@@ -29,241 +33,248 @@ import {
   prepareAttachmentFixture,
 } from "./chat-send-attachments.test-support.js";
 import { prepareAndAdmitChatSend } from "./chat-send-setup.js";
+import { expectRpcError } from "./rpc-response.test-support.js";
 import type { RespondFn } from "./types.js";
 
-it.each(["off", "all"] as const)(
-  "prepares both owners' global attachments with sandbox %s",
-  async (mode) => {
-    await withOpenClawTestState({ label: "gateway-media-owner" }, async (state) => {
+const it = test.extend<{ state: OpenClawTestState }>({
+  state: async ({ task }, use) => {
+    await withOpenClawTestState({ label: task.name }, async (state) => {
       await loadOrCreateProcessDeviceIdentityAsync();
-      const cfg = attachmentConfig(state, { mode, global: true });
-      const paths: string[] = [];
-      for (const agentId of ["main", "work"]) {
-        const bytes = `${agentId} attachment contents`;
-        const fileName = "notes café 雪 🦞.txt";
-        const { result, respond } = await prepareAttachmentFixture({
-          params: attachmentParams(`media-${agentId}`, fileName, bytes, {
-            agentId,
-            sessionKey: "global",
-          }),
-          session: {
-            cfg,
-            sessionKey: "global",
-            agentId,
-          },
-        });
-        expect(respond.mock.calls).toEqual([]);
-        assert(result.ok, "attachment preparation failed");
-        const media = result.value.mediaPathOffloads[0]!;
-        expect(media.fileName).toBe(fileName);
-        const file = path.resolve(media.workspaceDir!, media.path!);
-        expect(await fs.readFile(file, "utf8")).toBe(bytes);
-        paths.push(file);
-        if (mode === "all") {
-          expect(file.startsWith(state.path("sandboxes"))).toBe(true);
-        }
-      }
-      expect(paths[0]).not.toBe(paths[1]);
+      await use(state);
     });
   },
-);
+});
 
-it("stages managed session follow-ups in their projection and rejects unrelated workspaces", async () => {
-  await withOpenClawTestState({ label: "managed-chat-attachment" }, async (state) => {
-    await loadOrCreateProcessDeviceIdentityAsync();
-    const repository = state.path("repository");
-    const checkout = state.path("checkout");
-    await fs.mkdir(repository);
-    await requireGit(repository, ["init", "--quiet", "-b", "main"]);
-    await requireGit(repository, [
-      "-c",
-      "user.name=Test",
-      "-c",
-      "user.email=test@example.invalid",
-      "commit",
-      "--quiet",
-      "--allow-empty",
-      "-m",
-      "base",
-    ]);
-    await requireGit(repository, ["worktree", "add", "--quiet", "-b", "openclaw/guest", checkout]);
-    const sessionKey = "agent:main:dashboard:managed-attachment";
-    const worktree = {
-      id: "00000000-0000-4000-8000-000000000001",
-      name: "guest",
-      repoFingerprint: "synthetic-attachment-repository",
-      repoRoot: repository,
-      path: checkout,
-      branch: "openclaw/guest",
-      baseRef: "main",
-      ownerKind: "session" as const,
-      ownerId: sessionKey,
-      createdAt: 1,
-      lastActiveAt: 1,
-    };
-    await insertRegistryWorktree(process.env, worktree);
-    const cfg = {
-      worktreeAcceleration: false,
-      agents: {
-        entries: { main: { workspace: state.workspaceDir } },
-        defaults: {
-          skipBootstrap: true,
-          sandbox: { mode: "off", backend: "docker", workspaceAccess: "none" },
-        },
-      },
-    } satisfies OpenClawConfig;
-    setRuntimeConfigSnapshot(cfg);
-    const entry = {
-      sessionId: "managed-attachment-session",
-      updatedAt: 1,
-      sandbox: "required" as const,
-      spawnedCwd: checkout,
-      worktree: { id: worktree.id, branch: worktree.branch, repoRoot: repository },
-    };
-    await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
-    for (const selection of ["cwd", "workspace", "unrelated", "removed"] as const) {
-      if (selection === "removed") {
-        await updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
+async function createUpload(
+  state: OpenClawTestState,
+  cfg: OpenClawConfig,
+  params: ReturnType<typeof attachmentParams>,
+  respond = vi.fn<RespondFn>(),
+) {
+  await state.writeConfig(cfg);
+  const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+  const setup = await prepareAndAdmitChatSend({ client: null, context, respond, params });
+  assert(setup, "chat admission failed");
+  const { admission } = setup;
+  let prepared: Awaited<ReturnType<typeof prepareChatSendAttachments>> | undefined;
+  return {
+    ...setup,
+    context,
+    respond,
+    get prepared() {
+      return prepared;
+    },
+    prepare: () =>
+      prepareChatSendAttachments({ ...setup, respond, context }).then((result) => {
+        prepared = result;
+        return result;
+      }),
+    async cleanup() {
+      admission.cleanupAdmittedRun();
+      clearAgentRunContext(params.idempotencyKey, admission.lifecycleGeneration);
+      if (prepared?.ok) {
+        await attachments.discardPreparedInboundMedia(prepared.value.offloadedRefs);
       }
-      const selectedEntry = {
-        ...entry,
-        spawnedCwd: selection === "cwd" || selection === "removed" ? checkout : state.workspaceDir,
-        ...(selection === "workspace"
-          ? { spawnedBy: "agent:main:parent", spawnedWorkspaceDir: checkout }
-          : {}),
-      };
-      const { result, respond } = await prepareAttachmentFixture({
-        params: attachmentParams(
-          `managed-${selection}`,
-          "selection-comment.txt",
-          "Please clarify this selection.",
-          { sessionKey, message: "read the selection comment" },
-        ),
-        session: {
-          cfg,
-          sessionKey,
-          agentId: "main",
-          entry: { ...entry, spawnedCwd: state.workspaceDir },
-        },
-        admission: { admittedSessionEntry: selectedEntry },
-        abortCleanup() {},
-        context: { logGateway: createSubsystemLogger("test/managed-media") },
-      });
-      if (selection === "unrelated" || selection === "removed") {
-        expect(result.ok).toBe(false);
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            code: "UNAVAILABLE",
-            message: expect.stringContaining("Local sandbox managed workspace owner changed"),
-          }),
-        );
-        continue;
-      }
-      expect(respond.mock.calls).toEqual([]);
-      assert(result.ok, "managed attachment preparation failed");
-      const media = result.value.mediaPathOffloads[0]!;
-      const projection = await readLocalWorkspaceProjection(worktree.id);
-      expect(projection?.session_key).toBe(sessionKey);
-      expect(media.workspaceDir).toBe(projection?.projection_path);
-      expect(media.workspaceDir).not.toBe(state.workspaceDir);
-      expect(media.workspaceDir).not.toBe(checkout);
-      expect(await fs.readFile(path.resolve(media.workspaceDir!, media.path!), "utf8")).toBe(
-        "Please clarify this selection.",
-      );
-      await expect(fs.stat(path.resolve(checkout, media.path!))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-    }
+    },
+  };
+}
+
+async function unexpectedWorkspaceAccess(): Promise<never> {
+  throw new Error("unexpected workspace access");
+}
+
+it("stages a non-PDF upload above 50 MiB when mediaMaxMb admits it", async ({ state }) => {
+  const cfg = attachmentConfig(state, { mediaMaxMb: 51 });
+  const size = 50 * 1024 * 1024 + 1;
+  const { result, respond } = await prepareAttachmentFixture({
+    params: attachmentParams("large-upload", "large.txt", Buffer.alloc(size, "x")),
+    session: { cfg },
+    abortCleanup: vi.fn(),
+  });
+
+  expect(respond.mock.calls).toEqual([]);
+  assert(result.ok, "admitted attachment was not staged");
+  const media = result.value.mediaPathOffloads[0]!;
+  expect(media.path).toMatch(/^media\/inbound\/openclaw-staged-/u);
+  await expect(fs.stat(path.resolve(media.workspaceDir!, media.path!))).resolves.toMatchObject({
+    size,
   });
 });
 
-it.each([
+it.for(["off", "all"] as const)(
+  "prepares both owners' global attachments with sandbox %s",
+  async (mode, { state }) => {
+    const cfg = attachmentConfig(state, { mode, global: true });
+    const paths: string[] = [];
+    for (const agentId of ["main", "work"]) {
+      const bytes = `${agentId} attachment contents`;
+      const fileName = "notes café 雪 🦞.txt";
+      const { result, respond } = await prepareAttachmentFixture({
+        params: attachmentParams(`media-${agentId}`, fileName, bytes, {
+          agentId,
+          sessionKey: "global",
+        }),
+        session: { cfg, sessionKey: "global", agentId },
+      });
+      expect(respond.mock.calls).toEqual([]);
+      assert(result.ok, "attachment preparation failed");
+      const media = result.value.mediaPathOffloads[0]!;
+      expect(media.fileName).toBe(fileName);
+      const file = path.resolve(media.workspaceDir!, media.path!);
+      expect(await fs.readFile(file, "utf8")).toBe(bytes);
+      paths.push(file);
+      if (mode === "all") {
+        expect(file.startsWith(state.path("sandboxes"))).toBe(true);
+      }
+    }
+    expect(paths[0]).not.toBe(paths[1]);
+  },
+);
+
+it("stages managed session follow-ups in their projection and rejects unrelated workspaces", async ({
+  state,
+}) => {
+  const repository = await initializeGitFixture(state.root, "repository", "README.md", "base");
+  const checkout = state.path("checkout");
+  await requireGit(repository, ["worktree", "add", "--quiet", "-b", "openclaw/guest", checkout]);
+  const sessionKey = "agent:main:dashboard:managed-attachment";
+  const worktree = {
+    id: "00000000-0000-4000-8000-000000000001",
+    name: "guest",
+    repoFingerprint: "synthetic-attachment-repository",
+    repoRoot: repository,
+    path: checkout,
+    branch: "openclaw/guest",
+    baseRef: "main",
+    ownerKind: "session" as const,
+    ownerId: sessionKey,
+    createdAt: 1,
+    lastActiveAt: 1,
+  };
+  await insertRegistryWorktree(process.env, worktree);
+  const cfg = {
+    worktreeAcceleration: false,
+    agents: {
+      entries: { main: { workspace: state.workspaceDir } },
+      defaults: {
+        skipBootstrap: true,
+        sandbox: { mode: "off", backend: "docker", workspaceAccess: "none" },
+      },
+    },
+  } satisfies OpenClawConfig;
+  setRuntimeConfigSnapshot(cfg);
+  const entry = {
+    sessionId: "managed-attachment-session",
+    updatedAt: 1,
+    sandbox: "required" as const,
+    spawnedCwd: checkout,
+    worktree: { id: worktree.id, branch: worktree.branch, repoRoot: repository },
+  };
+  await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
+  for (const selection of ["cwd", "workspace", "unrelated", "removed"] as const) {
+    if (selection === "removed") {
+      await updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
+    }
+    const selectedEntry = {
+      ...entry,
+      spawnedCwd: selection === "cwd" || selection === "removed" ? checkout : state.workspaceDir,
+      ...(selection === "workspace"
+        ? { spawnedBy: "agent:main:parent", spawnedWorkspaceDir: checkout }
+        : {}),
+    };
+    const { result, respond } = await prepareAttachmentFixture({
+      params: attachmentParams(`managed-${selection}`, "comment.txt", "Comment", { sessionKey }),
+      session: {
+        cfg,
+        sessionKey,
+        agentId: "main",
+        entry: { ...entry, spawnedCwd: state.workspaceDir },
+      },
+      admission: { admittedSessionEntry: selectedEntry },
+      abortCleanup() {},
+      context: { logGateway: createSubsystemLogger("test/managed-media") },
+    });
+    if (selection === "unrelated" || selection === "removed") {
+      expect(result.ok).toBe(false);
+      expectRpcError(respond, {
+        code: "UNAVAILABLE",
+        message: expect.stringContaining("Local sandbox managed workspace owner changed"),
+      });
+      continue;
+    }
+    expect(respond.mock.calls).toEqual([]);
+    assert(result.ok, "managed attachment preparation failed");
+    const media = result.value.mediaPathOffloads[0]!;
+    const projection = await readLocalWorkspaceProjection(worktree.id);
+    expect(projection?.session_key).toBe(sessionKey);
+    expect(media.workspaceDir).toBe(projection?.projection_path);
+    expect(media.workspaceDir).not.toBe(state.workspaceDir);
+    expect(media.workspaceDir).not.toBe(checkout);
+    expect(await fs.readFile(path.resolve(media.workspaceDir!, media.path!), "utf8")).toBe(
+      "Comment",
+    );
+    await expect(fs.stat(path.resolve(checkout, media.path!))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  }
+});
+
+it.for([
   { canTransfer: true, stopped: false },
   { canTransfer: false, stopped: false },
   { canTransfer: false, stopped: true },
   { canTransfer: true, stopped: true },
-])("routes chat uploads: %j", async ({ canTransfer, stopped }) => {
-  await withOpenClawTestState({ label: "remote-chat-attachment" }, async (state) => {
-    await loadOrCreateProcessDeviceIdentityAsync();
-    const cfg = attachmentConfig(state, { sandboxRoot: "sandbox" });
-    await state.writeConfig(cfg);
-    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-    const respond = vi.fn<RespondFn>();
-    const runId = "remote-attachment";
-    const setup = await prepareAndAdmitChatSend({
-      client: null,
-      context,
-      respond,
-      params: attachmentParams(runId, "input.txt", "original upload", { agentId: "main" }),
-    });
-    assert(setup, "chat admission failed");
-    const release = registerAgentWorkspaceAccess(state.workspaceDir, {
-      ...(canTransfer ? { prepareTurnAttachments: vi.fn(async () => undefined) } : {}),
-      bridge: {
-        readFile: async () => {
-          throw new Error("unexpected workspace read");
-        },
-        writeFile: async () => {
-          throw new Error("unexpected workspace write");
-        },
-        stat: async () => {
-          throw new Error("unexpected workspace stat");
-        },
-      },
-    });
-    if (stopped) {
-      release();
-    }
-    const sandboxSpy = vi.spyOn(sandboxWorkspace, "ensureSandboxWorkspaceForSession");
-    let prepared: Awaited<ReturnType<typeof prepareChatSendAttachments>> | undefined;
-    const admission = setup.admission;
-    try {
-      prepared = await prepareChatSendAttachments({
-        request: setup.request,
-        session: setup.session,
-        admission,
-        respond,
-        context,
-      });
-      if (canTransfer && stopped) {
-        expect(prepared.ok).toBe(false);
-        expect(sandboxSpy).not.toHaveBeenCalled();
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "UNAVAILABLE" }),
-        );
-        return;
-      }
-      assert(prepared.ok, "attachment preparation failed");
-      const source = prepared.value.offloadedRefs[0]!.path;
-      const media = prepared.value.mediaPathOffloads[0]!;
-      expect(await fs.readFile(source, "utf8")).toBe("original upload");
-      if (canTransfer) {
-        expect(media).toMatchObject({ path: source, fileName: "input.txt" });
-        expect(sandboxSpy).not.toHaveBeenCalled();
-      } else {
-        expect(sandboxSpy).toHaveBeenCalled();
-        expect(media.workspaceDir?.startsWith(state.path("sandbox"))).toBe(true);
-        expect(await fs.readFile(path.join(media.workspaceDir!, media.path!), "utf8")).toBe(
-          "original upload",
-        );
-      }
-    } finally {
-      release();
-      sandboxSpy.mockRestore();
-      admission.cleanupAdmittedRun();
-      clearAgentRunContext(runId, admission.lifecycleGeneration);
-      if (prepared?.ok) {
-        await attachments.discardPreparedInboundMedia(prepared.value.offloadedRefs);
-      }
-    }
+])("routes chat uploads: %j", async ({ canTransfer, stopped }, { state }) => {
+  const cfg = attachmentConfig(state, { sandboxRoot: "sandbox" });
+  const runId = "remote-attachment";
+  const upload = await createUpload(
+    state,
+    cfg,
+    attachmentParams(runId, "input.txt", "original upload", { agentId: "main" }),
+  );
+  const { respond } = upload;
+  const release = registerAgentWorkspaceAccess(state.workspaceDir, {
+    ...(canTransfer ? { prepareTurnAttachments: vi.fn(async () => undefined) } : {}),
+    bridge: {
+      readFile: unexpectedWorkspaceAccess,
+      writeFile: unexpectedWorkspaceAccess,
+      stat: unexpectedWorkspaceAccess,
+    },
   });
+  if (stopped) {
+    release();
+  }
+  const sandboxSpy = vi.spyOn(sandboxWorkspace, "ensureSandboxWorkspaceForSession");
+  try {
+    const prepared = await upload.prepare();
+    if (canTransfer && stopped) {
+      expect(prepared.ok).toBe(false);
+      expect(sandboxSpy).not.toHaveBeenCalled();
+      expectRpcError(respond, { code: "UNAVAILABLE" });
+      return;
+    }
+    assert(prepared.ok, "attachment preparation failed");
+    const source = prepared.value.offloadedRefs[0]!.path;
+    const media = prepared.value.mediaPathOffloads[0]!;
+    expect(await fs.readFile(source, "utf8")).toBe("original upload");
+    if (canTransfer) {
+      expect(media).toMatchObject({ path: source, fileName: "input.txt" });
+      expect(sandboxSpy).not.toHaveBeenCalled();
+    } else {
+      expect(sandboxSpy).toHaveBeenCalled();
+      expect(media.workspaceDir?.startsWith(state.path("sandbox"))).toBe(true);
+      expect(await fs.readFile(path.join(media.workspaceDir!, media.path!), "utf8")).toBe(
+        "original upload",
+      );
+    }
+  } finally {
+    release();
+    sandboxSpy.mockRestore();
+    await upload.cleanup();
+  }
 });
 
-it.each([
+it.for([
   ["signal-only TXT cleanup", false, "signal", "abort", "aborted", "stage"],
   ["managed-PDF cancellation without fallback", true, "signal", "abort", "aborted", "stage"],
   ["ordinary TXT failure with aborted signal", false, "signal", "ordinary", "unavailable", "stage"],
@@ -272,15 +283,13 @@ it.each([
   ["unsandboxed cleanup before cancellation", false, "signal", "abort", "aborted", "sandbox-null"],
   ["managed-PDF pass-through cleanup", true, "signal", "abort", "aborted", "pass-through"],
   ["TXT failure before late abort", false, "late-marker", "ordinary", "unavailable", "stage"],
-] as const)("%s", async (_name, pdf, interruption, stageError, outcome, preparation) => {
-  await withOpenClawTestState({ label: "gateway-attachment-cancellation" }, async (state) => {
-    await loadOrCreateProcessDeviceIdentityAsync();
+] as const)(
+  "%s",
+  async ([_name, pdf, interruption, stageError, outcome, preparation], { state }) => {
     const cfg = attachmentConfig(state, {
       mode: preparation === "sandbox-null" ? "off" : "all",
       ...(preparation === "pass-through" ? { mediaMaxMb: 51 } : {}),
     });
-    await state.writeConfig(cfg);
-    const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
     const runId = "attachment-cancellation";
     const bytes =
       preparation === "pass-through"
@@ -295,18 +304,17 @@ it.each([
     const respond = vi.fn<RespondFn>(() => {
       filesPresentAtResponse.push(inboundPath !== undefined && existsSync(inboundPath));
     });
-    const setup = await prepareAndAdmitChatSend({
-      client: null,
-      context,
-      respond,
-      params: attachmentParams(runId, pdf ? "notes.pdf" : "notes.txt", bytes, {
+    const upload = await createUpload(
+      state,
+      cfg,
+      attachmentParams(runId, pdf ? "notes.pdf" : "notes.txt", bytes, {
         agentId: "main",
         message: "read the attached file",
       }),
-    });
+      respond,
+    );
     expect(respond).not.toHaveBeenCalled();
-    assert(setup, "chat admission failed before attachment preparation");
-    const admission = setup.admission;
+    const { admission, context } = upload;
     const signal = admission.activeRunAbort.controller.signal;
     const ordinaryFailure = new Error("synthetic staging filesystem failure");
     const stageRelease = createDeferred();
@@ -353,31 +361,20 @@ it.each([
       await stageRelease.promise;
       throw stageError === "abort" ? signal.reason : ordinaryFailure;
     });
-    let prepared: Awaited<ReturnType<typeof prepareChatSendAttachments>> | undefined;
-    const preparing = prepareChatSendAttachments({
-      request: setup.request,
-      session: setup.session,
-      admission,
-      respond,
-      context,
-    }).then((result) => {
-      prepared = result;
-      return result;
-    });
+    const preparing = upload.prepare();
     const abort = () =>
       abortChatRunById(createChatAbortOps(context), {
         runId,
-        sessionKey: setup.session.sessionKey,
+        sessionKey: upload.session.sessionKey,
         stopReason: "rpc",
       });
 
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         preparationEntered.promise,
-        preparing.then(() => {
-          throw new Error("attachment preparation completed before reaching the held boundary");
-        }),
-      ]);
+        preparing,
+        "attachment preparation completed before reaching the held boundary",
+      );
       if (preparation === "stage") {
         expect(stageSpy).toHaveBeenCalledOnce();
       } else {
@@ -414,7 +411,7 @@ it.each([
       // Cancellation must retain admission until the real abandoned-file
       // cleanup settles; neither a PDF fallback nor an early response owns it.
       await vi.waitFor(() => expect(discardSpy).toHaveBeenCalledOnce());
-      expect(prepared).toBeUndefined();
+      expect(upload.prepared).toBeUndefined();
       expect(admission.gatewayWorkAdmission.isActive()).toBe(true);
       expect(respond).not.toHaveBeenCalled();
       expect(existsSync(inboundPath)).toBe(true);
@@ -451,14 +448,10 @@ it.each([
           expect(stageSpy).toHaveBeenCalledWith(expect.objectContaining({ abortSignal: signal }));
         }
       } else {
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({
-            code: "UNAVAILABLE",
-            message: expect.stringContaining(ordinaryFailure.message),
-          }),
-        );
+        expectRpcError(respond, {
+          code: "UNAVAILABLE",
+          message: expect.stringContaining(ordinaryFailure.message),
+        });
         const failure = failureSpy.mock.calls[0]?.[2];
         assert(
           failure instanceof attachments.MediaOffloadError,
@@ -477,12 +470,8 @@ it.each([
         parseSpy.mockRestore();
         discardSpy.mockRestore();
         failureSpy.mockRestore();
-        admission.cleanupAdmittedRun();
-        clearAgentRunContext(runId, admission.lifecycleGeneration);
-        if (prepared?.ok) {
-          await discard(prepared.value.offloadedRefs);
-        }
+        await upload.cleanup();
       }
     }
-  });
-});
+  },
+);

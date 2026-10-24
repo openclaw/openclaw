@@ -42,10 +42,7 @@ export function createArmableStallWatchdog(params: {
     report(`[${params.label}] transport watchdog timeout handler failed: ${String(error)}`);
 
   const clearTimer = () => {
-    if (!timer) {
-      return;
-    }
-    clearInterval(timer);
+    clearInterval(timer ?? undefined);
     timer = null;
   };
 

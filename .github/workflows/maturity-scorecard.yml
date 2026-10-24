@@ -85,7 +85,7 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.x"
+  NODE_VERSION: "24.22.1"
 
 jobs:
   validate_selected_ref:
@@ -145,7 +145,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       # actionlint 1.7.11 lacks GitHub's current job.workflow_* fields. Serialize the non-secret
@@ -595,7 +595,7 @@ jobs:
           fi
 
       - name: Run Codex maturity scorecard agent
-        uses: openai/codex-action@86365089eb2b84e0a8fb0717b304f8bdcb13b20e # v1.12
+        uses: openai/codex-action@bdf19a4a223ec2549a3e2274a0cf61556bc07675 # v1.13
         env:
           MATURITY_EVIDENCE_DIR: .artifacts/maturity-evidence
           MATURITY_SCORES_PATH: qa/maturity-scores.yaml

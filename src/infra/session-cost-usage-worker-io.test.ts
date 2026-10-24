@@ -37,7 +37,7 @@ import {
   acquireUsageLock,
   createUsageCacheWrite,
 } from "./session-cost-usage-cache.fixtures.test-support.js";
-import { writeSessionCostUsageRollupInDatabase as writeRollup } from "./session-cost-usage-cache.kernel.js";
+import { writeSessionCostUsageRollupsInDatabase as writeRollups } from "./session-cost-usage-cache.kernel.js";
 import {
   readSessionCostUsageRollupRows as readRows,
   readSessionCostUsageRollupEntry as readEntry,
@@ -248,7 +248,7 @@ it("reuses discovered inputs and rollups across append, rewrite, and rollup repl
       // Another in-process writer replaces the derived row. Its receipt must
       // invalidate the retained rollup before refresh rebuilds it from canonical stats.
       transact((owner) =>
-        writeRollup(owner.db, createUsageCacheWrite(sessionFile, "{}", Date.now())),
+        writeRollups(owner.db, [createUsageCacheWrite(sessionFile, "{}", Date.now())]),
       );
       await refresh();
       expect(await cached()).toMatchObject({ summaries: [{ totalTokens: 19 }] });
@@ -528,14 +528,13 @@ it("loads multiple session summaries from one durable cache snapshot", async () 
     expect(
       runOpenClawAgentWriteTransaction(
         ({ db }) =>
-          writeRollup(
-            db,
+          writeRollups(db, [
             createUsageCacheWrite(
               path.join(sessionsDir, "unrequested.jsonl"),
               { ...selectedEntry, syntheticPadding: "雪".repeat(400_000) },
               selectedRow.updatedAt,
             ),
-          ),
+          ]),
         { agentId: "main" },
         { operationLabel: "session-cost-usage.rollup.write" },
       ),

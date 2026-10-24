@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { estimateTokensFromChars } from "@openclaw/normalization-core/cjk-chars";
+import { formatInjectedWorkspaceFileLabel } from "../../config/sessions/session-system-prompt-report.js";
 import type { SessionSystemPromptReport } from "../../config/sessions/types.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { encodePngRgba } from "../../media/png-encode.js";
@@ -273,6 +274,9 @@ function buildGroups(
   const tools = report.tools.entries
     .map((tool) => ({ name: tool.name, value: tool.schemaChars ?? 0 }))
     .filter((tool) => tool.value > 0);
+  const files = report.injectedWorkspaceFiles.filter(
+    (file) => file.injectionStatus !== "native_unverified",
+  );
   const groups = [
     {
       name: "Conversation",
@@ -283,12 +287,10 @@ function buildGroups(
       name: "Workspace files",
       color: rgb(58, 145, 91),
       leaves: [
-        ...report.injectedWorkspaceFiles
-          .filter((file) => file.injectionStatus !== "native_unverified")
-          .map((file) => ({
-            name: file.name,
-            value: file.injectedChars,
-          })),
+        ...files.map((file) => ({
+          name: formatInjectedWorkspaceFileLabel(file, files, { compact: true }),
+          value: file.injectedChars,
+        })),
         { name: "Project context frame", value: projectFrameChars },
       ],
     },

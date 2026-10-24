@@ -40,7 +40,7 @@ function buildRoutingSchema(options: { includeTeamId?: boolean }) {
   };
   if (options.includeTeamId) {
     props.teamId = optionalStringSchema(
-      "Team or workspace ID for channel-info, channel-list, or conversation-open.",
+      "Team or workspace ID for channel-create, channel-info, channel-list, or conversation-open.",
     );
   }
   return props;
@@ -518,7 +518,10 @@ function buildMessageToolSchema(actions: readonly string[], options: MessageTool
     ...options,
     includeTeamId: actions.some(
       (action) =>
-        action === "channel-info" || action === "channel-list" || action === "conversation-open",
+        action === "channel-info" ||
+        action === "channel-list" ||
+        action === "channel-create" ||
+        action === "conversation-open",
     ),
   };
   // Keep one flat object: provider adapters reject per-action anyOf/oneOf schemas.

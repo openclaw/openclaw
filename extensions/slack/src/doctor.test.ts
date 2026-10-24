@@ -1,9 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { slackDoctor } from "./doctor.js";
 
-const mocks = vi.hoisted(() => ({
-  probeSlack: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ probeSlack: vi.fn() }));
 
 vi.mock("./probe.js", () => ({
   probeSlack: mocks.probeSlack,
@@ -14,11 +12,9 @@ async function collectSlackWarnings(
   defaults?: Record<string, unknown>,
 ) {
   return (
-    (await Promise.resolve(
-      slackDoctor.collectMutableAllowlistWarnings?.({
-        cfg: { channels: { ...(defaults ? { defaults } : {}), slack } } as never,
-      }),
-    )) ?? []
+    (await slackDoctor.collectMutableAllowlistWarnings?.({
+      cfg: { channels: { ...(defaults ? { defaults } : {}), slack } } as never,
+    })) ?? []
   );
 }
 
@@ -46,6 +42,10 @@ function expectWarning(warnings: string[], ...texts: string[]) {
 
 function emptyChannels(...keys: string[]): Record<string, Record<string, never>> {
   return Object.fromEntries(keys.map((key) => [key, {}]));
+}
+
+function channelWarnings(warnings: string[]) {
+  return warnings.filter((warning) => warning.includes("Re-key it with the channel's"));
 }
 
 describe("slack doctor", () => {
@@ -152,9 +152,7 @@ describe("slack doctor", () => {
       ),
     });
 
-    const nameKeyWarnings = warnings.filter((warning) =>
-      warning.includes("Re-key it with the channel's"),
-    );
+    const nameKeyWarnings = channelWarnings(warnings);
     expect(nameKeyWarnings).toEqual(
       [
         '"example-channel"',
@@ -186,12 +184,8 @@ describe("slack doctor", () => {
       groupPolicy: "open",
       channels: { "root-room": {} },
       accounts: {
-        inheritedOpen: {
-          channels: { general: {} },
-        },
-        inheritedAllowlist: {
-          groupPolicy: "allowlist",
-        },
+        inheritedOpen: { channels: { general: {} } },
+        inheritedAllowlist: { groupPolicy: "allowlist" },
         explicitAllowlist: {
           groupPolicy: "allowlist",
           channels: { engineering: {} },
@@ -214,9 +208,7 @@ describe("slack doctor", () => {
       },
     });
 
-    const nameKeyWarnings = warnings.filter((warning) =>
-      warning.includes("Re-key it with the channel's"),
-    );
+    const nameKeyWarnings = channelWarnings(warnings);
     expect(nameKeyWarnings).toHaveLength(13);
     const rootWarning = nameKeyWarnings.find((warning) =>
       warning.includes('channels.slack.channels."root-room"'),
@@ -244,18 +236,16 @@ describe("slack doctor", () => {
 
   it("treats bare lowercase D forms as ambiguous without name matching", async () => {
     const warnings = await collectSlackWarnings({
-      channels: {
-        d0customers: {},
-        dabcdefgh: {},
-      },
+      channels: emptyChannels("d0customers", "dabcdefgh"),
     });
 
     expect(warnings).toHaveLength(2);
-    expect(warnings[0]).toContain(
-      'channels.slack.channels."d0customers" is ambiguous: it may be a lowercase Slack DM conversation ID or a channel name',
-    );
-    expect(warnings[1]).toContain(
-      'channels.slack.channels."dabcdefgh" is ambiguous: it may be a lowercase Slack DM conversation ID or a channel name',
+    expect(warnings).toEqual(
+      ["d0customers", "dabcdefgh"].map((key) =>
+        expect.stringContaining(
+          `channels.slack.channels."${key}" is ambiguous: it may be a lowercase Slack DM conversation ID or a channel name`,
+        ),
+      ),
     );
     expect(warnings[0]).toContain("stable C/G ID");
   });

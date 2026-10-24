@@ -501,10 +501,9 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
       : undefined;
     const dispatch = dispatchEventHandler<AgentEventRuntimePayload>({
       // An extra async hop lets empty queued finalization overtake reply buffer capture.
-      loadHandler: () =>
-        terminalPreparation
-          ? terminalPreparation.then(agentEventHandlerLoader.load)
-          : agentEventHandlerLoader.load(),
+      loadHandler: terminalPreparation
+        ? () => terminalPreparation.then(agentEventHandlerLoader.load)
+        : agentEventHandlerLoader.load,
       isDeliveryCurrent,
       event: evt,
       log: params.log,
@@ -585,7 +584,6 @@ export function startGatewayEventSubscriptions(params: GatewayEventSubscriptionP
   };
 
   const transcriptUnsub = onInternalSessionTranscriptUpdate((evt) => {
-    sessionActivitySummaries.handleTranscript(evt);
     // The committing root is a real completion obligation, separate from the
     // bounded presentation job. Capture it before leaving the producer context.
     const releaseRoot = retainGatewayRootWorkAdmissionContinuation();

@@ -7,6 +7,8 @@ import { promisify } from "node:util";
 import { brotliCompressSync, brotliDecompressSync, gunzipSync, gzipSync } from "node:zlib";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { WorkerTaskPool } from "../infra/worker-task-pool.js";
+import type { ControlUiFileRead } from "./control-ui-file.js";
 import { handleControlUiHttpRequest } from "./control-ui.js";
 import type { ControlUiRootState } from "./server-control-ui-root.js";
 
@@ -71,6 +73,9 @@ describe.each([
     await write("assets/app-fixture.js", assetBody, modifiedAt);
     await write("assets/app-fixture.js.gz", gzipSync(assetBody));
     await write("assets/app-fixture.js.br", brotliCompressSync(assetBody));
+    await write("assets/selected.js", assetBody);
+    await write("assets/selected.js.gz", gzipSync(assetBody));
+    await write("assets/selected.js.br", brotliCompressSync(assetBody));
     await write("assets/cold.js", assetBody);
     for (const publicAsset of ["themes/absolutely.css", "sw.js"]) {
       await write(publicAsset, assetBody, modifiedAt);
@@ -110,6 +115,33 @@ describe.each([
   });
 
   if (kind === "bundled" && basePath === "") {
+    it("reads only negotiated bodies while alternating cold encoding preferences", async () => {
+      const read = vi.spyOn(WorkerTaskPool.prototype, "run");
+      for (const [accept, encoding, bodyReads] of [
+        ["br, gzip", "br", 1],
+        ["gzip, br;q=0.5", "gzip", 2],
+        ["identity", "identity", 3],
+        ["br, gzip", "br", 3],
+      ] as const) {
+        const { response, body } = await requestAsset(`${baseUrl}/assets/selected.js`, "GET", {
+          "Accept-Encoding": accept,
+        });
+        expect(response.headers["content-encoding"]).toBe(
+          encoding === "identity" ? undefined : encoding,
+        );
+        expect(
+          encoding === "br"
+            ? brotliDecompressSync(body)
+            : encoding === "gzip"
+              ? gunzipSync(body)
+              : body,
+        ).toEqual(assetBody);
+        expect(
+          read.mock.calls.filter(([input]) => (input as ControlUiFileRead).readBody),
+        ).toHaveLength(bodyReads);
+      }
+    });
+
     it("serves warm representations and admits cold files without main-thread filesystem work", async () => {
       await requestAsset(assetUrl, "GET");
       const operations = [
@@ -156,6 +188,21 @@ describe.each([
   });
 
   describe.each(["GET", "HEAD"] as const)("%s", (method) => {
+    it.each(["gzip", "br", ""])(
+      "serves the original without sidecars (Accept-Encoding: %s)",
+      async (encoding) => {
+        const { response, body } = await requestAsset(
+          `${baseUrl}/assets/cold.js`,
+          method,
+          encoding ? { "Accept-Encoding": encoding } : {},
+        );
+        expect(response.statusCode).toBe(200);
+        expect(response.headers["content-encoding"]).toBeUndefined();
+        expect(response.headers["content-length"]).toBe(String(assetBody.byteLength));
+        expect(body).toEqual(method === "GET" ? assetBody : Buffer.alloc(0));
+      },
+    );
+
     it.each(["themes/absolutely.css", "sw.js"])(
       "versions public %s only for the active bundled build",
       async (asset) => {

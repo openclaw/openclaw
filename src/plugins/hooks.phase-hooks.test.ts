@@ -1,7 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { canonicalizeSessionEntry } from "../agents/sessions/session-manager-persistence-entry.js";
 import { readToolAllowlistIntersection } from "../agents/tool-policy.js";
+import { normalizeTranscriptJsonValue } from "../config/sessions/transcript-json.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { PluginHookAgentContext } from "./hook-types.js";
 import { createHookRunner } from "./hooks.js";
@@ -10,7 +12,10 @@ import {
   createMockPluginRegistry,
   TEST_PLUGIN_AGENT_CTX,
 } from "./hooks.test-fixtures.js";
+import { getPluginInstance } from "./plugin-instance-scope.js";
+import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
 import { createEmptyPluginRegistry } from "./registry.js";
+import { createPluginRecord } from "./status.test-helpers.js";
 import type {
   PluginHookBeforeAgentFinalizeResult,
   PluginHookBeforePromptBuildResult,
@@ -22,6 +27,107 @@ type PromptHook = Pick<
   "handler" | "requiresToolAuthority" | "priority"
 >;
 const phaseEvent = { prompt: "test", messages: [] };
+
+describe("pre-durable channel ingress policy", () => {
+  const context = () => ({
+    channelId: "discord",
+    accountId: "account",
+    signal: new AbortController().signal,
+  });
+  const raw = { id: "event", channel_id: "room", content: "private" };
+
+  function ownedPolicy(allowConversationAccess: boolean) {
+    const builder = createTestPluginRegistry();
+    const record = createPluginRecord({ id: "ingress-policy", origin: "global" });
+    builder.registry.plugins.push(record);
+    const api = builder.createApi(record, { config: {}, hookPolicy: { allowConversationAccess } });
+    const instance = getPluginInstance(record)!;
+    onTestFinished(async () => {
+      await instance.dispose();
+    });
+    return { api, instance, registry: builder.registry };
+  }
+
+  it.each([false, true])("requires the existing conversation-access grant (%s)", (allowed) => {
+    const owner = ownedPolicy(allowed);
+    owner.api.on("before_channel_ingress", () => undefined);
+    expect(owner.registry.typedHooks.map((entry) => entry.hookName)).toEqual(
+      allowed ? ["before_channel_ingress"] : [],
+    );
+  });
+
+  it("chains isolated transformed events and retains the earlier replacement on a later decline", async () => {
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_channel_ingress",
+          priority: 2,
+          handler: () => ({ event: { ...raw, content: "[redacted]" } }),
+        },
+        {
+          hookName: "before_channel_ingress",
+          handler: (value) => {
+            expect(value).toEqual({ event: { ...raw, content: "[redacted]" } });
+            return {};
+          },
+        },
+      ]),
+    );
+    const result = await runner.runBeforeChannelIngress({ event: raw }, context());
+    expect(result?.event).toEqual({ ...raw, content: "[redacted]" });
+    result?.assertCurrent();
+    expect(raw.content).toBe("private");
+  });
+
+  it("does not fail open or expose policy error contents after a timeout", async () => {
+    const release = createDeferred();
+    const error = vi.fn();
+    const runner = createHookRunner(
+      createMockPluginRegistry([
+        {
+          hookName: "before_channel_ingress",
+          timeoutMs: 2,
+          handler: async () => {
+            await release.promise;
+            throw new Error("PRIVATE_ERROR_SENTINEL");
+          },
+        },
+      ]),
+      {
+        logger: { error, warn: vi.fn() },
+        failurePolicyByHook: { before_channel_ingress: "fail-open" },
+      },
+    );
+    try {
+      await expect(runner.runBeforeChannelIngress({ event: raw }, context())).rejects.toThrow(
+        "Channel ingress transform failed",
+      );
+      expect(error).not.toHaveBeenCalled();
+    } finally {
+      release.resolve();
+    }
+  });
+
+  it("rejects a result from an actual registered instance retired during its awaited policy", async () => {
+    const owner = ownedPolicy(true);
+    const entered = createDeferred();
+    const release = createDeferred();
+    owner.api.on("before_channel_ingress", async () => {
+      entered.resolve();
+      await release.promise;
+      return { event: { ...raw, content: "[redacted]" } };
+    });
+    const promise = createHookRunner(owner.registry).runBeforeChannelIngress(
+      { event: raw },
+      context(),
+    );
+    await entered.promise;
+    const disposing = owner.instance.dispose();
+    release.resolve();
+    await expect(promise).rejects.toThrow(/Channel ingress transform/);
+    await disposing;
+  });
+});
 function promptRunner(hooks: PromptHook[]) {
   const registry = createEmptyPluginRegistry();
   registry.typedHooks.push(
@@ -420,6 +526,165 @@ describe("prompt hook invocation", () => {
 const promptEvent = (prompt: string) => ({ prompt, messages: [] });
 
 describe("before_prompt_build dispatch", () => {
+  it.each([
+    Object.freeze({ buffer: new SharedArrayBuffer(4) }),
+    new Error("shared", { cause: new Uint8Array(new SharedArrayBuffer(4)) }),
+    {
+      get buffer() {
+        return new SharedArrayBuffer(4);
+      },
+    },
+  ])("rejects unowned shared memory beside an owned payload (%#)", async (unowned) => {
+    const message = { role: "user", content: [{ type: "text", text: "owned" }] };
+    normalizeTranscriptJsonValue(message, "");
+    const handler = vi.fn();
+    const runner = promptRunner([{ handler }]);
+    await expect(
+      runner.runBeforePromptBuild({ prompt: "test", messages: [message, unowned] }, {}),
+    ).rejects.toThrow("before_prompt_build mutable input isolation failed");
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it.each([0, 1, 2])("never deep-clones owned payloads with %i handlers", async (handlers) => {
+    const message = {
+      role: "toolResult" as const,
+      toolCallId: "call-1",
+      toolName: "synthetic",
+      isError: false,
+      timestamp: 0,
+      content: [{ type: "text" as const, text: "caller history" }],
+      details: { private: "storage only" },
+      __openclaw: { upstreamUserText: "storage prompt", retained: "visible" },
+    };
+    const entry = canonicalizeSessionEntry({
+      type: "message",
+      id: "entry-1",
+      parentId: null,
+      timestamp: "2026-01-01T00:00:00.000Z",
+      message: structuredClone(message),
+    });
+    normalizeTranscriptJsonValue(message, "");
+    const messages = [message, entry.message];
+    const owned = new Set<object>(messages.flatMap((item) => [item.content, item.content[0]!]));
+    const ownKeys = vi.spyOn(Reflect, "ownKeys");
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    const received: unknown[] = [];
+    try {
+      for (const hookName of ["before_prompt_build", "agent_turn_prepare"] as const) {
+        const runner = createHookRunner(
+          createMockPluginRegistry(
+            Array.from({ length: handlers }, () => ({
+              hookName,
+              handler: (value: unknown) => {
+                const event = value as { messages: (typeof message)[] };
+                for (const [index, source] of messages.entries()) {
+                  const projected = event.messages[index]!;
+                  expect(projected.content).toBe(source.content);
+                  expect(() => {
+                    projected.content[0]!.text = "forbidden mutation";
+                  }).toThrow(TypeError);
+                  expect(projected).not.toHaveProperty("details");
+                  expect(projected["__openclaw"]).toEqual({ retained: "visible" });
+                  projected.toolName = "local tool name";
+                }
+                received.push(event);
+                return { prependContext: "returned context" };
+              },
+            })),
+          ),
+          { catchErrors: false },
+        );
+        for (let turn = 0; turn < 2; turn++) {
+          ownKeys.mockClear();
+          clone.mockClear();
+          const event = { prompt: "test", messages, queuedInjections: [] };
+          const result =
+            hookName === "before_prompt_build"
+              ? await runner.runBeforePromptBuild(event, {})
+              : await runner.runAgentTurnPrepare(event, {});
+          expect(result?.prependContext).toBe(
+            handlers ? Array(handlers).fill("returned context").join("\n\n") : undefined,
+          );
+          expect(clone).toHaveBeenCalledTimes(handlers ? 1 : 0);
+          expect(ownKeys.mock.calls.filter(([value]) => owned.has(value))).toHaveLength(0);
+          for (const [input] of clone.mock.calls) {
+            const snapshot = input as typeof event;
+            for (const [index, source] of messages.entries()) {
+              expect(snapshot.messages[index]!.content).not.toBe(source.content);
+            }
+          }
+          for (const source of messages) {
+            expect(source.content[0]!.text).toBe("caller history");
+            expect(source.toolName).toBe("synthetic");
+            expect(source["__openclaw"].retained).toBe("visible");
+          }
+        }
+      }
+      if (handlers) {
+        expect(received[0]).not.toBe(received[handlers]);
+      }
+    } finally {
+      ownKeys.mockRestore();
+      clone.mockRestore();
+    }
+  });
+
+  it.each(["before_prompt_build", "agent_turn_prepare"] as const)(
+    "%s isolates array, envelope, and non-owned edits across dispatches",
+    async (hookName) => {
+      const message = { role: "user", content: [{ type: "text", text: "history" }] };
+      normalizeTranscriptJsonValue(message, "");
+      const unowned = { content: Object.freeze([{ text: "unowned" }]) };
+      const event = { prompt: "test", messages: [message, unowned], queuedInjections: [] };
+      const snapshots: unknown[] = [];
+      const runner = createHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName,
+            handler: (value: unknown) => {
+              const input = value as typeof event;
+              snapshots.push(input);
+              expect(input.messages).toEqual(event.messages);
+              const first = input.messages[0] as typeof message;
+              first.role = "assistant";
+              first.content = [{ type: "text", text: "local replacement" }];
+              const second = input.messages[1] as typeof unowned;
+              second.content[0]!.text = "local unowned mutation";
+              input.messages.push({ content: [] });
+            },
+          },
+          {
+            hookName,
+            handler: (value: unknown) => {
+              const input = value as typeof event;
+              expect(input).toBe(snapshots.at(-1));
+              expect(input.messages).toHaveLength(3);
+              expect(input.messages[0]).toMatchObject({
+                role: "assistant",
+                content: [{ text: "local replacement" }],
+              });
+              expect(input.messages[1]).toMatchObject({
+                content: [{ text: "local unowned mutation" }],
+              });
+            },
+          },
+        ]),
+        { catchErrors: false },
+      );
+      for (let turn = 0; turn < 2; turn++) {
+        if (hookName === "before_prompt_build") {
+          await runner.runBeforePromptBuild(event, {});
+        } else {
+          await runner.runAgentTurnPrepare(event, {});
+        }
+        expect(event.messages).toHaveLength(2);
+        expect(message).toEqual({ role: "user", content: [{ type: "text", text: "history" }] });
+        expect(unowned.content[0]!.text).toBe("unowned");
+      }
+      expect(snapshots[0]).not.toBe(snapshots[1]);
+    },
+  );
+
   it("keeps sibling hook families and other runners active during dispatch", async () => {
     const turnPrepare = vi.fn(() => ({ prependContext: "turn" }));
     const heartbeat = vi.fn(() => ({ appendContext: "heartbeat" }));

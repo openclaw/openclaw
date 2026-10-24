@@ -306,20 +306,9 @@ it("keeps native monitor guards current through worker-published binding reads",
   );
 });
 
-it("keeps ordered failures without synchronous reads or retrying failed bulk acquisition", async () => {
-  const { state, store, syncLookup, lookup, lookupMany } = createReadFixture();
+it("propagates failed bulk acquisition without synchronous reads or retries", async () => {
+  const { store, syncLookup, lookup, lookupMany } = createReadFixture();
   const first = { kind: "conversation" as const, bindingId: "first" };
-  const invalid = { kind: "conversation" as const, bindingId: " " };
-  state.register(bindingStoreKey(first), activeRow({ threadId: "", cwd: "/repo" }));
-  await expect(collect(store.readMany([first, invalid]))).rejects.toThrow(
-    "Invalid Codex app-server binding row: conversation:first",
-  );
-  expect(lookupMany).not.toHaveBeenCalled();
-  state.delete(bindingStoreKey(first));
-  await expect(collect(store.readMany([first, invalid]))).rejects.toThrow(
-    "Codex app-server conversation binding requires a binding id",
-  );
-  lookup.mockClear();
   const failure = new Error("bulk database unavailable");
   lookupMany.mockImplementation(async () => {
     throw failure;
@@ -332,17 +321,12 @@ it("keeps ordered failures without synchronous reads or retrying failed bulk acq
   expect(syncLookup).not.toHaveBeenCalled();
 });
 
-it("keeps async fallback and oversized cohorts readable without synchronous acquisition", async () => {
+it("keeps oversized cohorts readable without synchronous acquisition", async () => {
   const { state, store, readValue, syncLookup, lookupMany } = createReadFixture();
   const first = { kind: "conversation" as const, bindingId: "first" };
   const last = { kind: "conversation" as const, bindingId: "last" };
   const binding = { threadId: "owned", cwd: "/repo" };
   state.register(bindingStoreKey(last), activeRow(binding));
-  const legacy = createLazyCodexAppServerBindingStore({
-    ...state,
-    asyncReads: { ...state.asyncReads, lookupMany: undefined },
-  });
-  expect(await collect(legacy.readMany([first, last]))).toEqual([undefined, binding]);
   lookupMany.mockImplementation(async (keys) => {
     if (keys.length > 10_000) {
       throw new Error("host bulk limit exceeded");

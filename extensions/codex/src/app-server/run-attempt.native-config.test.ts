@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -30,9 +31,10 @@ import {
   notifyChildStarted,
   turnStartedNotification,
   childTurnCompletedNotification,
+  itemNotification,
 } from "./native-subagent-monitor.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
-import { isJsonObject } from "./protocol.js";
+import { isJsonObject, type JsonObject } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createParams,
@@ -62,6 +64,7 @@ import {
   createClientHarness,
   createCodexTestModel,
   createCodexTestOAuthProfile,
+  stubCodexInferenceTransportEnv,
 } from "./test-support.js";
 import { codexDynamicToolsFingerprint } from "./thread-fingerprints.js";
 
@@ -82,6 +85,67 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 setupRunAttemptTestHooks();
 // Load real provider schema policy once; cold plugin discovery is not part of the turn budget.
 useProviderToolSchemaRuntimeForTest(["codex"]);
+
+type Send = (message: unknown) => void;
+type NativeReply = (request: JsonObject, send: Send) => unknown;
+type OperatorSource = NonNullable<
+  Parameters<typeof createAgentHarnessHostCapabilitiesForTest>[0]["operatorSource"]
+>;
+function mutableOperator(profileId: string, readPolicy: () => OperatorSource["modelPolicy"]) {
+  const listeners = new Set<() => void>();
+  const source: OperatorSource = {
+    profileId,
+    scopes: ["operator.write"],
+    assertCurrent: () => {},
+    get modelPolicy() {
+      return readPolicy();
+    },
+    onModelPolicyChanged: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+  return { source, listeners };
+}
+const completedTurn = (threadId: string, turn: JsonObject) => ({
+  method: "turn/completed",
+  params: { threadId, turn: { id: "turn-1", status: "completed", items: [], ...turn } },
+});
+function nativeClient(
+  codexHome: string,
+  replies: Record<string, NativeReply>,
+  afterResponse?: (method: string, request: JsonObject, send: Send) => void,
+) {
+  const requests: Array<{ method: string; params: unknown }> = [];
+  const handlers: Record<string, NativeReply> = {
+    initialize: () => ({
+      userAgent: `codex-cli/${getMockRuntimeIdentity().serverVersion}`,
+      codexHome,
+    }),
+    "configRequirements/read": () => ({ requirements: null }),
+    "thread/unsubscribe": () => ({ status: "unsubscribed" }),
+    ...replies,
+  };
+  const harness = createClientHarness({
+    onWrite: (line, send) => {
+      const message: unknown = JSON.parse(line);
+      if (
+        !isJsonObject(message) ||
+        typeof message.method !== "string" ||
+        message.id === undefined
+      ) {
+        return;
+      }
+      requests.push({ method: message.method, params: message.params });
+      const request = isJsonObject(message.params) ? message.params : {};
+      send({ id: message.id, result: handlers[message.method]?.(request, send) ?? {} });
+      afterResponse?.(message.method, request, send);
+    },
+  });
+  return { ...harness, requests };
+}
 
 describe("Codex native configuration", () => {
   it.each(["missing", "disabled"])(
@@ -107,22 +171,26 @@ describe("Codex native configuration", () => {
   it.each(["denied", "revoked"] as const)(
     "binds the actual harness retry model when its permission is %s",
     async (permission) => {
-      // This in-memory managed transport has no custom CA or proxy. Host transport settings
-      // would correctly disqualify a real client from owned inference routing.
-      for (const name of ["CODEX_CA_CERTIFICATE", "SSL_CERT_FILE", "REQUEST_METHOD"]) {
-        vi.stubEnv(name, undefined);
-      }
-      for (const name of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]) {
-        vi.stubEnv(name, undefined);
-        vi.stubEnv(name.toLowerCase(), undefined);
-      }
+      stubCodexInferenceTransportEnv();
       const catalogModel = "catalog-primary";
       const runtimeModel = "native-primary";
       const allowedModels = new Set([
         catalogModel,
         ...(permission === "denied" ? [] : ["native-retry"]),
       ]);
-      const policyListeners = new Set<() => void>();
+      const { source: operatorSource, listeners: policyListeners } = mutableOperator(
+        "restricted-retry-fixture",
+        () => {
+          const models = [...allowedModels].map((model) => ({ provider: "openai", model }));
+          return {
+            models,
+            allows: (ref) =>
+              models.some(
+                ({ provider, model }) => ref.provider === provider && ref.model === model,
+              ),
+          };
+        },
+      );
       const params = createParams(path.join(tempDir, "session.jsonl"), tempDir, {
         provider: "openai",
       });
@@ -145,27 +213,7 @@ describe("Codex native configuration", () => {
         path.join(tempDir, "retry-model-policy.sqlite"),
         params.sessionId,
       );
-      const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params, {
-        profileId: "restricted-retry-fixture",
-        scopes: ["operator.write"],
-        assertCurrent: () => {},
-        get modelPolicy() {
-          const models = [...allowedModels].map((model) => ({ provider: "openai", model }));
-          return {
-            models,
-            allows: (ref: (typeof models)[number]) =>
-              models.some(
-                ({ provider, model }) => ref.provider === provider && ref.model === model,
-              ),
-          };
-        },
-        onModelPolicyChanged: (listener) => {
-          policyListeners.add(listener);
-          return () => {
-            policyListeners.delete(listener);
-          };
-        },
-      });
+      const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params, operatorSource);
       const allowedControl = params.hostCapabilities.bindModelExecution?.({
         provider: "openai",
         model: catalogModel,
@@ -177,64 +225,49 @@ describe("Codex native configuration", () => {
       const retryStarted = createDeferred<void>();
       const turnModels: unknown[] = [];
       let nativeResponse = threadStartResult("thread-policy", { cwd: tempDir });
-      const transport = createClientHarness({
-        onWrite: (line, send) => {
-          const message: unknown = JSON.parse(line);
-          if (!isJsonObject(message) || message.id === undefined) {
-            return;
-          }
-          const request = isJsonObject(message.params) ? message.params : {};
-          let result: unknown = {};
-          if (message.method === "initialize") {
-            result = {
-              userAgent: `codex-cli/${getMockRuntimeIdentity().serverVersion}`,
-              codexHome: resolveCodexAppServerHomeDir(params.agentDir),
-            };
-          } else if (message.method === "configRequirements/read") {
-            result = { requirements: null };
-          } else if (message.method === "config/read") {
-            result = { config: {}, origins: {}, layers: [] };
-          } else if (message.method === "account/login/start") {
-            result = { type: "chatgptAuthTokens" };
-          } else if (message.method === "account/read") {
-            result = {
-              account: { type: "chatgpt", email: "synthetic@example.test", planType: "team" },
-              requiresOpenaiAuth: true,
-            };
-          } else if (message.method === "thread/read") {
-            result = { thread: nativeResponse.thread };
-          } else if (message.method === "thread/start" || message.method === "thread/resume") {
-            if (typeof request.model !== "string") {
-              throw new Error("Expected the selected native model in the thread request");
-            }
-            nativeResponse = { ...nativeResponse, model: request.model };
-            send({
-              method: "thread/status/changed",
-              params: { threadId: "thread-policy", status: { type: "notLoaded" } },
-            });
-            result = nativeResponse;
-          } else if (message.method === "turn/start") {
+      const startThread: NativeReply = (request, send) => {
+        if (typeof request.model !== "string") {
+          throw new Error("Expected the selected native model in the thread request");
+        }
+        nativeResponse = { ...nativeResponse, model: request.model };
+        send({
+          method: "thread/status/changed",
+          params: { threadId: "thread-policy", status: { type: "notLoaded" } },
+        });
+        return nativeResponse;
+      };
+      const transport = nativeClient(
+        resolveCodexAppServerHomeDir(params.agentDir),
+        {
+          "config/read": () => ({ config: {}, origins: {}, layers: [] }),
+          "account/login/start": () => ({ type: "chatgptAuthTokens" }),
+          "account/read": () => ({
+            account: { type: "chatgpt", email: "synthetic@example.test", planType: "team" },
+            requiresOpenaiAuth: true,
+          }),
+          "thread/read": () => ({ thread: nativeResponse.thread }),
+          "thread/start": startThread,
+          "thread/resume": startThread,
+          "turn/start": (request) => {
             turnModels.push(request.model);
-            result = turnStartResult(`turn-${turnModels.length}`);
-          } else if (message.method === "thread/backgroundTerminals/list") {
-            result = { data: [], nextCursor: null };
-          } else if (message.method === "thread/unsubscribe") {
-            result = { status: "unsubscribed" };
-          }
-          send({ id: message.id, result });
-          if (message.method === "turn/start") {
+            return turnStartResult(`turn-${turnModels.length}`);
+          },
+          "thread/backgroundTerminals/list": () => ({ data: [], nextCursor: null }),
+        },
+        (method, request, send) => {
+          if (method === "turn/start") {
             (turnModels.length === 1 ? primaryStarted : retryStarted).resolve();
-          } else if (message.method === "turn/interrupt") {
-            send({
-              method: "turn/completed",
-              params: {
-                threadId: "thread-policy",
-                turn: { id: request.turnId, status: "interrupted", items: [] },
-              },
-            });
+          } else if (method === "turn/interrupt") {
+            assert(request.turnId !== undefined, "interrupt must carry a turn id");
+            send(
+              completedTurn("thread-policy", {
+                id: request.turnId,
+                status: "interrupted",
+              }),
+            );
           }
         },
-      });
+      );
       // The controlled stdio fixture represents the managed process returned by startup.
       ownCodexInferenceClient(transport.client);
       vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(transport.client);
@@ -249,9 +282,10 @@ describe("Codex native configuration", () => {
           },
         },
       });
-      if (!harness.runAttempt) {
-        throw new Error("Registered Codex harness must support run attempts");
-      }
+      assert(
+        typeof harness.runAttempt === "function",
+        "Registered Codex harness must support run attempts",
+      );
       // Model policy owns this proof; cold preparation must not spend its logical clock.
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const runAttempt = harness.runAttempt.bind(harness);
@@ -269,13 +303,7 @@ describe("Codex native configuration", () => {
           method: "error",
           params: { threadId: "thread-policy", turnId: "turn-1", error, willRetry: false },
         });
-        transport.send({
-          method: "turn/completed",
-          params: {
-            threadId: "thread-policy",
-            turn: { id: "turn-1", status: "failed", items: [], error },
-          },
-        });
+        transport.send(completedTurn("thread-policy", { status: "failed", error }));
         const retried = await Promise.race([retryStarted.promise.then(() => true), settled]);
         if (permission === "revoked") {
           allowedModels.delete("native-retry");
@@ -288,26 +316,18 @@ describe("Codex native configuration", () => {
         allowedControl?.assertCurrent();
         sourceControl?.assertCurrent();
         if (retried) {
-          transport.send({
-            method: "turn/completed",
-            params: {
-              threadId: "thread-policy",
-              turn: {
-                id: "turn-2",
-                status: "completed",
-                items: [
-                  { type: "agentMessage", id: "retry-answer", text: "Synthetic retry reply" },
-                ],
-              },
-            },
-          });
+          transport.send(
+            completedTurn("thread-policy", {
+              id: "turn-2",
+              items: [{ type: "agentMessage", id: "retry-answer", text: "Synthetic retry reply" }],
+            }),
+          );
         }
         expect(turnModels).toEqual(
           permission === "denied" ? [runtimeModel] : [runtimeModel, "native-retry"],
         );
         await expect(run).rejects.toThrow("operator role cannot use this model");
-        expect(params.modelId).toBe(catalogModel);
-        expect(params.model.id).toBe(catalogModel);
+        expect(params).toMatchObject({ modelId: catalogModel, model: { id: catalogModel } });
         const transcript = await readTranscriptMessagesByIdentity(params);
         expect(transcript.filter((message) => message.role === "user")).toHaveLength(1);
       } finally {
@@ -348,6 +368,7 @@ describe("Codex native configuration", () => {
     }) => {
       const nativeSearchEnabled =
         nativeProvider === "copilot" || configuredProvider !== nativeProvider;
+      const runtimeSelection = { provider: nativeProvider, model: "gpt-5.6-luna" };
       const approvalsReviewer =
         nativeProvider === "openai" && configuredProvider === nativeProvider
           ? "auto_review"
@@ -387,7 +408,7 @@ describe("Codex native configuration", () => {
         historyCoveredThrough: new Date().toISOString(),
         webSearchThreadConfigFingerprint: JSON.stringify({
           "features.standalone_web_search": false,
-          web_search: "disabled",
+          web_search: nativeSearchEnabled && transport === "unix" ? "cached" : "disabled",
         }),
         connectionScope: "supervision",
         supervisionSourceThreadId: "thread-existing",
@@ -396,14 +417,6 @@ describe("Codex native configuration", () => {
         preserveNativeModel: true,
         conversationSourceTransferComplete: true,
         dynamicToolsFingerprint: codexDynamicToolsFingerprint([]),
-        ...(nativeSearchEnabled && transport === "unix"
-          ? {
-              webSearchThreadConfigFingerprint: JSON.stringify({
-                "features.standalone_web_search": false,
-                web_search: "cached",
-              }),
-            }
-          : {}),
         rolloutPath,
         appServerRuntimeFingerprint: buildCodexAppServerConnectionFingerprint(
           resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig }),
@@ -418,49 +431,25 @@ describe("Codex native configuration", () => {
         serviceTier: "priority",
       };
       const turnStarted = createDeferred<void>();
-      const requests: Array<{ method: string; params: unknown }> = [];
-      const harness = createClientHarness({
-        onWrite: (line, send) => {
-          const message: unknown = JSON.parse(line);
-          if (
-            !isJsonObject(message) ||
-            typeof message.method !== "string" ||
-            message.id === undefined
-          ) {
-            return;
-          }
-          requests.push({ method: message.method, params: message.params });
-          let result: unknown = {};
-          if (message.method === "initialize") {
-            result = {
-              userAgent: `codex-cli/${getMockRuntimeIdentity().serverVersion}`,
-              codexHome,
-            };
-          } else if (message.method === "configRequirements/read") {
-            result = { requirements: null };
-          } else if (message.method === "config/read") {
-            result = { config: { model_provider: configuredProvider }, origins: {} };
-          } else if (message.method === "modelProvider/capabilities/read") {
-            result = { webSearch: true };
-          } else if (message.method === "thread/read") {
-            result = { thread: { ...nativeResponse.thread, path: rolloutPath } };
-          } else if (message.method === "thread/resume") {
-            // Native resume tears down an idle, unsubscribed thread before applying overrides.
-            // A successful response alone cannot prove that its configuration changed.
-            send({
-              method: "thread/status/changed",
-              params: { threadId: "thread-existing", status: { type: "notLoaded" } },
-            });
-            result = nativeResponse;
-          } else if (message.method === "turn/start") {
-            result = turnStartResult();
-            turnStarted.resolve();
-          } else if (message.method === "thread/unsubscribe") {
-            result = { status: "unsubscribed" };
-          }
-          send({ id: message.id, result });
+      const harness = nativeClient(codexHome, {
+        "config/read": () => ({ config: { model_provider: configuredProvider }, origins: {} }),
+        "modelProvider/capabilities/read": () => ({ webSearch: true }),
+        "thread/read": () => ({ thread: { ...nativeResponse.thread, path: rolloutPath } }),
+        "thread/resume": (_request, send) => {
+          // Native resume tears down an idle, unsubscribed thread before applying overrides.
+          // A successful response alone cannot prove that its configuration changed.
+          send({
+            method: "thread/status/changed",
+            params: { threadId: "thread-existing", status: { type: "notLoaded" } },
+          });
+          return nativeResponse;
+        },
+        "turn/start": () => {
+          turnStarted.resolve();
+          return turnStartResult();
         },
       });
+      const { requests } = harness;
       const start = vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
       const clientFactory = vi.fn(sharedClientModule.getLeasedSharedCodexAppServerClient);
 
@@ -475,7 +464,7 @@ describe("Codex native configuration", () => {
       const bindModelExecution = vi.fn<
         NonNullable<typeof params.hostCapabilities.bindModelExecution>
       >((model) => {
-        expect(model).toEqual({ provider: nativeProvider, model: "gpt-5.6-luna" });
+        expect(model).toEqual(runtimeSelection);
         if (modelPolicyAction === "deny") {
           throw new Error("operator role cannot use this model");
         }
@@ -510,16 +499,13 @@ describe("Codex native configuration", () => {
         tools: {
           ...params.config?.tools,
           exec: { mode: configuredProvider === nativeProvider ? "auto" : "ask" },
+          ...(nativeSearchEnabled ? { web: { search: { enabled: true } } } : {}),
         },
       };
       if (nativeSearchEnabled) {
         params.preparedWebSearchPolicy = {
           allowed: true,
           persistentAllowed: true,
-        };
-        params.config = {
-          ...params.config,
-          tools: { ...params.config?.tools, web: { search: { enabled: true } } },
         };
       }
       // Keep the existing attempt budget on the clock owned by this protocol fixture.
@@ -552,49 +538,37 @@ describe("Codex native configuration", () => {
         ]);
         if (modelPolicyAction === "revoke") {
           modelRevocation.abort(new Error("operator model permission was revoked"));
-          harness.send({
-            method: "turn/completed",
-            params: {
-              threadId: "thread-existing",
-              turn: { id: "turn-1", status: "interrupted", items: [] },
-            },
-          });
+          harness.send(completedTurn("thread-existing", { status: "interrupted" }));
           await expect(run).rejects.toThrow("operator model permission was revoked");
           expect(releaseModelExecution).toHaveBeenCalledOnce();
           return;
         }
-        for (const method of ["item/started", "item/completed"]) {
-          harness.send({
-            method,
-            params: {
-              threadId: "thread-existing",
-              turnId: "turn-1",
-              item: {
+        for (const phase of ["started", "completed"]) {
+          harness.send(
+            itemNotification(
+              {
                 type: "commandExecution",
                 id: "settled-supervised-command",
                 command: "printf synthetic-completed-work",
                 cwd: workspaceDir,
-                status: method === "item/started" ? "inProgress" : "completed",
-                ...(method === "item/completed"
+                status: phase === "started" ? "inProgress" : "completed",
+                ...(phase === "completed"
                   ? { aggregatedOutput: "synthetic-completed-work", exitCode: 0 }
                   : {}),
               },
-            },
-          });
+              "turn-1",
+              "thread-existing",
+              phase,
+            ),
+          );
         }
-        harness.send({
-          method: "turn/completed",
-          params: {
-            threadId: "thread-existing",
-            turn: {
-              id: "turn-1",
-              status: "completed",
-              items: hasAnswer
-                ? [{ type: "agentMessage", id: "native-answer", text: "native answer" }]
-                : [],
-            },
-          },
-        });
+        harness.send(
+          completedTurn("thread-existing", {
+            items: hasAnswer
+              ? [{ type: "agentMessage", id: "native-answer", text: "native answer" }]
+              : [],
+          }),
+        );
         const result = await run;
         expect(bindModelExecution).toHaveBeenCalledOnce();
         expect(releaseModelExecution).toHaveBeenCalledOnce();
@@ -606,16 +580,10 @@ describe("Codex native configuration", () => {
           expect(context).not.toHaveProperty("modelProviderId");
           expect(context).not.toHaveProperty("modelId");
         }
-        expect(result.runtimeModelSelection).toEqual({
-          provider: nativeProvider,
-          model: "gpt-5.6-luna",
-        });
+        expect(result.runtimeModelSelection).toEqual(runtimeSelection);
         expect(capture).not.toHaveBeenCalled();
         if (hasAnswer) {
-          expect(result.currentAttemptAssistant).toMatchObject({
-            provider: nativeProvider,
-            model: "gpt-5.6-luna",
-          });
+          expect(result.currentAttemptAssistant).toMatchObject(runtimeSelection);
           expect(result.settledTurnFinalizationContext).toBeUndefined();
         } else {
           expect(result.settledTurnFinalizationContext).toEqual({ source: "unavailable" });
@@ -660,24 +628,20 @@ describe("Codex native configuration", () => {
           startOptions: expect.objectContaining({ homeScope: "user" }),
         }),
       );
-      const resumeRequest = requests.find((request) => request.method === "thread/resume");
-      const resumeParams = resumeRequest?.params as Record<string, unknown> | undefined;
-      expect(resumeParams).not.toHaveProperty("model");
-      expect(resumeParams).not.toHaveProperty("modelProvider");
+      const requestParams = (method: string) =>
+        requests.find((request) => request.method === method)?.params;
+      for (const method of ["thread/resume", "turn/start"]) {
+        const nativeParams = requestParams(method);
+        expect(nativeParams).not.toHaveProperty("model");
+        expect(nativeParams).not.toHaveProperty("modelProvider");
+        expect(nativeParams).toMatchObject({ approvalsReviewer, serviceTier: "priority" });
+      }
       if (nativeSearchEnabled) {
-        expect(resumeParams?.config).toMatchObject({
-          web_search: transport === "unix" ? "cached" : "disabled",
+        expect(requestParams("thread/resume")).toMatchObject({
+          config: { web_search: transport === "unix" ? "cached" : "disabled" },
         });
         expect(requests.some(({ method }) => method === "thread/start")).toBe(false);
       }
-      expect(resumeParams?.approvalsReviewer).toBe(approvalsReviewer);
-      expect(resumeParams?.serviceTier).toBe("priority");
-      const turnRequest = requests.find((request) => request.method === "turn/start");
-      const turnParams = turnRequest?.params as Record<string, unknown> | undefined;
-      expect(turnParams).not.toHaveProperty("model");
-      expect(turnParams).not.toHaveProperty("modelProvider");
-      expect(turnParams?.approvalsReviewer).toBe(approvalsReviewer);
-      expect(turnParams?.serviceTier).toBe("priority");
     },
   );
 });
@@ -689,11 +653,11 @@ it.each(["restore", "fresh"] as const)(
     const yielded = origin !== "fresh";
     const client = createClient();
     const runtime = createRuntime();
-    type Source = NonNullable<
-      Parameters<typeof createAgentHarnessHostCapabilitiesForTest>[0]["operatorSource"]
-    >;
-    let policy: Source["modelPolicy"];
-    const listeners = new Set<() => void>();
+    let policy: OperatorSource["modelPolicy"];
+    const { source: operatorSource, listeners } = mutableOperator(
+      "unqualified-native-operator",
+      () => policy,
+    );
     const attempt = createParams(
       path.join(tempDir, "unqualified-source.jsonl"),
       path.join(tempDir, "unqualified-source-workspace"),
@@ -703,33 +667,15 @@ it.each(["restore", "fresh"] as const)(
       attempt,
       pluginId: "codex",
       nativeModelPolicySupport: "exact",
-      operatorSource: {
-        profileId: "unqualified-native-operator",
-        scopes: ["operator.write"],
-        assertCurrent: () => {},
-        get modelPolicy() {
-          return policy;
-        },
-        onModelPolicyChanged: (changed) => {
-          listeners.add(changed);
-          return () => {
-            listeners.delete(changed);
-          };
-        },
-      },
+      operatorSource,
     });
     const source = host.capabilities.retainSourceAuthority?.();
-    if (!source) {
-      throw new Error("Expected host-issued operator source");
-    }
+    assert(source, "Expected host-issued operator source");
     const sibling = source.bindModelExecution?.({ provider: "test-provider", model: "allowed" });
-    if (!sibling) {
-      throw new Error("Expected sibling model binding");
-    }
+    assert(sibling, "Expected sibling model binding");
     const interruptModelExecution = vi.fn();
     const cancelForeground = vi.fn();
     const monitor = new codexNativeSubagentMonitorRuntime.Monitor(client.client, runtime, {
-      recoveryPollDelaysMs: [],
       interruptModelExecution,
     });
     const parent = await monitor.registerParent({
@@ -750,14 +696,9 @@ it.each(["restore", "fresh"] as const)(
     await notifyChildStarted(client);
     try {
       if (fresh) {
-        await client.notify({
-          method: "item/completed",
-          params: {
-            threadId: "parent-thread",
-            turnId: "parent-a",
-            item: directSpawnItem("v2", "parent-thread", "child-thread"),
-          },
-        });
+        await client.notify(
+          itemNotification(directSpawnItem("v2", "parent-thread", "child-thread"), "parent-a"),
+        );
       } else {
         await monitor.prepareModelInput({
           threadId: "parent-thread",
@@ -767,20 +708,18 @@ it.each(["restore", "fresh"] as const)(
           readQualification: () => undefined,
           assertCurrent: () => {},
         });
-        await client.notify({
-          method: "item/completed",
-          params: {
-            threadId: "parent-thread",
-            turnId: "parent-a",
-            item: {
+        await client.notify(
+          itemNotification(
+            {
               type: "subAgentActivity",
               kind: "interacted",
               id: "accepted-input",
               agentThreadId: "child-thread",
               agentPath: "/root/child-thread",
             },
-          },
-        });
+            "parent-a",
+          ),
+        );
       }
       await client.notify(turnStartedNotification("unqualified-turn"));
       if (yielded) {

@@ -1,74 +1,27 @@
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
-  ControlUiHost,
   ControlUiReplacement,
   ControlUiSurfaceProps,
   ControlUiViewContext,
 } from "../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { ApplicationContext } from "../app/context.ts";
 import { ContentPresentation } from "../lib/solid/presentation.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { PluginSurface } from "./control-ui-view.solid.tsx";
+import {
+  composerProps,
+  createViewRuntime as createRuntime,
+  recordReplacement,
+  replacement,
+} from "./control-ui-view.test-support.ts";
 import "./control-ui-contributions.solid.tsx";
 
-function createRuntime(initial?: ControlUiReplacement<"workspace" | "composer">) {
-  const listeners = new Set<() => void>();
-  const abort = new AbortController();
-  const request = vi.fn().mockResolvedValue({ ok: true });
-  const pluginHost = {
-    signal: abort.signal,
-    request,
-    sessions: {},
-    agents: {},
-    navigation: {},
-    ui: {
-      invalidate: () => {
-        for (const listener of listeners) {
-          listener();
-        }
-      },
-    },
-    components: {},
-  } as unknown as ControlUiHost;
-  const reportError = vi.fn();
-  let selected = initial;
-  const context = {
-    plugins: {
-      selectedReplacement: () =>
-        selected
-          ? {
-              key: "review/composed",
-              pluginId: "review",
-              value: selected,
-              host: pluginHost,
-              signal: abort.signal,
-            }
-          : undefined,
-      subscribe: (listener: () => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-      reportError,
-    },
-  } as unknown as ApplicationContext;
-  return {
-    context,
-    reportError,
-    listeners,
-    request,
-    select: (replacement?: ControlUiReplacement<"workspace" | "composer">) => {
-      selected = replacement;
-      for (const listener of listeners) {
-        listener();
-      }
-    },
-  };
-}
+const pluginView = (host: HTMLElement) =>
+  host.querySelector<HTMLElementTagNameMap["openclaw-plugin-view"]>("openclaw-plugin-view")!;
 
 function mountSurface(
   initial?: ControlUiReplacement<"workspace" | "composer">,
@@ -116,16 +69,13 @@ function mountSurface(
           <PluginSurface
             surface="composer"
             presented={presented()}
-            props={{
+            props={composerProps({
               ...identity(),
               draft: state.draft,
-              canSend: true,
-              sending: false,
-              disabledReason: null,
               setDraft: state.setDraft,
               send: state.send,
               abort: state.abort,
-            }}
+            })}
             renderDefault={renderDefault}
             renderCompanion={() => (
               <button class="companion-action">Retained attachment controls</button>
@@ -166,29 +116,22 @@ function mountView(initial: ControlUiReplacement<"workspace" | "composer">) {
   return { ...runtime, view, provider };
 }
 
-afterEach(() => {
-  document.body.replaceChildren();
-});
+afterEach(() => document.body.replaceChildren());
 
 describe("native UI built-in delegation", () => {
   it.each(["native", "solid"])(
     "coalesces %s property updates for the mounted plugin",
     async (mode) => {
       const updates: ControlUiViewContext<ControlUiSurfaceProps["workspace"]>[] = [];
-      const replacement: ControlUiReplacement<"workspace"> = {
-        id: "batched",
-        label: "Batched workspace",
-        surface: "workspace",
-        mount(container) {
-          container.textContent = "Synthetic workspace";
-          return { update: (context) => updates.push(context) };
-        },
-      };
+      const batched = replacement("workspace", (container) => {
+        container.textContent = "Synthetic workspace";
+        return { update: (context) => updates.push(context) };
+      });
       let view: HTMLElementTagNameMap["openclaw-plugin-view"];
       let refresh: () => void;
       let cleanup: () => void;
       if (mode === "native") {
-        const mounted = mountView(replacement);
+        const mounted = mountView(batched);
         view = mounted.view;
         refresh = () => {
           view.props = { sessionKey: "main", agentId: "main", routeId: "activity" };
@@ -198,8 +141,8 @@ describe("native UI built-in delegation", () => {
         };
         cleanup = () => mounted.provider.remove();
       } else {
-        const mounted = mountSurface(replacement);
-        view = mounted.host.querySelector("openclaw-plugin-view")!;
+        const mounted = mountSurface(batched);
+        view = pluginView(mounted.host);
         refresh = () => {
           mounted.update();
           mounted.update();
@@ -215,9 +158,7 @@ describe("native UI built-in delegation", () => {
         refresh();
         await view.updateComplete;
         flush();
-        expect(updates).toHaveLength(1);
-        expect(updates[0]?.props.routeId).toBe("chat");
-        expect(updates[0]?.presented).toBe(true);
+        expect(updates).toMatchObject([{ props: { routeId: "chat" }, presented: true }]);
       } finally {
         cleanup();
       }
@@ -238,11 +179,8 @@ describe("native UI built-in delegation", () => {
         button.remove();
       };
     };
-    const { view, select, listeners } = mountView({
-      id: "renderer-defaults",
-      label: "Renderer defaults",
-      surface: "workspace",
-      mount(container, context) {
+    const { view, select, invalidate } = mountView(
+      replacement("workspace", (container, context) => {
         const first = document.createElement("div");
         const second = document.createElement("div");
         container.append(first, second);
@@ -257,17 +195,15 @@ describe("native UI built-in delegation", () => {
             }
           },
         };
-      },
-    });
+      }),
+    );
     view.mountDefaultView = mountDefaultView;
     await view.updateComplete;
     expect(mounted).toHaveLength(3);
     expect(view.querySelectorAll("button")).toHaveLength(2);
     expect(disposed).toEqual(mounted.slice(0, 1));
     failUpdate = true;
-    for (const listener of listeners) {
-      listener();
-    }
+    invalidate();
     await view.updateComplete;
     await view.updateComplete;
     expect(disposed).toEqual(mounted.slice(0, 3));
@@ -280,58 +216,41 @@ describe("native UI built-in delegation", () => {
     expect(disposed).toEqual(mounted);
   });
 
-  it("keeps host controls beside a replacement and removes them when the built-in returns", async () => {
-    const replacement: ControlUiReplacement<"composer"> = {
-      id: "composer",
-      label: "Custom composer",
-      surface: "composer",
-      mount(container) {
-        container.textContent = "Custom draft";
-        return { update() {}, dispose() {} };
-      },
-    };
-    const { host, select } = mountSurface(replacement);
-    await vi.waitFor(() => expect(host.querySelector(".companion-action")).not.toBeNull());
-    expect(host.querySelector(".builtin-action")).toBeNull();
-    select();
-    await vi.waitFor(() => expect(host.querySelector(".builtin-action")).not.toBeNull());
-    expect(host.querySelector(".companion-action")).toBeNull();
-    select(replacement);
-    await vi.waitFor(() => expect(host.querySelector(".companion-action")).not.toBeNull());
-  });
-
   it("recovers the composer after a failed mount publishes an error", async () => {
-    const healthy: ControlUiReplacement<"composer"> = {
-      id: "healthy",
-      label: "Healthy composer",
-      surface: "composer",
-      mount(container) {
-        container.textContent = "Healthy composer";
-      },
-    };
-    const { host, select, reportError, listeners, unmount } = mountSurface(healthy);
-    // Runtime diagnostics publish synchronously from the failing plugin root.
-    reportError.mockImplementation(() => {
-      for (const notify of listeners) {
-        notify();
-      }
+    const healthy = replacement("composer", (container) => {
+      container.textContent = "Healthy composer";
     });
+    const { host, state, select, reportError, invalidate, update, unmount } = mountSurface(healthy);
+    // Runtime diagnostics publish synchronously from the failing plugin root.
+    reportError.mockImplementation(invalidate);
     try {
       await vi.waitFor(() => expect(host.textContent).toContain("Healthy composer"));
-      select({
-        id: "failing",
-        label: "Failing composer",
-        surface: "composer",
-        mount() {
-          throw new Error("Composer failed");
-        },
-      });
+      const failure = new Error("Composer failed");
+      select(
+        replacement("composer", () => {
+          throw failure;
+        }),
+      );
       await vi.waitFor(() => expect(host.querySelector(".builtin-action")).not.toBeNull());
       expect(host.querySelectorAll(".builtin-action")).toHaveLength(1);
       expect(host.querySelector(".companion-action")).toBeNull();
+      host.querySelector<HTMLButtonElement>(".builtin-action")!.click();
+      expect(state.count).toBe(1);
+      expect(reportError).toHaveBeenCalledWith("review", failure);
+      expect(host.querySelector("[role=alert]")?.textContent).toContain(failure.message);
+      const input = host.querySelector<HTMLInputElement>(".builtin-input")!;
+      input.value = "Unsent input";
+      input.focus();
+      update();
+      flush();
+      await pluginView(host).updateComplete;
+      expect(host.querySelector(".builtin-input")).toBe(input);
+      expect(input.value).toBe("Unsent input");
+      expect(document.activeElement).toBe(input);
       select(healthy);
       await vi.waitFor(() => expect(host.textContent).toContain("Healthy composer"));
       expect(host.querySelector(".builtin-action")).toBeNull();
+      expect(host.querySelector(".companion-action")).not.toBeNull();
       expect(host.querySelector("[role=alert]")).toBeNull();
     } finally {
       unmount();
@@ -346,17 +265,14 @@ describe("native UI built-in delegation", () => {
     toolbar.addEventListener("click", clicked);
     const status = document.createElement("output");
     status.textContent = "Plugin status";
-    const { host } = mountSurface({
-      id: "composer",
-      label: "Custom composer",
-      surface: "composer",
-      mount(container, context) {
+    const { host } = mountSurface(
+      replacement("composer", (container, context) => {
         container.append(toolbar);
         stopDefault = context.mountDefault(container);
         container.append(status);
         return { dispose: () => stopDefault?.() };
-      },
-    });
+      }),
+    );
     await vi.waitFor(() => expect(host.querySelector(".builtin-action")).not.toBeNull());
     expect(host.querySelectorAll(".builtin-action")).toHaveLength(1);
     expect(host.querySelector(".companion-action")).toBeNull();
@@ -378,23 +294,13 @@ describe("native UI built-in delegation", () => {
       const setPresented =
         presentation === "surface" ? view.setPresented : view.setContentPresented;
       const builtin = view.host.querySelector(".builtin-action");
-      const contexts: ControlUiViewContext<ControlUiSurfaceProps["workspace"]>[] = [];
-      const dispose = vi.fn();
-      const mount = vi.fn(
-        (
-          container: HTMLElement,
-          context: ControlUiViewContext<ControlUiSurfaceProps["workspace"]>,
-        ) => {
-          contexts.push(context);
-          container.textContent = "Retained plugin state";
-          return { update: (next: typeof context) => contexts.push(next), dispose };
-        },
-      );
+      const record = recordReplacement("workspace", "Retained plugin state", true);
+      const { contexts, dispose, mount } = record;
 
       setPresented(false);
       flush();
       expect(view.listeners.size).toBe(0);
-      view.select({ id: "workspace", label: "Workspace", surface: "workspace", mount });
+      view.select(record.view);
       flush();
       expect(mount).not.toHaveBeenCalled();
       expect(view.host.querySelector(".builtin-action")).toBe(builtin);
@@ -426,28 +332,12 @@ describe("native UI built-in delegation", () => {
       selector: "contributionKey",
     },
   ])("retires composer callbacks before rendering $label", async ({ nextAgents, selector }) => {
-    const contexts: ControlUiViewContext<ControlUiSurfaceProps["composer"]>[] = [];
-    const roots: HTMLElement[] = [];
-    const dispose = vi.fn();
-    const replacement: ControlUiReplacement<"composer"> = {
-      id: "composer",
-      label: "Custom composer",
-      surface: "composer",
-      mount(container, context) {
-        contexts.push(context);
-        roots.push(container);
-        container.textContent = context.props.agentId;
-        return { dispose };
-      },
-    };
-    const { host, state, request, select } = mountSurface(replacement, "global");
+    const record = recordReplacement("composer", (context) => context.props.agentId);
+    const { contexts, roots, dispose } = record;
+    const { host, state, request, select } = mountSurface(record.view, "global");
     await vi.waitFor(() => expect(contexts).toHaveLength(1));
-    const current = contexts[0];
-    const view =
-      host.querySelector<HTMLElementTagNameMap["openclaw-plugin-view"]>("openclaw-plugin-view");
-    if (!current || !view) {
-      throw new Error("Expected the composer replacement to mount");
-    }
+    const current = contexts[0]!;
+    const view = pluginView(host);
     current.props.setDraft("Current draft");
     expect(state.draft).toBe("Current draft");
 
@@ -467,7 +357,7 @@ describe("native UI built-in delegation", () => {
       view.contributionKey = "";
     } else {
       select();
-      select(replacement);
+      select(record.view);
     }
     // Revocation precedes the queued render; DOM disposal belongs to that render.
     expect(dispose).not.toHaveBeenCalled();
@@ -481,10 +371,7 @@ describe("native UI built-in delegation", () => {
     expect(dispose).toHaveBeenCalledOnce();
     expect(contexts).toHaveLength(2);
     expect(roots[1]).not.toBe(roots[0]);
-    const successor = contexts[1];
-    if (!successor) {
-      throw new Error("Expected a new composer owner to mount");
-    }
+    const successor = contexts[1]!;
     expect(successor.props.agentId).toBe(nextAgents?.at(-1) ?? "main");
     successor.props.setDraft("Successor draft");
     expect(state.draft).toBe("Successor draft");
@@ -493,28 +380,12 @@ describe("native UI built-in delegation", () => {
   it.each([false, true])(
     "retires hidden composer operations (same-turn return: %s)",
     async (sameTurnReturn) => {
-      const contexts: ControlUiViewContext<ControlUiSurfaceProps["composer"]>[] = [];
-      const roots: HTMLElement[] = [];
-      const dispose = vi.fn();
-      const replacement: ControlUiReplacement<"composer"> = {
-        id: "composer",
-        label: "Custom composer",
-        surface: "composer",
-        mount(container, context) {
-          contexts.push(context);
-          roots.push(container);
-          container.textContent = "Retained local view state";
-          return { update: (next) => contexts.push(next), dispose };
-        },
-      };
-      const { host, state, request } = mountSurface(replacement);
+      const record = recordReplacement("composer", "Retained local view state", true);
+      const { contexts, roots, dispose } = record;
+      const { host, state, request } = mountSurface(record.view);
       await vi.waitFor(() => expect(roots).toHaveLength(1));
-      const current = contexts.at(-1);
-      const view =
-        host.querySelector<HTMLElementTagNameMap["openclaw-plugin-view"]>("openclaw-plugin-view");
-      if (!current || !view) {
-        throw new Error("Expected the composer replacement to mount");
-      }
+      const current = contexts.at(-1)!;
+      const view = pluginView(host);
       current.props.setDraft("Current draft");
       const send = createDeferred<boolean>();
       state.send.mockReturnValueOnce(send.promise);
@@ -556,10 +427,8 @@ describe("native UI built-in delegation", () => {
       expect(dispose).not.toHaveBeenCalled();
       await expect(current.host.request("fixture.retained-view")).resolves.toEqual({ ok: true });
       expect(request).toHaveBeenCalledOnce();
-      const successor = contexts.at(-1);
-      if (!successor || successor === current) {
-        throw new Error("Expected fresh composer operations on return");
-      }
+      const successor = contexts.at(-1)!;
+      expect(successor).not.toBe(current);
       expect(successor.presented).toBe(true);
       expect(successor.signal).toBe(current.signal);
       successor.props.setDraft("Successor draft");
@@ -580,17 +449,13 @@ describe("native UI built-in delegation", () => {
     state.navigation.append(link);
     flush();
 
-    select({
-      id: "workspace",
-      label: "Custom workspace",
-      surface: "workspace",
-      mount(container) {
+    select(
+      replacement("workspace", (container) => {
         container.textContent = "Custom workspace";
-      },
-    });
+      }),
+    );
     await vi.waitFor(() => expect(host.textContent).toBe("Custom workspace"));
-    const retired =
-      host.querySelector<HTMLElementTagNameMap["openclaw-plugin-view"]>("openclaw-plugin-view")!;
+    const retired = pluginView(host);
     expect(link.isConnected).toBe(false);
 
     select();
@@ -602,67 +467,41 @@ describe("native UI built-in delegation", () => {
     expect(navigate).toHaveBeenCalledOnce();
   });
 
-  it("preserves built-in controls through composition and failure recovery", async () => {
+  it("reports fatal async errors only for the current mount and disposes synchronous failures", async () => {
+    const contexts: ControlUiViewContext<ControlUiSurfaceProps["workspace"]>[] = [];
     const dispose = vi.fn();
-    const replacement: ControlUiReplacement<"workspace"> = {
-      id: "composed",
-      label: "Composed workspace",
+    let failSynchronously = true;
+    const { host, reportError } = mountSurface({
+      id: "fatal",
+      label: "Fatal",
       surface: "workspace",
       mount(container, context) {
-        const stop = context.mountDefault(container);
-        return {
-          dispose() {
-            dispose();
-            stop();
-          },
-        };
-      },
-    };
-    const { host, state, reportError, listeners, select, update, unmount } = mountSurface();
-    flush();
-    expect(host.querySelector("openclaw-plugin-view")).toBeNull();
-    host.querySelector<HTMLButtonElement>(".builtin-action")!.click();
-    expect(state.count).toBe(1);
-
-    select(replacement);
-    await vi.waitFor(() =>
-      expect(host.querySelector("openclaw-plugin-view button")).not.toBeNull(),
-    );
-    host.querySelector<HTMLButtonElement>(".builtin-action")!.click();
-    expect(state.count).toBe(2);
-
-    select();
-    await vi.waitFor(() => expect(host.querySelector("openclaw-plugin-view")).toBeNull());
-    host.querySelector<HTMLButtonElement>(".builtin-action")!.click();
-    expect(state.count).toBe(3);
-    expect(dispose).toHaveBeenCalledOnce();
-    expect(reportError).not.toHaveBeenCalled();
-
-    const failure = new Error("Plugin mount failed");
-    select({
-      ...replacement,
-      mount() {
-        throw failure;
+        contexts.push(context);
+        container.textContent = "Current plugin content";
+        if (failSynchronously) {
+          context.reportError?.(new Error("Initial load failed"));
+        }
+        return { dispose };
       },
     });
     await vi.waitFor(() =>
-      expect(host.querySelector("[role=alert]")?.textContent).toContain(failure.message),
+      expect(host.querySelector("[role=alert]")?.textContent).toContain("Initial load failed"),
     );
-    host.querySelector<HTMLButtonElement>(".builtin-action")!.click();
-    expect(state.count).toBe(4);
-    expect(reportError).toHaveBeenCalledWith("review", failure);
-    const input = host.querySelector<HTMLInputElement>(".builtin-input")!;
-    input.value = "Unsent input";
-    input.focus();
-    update();
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(contexts[0]?.signal.aborted).toBe(true);
+    failSynchronously = false;
+    host.querySelector<HTMLButtonElement>("[role=alert] button")!.click();
+    await vi.waitFor(() => expect(contexts).toHaveLength(2));
+    contexts[0]?.reportError?.(new Error("Late retired error"));
     flush();
-    await host.querySelector("openclaw-plugin-view")!.updateComplete;
-    expect(host.querySelector(".builtin-input")).toBe(input);
-    expect(input.value).toBe("Unsent input");
-    expect(document.activeElement).toBe(input);
-    unmount();
-    await Promise.resolve();
-    expect(listeners.size).toBe(0);
+    expect(host.querySelector("[role=alert]")).toBeNull();
+    contexts[1]?.reportError?.(new Error("Current request failed"));
+    await vi.waitFor(() =>
+      expect(host.querySelector("[role=alert]")?.textContent).toContain("Current request failed"),
+    );
+    expect(contexts[1]?.signal.aborted).toBe(true);
+    expect(dispose).toHaveBeenCalledTimes(2);
+    expect(reportError).toHaveBeenCalledTimes(2);
   });
 
   it("aborts an invalidated view that fails during update and remounts it on retry", async () => {
@@ -672,11 +511,8 @@ describe("native UI built-in delegation", () => {
     const failure = new Error("Deferred page unavailable");
     let failUpdate = false;
     let invalidate = () => {};
-    const { host, reportError, listeners } = mountSurface({
-      id: "deferred",
-      label: "Deferred workspace",
-      surface: "workspace",
-      mount(container, context) {
+    const { host, reportError, listeners } = mountSurface(
+      replacement("workspace", (container, context) => {
         roots.push(container);
         signals.push(context.signal);
         invalidate = context.host.ui.invalidate;
@@ -689,11 +525,10 @@ describe("native UI built-in delegation", () => {
           },
           dispose,
         };
-      },
-    });
+      }),
+    );
     flush();
-    const view =
-      host.querySelector<HTMLElementTagNameMap["openclaw-plugin-view"]>("openclaw-plugin-view")!;
+    const view = pluginView(host);
     await view.updateComplete;
     failUpdate = true;
     invalidate();
@@ -722,25 +557,20 @@ describe("native UI built-in delegation", () => {
     const roots: HTMLElement[] = [];
     const signals: AbortSignal[] = [];
     const mountedViews: ControlUiViewContext<ControlUiSurfaceProps["workspace"]>[] = [];
-    const replacement: ControlUiReplacement<"workspace"> = {
-      id: "append-only",
-      label: "Append-only workspace",
-      surface: "workspace",
-      mount(container, context) {
-        roots.push(container);
-        signals.push(context.signal);
-        mountedViews.push(context);
-        container.append(document.createTextNode("Plugin content"));
-      },
-    };
-    const { view, provider, listeners, select, request } = mountView(replacement);
+    const appendOnly = replacement("workspace", (container, context) => {
+      roots.push(container);
+      signals.push(context.signal);
+      mountedViews.push(context);
+      container.append(document.createTextNode("Plugin content"));
+    });
+    const { view, provider, listeners, select, request } = mountView(appendOnly);
     const navigation = document.createElement("nav");
     view.mountDefaultView = (target) => {
       target.append(navigation);
       return () => navigation.remove();
     };
     await vi.waitFor(() => expect(roots).toHaveLength(1));
-    select({ ...replacement });
+    select({ ...appendOnly });
     await vi.waitFor(() => expect(roots).toHaveLength(2));
     expect(roots[1]).not.toBe(roots[0]);
     expect(signals[0]?.aborted).toBe(true);

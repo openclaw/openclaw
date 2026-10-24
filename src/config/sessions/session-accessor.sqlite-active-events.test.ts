@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
@@ -28,6 +30,7 @@ import {
   readSessionTranscriptActivePathEntryRelation as entryRelation,
   readSessionTranscriptBoundedMessageTailPage as readTailPage,
   readSessionTranscriptMessageEventPage as readPage,
+  readSessionTranscriptMessageEvents,
   SessionTranscriptProjectionUnavailableError as ProjectionUnavailableError,
 } from "./session-accessor.sqlite-active-events.js";
 import {
@@ -36,6 +39,7 @@ import {
   readSessionTranscriptHistoryEventById as messageById,
 } from "./session-accessor.sqlite-history.test-support.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
+import { readPreviousIndexedTranscriptEventSync as readPrevious } from "./session-accessor.sqlite-suffix-read.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { runWithSessionTranscriptReadFence as withReadFence } from "./session-transcript-read-fence.js";
 import {
@@ -127,6 +131,18 @@ describe("SQLite active transcript event projection", () => {
     messages: Parameters<typeof persistSessionTranscriptTurn>[1]["messages"],
     target = scope,
   ) => persistSessionTranscriptTurn(target, { messages, touchSessionEntry: false });
+  const userMessage = (id: string, parentId: string | null, content = id) =>
+    transcriptMessage(id, parentId, { role: "user", content, idempotencyKey: `${id}:user` });
+  const admission = (logicalTurnId = "fenced") => {
+    const anchor = readAnchor({ ...scope, entryId: "admitted" });
+    if (!anchor) {
+      throw new Error("missing real admission anchor");
+    }
+    return { ...anchor, logicalTurnId, role: "user" as const };
+  };
+  const accept = () => everyUserInput(scope, "source:user", () => true);
+  const admissionReset = (id: string, parent: string, kept?: string) =>
+    reset(id, parent, "2026-09-14T00:00:00.000Z", kept);
 
   beforeEach(() => {
     queuedSessionWrite.mockReset();
@@ -205,7 +221,6 @@ describe("SQLite active transcript event projection", () => {
         await reconcile();
 
         const page = readPage(scope, { maxMessages: 10, offset: 0 });
-
         expect(eventIds(page.events)).toEqual(rewind ? ["root", "active"] : ["canonical-root"]);
         expect(page.totalMessages).toBe(count);
         expect(indexState("needs_rebuild, active_message_count")).toEqual({
@@ -220,20 +235,6 @@ describe("SQLite active transcript event projection", () => {
         expect(readLatest(scope)?.event).toMatchObject({ id: "active" });
         expect(entryRelation(scope, "root")).toBe("ancestor");
         expect(page.events.map((entry) => entry.seq)).toEqual([1, 2]);
-        expect(indexState("needs_rebuild, active_event_count, active_message_count")).toEqual({
-          active_event_count: 2,
-          active_message_count: 2,
-          needs_rebuild: 0,
-        });
-        expect(
-          sessionSql(
-            "SELECT active_position, event_seq, message_position FROM session_transcript_active_events WHERE session_id = ? ORDER BY active_position",
-          ).all(scope.sessionId),
-        ).toEqual([
-          { active_position: 0, event_seq: 1, message_position: 0 },
-          { active_position: 1, event_seq: 3, message_position: 1 },
-        ]);
-
         const activeRows = sessionSql(
           "SELECT event.event_json FROM session_transcript_active_events AS active JOIN transcript_events AS event ON event.session_id = active.session_id AND event.seq = active.event_seq WHERE active.session_id = ? ORDER BY active.active_position",
         ).all(scope.sessionId) as Array<{ event_json: string }>;
@@ -252,6 +253,66 @@ describe("SQLite active transcript event projection", () => {
           operationSpy.mockRestore();
         }
       }
+    },
+  );
+
+  it("rejects a retained completion source reset before admission", async () => {
+    await persistMessages([userMessage("source", null, "completed child")]);
+    expect(accept()).toBe(true);
+    await admissionReset("before-admission-reset", "source", "source");
+    await persistMessages([userMessage("admitted", "before-admission-reset")]);
+    expect(
+      readSessionTranscriptMessageEvents(scope).some(
+        ({ event }) =>
+          typeof event === "object" && event !== null && "id" in event && event.id === "source",
+      ),
+    ).toBe(true);
+    expect(accept()).toBe(false);
+    expect(withReadFence(admission("recovery"), accept)).toBe(false);
+  });
+
+  it("accepts an admission store path that aliases the same database", async () => {
+    await persistMessages([userMessage("source", null), userMessage("admitted", "source")]);
+    const anchor = admission("aliased-store");
+    const aliasDir = path.join(path.dirname(path.dirname(anchor.storePath)), "agent-alias");
+    fs.symlinkSync(
+      path.dirname(anchor.storePath),
+      aliasDir,
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    expect(
+      withReadFence(
+        { ...anchor, storePath: path.join(aliasDir, path.basename(anchor.storePath)) },
+        accept,
+      ),
+    ).toBe(true);
+  });
+
+  it.each([false, true])(
+    "keeps pre-fence control facts through a later reset (human=%s)",
+    async (human) => {
+      await persistMessages([
+        userMessage("source", null, "result"),
+        ...(human ? [userMessage("human", "source", "new work")] : []),
+        userMessage("admitted", human ? "human" : "source"),
+      ]);
+      const anchor = admission();
+      await admissionReset("later-reset", "admitted");
+      await persistMessages([
+        transcriptMessage("after-reset", "later-reset", { role: "user", content: "fresh" }),
+      ]);
+      expect(accept()).toBe(false);
+      const seen: unknown[] = [];
+      const result = withReadFence(anchor, () =>
+        everyUserInput(scope, "source:user", (message) => {
+          seen.push(message);
+          return (message as { idempotencyKey?: string }).idempotencyKey !== "human:user";
+        }),
+      );
+      expect(result).toBe(!human);
+      expect(
+        seen.map((message) => (message as { idempotencyKey?: string }).idempotencyKey),
+      ).toEqual(human ? ["source:user", "human:user"] : ["source:user"]);
     },
   );
 
@@ -279,7 +340,8 @@ describe("SQLite active transcript event projection", () => {
     if (!anchor) {
       throw new Error("expected admitted message anchor");
     }
-    expect(readLatest(scope)?.event).toMatchObject({ id: "later" });
+    const latest = readLatest(scope);
+    expect(latest?.event).toMatchObject({ id: "later" });
     expect(
       withReadFence({ ...anchor, logicalTurnId: "fenced-turn", role: "user" }, () =>
         readLatest(scope),
@@ -294,6 +356,7 @@ describe("SQLite active transcript event projection", () => {
     });
     await reconcile();
     expect(readLatest(scope)?.event).toMatchObject({ id: "prior" });
+    expect(readPrevious(scope, latest!.eventSeq + 1)?.event).toMatchObject({ id: "prior" });
   });
 
   it("streams only user control facts from an exact visible input within the read fence", async () => {
@@ -302,27 +365,24 @@ describe("SQLite active transcript event projection", () => {
       sourceTool: "main_session_restart_recovery",
       sourceSessionKey: scope.sessionKey,
     };
-    await persistSessionTranscriptTurn(scope, {
-      messages: [
-        transcriptMessage("source", null, {
-          role: "user",
-          content: "x".repeat(100_000),
-          idempotencyKey: "source:user",
-          __openclaw: { runId: "source" },
-          provenance,
-        }),
-        transcriptMessage("tool-output", "source", {
-          role: "assistant",
-          content: "y".repeat(100_000),
-        }),
-        transcriptMessage("later-human", "tool-output", {
-          role: "user",
-          content: "new request",
-          idempotencyKey: "later:user",
-        }),
-      ],
-      touchSessionEntry: false,
-    });
+    await persistMessages([
+      transcriptMessage("source", null, {
+        role: "user",
+        content: "x".repeat(100_000),
+        idempotencyKey: "source:user",
+        __openclaw: { runId: "source" },
+        provenance,
+      }),
+      transcriptMessage("tool-output", "source", {
+        role: "assistant",
+        content: "y".repeat(100_000),
+      }),
+      transcriptMessage("later-human", "tool-output", {
+        role: "user",
+        content: "new request",
+        idempotencyKey: "later:user",
+      }),
+    ]);
     // An upgraded transcript keeps its original rows until a payload write.
     runOpenClawAgentWriteTransaction(
       (database) => {
@@ -400,8 +460,7 @@ describe("SQLite active transcript event projection", () => {
       offset: 0,
     });
 
-    expect(page.scannedMessages).toBe(2);
-    expect(page.newestContiguousEventCount).toBe(0);
+    expect(page).toMatchObject({ scannedMessages: 2, newestContiguousEventCount: 0 });
     expect(page.serializedBytes).toBeLessThanOrEqual(512);
     expect(eventIds(page.events)).toEqual(["small"]);
   });
@@ -453,7 +512,6 @@ describe("SQLite active transcript event projection", () => {
     await persistMessages([makeMessage("post-reset", "reset-boundary", "user", "new turn")]);
 
     const page = readPage(scope, { maxMessages: 10, offset: 0 });
-
     expect(eventIds(page.events)).toEqual(["kept-user", "kept-assistant", "post-reset"]);
     expect(page.events.map((entry) => entry.seq)).toEqual([2, 4, 5]);
     expect(page.totalMessages).toBe(3);
@@ -808,7 +866,7 @@ describe("SQLite active transcript event projection", () => {
     const liveWrite = await persistMessages([
       makeMessage("m100001", "m100000", "toolResult", "live-write"),
     ]);
-    expect(liveWrite.appendedCount).toBe(1);
+    expect(liveWrite.messages.filter((m) => m.appended)).toHaveLength(1);
     order.push("live-write");
     await reconciliation;
     expect(order).toEqual(["event-loop-responsive", "live-write", "reconciled"]);

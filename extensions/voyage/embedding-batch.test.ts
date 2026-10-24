@@ -6,7 +6,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { runVoyageEmbeddingBatches } from "./embedding-batch.js";
-import { createVoyageEmbeddingProvider } from "./embedding-provider.js";
+import { voyageMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 
 type VoyageBatchOptions = Parameters<typeof runVoyageEmbeddingBatches>[0];
 type BatchStage = "upload" | "create" | "status" | "output" | "error";
@@ -175,13 +175,14 @@ it("preserves real default requests, grouping, and configured query parameters",
       data: vectors.map((embedding, index) => ({ index, embedding })),
     },
   });
-  const { provider } = await createVoyageEmbeddingProvider({
+  const { provider } = await voyageMemoryEmbeddingProviderAdapter.create({
     config: {},
     provider: "voyage",
     model: "voyage/voyage-3",
     fallback: "none",
     remote: { baseUrl, apiKey: "voyage-loopback-key" },
   });
+  assert(provider, "expected configured Voyage embedding provider");
   expect(provider.maxInputTokens).toBe(32000);
   await expect(
     provider.embedBatch([{ text: "first" }, "second"], { inputType: undefined }),

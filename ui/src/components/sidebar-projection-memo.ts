@@ -1,5 +1,6 @@
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { personalSessionPinKeys } from "../app-navigation.ts";
 import { isSessionRouteId, type RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { i18n } from "../i18n/index.ts";
@@ -20,11 +21,12 @@ import type {
   SidebarVisibleSections,
 } from "./app-sidebar-session-projection.ts";
 import { projectSidebarSnoozeCatalogs } from "./app-sidebar-session-snooze-visibility.ts";
-import type {
-  SidebarEmptyGroupsMode,
-  SidebarRecentSession,
-  SidebarSessionSortMode,
-  SidebarSessionStatusFilter,
+import {
+  isListedInPinnedSection,
+  type SidebarEmptyGroupsMode,
+  type SidebarRecentSession,
+  type SidebarSessionSortMode,
+  type SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
 import type {
@@ -49,6 +51,7 @@ export type SidebarProjectionHost = {
   readonly sessionsShowCron: boolean;
   readonly sessionsShowSystem: boolean;
   readonly sessionsShowPreview: boolean;
+  readonly sidebarEntries: readonly string[];
   readonly sidebarLiveActivity: boolean;
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
@@ -130,6 +133,7 @@ export function memoizedSidebarSections(
       host.sessionsEmptyGroupsMode,
       rosterLimits,
       host.sessionData.visibleSessionLimits,
+      host.sidebarEntries,
       context?.gateway.snapshot.phase,
       context?.gateway.snapshot.client,
       host.sidebarLiveActivity,
@@ -140,9 +144,14 @@ export function memoizedSidebarSections(
     ],
     () => {
       const grouping = host.effectiveSessionsGrouping();
+      const pinnedKeys = personalSessionPinKeys(host.sidebarEntries);
       const sections = roster?.agentIds.map((agentId) => ({
         id: `agent:${agentId}:recent` as const,
-        rows: rows.filter((row) => !row.pinned && host.sessionNavigationAgentId(row) === agentId),
+        rows: rows.filter(
+          (row) =>
+            !isListedInPinnedSection(row, pinnedKeys) &&
+            host.sessionNavigationAgentId(row) === agentId,
+        ),
       }));
       const collapsedSections = new Set(host.collapsedSessionSections);
       for (const agentId of roster?.collapsedAgentIds ?? []) {
@@ -151,6 +160,7 @@ export function memoizedSidebarSections(
       return host.sessionProjection.project({
         rows,
         sections,
+        pinnedKeys,
         grouping,
         knownGroups: grouping === "category" ? host.knownSessionGroups() : [],
         selfOwnerId: context?.gateway.snapshot.selfUser?.id ?? null,
@@ -159,7 +169,11 @@ export function memoizedSidebarSections(
         catalogIds: catalogs.map((catalog) => catalog.id),
         collapsedSections,
         emptyGroupsMode: host.sessionsEmptyGroupsMode,
-        ownerFiltered: host.sessionOwnerFilterActive || host.sessionInvolvingMeFilterActive,
+        ownerFilter: host.sessionOwnerFilterActive
+          ? "owner"
+          : host.sessionInvolvingMeFilterActive
+            ? "involvingMe"
+            : null,
         visibleSessionLimits: roster ? rosterLimits : host.sessionData.visibleSessionLimits,
         sortMode: host.effectiveSessionSortMode(),
         statusFilter: host.sessionsStatusFilter,

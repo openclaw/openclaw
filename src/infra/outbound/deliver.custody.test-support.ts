@@ -29,10 +29,9 @@ export function useDeliveryCleanup(after?: () => void) {
   const pending: Promise<unknown>[] = [];
   const unsubscribe: Array<() => void> = [];
   afterEach(async () => {
-    release
-      .splice(0)
-      .toReversed()
-      .forEach((dispose) => dispose());
+    for (const dispose of release.splice(0).toReversed()) {
+      dispose();
+    }
     await Promise.allSettled(pending.splice(0));
     unsubscribe.splice(0).forEach((dispose) => dispose());
     after?.();
@@ -76,12 +75,10 @@ export function useOutboundRuntime() {
 }
 
 export function useOutboundFixture() {
-  const fixtures = installDeliveryQueueTmpDirHooks();
+  const { tmpDir } = installDeliveryQueueTmpDirHooks();
   const runtime = useOutboundRuntime();
-  beforeEach(() => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", fixtures.tmpDir());
-  });
-  return { ...runtime, tmpDir: fixtures.tmpDir };
+  beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir()));
+  return { ...runtime, tmpDir };
 }
 
 export function matrixDeliveryResult(messageId: string, kind: "text" | "media" = "text") {
@@ -95,16 +92,9 @@ export function matrixDeliveryResult(messageId: string, kind: "text" | "media" =
 }
 
 export function installQueueTestPlugin(overrides: Partial<ChannelPlugin> = {}) {
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "matrix",
-        source: "test",
-        plugin: {
-          ...createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForQueueTest }),
-          ...overrides,
-        },
-      },
-    ]),
-  );
+  const plugin = {
+    ...createOutboundTestPlugin({ id: "matrix", outbound: matrixOutboundForQueueTest }),
+    ...overrides,
+  };
+  setActivePluginRegistry(createTestRegistry([{ pluginId: "matrix", source: "test", plugin }]));
 }

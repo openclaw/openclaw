@@ -16,7 +16,8 @@ import {
   readAssistantTextBlocksForPhase,
 } from "../shared/chat-message-content.js";
 import { toolCallXmlTextFilter } from "../shared/text/assistant-visible-text.js";
-import { trimTextPreservingCode } from "../shared/text/text-projection.js";
+import { downgradedToolCallTextFilter } from "../shared/text/downgraded-tool-call-text.js";
+import { createTextProjection, trimTextPreservingCode } from "../shared/text/text-projection.js";
 import {
   findDirectiveCodePrefix,
   type StreamDirectiveCodePrefix,
@@ -299,12 +300,22 @@ export function resolveAssistantTextChunk(params: {
 }
 
 export function createStreamingReplyResolver(): StreamingReplyResolver {
+  const rawProjection = createTextProjection([
+    downgradedToolCallTextFilter(),
+    toolCallXmlTextFilter({ stripFunctionCallsXmlPayloads: true }, true),
+  ]);
   let directiveCodePrefix: StreamDirectiveCodePrefix | undefined;
   let hasDirectiveMarker = false;
   let previousChar = "";
   return (params) => {
+    let preparedRawText = params.next;
     if (params.rawDirectiveSource !== undefined) {
       const appended = params.rawDirectiveDelta ?? params.rawDirectiveSource;
+      // Directive parsing needs pre-trim coordinates, independently of the visible projection.
+      preparedRawText =
+        params.rawDirectiveDelta === undefined
+          ? rawProjection.replace(params.rawDirectiveSource).text
+          : rawProjection.append(params.rawDirectiveDelta, params.rawDirectiveSource).text;
       if (params.rawDirectiveDelta === undefined) {
         directiveCodePrefix = undefined;
         hasDirectiveMarker = false;
@@ -397,8 +408,8 @@ export function createStreamingReplyResolver(): StreamingReplyResolver {
       directiveCodePrefix = undefined;
       audioDirectiveCount = 0;
       const source =
-        params.rawDirectiveSource === undefined
-          ? params.next
+        params.rawDirectiveSource === undefined || params.evtType !== "text_end"
+          ? preparedRawText
           : toolCallXmlTextFilter(
               { stripFunctionCallsXmlPayloads: true },
               params.evtType !== "text_end",

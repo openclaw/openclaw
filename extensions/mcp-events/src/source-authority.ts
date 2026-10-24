@@ -1,5 +1,5 @@
 import type { OpenClawPluginServiceContext } from "openclaw/plugin-sdk/plugin-entry";
-import { record } from "./protocol.js";
+import { asOptionalRecord as record } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { SubscriptionBinding } from "./state.js";
 
 type PreparedEventSource = Awaited<

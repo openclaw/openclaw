@@ -509,7 +509,7 @@ describe("codex detach command", () => {
           senderIsOwner: true,
         },
         { channelId: "test", pluginBinding: f.conversation },
-        { bindingStore, timeoutMs: 500 },
+        { bindingStore },
       ),
     ).resolves.toEqual({ handled: true, reply: { text: "Original context kept" } });
     expect(f.request.mock.calls.map(([method]) => method)).toEqual([

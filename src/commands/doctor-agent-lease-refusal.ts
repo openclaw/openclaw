@@ -16,7 +16,7 @@ function createDoctorAgentLeaseRefusal(
   cause?: unknown,
   detail = "An agent database is in use.",
 ): DoctorMaintenanceRefusalError {
-  const message = `Doctor could not enter maintenance. ${detail} Stop other OpenClaw processes using this state, then retry the update.`;
+  const message = `Doctor could not enter maintenance. ${detail} Stop the Gateway and other OpenClaw processes or reboot, then rerun openclaw doctor --fix.`;
   return new DoctorMaintenanceRefusalError(
     message,
     { kind: "deferred", reason: "agent-database-in-use" },
@@ -168,7 +168,7 @@ export async function admitDoctorAgentLeases(params: {
           ? createDoctorAgentLeaseRefusal(
               params.state.env,
               cause,
-              `Waited ${formatDoctorWaitSeconds(performance.now() - startedAt)}; ${describeHolders(holders)} still ${holders.length === 1 ? "has" : "have"} an agent database open.`,
+              `Waited ${formatDoctorWaitSeconds(performance.now() - startedAt)}; database held by PID ${holders.slice(0, 3).join(", ")}${holders.length > 3 ? ", ..." : ""}.`,
             )
           : error;
       }

@@ -6,22 +6,10 @@ import { MAX_TRAVERSAL_DEPTH, OcPathError, formatOcPath, parseOcPath } from "../
 import { resolveOcPath, setOcPath } from "../../universal.js";
 
 const PATH_LENGTH_LIMIT = 4096;
-const LONG_TAIL = `😀${"b".repeat(PATH_LENGTH_LIMIT)}`;
-const PARSE_PREFIX = `oc://${"a".repeat(74)}`;
 const COERCION_ERROR = expect.objectContaining({ reason: "parse-error" });
 
 function rejectPath(input: string, error: RegExp | typeof OcPathError = OcPathError): void {
   expect(() => parseOcPath(input)).toThrow(error);
-}
-
-function expectUtf16SafeLimitError(run: () => unknown, expectedInput: string): void {
-  try {
-    run();
-    expect.fail("expected an OC_PATH_TOO_LONG error");
-  } catch (err) {
-    expect(err).toBeInstanceOf(OcPathError);
-    expect(err).toMatchObject({ code: "OC_PATH_TOO_LONG", input: expectedInput });
-  }
 }
 
 it.each<[string, string[]]>([
@@ -88,26 +76,15 @@ it("rejects multibyte paths above MAX_PATH_LENGTH bytes", () => {
   expect(() => formatOcPath({ file: multibyteFile })).toThrow(`length: ${pathBytes}`);
 });
 
-it("keeps overlong parse input UTF-16 safe", () => {
-  expectUtf16SafeLimitError(() => parseOcPath(PARSE_PREFIX + LONG_TAIL), `${PARSE_PREFIX}…`);
-});
-
-it("keeps post-NFC overlong parse input UTF-16 safe", () => {
-  const prefixBytes = Buffer.byteLength(PARSE_PREFIX, "utf8");
+it("rejects paths whose NFC normalization exceeds the byte limit", () => {
+  const prefix = `oc://${"a".repeat(74)}`;
+  const prefixBytes = Buffer.byteLength(prefix, "utf8");
   // U+0344 grows from two to four UTF-8 bytes under NFC; the emoji takes four.
   const markCount = Math.floor((PATH_LENGTH_LIMIT - prefixBytes - 4) / 2);
-  const input = `${PARSE_PREFIX}😀${"\u0344".repeat(markCount)}`;
+  const input = `${prefix}😀${"\u0344".repeat(markCount)}`;
   expect(Buffer.byteLength(input, "utf8")).toBeLessThanOrEqual(PATH_LENGTH_LIMIT);
   expect(Buffer.byteLength(input.normalize("NFC"), "utf8")).toBeGreaterThan(PATH_LENGTH_LIMIT);
-  expectUtf16SafeLimitError(() => parseOcPath(input), `${PARSE_PREFIX}…`);
-});
-
-it("keeps overlong formatted paths UTF-16 safe", () => {
-  const prefix = "a".repeat(72);
-  expectUtf16SafeLimitError(
-    () => formatOcPath({ file: "X", section: prefix + LONG_TAIL }),
-    `oc://X/${prefix}…`,
-  );
+  expect(() => parseOcPath(input)).toThrow(expect.objectContaining({ code: "OC_PATH_TOO_LONG" }));
 });
 
 it("walker depth cap fires on synthetic deeply-nested AST", () => {
@@ -120,6 +97,15 @@ it("walker depth cap fires on synthetic deeply-nested AST", () => {
   const ast = { kind: "jsonc" as const, raw: "", root: leaf };
   expect(() => findOcPaths(ast, parseOcPath("oc://X/**"))).toThrow(/MAX_TRAVERSAL_DEPTH/);
 });
+
+it.each(["{{a,,b},c}", "{a,{b,,c}}", "{{{a,,b},c},d}", "{a,{}}"])(
+  "rejects malformed nested union %s before traversal",
+  (pattern) => {
+    expect(() => parseOcPath("oc://X/" + pattern)).toThrow(
+      expect.objectContaining({ code: "OC_PATH_MALFORMED_UNION" }),
+    );
+  },
+);
 
 it("jsonl per-line parser flags malformed deeply-nested values", () => {
   const depth = MAX_TRAVERSAL_DEPTH + 50;

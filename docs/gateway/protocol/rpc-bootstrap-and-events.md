@@ -206,7 +206,13 @@ or retractions; this final flush is exempt from the two-second interval.
 Newer tool activity or a change of run discards pending older text, so a delayed
 snapshot cannot replace a newer tool line or switch the sidebar back to an older run.
 Lifecycle, status, tool, final, abort, and error events retain their existing
-delivery. Raw thinking streams and in-progress preamble or answer-candidate text
+delivery. Narration-only tool events retain identity, phase, error and visibility
+metadata, but omit `args`, input `diff`, `partialResult`, and `result` bodies.
+Tool progress still arrives through activity items. Opening the session admits
+full streams before fetching history; persisted tool cards retrieve complete
+output on demand through `chat.message.get`. Full subscribers and clients that
+omit narration mode retain the existing tool payloads.
+Raw thinking streams and in-progress preamble or answer-candidate text
 are omitted; item completion and answer selection still arrive. Approval events
 still require `includeApprovals: true` and the normal
 approval authority. Queued narration is discarded on unsubscribe, mode changes,
@@ -381,7 +387,7 @@ or protocol-version change.
   happens to match. Missing rows, generation or revision mismatches, and uncertain
   presentation ownership require the existing authoritative refresh path.
   The Gateway bounds this per-connection record and sends full rows after first
-  delivery, a successful list read, reconnect, resubscribe, reset/delete, changed presentation or visibility,
+  delivery, a successful legacy list read, reconnect, resubscribe, reset/delete, changed presentation or visibility,
   eviction, or uncertain delivery. Unsubscribe and disconnect clear the record;
   session deletion invalidates remembered ancestors.
   Recap-only (`reason: "activity-summary"`) events keep their ancestor payloads,
@@ -519,8 +525,13 @@ wrapper sends `full`. Both ends retain at most 1,024 rows in delivery-order LRU.
 The server also bounds its field-hash vectors to 2 MiB per connection; `retain:
 false` on a full wrapper instructs both ends to discard that baseline. No row-byte
 charge is sent. Subscription changes, ordinary fact updates (including broad
-notifications), hidden ancestors, and list reads invalidate ancestor certification
-but preserve wire baselines. Those baselines describe the last row delivered to
+notifications) and hidden ancestors invalidate ancestor certification but preserve
+wire baselines. For clients negotiating row deltas, list reads preserve ancestor
+certification too: replies cannot replace the socket's retained event rows. Before
+referencing an unchanged ancestor, the server checks that its wire baseline is
+still retained; eviction or `retain: false` requires a full ancestor again.
+Legacy clients keep the list-read reset because their ancestor receipts belong
+to admitted roster rows. Wire baselines describe the last row delivered to
 the socket; current authorized fields still determine every patch. A response can
 follow a newly delivered row on the same socket.
 Connection retirement clears the state. A dropped event invalidates server

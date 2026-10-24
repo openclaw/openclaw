@@ -31,10 +31,7 @@ function isToolProfileId(value: string): value is ToolProfileId {
 function migrateLegacyDynamicToolProfile(
   value: unknown,
   parseProfile: typeof parseClawOpenClawProfile,
-): {
-  value: unknown;
-  legacyProfile?: ClawOpenClawProfile;
-} {
+): unknown {
   const profile = record(value);
   const agent = record(profile?.agent);
   const tools = record(agent?.tools);
@@ -47,10 +44,10 @@ function migrateLegacyDynamicToolProfile(
     !isToolProfileId(toolProfile) ||
     tools.allow !== undefined
   ) {
-    return { value };
+    return value;
   }
   if (toolProfile === "full") {
-    return { value };
+    return value;
   }
   const validationProbe = parseProfile({
     ...profile,
@@ -63,36 +60,26 @@ function migrateLegacyDynamicToolProfile(
     },
   });
   if (!validationProbe.ok) {
-    return { value };
+    return value;
   }
   const validatedTools = validationProbe.profile.agent.tools;
   if (!validatedTools) {
-    return { value };
+    return value;
   }
   const selection = {
     ...validatedTools,
     profile: toolProfile,
-  };
-  const legacyProfile: ClawOpenClawProfile = {
-    ...validationProbe.profile,
-    agent: {
-      ...validationProbe.profile.agent,
-      tools: selection,
-    },
   };
   const migrated = materializeClawToolProfile(
     { tools: selection },
     { allowLegacyDynamicProfile: true },
   );
   return {
-    value: {
-      ...profile,
-      agent: {
-        ...agent,
-        tools: migrated.tools,
-      },
+    ...profile,
+    agent: {
+      ...agent,
+      tools: migrated.tools,
     },
-    legacyProfile,
   };
 }
 
@@ -114,7 +101,6 @@ export async function readClawOpenClawProfile(params: {
   | {
       ok: true;
       profile?: ClawOpenClawProfile;
-      legacyProfile?: ClawOpenClawProfile;
       raw?: Buffer;
       path?: string;
       diagnostics?: ClawDiagnostic[];
@@ -218,13 +204,13 @@ export async function readClawOpenClawProfile(params: {
     : parseClawOpenClawProfile;
   const migration = params.allowLegacyDynamicToolProfile
     ? migrateLegacyDynamicToolProfile(yaml.value, parseProfile)
-    : { value: yaml.value };
-  const parsed = parseProfile(migration.value);
+    : yaml.value;
+  const parsed = parseProfile(migration);
   if (!parsed.ok) {
     // Only the released host-field shape gets migration guidance; other schema errors stay exact.
     const legacy = params.allowLegacyLocalUpdateHostSettings
       ? undefined
-      : parseLegacyLocalUpdateClawOpenClawProfile(migration.value);
+      : parseLegacyLocalUpdateClawOpenClawProfile(migration);
     if (legacy?.ok) {
       const legacyFields = legacy.diagnostics
         .filter(
@@ -264,7 +250,6 @@ export async function readClawOpenClawProfile(params: {
   return {
     ok: true,
     profile: parsed.profile,
-    ...(migration.legacyProfile ? { legacyProfile: migration.legacyProfile } : {}),
     raw,
     path: declaredPath,
     ...(allDiagnostics.length > 0 ? { diagnostics: allDiagnostics } : {}),

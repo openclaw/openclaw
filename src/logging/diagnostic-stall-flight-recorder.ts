@@ -15,10 +15,7 @@ const MAX_SAMPLES = 1_024;
 const MAX_PROFILE_BYTES = 1_048_576;
 
 /** Two short native profiles retain recent stacks without a listener or on-demand heap scan. */
-export function createStallFlightRecorder(
-  warn: (message: string) => void,
-  now: () => number = () => performance.now(),
-) {
+export function createStallFlightRecorder(warn: (message: string) => void) {
   let active: v8.SyncCPUProfileHandle | undefined;
   let previous: { json: string; endedAt: number } | undefined;
   let startedAt = 0;
@@ -46,7 +43,7 @@ export function createStallFlightRecorder(
     if (!disabled) {
       packageRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
       active = start();
-      startedAt = now();
+      startedAt = performance.now();
     }
   } catch {
     disabled = true;
@@ -54,15 +51,15 @@ export function createStallFlightRecorder(
   }
   return {
     sample(stallMs = 0): string | undefined {
-      if (disabled || !active || (stallMs === 0 && now() - startedAt < WINDOW_MS)) {
+      if (disabled || !active || (stallMs === 0 && performance.now() - startedAt < WINDOW_MS)) {
         return undefined;
       }
       try {
         const old = active;
         // Keep the native code map and sampler alive; restarting the last profile scans the heap.
         active = start();
-        startedAt = now();
-        const current = { json: old.stop(), endedAt: now() };
+        startedAt = performance.now();
+        const current = { json: old.stop(), endedAt: performance.now() };
         const windows = previous ? [previous, current] : [current];
         previous = current.json.length <= MAX_PROFILE_BYTES ? current : undefined;
         if (!stallMs) {
@@ -85,7 +82,8 @@ export function createStallFlightRecorder(
             }
           }
           let at = profile.startTime;
-          const cutoff = profile.endTime - (stallMs + 100 - (now() - window.endedAt)) * 1_000;
+          const cutoff =
+            profile.endTime - (stallMs + 100 - (performance.now() - window.endedAt)) * 1_000;
           truncated ||= (profile.samples?.length ?? 0) >= MAX_SAMPLES;
           for (const [index, id] of (profile.samples ?? []).entries()) {
             at += profile.timeDeltas?.[index] ?? 0;

@@ -225,21 +225,22 @@ it("splits semantic batches at the gateway frame byte ceiling", async () => {
 });
 
 it("does not send retired previews after connection readiness returns", async () => {
-  const { client, ...harness } = liveHarness({ maxBufferedEvents: 1 });
+  const { client, ...harness } = liveHarness();
   const ready = createDeferred<WorkerHelloOk>();
   harness.waitForReady.mockReturnValue(ready.promise);
   harness.send.mockImplementation(async (_kind, request) =>
     request.lastAckedSeq > 0 ? resyncRequired() : successResponse({ ackedSeq: request.seq }),
   );
   onTestFinished(() => ready.resolve(HELLO));
-  expect(client.enqueuePreview("run-1", LIVE_EVENT)).toBe(true);
-  expect(client.enqueuePreview("run-1", LIVE_EVENT)).toBe(false);
+  expect(Array.from({ length: 1_025 }, () => client.enqueuePreview("run-1", LIVE_EVENT))).toEqual(
+    Array<boolean>(1_024).fill(true).concat(false),
+  );
   const terminal = client.emitTerminal("run-1", TERMINAL_EVENT);
   ready.resolve(HELLO);
 
   await expect(terminal).resolves.toBeUndefined();
   expect(harness.send.mock.calls.map(([, r]) => [r.seq, r.lastAckedSeq, r.event])).toEqual([
-    [2, 1, TERMINAL_EVENT],
+    [1_025, 8, TERMINAL_EVENT],
     [1, 0, TERMINAL_EVENT],
   ]);
 });
@@ -373,8 +374,9 @@ it("reports stream gaps but accepts later events and the terminal outcome", asyn
   const harness = connectionHarness();
   harness.start.mockResolvedValueOnce(successResponse({ status: "accepted" as const }));
   const client = new WorkerInferenceProxyClient(harness.connection);
-  const onEvent = vi.fn();
-  const onStreamGap = vi.fn();
+  const deliveries: string[] = [];
+  const onEvent = () => deliveries.push("event");
+  const onStreamGap = () => deliveries.push("gap");
   const terminal = TERMINAL_OUTCOME;
 
   const outcome = client.start(INFERENCE_REQUEST, { onEvent, onStreamGap });
@@ -385,8 +387,7 @@ it("reports stream gaps but accepts later events and the terminal outcome", asyn
   harness.emitInferenceTerminal(4, terminal);
 
   await expect(outcome).resolves.toEqual(terminal);
-  expect(onStreamGap.mock.calls).toEqual([[{ expectedSeq: 2, receivedSeq: 3 }]]);
-  expect(onEvent).toHaveBeenCalledTimes(2);
+  expect(deliveries).toEqual(["event", "gap", "event"]);
   client.dispose();
 });
 

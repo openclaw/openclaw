@@ -29,8 +29,7 @@ type UrbitSseOptions = {
 
 const MAX_SSE_PAYLOAD_BYTES = 16 * 1024 * 1024;
 const MAX_RECONNECT_ATTEMPTS = 10;
-// Eyre writes a `:` heartbeat comment to an open channel stream every 20 s. A
-// stream silent for three of those was dropped without TCP reporting a close.
+// Eyre sends a heartbeat every 20 s; treat three missed heartbeats as a stalled stream.
 const SSE_STALL_TIMEOUT_MS = 60_000;
 
 function parseUrbitSsePayload(data: string): { id?: number; json?: unknown; response?: string } {
@@ -182,8 +181,6 @@ export class UrbitSSEClient {
   }
 
   async openStream() {
-    // Use AbortController with manual timeout so we only abort during initial connection,
-    // not after the SSE stream is established and actively streaming.
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 60_000);
 

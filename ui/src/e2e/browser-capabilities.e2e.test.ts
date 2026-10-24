@@ -1,26 +1,15 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
-import { afterAll, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.ts";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import {
-  installMockGateway,
-  startProductionControlUiE2eServer,
-} from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { failControlUiModuleForDocuments } from "./control-ui-built-module.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const builds = useAutoCleanupTempDirTracker(afterAll);
-const enabledBuildId = "browser-capabilities-e2e";
 const enabled = createControlUiE2eSuite({
   name: "Control UI browser capability gate enabled",
-  startServer: () =>
-    startProductionControlUiE2eServer(
-      builds.make("openclaw-browser-capabilities-"),
-      enabledBuildId,
-    ),
 });
 
 const guidance = (page: Page) =>
@@ -201,7 +190,7 @@ enabled.define(() => {
     (fieldSizing) =>
       enabled.withPage({ serviceWorkers: "block" }, async ({ page }) => {
         await setBrowserFeatures(page, true, fieldSizing);
-        const gateway = await installMockGateway(page, { serverBuildId: enabledBuildId });
+        const gateway = await installMockGateway(page);
         await page.goto(`${enabled.server.baseUrl}chat`);
         await page.locator(".agent-chat__composer-combobox textarea").waitFor();
         expect((await gateway.getRequests()).some((request) => request.method === "connect")).toBe(

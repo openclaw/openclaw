@@ -152,7 +152,11 @@ function scheduleNativeTextareaOverflow(el: HTMLTextAreaElement) {
   }
   state.overflowFrame = requestAnimationFrame(() => {
     state.overflowFrame = null;
-    if (el.isConnected && composerTextareaResizeObservers.get(el) === state) {
+    if (
+      el.isConnected &&
+      !el.closest("[inert], [hidden]") &&
+      composerTextareaResizeObservers.get(el) === state
+    ) {
       updateTextareaOverflow(el, false);
     }
   });
@@ -386,7 +390,13 @@ export function handleTextareaOverflowInteraction(event: TextareaEvent) {
     // scrolling can move an ancestor. This signal performs no layout reads.
     invalidateNativeTextareaLayout(el, state);
   }
-  updateTextareaOverflow(el);
+  // Navigation can blur the field while hiding its retained route. Its fades
+  // need no synchronous layout; a reveal's resize observation restores them.
+  if (event.type === "blur") {
+    scheduleNativeTextareaOverflow(el);
+  } else {
+    updateTextareaOverflow(el);
+  }
 }
 
 export function handleTextareaOverflowScroll(event: TextareaEvent) {
@@ -429,26 +439,25 @@ export function focusComposerFromChrome(
   if (!(target instanceof Element)) {
     return;
   }
-  if (event.type === "pointerdown") {
-    // Cancel only pointer focus; click and popover-owned focus still run.
-    if (event.button === 0 && target.closest("summary, .oc-menu-trigger")) {
+  // A menu action can replace its clicked row before this bubbling listener.
+  // The dispatch path still records that the interaction belonged to a control.
+  const interactive = event
+    .composedPath()
+    .some((node) => node instanceof Element && node.matches(COMPOSER_CHROME_INTERACTIVE_SELECTOR));
+  if (event.type === "pointerdown" || event.type === "mousedown") {
+    // Blank padding otherwise moves focus to the page before click restores it,
+    // collapsing and reopening the mobile composer during the same gesture.
+    if (
+      event.button === 0 &&
+      (target.closest("summary, .oc-menu-trigger") || (connected && !interactive))
+    ) {
       event.preventDefault();
     }
     return;
   }
-  if (!connected) {
-    return;
+  if (connected && !interactive) {
+    textarea?.focus({ preventScroll: true });
   }
-  // A menu action can replace its clicked row before this bubbling listener.
-  // The dispatch path still records that the interaction belonged to a control.
-  if (
-    event
-      .composedPath()
-      .some((node) => node instanceof Element && node.matches(COMPOSER_CHROME_INTERACTIVE_SELECTOR))
-  ) {
-    return;
-  }
-  textarea?.focus({ preventScroll: true });
 }
 
 export function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "down") {

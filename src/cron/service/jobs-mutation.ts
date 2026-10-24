@@ -3,7 +3,11 @@ import { isDeepStrictEqual } from "node:util";
 import { isCronJobActive } from "../active-jobs.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
 import { reconcileCronSourceIdentity } from "../source-schedule.js";
-import type { CronJob, CronJobPatch, CronStoredJob } from "../types.js";
+import {
+  parseCronStreamSandboxTarget,
+  type CronStreamSandboxTarget,
+} from "../stream-sandbox-target.js";
+import type { CronJobPatch, CronStoredJob } from "../types.js";
 import { computeJobNextRunAtMs, hasScheduledNextRunAtMs, isJobEnabled } from "./jobs-scheduling.js";
 import { resolveForcePreservedOneShotAtMs } from "./one-shot-schedule.js";
 
@@ -15,9 +19,30 @@ export function cloneCronJobForMutation(job: CronStoredJob): CronStoredJob {
   return { ...structuredClone(mutableJob), ...(runtimeAuthority ? { runtimeAuthority } : {}) };
 }
 
+/** Only private caller options can install a sandbox target; unrelated edits retain it. */
+export function applyCronStreamSandboxTarget(
+  job: CronStoredJob,
+  target?: CronStreamSandboxTarget,
+): void {
+  if (job.schedule.kind !== "stream") {
+    if (target !== undefined) {
+      throw new TypeError("Sandbox stream targets require a stream schedule");
+    }
+    delete job.streamSandbox;
+    return;
+  }
+  if (target !== undefined) {
+    const parsed = parseCronStreamSandboxTarget(target);
+    if (!parsed) {
+      throw new TypeError("Invalid sandbox stream target");
+    }
+    job.streamSandbox = parsed;
+  }
+}
+
 export function finalizeUpdatedJob(params: {
-  job: CronJob;
-  nextJob: CronJob;
+  job: CronStoredJob;
+  nextJob: CronStoredJob;
   now: number;
   schedulingInputsRequested: boolean;
   scheduleChanged: boolean;

@@ -461,7 +461,7 @@ export function registerRequesterCompletionCustodyTests({
             await expect(prepareRecovery()).rejects.toThrow("awaits its current Gateway binding");
             expect(loadSubagentRegistryFromSqlite()).toEqual(unbound);
           }
-          await activateSubagentRegistry(() => replacement);
+          await activateSubagentRegistry(() => replacement).settled;
           await replay?.();
           if (terminalRecovery) {
             if (missingSource) {
@@ -495,7 +495,7 @@ export function registerRequesterCompletionCustodyTests({
             const nextGateway = createContext([], () => cfg);
             nextGateway.resolveGatewayContext = () => nextGateway;
             nextGateway.recoveryRuntime = createMockGatewayRecoveryRuntime();
-            await activateSubagentRegistry(() => nextGateway);
+            await activateSubagentRegistry(() => nextGateway).settled;
             await expect(
               prepareRequesterSettleWakeRecoverySource({
                 ...recoveryTarget,

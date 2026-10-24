@@ -26,6 +26,7 @@ import {
   type LlamaServerAsset,
   type LlamaServerDependency,
 } from "./llama-server-assets.js";
+import { formatLlamaServerRuntimeError } from "./runtime-error.js";
 
 const MEBIBYTE = 1024 * 1024;
 const LLAMA_ARCHIVE_LIMITS = {
@@ -350,7 +351,7 @@ async function runServerCommand(
   args: string[],
   signal?: AbortSignal,
   timeoutMs = PROBE_TIMEOUT_MS,
-  formatError?: (error: Error, stderr: string) => Error,
+  formatError: (error: Error, stderr: string) => Error = formatRuntimeDependencyError,
 ): Promise<string> {
   return await new Promise((resolve, reject) => {
     execFile(
@@ -360,7 +361,9 @@ async function runServerCommand(
       (error, stdout, stderr) => {
         if (error) {
           reject(
-            formatError ? formatError(error, stderr) : new Error(error.message, { cause: error }),
+            signal?.aborted
+              ? toErrorObject(signal.reason, "Installation cancelled")
+              : formatError(error, stderr),
           );
         } else {
           resolve(`${stdout}${stderr}`.trim());
@@ -372,28 +375,17 @@ async function runServerCommand(
 
 function formatRuntimeDependencyError(error: unknown): Error {
   const detail = error instanceof Error ? error.message : String(error);
-  if (process.platform === "linux") {
-    return new Error(
-      `The verified llama-server build could not start. Install the OpenMP runtime (for example libgomp1 on Debian/Ubuntu or libgomp on Fedora), then rerun llama.cpp setup. Detail: ${detail}`,
-      { cause: error },
-    );
-  }
   if (process.platform === "win32") {
     return new Error(
       `The verified llama-server build could not start with its app-local Visual C++ runtime. Rerun llama.cpp setup to reinstall it, or configure a compatible llama-server manually. Detail: ${detail}`,
       { cause: error },
     );
   }
-  return new Error(`The verified llama-server build could not start: ${detail}`, { cause: error });
+  return formatLlamaServerRuntimeError(error);
 }
 
-async function queryServerVersion(command: string, signal?: AbortSignal): Promise<string> {
-  try {
-    return await runServerCommand(command, ["--version"], signal, VERSION_TIMEOUT_MS);
-  } catch (error) {
-    signal?.throwIfAborted();
-    throw formatRuntimeDependencyError(error);
-  }
+function queryServerVersion(command: string, signal?: AbortSignal): Promise<string> {
+  return runServerCommand(command, ["--version"], signal, VERSION_TIMEOUT_MS);
 }
 
 function validateServerVersionOutput(command: string, version: string): void {
@@ -604,6 +596,14 @@ async function installLlamaServer(
       asset.executable,
     );
     const extractedRoot = path.dirname(extractedCommand);
+    const stageDependency = (dependency: LlamaServerDependency, index: number) =>
+      stageLlamaServerDependency({
+        dependency,
+        index,
+        extractDir,
+        extractedRoot,
+        options,
+      });
     const dependencies = asset.dependencies ?? [];
     const windowsRuntimeDependencies: Array<{
       dependency: LlamaServerDependency;
@@ -613,13 +613,7 @@ async function installLlamaServer(
       if (dependency.archive === "vc-redist") {
         windowsRuntimeDependencies.push({ dependency, index });
       } else {
-        await stageLlamaServerDependency({
-          dependency,
-          index,
-          extractDir,
-          extractedRoot,
-          options,
-        });
+        await stageDependency(dependency, index);
       }
     }
     options.signal?.throwIfAborted();
@@ -632,13 +626,7 @@ async function installLlamaServer(
         options.signal?.throwIfAborted();
         try {
           for (const { dependency, index } of windowsRuntimeDependencies) {
-            await stageLlamaServerDependency({
-              dependency,
-              index,
-              extractDir,
-              extractedRoot,
-              options,
-            });
+            await stageDependency(dependency, index);
           }
         } catch (stagingError) {
           options.signal?.throwIfAborted();

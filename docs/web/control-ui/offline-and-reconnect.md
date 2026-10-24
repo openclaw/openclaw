@@ -14,6 +14,16 @@ stale connection. These signals do not retry a connection that requires a page
 reload, corrected credentials, or a new pairing request. Follow the displayed
 recovery instructions; automatic document refresh remains available after an update.
 
+If an update or rollback leaves a tab using an incompatible connection protocol,
+the Control UI stops reconnecting and reloads the document served by the same
+Gateway. The tab records the attempt in session storage: it reloads once for a
+given server build and never more than once in 60 seconds, even if the build changes.
+If the refreshed page still cannot connect, it keeps the compatibility error and
+**Refresh** action visible. Open the Gateway's dashboard again or update and
+restart the Gateway so its served UI matches its protocol. Automatic reloads wait
+for unsaved-work protection and require working session storage; a separately
+hosted UI must be refreshed or updated at its own host.
+
 Agent names and avatars keep their last loaded values when an identity refresh
 fails. Reads for the same agent share one request across the sidebar and chat,
 including failures: subsequent reads back off from 500 ms to 5 seconds and honor
@@ -113,8 +123,11 @@ Unique display-name links use the same cached route resolution, including the
 
 Exact conversation links also wait for the scoped cached roster before presenting
 their header. Dashboard layouts restore before the pane renders, and embedded
-HTML widgets keep one loading surface while their board metadata and document
-arrive. Widget requests still require the current Gateway connection.
+HTML widgets restore their last board metadata from the same scoped conversation
+cache and start loading the isolated sandbox while connecting. Document requests
+still require the current Gateway connection and overlap the live board refresh.
+Unchanged widgets keep their iframe; changed, removed, or forbidden boards replace
+or clear the cached view. Pending or rejected MCP apps wait for live board data.
 
 Loading more sessions keeps the sidebar's warm-reload snapshot usable. The
 routing roster retains its first page; the sidebar separately keeps its visible
@@ -127,6 +140,9 @@ up to 80 recent rows (plus rows from the same history entry) for a warm reload.
 The snapshot also retains the slash-command catalog and its revision. Warm
 startup reuses that list when the Gateway confirms it is unchanged; config,
 plugin, and skill changes refresh it through the existing metadata owner.
+Saved dashboards restore independently of transcript validation, so a slow
+transcript download does not delay their layout. The Gateway still revalidates
+the board, its grants, and document tickets on connection.
 Older history loads from the Gateway as you scroll up. Cache upgrades discard
 older, unbounded transcript records; a connected visit fills the new cache.
 The first upward scroll or **Show earlier** refills the Gateway's current history
@@ -169,10 +185,30 @@ account checks still decide whether cached conversations may appear. No
 Gateway-rendered private HTML, API responses, or authorization tickets are
 added to this shell cache.
 
+Once the shell is ready and the browser is online and idle, the service worker
+downloads the remaining built-in JavaScript and styles in the background. After
+this first download, offline-capable menus and actions can open even if you have
+not used them since the update. This includes the interface code for drafts,
+queued chat sends, session changes, and reactions; each action keeps its existing
+connection and authorization requirements. Downloading the interface does not
+make live-only actions or uncached conversation data available offline.
+
+Each update downloads only missing or changed files. Background downloads yield
+to page requests, check file integrity, and retain completed files if interrupted;
+startup and resume checks can continue the download. Save-Data and slow-2g/2g
+connections skip this background download and record the reason in the service
+worker console. The critical shell still prepares normally, and files opened
+online still cache on use. Connection-speed and Save-Data changes automatically
+recheck the background download policy. English interface code is included; other language
+catalogs, the isolated Mermaid diagram renderer, and plugin-hosted assets are
+excluded from the background inventory and keep their existing loading behavior.
+
 Reloads reuse cached build-versioned fonts, themes, and the web manifest without
 contacting the Gateway. The service worker keeps the current complete build and
 one complete previous generation, so older open documents can still load their
 cached chunks. An incomplete replacement does not discard the last complete shell.
+Unchanged files referenced by the new inventory are retained before older caches
+are removed, so an update does not need to download those files again.
 After an update, open tabs reload automatically unless unsaved-work protection
 blocks recovery; then save or discard the protected work and use the **Reload**
 banner. Uploaded profile avatars use private browser caching only when the URL
@@ -187,7 +223,9 @@ authentication paths do not receive the offline shell. Plugin catalog detail
 links under `/plugins/` remain network-dependent because that namespace also
 hosts plugin HTTP endpoints. An open tab remains the
 most reliable way to keep working through intermittent service.
-Unvisited views and uncached external resources may still need a connection.
+Until the background download finishes, unvisited views may still need a
+connection. Excluded optional assets and uncached external resources may also
+need a connection.
 
 ## Gateway updates and suspended tabs
 
@@ -315,10 +353,21 @@ The client retries ordinary connection loss automatically with randomized backof
 retry waits 800–960 ms, and sustained failures spread retries across 12.5–15 seconds.
 Server retry hints remain minimum waits and can extend beyond that normal cap, with up to
 20% additional spread. The Gateway's WebSocket ping/pong keepalive detects dead
-transports. Delayed application heartbeats on a busy Gateway do not by themselves
-reconnect an open tab. Returning to a suspended tab still recovers a connection
-after two advertised heartbeat intervals of silence. An individual request
-timeout does not reset the socket. Reconnecting does not replay
+peers on the server, but browsers cannot observe those frames or receive a close
+over a silently dead link. A connected, visible tab checks inbound silence every
+five seconds. After two advertised heartbeat intervals (60 seconds by default),
+or 15 seconds after the first request sent since the last inbound frame, it sends
+one read-only `health` request without active integration probing. Sent requests
+still count after they time out; any inbound event or response resets that clock.
+It reconnects only if no event or response
+arrives during the next 10 seconds. A locally closed socket is retired immediately;
+recovery does not wait for an unreachable peer to finish the WebSocket closing handshake.
+Any inbound traffic proves the link is alive;
+a responsive but busy Gateway is not reconnected just because application ticks
+are delayed. Hidden tabs do not probe; returning to a suspended tab uses the
+existing wake recovery after two advertised heartbeat intervals of silence.
+An individual request timeout does not reset a socket that is receiving traffic.
+Reconnecting does not replay
 arbitrary requests; read owners retry their reads, and write owners reconcile
 uncertain outcomes. Gateway startup hints keep their separate bounded timing
 (100–2000 ms), with up to 20% additional spread across reconnecting tabs.
@@ -505,9 +554,11 @@ while the connection is available, without sending the message again. Timed-out
 receipt reads retry with backoff; they do not release later queued messages ahead
 of the uncertain input or overwrite a newer draft.
 
-If the connection drops before a send is acknowledged, reconnect checks the transcript and
-the session's active or last run ID for delivery proof. A matching run confirms receipt even
-before its transcript row appears. Without proof, an attempted message stays in the conversation
+If the connection drops before a send is acknowledged, reconnect checks delivery proof.
+Ordinary chat sends require an exact input receipt or a user transcript row whose
+idempotency key is the submission's `runId` or `runId:user`. A matching active or
+last run ID alone confirms only commands, not ordinary chat sends.
+Without proof, an attempted message stays in the conversation
 with an amber **Delivery unconfirmed** footer, **Retry**, and **Discard**. Check the conversation and retry only
 if the message did not arrive. Discard removes the pending copy from this browser's outbox; it does not
 undo or cancel work the Gateway already accepted. Later queued messages stay paused until the earlier

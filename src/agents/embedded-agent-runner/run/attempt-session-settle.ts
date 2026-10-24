@@ -1,4 +1,5 @@
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
+import { createPendingPromiseTracker } from "../../../shared/pending-promises.js";
 import type { createTrajectoryRuntimeRecorder } from "../../../trajectory/runtime.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { buildExecAutoReviewTranscript } from "../../exec-auto-review-transcript.js";
@@ -27,14 +28,7 @@ export function createEmbeddedAttemptSessionSettleTracker(
       recordAgentCleanupFailure();
     }
   };
-  const trackSettlePromise = (promise: Promise<void>): Promise<void> => {
-    inFlight.add(promise);
-    const settled = () => {
-      inFlight.delete(promise);
-    };
-    void promise.then(settled, settled);
-    return promise;
-  };
+  const trackSettlePromise = createPendingPromiseTracker(inFlight);
 
   return {
     abortActiveSession: (reason?: unknown) =>

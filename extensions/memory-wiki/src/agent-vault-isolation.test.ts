@@ -123,11 +123,22 @@ describe("agent-scoped memory-wiki tools", () => {
 
       for (const [agent, foreignAgent] of pairs) {
         const memorySearch = memoryCoreTool("memory_search", agent.id, "main");
-        const ownMemorySearch = await memorySearch.execute(`memory-search-own-${agent.id}`, {
-          query: agent.sentinel,
-          corpus: "wiki",
-        });
-        expect(assertToolDetailsRecord(ownMemorySearch.details).results).toEqual([
+        const memoryGet = memoryCoreTool("memory_get", agent.id, "main");
+        async function search(sentinel: string) {
+          const result = await memorySearch.execute(`search-${sentinel}`, {
+            query: sentinel,
+            corpus: "wiki",
+          });
+          return assertToolDetailsRecord(result.details).results;
+        }
+        async function get(pagePath: string) {
+          const result = await memoryGet.execute(`get-${pagePath}`, {
+            path: pagePath,
+            corpus: "wiki",
+          });
+          return assertToolDetailsRecord(result.details);
+        }
+        expect(await search(agent.sentinel)).toEqual([
           expect.objectContaining({
             corpus: "wiki",
             path: agent.pagePath,
@@ -135,32 +146,15 @@ describe("agent-scoped memory-wiki tools", () => {
           }),
         ]);
 
-        const foreignMemorySearch = await memorySearch.execute(
-          `memory-search-foreign-${agent.id}`,
-          {
-            query: foreignAgent.sentinel,
-            corpus: "wiki",
-          },
-        );
-        expect(assertToolDetailsRecord(foreignMemorySearch.details).results).toEqual([]);
-
-        const memoryGet = memoryCoreTool("memory_get", agent.id, "main");
-        const ownMemoryGet = await memoryGet.execute(`memory-get-own-${agent.id}`, {
-          path: agent.pagePath,
-          corpus: "wiki",
-        });
-        expect(assertToolDetailsRecord(ownMemoryGet.details)).toMatchObject({
+        expect(await search(foreignAgent.sentinel)).toEqual([]);
+        expect(await get(agent.pagePath)).toMatchObject({
           status: "ok",
           corpus: "wiki",
           path: agent.pagePath,
           text: expect.stringContaining(agent.sentinel),
         });
 
-        const foreignMemoryGet = await memoryGet.execute(`memory-get-foreign-${agent.id}`, {
-          path: foreignAgent.pagePath,
-          corpus: "wiki",
-        });
-        expect(assertToolDetailsRecord(foreignMemoryGet.details)).toMatchObject({
+        expect(await get(foreignAgent.pagePath)).toMatchObject({
           path: foreignAgent.pagePath,
           text: "",
           status: "not_found",

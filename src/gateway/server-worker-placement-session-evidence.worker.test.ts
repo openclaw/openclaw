@@ -284,13 +284,13 @@ it.each([false, true])(
     }),
 );
 
-it("captures config, environment, cwd and placement identity before discovery yields", () =>
+it("captures config, state directory and placement identity before discovery yields", () =>
   withState(async (state) => {
-    const store = path.relative(process.cwd(), state.statePath("captured.sqlite"));
+    const store = "captured.sqlite";
     const cfg: OpenClawConfig = { session: { store } };
     setRuntimeConfigSnapshot(cfg, cfg);
     const subject = await placement();
-    writeSession({ ...subject, storePath: store });
+    writeSession({ ...subject, storePath: state.statePath(store) });
     const gate = pauseRead("registry");
     const pending = createResolver([subject]);
     const originalRoot = process.env.OPENCLAW_STATE_DIR;
@@ -387,14 +387,8 @@ it("transfers a Windows-normalized environment through inventory and evidence wo
       }),
     );
     expect(() => structuredClone(normalized)).toThrow();
-    const clone = vi
-      .spyOn(configEnv, "cloneEnvWithPlatformSemantics")
-      .mockReturnValueOnce(normalized);
-    try {
-      expect(await resolveEvidence(subject)).toBe("current");
-    } finally {
-      clone.mockRestore();
-    }
+    using _ = vi.spyOn(configEnv, "cloneEnvWithPlatformSemantics").mockReturnValueOnce(normalized);
+    expect(await resolveEvidence(subject)).toBe("current");
   }));
 
 it("reads memory evidence after an in-process write completes during disk work", () =>

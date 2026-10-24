@@ -70,7 +70,6 @@ export function createDiscordSource(runtime: SourceRuntime): DiscordSource {
         readApiResponse(
           url,
           { Authorization: `Bot ${config.token}`, Accept: "application/json" },
-          runtime,
           status,
         );
       const get = async (path: string, params?: Record<string, string>): Promise<unknown> => {

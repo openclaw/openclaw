@@ -106,13 +106,17 @@ suite.define(() => {
       await side.waitFor();
       await typeFocused(page, main, "Keep typing here");
       expect(await side.inputValue()).toBe("");
-      await page.getByRole("button", { name: "Close Side chat", exact: true }).click();
+      const close = page.getByRole("button", { name: "Close Side chat", exact: true });
+      await close.click();
+      await close.waitFor({ state: "hidden" });
       await openChatSidePanelType(page, "Side chat");
     } else {
       const tab = page.getByRole("tab", { name: "Side chat", exact: true });
       await tab.waitFor();
       if (action === "close") {
-        await page.getByRole("button", { name: "Close Side chat", exact: true }).click();
+        const close = page.getByRole("button", { name: "Close Side chat", exact: true });
+        await close.click();
+        await close.waitFor({ state: "hidden" });
       } else if (action === "minimize") {
         await selectChatLayoutAction(page, "Minimize side panel");
       } else {
@@ -138,6 +142,35 @@ suite.define(() => {
     await main.fill("/bt");
     await page.locator(".chat-send-btn--send:enabled").waitFor({ state: "visible" });
     await page.getByRole("option").filter({ hasText: "/btw" }).click();
+    await expectFocus(side);
+    expect(await main.inputValue()).toBe("");
+  });
+  it("opens Side chat when the slash catalog refreshes during selection", async () => {
+    const { page, gateway, main, side } = await openChat({
+      scenario: { deferredMethods: ["commands.list"] },
+    });
+    await main.fill("/bt");
+    await page.locator(".chat-send-btn--send:enabled").waitFor({ state: "visible" });
+    await gateway.waitForRequest("commands.list");
+    const option = page.getByRole("option").filter({ hasText: "/btw" });
+    await option.hover();
+    await page.mouse.down();
+    await gateway.resolveDeferred("commands.list", {
+      commands: [
+        {
+          name: "btcheck",
+          textAliases: ["/btcheck"],
+          description: "Catalog refresh arrived.",
+          source: "plugin",
+          scope: "text",
+          acceptsArgs: false,
+        },
+      ],
+    });
+    await page.getByRole("option").filter({ hasText: "/btcheck" }).waitFor();
+    // Keep the release on the pressed option after the menu grows upward.
+    await option.hover();
+    await page.mouse.up();
     await expectFocus(side);
     expect(await main.inputValue()).toBe("");
   });

@@ -96,14 +96,16 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
 });
 
 async function capture(initialText?: string, stateDir = tempDirs.make("transcript-live-notes-")) {
+  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   const updates = trackSummaryUpdates();
   const ctx = {
     stateDir,
     config: cfg,
-    logger: { warn: vi.fn() },
+    logger: { warn: vi.spyOn(console, "warn").mockImplementation(() => {}) },
     caller: { kind: "operator" as const, source: "local" as const },
   };
   const store = createTranscriptsStore(ctx);
@@ -154,7 +156,8 @@ async function capture(initialText?: string, stateDir = tempDirs.make("transcrip
     advance: () => advanceSummaryInterval(updates),
     settle: () => settleSummaryUpdates(updates),
     execute(id: string, action: "stop" | "summarize") {
-      const tool = createTranscriptsTool(ctx);
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const tool = createTranscriptsTool({ config: ctx.config, caller: ctx.caller });
       return withPluginRuntimeRegistryScope(registry, () =>
         tool.execute(id, { action, sessionId: "meeting" }),
       );

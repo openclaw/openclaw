@@ -197,7 +197,6 @@ describe("node worker environment lifetime", () => {
     const capacitySnapshots: Array<{ total: number; available: number }> = [];
     const { env, supervisor, workspaceDir } = supervisorFixture({
       capacity: 1,
-      capacityWaitMs: 25,
       onCapacityChanged: (capacity) => capacitySnapshots.push(capacity),
     });
     const first = testWorkerLaunchInput(workspaceDir, "preview-start", "background-start");

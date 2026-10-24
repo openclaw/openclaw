@@ -181,6 +181,7 @@ export function registerMatrixMonitorEvents(params: {
   needsRoomAliasesForConfig: boolean;
   getRoomInfo: ReturnType<typeof createMatrixRoomInfoResolver>["getRoomInfo"];
   invalidateMemberDisplayName?: (roomId: string, userId: string) => void;
+  invalidateRoomName?: (roomId: string) => void;
   logVerboseMessage: (message: string) => void;
   warnedEncryptedRooms: Set<string>;
   warnedCryptoMissingRooms: Set<string>;
@@ -200,6 +201,7 @@ export function registerMatrixMonitorEvents(params: {
     readStoreAllowFrom,
     directTracker,
     invalidateMemberDisplayName,
+    invalidateRoomName,
     logVerboseMessage,
     warnedEncryptedRooms,
     warnedCryptoMissingRooms,
@@ -429,6 +431,9 @@ export function registerMatrixMonitorEvents(params: {
       logVerboseMessage(
         `matrix: member event room=${roomId} stateKey=${stateKey} membership=${membership ?? "unknown"}`,
       );
+    }
+    if (eventType === EventType.RoomName) {
+      invalidateRoomName?.(roomId);
     }
 
     routeVerificationEvent(roomId, event);

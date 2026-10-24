@@ -2,20 +2,23 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { prepareSystemAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { extractAgentRunTerminalError, extractAgentRunText } from "../agents/agent-run-result.js";
+import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { CommandLane } from "../process/lanes.js";
 import {
   SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
+  SYSTEM_AGENT_ASSISTANT_LOCAL_TIMEOUT_MS,
+  SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS,
   SYSTEM_AGENT_GREETING_SYSTEM_PROMPT,
   buildSystemAgentAssistantUserPrompt,
   buildSystemAgentGreetingUserPrompt,
   parseSystemAgentAssistantPlanText,
   type SystemAgentAssistantPlan,
-  type SystemAgentAssistantTurn,
 } from "./assistant-prompts.js";
-import { resolveSystemAgentAssistantTimeoutMs } from "./assistant-timeout.js";
 import type { SystemAgentGreetingFacts, SystemAgentGreetingPlan } from "./greeting.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import { requireSystemAgentInferenceRoute } from "./inference-guard.js";
@@ -36,14 +39,6 @@ export {
   type SystemAgentAssistantTurn,
 } from "./assistant-prompts.js";
 
-export type SystemAgentAssistantPlanner = (params: {
-  input: string;
-  overview: SystemAgentOverview;
-  history?: SystemAgentAssistantTurn[];
-  pendingOperation?: string;
-  readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
-}) => Promise<SystemAgentAssistantPlan | null>;
-
 const SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA = {
   type: "object",
   properties: {
@@ -58,8 +53,6 @@ const SYSTEM_AGENT_PLANNER_RESPONSE_SCHEMA = {
 export async function planSystemAgentCommand(params: {
   input: string;
   overview: SystemAgentOverview;
-  history?: SystemAgentAssistantTurn[];
-  pendingOperation?: string;
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
 }): Promise<SystemAgentAssistantPlan | null> {
   const input = params.input.trim();
@@ -69,8 +62,6 @@ export async function planSystemAgentCommand(params: {
   const prompt = buildSystemAgentAssistantUserPrompt({
     input,
     overview: params.overview,
-    ...(params.history ? { history: params.history } : {}),
-    ...(params.pendingOperation ? { pendingOperation: params.pendingOperation } : {}),
   });
   const result = await runConfiguredSystemAgentText({
     prompt,
@@ -108,11 +99,7 @@ async function runConfiguredSystemAgentText(params: {
   timeoutMs?: number;
   responseFormat?: Record<string, unknown>;
 }): Promise<{ text: string; modelLabel: string } | null> {
-  const route = await requireSystemAgentInferenceRoute(
-    params.verifiedInference,
-    undefined,
-    "planner",
-  );
+  const route = await requireSystemAgentInferenceRoute(params.verifiedInference, "planner");
   let expectedAgentHarnessRuntimeArtifact: ReturnType<
     typeof resolveSystemAgentExpectedAgentHarnessRuntimeArtifact
   >;
@@ -131,7 +118,35 @@ async function runConfiguredSystemAgentText(params: {
   let preparedRunAdmission: ReturnType<typeof prepareSystemAgentRunAdmission> | undefined;
   try {
     const runId = `${params.runIdPrefix}-${randomUUID()}`;
-    const timeoutMs = params.timeoutMs ?? resolveSystemAgentAssistantTimeoutMs(route);
+    const timeoutMs =
+      params.timeoutMs ??
+      (() => {
+        try {
+          const workspaceDir = resolveAgentWorkspaceDir(route.runConfig, route.agentId);
+          const snapshot = resolvePluginMetadataSnapshot({
+            config: route.runConfig,
+            workspaceDir,
+            env: process.env,
+            allowWorkspaceScopedCurrent: true,
+          });
+          const plugins = snapshot.plugins;
+          const providers = new Set([
+            normalizeProviderId(route.provider),
+            normalizeProviderId(route.modelLabel.split("/", 1)[0] ?? ""),
+          ]);
+          const isLocal = plugins.some((plugin) =>
+            Object.entries(plugin.modelPricing?.providers ?? {}).some(
+              ([provider, pricing]) =>
+                providers.has(normalizeProviderId(provider)) && pricing.external === false,
+            ),
+          );
+          return isLocal
+            ? SYSTEM_AGENT_ASSISTANT_LOCAL_TIMEOUT_MS
+            : SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS;
+        } catch {
+          return SYSTEM_AGENT_ASSISTANT_TIMEOUT_MS;
+        }
+      })();
     preparedRunAdmission = prepareSystemAgentRunAdmission(
       route.runConfig,
       runId,
@@ -213,6 +228,6 @@ async function runConfiguredSystemAgentText(params: {
   }
   // Cleanup is the final suspension before callers can display model text, so
   // authority must still match after cleanup completes.
-  await requireSystemAgentInferenceRoute(params.verifiedInference, undefined, "planner");
+  await requireSystemAgentInferenceRoute(params.verifiedInference, "planner");
   return { text, modelLabel: route.modelLabel };
 }

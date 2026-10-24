@@ -1,5 +1,6 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import type { SandboxContext } from "../agents/sandbox/types.js";
 import type { ExecApprovalPreparedConsumption } from "../gateway/operator-approval-store.types.js";
 import type { ExecApprovalsFile, ExecAsk, ExecSecurity } from "../infra/exec-approvals-core.js";
 import { isRecord } from "../utils.js";
@@ -8,7 +9,7 @@ import { cronStreamScheduleKey, type CronStreamSchedule } from "./stream-schedul
 import type { CronStoredJob } from "./types.js";
 
 export const CRON_STREAM_EXEC_AUTHORITY_ERROR =
-  "automation stream commands require the creator turn to have Gateway exec authority and either unattended execution or explicit user approval; denied, sandboxed, and node-only execution cannot create a stream.";
+  "automation stream commands require the creator turn to have Gateway exec authority or admitted Docker sandbox exec authority, and either unattended execution or explicit user approval; denied and node-only execution cannot create a stream.";
 
 /** The configuration owner rejected the capability, rather than malformed input. */
 export class CronStreamPolicyDeniedError extends TypeError {}
@@ -55,6 +56,7 @@ export type CronStreamExecApprovalReceipt = {
 
 /** Prepared run policy; only the host-floor branch reads approvals at the write boundary. */
 export type CronStreamExecPolicy = {
+  sandboxContext?: SandboxContext;
   /** Rechecks cancellation and the creator’s captured policy at the mutation boundary. */
   assertCurrentSource?: () => void;
   /** Per-invocation result projection only; never grants execution authority. */

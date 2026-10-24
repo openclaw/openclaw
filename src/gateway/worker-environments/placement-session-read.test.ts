@@ -14,6 +14,17 @@ import {
   stagePlacementWorkspaceResultWorkerPublication,
 } from "./placement-turn-authority.js";
 
+function withoutHostSql<T>(read: () => T): T {
+  const sql = observeHostDataSql();
+  try {
+    const result = read();
+    expect(sql.queries).toEqual([]);
+    return result;
+  } finally {
+    sql.restore();
+  }
+}
+
 it("retains SQL-free placement facts through bookkeeping, claims, dispatch, retirement and uncertain writes", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const database = openOpenClawStateDatabase();
@@ -24,16 +35,7 @@ it("retains SQL-free placement facts through bookkeeping, claims, dispatch, reti
       sessionId: "retained-placement",
     };
     const read = await store.prepareSessionPlacement(session.sessionId);
-    const current = () => {
-      const sql = observeHostDataSql();
-      try {
-        const placement = read.current();
-        expect(sql.queries).toEqual([]);
-        return placement;
-      } finally {
-        sql.restore();
-      }
-    };
+    const current = () => withoutHostSql(() => read.current());
     try {
       expect(current()).toBeUndefined();
       const claim = await store.claimTurn({
@@ -140,13 +142,7 @@ it("installs the committed placement when acquisition overlaps its writer receip
     });
     const retained = await store.prepareSessionPlacement(session.sessionId);
     try {
-      const sql = observeHostDataSql();
-      try {
-        expect(retained.current()).toEqual(committed);
-        expect(sql.queries).toEqual([]);
-      } finally {
-        sql.restore();
-      }
+      expect(withoutHostSql(() => retained.current())).toEqual(committed);
     } finally {
       retained.release();
     }
@@ -158,13 +154,7 @@ it("retains a cold async placement read for SQL-free synchronous compatibility a
     const store = createWorkerSessionPlacementStore();
     const sessionIds = ["cold-placement-absence"];
     expect(await store.getManyAsync(sessionIds)).toEqual(new Map());
-    const sql = observeHostDataSql();
-    try {
-      expect(store.getMany(sessionIds)).toEqual(new Map());
-      expect(sql.queries).toEqual([]);
-    } finally {
-      sql.restore();
-    }
+    expect(withoutHostSql(() => store.getMany(sessionIds))).toEqual(new Map());
   });
 });
 

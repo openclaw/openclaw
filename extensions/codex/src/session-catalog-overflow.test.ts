@@ -1,6 +1,7 @@
 import { expect, it, vi } from "vitest";
 import { memoryCatalogState } from "./session-catalog-index.test-support.js";
 import { remoteCatalogFactory } from "./session-catalog-resident.test-support.js";
+import type { CodexSessionCatalogPageParams } from "./session-catalog-types.js";
 import { commandRpcMocks, idleThread } from "./session-catalog.test-helpers.js";
 
 it("keeps paging and searching older native rows beyond the retained window after restart", async () => {
@@ -54,59 +55,48 @@ it("keeps paging and searching older native rows beyond the retained window afte
     expect([...values.values()].filter((entry) => entry.kind === "row")).toHaveLength(20_000);
     await initial.factory.stop();
     const { control } = await make();
+    const list = (query: CodexSessionCatalogPageParams = {}) =>
+      control.listPage({ limit: 40, ...query });
     const before = calls.length;
-    let page = await control.listPage({ limit: 40 });
+    let page = await list();
     expect(calls).toHaveLength(before);
     expect(page.sessions.map((row) => row.threadId)).toEqual(
       native.slice(0, 40).map((row) => row.id),
     );
     const ids = page.sessions.map((row) => row.threadId);
     while (page.nextCursor) {
-      page = await control.listPage({ limit: 40, cursor: page.nextCursor });
+      page = await list({ cursor: page.nextCursor });
       ids.push(...page.sessions.map((row) => row.threadId));
     }
     expect(ids).toEqual(native.map((thread) => thread.id));
     expect(page.backwardsCursor).toEqual(expect.any(String));
-    const previous = await control.listPage({ limit: 40, cursor: page.backwardsCursor });
-    const again = await control.listPage({ limit: 40, cursor: previous.nextCursor });
+    const previous = await list({ cursor: page.backwardsCursor });
+    const again = await list({ cursor: previous.nextCursor });
     expect(again.sessions).toEqual(page.sessions);
     const expected = native.slice(20_000).map((thread) => thread.id);
-    let searched = await control.listPage({ searchTerm: "older investigation", limit: 40 });
+    let searched = await list({ searchTerm: "older investigation" });
     expect(searched.nextCursor).toEqual(expect.any(String));
     while (!searched.sessions.length && searched.nextCursor) {
-      searched = await control.listPage({
+      searched = await list({
         searchTerm: "older investigation",
-        limit: 40,
         cursor: searched.nextCursor,
       });
     }
-    const scoped = await control.listPage({ cwd: "/workspace/older", limit: 40 });
+    const scoped = await list({ cwd: "/workspace/older" });
     expect(searched.sessions.map((row) => row.threadId)).toEqual(expected);
     expect(scoped.sessions.map((row) => row.threadId)).toEqual(expected);
-    let sparse = await control.listPage({ searchTerm: "sparse", limit: 40 });
+    let sparse = await list({ searchTerm: "sparse" });
     expect(sparse.sessions.map((row) => row.threadId)).toEqual([native[0]!.id]);
     while (sparse.nextCursor) {
-      sparse = await control.listPage({
-        searchTerm: "sparse",
-        limit: 40,
-        cursor: sparse.nextCursor,
-      });
+      sparse = await list({ searchTerm: "sparse", cursor: sparse.nextCursor });
     }
     expect(sparse.sessions.map((row) => row.threadId)).toEqual([native.at(-1)!.id]);
-    let newer = await control.listPage({
-      searchTerm: "sparse",
-      limit: 40,
-      cursor: sparse.backwardsCursor,
-    });
+    let newer = await list({ searchTerm: "sparse", cursor: sparse.backwardsCursor });
     expect(newer.sessions).toEqual([]);
     expect(newer.backwardsCursor).toEqual(expect.any(String));
     expect(newer.nextCursor).toBeUndefined();
     while (!newer.sessions.length && newer.backwardsCursor) {
-      newer = await control.listPage({
-        searchTerm: "sparse",
-        limit: 40,
-        cursor: newer.backwardsCursor,
-      });
+      newer = await list({ searchTerm: "sparse", cursor: newer.backwardsCursor });
     }
     expect(newer.sessions.map((row) => row.threadId)).toEqual([native[0]!.id]);
     expect(calls.slice(before).every((request) => request.useStateDbOnly === true)).toBe(true);

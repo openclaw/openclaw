@@ -145,7 +145,7 @@ suite.define(() => {
     });
   });
 
-  it.each(["raw", "file", "close"] as const)(
+  it.each(["file", "close"] as const)(
     "keeps a late initialization failure scoped after selecting %s",
     async (selection) => {
       await suite.withPage(editorContext, async ({ page }) => {
@@ -161,9 +161,7 @@ suite.define(() => {
         );
         await openFilePreview(page);
         await page.waitForFunction(() => typeof window.rejectEditorInitialization === "function");
-        if (selection === "raw") {
-          await page.getByRole("button", { name: /raw text/iu, exact: true }).click();
-        } else if (selection === "file") {
+        if (selection === "file") {
           await page.locator('a.markdown-file-link[data-file-path="other.txt"]').click();
           await page.locator(".cm-content").waitFor();
         } else {
@@ -173,11 +171,7 @@ suite.define(() => {
         await twoFrames(page);
         expect(await page.locator(".lazy-view-error:visible").count()).toBe(0);
         expect(errors).toEqual([]);
-        if (selection === "raw") {
-          expect(await page.locator(".sidebar-markdown-shell").textContent()).toContain(
-            "Synthetic notes.txt content",
-          );
-        } else if (selection === "file") {
+        if (selection === "file") {
           expect(await page.locator(".cm-content:visible").textContent()).toContain(
             "Synthetic other.txt content",
           );

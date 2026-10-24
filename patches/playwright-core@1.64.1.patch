@@ -1,0 +1,22 @@
+diff --git a/lib/coreBundle.js b/lib/coreBundle.js
+--- a/lib/coreBundle.js
++++ b/lib/coreBundle.js
+@@ -20638,15 +20638,16 @@
+ function normalizeEvaluationExpression(expression2, isFunction2) {
+   expression2 = expression2.trim();
+   if (isFunction2) {
++    // Parse callback syntax without compiling JavaScript in the host process.
+     try {
+-      new Function("(" + expression2 + ")");
++      require("acorn").parse("function anonymous() {\n(" + expression2 + ")\n}", { ecmaVersion: "latest" });
+     } catch (e1) {
+       if (expression2.startsWith("async "))
+         expression2 = "async function " + expression2.substring("async ".length);
+       else
+         expression2 = "function " + expression2;
+       try {
+-        new Function("(" + expression2 + ")");
++        require("acorn").parse("function anonymous() {\n(" + expression2 + ")\n}", { ecmaVersion: "latest" });
+       } catch (e2) {
+         throw new Error("Passed function is not well-serializable!");
+       }

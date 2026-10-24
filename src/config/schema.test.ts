@@ -21,10 +21,33 @@ const tupleSchema = {
 } as unknown as Parameters<typeof lookupConfigSchema>[0];
 
 describe("config schema", () => {
+  it("requires concrete Gateway policy identities and accepts an explicitly empty ceiling", () => {
+    expect(ToolsSchema.safeParse({ gatewayPolicy: { allow: [] } }).success).toBe(true);
+    expect(
+      ToolsSchema.safeParse({
+        gatewayPolicy: {
+          allow: ["sessions"],
+          actions: { sessions: ["list"] },
+          automations: { scope: "caller", allowCommandJobs: false },
+        },
+      }).success,
+    ).toBe(true);
+    for (const gatewayPolicy of [
+      {},
+      { allow: ["*"] },
+      { allow: ["group:plugins"] },
+      { allow: ["sessions"], actions: { sessions: ["*"] } },
+      { allow: [], automations: { scope: "admin" } },
+      { allow: [], automations: { allowCommandJobs: "false" } },
+      { allow: [], automations: { unknown: true } },
+    ]) {
+      expect(ToolsSchema.safeParse({ gatewayPolicy }).success).toBe(false);
+    }
+  });
+
   type SchemaInput = NonNullable<Parameters<typeof buildConfigSchemaCore>[0]>;
   let baseSchema: ReturnType<typeof buildConfigSchemaCore>;
   let pluginUiHintInput: SchemaInput;
-  let heartbeatChannelInput: SchemaInput;
   let cachedMergeInput: SchemaInput;
 
   beforeAll(() => {
@@ -42,9 +65,6 @@ describe("config schema", () => {
           },
         },
       ],
-    };
-    heartbeatChannelInput = {
-      channels: [{ id: "imessage", label: "iMessage", configSchema: { type: "object" } }],
     };
     cachedMergeInput = {
       plugins: [
@@ -295,18 +315,6 @@ describe("config schema", () => {
     expect(last?.schema?.description).toContain("omitted");
   });
 
-  it("adds heartbeat target hints with dynamic channels", () => {
-    const res = buildConfigSchemaCore(heartbeatChannelInput);
-
-    const defaultsHint = res.uiHints["agents.defaults.heartbeat.target"];
-    const entryHint = res.uiHints["agents.entries.*.heartbeat.target"];
-    expect(defaultsHint?.help).toContain("imessage");
-    expect(defaultsHint?.help).toContain("owner");
-    expect(defaultsHint?.help).toContain("last");
-    expect(defaultsHint?.placeholder).toBe("owner");
-    expect(entryHint?.help).toContain("imessage");
-  });
-
   it("caches merged schemas for identical plugin/channel metadata", () => {
     const first = buildConfigSchemaCore(cachedMergeInput);
     const plugin = expectDefined(cachedMergeInput.plugins?.[0], "cached plugin metadata");
@@ -409,6 +417,31 @@ describe("config schema", () => {
     }
   });
 
+  it("validates Tool Search selector fields and requires a nonempty selector", () => {
+    for (const key of ["include", "exclude"]) {
+      const selectors = [{ source: "mcp" }, { name: "github_*" }, { source: "client", name: "*" }];
+      expect(ToolsSchema.parse({ toolSearch: { [key]: selectors } })?.toolSearch).toEqual({
+        [key]: selectors,
+      });
+      expect(ToolsSchema.safeParse({ toolSearch: { [key]: [] } }).success).toBe(true);
+      for (const selector of [
+        {},
+        { source: "plugin" },
+        { name: "" },
+        { name: "   " },
+        { name: 1 },
+        { source: "mcp", server: "github" },
+        { source: null },
+      ]) {
+        expect(ToolsSchema.safeParse({ toolSearch: { [key]: [selector] } }).success).toBe(false);
+      }
+      expect(() => ToolsSchema.parse({ toolSearch: { [key]: [{}] } })).toThrow(
+        "Tool Search selectors must specify source, name, or both.",
+      );
+      expect(ToolsSchema.safeParse({ toolSearch: { [key]: "mcp" } }).success).toBe(false);
+    }
+  });
+
   it("looks up root config schema children without returning the full schema tree", () => {
     const lookup = lookupConfigSchema(baseSchema, ".");
     expect(lookup?.path).toBe(".");
@@ -416,6 +449,45 @@ describe("config schema", () => {
     expect(lookup?.children.find((child) => child.key === "gateway")?.path).toBe("gateway");
     const schema = lookup?.schema as { properties?: unknown } | undefined;
     expect(schema?.properties).toBeUndefined();
+  });
+
+  it("explains named custom providers through schema lookup before configuration", () => {
+    const providers = expectDefined(
+      lookupConfigSchema(baseSchema, "models.providers"),
+      "providers",
+    );
+    expect(providers.hint?.help).toContain("gpu-a or my-lab");
+    expect(providers.hint?.help).toContain("Built-in and extension-owned IDs and aliases");
+    expect(providers.hint?.help).toContain("api does");
+    expect(providers.hint?.help).toContain("same adapter");
+    expect(providers.hint?.help).toContain("Custom entries must include baseUrl and models");
+    expect(providers.children.find((child) => child.key === "*")?.hint?.help).toContain(
+      "Replace * with your chosen ID",
+    );
+
+    for (const id of ["*", "gpu-a"]) {
+      const entry = expectDefined(
+        lookupConfigSchema(baseSchema, `models.providers.${id}`),
+        "provider",
+      );
+      expect(entry.hintPath).toBe("models.providers.*");
+      expect(entry.hint?.help).toContain("before a custom ID is configured");
+      const api = expectDefined(
+        lookupConfigSchema(baseSchema, `models.providers.${id}.api`),
+        "API",
+      );
+      expect(api.hint?.help).toContain("Chat Completions: openai-completions");
+      expect(api.hint?.help).toContain("Responses: openai-responses");
+      expect(api.hint?.help).toContain("Messages: anthropic-messages");
+      expect(api.schema.enum).toEqual(
+        expect.arrayContaining([
+          "openai-completions",
+          "openai-responses",
+          "anthropic-messages",
+          "ollama",
+        ]),
+      );
+    }
   });
 
   it("includes reload metadata when a resolver is provided", () => {

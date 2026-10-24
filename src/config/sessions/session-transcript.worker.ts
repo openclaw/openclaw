@@ -1,3 +1,5 @@
+import { channel as diagnosticsChannel } from "node:diagnostics_channel";
+import { getHeapStatistics } from "node:v8";
 import { workerData } from "node:worker_threads";
 import { decodeAgentDatabaseReaderRequest } from "../../infra/agent-database-readers.js";
 import {
@@ -11,6 +13,7 @@ import type {
 import { serveOwnedWorkerTasks } from "../../infra/worker-task-server.js";
 import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import type { SessionIdentityEvidenceResult } from "./session-accessor.sqlite-entry-availability.js";
+import { isSessionHistoryReadOperation } from "./session-history-read-operation-kind.js";
 import {
   encodeSessionTranscriptWorkerError,
   encodeSessionTranscriptRequestError,
@@ -34,6 +37,7 @@ if (startup?.databaseEngineSelection) {
 let releaseReadValidation:
   | typeof import("../../state/openclaw-agent-db-validation-cache.js").releaseOpenClawAgentDatabaseReadValidation
   | undefined;
+const memoryPressure = diagnosticsChannel("openclaw.memory.critical");
 
 serveOwnedWorkerTasks(
   async (
@@ -43,6 +47,12 @@ serveOwnedWorkerTasks(
   ): Promise<
     SessionTranscriptWorkerReply<keyof SessionTranscriptWorkerValues> | UsageCostWorkerReply
   > => {
+    // Pressure stays inside this isolate and drops decoded caches before the next snapshot.
+    // Bun's compatibility probe walks the heap instead of describing a V8 allocation limit.
+    const heap = process.versions.bun ? undefined : getHeapStatistics();
+    if (heap && heap.used_heap_size >= heap.heap_size_limit * 0.8) {
+      memoryPressure.publish(undefined);
+    }
     // Install cleanup before this worker can acquire either a cached or explicit reader.
     releaseReadValidation ??= (await import("../../state/openclaw-agent-db-validation-cache.js"))
       .releaseOpenClawAgentDatabaseReadValidation;
@@ -53,7 +63,7 @@ serveOwnedWorkerTasks(
         throw new Error("Process-held history requires its host reader channel");
       }
       const { readProcessHeldCliHistoryInWorker } =
-        await import("../../gateway/cli-session-history.process-held.js");
+        await import("../../gateway/cli-session-history.process-held.worker.js");
       return {
         ok: true,
         value: await readProcessHeldCliHistoryInWorker(request.request, channel),
@@ -96,13 +106,6 @@ serveOwnedWorkerTasks(
         return usageCostWorkerFailure(error);
       }
     }
-    const [
-      { isSessionHistoryReadOperation, prepareSessionHistoryReadOperation },
-      { runWithSessionTranscriptReadFence },
-    ] = await Promise.all([
-      import("./session-history-read-operation.worker.js"),
-      import("./session-transcript-read-fence.js"),
-    ]);
     const readRequest = async (): Promise<
       SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]
     > => {
@@ -133,6 +136,8 @@ serveOwnedWorkerTasks(
         return { kind: request.kind, result: { ...result, indexing } };
       }
       if (isSessionHistoryReadOperation(request)) {
+        const { prepareSessionHistoryReadOperation } =
+          await import("./session-history-read-operation.worker.js");
         const execute = await prepareSessionHistoryReadOperation(request);
         return execute();
       }
@@ -161,8 +166,8 @@ serveOwnedWorkerTasks(
         if (request.history) {
           await Promise.all([
             import("../../gateway/session-history-worker-reader.js"),
-            import("../../gateway/server-methods/chat-history-page-kernel.js"),
-            import("../../gateway/server-methods/chat-history-response-page.js"),
+            import("../../gateway/chat-history-page-kernel.js"),
+            import("../../gateway/chat-history-response-page.js"),
             import("../../gateway/session-history-snapshot.js"),
           ]);
         }
@@ -240,7 +245,7 @@ serveOwnedWorkerTasks(
         };
       }
       if (request.kind === "session-transcript-instances") {
-        const { listSessionTranscriptInstances } = await import("./session-history.js");
+        const { listSessionTranscriptInstances } = await import("./session-history-read.js");
         return {
           kind: request.kind,
           instances: listSessionTranscriptInstances(
@@ -265,8 +270,7 @@ serveOwnedWorkerTasks(
         };
       }
       if (request.kind === "session-archive-inventory") {
-        const { listSessionTranscriptArchivesReadOnly } =
-          await import("./session-accessor.sqlite-history.js");
+        const { listSessionTranscriptArchivesReadOnly } = await import("./session-history-read.js");
         return {
           kind: request.kind,
           archives: listSessionTranscriptArchivesReadOnly({
@@ -277,7 +281,7 @@ serveOwnedWorkerTasks(
       }
       if (request.kind === "session-corpus-inventory") {
         const { readSessionTranscriptCorpusInventory } =
-          await import("../../../packages/memory-host-sdk/src/host/session-transcript-corpus.js");
+          await import("../../../packages/memory-host-sdk/src/host/session-transcript-corpus.worker.js");
         return {
           kind: request.kind,
           entries: readSessionTranscriptCorpusInventory(
@@ -309,7 +313,7 @@ serveOwnedWorkerTasks(
         };
       }
       if (request.kind === "cold-metadata" || request.kind === "cold-storage-inventory") {
-        const cold = await import("./session-cold-storage-worker.js");
+        const cold = await import("./session-cold-storage-read.worker.js");
         const options = { ...request.database, env: cloneEnvWithPlatformSemantics(request.env) };
         return request.kind === "cold-metadata"
           ? {
@@ -393,7 +397,7 @@ serveOwnedWorkerTasks(
         const { readSessionEntryList } = await import("./session-entry-list.worker.js");
         return {
           kind: "session-entry-list" as const,
-          ...readSessionEntryList(request),
+          ...(await readSessionEntryList(request)),
         };
       }
       if (request.kind === "session-store-projection") {
@@ -598,9 +602,11 @@ serveOwnedWorkerTasks(
         );
       }
       if (request.kind === "session-entries") {
-        const { prepareSessionMemoryEntries } = await import("./session-memory-entry.worker.js");
-        return { entries: await prepareSessionMemoryEntries(request.entries) };
+        const { deliverSessionMemoryEntries } = await import("./session-memory-entry.worker.js");
+        return await deliverSessionMemoryEntries(request.entries, channel, control);
       }
+      const { runWithSessionTranscriptReadFence } =
+        await import("./session-transcript-read-fence.js");
       return await runWithSessionTranscriptReadFence(
         request.admission,
         async (): Promise<SessionTranscriptWorkerValues[keyof SessionTranscriptWorkerValues]> => {
@@ -633,7 +639,7 @@ serveOwnedWorkerTasks(
           }
           if (request.kind === "session-reset-recall") {
             const { readSessionResetRecallCutoffInProcess } =
-              await import("../../../packages/memory-host-sdk/src/host/session-reset-recall-read.js");
+              await import("../../../packages/memory-host-sdk/src/host/session-reset-recall-read.worker.js");
             return { cutoff: readSessionResetRecallCutoffInProcess(request.scope) };
           }
           if (request.mode === "snapshot") {

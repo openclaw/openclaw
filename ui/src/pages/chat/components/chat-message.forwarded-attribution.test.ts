@@ -11,11 +11,13 @@ import {
 import { SessionLinkTitler } from "../../../components/session-link-titling.ts";
 import { SESSION_TITLE_TARGET_SELECTOR } from "../../../components/session-progress-hovercard-target.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import {
   coalesceAgentRunFrames,
   type AgentRunFrameRenderItem,
 } from "../chat-agent-run-grouping.ts";
+import { createInitializationContext } from "../chat-pane.test-support.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
 import { AgentRunFrame } from "./chat-agent-run-frame.tsx";
 import type { NativeMessageGroupOptions } from "./chat-message-group-view.tsx";
@@ -124,6 +126,8 @@ function openReport(key = "click") {
 function titlerFor(key: string, title: string) {
   const titler = new SessionLinkTitler();
   titler.client = new GatewayBrowserClient({ url: "ws://localhost" });
+  titler.context = createInitializationContext(titler.client);
+  titler.context.gateway.snapshot.hello = gatewayHelloForMethods(["controlUi.sessionPreview"]);
   const request = vi.spyOn(titler.client, "request").mockResolvedValueOnce({
     status: "ok",
     sessionKey: key,
@@ -200,6 +204,27 @@ it.each([false, true])("opens sender's nested tool files (frame=%s)", async (fra
   ]);
 });
 
+it.each([false, true])("opens own tool files from their message (frame=%s)", async (frame) => {
+  const onOpenWorkspaceFile = vi.fn();
+  const group = createGroup(undefined, {
+    runId: "own-tools",
+    __openclaw: { id: "entry-read" },
+    content: [readCall("own-read", reportPath)],
+  });
+  const options = { onOpenWorkspaceFile, ...expanded };
+  if (frame) {
+    renderFrame(group, options);
+  } else {
+    renderGroup(group, options);
+  }
+  await settleToolBridges(container);
+  required(".chat-tool-row__file-link").click();
+  expect(onOpenWorkspaceFile).toHaveBeenCalledExactlyOnceWith({
+    path: reportPath,
+    messageEntryId: "entry-read",
+  });
+});
+
 it("keeps the sender on narrated file links in a run frame", () => {
   const groups = groupMessages([
     narration([{ type: "text", text: reportLink }, readCall("read-report", reportPath)], 1_000, {
@@ -239,7 +264,7 @@ it.each([false, true])("preserves sender attribution (forwarded=%s)", async (for
 
   const { titler } = titlerFor("agent:main:main", "Main session");
   const sourceLink = expectDefined(link, "source session link");
-  await titler.decorate(sourceLink, true);
+  await titler.decorate(sourceLink);
   expect(sourceLink.textContent).toBe("Main session");
   renderGroup(group);
   const retained = query(`${attributionSelector} a`);
@@ -291,7 +316,7 @@ it.each([
   expect(chip.getAttribute("data-session-key")).toBe(isCronRun ? null : key);
   expect(text(attributionSelector) ?? "").not.toContain("—");
   const { titler, request } = titlerFor(key, "Client session title");
-  await titler.decorate(chip, true);
+  await titler.decorate(chip);
   expect(chip.textContent?.trim()).toBe(chipText);
   expect(chip.getAttribute("href")).toBe(href);
   if (isCronRun) {

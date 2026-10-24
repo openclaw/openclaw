@@ -154,7 +154,8 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
     throw new Error("Synthetic Git endpoint has no TCP address");
   }
   const endpoint = `http://127.0.0.1:${address.port}/remote.git`;
-  const fetches: { argv: string[]; settled: boolean }[] = [];
+  const fetches: { argv: string[]; settled: boolean; configCount: number; configKeys: string[] }[] =
+    [];
   const failedDiagnostics: string[] = [];
   // Only translate the admitted network boundary. Git transport, authentication,
   // object selection, cancellation, and the emitted pack all execute for real.
@@ -162,7 +163,13 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
     if (!args.includes(URL)) {
       return executeGitCommand(cwd, args, options);
     }
-    const fetch = { argv: [...args], settled: false };
+    const env = { ...options?.baseEnv, ...options?.env };
+    const configCount = Number(env.GIT_CONFIG_COUNT);
+    const configKeys = Array.from(
+      { length: configCount },
+      (_, index) => env[`GIT_CONFIG_KEY_${index}`]!,
+    );
+    const fetch = { argv: [...args], settled: false, configCount, configKeys };
     fetches.push(fetch);
     try {
       const result = await executeGitCommand(
@@ -171,7 +178,15 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
         {
           ...options,
           baseEnv: { ...options?.baseEnv, GIT_ALLOW_PROTOCOL: "http" },
-          env: { ...options?.env, GIT_CONFIG_KEY_2: `http.${endpoint}.extraHeader` },
+          env: {
+            ...Object.fromEntries(
+              Object.entries(options?.env ?? {}).map(([key, value]) => [
+                key,
+                value === `http.${URL}.extraHeader` ? `http.${endpoint}.extraHeader` : value,
+              ]),
+            ),
+            GIT_ALLOW_PROTOCOL: "http",
+          },
         },
       );
       if (result.code !== 0) {

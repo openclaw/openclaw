@@ -34,7 +34,7 @@ import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { dispatchInboundMessageMock, installGatewayTestHooks } from "../test-helpers.js";
 import { useBrowserFollowupFixture } from "./chat-send-pending-inputs.test-support.js";
-import { createProgressCardHandlers } from "./progress-card.js";
+import { progressCardHandlers } from "./progress-card.js";
 import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.js";
 
 installGatewayTestHooks();
@@ -112,7 +112,7 @@ async function refreshCard(
     context: f.context,
     respond,
     isWebchatConnect: () => true,
-    extraHandlers: options.extraHandlers ?? createProgressCardHandlers(),
+    extraHandlers: options.extraHandlers ?? progressCardHandlers,
   });
   return respond;
 }
@@ -145,7 +145,7 @@ describe("registered progress refresh admission", () => {
         }
         const cardRead = createDeferredCore();
         const releaseRead = createDeferredCore();
-        const handlers = createProgressCardHandlers();
+        const handlers = { ...progressCardHandlers };
         let readingTerminalCard = false;
         let revoked = false;
         const originalRefresh = handlers["progressCard.refresh"]!;
@@ -376,6 +376,7 @@ describe("registered progress refresh admission", () => {
       };
       const cancel = vi.fn();
       const claim = vi.fn(async () => true);
+      const steeringAccepted = createDeferredCore();
       const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
         async (_text, options, assertCurrent) => {
           assertCurrent();
@@ -386,6 +387,7 @@ describe("registered progress refresh admission", () => {
           await options?.userTurnTranscriptRecorder?.persistApproved();
           assertCurrent();
           options?.onQueueAccepted?.(true);
+          steeringAccepted.resolve();
           if (unconfirmed) {
             return { transcriptCommit: "unconfirmed", errorMessage: "Receipt still pending" };
           }
@@ -423,9 +425,17 @@ describe("registered progress refresh admission", () => {
           ),
         );
         expect(respond.mock.calls).toEqual([acceptedResponse(), acceptedResponse()]);
+        const accepted = respond.mock.calls[0]?.[1];
+        if (!isRecord(accepted) || typeof accepted.runId !== "string") {
+          throw new Error("Missing active refresh acceptance");
+        }
+        // The ACK precedes native steering; keep its incumbent alive until source settlement.
+        await rpcSourceTesting.get(accepted.runId)?.input.settlement.promise;
         expect(claim).not.toHaveBeenCalled();
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         expect(getAgentRunContext("original-work")).toMatchObject(visibleProjection);
+        // The ACK owns input custody; detached steering must reach the active run before it ends.
+        await steeringAccepted.promise;
         await f.finishDispatch();
         const retry = await refreshCard(f, "active-refresh", undefined, { id: "retry-steer" });
         expect(retry).toHaveBeenCalledWith(...acceptedResponse());

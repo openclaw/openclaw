@@ -80,6 +80,11 @@ export type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMet
     raw: TRaw,
     context: ChannelIngressMonitorInspectionContext,
   ) => Promise<ChannelIngressMonitorFacts | null>;
+  /** Await a provider-validated replacement before serialization; policy errors refuse intake. */
+  prepareAdmission?: (
+    raw: TRaw,
+    context: { facts: ChannelIngressMonitorFacts; receivedAt: number; signal: AbortSignal },
+  ) => Promise<{ raw: TRaw; assertCurrent: () => void } | undefined>;
   payload: ChannelIngressMonitorPayloadCodec<TRaw, TBody, TStoredPayload, TMetadata>;
   /**
    * Reuse admission identity when this monitor appends and claims a fresh event.

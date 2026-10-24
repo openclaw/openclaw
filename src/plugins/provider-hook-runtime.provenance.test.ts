@@ -70,8 +70,25 @@ function loadPlugins(options: Parameters<typeof loadOpenClawPlugins>[0]) {
   return loadOpenClawPlugins({ config, env: {}, installRecords: {}, activate: false, ...options });
 }
 
-function writeManifest(dir: string, manifest: object) {
-  writeFileSync(path.join(dir, "openclaw.plugin.json"), JSON.stringify(manifest));
+function labels(providers: readonly { label: string }[] | undefined) {
+  return providers?.map((provider) => provider.label);
+}
+
+function expectAbsent(value: unknown) {
+  // Do not let assertion failure formatting inspect lazy runtime proxies.
+  expect(value === undefined).toBe(true);
+}
+
+function writeManifest(dir: string, manifest: object = {}) {
+  writeFileSync(
+    path.join(dir, "openclaw.plugin.json"),
+    JSON.stringify({
+      id: "same-id",
+      providers: ["same-provider"],
+      configSchema: EMPTY_PLUGIN_SCHEMA,
+      ...manifest,
+    }),
+  );
 }
 
 function createRegistrationProbe() {
@@ -99,11 +116,7 @@ function loadFixture(label: string, dir?: string, hookAliases?: readonly string[
         normalizeModelId: () => String(registration) });
     }};`,
   });
-  writeManifest(plugin.dir, {
-    id: "same-id",
-    providers: ["same-provider"],
-    configSchema: EMPTY_PLUGIN_SCHEMA,
-  });
+  writeManifest(plugin.dir);
   return Object.assign(metadata(plugin.dir, plugin.file), { registrations: registrations.count });
 }
 
@@ -126,7 +139,7 @@ describe("provider runtime physical ownership", () => {
       };
       for (let attempt = 0; attempt < 2; attempt += 1) {
         const providers = resolveProviders(requested);
-        expect(providers.map((provider) => provider.label)).toEqual(["cold-alias"]);
+        expect(labels(providers)).toEqual(["cold-alias"]);
         expect(
           providers[0]?.normalizeModelId?.({ provider: "runtime-alias", modelId: "probe" }),
         ).toBe("1");
@@ -148,8 +161,6 @@ describe("provider runtime physical ownership", () => {
         }};`,
       });
       writeManifest(plugin.dir, {
-        id: "same-id",
-        providers: ["same-provider"],
         configContracts: { secretInputs: { paths: [{ path: "credential", expected: "string" }] } },
         configSchema: {
           type: "object",
@@ -275,8 +286,6 @@ describe("provider runtime physical ownership", () => {
         }};`,
       });
       writeManifest(plugin.dir, {
-        id: "same-id",
-        providers: ["same-provider"],
         configSchema: {
           type: "object",
           properties: { revision: { type: "string" } },
@@ -334,9 +343,7 @@ describe("provider runtime physical ownership", () => {
       expect(loadedProvider(requested)).toBeUndefined();
       expect(readFileSync(registrationMarker, "utf8")).toBe("A/1");
       expect(
-        resolveProviders({ ...requested, providerRefs: [requested.provider] }).map(
-          (provider) => provider.label,
-        ),
+        labels(resolveProviders({ ...requested, providerRefs: [requested.provider] })),
       ).toEqual(receiver === "removed-alias" ? [] : ["B/2"]);
       expect(readFileSync(registrationMarker, "utf8")).toBe("B/2");
       expect(resolveProvider(requested)?.label).toBe(
@@ -374,9 +381,9 @@ describe("provider runtime physical ownership", () => {
     };
     expect(loadedProvider({ ...lookup, config: derivedConfig })?.label).toBe("old");
     const changed = { ...lookup, config: configFor(next) };
-    expect(loadedProvider(changed) === undefined).toBe(true);
+    expectAbsent(loadedProvider(changed));
     originalConfig.plugins.load.paths = changed.config.plugins.load.paths;
-    expect(loadedProvider({ ...lookup, config: originalConfig }) === undefined).toBe(true);
+    expectAbsent(loadedProvider({ ...lookup, config: originalConfig }));
     expect(resolveProvider(changed)?.label).toBe("next");
   });
 
@@ -447,29 +454,18 @@ describe("provider runtime physical ownership", () => {
       });
       setActivePluginRegistry(loaded, state);
       const lookup = { config: pluginConfig, env: {}, pluginMetadataSnapshot: snapshot };
-      expect(loadedProvider({ ...lookup, provider: "same-provider" }) === undefined).toBe(true);
-      expect(
-        loadedHooks({
-          ...lookup,
-          providerRefs: ["same-provider", "other-provider"],
-          onlyPluginIds: ["same-id", "alias-owner"],
-        }) === undefined,
-      ).toBe(true);
+      const hookLookup = {
+        ...lookup,
+        providerRefs: ["same-provider", "other-provider"],
+        onlyPluginIds: ["same-id", "alias-owner"],
+      };
+      expectAbsent(loadedProvider({ ...lookup, provider: "same-provider" }));
+      expectAbsent(loadedHooks(hookLookup));
       expect(resolveProvider({ ...lookup, provider: "same-provider" })?.label).toBe("selected");
-      expect(
-        resolveProviders({ ...lookup, providerRefs: ["same-provider"] }).map(
-          (provider) => provider.label,
-        ),
-      ).toEqual(["selected"]);
-      expect(
-        resolveHooks({
-          ...lookup,
-          providerRefs: ["same-provider", "other-provider"],
-          onlyPluginIds: ["same-id", "alias-owner"],
-        })
-          .map((provider) => provider.label)
-          .toSorted(),
-      ).toEqual(["alias", "selected"]);
+      expect(labels(resolveProviders({ ...lookup, providerRefs: ["same-provider"] }))).toEqual([
+        "selected",
+      ]);
+      expect(labels(resolveHooks(hookLookup))?.toSorted()).toEqual(["alias", "selected"]);
       expect(
         loadedProvider({
           ...lookup,
@@ -482,33 +478,28 @@ describe("provider runtime physical ownership", () => {
         manifestRegistry: snapshot.manifestRegistry,
       });
       if (state === "setup-only") {
-        expect(complete.providers.map((entry) => entry.provider.label).toSorted()).toEqual([
+        expect(labels(complete.providers.map((entry) => entry.provider))?.toSorted()).toEqual([
           "alias",
           "selected",
         ]);
         withGeneration({ metadataSnapshot: snapshot, pluginRegistry: loaded }, () => {
           expect(
-            resolveHooks({
-              ...lookup,
-              providerRefs: ["same-provider", "other-provider"],
-            }).map((provider) => provider.label),
+            labels(resolveHooks({ ...lookup, providerRefs: hookLookup.providerRefs })),
           ).toEqual(["alias"]);
-          expect(resolveProvider({ ...lookup, provider: "same-provider" }) === undefined).toBe(
-            true,
-          );
+          expectAbsent(resolveProvider({ ...lookup, provider: "same-provider" }));
         });
       }
       const verifyAliasProjection = () => {
         const aliases = { ...lookup, providerRefs: ["runtime-only"] };
-        expect(loadedHooks(aliases)?.map((provider) => provider.label)).toEqual(["alias"]);
-        expect(resolveHooks(aliases).map((provider) => provider.label)).toEqual(["alias"]);
+        expect(labels(loadedHooks(aliases))).toEqual(["alias"]);
+        expect(labels(resolveHooks(aliases))).toEqual(["alias"]);
         expect(
-          resolveHooks({
-            ...lookup,
-            providerRefs: ["same-provider", "runtime-only"],
-          })
-            .map((provider) => provider.label)
-            .toSorted(),
+          labels(
+            resolveHooks({
+              ...lookup,
+              providerRefs: ["same-provider", "runtime-only"],
+            }),
+          )?.toSorted(),
         ).toEqual(["alias", "selected"]);
       };
       withRegistry(complete, verifyAliasProjection);
@@ -519,7 +510,6 @@ describe("provider runtime physical ownership", () => {
     },
   );
 
-  // Compare opaque handles as scalars: failure formatting must not inspect lazy runtime proxies.
   it.each(
     (["request", "active"] as const).flatMap((scope) =>
       (["global", "bundled"] as const).flatMap((origin) =>
@@ -552,13 +542,13 @@ describe("provider runtime physical ownership", () => {
       ),
     };
     const check = () => {
-      expect(loadedProvider(lookup) === undefined).toBe(true);
-      expect(
+      expectAbsent(loadedProvider(lookup));
+      expectAbsent(
         loadedHooks({
           providerRefs: [lookup.provider],
           pluginMetadataSnapshot: lookup.pluginMetadataSnapshot,
-        }) === undefined,
-      ).toBe(true);
+        }),
+      );
     };
     if (scope === "request") {
       withRegistry(old, check);
@@ -581,7 +571,7 @@ describe("provider runtime physical ownership", () => {
         },
       });
     expect(resolve(snapshot) === old).toBe(true);
-    expect(resolve(metadata("/synthetic/new")) === undefined).toBe(true);
+    expectAbsent(resolve(metadata("/synthetic/new")));
   });
 
   it("does not reuse an active registry for another raw discovery selection", () => {
@@ -605,12 +595,12 @@ describe("provider runtime physical ownership", () => {
         requiredPluginIds: ["same-id"],
       }) === old,
     ).toBe(true);
-    expect(
+    expectAbsent(
       loadedRegistryFor({
         loadOptions: options(metadata("/synthetic/new")),
         requiredPluginIds: ["same-id"],
-      }) === undefined,
-    ).toBe(true);
+      }),
+    );
   });
 
   it("uses the loaded owner rather than a later disabled duplicate record", () => {
@@ -637,12 +627,7 @@ describe("provider runtime physical ownership", () => {
           pluginMetadataSnapshot: old,
         })?.label,
       ).toBe("old");
-      expect(
-        loadedProvider({
-          provider: "same-provider",
-          pluginMetadataSnapshot: next,
-        }) === undefined,
-      ).toBe(true);
+      expectAbsent(loadedProvider({ provider: "same-provider", pluginMetadataSnapshot: next }));
     });
   });
 
@@ -697,12 +682,9 @@ describe("provider runtime physical ownership", () => {
       expect(loadOpenClawPlugins(selectedOptions).providers[0]?.provider.label).toBe("source");
       if (selection === "source preference") {
         withRegistry(loaded, () => {
-          expect(
-            loadedProvider({
-              provider: "same-provider",
-              pluginMetadataSnapshot: selected,
-            }) === undefined,
-          ).toBe(true);
+          expectAbsent(
+            loadedProvider({ provider: "same-provider", pluginMetadataSnapshot: selected }),
+          );
         });
       }
     },
@@ -755,14 +737,16 @@ describe("provider runtime physical ownership", () => {
     withGeneration({ metadataSnapshot: selected, pluginRegistry: old }, () => {
       expect(loadedProvider(lookup)?.label).toBe("old");
       expect(
-        resolveProviders({
-          config,
-          providerRefs: [lookup.provider],
-          pluginMetadataSnapshot: newer,
-        }).map((provider) => provider.label),
+        labels(
+          resolveProviders({
+            config,
+            providerRefs: [lookup.provider],
+            pluginMetadataSnapshot: newer,
+          }),
+        ),
       ).toEqual(["old"]);
       withGeneration({ metadataSnapshot: selected }, () => {
-        expect(loadedProvider(lookup) === undefined).toBe(true);
+        expectAbsent(loadedProvider(lookup));
         expect(loadedHooks({ providerRefs: [lookup.provider] })).toEqual([]);
       });
     });

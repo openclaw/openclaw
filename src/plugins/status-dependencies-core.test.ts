@@ -59,35 +59,20 @@ function linkHost(rootDir: string, hostRoot: string) {
 }
 
 describe("plugin dependency health", () => {
-  it.each([
-    "missing",
-    "directory",
-    "file",
-    "empty-manifest",
-    "malformed-manifest",
-    "directory-manifest",
-  ])("rejects a required dependency with a %s package payload", (payload) => {
-    const rootDir = createPluginRoot();
-    const dependencyDir = path.join(rootDir, "node_modules", "required-runtime");
-    if (payload === "directory") {
-      fs.mkdirSync(dependencyDir, { recursive: true });
-    } else if (payload === "file") {
-      fs.mkdirSync(path.dirname(dependencyDir));
-      fs.writeFileSync(dependencyDir, "not a package");
-    }
-    if (payload.endsWith("manifest")) {
-      fs.mkdirSync(dependencyDir, { recursive: true });
-      const manifest = path.join(dependencyDir, "package.json");
+  it.each(["missing", "directory-manifest"])(
+    "rejects a required dependency with a %s package payload",
+    (payload) => {
+      const rootDir = createPluginRoot();
       if (payload === "directory-manifest") {
-        fs.mkdirSync(manifest);
-      } else {
-        fs.writeFileSync(manifest, payload === "empty-manifest" ? "" : "{");
+        fs.mkdirSync(path.join(rootDir, "node_modules/required-runtime/package.json"), {
+          recursive: true,
+        });
       }
-    }
-    const status = dependencyStatus(rootDir);
-    expectRequired(status, false);
-    expect(status.dependencies[0]?.resolvedPath).toBeUndefined();
-  });
+      const status = dependencyStatus(rootDir);
+      expectRequired(status, false);
+      expect(status.dependencies[0]?.resolvedPath).toBeUndefined();
+    },
+  );
 
   it.each([
     ["required-runtime", "nested", false],

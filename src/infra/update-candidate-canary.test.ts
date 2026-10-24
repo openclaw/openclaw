@@ -168,7 +168,10 @@ describe("update candidate canary", () => {
         nodeRunner,
       });
       expect(result.status).toBe("ok");
-      expect(result.steps[0]?.warnings).toEqual(warnings);
+      expect(result.steps[0]?.warnings).toEqual([
+        ...warnings,
+        expect.stringContaining("deadline allows at most 3 s"),
+      ]);
       expect(mocks.snapshot.mock.calls[0]?.[0]).toEqual([
         nodeRunner,
         ...runtimeArgs,
@@ -189,14 +192,16 @@ describe("update candidate canary", () => {
   registerCanaryProgressWorkerTests(() => root, mocks, admission);
 
   it.each([
-    ["snapshot", 32 * 1024 ** 2, 30_000, 300_001, "ok"],
-    ["doctor", 0, undefined, 31 * 60_000, "error"],
-    ["doctor", 400 * 1024 ** 2, undefined, 400_000, "ok"],
-    ["doctor", 2 * 1024 ** 3, undefined, 31 * 60_000, "ok"],
-    ["doctor", 2 * 1024 ** 3, 30 * 60_000, 31 * 60_000, "error"],
+    ["snapshot", 32 * 1024 ** 2, 30_000, 300_001, "ok", "30 s", "340 s"],
+    ["doctor", 0, undefined, 31 * 60_000, "error", undefined, undefined],
+    ["doctor", 400 * 1024 ** 2, undefined, 400_000, "ok", undefined, undefined],
+    ["doctor", 2 * 1024 ** 3, undefined, 31 * 60_000, "ok", undefined, undefined],
+    ["doctor", 2 * 1024 ** 3, 30 * 60_000, 31 * 60_000, "error", "1800 s", "2860 s"],
+    ["doctor", 2 * 1024 ** 3, 2_860_000, 31 * 60_000, "ok", undefined, undefined],
+    ["doctor", 2 * 1024 ** 3, 3_600_000, 31 * 60_000, "ok", undefined, undefined],
   ] as const)(
     "keeps the %s budget separate for %i state bytes and an explicit %s deadline",
-    async (stage, sqliteBytes, timeoutMs, elapsedMs, expectedStatus) => {
+    async (stage, sqliteBytes, timeoutMs, elapsedMs, expectedStatus, limit, allowance) => {
       databasePath = path.join(root, "budget.sqlite");
       await fs.writeFile(databasePath, "");
       await fs.truncate(databasePath, sqliteBytes);
@@ -237,6 +242,17 @@ describe("update candidate canary", () => {
           status: expectedStatus,
           phase: expectedStatus === "ok" ? "readiness" : "doctor",
         });
+        const report = renderUpdateRunReport(
+          updateRunReportInputFromResult({ ...result, mode: "git", root }),
+          { markdownLimit: Infinity },
+        ).markdown;
+        if (limit) {
+          expect(report).toContain(
+            `Warning: The update deadline allows at most ${limit} per candidate check, below the automatic ${allowance} allowance for this state. Checks may time out early; increase --timeout to allow more time.`,
+          );
+        } else {
+          expect(report).not.toContain("Checks may time out early");
+        }
         if (expectedStatus === "error") {
           expect(result.logTail.join("\n")).toContain("deadline exceeded");
         } else {
@@ -559,11 +575,8 @@ describe("update candidate canary", () => {
       gateway: { bind: "loopback" },
       mcp: { apps: { enabled: false } },
     });
-    expect(result.listenerIsolation).toEqual({
-      gateway: { host: "127.0.0.1", port: expect.any(Number) },
-      mcpAppSandbox: "disabled",
-    });
-    expect(candidateConfig.gateway).toMatchObject({ port: result.listenerIsolation?.gateway.port });
+    expect(candidateConfig.gateway).toMatchObject({ port: expect.any(Number) });
+    expect(candidateConfig.gateway).not.toMatchObject({ port: original.gateway.port });
     expect(original.mcp.apps).toEqual({ enabled: true, sandboxPort: 18790 });
     expect(original.cron.enabled).toBe(true);
     const gatewayPid = [...children.keys()].at(-1)!;
@@ -713,10 +726,18 @@ describe("update candidate canary", () => {
       expect(result).toMatchObject({ status: "error", phase: failure });
       if (failure === "readiness") {
         expect(canaryOutcomeStep(result.steps)).toMatchObject({
-          exitCode: 1,
-          failureFacts: [{ check: "readyz", message: expect.stringContaining("stalled") }],
+          exitCode: null,
+          termination: "timeout",
+          failureFacts: [
+            {
+              check: "startupz",
+              code: "candidate-startup-failed",
+              message: "readiness timeout",
+            },
+          ],
         });
         expect(canaryOutcomeStep(result.steps)?.advisory).toBeUndefined();
+        expect(canaryOutcomeStep(result.steps)?.stderrTail).toContain("stalled");
       }
       expect(result.steps.some((step) => step.exitCode !== 0)).toBe(true);
       expect(result.logTail.length).toBeLessThanOrEqual(40);

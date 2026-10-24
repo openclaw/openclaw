@@ -13,6 +13,8 @@ import { withWorkspaceHashMemo } from "./workspace-hash-memo.js";
 import { sha256 as digest, workspaceFile } from "./workspace-manifest-fixtures.test-support.js";
 import {
   captureWorkspaceManifest,
+  captureWorkspaceManifestDocument,
+  captureWorkspaceManifestReference,
   captureWorkspaceSnapshot,
   parseWorkspaceManifestPair,
 } from "./workspace-manifest-worker.js";
@@ -165,9 +167,23 @@ it("captures eligible files outside the Gateway thread and returns the canonical
   );
   expect({ manifest: snapshot.manifest, manifestRef: snapshot.manifestRef }).toEqual(first);
   expect(snapshot.manifestRef).toBe(`sha256:${digest(snapshot.rawManifest)}`);
+  const document = await withWorkspaceHashMemo(
+    memo,
+    () => captureWorkspaceManifestDocument(selection),
+    metrics,
+  );
+  expect(document).toEqual({
+    manifestRef: snapshot.manifestRef,
+    rawManifest: snapshot.rawManifest,
+  });
+  const reference = () =>
+    withWorkspaceHashMemo(memo, () => captureWorkspaceManifestReference(selection), metrics);
+  expect(await reference()).toBe(first.manifestRef);
   const empty = await captureWorkspaceManifest({ ...selection, includePaths: new Set<string>() });
   expect(empty.manifest).toMatchObject({ entries: [], directories: [] });
-  expect(metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 1 });
+  expect(metrics).toMatchObject({ contentHashCount: 1, memoHitCount: 3 });
+  await fs.unlink(path.join(root, "input.txt"));
+  expect(await reference()).not.toBe(first.manifestRef);
 });
 
 it("authenticates both manifests before selecting changed transfer payloads", async () => {

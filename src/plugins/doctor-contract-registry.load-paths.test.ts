@@ -12,6 +12,7 @@ import {
   listPluginDoctorStateMigrationEntries,
 } from "./doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
+import { writeDoctorFiles } from "./doctor-contract.test-support.js";
 
 const tempDirs = createTempDirTracker();
 
@@ -32,7 +33,7 @@ function writeDoctorFixture(
   files: Record<string, string | Record<string, unknown>>,
 ): void {
   const manifest = files["openclaw.plugin.json"];
-  for (const [relativePath, contents] of Object.entries({
+  writeDoctorFiles(pluginRoot, {
     ...(files["package.json"] ? {} : { "index.cjs": "module.exports = {};\n" }),
     ...files,
     "openclaw.plugin.json": {
@@ -40,15 +41,7 @@ function writeDoctorFixture(
       configSchema: {},
       ...(typeof manifest === "object" ? manifest : {}),
     },
-  })) {
-    const filePath = path.join(pluginRoot, relativePath);
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(
-      filePath,
-      typeof contents === "string" ? contents : JSON.stringify(contents),
-      "utf8",
-    );
-  }
+  });
 }
 
 function writeDoctorPlugin(pluginRoot: string, pluginId: string): void {

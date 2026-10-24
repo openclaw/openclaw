@@ -52,9 +52,7 @@ vi.mock("./media.js", () => ({ tryHandleHostedSmsMediaRequest }));
 vi.mock("./webhook.js", () => ({ createSmsWebhookHandler }));
 
 // mock-isolation: Gateway fixtures control webhook registration and request admission.
-vi.mock("openclaw/plugin-sdk/webhook-ingress", () => ({
-  registerPluginHttpRoute,
-}));
+vi.mock("openclaw/plugin-sdk/webhook-ingress", () => ({ registerPluginHttpRoute }));
 
 function createAccount(accountId: string, webhookPath = "/webhooks/sms"): ResolvedSmsAccount {
   return createSmsTestAccount({

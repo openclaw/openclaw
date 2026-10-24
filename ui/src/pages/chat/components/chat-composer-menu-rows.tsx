@@ -1,7 +1,10 @@
 import type { JSX } from "@solidjs/web";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import type { MenuEntry, MenuItem } from "../../../components/solid/menu.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 export function menuDivider(id: string): MenuEntry {
   return {

@@ -1,7 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
-import type { SessionBackground } from "../components/session-background.tsx";
+import type { SessionBackground } from "../components/session-background-host.tsx";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,

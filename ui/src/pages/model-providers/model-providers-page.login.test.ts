@@ -23,6 +23,7 @@ import {
 } from "./model-providers-page.login.test-support.ts";
 import {
   appendPage,
+  expandProvider,
   unmountPage,
   type ModelProvidersPageTestElement,
   startSelectedLogin,
@@ -91,18 +92,16 @@ describe("Models provider login", () => {
     });
     const page = appendPage(context);
     if (entry === "readiness") {
+      // The setup prompt shows only until a model works; Provider access connects after that.
+      const connect = setup ? "[data-model-readiness] button" : "[data-models-connect]";
       await waitForSolid(() => {
-        expect(
-          page.querySelector("[data-model-readiness]")?.getAttribute("data-model-readiness"),
-        ).toBe(setup ? "model-required" : "ready");
-        expect(
-          page.querySelector<HTMLButtonElement>("[data-model-readiness] button")?.disabled,
-        ).toBe(false);
+        expect(page.querySelector("[data-model-readiness]") !== null).toBe(setup);
+        expect(page.querySelector<HTMLButtonElement>(connect)?.disabled).toBe(false);
       });
       if (setup) {
         expect(page.view.props.loading).toBe(true);
       }
-      page.querySelector<HTMLButtonElement>("[data-model-readiness] button")!.click();
+      page.querySelector<HTMLButtonElement>(connect)!.click();
       await page.updateComplete;
     } else {
       await openPicker(page);
@@ -259,7 +258,7 @@ describe("Models provider login", () => {
       try {
         await chooseLogin(page, "Example browser sign-in");
         await waitForSolid(() =>
-          expect(page.querySelector<HTMLAnchorElement>(".wizard-step__sign-in a")?.href).toBe(
+          expect(page.querySelector<HTMLAnchorElement>(".wizard-sign-in a")?.href).toBe(
             "https://provider.example/sign-in",
           ),
         );
@@ -277,8 +276,10 @@ describe("Models provider login", () => {
           );
         }
         if (cancel) {
-          [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")]
-            .find((button) => button.textContent?.trim() === "Cancel")!
+          page
+            .querySelector<HTMLButtonElement>(
+              'openclaw-modal-dialog button[aria-label="Cancel sign-in"]',
+            )!
             .click();
           await waitForSolid(() => expect(page.querySelector("openclaw-modal-dialog")).toBeNull());
           expect(session?.getStatus()).toBe("cancelled");
@@ -392,8 +393,19 @@ describe("Models provider login", () => {
       },
       { timeoutMs: null },
     );
-    expect(page.querySelector('input[type="password"][name="wizard-text"]')).not.toBeNull();
+    const input = page.querySelector<HTMLInputElement>(
+      'input[type="password"][name="wizard-text"]',
+    )!;
+    expect(input).not.toBeNull();
     await submitCredential(page);
+    await waitForSolid(() => expect(input.disabled).toBe(true));
+    expect(page.querySelector('input[name="wizard-text"]')).toBe(input);
+    expect(input.value).toBe("synthetic-test-credential");
+    expect(
+      [...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")].find(
+        (button) => button.textContent?.trim() === "Cancel",
+      )?.disabled,
+    ).toBe(false);
 
     const dismissal = new CustomEvent("modal-cancel", { bubbles: true, cancelable: true });
     page.querySelector("openclaw-modal-dialog")!.dispatchEvent(dismissal);
@@ -748,10 +760,7 @@ describe("Models provider login", () => {
       ],
     });
     const page = appendPage(context);
-    await waitForSolid(() =>
-      expect(page.querySelector('[data-provider-id="example-owner"]')).not.toBeNull(),
-    );
-    const card = page.querySelector('[data-provider-id="example-owner"]')!;
+    const card = await expandProvider(page, "example-owner");
     const addAccount = [...card.querySelectorAll<HTMLButtonElement>("button")].find(
       (button) => button.textContent?.trim() === "Add account",
     );
@@ -879,6 +888,93 @@ describe("Models provider login", () => {
     expect(request.mock.calls.some(([method]) => method.startsWith("openclaw.setup."))).toBe(false);
   });
 
+  it("reveals and focuses new inventory before a cancelled agent's read settles", async () => {
+    const { context, request } = loginHarness();
+    const originalRequest = request.getMockImplementation()!;
+    const previousInventory = deferred<ModelAuthStatusResult>();
+    let inventoryReads = 0;
+    request.mockImplementation(async (method, ...args) => {
+      if (method === "models.authStatus" && inventoryReads++ === 0) {
+        return previousInventory.promise;
+      }
+      return originalRequest(method, ...args);
+    });
+    let agentId = "writer";
+    let controller!: ModelProviderLogin;
+    const view = mountSolid(() => {
+      controller = createModelProviderLogin({
+        getScope: () => ({ context, agentId, connectionEpoch: 1 }),
+        canStart: () => true,
+        canContinue: () => true,
+        refresh: async () => undefined,
+      });
+      return createComponent(ModelProviderLoginView, { controller });
+    });
+    const openingPrevious = controller.open();
+    expect(controller.busy).toBe(true);
+    await waitForSolid(() =>
+      expect(
+        view.container.querySelector('.model-provider-login [role="status"]')?.textContent,
+      ).toBe("Loading…"),
+    );
+    view.container.querySelector<HTMLButtonElement>("openclaw-modal-actions .btn")!.click();
+    expect(controller.busy).toBe(false);
+    agentId = "reviewer";
+    await controller.open();
+    await waitForSolid(() => {
+      const input = view.container.querySelector("[data-models-login-search]");
+      expect(input).not.toBeNull();
+      expect(document.activeElement).toBe(input);
+      expect(providerChoices(view.container)).toEqual(["example"]);
+    });
+    const input = view.container.querySelector("[data-models-login-search]");
+    previousInventory.resolve({ ts: 1, providers: [], providerCapabilities: [] });
+    await openingPrevious;
+    await waitForSolid(() => {
+      expect(view.container.querySelector("[data-models-login-search]")).toBe(input);
+      expect(providerChoices(view.container)).toEqual(["example"]);
+    });
+    view.unmount();
+  });
+
+  it.each([false, true])("reopens after an inventory error (cached auth: %s)", async (cached) => {
+    const { context, request } = loginHarness();
+    const ready =
+      await context.gateway.snapshot.client!.request<ModelAuthStatusResult>("models.authStatus");
+    request.mockClear();
+    request.mockRejectedValueOnce(new Error("Inventory unavailable"));
+    let authStatus: ModelAuthStatusResult | undefined;
+    let controller!: ModelProviderLogin;
+    const view = mountSolid(() => {
+      controller = createModelProviderLogin({
+        getScope: () => ({ context, agentId: "writer", connectionEpoch: 1, authStatus }),
+        canStart: () => true,
+        canContinue: () => true,
+        refresh: async () => undefined,
+      });
+      return createComponent(ModelProviderLoginView, { controller });
+    });
+    await controller.open();
+    await waitForSolid(() =>
+      expect(view.container.querySelector('[role="alert"]')?.textContent).toContain(
+        "Inventory unavailable",
+      ),
+    );
+    view.container.querySelector<HTMLButtonElement>("openclaw-modal-actions .btn")!.click();
+    if (cached) {
+      authStatus = ready;
+    }
+    await controller.open();
+    await waitForSolid(() => {
+      expect(view.container.querySelector('[role="alert"]')).toBeNull();
+      expect(providerChoices(view.container)).toEqual(["example"]);
+    });
+    expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(
+      cached ? 1 : 2,
+    );
+    view.unmount();
+  });
+
   it.each([false, true])(
     "offers optional discovery without login choices (inventory unavailable: %s)",
     async (unavailable) => {
@@ -893,7 +989,7 @@ describe("Models provider login", () => {
       const view = mountSolid(
         () => {
           controller = createModelProviderLogin({
-            getScope: () => ({ context, agentId: "writer" }),
+            getScope: () => ({ context, agentId: "writer", connectionEpoch: 1 }),
             canStart: () => true,
             canContinue: () => true,
             refresh: async () => undefined,

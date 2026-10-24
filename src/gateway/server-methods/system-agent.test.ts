@@ -42,7 +42,7 @@ import type { GatewayRequestContext } from "./types.js";
 const {
   systemAgentTempDirs,
   requireVerifiedInferenceFixture,
-  requireVerifiedInferenceDeps,
+  installVerifiedConfigReader,
   makeVerifiedEngine,
   seededSession,
 } = useSystemAgentGatewayTestFixture();
@@ -777,9 +777,9 @@ describe("openclaw.chat", () => {
   });
 
   it("persists completed turns from the engine's sanitized history", async () => {
+    installVerifiedConfigReader();
     const engine = new SystemAgentChatEngine({
       verifiedInference: requireVerifiedInferenceFixture(),
-      deps: requireVerifiedInferenceDeps(),
       runAgentTurn: async () => ({ text: "Everything is healthy." }),
     });
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
@@ -807,10 +807,10 @@ describe("openclaw.chat", () => {
 
   it("persists only the mask marker for a sensitive hosted-wizard answer", async () => {
     vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(runSensitiveChannelSetup);
+    installVerifiedConfigReader();
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       verifiedInference: requireVerifiedInferenceFixture(),
-      deps: requireVerifiedInferenceDeps(),
       runAgentTurn: async () => null,
     });
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);
@@ -883,6 +883,7 @@ describe("openclaw.chat", () => {
 
   it("reuses a live session, then requires fresh fallback verification after failure", async () => {
     stubEngineOverview();
+    installVerifiedConfigReader();
     const engine = new SystemAgentChatEngine({
       verifiedInference: requireVerifiedInferenceFixture(),
       runAgentTurn: async () => {
@@ -890,7 +891,6 @@ describe("openclaw.chat", () => {
           new Error("workspace owner openclaw is missing from the roster"),
         ]);
       },
-      deps: requireVerifiedInferenceDeps(),
     });
     const dispose = vi.spyOn(engine, "dispose").mockResolvedValue();
     const sessions = new Map<string, SystemAgentChatSession>([["s1", seededSession({ engine })]]);

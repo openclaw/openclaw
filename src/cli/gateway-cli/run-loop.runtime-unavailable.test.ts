@@ -6,8 +6,12 @@ import {
   readChildRuntimeViability,
 } from "../../infra/child-runtime-viability.js";
 import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
-import { runLoopFixture as fixture } from "./run-loop-mocks.test-support.js";
-import { createLifecycleGate, createActiveWorkSnapshot } from "./run-loop.test-support.js";
+import { gatewayWorkAdmissionActual, runLoopFixture as f } from "./run-loop-mocks.test-support.js";
+import {
+  createLifecycleGate,
+  createActiveWorkSnapshot,
+  expectUncalled,
+} from "./run-loop.test-support.js";
 
 // mock-isolation: Runtime recovery must inspect fixture service state, never the host service.
 vi.mock("../../daemon/service-state.js", () => ({ readGatewayServiceState: vi.fn() }));
@@ -16,9 +20,7 @@ const originalExecPath = process.execPath;
 const serviceNodeExecPath = resolveTestNodeExecPath();
 afterEach(() => {
   process.execPath = originalExecPath;
-  fixture.requestGatewayRestartWithSignalAdmission
-    .mockReset()
-    .mockReturnValue({ status: "emitted" });
+  f.requestGatewayRestartWithSignalAdmission.mockReset().mockReturnValue({ status: "emitted" });
 });
 
 function diagnose() {
@@ -36,42 +38,37 @@ it("closes admission and drains active work before handing runtime recovery to t
     env: {},
     command: { programArguments: [serviceNodeExecPath, "/fixture/openclaw.mjs", "gateway", "run"] },
   });
-  fixture.restartGatewayProcessWithFreshPid.mockReturnValue({ mode: "supervised" });
+  f.restartGatewayProcessWithFreshPid.mockReturnValue({ mode: "supervised" });
   const drain = createLifecycleGate();
-  const snapshot = createActiveWorkSnapshot({ embeddedRuns: 1 });
-  fixture.createGatewayActiveWorkSnapshot.mockReturnValue(snapshot);
-  fixture.waitForGatewayActiveWork.mockImplementation(async () => {
+  f.createGatewayActiveWorkSnapshot.mockReturnValue(createActiveWorkSnapshot({ embeddedRuns: 1 }));
+  f.waitForGatewayActiveWork.mockImplementation(async () => {
     await drain.wait();
     return { drained: true, snapshot: createActiveWorkSnapshot() };
   });
-  await fixture.withRunningGateway(async ({ captureSignal, close, start, exited, loopPromise }) => {
-    fixture.requestGatewayRestartWithSignalAdmission.mockImplementation((reason) => {
-      fixture.peekGatewayRestartReason.mockReturnValue(reason);
+  await f.withRunningGateway(async ({ captureSignal, close, start, exited, loopPromise }) => {
+    f.requestGatewayRestartWithSignalAdmission.mockImplementation((reason) => {
+      f.peekGatewayRestartReason.mockReturnValue(reason);
       captureSignal("SIGUSR2")();
       return { status: "emitted" };
     });
     try {
       diagnose();
       await vi.dynamicImportSettled();
-      expect(fixture.requestGatewayRestartWithSignalAdmission).toHaveBeenCalledExactlyOnceWith(
+      expect(f.requestGatewayRestartWithSignalAdmission).toHaveBeenCalledExactlyOnceWith(
         "gateway.runtime-unavailable",
       );
       await drain.entered;
-      const { isGatewayWorkAdmissionClosed } =
-        await import("../../process/gateway-work-admission.js");
-      expect(isGatewayWorkAdmissionClosed()).toBe(true);
-      expect(close).not.toHaveBeenCalled();
-      expect(fixture.restartGatewayProcessWithFreshPid).not.toHaveBeenCalled();
+      expect(gatewayWorkAdmissionActual.isGatewayWorkAdmissionClosed()).toBe(true);
+      expectUncalled(close, f.restartGatewayProcessWithFreshPid);
       drain.release();
       await expect(exited).resolves.toBe(0);
-      await loopPromise;
       expect(close).toHaveBeenCalledOnce();
-      expect(fixture.restartGatewayProcessWithFreshPid).toHaveBeenCalledOnce();
+      expect(f.restartGatewayProcessWithFreshPid).toHaveBeenCalledOnce();
       expect(close.mock.invocationCallOrder[0]).toBeLessThan(
-        fixture.restartGatewayProcessWithFreshPid.mock.invocationCallOrder[0]!,
+        f.restartGatewayProcessWithFreshPid.mock.invocationCallOrder[0]!,
       );
       expect(start).toHaveBeenCalledOnce();
-      expect(fixture.writeGatewayRestartHandoff.mock.calls[0]?.[0]).toMatchObject({
+      expect(f.writeGatewayRestartHandoff.mock.calls[0]?.[0]).toMatchObject({
         reason: "gateway.runtime-unavailable",
         restartKind: "full-process",
       });
@@ -87,18 +84,17 @@ it("closes admission and drains active work before handing runtime recovery to t
 });
 
 it("finishes cleanup instead of restarting in-process when a fresh-process handoff fails", async () => {
-  fixture.restartGatewayProcessWithFreshPid.mockReturnValue({
+  f.restartGatewayProcessWithFreshPid.mockReturnValue({
     mode: "failed",
     detail: "fixture handoff refused",
   });
-  await fixture.withRunningGateway(async ({ captureSignal, close, start, exited, loopPromise }) => {
+  await f.withRunningGateway(async ({ captureSignal, close, start, exited }) => {
     diagnose();
     captureSignal("SIGUSR2")();
     await expect(exited).resolves.toBe(1);
-    await loopPromise;
     expect(close).toHaveBeenCalledOnce();
     expect(start).toHaveBeenCalledOnce();
-    expect(fixture.gatewayLog.error).toHaveBeenCalledWith(
+    expect(f.gatewayLog.error).toHaveBeenCalledWith(
       expect.stringContaining("cannot recover in-process"),
     );
   });

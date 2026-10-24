@@ -6,6 +6,7 @@ import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { readStoredOutboxStore, storageTargetForComposer } from "../../lib/chat/outbox-store.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -23,10 +24,7 @@ import {
 import { handleSendChat } from "./chat-send-submit.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
 import { createProps } from "./chat-thread.test-support.ts";
-import {
-  listStoredChatOutboxes,
-  updateStoredChatComposerQueueItems,
-} from "./composer-persistence.ts";
+import { updateStoredChatComposerQueueItems } from "./composer-queue-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
 import { beginQueuedMessageEdit, updateQueuedMessageEdit } from "./queued-message-edit.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";

@@ -1,6 +1,6 @@
 import path from "node:path";
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
@@ -9,7 +9,7 @@ import type { callGateway as gatewayCall } from "../../gateway/call.js";
 import { waitForGatewayDispatch } from "../../gateway/server-in-process-dispatch.js";
 import { GatewayTransportError } from "../../gateway/transport-error.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
-import { normalizeToolParameters } from "../agent-tools.schema.js";
+import { finalizeAgentTools } from "../agent-tools.finalize.js";
 import { describeSessionLinkRule } from "../tool-description-presets.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
@@ -316,7 +316,13 @@ describe("sessions_search tool", () => {
   });
 
   it("rejects blank execution with retry guidance after OpenAI schema normalization", async () => {
-    const tool = normalizeToolParameters(createTool({}), { modelProvider: "openai" });
+    const [tool] = finalizeAgentTools({
+      tools: [createTool({})],
+      modelProvider: "openai",
+      hookContext: {},
+      wrapBeforeToolCallHook: false,
+    });
+    assert.ok(tool);
     for (const query of ["", "   "]) {
       await expect(tool.execute!("blank-query", { query })).rejects.toThrow(
         /query must not be empty; retry with non-empty keywords/,

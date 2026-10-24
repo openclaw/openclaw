@@ -23,6 +23,7 @@ export type StateInput = {
   additionalPaths?: readonly string[];
   config: OpenClawConfigWithLegacyRoster;
   includeLocalStoreVersions?: boolean;
+  includeClientCredentialStoreVersion?: boolean;
   env?: NodeJS.ProcessEnv;
   includeRetainedAgentPaths?: true;
   sourceBundledPlugins?: UpdateCandidateBundledSource;

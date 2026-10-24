@@ -712,6 +712,36 @@ describe("login-qr", () => {
     });
   });
 
+  it("renders the newest QR while an older version is still rendering", async () => {
+    const accountId = "overlapping-qr-versions";
+    waitForWaConnectionMock.mockImplementation(waitForever);
+    const start = await startQr(accountId);
+    const onQr = createWaSocketMock.mock.calls[0]?.[2]?.onQr;
+    const olderRender = Promise.withResolvers<string>();
+    renderQrPngDataUrlMock.mockImplementationOnce(() => olderRender.promise);
+
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    const waiting = waitForQr(start.qrDataUrl, accountId, 1000);
+    onQr?.("qr-data-2");
+    onQr?.("qr-data-3");
+    await vi.advanceTimersByTimeAsync(1000);
+    const refreshed = await waiting;
+
+    olderRender.resolve(encodedQr("qr-data-2"));
+    await flushTasks();
+
+    expectQrRefreshResult(refreshed, "qr-data-3");
+    expect(await startQr(accountId)).toEqual({
+      qrDataUrl: encodedQr("qr-data-3"),
+      message: "QR already active. Scan it in WhatsApp → Linked Devices.",
+    });
+    expect(renderQrPngDataUrlMock.mock.calls.map(([qr]) => qr)).toEqual([
+      "qr-data",
+      "qr-data-2",
+      "qr-data-3",
+    ]);
+  });
+
   it("deduplicates initial QR rendering while the start path awaits the same image", async () => {
     const accountId = "single-flight-qr";
     const render = Promise.withResolvers<string>();

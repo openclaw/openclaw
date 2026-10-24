@@ -1,25 +1,22 @@
-// Matrix tests cover actions plugin behavior.
 import type { ChannelMessageToolDiscovery } from "openclaw/plugin-sdk/channel-contract";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { matrixMessageActions } from "./actions.js";
 import type { MatrixCredentialStateRecord } from "./matrix/credentials-state.js";
 import { setMatrixRuntime } from "./runtime.js";
-import type { CoreConfig } from "./types.js";
+import type { CoreConfig, MatrixConfig } from "./types.js";
 
 const lookupStoredCredentials = vi.fn<() => Promise<MatrixCredentialStateRecord | undefined>>();
 
 const runtimeStub = {
-  config: {
-    current: () => ({}),
-  },
+  config: { current: () => ({}) },
   state: {
     resolveStateDir: () => "/tmp/openclaw-matrix-test",
     openKeyedStoreV2: () => ({ lookup: lookupStoredCredentials }),
   },
 } as unknown as PluginRuntime;
 
-function createConfiguredMatrixConfig(): CoreConfig {
+function matrixConfig(overrides: Partial<MatrixConfig> = {}): CoreConfig {
   return {
     channels: {
       matrix: {
@@ -27,9 +24,14 @@ function createConfiguredMatrixConfig(): CoreConfig {
         homeserver: "https://matrix.example.org",
         userId: "@bot:example.org",
         accessToken: "token",
+        ...overrides,
       },
     },
-  } as CoreConfig;
+  };
+}
+
+function discover(overrides: Partial<MatrixConfig> = {}) {
+  return matrixMessageActions.describeMessageTool({ cfg: matrixConfig(overrides) } as never);
 }
 
 function listSchemas(schema: ChannelMessageToolDiscovery["schema"] | undefined) {
@@ -46,15 +48,7 @@ describe("matrixMessageActions", () => {
     const credentials = Promise.withResolvers<MatrixCredentialStateRecord | undefined>();
     lookupStoredCredentials.mockReturnValue(credentials.promise);
     const discovery = matrixMessageActions.describeMessageToolAsync!({
-      cfg: {
-        channels: {
-          matrix: {
-            homeserver: "https://matrix.example.org",
-            userId: "@bot:example.org",
-            encryption: true,
-          },
-        },
-      },
+      cfg: matrixConfig({ enabled: undefined, accessToken: undefined, encryption: true }),
       senderIsOwner: true,
     });
     credentials.resolve({
@@ -66,27 +60,20 @@ describe("matrixMessageActions", () => {
     });
 
     const resolved = await discovery;
-    expect(resolved?.actions).toEqual(
-      expect.arrayContaining(["send", "react", "set-profile", "permissions"]),
-    );
-    expect(resolved?.capabilities).toEqual(["presentation"]);
-    expect(resolved?.mediaSourceParams).toEqual({ "set-profile": ["avatarUrl", "avatarPath"] });
-    const schemas = Array.isArray(resolved?.schema) ? resolved.schema : [resolved?.schema];
+    expect(resolved).toMatchObject({
+      actions: expect.arrayContaining(["send", "react", "set-profile", "permissions"]),
+      capabilities: ["presentation"],
+      mediaSourceParams: { "set-profile": ["avatarUrl", "avatarPath"] },
+    });
+    const schemas = listSchemas(resolved?.schema);
     expect(
       schemas.find((schema) => schema?.actions?.includes("set-profile"))?.properties,
     ).toHaveProperty("avatarUrl");
   });
 
   it("advertises custom-emote discovery and its reaction hint only when reactions are enabled", () => {
-    const cfg = createConfiguredMatrixConfig();
-    const enabled = matrixMessageActions.describeMessageTool({ cfg } as never);
-    const disabled = matrixMessageActions.describeMessageTool({
-      cfg: {
-        channels: {
-          matrix: { ...cfg.channels?.matrix, actions: { reactions: false } },
-        },
-      },
-    } as never);
+    const enabled = discover();
+    const disabled = discover({ actions: { reactions: false } });
 
     expect(enabled?.actions).toContain("emoji-list");
     expect(matrixMessageActions.supportsAction?.({ action: "emoji-list" } as never)).toBe(true);
@@ -106,23 +93,15 @@ describe("matrixMessageActions", () => {
   });
 
   it("adds metadata-only pagination-token guidance for read cursors", () => {
-    const cfg = createConfiguredMatrixConfig();
-    const enabled = matrixMessageActions.describeMessageTool({ cfg } as never);
-    const readDisabled = matrixMessageActions.describeMessageTool({
-      cfg: { channels: { matrix: { ...cfg.channels?.matrix, actions: { messages: false } } } },
-    } as never);
+    const enabled = discover();
+    const readDisabled = discover({ actions: { messages: false } });
 
-    // An empty action list keeps this guidance metadata-only for cross-channel discovery.
+    const cursor = expect.objectContaining({
+      description: expect.stringContaining("nextBatch/prevBatch, not an event id"),
+    });
     expect(listSchemas(enabled?.schema)).toContainEqual({
       actions: [],
-      properties: {
-        before: expect.objectContaining({
-          description: expect.stringContaining("nextBatch/prevBatch, not an event id"),
-        }),
-        after: expect.objectContaining({
-          description: expect.stringContaining("nextBatch/prevBatch, not an event id"),
-        }),
-      },
+      properties: { before: cursor, after: cursor },
     });
     expect(readDisabled?.actions).not.toContain("read");
     expect(listSchemas(readDisabled?.schema).some((schema) => "before" in schema.properties)).toBe(
@@ -131,30 +110,10 @@ describe("matrixMessageActions", () => {
   });
 
   it("hides actions until defaultAccount is set for ambiguous multi-account configs", () => {
+    const account = { homeserver: "https://matrix.example.org", accessToken: "token" };
     const discovery = matrixMessageActions.describeMessageTool({
-      cfg: {
-        channels: {
-          matrix: {
-            accounts: {
-              assistant: {
-                homeserver: "https://matrix.example.org",
-                accessToken: "assistant-token",
-              },
-              ops: {
-                homeserver: "https://matrix.example.org",
-                accessToken: "ops-token",
-              },
-            },
-          },
-        },
-      } as CoreConfig,
+      cfg: { channels: { matrix: { accounts: { assistant: account, ops: account } } } },
     } as never);
-    if (!discovery) {
-      throw new Error("describeMessageTool returned null");
-    }
-    const actions = discovery.actions;
-
-    expect(actions).toStrictEqual([]);
-    expect(discovery.capabilities).toStrictEqual([]);
+    expect(discovery).toStrictEqual({ actions: [], capabilities: [] });
   });
 });

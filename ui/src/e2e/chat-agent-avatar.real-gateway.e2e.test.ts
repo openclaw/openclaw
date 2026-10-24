@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { copyFile, readFile, realpath, writeFile } from "node:fs/promises";
+import { copyFile, readFile, realpath } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import type { Page } from "playwright";
@@ -8,6 +8,10 @@ import { waitForControlUiDocument } from "../../../src/commands/control-ui-hando
 import { appendTranscriptMessage } from "../../../src/config/sessions/session-accessor.js";
 import { setAvatar } from "../../../src/state/user-profile-writes.worker.js";
 import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../../test/helpers/gateway-integration-fixtures.ts";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -18,7 +22,6 @@ import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { enterControlUiSession } from "../test-helpers/control-ui-session-entry.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
-const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 const sessionKey = "agent:main:avatar-proof";
 const reply = "My configured avatar appears beside this assistant reply.";
 const rejectedStatuses = {
@@ -55,7 +58,7 @@ type WorkspaceIconElement = HTMLElementTagNameMap["openclaw-workspace-icon"];
 function resolveGatewayRuntime() {
   const bun = process.env.BUN_BIN;
   if (!bun) {
-    return { proof: { name: "node", version: process.versions.node } };
+    return { gatewayCommandPrefix: undefined };
   }
   const probe = spawnSync(
     bun,
@@ -72,7 +75,6 @@ function resolveGatewayRuntime() {
   }
   return {
     gatewayCommandPrefix: [runtime.execPath] satisfies [string],
-    proof: { name: "bun", version: runtime.version },
   };
 }
 
@@ -138,27 +140,11 @@ async function startAvatarStreams(origin: string, image: Buffer) {
       response.write("avatar response remains pending");
     }
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Avatar stream server did not bind a TCP port");
-  }
+  const url = await listenLoopback(server);
   return {
-    url: `http://127.0.0.1:${address.port}`,
+    url,
     responses,
-    async close() {
-      const closed = new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-      server.closeAllConnections();
-      await closed;
-    },
+    close: () => closeHttpServer(server),
   };
 }
 
@@ -227,13 +213,11 @@ async function observeAvatarResponses(page: Page, pathname: string | RegExp) {
 
 let instance: OpenClawTestInstance | undefined;
 let streams: Awaited<ReturnType<typeof startAvatarStreams>>;
-let gatewayRuntime: { name: string; version: string };
 const suite = createControlUiE2eSuite({
   name: "Control UI agent avatar with a real Gateway",
   startServerBeforeBrowser: true,
   async startServer() {
     const runtime = resolveGatewayRuntime();
-    gatewayRuntime = runtime.proof;
     const owner = await createOpenClawTestInstance({
       name: "control-ui-agent-avatar",
       config: { gateway: { controlUi: { enabled: true } } },
@@ -347,14 +331,13 @@ async function routeAvatarStream(page: Page, caseName: StreamCase, pathname: str
   await page.route(
     (url) =>
       typeof pathname === "string" ? url.pathname === pathname : pathname.test(url.pathname),
-    async (route) => {
-      if (route.request().resourceType() === "fetch") {
-        // continue() keeps Chromium's native network stream; fulfill() would buffer it.
-        await route.continue({ url: `${streams.url}/${caseName}` });
-      } else {
-        await route.continue();
-      }
-    },
+    // continue() keeps Chromium's native stream; fulfill() would buffer it.
+    (route) =>
+      route.continue(
+        route.request().resourceType() === "fetch"
+          ? { url: `${streams.url}/${caseName}` }
+          : undefined,
+      ),
   );
 }
 
@@ -379,12 +362,7 @@ async function mountWorkspaceIcon(
       element.authReady = true;
       const fixture = document.createElement("div");
       fixture.className = "chat-pane__workspace-chip";
-      Object.assign(fixture.style, {
-        position: "fixed",
-        bottom: "16px",
-        right: "16px",
-        zIndex: "1000",
-      });
+      fixture.style.cssText = "position: fixed; bottom: 16px; right: 16px; z-index: 1000";
       fixture.append(element);
       document.body.append(fixture);
       await element.updateComplete;
@@ -409,12 +387,12 @@ async function expectReleasedResponses(page: Page, caseName: StreamCase, count?:
       const allBrowser = await readBrowserResponses(page);
       const browser = allBrowser.filter((response) => response.status === status);
       const server = readServerResponses(caseName).filter((response) => response.status === status);
-      return {
-        countMatches: count === undefined ? server.length > 0 : server.length === count,
-        allReceived: allBrowser.every((response) => response.status !== 0),
-        browserMatches: browser.length === server.length,
-        uniqueFetches: new Set(browser.map((response) => response.fetchId)).size === server.length,
-        matched: server.every((response) => {
+      return (
+        (count === undefined ? server.length > 0 : server.length === count) &&
+        allBrowser.every((response) => response.status !== 0) &&
+        browser.length === server.length &&
+        new Set(browser.map((response) => response.fetchId)).size === server.length &&
+        server.every((response) => {
           const observed = browser.find((entry) => entry.id === response.id);
           return (
             observed?.status === response.status &&
@@ -427,35 +405,10 @@ async function expectReleasedResponses(page: Page, caseName: StreamCase, count?:
             response.endedAtClose === false &&
             response.socketClosed
           );
-        }),
-      };
+        })
+      );
     })
-    .toEqual({
-      countMatches: true,
-      allReceived: true,
-      browserMatches: true,
-      uniqueFetches: true,
-      matched: true,
-    });
-}
-
-async function captureStreamProof(page: Page, caseName: StreamCase) {
-  if (!captureEnabled) {
-    return;
-  }
-  await page.screenshot({ path: path.join(suite.artifactDir, `${caseName}.png`) });
-  await writeFile(
-    path.join(suite.artifactDir, `${caseName}.json`),
-    `${JSON.stringify(
-      {
-        gatewayRuntime,
-        browser: await readBrowserResponses(page),
-        server: readServerResponses(caseName),
-      },
-      null,
-      2,
-    )}\n`,
-  );
+    .toBe(true);
 }
 
 suite.define(() => {
@@ -469,10 +422,6 @@ suite.define(() => {
           (await avatar.count()) === 1
             ? avatar.evaluate((element) => (element as HTMLImageElement).naturalWidth)
             : 0;
-        // Preserve the missing avatar on the broken revision before the regression assertion.
-        if (captureEnabled) {
-          await page.screenshot({ path: path.join(suite.artifactDir, "01-loaded-transcript.png") });
-        }
         await expect.poll(decodedWidth).toBeGreaterThan(0);
         expect(await avatar.getAttribute("src")).toMatch(/^blob:/);
         expect(await avatar.getAttribute("alt")).toBe("Avatar Proof");
@@ -480,51 +429,51 @@ suite.define(() => {
         expect(
           await avatar.evaluate((element) => element.closest(".chat-group")?.textContent),
         ).toContain(reply);
-        if (captureEnabled) {
-          await page.screenshot({ path: path.join(suite.artifactDir, "02-avatar-decoded.png") });
-          await writeFile(
-            path.join(suite.artifactDir, "evidence.json"),
-            JSON.stringify(
-              {
-                gatewayRuntime,
-                sessionKey,
-                configuredWorkspaceAvatar: "agent-avatar.png",
-                assistantAvatarCount: await avatar.count(),
-                decodedWidth: await decodedWidth(),
-                visibleBesidePersistedReply: true,
-                servedScripts: await page
-                  .locator("script[src]")
-                  .evaluateAll((scripts) =>
-                    scripts.map((script) => new URL((script as HTMLScriptElement).src).pathname),
-                  ),
-              },
-              null,
-              2,
-            ),
-          );
-        }
       },
     );
   });
 
-  it("releases a pending route 404 while the mounted workspace fallback stays cached", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      await openWorkspaceStream(page, "route-404");
-      const consumer = await mountWorkspaceIcon(page, "route-404");
-      await expectReleasedResponses(page, "route-404", 1);
-      expect(await consumer.locator(".workspace-icon-fallback").isVisible()).toBe(true);
-      await consumer.evaluate(async (element: WorkspaceIconElement) => {
-        element.authTokens = [...element.authTokens];
-        await element.updateComplete;
+  it.each(["route-404", "workspace-503"] as const)(
+    "releases %s without reminting its cached retry budget",
+    async (caseName) => {
+      await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+        const retrying = caseName === "workspace-503";
+        if (retrying) {
+          await page.clock.install();
+        }
+        await openWorkspaceStream(page, caseName);
+        if (retrying) {
+          // Park before mount so network latency cannot spend the retry budget.
+          await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1_000);
+        }
+        const consumer = await mountWorkspaceIcon(page, caseName);
+        const attempts = retrying ? 4 : 1;
+        for (let count = 1; count <= attempts; count += 1) {
+          if (count > 1) {
+            await page.clock.runFor(1_000);
+          }
+          await expectReleasedResponses(page, caseName, count);
+        }
+        expect(await consumer.locator(".workspace-icon-fallback").isVisible()).toBe(true);
+        if (retrying) {
+          await page.clock.runFor(29_000);
+        }
+        await consumer.evaluate(async (element: WorkspaceIconElement) => {
+          element.authTokens = [...element.authTokens];
+          await element.updateComplete;
+        });
+        await expectReleasedResponses(page, caseName, attempts);
+        expect(readServerResponses(caseName)).toHaveLength(attempts);
+        expect(await readBrowserResponses(page)).toHaveLength(attempts);
+        expect(await consumer.locator(".workspace-icon-fallback").isVisible()).toBe(true);
+        expect(await consumer.locator("img").count()).toBe(0);
+        expect(await consumer.evaluate((element) => element.isConnected)).toBe(true);
+        if (!retrying) {
+          await consumer.evaluate((element) => element.remove());
+        }
       });
-      expect(readServerResponses("route-404")).toHaveLength(1);
-      expect(await readBrowserResponses(page)).toHaveLength(1);
-      expect(await consumer.locator("img").count()).toBe(0);
-      expect(await consumer.evaluate((element) => element.isConnected)).toBe(true);
-      await captureStreamProof(page, "route-404");
-      await consumer.evaluate((element) => element.remove());
-    });
-  });
+    },
+  );
 
   it("releases a pending identity-context 404 while the persisted reply keeps its fallback", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
@@ -543,12 +492,12 @@ suite.define(() => {
         }))
         .toEqual({ fallback: true, sourcedImages: 0 });
       expect(await group.evaluate((element) => element.isConnected)).toBe(true);
-      await captureStreamProof(page, "identity-404");
     });
   });
 
-  for (const status of [401, 403] as const) {
-    it(`recovers from a pending ${status} and rejected cancellation without canceling the valid avatar`, async () => {
+  it.each([401, 403] as const)(
+    "recovers from a pending %s and rejected cancellation without canceling the valid avatar",
+    async (status) => {
       await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
         const caseName = `credential-${status}` as const;
         await openWorkspaceStream(page, caseName);
@@ -564,55 +513,15 @@ suite.define(() => {
           .toBeGreaterThan(0);
         expect(await image.getAttribute("src")).toMatch(/^blob:/);
         expect(await image.isVisible()).toBe(true);
-        expect(
-          readServerResponses(caseName).map(({ status: responseStatus, credential }) => ({
-            status: responseStatus,
-            credential,
-          })),
-        ).toEqual([
-          { status, credential: "stale" },
-          { status: 200, credential: "valid" },
-        ]);
         const browser = await readBrowserResponses(page);
-        expect(browser.map((response) => response.status)).toEqual([status, 200]);
+        expect(browser).toMatchObject([{ status }, { status: 200, cancelCount: 0, blobReads: 1 }]);
         const success = browser[1];
-        expect(success).toMatchObject({ cancelCount: 0, blobReads: 1 });
         expect(success?.blobBytes).toBeGreaterThan(0);
-        expect(readServerResponses(caseName)[1]).toMatchObject({
-          id: success?.id,
-          status: 200,
-          finished: true,
-          endedAtClose: true,
-        });
-        await captureStreamProof(page, caseName);
+        expect(readServerResponses(caseName)).toMatchObject([
+          { status, credential: "stale" },
+          { id: success?.id, status: 200, credential: "valid", finished: true, endedAtClose: true },
+        ]);
       });
-    });
-  }
-
-  it("releases the initial workspace 503 and three retries without reminting its budget during cooldown", async () => {
-    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
-      await page.clock.install();
-      // Mount only after parking the clock, so network latency cannot spend the retry budget.
-      await openWorkspaceStream(page, "workspace-503");
-      await page.clock.pauseAt((await page.evaluate(() => Date.now())) + 1_000);
-      const consumer = await mountWorkspaceIcon(page, "workspace-503");
-      for (let count = 1; count <= 4; count += 1) {
-        if (count > 1) {
-          await page.clock.runFor(1_000);
-        }
-        await expectReleasedResponses(page, "workspace-503", count);
-      }
-      await page.clock.runFor(29_000);
-      await consumer.evaluate(async (element: WorkspaceIconElement) => {
-        element.authTokens = [...element.authTokens];
-        await element.updateComplete;
-      });
-      await expectReleasedResponses(page, "workspace-503", 4);
-      expect(await readBrowserResponses(page)).toHaveLength(4);
-      expect(await consumer.locator(".workspace-icon-fallback").isVisible()).toBe(true);
-      expect(await consumer.locator("img").count()).toBe(0);
-      expect(await consumer.evaluate((element) => element.isConnected)).toBe(true);
-      await captureStreamProof(page, "workspace-503");
-    });
-  });
+    },
+  );
 });

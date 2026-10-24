@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginMetadataSnapshotCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { getPluginValueInstance } from "../plugins/plugin-instance-scope.js";
@@ -104,7 +105,7 @@ export async function createGatewayMetadataCloseFixture(label: string) {
       return monitor;
     });
   setActivePluginRegistry(createEmptyPluginRegistry());
-  return {
+  const fixture = {
     state,
     config,
     kernels,
@@ -194,4 +195,49 @@ export async function createGatewayMetadataCloseFixture(label: string) {
       }
     },
   };
+  return Object.assign(fixture, {
+    async startServer() {
+      const port = await reservePort();
+      const server = await fixture.start(port);
+      const kernel = kernels.get(port);
+      assert(kernel);
+      return { server, kernel, port };
+    },
+  });
+}
+
+export async function createIncognitoCloseSession(
+  fixture: Awaited<ReturnType<typeof createGatewayMetadataCloseFixture>>,
+  sessionKey: string,
+  sessionId: string,
+  entry: Partial<SessionEntry> = {},
+) {
+  const { memorySessionActorOwners } =
+    await import("../config/sessions/session-actor-memory-owner.js");
+  const { resolveIncognitoOpenClawAgentSqlitePath } =
+    await import("../state/openclaw-agent-db.paths.js");
+  const database = { agentId: "main", env: fixture.state.env };
+  const owner = memorySessionActorOwners.get({
+    agentId: database.agentId,
+    path: resolveIncognitoOpenClawAgentSqlitePath(database),
+  });
+  const authority = { assertCurrent() {}, authorize() {} };
+  const target = { ...database, sessionKey, sessionId, storePath: owner.path };
+  const actor = await owner.acquire(
+    { database: owner.identity, sessionKey },
+    { assertCurrent() {}, assertReadable() {} },
+  );
+  try {
+    const created = await actor.storage!.mutate(
+      {
+        type: "session.entry.create",
+        input: { entry: { sessionId, updatedAt: 1, incognito: true, ...entry } },
+      },
+      authority,
+    );
+    return { owner, actor, authority, target, created };
+  } catch (error) {
+    await actor.release();
+    throw error;
+  }
 }

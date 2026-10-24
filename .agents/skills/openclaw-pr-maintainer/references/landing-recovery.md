@@ -8,7 +8,7 @@
 - `node scripts/pr-lib/merge-prior-ci.mjs delta <prior-green-head> <prepared-head>` reports both heads, `deltaSha256`, `changedPaths`. Inspect delta; changed-check planner selects affected checks; record actual results.
 - Evidence JSON: `version: 1`, `repository`, numeric `pr`, `head`, `priorHead`, numeric `runId`/`runAttempt`, `deltaSha256`, `changeKind: "conflict-resolution"`, operator `reason`, string `contracts`, `checks` with `command`, `result: "passed"`, `evidence` description. Scoped results = operator attestations, not current-head CI success.
 - Verifier checks prior successful attempt's PR/head provenance + CI gate. PR run: matching association. Manual dispatch: current same-repository PR branch + ancestor tested head. Live writer needs repository + active organization-admin authority; only pending/skipped normal CI allowed. Failed required checks, security, enforced reviews, unresolved required threads still block.
-- github.com immediate squash only; known ruleset policy, no classic protection, queue, auto-merge. Protected REST merge pins exact head; existing outcome retains run, delta, scoped proof, operator. Accepted/uncertain outcomes require reconciliation. Recovery only qualified cases below.
+- github.com immediate squash only; supported applicable rules, no queue or auto-merge. Protected REST merge pins exact head; existing outcome retains run, delta, scoped proof, operator. Accepted/uncertain outcomes require reconciliation. Recovery only qualified cases below.
 - Unknown GraphQL mergeability → complete REST observation retained for attempt. Preserve known GraphQL facts; read repo, PR head, main, rules, required checks together. Blocked CI remains blocked. Final REST reread → live authority/reviews/security/exact-CI verification. Missing/changed proof refuses before intent. No implicit admin route/mutation retry.
 
 ### Authorized pre-existing failures
@@ -29,7 +29,7 @@
 - Non-organization/repository admin writer: repository write, active org membership, live bypass for every effective CI gate ruleset. Native `current_user_can_bypass`: `always`/`pull_requests_only`. Qualifying ruleset: active, repository-owned branch rule, only GitHub Actions `openclaw/ci-gate` (integration `15368`). Mixed review/security rules, missing/changed policy, revoked/unavailable grants refuse.
 - After CI/security inspection, verifier rereads policy/delegated authority; outcome retains writer, repo ID, ruleset IDs, bypass modes. No caller grant, permission mutation, or delegated prior-success conflict exception.
 - GitHub administrators provision missing grants via ruleset owner; prefer dedicated CI-bypass team + pull-request-only mode. Inspect existing grants first. Never bot org-admin upgrade or broader review/security bypass. Operator invocation = task authorization; bypass grant = execution capability, not authenticated human approval.
-- The current helper still requires authoritative classic-protection absence. Non-admin readable repo may return `404 Not Found`; GraphQL `branchProtectionRule: null`/empty `branchProtectionRules` can hide protection. Missing policy read → stop before intent and report the exact capability failure, not missing human consent. Preserve scoped authorization; do not require unrelated CI repair/reruns or repeat approval. No writer upgrade, substituted credentials, caller-attested policy snapshot, raw writer, or guard bypass. Skill guidance alone does not change helper/provider admission.
+- No classic-protection lookup or proof of absence is required. Do not interpret a 404, change credentials, or require administrator visibility merely to discover a legacy rule. The admin route also reads paginated per-PR required-check markers and verifies other observed requirements through the existing latest-run/publisher owner. It makes no claim about unreported policy absence. GitHub evaluates writer permissions and applicable enforcement at the pinned merge request. Existing review/security, applicable-rule evidence, delegated CI authority, and retained-outcome safeguards remain required.
 
 #### Main drift and security
 
@@ -41,6 +41,8 @@
 - Security owner interprets CI-only failure/success/waiting projection; current independent guard clearance when rollout applies, approval + PR/rollout identity revalidated. Historical green alone insufficient. Missing/stale/foreign/failed/changed clearance blocks. Only identified combined status may be excused with attributed Actions gate. Live facts, no operator security waiver; ordinary merge unchanged.
 
 ## Recovery and closeout
+
+- A dependency refresh on main does not require replacing an older workflow binding. Run the current trusted wrapper again: it installs the anchor's frozen dependency set outside shared checkouts and reuses the completed entry. Do not delete bindings or alter another operation's tooling root. Missing already-pinned package directories are a separate retained-projection recovery case; follow [the dependency recovery owner](../../../../docs/reference/scripts/pr-tooling.md#recover-a-retained-dependency-projection).
 
 - Accepted/uncertain auto submission: retire retained request before remote-head replacement.
 
@@ -81,6 +83,7 @@ scripts/pr merge-recover <PR> <OUTCOME_OID> --confirmed-operator-recovery \
   --replacement-head <HEAD_SHA> --admin-evidence <path> --confirmed-operator-admin
 ```
 
+- An older retained workflow may use the canonical correction by appending `--current-workflow` to this confirmed-cancelled auto recovery with the exact `--replacement-head`. The wrapper qualifies freshly fetched official main under the operation lock, retains the original binding/history, and records old/new source provenance. Every normal admission gate still applies. Other commands/recovery kinds cannot opt in; ordinary reconciliation/completion keep the original binding.
 - Fresh review + exact-head `github_pending`, live admin/review/security/CI evidence for selected head. Explicit `--replacement-head` may equal retained head; no synthetic commit needed, but selection mandatory. Old-head evidence cannot qualify another head/current attempt.
 - Successor CAS keeps intent, confirmed cancellation, capture history; never relabel rejected/unsubmitted. Unconfirmed cancellation, renewed auto/queue request, missing explicit head, changed artifacts block. Queue cancellation unsupported.
 - Failed operation lock: verify no owned child tools remain; exact emitted token/command only. Never hand-remove lock or competing retries. After throttling, inspect quota before native prepare/merge retry.

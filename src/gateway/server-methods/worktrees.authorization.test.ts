@@ -2,10 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { managedWorktrees } from "../../agents/worktrees/service.js";
 import type { ManagedWorktreeRecord } from "../../agents/worktrees/types.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { handleGatewayRequest } from "../server-methods.js";
-import { createWorktreesHandlers } from "./worktrees.js";
+import { worktreesHandlers } from "./worktrees.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -30,7 +31,8 @@ function worktreeRecord(repoRoot: string): ManagedWorktreeRecord {
 
 async function dispatchCreate(params: { repoRoot: string; scopes: string[]; workspace: string }) {
   const create = vi.fn(async () => worktreeRecord(params.repoRoot));
-  const handler = createWorktreesHandlers({ create } as never)["worktrees.create"];
+  using _ = vi.spyOn(managedWorktrees, "create").mockImplementation(create);
+  const handler = worktreesHandlers["worktrees.create"];
   if (!handler) {
     throw new Error("worktrees.create handler is not registered");
   }

@@ -3,12 +3,18 @@ import { OAuthRefreshFailureError } from "../../agents/auth-profiles/oauth-refre
 import { FailoverError } from "../../agents/failover-error.js";
 import { AUTH_PROFILE_COOLDOWN_ERROR_CODE } from "../../agents/failover/error.js";
 import { runWithAgentWorkspaceReadiness } from "../../agents/workspace-readiness.js";
+import { decodePostgresError } from "../../infra/postgres-sync/protocol.js";
+import { classifyGatewayStorageFailure } from "../../infra/sqlite-error-diagnostics.js";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import * as providerFailover from "../../plugins/provider-failover.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
 
 const { emitAgentEvent } = vi.hoisted(() => ({ emitAgentEvent: vi.fn() }));
 
-vi.mock("../../infra/agent-events.js", () => ({ emitAgentEvent }));
+vi.mock("../../infra/agent-events.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../infra/agent-events.js")>()),
+  emitAgentEvent,
+}));
 
 describe("createAgentLifecycleTerminalBackstop", () => {
   beforeEach(() => emitAgentEvent.mockClear());
@@ -23,6 +29,37 @@ describe("createAgentLifecycleTerminalBackstop", () => {
       ...overrides,
     });
   }
+
+  it.each([
+    {
+      code: "unavailable",
+      failure: new SqliteWorkerError("PRIVATE_ROLLBACK", "unavailable"),
+    },
+    {
+      code: "session_actor_reconciliation",
+      failure: new SqliteWorkerError("PRIVATE_UNCERTAIN_WRITE", "outcome-unknown"),
+    },
+    {
+      code: "57014",
+      failure: decodePostgresError({
+        name: "error",
+        code: "57014",
+        message: "PRIVATE_CANCELLED_QUERY",
+      }),
+    },
+  ])("renders $code before terminal events flatten the failure", ({ code, failure }) => {
+    const wrapped = new Error("PRIVATE_LIFECYCLE_FAILURE", { cause: failure });
+    expect(classifyGatewayStorageFailure(wrapped)).toBe(code);
+    const terminal = createTerminal();
+    terminal.capture("error", wrapped);
+    terminal.emit("error", wrapped);
+    expect(emitAgentEvent).toHaveBeenCalledOnce();
+    const event = emitAgentEvent.mock.calls[0]?.[0];
+    expect(event.data).toMatchObject({ phase: "error", executionSettled: true });
+    expect(event.data.error).toMatch(/check|reopen|retry/i);
+    expect(event.data.error).toMatch(code === "57014" ? /cancel|timeout/i : /confirm|saved/i);
+    expect(event.data.error).not.toContain("PRIVATE_");
+  });
 
   it("publishes a preparation failure once instead of its cancellation side effect", async () => {
     const preparation: { failure?: Error } = {};

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import * as manifestRegistry from "../../../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
+import { createPluginManifestRecordFixture } from "../../../plugins/plugin-metadata.test-support.js";
 import {
   channelPluginBlockerHitToHealthFinding,
   collectConfiguredChannelPluginBlockerWarnings,
@@ -10,42 +11,42 @@ import {
   scanConfiguredChannelPluginBlockers,
 } from "./channel-plugin-blockers.js";
 
-function createPackageChannelEnv(channelId: string, envVars: string[]) {
-  return { id: channelId, configuredState: { env: { anyOf: envVars } } };
-}
-
 function plugin(
   id: string,
-  options: {
-    origin?: "bundled" | "config" | "global" | "workspace";
-    channelId?: string;
-    enabledByDefault?: boolean;
-    [key: string]: unknown;
-  } = {},
+  options: Partial<manifestRegistry.PluginManifestRecord> & { channelId?: string } = {},
 ) {
-  const { origin = "global", channelId = id, enabledByDefault = false, ...metadata } = options;
+  const { channelId = id, ...metadata } = options;
   const rootDir = `/plugins/${id}`;
-  return {
+  return createPluginManifestRecordFixture({
     id,
-    origin,
+    origin: "global",
     channels: [channelId],
-    providers: [],
-    cliBackends: [],
-    skills: [],
-    hooks: [],
-    enabledByDefault,
+    enabledByDefault: false,
     rootDir,
     source: `${rootDir}/index.ts`,
-    manifestPath: `${rootDir}/openclaw.plugin.json`,
     ...metadata,
-  };
+  });
 }
 
-function mockManifestPlugins(plugins: unknown[]) {
+function packagePlugin(id: string, token: string, options: Parameters<typeof plugin>[1] = {}) {
+  return plugin(id, {
+    ...options,
+    packageChannel: {
+      id: options.channelId ?? id,
+      configuredState: { env: { anyOf: [token] } },
+    },
+  });
+}
+
+const sharedOwner = (id: string, options: Parameters<typeof plugin>[1] = {}) =>
+  plugin(id, { origin: "config", channelId: "shared-chat", ...options });
+const bundledOwner = { origin: "bundled", enabledByDefault: true } as const;
+
+function mockManifestPlugins(plugins: manifestRegistry.PluginManifestRecord[]) {
   vi.spyOn(manifestRegistry, "loadPluginManifestRegistryCore").mockReturnValue({
     plugins,
     diagnostics: [],
-  } as unknown as ReturnType<typeof manifestRegistry.loadPluginManifestRegistryCore>);
+  });
 }
 
 type Blocker = ReturnType<typeof scanConfiguredChannelPluginBlockers>[number];
@@ -123,11 +124,7 @@ describe("channel plugin blockers", () => {
   });
 
   it("suppresses ambient-only package env blockers for gateway startup", () => {
-    mockManifestPlugins([
-      plugin("discord", {
-        packageChannel: createPackageChannelEnv("discord", ["DISCORD_FAKE_TEST_TRIGGER"]),
-      }),
-    ]);
+    mockManifestPlugins([packagePlugin("discord", "DISCORD_FAKE_TEST_TRIGGER")]);
 
     expect(
       scanConfiguredChannelPluginBlockers(
@@ -157,15 +154,10 @@ describe("channel plugin blockers", () => {
 
   it("keeps package env trust diagnostics scoped to the declaring owner", () => {
     mockManifestPlugins([
-      plugin("bundled-chat", {
-        origin: "bundled",
-        channelId: "shared-chat",
-        enabledByDefault: true,
-      }),
-      plugin("external-chat", {
+      sharedOwner("bundled-chat", bundledOwner),
+      packagePlugin("external-chat", "EXTERNAL_CHAT_TOKEN", {
         origin: "config",
         channelId: "shared-chat",
-        packageChannel: createPackageChannelEnv("shared-chat", ["EXTERNAL_CHAT_TOKEN"]),
       }),
     ]);
 
@@ -200,19 +192,14 @@ describe("channel plugin blockers", () => {
   });
 
   it("accepts an available co-owner for the same package env trigger", () => {
-    mockManifestPlugins([
-      plugin("bundled-chat", {
-        origin: "bundled",
-        channelId: "shared-chat",
-        packageChannel: createPackageChannelEnv("shared-chat", ["SHARED_CHAT_TOKEN"]),
-        enabledByDefault: true,
-      }),
-      plugin("external-chat", {
-        origin: "config",
-        channelId: "shared-chat",
-        packageChannel: createPackageChannelEnv("shared-chat", ["SHARED_CHAT_TOKEN"]),
-      }),
-    ]);
+    mockManifestPlugins(
+      ["bundled-chat", "external-chat"].map((id, index) =>
+        packagePlugin(id, "SHARED_CHAT_TOKEN", {
+          channelId: "shared-chat",
+          ...(index === 0 ? bundledOwner : { origin: "config" as const }),
+        }),
+      ),
+    );
 
     const hits = scanConfiguredChannelPluginBlockers({}, { SHARED_CHAT_TOKEN: "configured" });
 
@@ -220,18 +207,14 @@ describe("channel plugin blockers", () => {
   });
 
   it("deduplicates global plugin disablement across package env triggers", () => {
-    mockManifestPlugins([
-      plugin("first-chat", {
-        origin: "config",
-        channelId: "shared-chat",
-        packageChannel: createPackageChannelEnv("shared-chat", ["FIRST_CHAT_TOKEN"]),
-      }),
-      plugin("second-chat", {
-        origin: "config",
-        channelId: "shared-chat",
-        packageChannel: createPackageChannelEnv("shared-chat", ["SECOND_CHAT_TOKEN"]),
-      }),
-    ]);
+    mockManifestPlugins(
+      ["first", "second"].map((name) =>
+        packagePlugin(`${name}-chat`, `${name.toUpperCase()}_CHAT_TOKEN`, {
+          origin: "config",
+          channelId: "shared-chat",
+        }),
+      ),
+    );
 
     const hits = scanConfiguredChannelPluginBlockers(
       { plugins: { enabled: false } },
@@ -256,10 +239,7 @@ describe("channel plugin blockers", () => {
     },
   ])("diagnoses bundled opt-in owner: $reason", ({ plugins, reason, warning }) => {
     mockManifestPlugins([
-      plugin("twitch", {
-        origin: "bundled",
-        packageChannel: createPackageChannelEnv("twitch", ["OPENCLAW_TWITCH_ACCESS_TOKEN"]),
-      }),
+      packagePlugin("twitch", "OPENCLAW_TWITCH_ACCESS_TOKEN", { origin: "bundled" }),
     ]);
     const hits = scanConfiguredChannelPluginBlockers(plugins ? { plugins } : {}, {
       OPENCLAW_TWITCH_ACCESS_TOKEN: "configured",
@@ -269,11 +249,7 @@ describe("channel plugin blockers", () => {
   });
 
   it("honors explicit channel disablement over package env triggers", () => {
-    mockManifestPlugins([
-      plugin("discord", {
-        packageChannel: createPackageChannelEnv("discord", ["DISCORD_BOT_TOKEN"]),
-      }),
-    ]);
+    mockManifestPlugins([packagePlugin("discord", "DISCORD_BOT_TOKEN")]);
 
     const channels = { discord: { enabled: false } };
     const hits = scanConfiguredChannelPluginBlockers(
@@ -286,9 +262,7 @@ describe("channel plugin blockers", () => {
   });
 
   it("preserves explicit workspace trust across an auto-materialized allowlist", () => {
-    mockManifestPlugins([
-      plugin("workspace-chat", { origin: "workspace", channelId: "workspace-chat" }),
-    ]);
+    mockManifestPlugins([plugin("workspace-chat", { origin: "workspace" })]);
 
     const sourceConfig: OpenClawConfig = {
       channels: { "workspace-chat": { enabled: true } },
@@ -321,10 +295,7 @@ describe("channel plugin blockers", () => {
   });
 
   it("keeps blocker reasons scoped to each external owner", () => {
-    mockManifestPlugins([
-      plugin("denied-chat", { origin: "config", channelId: "shared-chat" }),
-      plugin("untrusted-chat", { origin: "config", channelId: "shared-chat" }),
-    ]);
+    mockManifestPlugins([sharedOwner("denied-chat"), sharedOwner("untrusted-chat")]);
 
     const hits = scanConfiguredChannelPluginBlockers({
       plugins: { deny: ["denied-chat"] },
@@ -342,9 +313,7 @@ describe("channel plugin blockers", () => {
   });
 
   it("accepts workspace channel owners activated through a plugin slot", () => {
-    mockManifestPlugins([
-      plugin("workspace-chat", { origin: "workspace", channelId: "workspace-chat" }),
-    ]);
+    mockManifestPlugins([plugin("workspace-chat", { origin: "workspace" })]);
 
     const hits = scanConfiguredChannelPluginBlockers({
       plugins: { allow: ["browser"], slots: { contextEngine: "workspace-chat" } },

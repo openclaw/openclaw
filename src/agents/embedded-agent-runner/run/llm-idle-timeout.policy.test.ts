@@ -73,6 +73,46 @@ describe("LLM watchdog policy", () => {
     },
   );
 
+  it.each<{ name: string; entries: Array<[string, boolean]>; expected: number }>([
+    { name: "normalized key", entries: [[" GPU ", true]], expected: 300_000 },
+    {
+      name: "canonical key priority",
+      entries: [
+        [" GPU ", true],
+        ["gpu", false],
+      ],
+      expected: 120_000,
+    },
+    {
+      name: "first normalized key",
+      entries: [
+        [" GPU ", false],
+        ["GPU", true],
+      ],
+      expected: 120_000,
+    },
+  ])("uses $name for configured provider locality", ({ entries, expected }) => {
+    const baseUrl = "http://gpu-box:8000/v1";
+    const cfg: OpenClawConfig = {
+      models: {
+        providers: Object.fromEntries(
+          entries.map(([key, isLocal]) => [
+            key,
+            {
+              baseUrl,
+              api: "openai-completions",
+              models: [],
+              apiKey: isLocal ? "custom-local" : "synthetic-remote",
+            },
+          ]),
+        ),
+      },
+    };
+    const model = { provider: " GPU ", baseUrl };
+    expect(resolveLlmIdleTimeoutMs({ cfg, model })).toBe(expected);
+    expect(resolveLlmFirstEventTimeoutMs({ cfg, model })).toBe(expected);
+  });
+
   it.each([
     ["kimi-k2.5:cloud", "http://127.0.0.1:11434", 0],
     ["gpt-oss:120b-cloud", "http://ollama-box:11434", 300_000],

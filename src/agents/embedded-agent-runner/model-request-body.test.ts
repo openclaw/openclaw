@@ -1,4 +1,5 @@
 import { hash } from "node:crypto";
+import { serialize } from "node:v8";
 import { serializeModelRequestBody } from "@openclaw/ai/internal/shared";
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
@@ -182,15 +183,14 @@ it("encodes the final large provider body off-thread and shares its exact bytes 
       cachePrefix: {
         system: hash("sha256", "{}"),
         tools: digest({ tools: allowedTools }),
-        messages: messages.map((message, index) =>
-          index < 32
-            ? { digest: digest(message), fields: fieldDigests(message) }
-            : { digest: digest(message) },
-        ),
+        messageDigests: messages
+          .map((message) => hash("sha256", JSON.stringify(message), "latin1"))
+          .join(""),
+        messageFields: messages.slice(0, 32).map(fieldDigests),
         messageField: "messages",
         messageCount: 100,
         parameters: {
-          digest: digest(parameters),
+          digest: hash("sha256", JSON.stringify(parameters), "latin1"),
           fields: fieldDigests(parameters),
         },
         continuation: true,
@@ -227,10 +227,31 @@ it("observes serialized values without letting the observer change request bytes
   expect(encoded.stream).toBe(true);
 });
 
+it.each([
+  [undefined, "", false],
+  [null, "null", false],
+  [[{ stream: true }], '[{"stream":true}]', false],
+  [
+    { input: ['"\\', { nested: [false, null, 123] }], stream: true },
+    '{"input":["\\\"\\\\",{"nested":[false,null,123]}],"stream":true}',
+    true,
+  ],
+  [
+    { 'quoted"key': { stream: true }, stream: "true" },
+    '{"quoted\\\"key":{"stream":true},"stream":"true"}',
+    false,
+  ],
+])("preserves wire bytes and top-level stream for %j", (payload, wire, stream) => {
+  const encoded = serializeModelRequestBody(payload);
+  expect(new TextDecoder().decode(encoded.body)).toBe(wire);
+  expect(encoded.stream).toBe(stream);
+});
+
 it("fingerprints serialized prompt segments with bounded, content-free history metadata", () => {
   const message = {
     role: "user",
-    content: "private history content",
+    content: 'private history content " \\ \\\" 🦞\ud800',
+    'private-"\\key': { nested: [false, null, [123, "[,]:{}"]] },
     ...Object.fromEntries(Array.from({ length: 100 }, (_, index) => [`private-${index}`, index])),
   };
   const input = Array.from({ length: 514 }, () => message);
@@ -252,32 +273,27 @@ it("fingerprints serialized prompt segments with bounded, content-free history m
   expect(first.cachePrefix).toEqual({
     system: hash("sha256", '{"instructions":"private instructions"}'),
     tools: hash("sha256", '{"tools":[{"type":"function","name":"private_tool_name"}]}'),
-    messages: Array.from({ length: 512 }, (_, index) => ({
-      digest: hash("sha256", JSON.stringify(message)),
-      ...(index < 32
-        ? {
-            fields: {
-              role: hash("sha256", '"user"'),
-              content: hash("sha256", '"private history content"'),
-              other: expect.stringMatching(/^[a-f0-9]{64}$/),
-            },
-          }
-        : {}),
+    messageDigests: hash("sha256", JSON.stringify(message), "latin1").repeat(512),
+    messageFields: Array.from({ length: 32 }, () => ({
+      role: hash("sha256", '"user"'),
+      content: hash("sha256", JSON.stringify(message.content)),
+      other: expect.stringMatching(/^[a-f0-9]{64}$/),
     })),
     messageField: "input",
     messageCount: 514,
     tail: hash("sha256", JSON.stringify([message, message])),
     parameters: {
-      digest: hash("sha256", '{"private_parameter_name":"private parameter value"}'),
+      digest: hash("sha256", '{"private_parameter_name":"private parameter value"}', "latin1"),
       fields: { other: expect.stringMatching(/^[a-f0-9]{64}$/) },
     },
     continuation: false,
   });
   expect(JSON.stringify(first.cachePrefix)).not.toContain("private");
+  expect(serialize(first.cachePrefix).byteLength).toBeLessThan(32 * 1024);
 
   input[513] = { ...message, content: "changed private history" };
   const changed = prepareProviderPrompt({ payload, encode: true });
-  expect(changed.cachePrefix?.messages).toEqual(first.cachePrefix?.messages);
+  expect(changed.cachePrefix?.messageDigests).toEqual(first.cachePrefix?.messageDigests);
   expect(changed.cachePrefix?.tail).not.toBe(first.cachePrefix?.tail);
   expect(prepareProviderPrompt({ payload: {}, encode: false }).cachePrefix).toBeUndefined();
 });

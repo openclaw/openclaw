@@ -122,7 +122,7 @@ const sessionCleanupMocks = vi.hoisted(() => ({
           .filter((key) => key.length > 0),
       ),
     );
-    return { followupCleared: 0, keys: clearedKeys };
+    return clearedKeys;
   }),
   stopSessionResetSubagents: vi.fn(
     async (params: { beforeKill?: () => boolean | Promise<boolean> }) => {

@@ -1,3 +1,4 @@
+import "./sessions-files.mocks.test-support.js";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -11,7 +12,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import type { withSessionTranscriptDeltaReader } from "../../config/sessions/session-transcript-delta-read.js";
 import { root as openSafeRoot } from "../../infra/fs-safe.js";
 import { WorkerTaskPool } from "../../infra/worker-task-pool.js";
 import { resolveOpenPathCommand } from "./open-path.js";
@@ -32,60 +32,17 @@ import {
   writeWorkspaceFile,
 } from "./sessions-files.test-support.js";
 
-const hoisted = vi.hoisted(() => ({
+const { sessionFilesMocks } = await import("./sessions-files.mocks.test-support.js");
+
+const openPathMocks = vi.hoisted(() => ({
   execOpenPath: vi.fn(),
-  loadSessionEntry: vi.fn(),
-  resolveAgentWorkspaceDir: vi.fn(),
-  resolveDefaultAgentId: vi.fn(),
-  readDelta: vi.fn(),
 }));
+const hoisted = { ...sessionFilesMocks, ...openPathMocks };
 
 vi.mock("./open-path.js", async () => {
   const actual = await vi.importActual<typeof import("./open-path.js")>("./open-path.js");
-  return { ...actual, execOpenPath: hoisted.execOpenPath };
+  return { ...actual, execOpenPath: openPathMocks.execOpenPath };
 });
-
-vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
-  resolveAgentWorkspaceDir: hoisted.resolveAgentWorkspaceDir,
-  resolveDefaultAgentId: hoisted.resolveDefaultAgentId,
-}));
-
-vi.mock("../session-utils.js", async (original) => ({
-  ...(await original<typeof import("../session-utils.js")>()),
-  loadIncognitoGatewaySessionEntryReadOnly: hoisted.loadSessionEntry,
-}));
-
-vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../session-utils-store-worker.js")>()),
-  loadGatewaySessionEntryReadOnlyInWorker: async (params: { key: string; agentId?: string }) =>
-    hoisted.loadSessionEntry(params.key, { agentId: params.agentId }),
-}));
-
-vi.mock("../../config/sessions/session-entry-read-facts.js", async (importOriginal) => {
-  const { createRepositorySessionEntryReader } =
-    await import("./sessions-files.repository.test-support.js");
-  const actual =
-    await importOriginal<typeof import("../../config/sessions/session-entry-read-facts.js")>();
-  return {
-    ...actual,
-    readRetainedSessionEntryFacts: createRepositorySessionEntryReader(
-      actual.readRetainedSessionEntryFacts,
-      (key) => hoisted.loadSessionEntry(key),
-    ),
-  };
-});
-
-// mock-isolation: File-policy tests supply visible transcript pages without opening SQLite.
-vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
-  withSessionTranscriptDeltaReader: ((scope, consume) =>
-    consume({
-      visible: async (limits) => hoisted.readDelta(scope, limits),
-      raw: async () => {
-        throw new Error("File browsing must consume visible transcript pages");
-      },
-    })) satisfies typeof withSessionTranscriptDeltaReader,
-}));
 
 const sessionKey = "agent:main:main";
 const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
@@ -409,6 +366,32 @@ describe("sessions.files RPC handlers", () => {
     const payload = await files.ok("list", { search: "needle" });
 
     expect(payload.browser).toMatchObject({ search: "needle", truncated: true, entries: [] });
+  });
+
+  it("marks searches incomplete when an excluded directory may hide a match", async () => {
+    writeWorkspace("src/REPORT.md", "# Source report\n");
+    writeWorkspace("dist/REPORT.md", "# Generated report\n");
+
+    const payload = await files.ok("list", { search: "REPORT.md" });
+
+    expect(payload.browser).toMatchObject({
+      search: "REPORT.md",
+      truncated: true,
+      entries: [{ path: "src/REPORT.md" }],
+    });
+  });
+
+  it("keeps searches complete when only repository metadata is excluded", async () => {
+    writeWorkspace("src/REPORT.md", "# Source report\n");
+    writeWorkspace(".git/objects/REPORT.md", "# Git object\n");
+
+    const payload = await files.ok("list", { search: "REPORT.md" });
+
+    expect(payload.browser).toMatchObject({
+      search: "REPORT.md",
+      entries: [{ path: "src/REPORT.md" }],
+    });
+    expect(payload.browser).not.toHaveProperty("truncated");
   });
 
   it.runIf(process.platform === "linux")(

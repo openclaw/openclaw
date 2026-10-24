@@ -1,5 +1,5 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { afterEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
@@ -22,9 +22,6 @@ import {
   releaseSwarmRun,
   reserveSwarmRun,
 } from "./swarm-scheduler.js";
-import { testing } from "./swarm-scheduler.test-support.js";
-
-afterEach(() => testing.reset());
 
 const readContext = () => ({
   caller: getGatewayToolCallerIdentity(),
@@ -73,6 +70,7 @@ function createContextRun() {
     await pending?.catch(() => {});
     await Promise.allSettled(tails);
     await close();
+    releaseSwarmRun("holder");
   };
   return { activation, observed, tailFailures, trackTail, activate, close, dispose };
 }

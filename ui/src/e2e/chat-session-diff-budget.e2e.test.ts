@@ -3,7 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
-import { setDiffView, singleFileDiff } from "./chat-session-diff.test-support.ts";
+import { singleFileDiff } from "./chat-session-diff.test-support.ts";
 import {
   activateChatHeaderPanelAction,
   focusChatSidePanel,
@@ -50,26 +50,50 @@ suite.define(() => {
     await focusChatSidePanel(page);
     const panel = page.locator(".session-diff");
     const readSide = (selector: string) => panel.locator(selector).allTextContents();
-    const splitSide = (side: string) =>
-      readSide(
-        `.session-diff-split__side--${side}.session-diff-split__side--filled .session-diff-split__text`,
-      );
-    expect(await readSide(".chat-diff__row--del .chat-diff__text")).toEqual(before);
+    const fileToggle = panel.getByRole("button", {
+      name: "src/large.ts — Modified",
+      exact: true,
+    });
+    const modeButton = (current: "auto" | "unified" | "split") =>
+      panel.getByRole("button", {
+        name: "Diff mode: " + current + ". Switch to next mode",
+        exact: true,
+      });
+    await fileToggle.waitFor();
+    expect(await fileToggle.getAttribute("aria-expanded")).toBe("false");
+    await fileToggle.click();
+    await modeButton("auto").click();
+    await expect.poll(() => readSide(".chat-diff__row--del .chat-diff__text")).toEqual(before);
     expect(await readSide(".chat-diff__row--add .chat-diff__text")).toEqual(after);
-    await setDiffView(page, "Split");
-    await expect.poll(() => splitSide("left")).toEqual(before);
-    expect(await splitSide("right")).toEqual(after);
-    const lastRow = panel.locator(".session-diff-split__row").last();
-    await lastRow.scrollIntoViewIfNeeded();
-    expect(await lastRow.textContent()).toContain(after[63]);
-    await setDiffView(page, "Unified");
+    await modeButton("unified").click();
+    await expect
+      .poll(() =>
+        readSide(
+          ".session-diff-split__side--left.session-diff-split__side--filled .session-diff-split__text",
+        ),
+      )
+      .toEqual(before);
+    expect(
+      await readSide(
+        ".session-diff-split__side--right.session-diff-split__side--filled .session-diff-split__text",
+      ),
+    ).toEqual(after);
+    await panel.locator(".session-diff-split__row").last().scrollIntoViewIfNeeded();
+    expect(await panel.locator(".session-diff-split__row").last().textContent()).toContain(
+      after[63],
+    );
+    await modeButton("split").click();
+    await modeButton("auto").click();
     expect(await readSide(".chat-diff__row--add .chat-diff__text")).toEqual(after);
     const samples: { cpuRate: number; paintMs: number }[] = [];
     for (let i = 0; i < (captureProof ? 10 : 1); i++) {
       const cpuRate = i < 5 ? 4 : 1;
       await cdp.send("Emulation.setCPUThrottlingRate", { rate: cpuRate });
+      const previousRequests = (await gateway.getRequests("sessions.diff")).length;
       await gateway.deferNext("sessions.diff");
       await panel.getByRole("button", { name: "Refresh changes" }).click();
+      await gateway.waitForRequest("sessions.diff", { after: previousRequests });
+      expect(await fileToggle.getAttribute("aria-expanded")).toBe("false");
       const painted = page.evaluate(
         () =>
           new Promise<number>((resolve) => {
@@ -92,6 +116,9 @@ suite.define(() => {
       );
       await gateway.resolveDeferred("sessions.diff");
       samples.push({ cpuRate, paintMs: await painted });
+      await fileToggle.click();
+      await expect.poll(() => readSide(".chat-diff__row--del .chat-diff__text")).toEqual(before);
+      expect(await readSide(".chat-diff__row--add .chat-diff__text")).toEqual(after);
     }
     if (captureProof) {
       const artifactDir = createControlUiE2eArtifactDir("diff-highlighting");

@@ -155,31 +155,29 @@ describe("runtime parity Control UI ownership", () => {
       let continuation: QaEvidenceSummaryV3Json | undefined;
       let firstAttempt: QaEvidenceSummaryV3Json | undefined;
       const lab = createTestLab();
-      const result = await runQaSuiteWithInfraRetry(
-        (attempt) =>
-          runQaFlowSuiteFromRuntime({
-            repoRoot,
-            outputDir,
-            providerMode: "mock-openai",
-            scenarioIds: [scenario.id],
-            runtimePair: ["openclaw", "codex"],
-            evidenceMode: "slim",
-            lab,
-            startLab: async () => lab,
-            ...(continuation
-              ? {
-                  evidenceAnchors: rootInstances(continuation),
-                  evidenceContinuation: continuation,
-                }
-              : {}),
-            onEvidence: (summary) => {
-              continuation = structuredClone(summary);
-              if (attempt === 0) {
-                firstAttempt = structuredClone(summary);
+      const result = await runQaSuiteWithInfraRetry((attempt) =>
+        runQaFlowSuiteFromRuntime({
+          repoRoot,
+          outputDir,
+          providerMode: "mock-openai",
+          scenarioIds: [scenario.id],
+          runtimePair: ["openclaw", "codex"],
+          evidenceMode: "slim",
+          lab,
+          startLab: async () => lab,
+          ...(continuation
+            ? {
+                evidenceAnchors: rootInstances(continuation),
+                evidenceContinuation: continuation,
               }
-            },
-          }),
-        1,
+            : {}),
+          onEvidence: (summary) => {
+            continuation = structuredClone(summary);
+            if (attempt === 0) {
+              firstAttempt = structuredClone(summary);
+            }
+          },
+        }),
       );
       expect(
         mocks.runQaFlowSuiteStandard.mock.calls.map(([params]) => params.forcedRuntime),

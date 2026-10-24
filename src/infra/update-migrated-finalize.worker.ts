@@ -7,9 +7,13 @@ import {
   withDelegatedUpdateCommandExecutor,
   withUpdateCommandExecutor,
 } from "../cli/update-cli/update-command-executor.js";
+import {
+  readUpdateDoctorInput,
+  readUpdatePostCoreInput,
+  type DecodedUpdateDoctorInput,
+  type DecodedUpdatePostCoreInput,
+} from "../cli/update-cli/update-command-migrated-input.js";
 import type {
-  UpdateDoctorInput,
-  UpdatePostCoreInput,
   MigratedUpdateFinalizationInput,
   MigratedUpdateFinalizationResult,
 } from "../cli/update-cli/update-command-migrated-types.js";
@@ -97,12 +101,10 @@ async function finalizeMigratedUpdate(): Promise<void> {
   }
   const text = Buffer.concat(chunks).toString("utf8");
   if (process.argv[2] === "--post-core") {
-    // SAFETY: The parent binds this receiver before releasing its private input.
-    return await runDelegatedPostCore(JSON.parse(text) as UpdatePostCoreInput);
+    return await runDelegatedPostCore(readUpdatePostCoreInput(JSON.parse(text)));
   }
   if (process.argv[2] === "--doctor") {
-    // SAFETY: The typed parent sends this private input only after binding this child.
-    return await runDelegatedDoctor(JSON.parse(text) as UpdateDoctorInput);
+    return await runDelegatedDoctor(readUpdateDoctorInput(JSON.parse(text)));
   }
   // SAFETY: Only the typed parent continuation serializes this private input.
   const input = JSON.parse(text) as MigratedUpdateFinalizationInput;
@@ -223,7 +225,7 @@ async function finalizeMigratedUpdate(): Promise<void> {
   await fs.writeFile(input.resultPath, JSON.stringify(response), { mode: 0o600 });
 }
 
-async function runDelegatedPostCore(input: UpdatePostCoreInput): Promise<void> {
+async function runDelegatedPostCore(input: DecodedUpdatePostCoreInput): Promise<void> {
   const resultPath = process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]?.trim();
   const executingRoot = resolveOpenClawPackageRootSync({ moduleUrl: import.meta.url });
   if (
@@ -261,6 +263,7 @@ async function runDelegatedPostCore(input: UpdatePostCoreInput): Promise<void> {
           run: {
             runId: input.runId,
             originalRecoveryCapture: input.originalRecoveryCapture,
+            busyTimeoutMs: input.busyTimeoutMs,
             env: { ...process.env },
             executorFence: fence,
             ...(requesterAuthority ? { requesterAuthority } : {}),
@@ -277,7 +280,7 @@ async function runDelegatedPostCore(input: UpdatePostCoreInput): Promise<void> {
   }
 }
 
-async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
+async function runDelegatedDoctor(input: DecodedUpdateDoctorInput): Promise<void> {
   const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
   if (!resultPath || !input.executor) {
     throw new Error("Update Doctor requires its delegated executor and result path.");
@@ -414,7 +417,7 @@ function recordDriverHandoff(
     };
     result.steps.push(step);
     for (const row of updateRunStepsFromResultStep(step)) {
-      recordUpdateRunStep(run.runId, { ...row, startedAtMs, endedAtMs }, { env: run.env });
+      recordUpdateRunStep(run.runId, { ...row, startedAtMs, endedAtMs }, run);
     }
   } catch {
     // Handoff timing is diagnostic; finalization proceeds without it.
@@ -436,8 +439,10 @@ async function finalizeInput(
     throw new Error("Update finalization requires its migrated update run.");
   }
   const { requesterAuthority: descriptor, ...runIdentity } = transferredRun;
+  // Shipped parents carry the admitted allowance in the existing step timeout.
+  runIdentity.busyTimeoutMs ??= input.params.updateStepTimeoutMs;
   executorFence.assertCurrent();
-  const adopted = adoptUpdateRun(runIdentity.runId, { env: runIdentity.env });
+  const adopted = adoptUpdateRun(runIdentity.runId, runIdentity);
   // Parent closures cannot cross JSON. The fresh runtime retains identity checks
   // under its validated original native update lineage.
   const run: NonNullable<UpdateCommandOptions["run"]> = {
@@ -467,7 +472,7 @@ async function finalizeInput(
       }
     };
     for (const step of input.bufferedSteps) {
-      await recordUpdateRunStepAsync(run.runId, step, { env, context, assertCurrent });
+      await recordUpdateRunStepAsync(run.runId, step, { ...run, env, context, assertCurrent });
     }
   }
   recordDriverHandoff(run, input.params.result, adopted, input.bufferedSteps);

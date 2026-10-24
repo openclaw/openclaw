@@ -6,6 +6,7 @@ import { createChannelReplyTransform } from "../../channels/message/reply-transf
 import { getBundledChannelPlugin } from "../../channels/plugins/bundled.js";
 import { getLoadedChannelPlugin, normalizeChannelId } from "../../channels/plugins/index.js";
 import { normalizeChatChannelId } from "../../channels/registry.js";
+import type { SessionDeliveryGeneration } from "../../config/sessions/session-delivery-generation.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import {
@@ -49,6 +50,8 @@ type RouteReplyParams = {
   to: string;
   /** Session key for deriving agent identity defaults (multi-agent). */
   sessionKey?: string;
+  /** Original session generation retained by durable delivery after producer settlement. */
+  sessionGeneration?: SessionDeliveryGeneration;
   /** Prepared owner for unscoped sessions; an agent-scoped target remains authoritative. */
   agentId?: string;
   /** Session key for policy resolution when native-command delivery targets a different session. */
@@ -98,15 +101,7 @@ type RouteReplyResult = {
   queueCustody?: "held" | "released";
   /** True when a hook intentionally suppressed provider delivery. */
   suppressed?: boolean;
-  reason?:
-    | "reasoning_payload_not_external"
-    | "channel_transform"
-    | "adapter_returned_no_identity"
-    | "adapter_returned_no_send"
-    | "cancelled_by_message_sending_hook"
-    | "cancelled_by_reply_payload_sending_hook"
-    | "empty_after_message_sending_hook"
-    | "empty_after_reply_payload_sending_hook";
+  reason?: "channel_transform";
   messageId?: string;
   error?: string;
   /** Original failure retains the delivery owner's no-send proof. */
@@ -156,14 +151,15 @@ async function routeReplyOperation(
   operation: ReplyDispatchOperation,
 ): Promise<RouteReplyResult> {
   const { channel, to, accountId, threadId, cfg, abortSignal } = params;
-  const suppress = (reason?: RouteReplyResult["reason"]): RouteReplyResult => ({
+  const suppress = (reason?: "suppressed" | "channel_transform"): RouteReplyResult => ({
     ok: true,
     delivered: false,
-    ...(reason ? { suppressed: true, reason } : {}),
+    ...(reason ? { suppressed: true } : {}),
+    ...(reason === "channel_transform" ? { reason } : {}),
   });
   const payload = operation.kind === "raw" ? operation.payload : operation.plan.payload;
-  if (shouldSuppressReasoningPayload(payload)) {
-    return suppress("reasoning_payload_not_external");
+  if (operation.kind === "raw" && shouldSuppressReasoningPayload(payload)) {
+    return suppress("suppressed");
   }
   const normalizedChannel = normalizeMessageChannel(channel);
   const channelId =
@@ -352,11 +348,19 @@ async function routeReplyOperation(
     } satisfies Omit<Parameters<typeof sendDurableMessageBatchCore>[0], "payloads">;
     const send =
       operation.kind === "prepared"
-        ? await sendStructuredDurableMessageBatchCore({
-            ...sendParams,
-            plan: createStructuredOutboundPayloadPlan([deliveryPayload]),
-          })
-        : await sendDurableMessageBatchCore({ ...sendParams, payloads: [deliveryPayload] });
+        ? await sendStructuredDurableMessageBatchCore(
+            {
+              ...sendParams,
+              plan: createStructuredOutboundPayloadPlan([deliveryPayload]),
+            },
+            params.sessionGeneration,
+          )
+        : await sendDurableMessageBatchCore(
+            { ...sendParams, payloads: [deliveryPayload] },
+            undefined,
+            undefined,
+            params.sessionGeneration,
+          );
     if (send.status === "failed" || send.status === "partial_failed") {
       const delivery = summarizeVisibleRouteReplyDelivery(
         send.status === "failed" ? [] : send.results,
@@ -383,14 +387,13 @@ async function routeReplyOperation(
         send.reason === "empty_after_message_sending_hook" ||
         send.reason === "empty_after_reply_payload_sending_hook")
     ) {
-      return suppress(send.reason);
+      return suppress("suppressed");
     }
     if (send.status === "suppressed" && durableMessageBatchMayHaveReachedRecipient(send)) {
       return {
         ok: true,
         delivered: false,
         ambiguous: true,
-        reason: "adapter_returned_no_identity",
       };
     }
     const results = send.status === "sent" ? send.results : [];

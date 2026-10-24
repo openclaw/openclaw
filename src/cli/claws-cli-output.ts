@@ -1,10 +1,9 @@
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import type { ClawAddPlan, ClawDiagnostic } from "../claws/types.js";
 import { redactSensitiveText } from "../logging/redact.js";
-import { writeRuntimeJson, type RuntimeEnv } from "../runtime.js";
+import { defaultRuntime as runtime, writeRuntimeJson } from "../runtime.js";
 
 export function emitClawFailure(
-  runtime: RuntimeEnv,
   json: boolean | undefined,
   message: string,
   payload: unknown,
@@ -27,12 +26,8 @@ export function formatClawDiagnostics(diagnostics: readonly ClawDiagnostic[]): s
     .join("\n");
 }
 
-function logClawPlanNotices(diagnostics: ClawDiagnostic[], runtime: RuntimeEnv): void {
-  for (const diagnostic of diagnostics.filter((entry) => entry.level === "warning")) {
+export function logClawAgentConfiguration(plan: ClawAddPlan): void {
+  for (const diagnostic of plan.diagnostics.filter((entry) => entry.level === "warning")) {
     runtime.log(redactSensitiveText(`Notice: ${diagnostic.message}`));
   }
-}
-
-export function logClawAgentConfiguration(plan: ClawAddPlan, runtime: RuntimeEnv): void {
-  logClawPlanNotices(plan.diagnostics, runtime);
 }

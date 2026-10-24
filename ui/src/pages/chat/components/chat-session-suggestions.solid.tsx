@@ -5,7 +5,10 @@ import type {
   SessionSuggestionResolution,
 } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export type ChatSessionSuggestionsProps = {
   suggestions: readonly SessionSuggestion[];

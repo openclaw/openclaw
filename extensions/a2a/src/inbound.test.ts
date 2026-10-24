@@ -47,7 +47,7 @@ function createA2aInboundFixture(peerName = "hermes") {
   const runtime = createPluginRuntimeMock();
   const store = new A2aTaskStore();
   stores.push(store);
-  const task = store.create("ctx-inbound", peerName);
+  const task = store.create("ctx-inbound", peerName, "incoming-message");
   store.start(task.id);
   const account = resolveA2aChannelAccount({
     cfg: { channels: { a2a: { peers: { hermes: { token: "test-token" } } } } },
@@ -56,7 +56,6 @@ function createA2aInboundFixture(peerName = "hermes") {
     account,
     config: {},
     channelRuntime: runtime.channel,
-    buildContext: runtime.channel.inbound.buildContext,
     store,
     taskId: task.id,
     contextId: task.contextId,
@@ -155,7 +154,7 @@ describe("A2A channel inbound dispatch", () => {
   );
 
   it("matches interleaved same-context replies to their originating tasks", async () => {
-    const second = fixture.store.create(fixture.task.contextId, "hermes");
+    const second = fixture.store.create(fixture.task.contextId, "hermes", "second");
     fixture.dispatch.mockImplementation(async (turn) => dispatched(turn, false, true));
     await fixture.run();
     await fixture.run({ taskId: second.id, messageId: "second" });
@@ -177,7 +176,7 @@ describe("A2A channel inbound dispatch", () => {
       hermes: { token: "first-token" },
       crew: { token: "second-token" },
     };
-    const crewTask = fixture.store.create(fixture.task.contextId, "crew");
+    const crewTask = fixture.store.create(fixture.task.contextId, "crew", "crew-message");
     fixture.store.start(crewTask.id);
     fixture.dispatch.mockImplementation(async (turn) => {
       await turn.delivery.deliver({ text: String(turn.ctxPayload.From) }, { kind: "final" });
@@ -193,11 +192,13 @@ describe("A2A channel inbound dispatch", () => {
     const dispatches = fixture.dispatch.mock.calls;
     expect(dispatches[0]?.[0].route.sessionKey).not.toBe(dispatches[1]?.[0].route.sessionKey);
     expect(fixture.task.artifacts[0]?.parts[0]).toEqual({ text: "a2a:hermes" });
-    expect(fixture.store.get(crewTask.id)?.artifacts[0]?.parts[0]).toEqual({ text: "a2a:crew" });
+    expect(fixture.store.get(crewTask.id, "crew")?.artifacts[0]?.parts[0]).toEqual({
+      text: "a2a:crew",
+    });
   });
 
   it("routes a stable peer binding before account fallback while preserving exact context overrides", async () => {
-    const exactTask = fixture.store.create("ctx-exact", "hermes");
+    const exactTask = fixture.store.create("ctx-exact", "hermes", "exact-message");
     fixture.store.start(exactTask.id);
     fixture.dispatch.mockImplementation(async (turn) => dispatched(turn));
     const bindings = [

@@ -1,7 +1,9 @@
 import { randomUUID } from "node:crypto";
+import type { SandboxContext } from "../../agents/sandbox/types.js";
 import { CronStreamApprovalEndedError } from "../../cron/stream-approval-outcome.js";
 import {
   CronStreamExecApprovalRequiredError,
+  CronStreamPolicyDeniedError,
   cronStreamExecApprovalBinding,
   type CronStreamExecApproval,
   type CronStreamExecApprovalReceipt,
@@ -22,6 +24,7 @@ export async function withCronStreamExecApproval<T>(params: {
   client: GatewayClient | null;
   creatorSessionId: string | undefined;
   assertCurrent: () => void;
+  sandboxContext?: SandboxContext;
   mutate: (approval?: CronStreamExecApproval) => Promise<T>;
   onApprovalCommitted?: (receipt: CronStreamExecApprovalReceipt) => void;
 }): Promise<T> {
@@ -51,13 +54,28 @@ export async function withCronStreamExecApproval<T>(params: {
       throw error;
     }
     const binding = cronStreamExecApprovalBinding(mutation);
-    const cwdValue = job.schedule.cwd ?? process.cwd();
-    const execution = await (
-      await import("../cron-stream-execution-binding.js")
-    ).prepareCronStreamExecutionBinding({
-      argv: job.schedule.command,
-      cwd: cwdValue,
-    });
+    const sandboxTarget = job.streamSandbox;
+    const cwdValue = job.schedule.cwd ?? job.streamSandbox?.containerWorkdir ?? process.cwd();
+    const execution: { assertCurrent: () => void; revalidate?: () => Promise<void> } = sandboxTarget
+      ? await (async () => {
+          if (!params.sandboxContext) {
+            throw new CronStreamPolicyDeniedError(
+              "Sandbox stream approval requires its original admitted sandbox.",
+            );
+          }
+          const { prepareCronStreamSandboxApproval } =
+            await import("../cron-stream-sandbox-approval.js");
+          return await prepareCronStreamSandboxApproval({
+            sandbox: params.sandboxContext,
+            target: sandboxTarget,
+          });
+        })()
+      : await (
+          await import("../cron-stream-execution-binding.js")
+        ).prepareCronStreamExecutionBinding({
+          argv: job.schedule.command,
+          cwd: cwdValue,
+        });
     params.assertCurrent();
     const command = sanitizeExecApprovalDisplayTextWithStatus(
       formatExecCommand(job.schedule.command),
@@ -76,7 +94,10 @@ export async function withCronStreamExecApproval<T>(params: {
     const warning = sanitizeExecApprovalWarningTextWithStatus(
       `${mutation.method === "cron.add" ? "Create" : "Reactivate or change"} persistent stream ${JSON.stringify(job.name)}? ` +
         `Watcher ID: ${JSON.stringify(job.id)}. ` +
-        "It runs on your Gateway " +
+        (job.streamSandbox
+          ? "Each start uses a fresh Docker container with this session's approved mounts and configured filesystem, network, and resource restrictions. " +
+            "Sandbox setup runs each time; files outside those mounts are discarded between starts. It keeps running "
+          : "It runs on your Gateway ") +
         "after this conversation ends and automatically restarts after interruptions, including Gateway restarts, until disabled or deleted. " +
         "Approve once authorizes this saved watcher and its automatic restarts. " +
         `${outputSelection} ${outputAction}. Notification delivery: ${job.delivery ? JSON.stringify(job.delivery) : "the session’s configured route"}.`,
@@ -97,7 +118,7 @@ export async function withCronStreamExecApproval<T>(params: {
       command: command.text,
       commandArgv: [...job.schedule.command],
       cwd: cwd.text,
-      host: "gateway",
+      host: job.streamSandbox ? "sandbox" : "gateway",
       security: error.security,
       ask: error.ask,
       allowedDecisions: ["allow-once", "deny"] as const,
@@ -172,6 +193,8 @@ export async function withCronStreamExecApproval<T>(params: {
               throw new TypeError("Stream was not saved: affirmative user approval is required.");
             }
           };
+          assertOperatorDecision();
+          await execution.revalidate?.();
           assertOperatorDecision();
           const consumption = manager.prepareConsumeAllowOnce(
             record.id,

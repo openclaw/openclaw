@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { normalizeUserBackgroundImage } from "../../state/user-background-image.js";
@@ -6,6 +7,7 @@ import { getUserBackground } from "../../state/user-background.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 vi.mock("../../state/user-background-image.js", async (importOriginal) => ({
@@ -24,22 +26,13 @@ beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("background-rpc-"));
   const profile = ensureProfileForEmail("reader@example.test");
   releaseProfileCatalog = (await prepareUserProfileCatalog()).release;
-  client = {
-    connId: "background-client",
-    authenticatedUserProfile: {
-      profileId: profile.id,
-      displayName: null,
-      hasAvatar: false,
-      updatedAt: profile.updatedAt,
-    },
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      role: "operator",
-      scopes: ["operator.read", "operator.write"],
-      client: { id: "test", mode: "test", version: "1", platform: "test" },
-    },
-  };
+  client = createSessionMutationTestClient(profile.id);
+  delete client.authenticatedUserId;
+  client.connId = "background-client";
+  client.authenticatedUserProfile!.displayName = null;
+  client.authenticatedUserProfile!.updatedAt = profile.updatedAt;
+  client.connect.scopes = ["operator.read", "operator.write"];
+  client.connect.client = { id: "test", mode: "test", version: "1", platform: "test" };
   connected = true;
   broadcast = vi.fn();
   context = {
@@ -56,7 +49,8 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
 });
-async function rpc(method: string, params: Record<string, unknown> = {}) {
+async function rpc(operation: string, params: Record<string, unknown> = {}) {
+  const method = `users.background.${operation}`;
   const respond = vi.fn();
   await handleGatewayRequest({
     req: { type: "req", id: method, method, params },
@@ -65,58 +59,42 @@ async function rpc(method: string, params: Record<string, unknown> = {}) {
     respond,
     isWebchatConnect: () => false,
   });
-  return respond;
+  expect(respond).toHaveBeenCalledOnce();
+  return respond.mock.calls[0]!;
 }
 
 describe("registered private background methods", () => {
   it("allows ordinary profile read/write scopes and emits only a profile-targeted invalidation", async () => {
-    const uploaded = await rpc("users.background.upload", { ...empty, imageBase64: "dGVzdA==" });
-    expect(uploaded).toHaveBeenCalledWith(
+    expect(await rpc("upload", { ...empty, imageBase64: "dGVzdA==" })).toEqual([
       true,
       expect.objectContaining({
         status: "ok",
         asset: expect.objectContaining({ mime: "image/jpeg" }),
         preference: expect.objectContaining({ showInSessions: false }),
       }),
-    );
+    ]);
     expect(broadcast).toHaveBeenCalledWith(
       "users.prefs.changed",
       { profileId: client.authenticatedUserProfile!.profileId, keys: ["ui.background"] },
       new Set([client.connId]),
     );
     client.connect.scopes = ["operator.read"];
-    expect(await rpc("users.background.get")).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({ status: "ok" }),
-    );
-    const denied = await rpc("users.background.remove", empty);
-    expect(denied.mock.calls[0]?.[0]).toBe(false);
+    expect(await rpc("get")).toEqual([true, expect.objectContaining({ status: "ok" })]);
+    expect((await rpc("remove", empty))[0]).toBe(false);
   });
 
   it.each(["disconnect", "profile-switch", "revoke-write"])(
     "refuses a pending decode after %s",
     async (revocation) => {
       const owner = client.authenticatedUserProfile!.profileId;
-      let release!: (value: typeof normalized) => void;
-      let started!: () => void;
-      const decoding = new Promise<void>((resolve) => {
-        started = resolve;
-      });
+      const decoding = createDeferred();
+      const decoded = createDeferred<typeof normalized>();
       vi.mocked(normalizeUserBackgroundImage).mockImplementationOnce(() => {
-        started();
-        return new Promise((resolve) => {
-          release = resolve;
-        });
+        decoding.resolve();
+        return decoded.promise;
       });
-      const pending = rpc("users.background.upload", { ...empty, imageBase64: "dGVzdA==" });
-      await Promise.race([
-        decoding,
-        pending.then((response) => {
-          throw new Error(
-            "Upload finished before decoding: " + JSON.stringify(response.mock.calls),
-          );
-        }),
-      ]);
+      const pending = rpc("upload", { ...empty, imageBase64: "dGVzdA==" });
+      await awaitGateBeforeSettlement(decoding.promise, pending, "Upload finished before decoding");
       if (revocation === "disconnect") {
         connected = false;
       } else if (revocation === "profile-switch") {
@@ -124,9 +102,9 @@ describe("registered private background methods", () => {
       } else {
         client.connect.scopes = ["operator.read"];
       }
-      release(normalized);
+      decoded.resolve(normalized);
       const response = await pending;
-      expect(response.mock.calls[0]?.[0]).toBe(false);
+      expect(response[0]).toBe(false);
       expect(await getUserBackground(owner)).toEqual({
         status: "ok",
         asset: null,
@@ -137,12 +115,8 @@ describe("registered private background methods", () => {
   );
 
   it("requires durable identity and rejects client-supplied ownership", async () => {
-    expect(
-      (await rpc("users.background.get", { profileId: "someone-else" })).mock.calls[0]?.[0],
-    ).toBe(false);
+    expect((await rpc("get", { profileId: "someone-else" }))[0]).toBe(false);
     client.authenticatedUserProfile = undefined;
-    expect(await rpc("users.background.get")).toHaveBeenCalledWith(true, {
-      status: "no_durable_identity",
-    });
+    expect(await rpc("get")).toEqual([true, { status: "no_durable_identity" }]);
   });
 });

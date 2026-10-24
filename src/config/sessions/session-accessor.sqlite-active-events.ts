@@ -20,6 +20,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import {
   getActiveTranscriptKysely,
+  selectActiveTranscriptIdentityRows,
   getMessageRangeReaders,
   parseActiveTranscriptMessageRow,
   selectMessageMetadata,
@@ -106,7 +107,6 @@ export function everySessionTranscriptUserInputFrom(
   preparedProjection?: CurrentTranscriptProjection,
 ): boolean {
   const read = (projection: CurrentTranscriptProjection) => {
-    const db = getActiveTranscriptKysely(projection.database);
     const fence = resolveSqliteSessionTranscriptReadFence({
       database: projection.database,
       ...projection.resolved,
@@ -114,13 +114,7 @@ export function everySessionTranscriptUserInputFrom(
     const end = fence?.beforeActiveMessagePosition ?? projection.state.activeMessageCount;
     const anchor = executeSqliteQueryTakeFirstSync(
       projection.database.db,
-      db
-        .selectFrom("transcript_event_identities as identity")
-        .innerJoin("session_transcript_active_events as active", (join) =>
-          join
-            .onRef("active.session_id", "=", "identity.session_id")
-            .onRef("active.event_seq", "=", "identity.seq"),
-        )
+      selectActiveTranscriptIdentityRows(projection.database)
         .select("active.message_position")
         .where("identity.session_id", "=", projection.resolved.sessionId)
         .where("identity.message_idempotency_key", "=", idempotencyKey)

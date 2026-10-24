@@ -231,6 +231,11 @@ plugin search key, environment key, then model-provider key. The plugin search
 key and model-provider fallback support SecretRefs through the standard secret
 preparation flow. Search does not reuse API keys stored only in model auth profiles.
 
+With DeepSeek selected as the search provider, changing its search key or SecretRef
+hot-applies through the Gateway's secrets runtime without replacing the plugin or
+waiting for unrelated agent turns. Plugin enablement and explicit plugin reloads
+still use normal lifecycle settlement.
+
 With no explicit search provider, credential auto-detection considers DeepSeek
 after Parallel (order 80), before configured endpoint providers. Select
 `provider: "deepseek"` to prevent automatic fallback to another search service.

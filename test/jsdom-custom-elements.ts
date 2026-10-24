@@ -38,10 +38,25 @@ export function trackCustomElementRegistry(
   const tracking: CustomElementTracking = { registry, definitions, repoOwnedTags: new Set() };
   const define = registry.define.bind(registry);
   registry.define = (name, constructor, options) => {
-    if (isRepoOwnedRegistrationStack(new Error().stack)) {
+    const stack = new Error().stack;
+    if (isRepoOwnedRegistrationStack(stack)) {
       tracking.repoOwnedTags.add(name);
     }
-    define(name, constructor, options);
+    try {
+      define(name, constructor, options);
+    } catch (error) {
+      // Bun's native DOMException can omit the caller stack from collection failures.
+      console.error("[jsdom-custom-elements:registration-failed]", {
+        tag: name.slice(0, 160),
+        alreadyDefined: Boolean(registry.get(name)),
+        trackedForCleanup: tracking.repoOwnedTags.has(name),
+        stack: stack
+          ?.split("\n")
+          .slice(0, 8)
+          .map((line) => line.slice(0, 400)),
+      });
+      throw error;
+    }
   };
   return tracking;
 }

@@ -1,6 +1,5 @@
-import { createServer, type Server } from "node:http";
-import type { AddressInfo, Socket } from "node:net";
 import { WebClient, type WebClientOptions } from "@slack/web-api";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createSlackLookupClient,
@@ -36,94 +35,50 @@ beforeEach(() => {
   }
 });
 
-function closeServer(server: Server): Promise<void> {
-  return new Promise((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-}
-
-async function listen(server: Server) {
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  return {
-    baseUrl: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
-    close: () => closeServer(server),
-  };
-}
-
-async function startSlackApiServer(requests: SlackApiRequest[], responseDelayMs = 0) {
-  const server = createServer((request, response) => {
-    requests.push({
-      authorization: request.headers.authorization,
-      method: request.method,
-      url: request.url,
-    });
-    request.resume();
-    const sendResponse = () => {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ ok: true }));
-    };
-    if (responseDelayMs > 0) {
-      setTimeout(sendResponse, responseDelayMs);
-    } else {
-      sendResponse();
-    }
-  });
-  return listen(server);
-}
-
-async function startDroppedResponseSlackApiServer(requests: SlackApiRequest[]) {
-  const server = createServer((request) => {
-    const chunks: Buffer[] = [];
-    request.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-    request.once("end", () => {
-      requests.push({
-        authorization: request.headers.authorization,
-        body: Buffer.concat(chunks).toString("utf8"),
-        method: request.method,
-        url: request.url,
-      });
-      request.socket.destroy();
-    });
-  });
-  return listen(server);
-}
-
-async function startStalledHeadersSlackApiServer(requests: SlackApiRequest[]) {
-  let resolveSocketClosed: () => void = () => {};
+async function withSlackApiServer(
+  requests: SlackApiRequest[],
+  mode: number | "drop" | "stall",
+  use: (baseUrl: string, socketClosed: Promise<void>) => Promise<void>,
+) {
+  let resolveSocketClosed = () => {};
   const socketClosed = new Promise<void>((resolve) => {
     resolveSocketClosed = resolve;
   });
-  const server = createServer((request) => {
-    requests.push({
-      authorization: request.headers.authorization,
-      method: request.method,
-      url: request.url,
-    });
-    request.resume();
-    request.socket.once("close", resolveSocketClosed);
-  });
-  const sockets = new Set<Socket>();
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
-  });
-  const listening = await listen(server);
-  return {
-    ...listening,
-    close: async () => {
-      const closed = closeServer(server);
-      for (const socket of sockets) {
-        socket.destroy();
+  await withServer(
+    (request, response) => {
+      const entry = {
+        authorization: request.headers.authorization,
+        method: request.method,
+        url: request.url,
+        body: "",
+      };
+      requests.push(entry);
+      request.setEncoding("utf8");
+      request.on("data", (chunk) => {
+        entry.body += String(chunk);
+      });
+      request.socket.once("close", resolveSocketClosed);
+      if (mode === "drop") {
+        request.once("end", () => request.socket.destroy());
+      } else if (mode !== "stall") {
+        const sendResponse = () => {
+          response.writeHead(200, { "content-type": "application/json" });
+          response.end(JSON.stringify({ ok: true }));
+        };
+        if (mode > 0) {
+          setTimeout(sendResponse, mode);
+        } else {
+          sendResponse();
+        }
       }
-      await closed;
     },
-    socketClosed,
-  };
+    async (baseUrl) => use(baseUrl, socketClosed),
+  );
 }
 
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
 
 const authResult = { ok: true, team_id: "TMOCK", user_id: "UMOCK" };
 const authResponse = () => new Response(JSON.stringify(authResult), { status: 200 });
@@ -154,10 +109,9 @@ describe("Slack Web API routing", () => {
   it("keeps lost stream responses one-shot without changing listener reads", async () => {
     const teamId = "TENTERPRISE1";
     const requests: SlackApiRequest[] = [];
-    const server = await startDroppedResponseSlackApiServer(requests);
-    try {
+    await withSlackApiServer(requests, "drop", async (baseUrl) => {
       const clientOptions = {
-        slackApiUrl: `${server.baseUrl}/api/`,
+        slackApiUrl: `${baseUrl}/api/`,
         teamId,
         retryConfig: { retries: 2, minTimeout: 1, maxTimeout: 1 },
       };
@@ -186,9 +140,7 @@ describe("Slack Web API routing", () => {
 
       await expect(listenerClient.auth.test()).rejects.toThrow();
       expect(requests.filter((request) => request.url === "/api/auth.test")).toHaveLength(3);
-    } finally {
-      await server.close();
-    }
+    });
   });
 
   it("retries two transient startup auth failures", async () => {
@@ -218,21 +170,18 @@ describe("Slack Web API routing", () => {
 
   it("aborts a stalled-header lookup after one request", async () => {
     const requests: SlackApiRequest[] = [];
-    const server = await startStalledHeadersSlackApiServer(requests);
-    try {
+    await withSlackApiServer(requests, "stall", async (baseUrl, socketClosed) => {
       const client = createSlackLookupClient("lookup-fixture", {
-        slackApiUrl: `${server.baseUrl}/api/`,
+        slackApiUrl: `${baseUrl}/api/`,
         timeout: 50,
       });
 
       await expect(client.auth.test()).rejects.toThrow();
-      await server.socketClosed;
+      await socketClosed;
 
       expect(requests).toHaveLength(1);
       expect(requests[0]).toMatchObject({ method: "POST", url: "/api/auth.test" });
-    } finally {
-      await server.close();
-    }
+    });
   });
 
   it("rejects rate limits without sleeping through Retry-After", async () => {
@@ -252,11 +201,10 @@ describe("Slack Web API routing", () => {
 
   it("keeps dropped Enterprise upload completion responses to one team-scoped request", async () => {
     const requests: SlackApiRequest[] = [];
-    const server = await startDroppedResponseSlackApiServer(requests);
-    try {
+    await withSlackApiServer(requests, "drop", async (baseUrl) => {
       const clientOptions = {
         headers: { Authorization: "Bearer stale-fixture", "X-Slack-Test": "preserved" },
-        slackApiUrl: `${server.baseUrl}/api/`,
+        slackApiUrl: `${baseUrl}/api/`,
         retryConfig: { retries: 2 },
       };
       const listenerClient = new WebClient("listener-fixture", clientOptions);
@@ -278,17 +226,14 @@ describe("Slack Web API routing", () => {
       });
       expect(new URLSearchParams(requests[0]?.body).get("team_id")).toBe("TENTERPRISE1");
       expect(requests[0]?.authorization).not.toContain("stale-fixture");
-    } finally {
-      await server.close();
-    }
+    });
   });
 
   it("does not inherit the listener request timeout for upload completion", async () => {
     const requests: SlackApiRequest[] = [];
-    const server = await startSlackApiServer(requests, 80);
-    try {
+    await withSlackApiServer(requests, 80, async (baseUrl) => {
       const clientOptions = {
-        slackApiUrl: `${server.baseUrl}/api/`,
+        slackApiUrl: `${baseUrl}/api/`,
         retryConfig: { retries: 2 },
         timeout: 20,
       };
@@ -297,16 +242,13 @@ describe("Slack Web API routing", () => {
 
       expect(result.ok).toBe(true);
       expect(requests).toHaveLength(1);
-    } finally {
-      await server.close();
-    }
+    });
   });
 
   it("bounds dedicated reads without timing out shared clients", async () => {
     const requests: SlackApiRequest[] = [];
-    const server = await startSlackApiServer(requests, 80);
-    try {
-      const options = { retryConfig: { retries: 0 }, slackApiUrl: `${server.baseUrl}/api/` };
+    await withSlackApiServer(requests, 80, async (baseUrl) => {
+      const options = { retryConfig: { retries: 0 }, slackApiUrl: `${baseUrl}/api/` };
       const readClient = createSlackReadClient("xoxb-read", { ...options, timeout: 20 });
       const sharedClient = createSlackWebClient("xoxb-shared", options);
 
@@ -316,8 +258,6 @@ describe("Slack Web API routing", () => {
       // The timed-out read may never arrive; only the shared client's arrival is certain.
       expect(requests.length).toBeGreaterThanOrEqual(1);
       expect(requests.at(-1)?.authorization).toBe("Bearer xoxb-shared");
-    } finally {
-      await server.close();
-    }
+    });
   });
 });

@@ -7,6 +7,7 @@ import {
   fakeCtx,
   inMemoryIO,
   pluginRuntime,
+  pluginCatalog,
   pluginSummary,
   presentationButtons,
   type CodexPluginsManagementRuntime,
@@ -48,10 +49,6 @@ function installingApps(appsNeedingAuth: v2.AppSummary[], setupAllowed = true) {
     setupAllowed,
     install: async () => ({ authPolicy: "ON_INSTALL", appsNeedingAuth }),
   });
-}
-
-function catalog(plugins: v2.PluginSummary[], name: string): v2.PluginListResponse {
-  return { marketplaces: [{ name, plugins }], marketplaceLoadErrors: [], featuredPluginIds: [] };
 }
 
 describe("Codex /codex plugins subcommand", () => {
@@ -222,12 +219,7 @@ describe("Codex /codex plugins subcommand", () => {
     const result = await command(["install", `github@${marketplace}`], io, runtime);
 
     expect(io.current()).toEqual({
-      github: {
-        enabled: true,
-        marketplaceName: "openai-curated",
-        pluginName: "github",
-        allow_destructive_actions: "ask",
-      },
+      github: makePolicy("github", "openai-curated", true, "ask"),
     });
     expect(runtime.install).toHaveBeenCalledWith({
       remoteMarketplaceName: marketplace,
@@ -246,7 +238,7 @@ describe("Codex /codex plugins subcommand", () => {
         list: vi.fn(async (params: v2.PluginListParams) => {
           const supplemental = Boolean(params.marketplaceKinds);
           const marketplace = supplemental ? "openai-curated-remote" : "openai-curated";
-          return catalog(
+          return pluginCatalog(
             [
               pluginSummary("github", marketplace, {
                 remotePluginId,
@@ -312,12 +304,9 @@ describe("Codex /codex plugins subcommand", () => {
     expect(enabled.text).toContain("enabled in openclaw.json");
     expect(enabled.text).toContain("Takes effect on your next message.");
     expect(runtime.install).not.toHaveBeenCalled();
-    expect(io.current()["security-review@company-tools"]).toEqual({
-      enabled: true,
-      marketplaceName: "another-marketplace",
-      pluginName: "different-plugin",
-      allow_destructive_actions: true,
-    });
+    expect(io.current()[localPluginId]).toEqual(
+      makePolicy("different-plugin", "another-marketplace", true, true),
+    );
   });
 
   it("rejects duplicate legacy policies before installation or qualified enablement", async () => {

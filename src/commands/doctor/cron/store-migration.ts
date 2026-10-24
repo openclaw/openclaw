@@ -17,6 +17,7 @@ import { coerceFiniteScheduleNumber } from "../../../cron/schedule-number.js";
 import { inferCronJobName } from "../../../cron/service/normalize.js";
 import { resolveCronCurrentSessionTarget } from "../../../cron/session-target.js";
 import { normalizeCronStaggerMs, resolveDefaultCronStaggerMs } from "../../../cron/stagger.js";
+import { decodeStoredCronJobConfig } from "../../../cron/store/job-config-codec.js";
 import type { CronQuarantinedJob, QuarantinedCronConfigJob } from "../../../cron/types-shared.js";
 import {
   hasLegacyToolNameList,
@@ -577,7 +578,7 @@ export function recoverValidQuarantinedCronScheduleJobs(
       retainedEntries.push(entry);
       continue;
     }
-    const candidate = structuredClone(entry.job);
+    const candidate = decodeStoredCronJobConfig(structuredClone(entry.job));
     const jobId = storedCronJobId(candidate);
     if (jobId && (activeJobIds.has(jobId) || recoveredJobIds.has(jobId))) {
       retainedEntries.push(entry);

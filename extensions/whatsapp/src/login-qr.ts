@@ -95,6 +95,8 @@ function notifyQrUpdate(login: ActiveLogin) {
 function updateLoginQrState(accountId: string, login: ActiveLogin, qr: string, notify = false) {
   login.qr = qr;
   login.qrVersion += 1;
+  // A rotated QR must not join the previous version's in-flight render.
+  login.qrRenderPromise = null;
   if (notify) {
     notifyQrUpdate(login);
   }

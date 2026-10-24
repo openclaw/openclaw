@@ -1,12 +1,17 @@
 import { createServer } from "node:http";
 import { expect, it } from "vitest";
 import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
+import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
 import { setSessionMcpRuntimeScheduler } from "../agents/agent-bundle-mcp-manager-api.js";
 import { getSessionMcpRuntimeTestManager } from "../agents/agent-bundle-mcp-manager.test-support.js";
+import { model as createModelFixture } from "../agents/model-catalog-fixtures.test-support.js";
 import { setRuntimeConfigSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -28,9 +33,14 @@ const mediaCaption = "Here is the generated image.";
 const fallbackText = "The backup produced a second answer.";
 const mediaBlock = { kind: "block", text: mediaCaption, mediaUrls: [finalMediaUrl] };
 const mediaFinal = { kind: "final", text: undefined, mediaUrls: [finalMediaUrl] };
+const completionRequest = { method: "POST", url: "/v1/chat/completions" };
 
 function responseFrames(model?: string) {
   const backup = model === "backup";
+  const status = backup ? "completed" : "failed";
+  const error = backup
+    ? undefined
+    : { code: "insufficient_balance", message: "Insufficient balance. Top up to continue." };
   const text = backup ? fallbackText : `${finalText}\nMEDIA:${finalMediaUrl}`;
   const item = {
     id: "message-fixture",
@@ -54,20 +64,13 @@ function responseFrames(model?: string) {
     frame("output_text.delta", { ...indices, delta: text }),
     frame("output_text.done", { ...indices, text }),
     frame("output_item.done", { output_index: 0, item }),
-    frame(backup ? "completed" : "failed", {
+    frame(status, {
       response: {
         id: "response-fixture",
         model,
-        status: backup ? "completed" : "failed",
+        status,
         output: [item],
-        ...(backup
-          ? {}
-          : {
-              error: {
-                code: "insufficient_balance",
-                message: "Insufficient balance. Top up to continue.",
-              },
-            }),
+        error,
       },
     }),
   ];
@@ -88,15 +91,10 @@ function fixtureProvider(
     api,
     request: { allowPrivateNetwork: true },
     models: [
-      {
-        id,
-        name: id === "answer" ? "Answer" : "Backup",
-        reasoning: false,
-        input: ["text" as const],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      createModelFixture(id, id === "answer" ? "Answer" : "Backup", {
         contextWindow: 128000,
         maxTokens: 4096,
-      },
+      }),
     ],
   };
 }
@@ -233,14 +231,7 @@ it.for([
         };`,
         );
       }
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("fixture server did not bind");
-      }
-      const baseUrl = `http://127.0.0.1:${address.port}/v1`;
+      const baseUrl = `${await listenLoopback(server)}/v1`;
       const configuredModels: Array<[string, "answer" | "backup"]> = [["fixture", "answer"]];
       if (fallback) {
         configuredModels.push(["fixture-backup", "backup"]);
@@ -252,7 +243,6 @@ it.for([
           defaults: {
             workspace: state.workspaceDir,
             skipBootstrap: true,
-            heartbeat: { every: "0m" },
             model: {
               primary: "fixture/answer",
               ...(fallback ? { fallbacks: ["fixture-backup/backup"] } : {}),
@@ -452,12 +442,10 @@ it.for([
       }
       const result = await dispatch;
       expect(requests).toEqual(
-        scenario === "concurrent" || directMedia
-          ? [
-              { method: "POST", url: "/v1/chat/completions" },
-              { method: "POST", url: "/v1/chat/completions" },
-            ]
-          : [{ method: "POST", url: "/v1/chat/completions" }],
+        Array.from(
+          { length: scenario === "concurrent" || directMedia ? 2 : 1 },
+          () => completionRequest,
+        ),
       );
       expect(blocks).toBeGreaterThanOrEqual(directMedia ? 1 : 2);
       if (directMedia) {
@@ -509,10 +497,7 @@ it.for([
         }
       }
       await scheduler.stop();
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeHttpServer(server);
       await state.cleanup();
       resetCommandQueueStateForTest();
     }

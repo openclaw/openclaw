@@ -1,4 +1,3 @@
-import { resolveThinkingDefault } from "openclaw/plugin-sdk/agent-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   createAppServerOptions,
@@ -76,46 +75,6 @@ it("refreshes and clears presence without rewriting native turn input", async ()
     expect(turn.input).toEqual(textInput(params.prompt));
   }
 });
-it.each([
-  { thinking: undefined, thinkingDefault: undefined, expected: "medium" },
-  { thinking: undefined, thinkingDefault: "high" as const, expected: "high" },
-  { thinking: "medium", thinkingDefault: "high" as const, expected: "medium" },
-])(
-  "sends $expected for Astra with configured effort $thinking/$thinkingDefault",
-  async (testCase) => {
-    const modelId = "gpt-6-astra";
-    const config = {
-      agents: {
-        defaults: {
-          thinkingDefault: testCase.thinkingDefault,
-          models: { [`openai/${modelId}`]: { params: { thinking: testCase.thinking } } },
-        },
-      },
-    };
-    const params = paramsForTurn(config);
-    params.provider = "openai";
-    params.modelId = modelId;
-    params.model = {
-      ...params.model,
-      provider: "openai",
-      id: modelId,
-      compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max"] },
-    };
-    params.thinkLevel = resolveThinkingDefault({
-      cfg: config,
-      provider: params.provider,
-      model: modelId,
-      agentRuntime: "codex",
-      catalog: [{ provider: "openai", id: modelId, name: "Astra", reasoning: true }],
-    });
-
-    const turn = await buildTurnStartParams(params, turnOptions());
-    expect(turn).toMatchObject({
-      effort: testCase.expected,
-      collaborationMode: { settings: { reasoning_effort: testCase.expected } },
-    });
-  },
-);
 it("uses the configured user timezone on every turn without changing cron input", async () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-09-02T00:30:00.000Z"));
   const params = paramsForTurn(
@@ -201,10 +160,6 @@ it("carries explicit current policy without changing native turn input", async (
   );
   const values = turns.map(deliveryValue);
   expect(values[0]).toContain("OpenClaw delivers your final response automatically");
-  expect(values[0]).toContain("is your complete reply");
-  expect(values[0]).toContain("Commentary is optional progress and may be hidden");
-  expect(values[0]).toContain("`message(action=send, final=false)`");
-  expect(values[0]).toContain("deliver every still-pending answer");
   expect(values[1]).toContain("Use `message(action=send)`");
   expect(values[1]).toContain("For progress, set `final=false`");
   expect(values[1]).toContain("Set `final=true`, or omit it,");

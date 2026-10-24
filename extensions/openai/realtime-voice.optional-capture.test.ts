@@ -1,10 +1,12 @@
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createOpenAIRealtimeTestSupport } from "./realtime-voice-test-support.js";
 
-const { FakeWebSocket } = await vi.hoisted(async () => {
+const state = await vi.hoisted(async () => {
   const { createOpenAIRealtimeMockState } = await import("./realtime-voice-test-support.js");
   return createOpenAIRealtimeMockState();
 });
+const { FakeWebSocket } = state;
 const mocks = vi.hoisted(() => ({
   capture: vi.fn<typeof import("openclaw/plugin-sdk/proxy-capture").captureWsEventAsync>(),
   proxyAgent: { fixture: "configured-proxy" },
@@ -18,54 +20,43 @@ vi.mock("openclaw/plugin-sdk/proxy-capture", async (importOriginal) => ({
   createDebugProxyWebSocketAgent: () => mocks.proxyAgent,
 }));
 
-beforeEach(() => {
-  vi.resetModules();
-  FakeWebSocket.instances = [];
-  mocks.capture.mockReset().mockResolvedValue(undefined);
-});
-
-it.each(["present", "rejected"] as const)(
-  "preserves proxied realtime events and close when async capture is %s",
-  async (capture) => {
+describe.each(["present", "rejected"])("async capture %s", (capture) => {
+  beforeEach(() => {
+    vi.resetModules();
+    FakeWebSocket.instances = [];
+    mocks.capture.mockReset().mockResolvedValue(undefined);
     if (capture === "rejected") {
       mocks.capture.mockRejectedValue(new Error("diagnostic store failed"));
     }
+  });
+
+  it("preserves proxied realtime events and close", async () => {
     const { buildOpenAIRealtimeVoiceProvider } = await import("./realtime-voice-provider.js");
-    const onReady = vi.fn();
-    const onError = vi.fn();
-    const onClose = vi.fn();
-    const bridge = buildOpenAIRealtimeVoiceProvider().createBridge({
+    const { createNativeBridge, connectReadyBridge, parseSent } = createOpenAIRealtimeTestSupport({
+      ...state,
+      buildOpenAIRealtimeVoiceProvider,
+    });
+    const callbacks = { onReady: vi.fn(), onError: vi.fn(), onClose: vi.fn() };
+    const bridge = createNativeBridge({
       providerConfig: { apiKey: "fixture-key" },
-      onAudio: vi.fn(),
-      onClearAudio: vi.fn(),
-      onReady,
-      onError,
-      onClose,
+      ...callbacks,
     });
     try {
-      const connecting = bridge.connect();
-      const socket = FakeWebSocket.instances[0];
-      if (!socket) {
-        throw new Error("OpenAI realtime socket is unavailable");
-      }
+      const socket = await connectReadyBridge(bridge);
       expect(socket.args[1]).toMatchObject({ agent: mocks.proxyAgent });
-      socket.readyState = FakeWebSocket.OPEN;
-      socket.emit("open");
-      socket.emit("message", Buffer.from(JSON.stringify({ type: "session.updated" })));
-      await connecting;
-      expect(onReady).toHaveBeenCalledOnce();
+      expect(callbacks.onReady).toHaveBeenCalledOnce();
       bridge.sendAudio(Buffer.from("voice"));
-      expect(socket.sent.map((payload) => JSON.parse(payload))).toContainEqual({
+      expect(parseSent(socket)).toContainEqual({
         type: "input_audio_buffer.append",
         audio: Buffer.from("voice").toString("base64"),
       });
       const transportError = new Error("upstream failed");
       socket.emit("error", transportError);
-      expect(onError).toHaveBeenCalledExactlyOnceWith(transportError);
+      expect(callbacks.onError).toHaveBeenCalledExactlyOnceWith(transportError);
     } finally {
       await bridge.close();
     }
-    expect(onClose).toHaveBeenCalledExactlyOnceWith("completed");
+    expect(callbacks.onClose).toHaveBeenCalledExactlyOnceWith("completed");
     expect(mocks.capture.mock.calls.map(([event]) => event)).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ direction: "local", kind: "ws-open" }),
@@ -75,15 +66,9 @@ it.each(["present", "rejected"] as const)(
         expect.objectContaining({ direction: "local", kind: "ws-close" }),
       ]),
     );
-  },
-);
+  });
 
-it.each(["present", "rejected"] as const)(
-  "preserves Live session input and graceful close when async capture is %s",
-  async (capture) => {
-    if (capture === "rejected") {
-      mocks.capture.mockRejectedValue(new Error("diagnostic store failed"));
-    }
+  it("preserves Live session input and graceful close", async () => {
     const { createHarness, sentEvents } =
       await import("./realtime-quicksilver-bridge.test-support.js");
     const harness = createHarness({ model: "gpt-live-1" });
@@ -113,5 +98,5 @@ it.each(["present", "rejected"] as const)(
     expect(mocks.capture).toHaveBeenCalledWith(
       expect.objectContaining({ meta: { provider: "openai", capability: "gpt-live-voice" } }),
     );
-  },
-);
+  });
+});

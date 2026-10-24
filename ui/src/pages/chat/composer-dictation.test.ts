@@ -315,28 +315,36 @@ describe("ComposerDictationOwner", () => {
     await waitForFast(() => expectClosed("dictation-1", true));
   });
 
-  it("surfaces final transcription failure and discards its pending result", async () => {
-    const { controller, onCommit, onError } = createHarness();
-    const publishedErrors: unknown[] = [];
-    const unsubscribe = controller.subscribe(() => {
-      publishedErrors.push(onError.mock.lastCall?.[0]);
-    });
+  it.each(["", "Keep the preview"])(
+    "preserves %j when final transcription fails",
+    async (preview) => {
+      const { controller, onCommit, onError } = createHarness();
+      const publishedErrors: unknown[] = [];
+      const unsubscribe = controller.subscribe(() => {
+        publishedErrors.push(onError.mock.lastCall?.[0]);
+      });
 
-    await startDirect(controller);
-    const finished = controller.finishActive();
-    transcript("failed result");
-    emit({ type: "error", message: "Local transcription failed" });
-    expect(onError).toHaveBeenCalledExactlyOnceWith("Local transcription failed", {
-      kind: "interrupted",
-      preservesText: false,
-    });
-    await expect(finished).resolves.toBe(false);
-    expect(onCommit).not.toHaveBeenCalled();
-    expect(controller.locksComposer).toBe(false);
-    expect(listeners.size).toBe(0);
-    expect(publishedErrors).toContain("Local transcription failed");
-    unsubscribe();
-  });
+      await startDirect(controller);
+      emit({ type: "partial", text: preview });
+      const finished = controller.finishActive();
+      transcript("failed result");
+      emit({ type: "error", message: "Local transcription failed" });
+      expect(onError).toHaveBeenCalledExactlyOnceWith("Local transcription failed", {
+        kind: "interrupted",
+        preservesText: Boolean(preview),
+      });
+      await expect(finished).resolves.toBe(Boolean(preview));
+      if (preview) {
+        expect(onCommit).toHaveBeenCalledExactlyOnceWith(preview, true);
+      } else {
+        expect(onCommit).not.toHaveBeenCalled();
+      }
+      expect(controller.locksComposer).toBe(false);
+      expect(listeners.size).toBe(0);
+      expect(publishedErrors).toContain("Local transcription failed");
+      unsubscribe();
+    },
+  );
 
   it("lets Read aloud discard pending dictation without stopping newer playback", async () => {
     const { controller, onCommit, options } = createHarness();
@@ -411,6 +419,8 @@ describe("ComposerDictationOwner", () => {
 
   it("keeps captured text and releases dictation on microphone loss when error delivery throws", async () => {
     const { controller, onCommit, onError } = createHarness();
+    const committed = createDeferred<string>();
+    onCommit.mockImplementation((text: string) => committed.resolve(text));
     const track = Object.assign(new EventTarget(), { stop: vi.fn() });
     const addListener = vi.spyOn(track, "addEventListener");
     getUserMedia.mockResolvedValueOnce({ getTracks: () => [track] });
@@ -432,7 +442,8 @@ describe("ComposerDictationOwner", () => {
       kind: "interrupted",
       preservesText: true,
     });
-    expect(onCommit).toHaveBeenCalledWith("Keep these words");
+    await expect(committed.promise).resolves.toBe("Keep these words");
+    expect(onCommit).toHaveBeenCalledWith("Keep these words", true);
     expect(controller.active).toBe(false);
     expect(track.stop).toHaveBeenCalledOnce();
     expect(listeners.size).toBe(0);
@@ -503,7 +514,7 @@ describe("ComposerDictationOwner", () => {
     }
   });
 
-  it.each(["new capture", "draft switch"])(
+  it.each(["new capture", "draft switch", "session switch", "client switch"])(
     "unlocks immediately and rejects a pending result after %s",
     async (transition) => {
       const { promise: close, resolve: resolveClose } = createDeferred();
@@ -518,8 +529,12 @@ describe("ComposerDictationOwner", () => {
         }
         return { ok: true };
       });
-      const { controller, onCommit, onError, target, options } = createHarness();
+      const { controller, onCommit, onError, target, options } = createHarness({
+        draftKey: "first",
+        sessionKey: "first",
+      });
       await startHold(target);
+      emit({ type: "partial", text: "Old draft preview" });
 
       const committed = controller.finishActive();
 
@@ -528,20 +543,27 @@ describe("ComposerDictationOwner", () => {
       await waitForFast(() => expectClosed());
       try {
         if (transition === "draft switch") {
-          controller.cancel();
+          controller.update({ ...options, draftKey: "replacement" });
+        } else if (transition === "session switch") {
           controller.update({ ...options, sessionKey: "replacement" });
-          controller.update(options);
+        } else if (transition === "client switch") {
+          controller.update({ ...options, client: createClient() });
         }
-        expect(controller.startDirect()).toBe(true);
-        await waitForFast(() => expect(sessionsCreated).toBe(2));
-        emit({ transcriptionSessionId: "dictation-2", type: "partial", text: "new preview" });
-        expect(controller.transcript).toBe("new preview");
+        if (transition !== "new capture") {
+          controller.update(options);
+        } else {
+          expect(controller.startDirect()).toBe(true);
+          await waitForFast(() => expect(sessionsCreated).toBe(2));
+          emit({ transcriptionSessionId: "dictation-2", type: "partial", text: "new preview" });
+        }
+        const currentPreview = transition === "new capture" ? "new preview" : "";
+        expect(controller.transcript).toBe(currentPreview);
         emit({ type: "partial", text: "stale preview" });
-        expect(controller.transcript).toBe("new preview");
+        expect(controller.transcript).toBe(currentPreview);
         emit({ type: "error", message: "stale failure" });
         expect(onError).not.toHaveBeenCalled();
         transcript("late final");
-        expect(controller.transcript).toBe("new preview");
+        expect(controller.transcript).toBe(currentPreview);
         resolveClose();
         await expect(committed).resolves.toBe(false);
         expect(onCommit).not.toHaveBeenCalled();
@@ -626,7 +648,7 @@ describe("ComposerDictationOwner", () => {
     expect(controller.locksComposer).toBe(false);
   });
 
-  it("streams g711_ulaw audio and commits final transcript from latched Stop", async () => {
+  it("streams g711_ulaw audio and drains the final transcript after latched Stop", async () => {
     const order = recordRequests();
     getUserMedia.mockImplementation(async () => {
       order.push("microphone");
@@ -641,23 +663,42 @@ describe("ComposerDictationOwner", () => {
     emit({ type: "partial", text: "hello wor" });
     expect(controller.transcript).toBe("hello wor");
     transcript("hello world");
+    emit({ type: "partial", text: "next wor" });
     await releaseLatched(target);
-    await expect(controller.finishActive()).resolves.toBe(true);
-    expect(controller.finalizing).toBe(false);
-    expect(onCommit).toHaveBeenCalledWith("hello world");
+    const finished = controller.finishActive();
+    expect(controller).toMatchObject({ finalizing: false, locksComposer: false });
+    expect(onCommit).not.toHaveBeenCalled();
+    transcript("next words");
+    emit({ type: "close", reason: "completed" });
+    await expect(finished).resolves.toBe(true);
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith("hello world next words", true);
     await waitForFast(() => expectClosed());
     expect(order.indexOf("talk.session.appendAudio")).toBeLessThan(
       order.indexOf("talk.session.close"),
     );
   });
 
-  it("reports false for an empty immediate transcript snapshot", async () => {
-    const withoutTranscript = createHarness();
-    await startHold(withoutTranscript.target);
-    const empty = withoutTranscript.controller.finishActive();
-    await waitForFast(() => expectClosed());
-    await vi.advanceTimersByTimeAsync(10_000);
-    await expect(empty).resolves.toBe(false);
+  it.each([
+    ["", "timeout"],
+    ["Keep the preview", "timeout"],
+    ["Keep the preview", "disconnect"],
+  ])("preserves %j when the final drain ends through %s", async (preview, outcome) => {
+    const { controller, options, onCommit } = createHarness();
+    await startDirect(controller);
+    emit({ type: "partial", text: preview });
+    const finished = controller.finishActive();
+    await vi.advanceTimersByTimeAsync(0);
+    if (outcome === "disconnect") {
+      controller.update({ ...options, connected: false });
+    } else {
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
+    await expect(finished).resolves.toBe(Boolean(preview));
+    if (preview) {
+      expect(onCommit).toHaveBeenCalledExactlyOnceWith(preview, true);
+    } else {
+      expect(onCommit).not.toHaveBeenCalled();
+    }
   });
 
   it("buffers microphone audio while the transcription session is being created", async () => {
@@ -715,7 +756,9 @@ describe("ComposerDictationOwner", () => {
     const disconnectedAt = Date.now();
     harness.controller.update({ ...harness.options, connected: false });
     await waitForFast(() => expectClosed());
-    await waitForFast(() => expect(harness.onCommit).toHaveBeenCalledWith("keep this unfinished"));
+    await waitForFast(() =>
+      expect(harness.onCommit).toHaveBeenCalledWith("keep this unfinished", true),
+    );
     expect(Date.now() - disconnectedAt).toBeLessThan(1000);
     expect(harness.onError).toHaveBeenCalledWith(
       "Dictation stopped because the Gateway disconnected.",
@@ -756,7 +799,9 @@ describe("composer microphone button", () => {
 
     click(target);
     await waitForFast(() => expectClosed());
-    expect(onCommit).toHaveBeenCalledWith("keep recording");
+    emit({ type: "close", reason: "completed" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith("keep recording", true);
     expect(controller.active).toBe(false);
     expect(onTap).not.toHaveBeenCalled();
   });

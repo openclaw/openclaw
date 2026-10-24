@@ -5,16 +5,7 @@ import {
   summarizeResourcePhase,
 } from "../../scripts/e2e/lib/kitchen-sink-resources.mts";
 import type { GatewayResourceSnapshot } from "../../scripts/lib/gateway-bench-profile.js";
-
-function operations(completed: number, failed = 0) {
-  return { attempted: completed + failed, completed, failed };
-}
-function memoryUsage(value: number) {
-  return { rss: value, heapTotal: value, heapUsed: value, external: value, arrayBuffers: value };
-}
-function receipt(completed: number, failed = 0) {
-  return { status: failed ? "failed" : "exercised", operations: operations(completed, failed) };
-}
+import { memoryUsage, operations, receipt, snapshot } from "./kitchen-sink.test-support.js";
 
 async function measurement(
   samples: Array<GatewayResourceSnapshot | Error>,
@@ -39,19 +30,6 @@ async function measurement(
   });
   const phase = await measureResourceOperations({ name, count, splitFirst, sample, run });
   return { order, sample, run, phase };
-}
-
-function snapshot(step: number, memory = 100): GatewayResourceSnapshot {
-  return {
-    pid: 123,
-    atMonotonicMicros: step * 1_000,
-    cpuEnvironment: { availableParallelism: 2, affinity: "0-1" },
-    process: { user: step * 100, system: step * 10 },
-    mainThread: { user: step * 50, system: step * 5 },
-    memory: memoryUsage(memory),
-    runtime: { node: "26.0.0", platform: "linux", arch: "x64" },
-    activeResources: { Timeout: 1 },
-  };
 }
 
 it.each([false, true])("samples completed operations with splitFirst=%s", async (splitFirst) => {

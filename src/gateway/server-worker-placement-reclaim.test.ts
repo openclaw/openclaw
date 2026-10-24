@@ -13,6 +13,7 @@ import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-s
 import { pendingChatSendDedupeKey } from "./server-shared.js";
 import { cancelGatewayWorkerSessionWork } from "./server-worker-placement-cancel.js";
 import { createGatewayWorkerDispatchAdmission } from "./server-worker-placement-dispatch-admission.js";
+import { createPlacementTestHold } from "./server-worker-placement-hold.test-support.js";
 import { createGatewayWorkerPlacementReclaimBarriers } from "./server-worker-placement-reclaim.js";
 import {
   cleanupAdmission,
@@ -591,14 +592,12 @@ it.each(["missing", "local"] as const)(
       admitted.value.cleanupAdmittedRun();
       aborted.resolve();
     });
-    const entered = createDeferred();
-    const release = createDeferred();
+    const entered = createPlacementTestHold();
     vi.mocked(harness.environments.reconcileOnce).mockImplementationOnce(async () => {
-      entered.resolve();
-      await release.promise;
+      await entered.wait();
     });
     const sweep = coordinated.reconcileActive();
-    await entered.promise;
+    await entered.entered.promise;
     expect((await placements.getAsync(REQUEST.sessionId))?.state).toBe(
       state === "local" ? "local" : undefined,
     );
@@ -634,7 +633,7 @@ it.each(["missing", "local"] as const)(
       expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     } finally {
       cancellationLoad.resolve();
-      release.resolve();
+      entered.release.resolve();
       await Promise.all([sweep, dispatch, stopping]);
       releaseControllerClaim();
       cleanupAdmission(runId, admitted);

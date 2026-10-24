@@ -72,6 +72,16 @@ export async function startOrResumeThread(
     const expectedOwnership = params.params.expectedSessionRuntimeOwnership;
     let binding = saved;
     let selectionBinding = binding;
+    const assertReplacementAllowed = (operation: string) => {
+      // Review validation runs after preparation; never replace its native history first.
+      if (params.params.providerReviewAcknowledgment) {
+        throw new Error(
+          `Cannot acknowledge provider review while ${operation}. The reviewed thread is preserved; ` +
+            "restore its original tools and runtime configuration, then retry the acknowledgment from the original conversation.",
+        );
+      }
+      assertCodexBindingMayBeReplaced(binding, operation, expectedOwnership);
+    };
     if (hasCodexNativeToolCatalog(binding)) {
       // A resumed native catalog is immutable data. Run eligibility only changes
       // the bridge's available executors, never this thread's inherited history.
@@ -158,6 +168,9 @@ export async function startOrResumeThread(
         onExitWaitCancelled: afterThreadWrite ? undefined : params.onPrewriteHandoffCancelled,
       });
     if (binding?.pendingSupervisionBranch) {
+      if (params.params.providerReviewAcknowledgment) {
+        assertReplacementAllowed("branching the reviewed native thread");
+      }
       const requestContext = await prepareRequestContext();
       await releaseRetainedThread(binding.threadId);
       const pendingBinding = binding as CodexAppServerThreadBinding & {
@@ -233,7 +246,7 @@ export async function startOrResumeThread(
       if (!current?.threadId) {
         return;
       }
-      assertCodexBindingMayBeReplaced(current, operation, expectedOwnership);
+      assertReplacementAllowed(operation);
       assert();
       // Replacement CAS needs the predecessor row to preserve same-connection inventory.
       replacementPredecessor = current;
@@ -344,11 +357,7 @@ export async function startOrResumeThread(
       stageBindingReplacement("rotating a host-policy-restricted thread binding");
     }
     if (binding?.threadId && (transientNativeToolRestriction || transientWebSearchRestriction)) {
-      assertCodexBindingMayBeReplaced(
-        binding,
-        "starting a turn-restricted thread",
-        expectedOwnership,
-      );
+      assertReplacementAllowed("starting a turn-restricted thread");
       preserveExistingBinding = true;
       binding = undefined;
     }
@@ -431,7 +440,7 @@ export async function startOrResumeThread(
       params.mcpServersFingerprintEvaluated === true &&
       binding.mcpServersFingerprint !== params.mcpServersFingerprint
     ) {
-      assertCodexBindingMayBeReplaced(binding, "changing MCP configuration", expectedOwnership);
+      assertReplacementAllowed("changing MCP configuration");
       if (
         !ringZeroActive &&
         (transientNativeToolRestriction ||
@@ -462,11 +471,7 @@ export async function startOrResumeThread(
       webSearchBindingChanged &&
       !deferLegacyWebSearchRotationToTransientNativeSurface
     ) {
-      assertCodexBindingMayBeReplaced(
-        binding,
-        "changing web-search configuration",
-        expectedOwnership,
-      );
+      assertReplacementAllowed("changing web-search configuration");
       if (!ringZeroActive && transientWebSearchRestriction) {
         embeddedAgentLog.debug(
           "codex app-server tool surface restricted for turn; starting transient thread",
@@ -483,11 +488,7 @@ export async function startOrResumeThread(
       binding = undefined;
     }
     if (binding?.threadId && transientDelegationRestriction) {
-      assertCodexBindingMayBeReplaced(
-        binding,
-        "starting a delegation-restricted turn",
-        expectedOwnership,
-      );
+      assertReplacementAllowed("starting a delegation-restricted turn");
       // Loaded Codex threads ignore resume config overrides. Keep the normal
       // binding intact and start a transient thread with collaboration disabled.
       embeddedAgentLog.debug(
@@ -589,11 +590,7 @@ export async function startOrResumeThread(
           nextLegacy: legacyDynamicToolsFingerprint,
         })
       ) {
-        assertCodexBindingMayBeReplaced(
-          binding,
-          "changing the dynamic tool catalog",
-          expectedOwnership,
-        );
+        assertReplacementAllowed("changing the dynamic tool catalog");
         preserveExistingBinding =
           params.params.pluginHarnessToolPolicyScope !== "conversation" &&
           params.nativeCodeModeEnabled !== false &&
@@ -670,7 +667,7 @@ export async function startOrResumeThread(
       }
     }
 
-    assertCodexBindingMayBeReplaced(binding, "starting a fresh native thread", expectedOwnership);
+    assertReplacementAllowed("starting a fresh native thread");
     const requestContext = await prepareRequestContext();
     if (
       initialBoundThreadId &&

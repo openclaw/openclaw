@@ -2,6 +2,7 @@
  * Shared body-stream cleanup for guarded fetch consumers (`fetchWithSsrFGuard`
  * callers that re-wrap streaming responses).
  */
+import { runBestEffortCleanup } from "../non-fatal-cleanup.js";
 
 // Catches wrapper bodies abandoned without cancel/consume so guarded dispatchers
 // (and caller resources hooked into `cleanup`) do not leak with the stream.
@@ -162,7 +163,13 @@ const NULL_BODY_STATUSES = new Set([101, 103, 204, 205, 304]);
 /** Keeps request ownership through body completion, failure, or cancellation. */
 export function responseWithRelease(response: Response, release: () => Promise<void>): Response {
   if (!response.body || NULL_BODY_STATUSES.has(response.status)) {
-    void (async () => await release())();
+    // There is no body stream to carry a release failure back to the caller.
+    void runBestEffortCleanup({
+      cleanup: release,
+      onError(error) {
+        process.emitWarning(error instanceof Error ? error : String(error));
+      },
+    });
     return response;
   }
   return new Response(wrapBodyStream({ body: response.body, cleanup: release }, "release"), {

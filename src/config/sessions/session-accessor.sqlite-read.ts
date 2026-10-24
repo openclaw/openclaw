@@ -28,6 +28,7 @@ import type {
   SessionTranscriptEventRow,
   SessionTranscriptStats,
   TranscriptEvent,
+  TranscriptEventReadOptions,
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.js";
 import type { SessionStateDeleteSnapshot } from "./session-accessor.sqlite-delete-snapshot.types.js";
@@ -55,8 +56,10 @@ import {
   readTranscriptStatsFromDatabase,
 } from "./session-accessor.sqlite-transcript-stats.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
-import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
-import { SessionTranscriptColdError } from "./session-cold-storage-state.js";
+import {
+  readHotSessionTranscriptSnapshot,
+  SessionTranscriptColdError,
+} from "./session-cold-storage-state.js";
 import type { SessionTranscriptReadSnapshot } from "./session-history-read.types.js";
 import { SqliteTranscriptMutationConflictError } from "./session-mutation-conflict-error.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
@@ -315,7 +318,6 @@ export function readTranscriptExportSnapshotsFromDatabase(
               : transcriptEventJsonSql(database.db)
             ).as("event_json"),
           ])
-          .where("session_id", "in", [...bySession.keys()])
           .where((eb) =>
             eb.or(
               batch.map(({ request, throughSeq, afterSeq }) =>
@@ -499,11 +501,7 @@ export function readTranscriptEventAtSeqInTransaction(
 export function prepareTranscriptEventReadQuery(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
-  options: {
-    beforeEventSeq?: number;
-    afterEventSeq?: number;
-    maxEventBytes?: number;
-  } = {},
+  options: Omit<TranscriptEventReadOptions, "projection"> = {},
 ) {
   assertTranscriptEventReadBudget(database, sessionId, options);
   return getSessionKysely(database.db)
@@ -520,14 +518,18 @@ export function prepareTranscriptEventReadQuery(
 export function loadTranscriptEventsFromDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
-  options: {
-    beforeEventSeq?: number;
-    afterEventSeq?: number;
-    projection?: "reset-boundary";
-    maxEventBytes?: number;
-    projectEvent?: (event: TranscriptEvent) => TranscriptEvent;
-  } = {},
+  options: TranscriptEventReadOptions = {},
 ): TranscriptEvent[] {
+  return readTranscriptEventsFromDatabase(database, sessionId, Array.from, options);
+}
+
+/** Consume synchronously: the iterator must not outlive its fenced native snapshot. */
+export function readTranscriptEventsFromDatabase<T>(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  sessionId: string,
+  consume: (events: Iterable<TranscriptEvent>) => T,
+  options: TranscriptEventReadOptions = {},
+): T {
   return readHotSessionTranscriptSnapshot(database, sessionId, "events", () => {
     const rows = iterateSqliteQuerySync(
       database.db,
@@ -539,11 +541,17 @@ export function loadTranscriptEventsFromDatabase(
         ])
         .orderBy("seq", "asc"),
     );
-    // Array.from closes the iterator on parse failure; no live cursor escapes a fenced read.
-    return Array.from(rows, (row) => {
-      const event: TranscriptEvent = JSON.parse(row.event_json);
-      return options.projectEvent ? options.projectEvent(event) : event;
-    });
+    const events = (function* () {
+      for (const row of rows) {
+        const event: TranscriptEvent = JSON.parse(row.event_json);
+        yield event;
+      }
+    })();
+    try {
+      return consume(events);
+    } finally {
+      events.return();
+    }
   });
 }
 
@@ -562,7 +570,6 @@ export function readTranscriptSnapshot(
 export function readTranscriptEventRows(
   database: Pick<OpenClawAgentDatabase, "db">,
   sessionId: string,
-  options: { afterSeq?: number } = {},
 ): SqliteTranscriptSnapshotRow[] {
   return readHotSessionTranscriptSnapshot(database, sessionId, "raw rows", () => {
     const db = getSessionKysely(database.db);
@@ -572,7 +579,6 @@ export function readTranscriptEventRows(
         .selectFrom("transcript_events")
         .select([transcriptEventJsonSql(database.db).as("event_json"), "seq"])
         .where("session_id", "=", sessionId)
-        .$if(options.afterSeq !== undefined, (query) => query.where("seq", ">", options.afterSeq!))
         .orderBy("seq", "asc"),
     ).rows;
     return rows.map((row) => ({
@@ -672,6 +678,7 @@ export function findTranscriptEventInDatabase(
   sessionId: string,
   match: (event: TranscriptEvent) => boolean,
   navigationMatch?: (event: TranscriptEvent) => boolean,
+  { malformed = "skip" }: { malformed?: "skip" | "throw" } = {},
 ): { event: TranscriptEvent } | undefined {
   return readHotSessionTranscriptSnapshot(database, sessionId, "match", () => {
     const events = getSessionKysely(database.db)
@@ -700,7 +707,7 @@ export function findTranscriptEventInDatabase(
               .where("seq", "=", row.seq),
           )
         : row;
-      const found = payload && findTranscriptEventInRows([payload], match);
+      const found = payload && findTranscriptEventInRows([payload], match, malformed);
       if (found) {
         return found;
       }

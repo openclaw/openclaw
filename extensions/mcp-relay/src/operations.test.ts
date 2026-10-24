@@ -1,6 +1,6 @@
 import type { GatewayIngressPrincipalBindingV1 } from "openclaw/plugin-sdk/gateway-ingress";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayRequest } from "./gateway-request.js";
 import { createOperations } from "./operations.js";
 import { CLIENT, createPrincipalIngress, createTransportFixture } from "./relay.test-helpers.js";
@@ -96,6 +96,20 @@ async function fixture(agentId?: string) {
 
 function message(id: string, role: string, text: string) {
   return { role, content: [{ type: "text", text }], timestamp: 1_000, __openclaw: { id } };
+}
+
+function useDeadlineClock() {
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+  // Native AbortSignal.timeout does not use Vitest's clock.
+  const timeout = vi.spyOn(AbortSignal, "timeout").mockImplementation((ms) => {
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new DOMException("Timed out", "TimeoutError")), ms);
+    return controller.signal;
+  });
+  onTestFinished(() => {
+    timeout.mockRestore();
+    vi.useRealTimers();
+  });
 }
 
 describe("MCP relay data operations", () => {
@@ -411,6 +425,61 @@ describe("MCP relay data operations", () => {
       }
     },
   );
+
+  it.each([false, true])(
+    "keeps an accepted run alive beyond the submission deadline (existing conversation: %s)",
+    async (existing) => {
+      const { operations, request } = await fixture();
+      useDeadlineClock();
+      let submissionSignal: AbortSignal | undefined;
+      request.mockImplementationOnce(async (_method, _params, options) => {
+        submissionSignal = options?.signal;
+        return { key: newer.key, runId: "slow-run", status: "started" };
+      });
+      expect(
+        await operations("message.send", {
+          ...(existing ? { conversationId: newer.key } : {}),
+          message: "A slow question",
+          waitMs: 0,
+        }),
+      ).toEqual({ conversationId: newer.key, runId: "slow-run", status: "running" });
+      expect(submissionSignal).toBeDefined();
+      await vi.advanceTimersByTimeAsync(16_000);
+      // The SDK retains this signal as the accepted run's upstream authority.
+      expect(submissionSignal?.aborted).toBe(false);
+      request.mockResolvedValueOnce({
+        status: "ok",
+        terminalReply: { disposition: "visible", text: "Finished the slow question" },
+      });
+      expect(
+        await operations("reply.get", {
+          conversationId: newer.key,
+          runId: "slow-run",
+          waitMs: 0,
+        }),
+      ).toMatchObject({ status: "completed", reply: "Finished the slow question" });
+    },
+  );
+
+  it("still times out a submission that never returns acceptance", async () => {
+    const { operations, request } = await fixture();
+    useDeadlineClock();
+    request.mockImplementationOnce(
+      async (_method, _params, options) =>
+        await new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener(
+            "abort",
+            () => reject(new Error("Submission aborted", { cause: options.signal?.reason })),
+            { once: true },
+          );
+        }),
+    );
+    const result = expect(
+      operations("message.send", { message: "A stalled submission", waitMs: 0 }),
+    ).rejects.toMatchObject({ code: "timeout" });
+    await vi.advanceTimersByTimeAsync(15_000);
+    await result;
+  });
 
   it.each(["message.send", "conversation.read"])(
     "logs a %s Gateway failure once without request content",

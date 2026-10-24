@@ -19,7 +19,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { onTestFinished, vi } from "vitest";
 import { identityFromPrivateKey, RelayError } from "./protocol.js";
 import { RelayService, type RelaySocket } from "./service.js";
-import { RelayState } from "./state.js";
+import { RelayState, type RelayGrant } from "./state.js";
 import { UiTunnel } from "./ui-tunnel.js";
 
 export function createStateFixture(now = () => 0) {
@@ -120,13 +120,20 @@ const VECTOR_PRIVATE_KEY = Buffer.from(
     "0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20",
   "hex",
 ).toString("base64url");
-export const CHALLENGE = {
-  type: "challenge",
-  protocol: 1,
-  nonce: NONCE,
-  relay: "mcp.openclaw.ai",
-};
+export const CHALLENGE = { type: "challenge", protocol: 1, nonce: NONCE, relay: "mcp.openclaw.ai" };
 export const CLIENT = { id: "synthetic-client", name: "Synthetic client" };
+
+export function grantFixture(overrides: Partial<RelayGrant> = {}): RelayGrant {
+  return {
+    grantId: "gr_one",
+    clientId: CLIENT.id,
+    clientName: CLIENT.name,
+    createdAt: 0,
+    principal: { kind: "owner" },
+    ceiling: ["operator.read", "operator.write"],
+    ...overrides,
+  };
+}
 
 function parseFrame(text: string): Record<string, unknown> {
   const frame: unknown = JSON.parse(text);

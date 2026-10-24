@@ -4,6 +4,7 @@ import { resolve } from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { asRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { firstLine } from "./command-output.js";
 import type { FaceTimeConfig } from "./config.js";
 import { inspectFaceTimeDriver, type FaceTimeDriverStatus } from "./driver-setup.js";
 import type { FaceTimePreflightCheck, FaceTimePreflightResult } from "./preflight.js";
@@ -157,10 +158,6 @@ const PRECHECK_ACTIONS: Record<string, keyof typeof SETUP_ACTIONS> = {
   "process-tap": "grant-system-audio",
   "realtime-provider": "configure-realtime-provider",
 };
-
-function firstLine(value: unknown): string | undefined {
-  return typeof value === "string" ? value.trim().split(/\r?\n/u)[0] || undefined : undefined;
-}
 
 function addPreflightCheck(checks: FaceTimeSetupCheck[], check: FaceTimePreflightCheck): void {
   if (check.id === "call-app-running") {

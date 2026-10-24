@@ -355,7 +355,7 @@ suite.define(() => {
       const inventory = page.locator(".systems-sidebar");
       await inventory.getByRole("button", { name: /Cloud worker/ }).click();
       await expect
-        .poll(() => page.locator(".systems-heading h1").textContent())
+        .poll(() => page.locator(".systems-heading h2").textContent())
         .toBe("Cloud worker");
 
       expect(await inventory.getByRole("button", { name: /worker history/ }).count()).toBe(0);
@@ -367,7 +367,7 @@ suite.define(() => {
       await page.locator('[data-navigation-view="sessions"]').click();
       await inventory.waitFor();
       await expect
-        .poll(() => page.locator(".systems-heading h1").textContent())
+        .poll(() => page.locator(".systems-heading h2").textContent())
         .toBe("Cloud worker");
       await page.setViewportSize({ width: 640, height: 900 });
       const picker = page.locator(".systems-mobile-picker");

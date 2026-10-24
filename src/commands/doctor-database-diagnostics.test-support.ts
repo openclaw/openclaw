@@ -6,6 +6,7 @@ import path from "node:path";
 import type { Client } from "pg";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { describeAdmittedDatabaseStores } from "../infra/database-engine/admitted-diagnostics.js";
+import { formatDatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics-format.js";
 import type { DatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics.js";
 import { readBackupEngine } from "../infra/database-engine/physical-store.js";
 import type { PortDescriptor } from "../infra/database-engine/port-descriptor.js";
@@ -19,6 +20,7 @@ import {
 import { retireSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
+import { inspectDoctorDatabaseEngines } from "./doctor-database-engine-inspection.js";
 import {
   buildStatusDatabaseStoreRows,
   resolveStatusDatabaseEngines,
@@ -48,12 +50,9 @@ function fixtureStores(root: string) {
 export function diagnosticConfig(connection?: string): OpenClawConfig {
   return {
     plugins: {
-      entries: {
-        matrix: { enabled: false },
-        workboard: { enabled: false },
-        logbook: { enabled: false },
-        "team-reports": { enabled: false },
-      },
+      entries: Object.fromEntries<{ enabled: boolean }>(
+        ["matrix", "workboard", "logbook", "team-reports"].map((id) => [id, { enabled: false }]),
+      ),
     },
     ...(connection ? { database: { engine: "postgres", postgres: { connection } } } : {}),
   };
@@ -107,7 +106,7 @@ export async function createDiagnosticStores(root: string) {
 }
 
 /** Populate actual owner admissions, independently from Doctor's inspection worker. */
-export async function admittedStatusOutput(
+async function admittedStatusOutput(
   root: string,
   config: OpenClawConfig,
   descriptors: Map<string, PortDescriptor>,
@@ -183,21 +182,19 @@ function snapshotStoreSchema(store: DatabaseStoreDiagnostic) {
   if (current === undefined) {
     return store;
   }
-  const { version, expectedVersion } = store.schema;
-  if (version !== null) {
-    assert.equal(version, current, `${store.family} schema at ${store.path}`);
-  }
-  if (expectedVersion !== null) {
-    assert.equal(expectedVersion, current, `${store.family} expected schema at ${store.path}`);
-  }
   // Keep unknowns and migration state exact; only validated current versions vary on upgrades.
-  const marker = `<current-${store.family}-schema>`;
+  const normalize = (version: number | null) => {
+    if (version !== null) {
+      assert.equal(version, current, `${store.family} schema at ${store.path}`);
+    }
+    return version === null ? null : `<current-${store.family}-schema>`;
+  };
   return {
     ...store,
     schema: {
       ...store.schema,
-      version: version === null ? null : marker,
-      expectedVersion: expectedVersion === null ? null : marker,
+      version: normalize(store.schema.version),
+      expectedVersion: normalize(store.schema.expectedVersion),
     },
   };
 }
@@ -214,47 +211,57 @@ function snapshotSchemaText(text: string): string {
   return text;
 }
 
-type DiagnosticSnapshot = {
-  text: string | string[];
-  json: DatabaseStoreDiagnostic | DatabaseStoreDiagnostic[];
-  status: Awaited<ReturnType<typeof admittedStatusOutput>>;
-};
+function mapOneOrMany<T, U>(value: T | T[], map: (item: T) => U): U | U[] {
+  return Array.isArray(value) ? value.map(map) : map(value);
+}
 
-export function normalizeDiagnosticOutput(
-  value: DiagnosticSnapshot,
+export async function inspectDiagnosticStores(root: string, config = diagnosticConfig()) {
+  return (
+    await inspectDoctorDatabaseEngines({
+      config,
+      stateDir: root,
+      env: { OPENCLAW_STATE_DIR: root, HOME: path.join(root, "home") },
+    })
+  ).stores!;
+}
+
+export async function diagnosticOutput(
   root: string,
+  config: OpenClawConfig,
+  descriptors: Map<string, PortDescriptor>,
+  stores: DatabaseStoreDiagnostic | DatabaseStoreDiagnostic[],
   connection?: string,
+  normalizedConnection = connection,
 ) {
+  const status = await admittedStatusOutput(root, config, descriptors, connection);
+  for (const row of status.text) {
+    row.Value = snapshotSchemaText(row.Value);
+  }
   const packageJournal = resolvePackageActivationJournalPath(
     resolvePackageActivationAnchor(process.cwd()),
   );
   const snapshot = {
-    ...value,
-    json: Array.isArray(value.json)
-      ? value.json.map(snapshotStoreSchema)
-      : snapshotStoreSchema(value.json),
-    text: Array.isArray(value.text)
-      ? value.text.map(snapshotSchemaText)
-      : snapshotSchemaText(value.text),
+    json: mapOneOrMany(stores, snapshotStoreSchema),
+    text: mapOneOrMany(stores, (store) => snapshotSchemaText(formatDatabaseStoreDiagnostic(store))),
     status: {
-      ...value.status,
-      json: value.status.json.map(snapshotStoreSchema),
-      text: value.status.text.map((row) => ({ ...row, Value: snapshotSchemaText(row.Value) })),
+      ...status,
+      json: status.json.map(snapshotStoreSchema),
     },
   };
   let text = JSON.stringify(snapshot, null, 2)
     .replaceAll(packageJournal, "<package-activation-journal>")
     .replaceAll(root, "<state>")
-    .replaceAll(process.cwd(), "<install>");
-  text = text.replaceAll(os.tmpdir(), "<temporary>").replaceAll(/openclaw-\d+/g, "openclaw-<uid>");
-  text = text.replaceAll(/doctor_proof_[a-f0-9]+/g, "<namespace>");
-  text = text.replaceAll(
-    /[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/g,
-    "<store-id>",
-  );
-  if (connection) {
-    assert(!text.includes(connection), "diagnostics must not expose the connection string");
-    const parsed = new URL(connection);
+    .replaceAll(process.cwd(), "<install>")
+    .replaceAll(os.tmpdir(), "<temporary>")
+    .replaceAll(/openclaw-\d+/g, "openclaw-<uid>")
+    .replaceAll(/doctor_proof_[a-f0-9]+/g, "<namespace>")
+    .replaceAll(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/g, "<store-id>");
+  if (normalizedConnection) {
+    assert(
+      !text.includes(normalizedConnection),
+      "diagnostics must not expose the connection string",
+    );
+    const parsed = new URL(normalizedConnection);
     const database = decodeURIComponent(parsed.pathname.slice(1));
     text = text
       .replaceAll(`"database": "${database}"`, '"database": "<database>"')

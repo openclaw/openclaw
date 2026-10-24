@@ -4,14 +4,18 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { gunzipSync } from "node:zlib";
 import type { ISyncResponse } from "matrix-js-sdk/lib/matrix.js";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { withStateMigrationBackupForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createFixtureLifetime } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { stateMigrations } from "./doctor-contract-api.js";
+import {
+  accountStorageRoot,
+  createMigrationParams,
+  migrationById,
+  withDatabase,
+  writeSource,
+} from "./doctor-contract-api.test-support.js";
 import { SqliteBackedMatrixSyncStore } from "./src/matrix/client/file-sync-store.js";
 import { installMatrixTestRuntime, resetMatrixTestStores } from "./src/test-runtime.js";
 
@@ -33,8 +37,7 @@ function matrixSyncResponse(nextBatch: string): ISyncResponse {
 }
 
 function matrixStateRowsSha256(databasePath: string): string {
-  const database = new DatabaseSync(databasePath, { readOnly: true });
-  try {
+  return withDatabase(databasePath, true, (database) => {
     const rows = database
       .prepare(
         `SELECT plugin_id, namespace, entry_key, value_json, created_at, expires_at
@@ -44,17 +47,7 @@ function matrixStateRowsSha256(databasePath: string): string {
       )
       .all();
     return createHash("sha256").update(JSON.stringify(rows)).digest("hex");
-  } finally {
-    database.close();
-  }
-}
-
-function accountStateMigration() {
-  const migration = stateMigrations.find((entry) => entry.id === "matrix-account-sqlite-schema");
-  if (!migration) {
-    throw new Error("missing Matrix account SQLite schema migration");
-  }
-  return migration;
+  });
 }
 
 describe("Matrix account state Doctor migration", () => {
@@ -72,26 +65,10 @@ describe("Matrix account state Doctor migration", () => {
       let bodyFailure: { error: unknown } | undefined;
       try {
         const stateDir = lifetime.createTempDir("openclaw-matrix-doctor-");
-        const storageRootDir = path.join(
-          stateDir,
-          "matrix",
-          "accounts",
-          "sync-cache-backup",
-          "matrix.example.org__bot",
-          "0123456789abcdef",
-        );
-        const archivedStorageRootDir = path.join(
-          stateDir,
-          "matrix",
-          "accounts",
-          "default",
-          "matrix.example.org__bot",
-          "sync-cache-backup",
-        );
+        const storageRootDir = accountStorageRoot(stateDir, "sync-cache-backup");
+        const archivedStorageRootDir = accountStorageRoot(stateDir, "default", "sync-cache-backup");
         const databasePath = path.join(storageRootDir, "state", "openclaw.sqlite");
         const archivedDatabasePath = path.join(archivedStorageRootDir, "state", "openclaw.sqlite");
-        fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-        fs.mkdirSync(path.dirname(archivedDatabasePath), { recursive: true });
         const compressedFixture = Buffer.from(
           fs.readFileSync(MATRIX_V2026_7_1_FIXTURE_BASE64, "utf8").replaceAll(/\s/gu, ""),
           "base64",
@@ -103,8 +80,8 @@ describe("Matrix account state Doctor migration", () => {
         expect(createHash("sha256").update(rawFixture).digest("hex")).toBe(
           MATRIX_V2026_7_1_RAW_SHA256,
         );
-        fs.writeFileSync(databasePath, rawFixture);
-        fs.writeFileSync(archivedDatabasePath, rawFixture);
+        writeSource(databasePath, rawFixture);
+        writeSource(archivedDatabasePath, rawFixture);
 
         const beforeRepairRowsSha256 = matrixStateRowsSha256(databasePath);
         const staleStore = await SqliteBackedMatrixSyncStore.create(storageRootDir);
@@ -118,22 +95,16 @@ describe("Matrix account state Doctor migration", () => {
         });
         await lifetime.verifyCleanup(resetMatrixTestStores);
 
-        const stale = new DatabaseSync(databasePath, { readOnly: true });
-        try {
+        withDatabase(databasePath, true, (stale) => {
           expect(stale.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
           expect(stale.prepare("PRAGMA integrity_check").get()).toEqual({
             integrity_check: "ok",
           });
-        } finally {
-          stale.close();
-        }
+        });
 
-        const migration = accountStateMigration();
+        const migration = await migrationById("matrix-account-sqlite-schema");
         const migrationParams = {
-          config: {} as OpenClawConfig,
-          env: { OPENCLAW_STATE_DIR: stateDir },
-          stateDir,
-          oauthDir: path.join(stateDir, "oauth"),
+          ...createMigrationParams(stateDir),
           context: {
             openPluginStateKeyedStore() {
               throw new Error("account schema migration must not open the plugin state store");

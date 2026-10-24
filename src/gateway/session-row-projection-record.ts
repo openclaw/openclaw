@@ -167,7 +167,8 @@ export type Query = {
   storePath?: string;
   key?: string;
   sessionIdOrKey?: string;
-  parentSessionKey?: string;
+  /** Prepared qualified rows carry identity; raw keys retain alias resolution. */
+  parentSessionKey?: string | Pick<Row, "key" | "agentId">;
   sortBy?: Parameters<typeof compareSessionEntryPairs>[2] | null;
 };
 export type Inputs = Parameters<typeof rowProjection.readSessionRowInputs>[0];
@@ -412,10 +413,11 @@ export function publishTranscriptFields(
     lastAssistantMessage: fields.lastAssistantMessage,
     fallbackModel,
   });
-  row.materialized.source.lastMessagePreview = fields.lastMessagePreview;
-  row.materialized.row.lastMessagePreview = fields.lastMessagePreview;
-  row.materialized.source.lastAssistantMessage = fields.lastAssistantMessage;
-  row.materialized.row.lastAssistantMessage = fields.lastAssistantMessage;
+  const transcript = {
+    lastMessagePreview: fields.lastMessagePreview,
+    lastAssistantMessage: fields.lastAssistantMessage,
+  };
+  row.materialized = rowProjection.replaceSessionRowFacts(row.materialized, transcript, transcript);
   return true;
 }
 

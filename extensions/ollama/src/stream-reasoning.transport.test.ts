@@ -1,4 +1,4 @@
-import type { Model } from "openclaw/plugin-sdk/llm";
+import type { AssistantMessageEvent, Model } from "openclaw/plugin-sdk/llm";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -14,6 +14,19 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => ({
 import { createOllamaStreamFn } from "./stream.runtime.js";
 
 afterEach(() => guardedFetch.mockReset());
+
+const baseModel: Model = {
+  api: "ollama",
+  provider: "ollama",
+  baseUrl: "http://localhost:11434",
+  id: "qwen3:4b",
+  name: "Qwen3 4B",
+  reasoning: true,
+  input: ["text"],
+  contextWindow: 32768,
+  maxTokens: 8192,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+};
 
 describe("native Ollama direct completion reasoning", () => {
   it.each([
@@ -43,19 +56,7 @@ describe("native Ollama direct completion reasoning", () => {
       ),
       release: async () => {},
     });
-    const model: Model = {
-      api: "ollama",
-      provider: "ollama",
-      baseUrl: "http://localhost:11434",
-      id: "qwen3:4b",
-      name: "Qwen3 4B",
-      reasoning: true,
-      input: ["text"],
-      contextWindow: 32768,
-      maxTokens: 8192,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      ...overrides,
-    };
+    const model: Model = { ...baseModel, ...overrides };
     const stream = await createOllamaStreamFn("http://localhost:11434")(
       model,
       { messages: [{ role: "user", content: "Hello", timestamp: 0 }] },
@@ -71,5 +72,60 @@ describe("native Ollama direct completion reasoning", () => {
     expect(request.think).toBe(expectedThink);
     expect(request.options).toMatchObject({ num_predict: 24 });
     expect(request.options).not.toHaveProperty("think");
+  });
+
+  it.each([
+    { field: "thinking", answer: "OK", reasoning: false, finish: "stop", terminal: "done" },
+    { field: "reasoning", answer: "", reasoning: false, finish: "stop", terminal: "error" },
+    { field: "thinking", answer: "", reasoning: false, finish: "length", terminal: "error" },
+    { field: "reasoning", answer: "OK", reasoning: true, finish: "stop", terminal: "done" },
+  ])("keeps $field private with reasoning=$reasoning and finish=$finish", async (testCase) => {
+    const hidden = "synthetic private thought";
+    guardedFetch.mockResolvedValue({
+      finalUrl: "http://localhost:11434/api/chat",
+      response: new Response(
+        [
+          { message: { role: "assistant", content: "", [testCase.field]: hidden }, done: false },
+          {
+            message: { role: "assistant", content: testCase.answer },
+            done: true,
+            done_reason: testCase.finish,
+            prompt_eval_count: 3,
+            eval_count: 7,
+          },
+        ]
+          .map((chunk) => JSON.stringify(chunk))
+          .join("\n"),
+      ),
+      release: async () => {},
+    });
+    const stream = await createOllamaStreamFn(baseModel.baseUrl)(
+      { ...baseModel, reasoning: testCase.reasoning },
+      { messages: [{ role: "user", content: "Reply OK", timestamp: 0 }] },
+    );
+    const events: AssistantMessageEvent[] = [];
+    for await (const event of stream) {
+      events.push(event);
+    }
+    const result = await stream.result();
+    expect(events.at(-1)?.type).toBe(testCase.terminal);
+    expect(result.content.filter((block) => block.type === "text")).toEqual(
+      testCase.answer ? [{ type: "text", text: testCase.answer }] : [],
+    );
+    expect(result.usage.output).toBe(7);
+    if (testCase.reasoning) {
+      expect(result.diagnostics).toBeUndefined();
+      expect(result.content).toContainEqual({ type: "thinking", thinking: hidden });
+    } else {
+      expect(JSON.stringify(result)).not.toContain(hidden);
+      expect(events.some((event) => event.type === "thinking_delta")).toBe(false);
+      expect(result.diagnostics).toEqual([
+        { type: "reasoning_suppressed", timestamp: expect.any(Number) },
+      ]);
+      if (testCase.terminal === "error") {
+        expect(result.errorMessage).toContain("reasoning: true");
+        expect(result.errorMessage).toContain("ollama/qwen3:4b");
+      }
+    }
   });
 });

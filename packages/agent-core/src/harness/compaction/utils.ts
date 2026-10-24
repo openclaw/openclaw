@@ -194,24 +194,6 @@ function truncateForSummary(text: string, maxChars: number): string {
   return `${sliced}\n\n[... ${truncatedChars} more characters truncated]`;
 }
 
-/** Extract text that compaction both estimates and includes in summary prompts. */
-function getCompactionContentBlockText(block: {
-  type: string;
-  content?: unknown;
-  text?: string;
-}): string {
-  if (
-    (block.type === "text" || block.type === "toolResult" || block.type === "tool_result") &&
-    block.text
-  ) {
-    return block.text;
-  }
-  return (block.type === "toolResult" || block.type === "tool_result") &&
-    typeof block.content === "string"
-    ? block.content
-    : "";
-}
-
 /** Project summary content once so rendering and token accounting share omission facts. */
 export function getCompactionContent(
   content: string | Array<{ type: string; content?: unknown; text?: string }>,
@@ -222,7 +204,20 @@ export function getCompactionContent(
       ? content
       : content
           .map((block) => {
-            const blockText = getCompactionContentBlockText(block);
+            let blockText = "";
+            if (
+              (block.type === "text" ||
+                block.type === "toolResult" ||
+                block.type === "tool_result") &&
+              block.text
+            ) {
+              blockText = block.text;
+            } else if (
+              (block.type === "toolResult" || block.type === "tool_result") &&
+              typeof block.content === "string"
+            ) {
+              blockText = block.content;
+            }
             if (block.type !== "text" && !blockText) {
               // This projection knows only what it omits, not whether a model processed it.
               omissions.add(
@@ -249,13 +244,18 @@ type PersistedSenderCarrier = {
   role: string;
 };
 
-function readPersistedSender(message: PersistedSenderCarrier) {
+/**
+ * Return exactly the persisted-sender text which is projected into a user
+ * conversation label. Keep this shared with token accounting: adding a label
+ * to the prompt without charging it can make bounded compaction overflow.
+ */
+export function formatPersistedSenderSuffix(message: PersistedSenderCarrier): string {
   if (message.role !== "user") {
-    return undefined;
+    return "";
   }
   const metadata = asRecord(Reflect.get(message, "__openclaw"));
   if (!metadata) {
-    return undefined;
+    return "";
   }
   const normalize = (value: unknown): string | undefined => {
     if (typeof value !== "string") {
@@ -272,17 +272,7 @@ function readPersistedSender(message: PersistedSenderCarrier) {
   // Display names and usernames are mutable and non-unique. They are useful
   // labels only once a stable sender ID anchors them; on their own they must
   // not turn a legacy/partial record into asserted author provenance.
-  return sender.id ? sender : undefined;
-}
-
-/**
- * Return exactly the persisted-sender text which is projected into a user
- * conversation label. Keep this shared with token accounting: adding a label
- * to the prompt without charging it can make bounded compaction overflow.
- */
-export function formatPersistedSenderSuffix(message: PersistedSenderCarrier): string {
-  const sender = readPersistedSender(message);
-  return sender ? ` sender=${JSON.stringify(sender)}` : "";
+  return sender.id ? ` sender=${JSON.stringify(sender)}` : "";
 }
 
 /** Serialize LLM messages to plain text for summarization prompts. */

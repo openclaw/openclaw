@@ -235,6 +235,20 @@ function turnCompleted(threadId: string, id: string, text: string, itemId = "ans
   };
 }
 
+function turnEnded(status: string, error: unknown = null) {
+  return {
+    method: "turn/completed",
+    params: { threadId: "thread-1", turn: { id: "turn-1", status, error, items: [] } },
+  };
+}
+
+function agentItem(item: Record<string, unknown>) {
+  return {
+    method: "item/completed",
+    params: { threadId: "thread-1", turnId: "turn-1", item: { type: "agentMessage", ...item } },
+  };
+}
+
 function clientListeners(
   handlers?: Set<(notification: unknown) => unknown>,
   onCleanup?: (kind: string) => void,
@@ -353,6 +367,10 @@ function conversationData(bindingId: string, fields: Record<string, unknown> = {
 
 function sourceSession(sessionId: string, threadId = "thread-source") {
   return { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}`, threadId };
+}
+
+function sourceIdentity({ agentId, sessionId, sessionKey }: ReturnType<typeof sourceSession>) {
+  return { kind: "session" as const, agentId, sessionId, sessionKey };
 }
 
 function seedSession(
@@ -957,16 +975,11 @@ it("rejects sandbox revocation while a conversation awaits client acquisition", 
 it("starts a fresh proxy-backed thread when binding an explicit app-server thread id", async () => {
   const sessionFile = path.join(tempDir, "session.jsonl");
   const agentDir = path.join(tempDir, "agents", "bot-a", "agent");
-  const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
-  acquireClient.mockResolvedValue({
-    request: vi.fn(async (method: string, requestParams: Record<string, unknown>) => {
-      requests.push({ method, params: requestParams });
-      if (method === "thread/resume") {
-        throw new Error("thread/resume should not receive network proxy config");
-      }
-      return threadResult(tempDir, "thread-new");
-    }),
+  const { client, operations: requests } = conversationClient({
+    "thread/start": threadResult(tempDir, "thread-new"),
+    "thread/resume": new Error("thread/resume should not receive network proxy config"),
   });
+  acquireClient.mockResolvedValue(client);
 
   await prepareBinding({
     pluginConfig: NETWORK_PROXY_PLUGIN_CONFIG,
@@ -997,17 +1010,15 @@ it("bounds a pending native config read without releasing the bound thread or it
   const retry = await useRealRequestScope();
   const releaseLease = vi.mocked(sharedClientRuntime.releaseCodexAppServerClientLease);
   releaseLease.mockClear();
-  const sessionFile = path.join(tempDir, "pending-config-read.jsonl");
   const harness = createClientHarness();
   initializeClient(harness.client, { agentDir: tempDir });
   const releaseBoundThread = vi.fn(async () => undefined);
   const releaseSibling = vi.fn(async () => undefined);
   await retainThread(harness.client, "thread-current", releaseBoundThread);
   await retainThread(harness.client, "thread-sibling", releaseSibling);
-  await writeBinding(sessionFile, {
+  const sessionFile = await boundSession("pending-config-read.jsonl", {
     threadId: "thread-current",
     clientId: harness.client.getInstanceId(),
-    cwd: tempDir,
   });
   const before = await readBinding(sessionFile);
   acquireClient.mockResolvedValue(harness.client);
@@ -1053,7 +1064,6 @@ it("bounds a pending native config read without releasing the bound thread or it
 
 it("uses the selected physical client's budget when rebinding a thread", async () => {
   await useRealConfigReader();
-  const sessionFile = path.join(tempDir, "selected-config-owner.jsonl");
   const threadId = "thread-selected-config-owner";
   const createBudgetClient = (budget: number) =>
     respondingHarness({
@@ -1076,10 +1086,9 @@ it("uses the selected physical client's budget when rebinding a thread", async (
   initializeClient(previous.client, { agentDir: tempDir });
   initializeClient(selected.client, { agentDir: tempDir });
   await retainThread(previous.client, threadId);
-  await writeBinding(sessionFile, {
+  const sessionFile = await boundSession("selected-config-owner.jsonl", {
     threadId,
     clientId: previous.client.getInstanceId(),
-    cwd: tempDir,
   });
   acquireClient.mockResolvedValue(selected.client);
   retainClient.mockImplementation((clientId) =>
@@ -1118,7 +1127,6 @@ it.each(["commit", "retention"] as const)(
   "preserves the current owner when attachment fails during %s",
   async (expiresDuring) => {
     const retry = await useRealRequestScope();
-    const sessionFile = path.join(tempDir, "expired-attachment.jsonl");
     const threadId = "thread-expired-attachment";
     const existingThreadId = expiresDuring === "commit" ? "thread-previous-attachment" : threadId;
     const harness = createClientHarness();
@@ -1127,10 +1135,9 @@ it.each(["commit", "retention"] as const)(
     await retainThread(harness.client, existingThreadId, release);
     const releaseSibling = vi.fn(async () => undefined);
     await retainThread(harness.client, "thread-sibling", releaseSibling);
-    await writeBinding(sessionFile, {
+    const sessionFile = await boundSession("expired-attachment.jsonl", {
       threadId: existingThreadId,
       clientId: harness.client.getInstanceId(),
-      cwd: tempDir,
     });
     const before = await readBinding(sessionFile);
     const response = threadResult(tempDir, threadId, true);
@@ -1242,11 +1249,10 @@ it("never resumes or unsubscribes an actively claimed native child for a convers
 
 it("preserves a stored child binding when resumed direct input is refused", async () => {
   const sessionKey = "agent:main:dashboard:incognito-child";
-  const sessionFile = path.join(tempDir, "stored-child.jsonl");
   const harness = createClientHarness();
   initializeClient(harness.client, { agentDir: tempDir });
   const threadId = "thread-parent-owned";
-  await writeBinding(sessionFile, { threadId, cwd: tempDir });
+  const sessionFile = await boundSession("stored-child.jsonl", { threadId });
   const before = await readBinding(sessionFile);
   const request = vi.spyOn(harness.client, "request").mockImplementation(async (method) => {
     if (method === "thread/read") {
@@ -1261,10 +1267,11 @@ it("preserves a stored child binding when resumed direct input is refused", asyn
     throw new Error(`unexpected Codex method ${method}`);
   });
   acquireClient.mockResolvedValue(harness.client);
-  const { event, ctx } = boundConversationClaim(sessionFile, sessionKey);
-
   try {
-    await expectReplyContaining(claimConversation(event, ctx), "controlled by its parent");
+    await expectReplyContaining(
+      runBoundClaim(sessionFile, {}, sessionKey),
+      "controlled by its parent",
+    );
     await expect(readBinding(sessionFile)).resolves.toEqual(before);
     expectMethods(request, ["thread/read", "thread/resume", "thread/unsubscribe"]);
     await expect(consumeThread(harness.client, threadId)).resolves.toBeUndefined();
@@ -1280,7 +1287,7 @@ it.each([false, true])(
     const { previousClient, replacementClient, operations, ownerDuringRelease, readOwner } =
       await createSameThreadClientMigrationFixture(sessionFile, { rejectOldRelease });
 
-    const result = await runBoundClaim(sessionFile, { timeoutMs: 500 });
+    const result = await runBoundClaim(sessionFile);
     expect(result?.reply?.text).toContain(
       rejectOldRelease ? "previous physical client unsubscribe failed" : "Migrated reply",
     );
@@ -1470,9 +1477,8 @@ it.each([
 );
 
 it("keeps the bound agent node exec block ahead of current-session exec host overrides", async () => {
-  const sessionFile = path.join(tempDir, "session.jsonl");
   const storePath = path.join(tempDir, "agents", "main", "sessions", "sessions.json");
-  await writeBinding(sessionFile, { threadId: "thread-1", cwd: tempDir });
+  const sessionFile = await boundSession();
   await seedSession({ sessionKey: "agent:main:session-1", sessionId: "session-1" }, storePath, {
     execHost: "gateway",
   });
@@ -1543,7 +1549,6 @@ it("blocks bound Codex CLI node turns when the current OpenClaw session is sandb
 });
 
 it("re-reads source-owned permission roots while resuming an unloaded bound thread", async () => {
-  const sessionFile = path.join(tempDir, "session.jsonl");
   const storePath = path.join(tempDir, "recovery.sqlite");
   const source = sourceSession("recovery-source");
   const recoveredRoot = path.join(tempDir, "recovered-root");
@@ -1555,9 +1560,8 @@ it("re-reads source-owned permission roots while resuming an unloaded bound thre
       work: { type: "oauth", provider: "openai", access: "access-token" },
     },
   });
-  await writeBinding(sessionFile, {
+  const sessionFile = await boundSession("session.jsonl", {
     threadId: "thread-old",
-    cwd: tempDir,
     authProfileId: "work",
     model: "gpt-5.4-mini",
     modelProvider: "openai",
@@ -1600,7 +1604,7 @@ it("re-reads source-owned permission roots while resuming an unloaded bound thre
         source: { agentId: source.agentId, sessionId: source.sessionId, threadId: source.threadId },
       }),
     ),
-    { config: { session: { store: storePath } }, timeoutMs: 500 },
+    { config: { session: { store: storePath } } },
   );
 
   await expectReply(result, "Recovered");
@@ -1700,13 +1704,8 @@ it("moves session history while clamping rootless inherited cwd to the agent wor
     storePath,
     message: { role: "assistant", content: "Earlier answer", timestamp: 2 },
   });
-  const sourceIdentity = {
-    kind: "session" as const,
-    agentId: source.agentId,
-    sessionId: source.sessionId,
-    sessionKey: source.sessionKey,
-  };
-  await bindings.mutate(sourceIdentity, {
+  const identity = sourceIdentity(source);
+  await bindings.mutate(identity, {
     kind: "set",
     binding: {
       threadId: source.threadId,
@@ -1743,7 +1742,6 @@ it("moves session history while clamping rootless inherited cwd to the agent wor
   await expectReply(
     claimConversation(event, ctx, {
       config: { session: { store: storePath } },
-      timeoutMs: 500,
     }),
     "Bound reply",
   );
@@ -1773,7 +1771,7 @@ it("moves session history while clamping rootless inherited cwd to the agent wor
     undefined,
     expect.any(Function),
   );
-  expect(bindings.read(sourceIdentity)).toBeUndefined();
+  expect(bindings.read(identity)).toBeUndefined();
   await expectLiveThread(client, "thread-bound");
 });
 
@@ -1782,15 +1780,10 @@ it.each([
   { label: "a live client whose source subscription is claimed", exposeClient: true },
 ])("does not transfer $label into a bound conversation", async ({ exposeClient }) => {
   const source = sourceSession("active-source-session", "thread-active-source");
-  const sourceIdentity = {
-    kind: "session" as const,
-    agentId: source.agentId,
-    sessionId: source.sessionId,
-    sessionKey: source.sessionKey,
-  };
+  const identity = sourceIdentity(source);
   const storePath = path.join(tempDir, "active-source.sqlite");
   await seedSession(source, storePath);
-  await seedBinding(sourceIdentity, { threadId: source.threadId, clientId: "active-client" });
+  await seedBinding(identity, { threadId: source.threadId, clientId: "active-client" });
   const { client, request } = conversationClient(
     {
       "thread/start": threadResult(tempDir, "thread-active-target"),
@@ -1821,12 +1814,11 @@ it.each([
   const claimSource = async () => {
     const result = await claimConversation(event, ctx, {
       config: { session: { store: storePath } },
-      timeoutMs: 500,
     });
 
     expect(result?.reply?.text).toContain("active run");
     expectMethods(request, ["thread/start"]);
-    expect(bindings.read(sourceIdentity)).toMatchObject({ threadId: source.threadId });
+    expect(bindings.read(identity)).toMatchObject({ threadId: source.threadId });
     expect(
       bindings.read({ kind: "conversation", bindingId: "binding-active-source" }),
     ).not.toHaveProperty("conversationSourceTransferComplete", true);
@@ -1894,7 +1886,6 @@ it("passes sandbox state when resolving bound turn policy", async () => {
     }),
     conversationClaimContext(legacyConversationData(sessionFile), "agent:main:session-1"),
     {
-      timeoutMs: 50,
       config: config as never,
     },
   );
@@ -1932,12 +1923,10 @@ it.each([
 ])(
   "returns a clean incognito failure reply: $label",
   async ({ retirementFails, error, expected }) => {
-    const sessionFile = path.join(tempDir, "session.jsonl");
     const sessionKey = "agent:main:dashboard:incognito-bound-failure";
     const agentDir = path.join(tempDir, "agents", "bot-b", "agent");
-    await writeBinding(sessionFile, {
+    const sessionFile = await boundSession("session.jsonl", {
       threadId: "thread-1",
-      cwd: tempDir,
       authProfileId: "openai:work",
     });
     const unhandledRejections: unknown[] = [];
@@ -1962,7 +1951,6 @@ it.each([
       const result = await claimConversation(
         conversationMessage("hi", { bodyForAgent: "hi", sessionKey }),
         conversationClaimContext(legacyConversationData(sessionFile, { agentDir }), sessionKey),
-        { timeoutMs: 50 },
       );
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
@@ -2054,35 +2042,12 @@ it("retains a pre-start final after a saturated commentary stream", async () => 
   const { client, notify } = conversationClient({
     "turn/start": () => {
       for (let index = 0; index < 100; index += 1) {
-        notify({
-          method: "item/completed",
-          params: {
-            threadId: "thread-1",
-            turnId: "turn-1",
-            item: {
-              type: "agentMessage",
-              id: `commentary-${index}`,
-              text: `progress ${index}`,
-              phase: "commentary",
-            },
-          },
-        });
+        notify(
+          agentItem({ id: `commentary-${index}`, text: `progress ${index}`, phase: "commentary" }),
+        );
       }
-      notify({
-        method: "item/completed",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          item: { type: "agentMessage", id: "answer", text: "authoritative answer" },
-        },
-      });
-      notify({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-1",
-          turn: { id: "turn-1", status: "completed", error: null, items: [] },
-        },
-      });
+      notify(agentItem({ id: "answer", text: "authoritative answer" }));
+      notify(turnEnded("completed"));
       return { turn: { id: "turn-1" } };
     },
   });
@@ -2115,13 +2080,7 @@ it.each([
               },
             });
           }
-          notify({
-            method: "turn/completed",
-            params: {
-              threadId: "thread-1",
-              turn: { id: "turn-1", status, error, items: [] },
-            },
-          });
+          notify(turnEnded(status, error));
         });
         return { turn: { id: "turn-1" } };
       },
@@ -2137,12 +2096,10 @@ it.each([
 
 it("interrupts an indeterminate incognito native turn before cleanup", async () => {
   const sessionKey = "agent:main:dashboard:incognito-start-timeout";
-  const sessionFile = path.join(tempDir, "session.jsonl");
   const harness = createClientHarness();
-  await writeBinding(sessionFile, {
+  const sessionFile = await boundSession("session.jsonl", {
     threadId: "thread-1",
     clientId: harness.client.getInstanceId(),
-    cwd: tempDir,
   });
   acquireClient.mockResolvedValue(harness.client);
   const waitForRequest = async (method: string) =>
@@ -2214,13 +2171,7 @@ it("interrupts a timed-out incognito turn before removing active tracking and ha
         cleanupEvents.push("turn completed");
         expect(activeTurn(identity)).toMatchObject({ threadId: "thread-1", turnId: "turn-1" });
         for (const handler of notificationHandlers) {
-          handler({
-            method: "turn/completed",
-            params: {
-              threadId: "thread-1",
-              turn: { id: "turn-1", status: "interrupted", error: null, items: [] },
-            },
-          });
+          handler(turnEnded("interrupted"));
         }
       });
       return {};
@@ -2230,11 +2181,11 @@ it("interrupts a timed-out incognito turn before removing active tracking and ha
       ...clientListeners(notificationHandlers, (event) => cleanupEvents.push(event)),
     };
     acquireClient.mockResolvedValue(client);
-    const result = runBoundClaim(sessionFile, { timeoutMs: 100 }, sessionKey);
+    const result = runBoundClaim(sessionFile, {}, sessionKey);
 
     await vi.advanceTimersByTimeAsync(0);
     expect(request).toHaveBeenCalledWith("turn/start", expect.any(Object), expect.any(Object));
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
 
     await expectReply(
       result,
@@ -2283,11 +2234,11 @@ it.each([
       sharedClientMocks.retireSharedCodexAppServerClientIfCurrent
         .mockReturnValueOnce({ activeLeases: 2, closed: false })
         .mockReturnValue(undefined);
-      const result = runBoundClaim(sessionFile, { timeoutMs: 100 }, sessionKey);
+      const result = runBoundClaim(sessionFile, {}, sessionKey);
 
       await vi.advanceTimersByTimeAsync(0);
       expect(request).toHaveBeenCalledWith("turn/start", expect.any(Object), expect.any(Object));
-      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(20 * 60_000);
       expect(request).toHaveBeenCalledWith(
         "turn/interrupt",
         { threadId: "thread-1", turnId: "turn-1" },
@@ -2348,7 +2299,6 @@ it("refreshes stale network-proxy bound app-server threads before the turn", asy
       pluginConfig: {
         appServer: { ...NETWORK_PROXY_PLUGIN_CONFIG.appServer, serviceTier: "priority" },
       },
-      timeoutMs: 50,
     },
   );
 
@@ -2427,7 +2377,7 @@ it("refuses legacy custom-provider bindings requiring interactive approvals befo
     claimConversation(
       conversationMessage("hello"),
       conversationClaimContext(legacyConversationData(sessionFile)),
-      { timeoutMs: 50, pluginConfig: { appServer: { mode: "guardian" } } },
+      { pluginConfig: { appServer: { mode: "guardian" } } },
     ),
     "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
   );

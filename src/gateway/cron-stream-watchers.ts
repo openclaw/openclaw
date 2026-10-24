@@ -1,7 +1,8 @@
 import { resolveCronTriggerMinIntervalMs } from "../config/cron-limits.js";
 import { resolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
+import { describeCronHostExecutionRestriction } from "../cron/service/state.js";
 import { assertCanonicalCronDeliveryMode } from "../cron/store/delivery-codec.js";
-import type { CronJob } from "../cron/types.js";
+import type { CronStoredJob } from "../cron/types.js";
 import {
   CronStreamJobOwner,
   isCronStreamJob,
@@ -14,10 +15,10 @@ import type { CronStreamJob } from "./cron-stream-output.js";
 export type { CronStreamFireDisposition } from "./cron-stream-output.js";
 
 type CronStreamWatchers = {
-  reconcile: (jobs: CronJob[], enabled: boolean, triggersEnabled?: boolean) => Promise<void>;
+  reconcile: (jobs: CronStoredJob[], enabled: boolean, triggersEnabled?: boolean) => Promise<void>;
   resume: () => void;
-  start: (job: CronJob) => Promise<void>;
-  stop: (jobId: string, reason: CronStreamStopReason, job?: CronJob) => Promise<void>;
+  start: (job: CronStoredJob) => Promise<void>;
+  stop: (jobId: string, reason: CronStreamStopReason, job?: CronStoredJob) => Promise<void>;
   stopAll: (reason: CronStreamStopReason) => Promise<void>;
   activeJobIds: () => string[];
   inspect: (jobId: string) => CronStreamOwnerSnapshot | undefined;
@@ -43,12 +44,14 @@ export function resolveStreamStopReason(input: {
 }
 
 /** Supervise line-producing cron sources through one serialized owner per job. */
-export function createCronStreamWatchers(
-  params: Omit<CronStreamOwnerParams, "minIntervalMs"> & {
-    /** Test seams; production uses the built-in cadence and retry schedules. */
-    minIntervalMs?: number;
-  },
-): CronStreamWatchers {
+export function createCronStreamWatchers({
+  hostExecutionDisabled,
+  ...params
+}: Omit<CronStreamOwnerParams, "minIntervalMs"> & {
+  hostExecutionDisabled?: boolean;
+  /** Test seams; production uses the built-in cadence and retry schedules. */
+  minIntervalMs?: number;
+}): CronStreamWatchers {
   const owners = new Map<string, CronStreamJobOwner>();
   let stopped = false;
 
@@ -91,7 +94,7 @@ export function createCronStreamWatchers(
   const stop = async (
     jobId: string,
     reason: CronStreamStopReason,
-    job?: CronJob,
+    job?: CronStoredJob,
   ): Promise<void> => {
     const streamJob = job && isCronStreamJob(job) ? job : undefined;
     const owner =
@@ -105,12 +108,16 @@ export function createCronStreamWatchers(
     }
   };
 
-  const start = async (job: CronJob): Promise<void> => {
+  const start = async (job: CronStoredJob): Promise<void> => {
     if (stopped) {
       return;
     }
     if (!isCronStreamJob(job)) {
       await stop(job.id, "schedule-update");
+      return;
+    }
+    if (describeCronHostExecutionRestriction(job, hostExecutionDisabled)) {
+      await stop(job.id, "host-execution-disabled", job);
       return;
     }
     try {
@@ -174,7 +181,7 @@ export function createCronStreamWatchers(
   };
 
   const reconcile = async (
-    jobs: CronJob[],
+    jobs: CronStoredJob[],
     enabled: boolean,
     triggersEnabled = enabled,
   ): Promise<void> => {

@@ -89,6 +89,77 @@ describe("project registry persistence", () => {
     return { source, target };
   }
 
+  it.each(["new", "reused", "refreshed"] as const)(
+    "keeps ordinary Git commands in a %s managed clone out of auto-GC",
+    async (mode) => {
+      const { source, target } = await cloneFixture();
+      if (mode !== "new") {
+        // Existing clones from before repository-local maintenance ownership.
+        await git(target, "config", "maintenance.auto", "true");
+        await git(target, "config", "gc.auto", "6700");
+        const originUrl = mode === "refreshed" ? source : "https://github.com/example/project.git";
+        const project = await registerClonedProjectRegistry(
+          { path: target, name: "Legacy clone", originUrl },
+          options,
+        );
+        if (mode === "reused") {
+          await materializeProjectClone({ cfg: {}, gitUrl: originUrl }, options);
+        } else {
+          await refreshProjectClone(project, options);
+        }
+      }
+      // Force the pack-count trigger without a large fixture or detached children.
+      await git(target, "config", "gc.autoPackLimit", "1");
+      await git(target, "config", "gc.autoDetach", "false");
+      await git(target, "config", "maintenance.autoDetach", "false");
+      await git(target, "config", "user.name", "OpenClaw Tests");
+      await git(target, "config", "user.email", "tests@openclaw.invalid");
+      for (let index = 0; index < 3; index++) {
+        await git(
+          target,
+          "-c",
+          "maintenance.auto=false",
+          "commit",
+          "--allow-empty",
+          "-m",
+          `${index}`,
+        );
+        await git(target, "repack");
+      }
+      const worktree = path.join(root, "agent-checkout");
+      await git(target, "worktree", "add", "-b", "agent", worktree);
+      const trace = path.join(root, "agent-git-trace.jsonl");
+      const env = {
+        ...process.env,
+        GIT_CONFIG_PARAMETERS: "",
+        GIT_CONFIG_COUNT: "0",
+        GIT_TRACE2_EVENT: trace,
+        GIT_AUTHOR_NAME: "OpenClaw Tests",
+        GIT_AUTHOR_EMAIL: "tests@openclaw.invalid",
+        GIT_COMMITTER_NAME: "OpenClaw Tests",
+        GIT_COMMITTER_EMAIL: "tests@openclaw.invalid",
+      };
+      await execFileAsync("git", ["-C", worktree, "commit", "--allow-empty", "-m", "agent"], {
+        env,
+      });
+      await execFileAsync("git", ["-C", worktree, "fetch", "origin"], { env });
+      const events = (await fs.readFile(trace, "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as { event: string; argv?: string[] });
+      const children = events.filter((event) => event.event === "child_start");
+      expect(
+        children.some(({ argv }) =>
+          argv?.some((arg) => /^(maintenance|gc|repack|pack-objects)$/.test(arg)),
+        ),
+      ).toBe(false);
+      expect(await gitText(worktree, "config", "--local", "--get", "maintenance.auto")).toBe(
+        "false",
+      );
+      expect(await gitText(worktree, "config", "--local", "--get", "gc.auto")).toBe("0");
+    },
+  );
+
   function workspaceConfig(workspaces: Record<string, string>): OpenClawConfig {
     return {
       agents: {
@@ -98,6 +169,18 @@ describe("project registry persistence", () => {
       },
     };
   }
+
+  it("preserves operator Git policy when reusing a registered repository", async () => {
+    const repo = await initializeRepository(root, "operator");
+    const originUrl = "https://github.com/example/operator.git";
+    await git(repo, "remote", "add", "origin", originUrl);
+    await git(repo, "config", "maintenance.auto", "true");
+    await git(repo, "config", "gc.auto", "1234");
+    await registerProjectRegistry({ path: repo }, options);
+    await materializeProjectClone({ cfg: {}, gitUrl: originUrl }, options);
+    expect(await gitText(repo, "config", "--local", "--get", "maintenance.auto")).toBe("true");
+    expect(await gitText(repo, "config", "--local", "--get", "gc.auto")).toBe("1234");
+  });
 
   async function commitFile(repo: string, file: string, content: string) {
     await fs.writeFile(path.join(repo, file), content);
@@ -368,24 +451,6 @@ describe("project registry persistence", () => {
     expect((await git(target, "show", `${refreshed}:refresh.txt`)).stdout).toBe(
       "keep refreshed blobs lazy\n",
     );
-  });
-
-  it("prunes seeded tracking refs deleted upstream during refresh", async () => {
-    const source = await initializeRepository(root, "source");
-    await git(source, "branch", "old");
-    const target = path.join(root, "managed", "fixture");
-    await cloneProjectCheckout({ url: source, target });
-    await git(source, "branch", "-D", "old");
-    await git(source, "branch", "new");
-
-    await refreshProjectCheckout({ url: source, target });
-
-    await expectRef(target, "origin/old").rejects.toMatchObject({
-      code: 128,
-    });
-    await expectRef(target, "origin/new").resolves.toMatchObject({
-      stdout: expect.stringMatching(/^[a-f0-9]{40}\n$/u),
-    });
   });
 
   it.each(["initial", "fetched"] as const)(

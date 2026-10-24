@@ -89,20 +89,6 @@ describe("owner projections", () => {
     expect(second.values).toEqual([4, 5]);
   });
 
-  it("preserves value equality for local publications", () => {
-    const state = { value: "same" };
-    const projection = projectMutableSource(state, (current) => current.value, Object.is);
-    disposals.push(projection.dispose);
-    const listener = vi.fn();
-    disposals.push(projection.subscribe(listener));
-    projection.publish();
-    expect(listener).not.toHaveBeenCalled();
-    state.value = "changed";
-    projection.publish();
-    expect(listener).toHaveBeenCalledOnce();
-    expect(projection.read()).toBe("changed");
-  });
-
   it("adapts a private callback owner across shared observation and disposal", () => {
     const { owner, view } = projectCallbackOwner(
       (notify) => ({

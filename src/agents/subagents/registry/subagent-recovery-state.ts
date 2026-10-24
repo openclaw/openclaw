@@ -3,6 +3,18 @@ import { isAgentEventLifecycleGenerationCurrent } from "../../../infra/agent-eve
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
+/** Restart custody survives the process; explicit cancellation never supplies it. */
+export function isRestartInterruptedSubagent(entry: SubagentRunRecord): boolean {
+  return (
+    entry.execution.interruptionReason === "gateway-restart" &&
+    !entry.killIntent &&
+    !entry.killReconciliation &&
+    !entry.pauseReason &&
+    !entry.suppressCompletionDelivery &&
+    !entry.execution.suppressSessionEffects
+  );
+}
+
 export function isQuietSubagentRestartContinuation(entry: SubagentRunRecord): boolean {
   return (
     !entry.collect &&

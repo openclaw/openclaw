@@ -106,10 +106,17 @@ enum class TalkSessionCloseDisposition(
 enum class GatewayMediaKind(
   val wireValue: String,
   val maximumBufferedBytes: Long,
+  val acceptHeader: String = "$wireValue/*",
 ) {
   Image("image", 12L * 1024L * 1024L),
   Audio("audio", 16L * 1024L * 1024L),
   Video("video", 0L),
+  File("file", 100L * 1024L * 1024L, "*/*"), // Gateway document limit (media-core/constants).
+  ;
+
+  fun acceptsMimeType(mimeType: String): Boolean =
+    // Files are exported, not rendered; the Gateway owns document admission.
+    if (this == File) mimeType.isNotBlank() else mimeType.startsWith("$wireValue/")
 }
 
 sealed interface GatewayLoadedMedia {
@@ -852,7 +859,7 @@ class GatewaySession(
     }
     val payload = response.payloadJson?.let(::parseJsonOrNull).asObjectOrNull() ?: return null
     val artifact = payload["artifact"].asObjectOrNull()
-    // Older gateways returned only the managed-image URL. Audio/video shipped with the typed
+    // Older gateways returned only the managed-image URL. Other media require the typed
     // artifact envelope, so keep the narrow image fallback without weakening their type gate.
     if (artifact == null && kind != GatewayMediaKind.Image) return null
     if (artifact != null && artifact["type"].asStringOrNull()?.trim()?.lowercase(Locale.ROOT) != kind.wireValue) return null
@@ -862,7 +869,7 @@ class GatewaySession(
         .asStringOrNull()
         ?.trim()
         ?.lowercase(Locale.ROOT)
-    if (mimeType != null && !mimeType.startsWith("${kind.wireValue}/")) return null
+    if (mimeType != null && !kind.acceptsMimeType(mimeType)) return null
     val loaded =
       payload["data"].asStringOrNull()?.let { encoded ->
         if (kind == GatewayMediaKind.Video) return@let null
@@ -1259,14 +1266,25 @@ class GatewaySession(
     ): GatewayLoadedMedia.Buffered? =
       withContext(Dispatchers.IO) {
         val resolved = resolveTicketedMediaRequest(ticketedPath, playbackRendition) ?: return@withContext null
-        val request = Request.Builder().url(resolved.url).header("Accept", "${kind.wireValue}/*")
+        val request = Request.Builder().url(resolved.url).header("Accept", kind.acceptHeader)
         for ((name, value) in resolved.headers) {
           request.header(name, value)
         }
+        // Exported documents must not follow a redirect outside the ticketed Gateway route.
+        val downloadClient =
+          if (kind == GatewayMediaKind.File) {
+            client
+              .newBuilder()
+              .followRedirects(false)
+              .followSslRedirects(false)
+              .build()
+          } else {
+            client
+          }
         val retry = GatewayPlaybackRetryState()
         repeat(Int.MAX_VALUE) {
           if (!retry.canAttempt()) return@withContext null
-          val call = client.newCall(request.build())
+          val call = downloadClient.newCall(request.build())
           call.timeout().timeout(20, java.util.concurrent.TimeUnit.SECONDS)
           var retryDelayMs: Long? = null
           call.execute().use { response ->
@@ -1276,7 +1294,7 @@ class GatewaySession(
               if (!response.isSuccessful) return@withContext null
               val body = response.body
               val mimeType = body.contentType()?.toString()?.lowercase(Locale.ROOT) ?: return@withContext null
-              if (!mimeType.startsWith("${kind.wireValue}/")) return@withContext null
+              if (!kind.acceptsMimeType(mimeType)) return@withContext null
               val maximumBytes = kind.maximumBufferedBytes
               val declaredLength = body.contentLength()
               if (declaredLength > maximumBytes) return@withContext null

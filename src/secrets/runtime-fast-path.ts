@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { listAgentIds, resolveAgentDir } from "../agents/agent-scope-config.js";
-import { copyCanonicalAuthProfileCredentialObservations } from "../agents/auth-profiles/credential-observation.js";
 import { readAuthProfileDatabaseIdentity } from "../agents/auth-profiles/file-state.js";
 import { resolveSharedAuthStorePath } from "../agents/auth-profiles/path-resolve.js";
 import {
@@ -160,10 +159,6 @@ export function canUseSecretsRuntimeFastPath(params: {
 export function prepareSecretsRuntimeFastPathSnapshot(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  agentDirs?: string[];
-  includeAuthStoreRefs?: boolean;
-  loadAuthStore?: (agentDir?: string) => AuthProfileStore;
-  loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
   manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
 }): {
   snapshot: PreparedSecretsRuntimeSnapshot;
@@ -176,42 +171,25 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
   const authStoreSnapshotsRevision = getRuntimeAuthProfileStoreSnapshotsRevision();
   const sourceConfig = cloneConfigWithResolutionFacts(params.config);
   const resolvedConfig = cloneConfigWithResolutionFacts(params.config);
-  const includeAuthStoreRefs = params.includeAuthStoreRefs ?? true;
-  const candidateDirs = params.agentDirs?.length
-    ? uniqueStrings(params.agentDirs.map((entry) => resolveUserPath(entry, runtimeEnv)))
-    : collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
-  let authStores: Array<{ agentDir: string; store: AuthProfileStore }> = [];
-  if (includeAuthStoreRefs) {
-    if (!params.loadAuthStore) {
-      const databasePaths = uniqueStrings([
-        ...candidateDirs.map(resolveAuthProfileDatabasePath),
-        resolveSharedAuthStorePath(runtimeEnv),
-      ]);
-      if (
-        databasePaths.some(
-          (pathname) => !readAuthProfileDatabaseIdentity(pathname)?.key.startsWith("path:"),
-        )
-      ) {
-        return null;
-      }
-      // Empty startup snapshots carry the admitted absence into later session-only creation.
-      for (const pathname of databasePaths) {
-        recordRuntimeAuthProfilePersistedStore(pathname, null);
-      }
-      authStores = candidateDirs.map((agentDir) => ({
-        agentDir,
-        store: { version: 1, profiles: {} },
-      }));
-    } else {
-      const loadAuthStore = params.loadAuthStore;
-      authStores = candidateDirs.map((agentDir) => {
-        const source = loadAuthStore(agentDir);
-        const store = structuredClone(source);
-        copyCanonicalAuthProfileCredentialObservations(source.profiles, store.profiles);
-        return { agentDir, store };
-      });
-    }
+  const candidateDirs = collectCandidateAgentDirs(resolvedConfig, runtimeEnv);
+  const databasePaths = uniqueStrings([
+    ...candidateDirs.map(resolveAuthProfileDatabasePath),
+    resolveSharedAuthStorePath(runtimeEnv),
+  ]);
+  if (
+    databasePaths.some(
+      (pathname) => !readAuthProfileDatabaseIdentity(pathname)?.key.startsWith("path:"),
+    )
+  ) {
+    return null;
   }
+  // Empty startup snapshots carry the admitted absence into later session-only creation.
+  for (const pathname of databasePaths) {
+    recordRuntimeAuthProfilePersistedStore(pathname, null);
+  }
+  const authStores: Array<{ agentDir: string; store: AuthProfileStore }> = candidateDirs.map(
+    (agentDir) => ({ agentDir, store: { version: 1, profiles: {} } }),
+  );
   if (!canUseSecretsRuntimeFastPath({ sourceConfig, authStores })) {
     return null;
   }
@@ -230,11 +208,10 @@ export function prepareSecretsRuntimeFastPathSnapshot(params: {
     snapshot,
     refreshContext: {
       env: runtimeEnv,
-      explicitAgentDirs: params.agentDirs?.length ? [...candidateDirs] : null,
-      includeAuthStoreRefs,
-      loadablePluginOrigins: params.loadablePluginOrigins ?? new Map<string, PluginOrigin>(),
+      explicitAgentDirs: null,
+      includeAuthStoreRefs: true,
+      loadablePluginOrigins: new Map<string, PluginOrigin>(),
       ...(params.manifestRegistry ? { manifestRegistry: params.manifestRegistry } : {}),
-      ...(params.loadAuthStore ? { loadAuthStore: params.loadAuthStore } : {}),
     },
   };
 }

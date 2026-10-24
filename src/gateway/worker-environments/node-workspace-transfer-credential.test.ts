@@ -1,47 +1,27 @@
-import { once } from "node:events";
+import "./store-publication.test-support.js";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
 import { assert, describe, expect, it, vi } from "vitest";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../../test/helpers/gateway-integration-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspace.js";
 import { hashWorkerCredential } from "./credential.js";
 import {
+  interceptUploadFile,
+  transferFixture as createTransferFixture,
+} from "./node-workspace-transfer-fixtures.test-support.js";
+import {
   createNodeWorkspaceTransferHttpCallback,
   handleNodeWorkspaceTransferHttpRequest,
 } from "./node-workspace-transfer-http.js";
-import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { startNodeWorkspaceTransferTestServer } from "./node-workspace-transfer.test-support.js";
 import * as support from "./service.test-support.js";
 
-const delivery = vi.hoisted(() => ({
-  command: undefined as string | undefined,
-  afterCommit: undefined as (() => Promise<void>) | undefined,
-}));
-vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../state/openclaw-state-worker-store.js")>();
-  return {
-    ...actual,
-    runOpenClawStateWorkerOperation: (
-      ...[context, operation, options]: Parameters<typeof actual.runOpenClawStateWorkerOperation>
-    ) =>
-      actual.runOpenClawStateWorkerOperation(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              const result = await scope.execute(command, executeOptions);
-              if (command.type === delivery.command) {
-                await delivery.afterCommit?.();
-              }
-              return result;
-            },
-          }),
-        options,
-      ),
-  };
-});
+const { delivery } = await import("./store-publication.test-support.js");
 
 async function transferFixture(name: string, filename: string, payload: string | Buffer) {
   const { store, root } = support.testState;
@@ -53,22 +33,16 @@ async function transferFixture(name: string, filename: string, payload: string |
     to: "attached",
     patch: support.attachedPatch(ready.environmentId, sessionId),
   });
-  const localPath = path.join(root, "workspace");
-  await fs.mkdir(localPath);
-  await fs.writeFile(path.join(localPath, filename), payload);
-  const service = createNodeWorkspaceTransferService({
+  const { service, request, files } = await createTransferFixture(root, {
+    environmentId: record.environmentId,
+    ownerEpoch: record.ownerEpoch,
+    sessionId,
     getOwner: (id) => store.getTransferOwner(id),
     now: () => support.testState.nowMs,
     temporaryRoot: path.join(root, "transfer-tmp"),
   });
-  const input = {
-    environmentId: record.environmentId,
-    ownerEpoch: record.ownerEpoch,
-    sessionId,
-    localPath,
-    isAuthorized: () => true,
-    signal: new AbortController().signal,
-  };
+  await files.write(filename, payload);
+  const input = { ...request, signal: new AbortController().signal };
   return { service, record, input };
 }
 
@@ -116,12 +90,9 @@ describe("node workspace credential revocation", () => {
         const prepared = await service.prepareSync(input);
         const entry = prepared.snapshot.manifest.entries.find((row) => row.path === "proof.txt");
         assert(entry?.type === "file", "Missing verified blob fixture");
-        server.listen(0, "127.0.0.1");
-        await once(server, "listening");
-        const address = server.address();
-        assert(address && typeof address !== "string", "HTTP blob fixture did not bind");
+        const origin = await listenLoopback(server);
         request = fetch(
-          `http://127.0.0.1:${address.port}/__openclaw__/worker-transfer/v1/environments/${record.environmentId}/blobs/${entry.sha256}`,
+          `${origin}/__openclaw__/worker-transfer/v1/environments/${record.environmentId}/blobs/${entry.sha256}`,
           {
             headers: { authorization: `Bearer ${prepared.token}` },
             signal: requestAbort.signal,
@@ -179,10 +150,7 @@ describe("node workspace credential revocation", () => {
         resumeVerification.resolve();
         publish.resolve();
         requestAbort.abort();
-        server.closeAllConnections();
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
+        await closeHttpServer(server);
         await Promise.allSettled([mutation, request, handling]);
         delivery.command = undefined;
         delivery.afterCommit = undefined;
@@ -230,20 +198,10 @@ describe("node workspace credential revocation", () => {
       });
       await fs.writeFile(path.join(downloaded.workspaceDir, "result.txt"), "node result");
       const opened = createDeferred();
-      const originalOpen = fs.open.bind(fs);
-      const open = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-        const handle = await originalOpen(...args);
-        if (
-          typeof args[0] === "string" &&
-          args[0].includes(`${path.sep}upload-`) &&
-          path.basename(args[0]) === "result.txt" &&
-          args[1] === "wx"
-        ) {
-          stagingRoot = path.dirname(args[0]);
-          opened.resolve();
-          await release.promise;
-        }
-        return handle;
+      const open = interceptUploadFile("result.txt", async (_handle, file) => {
+        stagingRoot = path.dirname(file);
+        opened.resolve();
+        await release.promise;
       });
       restoreOpen = () => open.mockRestore();
       const token = service.prepareUpload(environmentId, snapshot.manifestRef);
