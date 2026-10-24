@@ -63,6 +63,7 @@ import {
   installRotatingBoardTickets,
   installWidgetReadiness,
 } from "./lib/control-ui-dashboard-probe.ts";
+import { summarizeLongTaskCpuProfiles } from "./lib/control-ui-interaction-trace.ts";
 import { probeColdLoadOverlays } from "./lib/control-ui-overlay-probe.ts";
 import { warmReloadProbe } from "./lib/control-ui-warm-reload-probe.ts";
 import {
@@ -216,6 +217,7 @@ const { values } = parseArgs({
   options: {
     "cpu-profile": { type: "boolean", default: false },
     "cpu-profile-compare": { type: "string" },
+    "thread-cpu-time": { type: "boolean", default: false },
     allocations: { type: "boolean", default: false },
     "warm-reload": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
@@ -310,6 +312,7 @@ if (sidebarView !== "sessions" && sidebarView !== "online") {
   throw new Error("Expected sidebar-view sessions or online");
 }
 const cpuProfile = values["cpu-profile"] || Boolean(values["cpu-profile-compare"]);
+const performanceTimeDomain = values["thread-cpu-time"] ? "threadTicks" : "timeTicks";
 const allocations = values.allocations;
 const traced = !values.untraced && !values["filmstrip-only"];
 if (
@@ -1245,8 +1248,8 @@ try {
     const rawTrace: unknown[] = [];
     let collectedTrace = rawTrace;
     cdp.on("Tracing.dataCollected", (data) => collectedTrace.push(...data.value));
-    if (cpuProfile) {
-      await cdp.send("Performance.enable");
+    if (cpuProfile || values["thread-cpu-time"]) {
+      await cdp.send("Performance.enable", { timeDomain: performanceTimeDomain });
     }
     if (traced || cpuProfile) {
       await cdp.send("Profiler.enable");
@@ -1262,6 +1265,9 @@ try {
       });
     }
     sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
+    const threadCpuBefore = values["thread-cpu-time"]
+      ? (await cdp.send("Performance.getMetrics")).metrics
+      : undefined;
     if (firstLoad) {
       await page.goto(url, { waitUntil: "domcontentloaded" });
     } else {
@@ -1274,6 +1280,28 @@ try {
     if (captureMs) {
       await page.waitForFunction((duration) => performance.now() >= duration, captureMs);
     }
+    const threadCpuAfter = threadCpuBefore
+      ? (await cdp.send("Performance.getMetrics")).metrics
+      : undefined;
+    const threadCpu =
+      threadCpuBefore && threadCpuAfter
+        ? Object.fromEntries(
+            [
+              ["scriptMs", "ScriptDuration"],
+              ["taskMs", "TaskDuration"],
+              ["layoutMs", "LayoutDuration"],
+              ["styleMs", "RecalcStyleDuration"],
+              ["threadMs", "ThreadTime"],
+            ].map(([key, name]) => {
+              const before = threadCpuBefore.find((metric) => metric.name === name)?.value;
+              const after = threadCpuAfter.find((metric) => metric.name === name)?.value;
+              if (before === undefined || after === undefined) {
+                throw new Error(`Missing reload CPU metric: ${name}`);
+              }
+              return [key, (after - before) * 1_000];
+            }),
+          )
+        : undefined;
     const metrics = await page.evaluate(() => {
       const pane = document.querySelector(".chat-pane-cache__pane--active");
       const rows = pane ? [...pane.querySelectorAll(".chat-virtual-row")] : null;
@@ -1523,7 +1551,7 @@ try {
     if (streamingReply) {
       const composer = page.locator(".agent-chat__composer-combobox textarea").last();
       await composer.focus();
-      await cdp.send("Performance.enable");
+      await cdp.send("Performance.enable", { timeDomain: performanceTimeDomain });
       let previousCpu = (await cdp.send("Performance.getMetrics")).metrics;
       let previousDelivered = 0;
       const cpu: Array<{
@@ -1711,7 +1739,7 @@ try {
       );
     if (values["live-events"]) {
       const before = await readLivePresentation();
-      await cdp.send("Performance.enable");
+      await cdp.send("Performance.enable", { timeDomain: performanceTimeDomain });
       const cpuBefore = (await cdp.send("Performance.getMetrics")).metrics;
       const liveTrace: unknown[] = [];
       collectedTrace = liveTrace;
@@ -1937,7 +1965,7 @@ try {
       const rpcOffset = await page.evaluate(
         () => Reflect.get(window, "__coldLoad").read().rpcs.length,
       );
-      await cdp.send("Performance.enable");
+      await cdp.send("Performance.enable", { timeDomain: performanceTimeDomain });
       const cpuBefore = (await cdp.send("Performance.getMetrics")).metrics;
       if (cpuProfile) {
         await cdp.send("Profiler.start");
@@ -1983,6 +2011,7 @@ try {
       await page.screenshot({ path: path.join(artifactDir, `run-${run + 1}.session-switch.png`) });
     }
     await cdp.detach();
+    const traceSummary = traced ? summarizeColdLoadTrace(trace, metrics.at) : undefined;
     const result = {
       run: run + 1,
       hostLoadAverage,
@@ -1995,7 +2024,19 @@ try {
       head,
       sidebarRowTransfer: values["sidebar-list-churn"] ? runTransfer : undefined,
       ...metrics,
-      trace: traced ? summarizeColdLoadTrace(trace, metrics.at) : undefined,
+      threadCpu,
+      trace: traceSummary,
+      longTaskDetails:
+        traceSummary && mapped && profile
+          ? summarizeLongTaskCpuProfiles(
+              {
+                ...mapped.profile,
+                startTime: profile.profile.startTime,
+                endTime: profile.profile.endTime,
+              },
+              traceSummary.longTaskIntervals,
+            )
+          : undefined,
       cpu: mapped ? summarizeCpuProfile(mapped.profile) : undefined,
       mappedFrames: mapped?.mappedFrames,
       unmappedFrames: mapped?.unmappedFrames,
@@ -2106,6 +2147,7 @@ try {
         chromiumArgs,
         isolatedSandboxOrigin,
         cpuProfile,
+        metricTimeDomain: performanceTimeDomain,
         cpuProfileCompare: values["cpu-profile-compare"],
         sidebarRowTransfer,
         sidebarComparison: values["sidebar-list-churn"]

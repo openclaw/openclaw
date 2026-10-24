@@ -22,6 +22,7 @@ import {
 import {
   clipInteractionCpuProfile,
   summarizeInteractionTrace,
+  summarizeLongTaskCpuProfiles,
 } from "./lib/control-ui-interaction-trace.ts";
 
 const { values } = parseArgs({
@@ -33,6 +34,8 @@ const { values } = parseArgs({
     viewport: { type: "string", default: "both" },
     pairs: { type: "string", default: "1" },
     trace: { type: "boolean", default: false },
+    "thread-cpu-time": { type: "boolean", default: false },
+    "first-pair-screenshots": { type: "boolean", default: false },
     "invalidation-tracking": { type: "boolean", default: false },
   },
 });
@@ -97,10 +100,11 @@ type Result = {
   layoutMs?: number;
   styleMs?: number;
   requests?: Record<string, number>;
-  domBefore?: { nodes: number; menuItems: number };
-  domAfter?: { nodes: number; menuItems: number };
+  domBefore?: { nodes: number; menuItems: number; namedAnchors: number };
+  domAfter?: { nodes: number; menuItems: number; namedAnchors: number };
   rowIdentity?: { initial: number; created: number; retained: number; final: number };
   trace?: ReturnType<typeof summarizeInteractionTrace>;
+  longTaskDetails?: ReturnType<typeof summarizeLongTaskCpuProfiles>;
   error?: string;
   artifactPrefix: string;
 };
@@ -158,6 +162,8 @@ try {
           ? "CDP trace + 1ms CPU profiler (overhead included)"
           : "untraced CDP metrics",
         invalidationTracking: values.trace && values["invalidation-tracking"],
+        metricTimeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
+        screenshots: values["first-pair-screenshots"] ? "first pair per cell" : "all",
         fixture: { sessions: 1000, messagesPerSession: 400, models: 1000, cronJobs: 500 },
         acceptance:
           "For fixed steps: >=10 serial AB pairs per viewport, all median/p95/min/max cells reviewed; any >20% regression stops landing. No boot growth beyond 64 B.",
@@ -231,7 +237,9 @@ try {
             await page.evaluate(() => document.fonts.ready.then(() => undefined));
             await settle(page);
             cdp = await context.newCDPSession(page);
-            await cdp.send("Performance.enable");
+            await cdp.send("Performance.enable", {
+              timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
+            });
             if (values.trace) {
               cdp.on("Tracing.dataCollected", ({ value }: { value: unknown[] }) =>
                 events.push(...value),
@@ -256,6 +264,9 @@ try {
               page.evaluate(() => ({
                 nodes: document.querySelectorAll("*").length,
                 menuItems: document.querySelectorAll('[role^="menuitem"]').length,
+                namedAnchors: [...document.querySelectorAll<HTMLElement>("[style]")].filter(
+                  (element) => element.style.getPropertyValue("anchor-name"),
+                ).length,
               }));
             result.domBefore = await countDom();
             const rowProbe = scenario.rowSelector
@@ -378,12 +389,21 @@ try {
                         assetBaseUrl: new URL("assets/", slot.server.baseUrl).href,
                         assetDirectory: path.join(slot.directory, "assets"),
                       });
+                      result.longTaskDetails = summarizeLongTaskCpuProfiles(
+                        {
+                          ...mapped.profile,
+                          startTime: clipped.startTime,
+                          endTime: clipped.endTime,
+                        },
+                        result.trace.longTaskIntervals,
+                      );
                       await writeFile(
                         path.join(artifactDir, `${artifactPrefix}.hotspots.json`),
                         JSON.stringify(
                           {
                             mappedFrames: mapped.mappedFrames,
                             unmappedFrames: mapped.unmappedFrames,
+                            longTasks: result.longTaskDetails,
                             ...summarizeCpuProfile(mapped.profile, { includeTables: true }),
                           },
                           null,
@@ -394,9 +414,11 @@ try {
                   }
                 });
               }
-              await capture(() =>
-                page.screenshot({ path: path.join(artifactDir, `${artifactPrefix}.png`) }),
-              );
+              if (!values["first-pair-screenshots"] || pair === 0 || result.status === "failed") {
+                await capture(() =>
+                  page.screenshot({ path: path.join(artifactDir, `${artifactPrefix}.png`) }),
+                );
+              }
             } finally {
               await capture(async () => cdp?.detach());
               await capture(() => context.close());
