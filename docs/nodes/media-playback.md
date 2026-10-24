@@ -16,6 +16,11 @@ This page covers playback in OpenClaw clients. Channel delivery, inbound media
 understanding, and live voice conversations use separate paths; see
 [Image and media support](/nodes/images),
 [Media understanding](/nodes/media-understanding), and [Talk mode](/nodes/talk).
+For oversized videos selected in the Control UI composer, see
+[pre-upload video preparation](/web/control-ui/chat#video-preparation-compatibility).
+Its browser codec requirements and qualification gaps are separate from the
+Gateway playback policy below; a playback rendition cannot fix a file that was
+refused before upload.
 
 ## Client support
 

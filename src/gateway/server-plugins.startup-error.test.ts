@@ -3,6 +3,7 @@ import { linkSync, unlinkSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { waitForGatewayStartup } from "../../test/helpers/gateway-startup.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
@@ -109,6 +110,7 @@ it.each(["module-load", "entry-open"] as const)(
     let socket: PluginSocket | undefined;
     try {
       await server.startupSettled;
+      await waitForGatewayStartup(port);
       const connected = await connectWebchatClient({ port, scopes: ["operator.admin"] });
       socket = connected;
       const probe = async () => {

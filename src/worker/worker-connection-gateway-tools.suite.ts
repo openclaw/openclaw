@@ -6,7 +6,10 @@ import {
   WORKER_PROTOCOL_FEATURES,
   WORKER_RPC_SET_VERSION,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { validateWorkerExecApprovalParams } from "../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
 import { createWorkerConnection } from "./worker-connection.js";
+import { workerExecApprovalDigest } from "./worker-exec-approval-binding.js";
+import { createWorkerExecApprovalTransport } from "./worker-exec-approval.js";
 
 function createGatewayToolConnectionFixture(
   connectParams: WorkerConnectParams,
@@ -80,6 +83,86 @@ function createGatewayToolConnectionFixture(
 }
 
 export function registerWorkerGatewayToolTransportTests(connectParams: WorkerConnectParams) {
+  describe("WorkerConnection exec approval transport", () => {
+    it.each([false, true])(
+      "uses its admitted socket and fails closed on a missing decision: %s",
+      async (missingDecision) => {
+        vi.useFakeTimers();
+        const { connection, sent, respond, sockets } =
+          createGatewayToolConnectionFixture(connectParams);
+        try {
+          const starting = connection.start();
+          await vi.advanceTimersByTimeAsync(0);
+          await starting;
+          const transport = createWorkerExecApprovalTransport(connection, "exec-call");
+          transport.bindExecution({
+            command: "/bin/echo worker",
+            execCommand: "/bin/echo worker",
+            cwd: "/workspace",
+            env: {},
+            pty: false,
+          });
+          const reviewing = transport.review({
+            command: "/bin/echo worker",
+            cwd: "/workspace",
+            host: "gateway",
+            reason: "allowlist-miss",
+            analysis: { parsed: true, allowlistMatched: false, inlineEval: false },
+          });
+          const wire = sent[0];
+          expect(wire?.method).toBe("worker.exec.approval");
+          expect(wire?.params).toMatchObject({
+            operation: "review",
+            toolCallId: "exec-call",
+            binding: { command: "/bin/echo worker", cwd: "/workspace" },
+          });
+          if (!wire) {
+            throw new Error("Missing exec approval request");
+          }
+          if (!validateWorkerExecApprovalParams(wire.params)) {
+            throw new Error("Invalid exec approval request");
+          }
+          const params = wire.params;
+          const outcome = missingDecision
+            ? expect(reviewing).rejects.toThrow("no valid decision. Retry from a new worker turn")
+            : expect(reviewing).resolves.toMatchObject({ decision: "allow-once" });
+          respond(wire.id, {
+            operation: "review",
+            binding: workerExecApprovalDigest(params.binding),
+            ...(missingDecision
+              ? {}
+              : { decision: { decision: "allow-once", risk: "low", rationale: "fixture" } }),
+          });
+          await outcome;
+          expect(sent.filter((frame) => frame.method === "worker.exec.approval")).toHaveLength(1);
+          if (!missingDecision) {
+            expect(sockets).toHaveLength(1);
+          }
+        } finally {
+          await connection.stop();
+          vi.useRealTimers();
+        }
+      },
+    );
+
+    it("invalidates an exec decision when its connection is replaced", async () => {
+      vi.useFakeTimers();
+      const { connection, sockets } = createGatewayToolConnectionFixture(connectParams);
+      try {
+        const starting = connection.start();
+        await vi.advanceTimersByTimeAsync(0);
+        await starting;
+        const assertCurrent = connection.captureExecApprovalAuthority();
+        sockets[0]!.emit("close", 1006, Buffer.alloc(0));
+        await vi.advanceTimersByTimeAsync(10);
+        expect(connection.state.kind).toBe("ready");
+        expect(assertCurrent).toThrow("lost Gateway admission");
+      } finally {
+        await connection.stop();
+        vi.useRealTimers();
+      }
+    });
+  });
   describe("WorkerConnection Gateway tool transport", () => {
     it("queues excess calls in order while queued aborts and control traffic remain independent", async () => {
       vi.useFakeTimers();

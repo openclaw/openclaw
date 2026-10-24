@@ -2,7 +2,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   type WorkerAdmissionHandshake,
@@ -20,6 +19,7 @@ import {
   seedActivePlacement,
 } from "./placement-dispatch-test-fixtures.js";
 import { createHarness, createRecoveryService } from "./placement-dispatch-test-harness.js";
+import { WORKER_PROTOCOL_FEATURES } from "./placement-lifecycle.test-support.js";
 import { placementTurnOwner } from "./placement-record.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import * as support from "./service.test-support.js";
@@ -785,10 +785,7 @@ describe("worker placement restart recovery", () => {
     async (failure) => {
       const currentReceipt: WorkerAdmissionHandshake = {
         ...support.BOOTSTRAP_RECEIPT,
-        protocolFeatures: [
-          WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-          WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-        ],
+        protocolFeatures: [...WORKER_PROTOCOL_FEATURES],
       };
       let currentBundle: WorkerInstallationArtifact = {
         ...support.BUNDLE_ARTIFACT,

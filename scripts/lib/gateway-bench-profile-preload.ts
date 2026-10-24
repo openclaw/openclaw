@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import v8, { getHeapSpaceStatistics, queryObjects, writeHeapSnapshot } from "node:v8";
 import { isMainThread } from "node:worker_threads";
+import { getSessionRowSelectionMetrics } from "../../src/infra/gateway-work-metrics.ts";
 import { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
 import {
   GATEWAY_PROFILE_CHANNEL,
@@ -49,6 +50,7 @@ function sampleResources(): GatewayResourceSnapshot {
     ...sampleCpu(),
     memory: process.memoryUsage(),
     heapSpaces: getHeapSpaceStatistics(),
+    sessionRowSelections: getSessionRowSelectionMetrics(),
     // These resource types keep the event loop alive; they are not ownership IDs.
     activeResources: Object.fromEntries(
       [...counts].toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0)),
@@ -63,13 +65,28 @@ if (isMainThread) {
   if (!process.send) {
     throw new Error("Gateway profiling requires the benchmark IPC channel");
   }
+  if (process.env.OPENCLAW_BENCH_DISABLE_INLINING === "1") {
+    v8.setFlagsFromString("--no-turbo-inlining --no-maglev-inlining");
+  }
   const broadcastTiming = process.env.OPENCLAW_BENCH_BROADCAST_TIMING === "1";
   const workerAttribution = process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1";
   const workerAttributionSourceHooks = new Set<string>();
+  const sessionProjectionCounts = process.env.OPENCLAW_BENCH_SESSION_PROJECTION_COUNTS === "1";
   const sessionProjectionSource = process.env.OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE;
   const historySource = process.env.OPENCLAW_BENCH_HISTORY_SOURCE;
+  const retainToolContext = process.env.OPENCLAW_BENCH_RETAIN_TOOL_CONTEXT === "1";
+  const toolExecutionSource = process.env.OPENCLAW_BENCH_TOOL_EXECUTION_SOURCE;
   let broadcastTimingInstalled = false;
-  if (broadcastTiming || sessionProjectionSource || workerAttribution || historySource) {
+  let sessionProjectionCountsInstalled = false;
+  if (
+    broadcastTiming ||
+    sessionProjectionCounts ||
+    sessionProjectionSource ||
+    workerAttribution ||
+    historySource ||
+    retainToolContext ||
+    toolExecutionSource
+  ) {
     const entry = new URL("../../src/entry.ts", import.meta.url);
     if (!process.argv[1] || realpathSync(process.argv[1]) !== realpathSync(entry)) {
       throw new Error("Benchmark source instrumentation requires --entry src/entry.ts");
@@ -77,10 +94,16 @@ if (isMainThread) {
     const projectionSources = new Map<string, string>();
     if (sessionProjectionSource) {
       for (const file of [
+        "server-broadcast.ts",
         "session-event-projection.ts",
         "session-row-presentation.ts",
         "session-sharing-read.ts",
         "session-utils-list.ts",
+        "session-row-placement-projection.ts",
+        "session-ancestor-references.ts",
+        "server-connection-state.ts",
+        "server-methods/sessions-read.ts",
+        "server-methods/sessions-read-by-key.ts",
       ]) {
         projectionSources.set(
           new URL(`../../src/gateway/${file}`, import.meta.url).href,
@@ -109,9 +132,55 @@ if (isMainThread) {
     const transformWorkerSource = workerAttribution
       ? (await import("esbuild")).transformSync
       : undefined;
+    const projectionOwner = new URL(
+      "../../src/gateway/session-event-projection.ts",
+      import.meta.url,
+    ).href;
+    const toolContextOwner = new URL(
+      "../../packages/agent-core/src/tool-execution-context.ts",
+      import.meta.url,
+    ).href;
+    const toolExecutionOwner = new URL(
+      "../../packages/agent-core/src/agent-loop-tool-execution.ts",
+      import.meta.url,
+    ).href;
+
     registerHooks({
       load(url, context, nextLoad) {
         const loaded = nextLoad(url, context);
+        if (toolExecutionSource && url === toolExecutionOwner) {
+          return {
+            ...loaded,
+            format: "module-typescript",
+            source: readFileSync(toolExecutionSource, "utf8"),
+          };
+        }
+        if (retainToolContext && url === toolContextOwner) {
+          const source = readFileSync(new URL(url), "utf8");
+          const anchor = "return activeToolExecution.run(context, run);";
+          if (source.split(anchor).length !== 2) {
+            throw new Error("Tool context retention anchor changed; update the benchmark observer");
+          }
+          // Model a long-lived socket/timer inheriting a tool's async context, without retaining
+          // its producer, result, or session directly. Attribution remains available after settlement.
+          return {
+            ...loaded,
+            format: "module-typescript",
+            source: `const benchmarkToolContexts = new WeakSet<object>();
+const benchmarkToolSnapshots: ReturnType<typeof AsyncLocalStorage.snapshot>[] = [];
+${source.replace(
+  anchor,
+  `return activeToolExecution.run(context, () => {
+    if (!benchmarkToolContexts.has(context)) {
+      benchmarkToolContexts.add(context);
+      benchmarkToolSnapshots.push(AsyncLocalStorage.snapshot());
+      console.log("BENCH_RETAINED_TOOL_CONTEXTS " + benchmarkToolSnapshots.length);
+    }
+    return run();
+  });`,
+)}`,
+          };
+        }
         const workerOwner = workerAttribution && workerOwners.get(url);
         if (workerOwner) {
           const source = instrumentGatewayBenchWorkerSource(
@@ -140,14 +209,64 @@ if (isMainThread) {
           };
         }
         const projectionSource = projectionSources.get(url);
-        if (projectionSource !== undefined) {
+        if (sessionProjectionCounts && url === projectionOwner) {
+          let source = projectionSource ?? readFileSync(new URL(url), "utf8");
+          // Source-overlay comparisons also load the pre-sharing baseline owner.
+          const sharedDelivery = source.includes("      return projected;");
+          const returnAnchor = sharedDelivery
+            ? "      return projected;"
+            : "      return {\n        payload: wirePayload,";
+          const payload = sharedDelivery ? "projected.payload" : "wirePayload";
+          const replacements = [
+            [
+              "    const audiences = new Map<",
+              `    const benchmarkProjectionPayloads = new Set<object>();
+    benchmarkSessionProjectionChannel.publish({ operation: event, publications: 1 });
+    const audiences = new Map<`,
+            ],
+            [
+              "      if (!audience) {",
+              `      if (!audience) {
+        benchmarkSessionProjectionChannel.publish({ operation: event, audienceCacheMisses: 1 });`,
+            ],
+            [
+              "      if (!projected) {",
+              `      if (!projected) {
+        benchmarkSessionProjectionChannel.publish({ operation: event, payloadCacheMisses: 1 });`,
+            ],
+            [
+              returnAnchor,
+              `      benchmarkSessionProjectionChannel.publish({
+        operation: event,
+        projectedRecipients: 1,
+        wirePayloads: benchmarkProjectionPayloads.has(${payload}) ? 0 : 1,
+      });
+      benchmarkProjectionPayloads.add(${payload});
+${returnAnchor}`,
+            ],
+          ] as const;
+          for (const [anchor, replacement] of replacements) {
+            if (source.split(anchor).length !== 2) {
+              throw new Error(
+                "Session projection count anchors changed; update the benchmark observer",
+              );
+            }
+            source = source.replace(anchor, replacement);
+          }
+          source = `import { channel as benchmarkProjectionDiagnosticChannel } from "node:diagnostics_channel";
+const benchmarkSessionProjectionChannel = benchmarkProjectionDiagnosticChannel("openclaw.benchmark.session-projection");
+${source}`;
+          sessionProjectionCountsInstalled = true;
+          return { ...loaded, format: "module-typescript", source };
+        }
+        if (projectionSource !== undefined && url !== owner) {
           // Preserve canonical imports and original TypeScript lines in sampled stacks.
           return { ...loaded, format: "module-typescript", source: projectionSource };
         }
         if (url !== owner) {
           return loaded;
         }
-        let source = readFileSync(new URL(url), "utf8");
+        let source = projectionSource ?? readFileSync(new URL(url), "utf8");
         // Native source preserves the broadcaster's name in allocation profiles without a timer.
         if (!broadcastTiming) {
           return { ...loaded, format: "module-typescript", source };
@@ -397,6 +516,14 @@ ${source}`;
     };
     if (broadcastTiming && !broadcastTimingInstalled && message.action === "start") {
       reply("Broadcast timing owner was not loaded; source attribution is unavailable");
+      return;
+    }
+    if (
+      sessionProjectionCounts &&
+      !sessionProjectionCountsInstalled &&
+      message.action === "start"
+    ) {
+      reply("Session projection owner was not loaded; count attribution is unavailable");
       return;
     }
     if (message.kind === "diagnostics") {

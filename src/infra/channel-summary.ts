@@ -12,10 +12,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID } from "../routing/session-key.js";
 import { formatTimeAgo } from "./format-time/format-relative.ts";
 
-type ChannelAccountEntry = ChannelAccountInspectionResult & {
-  accountId: string;
-};
-
 export async function buildChannelSummary(
   cfg: OpenClawConfig,
   options?: {
@@ -39,7 +35,9 @@ export async function buildChannelSummary(
     const defaultAccountId =
       plugin.config.defaultAccountId?.(cfg) ?? accountIds[0] ?? DEFAULT_ACCOUNT_ID;
     const resolvedAccountIds = accountIds.length > 0 ? accountIds : [defaultAccountId];
-    const entries: ChannelAccountEntry[] = [];
+    const entries: (ChannelAccountInspectionResult & {
+      accountId: string;
+    })[] = [];
 
     for (const accountId of resolvedAccountIds) {
       const inspected = await resolveInspectedChannelAccount({

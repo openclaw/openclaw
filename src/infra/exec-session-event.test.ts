@@ -200,6 +200,10 @@ it.for(completionRoutingCases)(
           await params.onExecutionStarted?.();
           await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
           expect(params.trigger).toBe("event");
+          expect(params.prompt).toContain("[OpenClaw exec completion]");
+          expect(params.prompt).toContain("requested results not yet delivered");
+          expect(params.prompt).toContain("duplicate or superseded results");
+          expect(params.prompt).toContain("reply NO_REPLY only");
           expect(params.sessionKey).toBe(scope.sessionKey);
           expect(params.chatType).toBe("group");
           expect(params.bootstrapContextMode).toBeUndefined();

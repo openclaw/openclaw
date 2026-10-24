@@ -987,69 +987,6 @@ describe("GatewayClient connect auth payload", () => {
     },
   );
 
-  it.each([
-    { canonical: "macos", legacy: "darwin", protocolBounds: {} },
-    {
-      canonical: "macos",
-      legacy: "darwin",
-      protocolBounds: { minProtocol: MIN_NODE_PROTOCOL_VERSION },
-    },
-    {
-      canonical: "windows",
-      legacy: "win32",
-      protocolBounds: { maxProtocol: PROTOCOL_VERSION },
-    },
-  ])(
-    "retries a released-v3 Gateway with the shipped $legacy metadata envelope",
-    async ({ canonical, legacy, protocolBounds }) => {
-      const signDevicePayload = vi.fn((_privateKeyPem: string, _payload: string) => "signature");
-      const deviceFamily = canonical === "macos" ? "Mac" : "Windows";
-      const modelIdentifier = "TestMachine1,1";
-      const client = createClientWithIdentity(`device-${legacy}`, vi.fn(), {
-        role: "node",
-        mode: GATEWAY_CLIENT_MODES.NODE,
-        clientName: GATEWAY_CLIENT_NAMES.NODE_HOST,
-        platform: canonical,
-        deviceFamily,
-        modelIdentifier,
-        hostDeps: { signDevicePayload },
-        ...protocolBounds,
-      });
-
-      const { ws: currentWs, connect: currentConnect } = await startClientAndConnect({ client });
-      expect(currentConnect.params).toMatchObject({
-        minProtocol: PROTOCOL_VERSION,
-        maxProtocol: PROTOCOL_VERSION,
-        client: { platform: canonical, deviceFamily, modelIdentifier },
-      });
-      expect(signDevicePayload.mock.calls[0]?.[1]?.split("|").slice(9)).toEqual([
-        canonical,
-        deviceFamily.toLowerCase(),
-      ]);
-
-      emitConnectFailure(
-        currentWs,
-        currentConnect.id,
-        { code: "PROTOCOL_MISMATCH", expectedProtocol: MIN_NODE_PROTOCOL_VERSION },
-        "protocol mismatch",
-      );
-      const legacyWs = await advanceToNextReconnect();
-      legacyWs.emitOpen();
-      emitConnectChallenge(legacyWs, "nonce-v3");
-      const legacyConnect = connectRequestFrom(legacyWs);
-
-      expect(legacyConnect.params).toMatchObject({
-        minProtocol: MIN_NODE_PROTOCOL_VERSION,
-        maxProtocol: MIN_NODE_PROTOCOL_VERSION,
-        client: { platform: legacy },
-      });
-      expect(legacyConnect.params?.client).not.toHaveProperty("deviceFamily");
-      expect(legacyConnect.params?.client).not.toHaveProperty("modelIdentifier");
-      expect(signDevicePayload.mock.calls.at(-1)?.[1]?.split("|").slice(9)).toEqual([legacy, ""]);
-      client.stop();
-    },
-  );
-
   it("reconnects with the current envelope when a legacy probe reaches an upgraded Gateway", async () => {
     const onHelloOk = vi.fn();
     const client = createClientWithIdentity("device-gateway-upgrade", vi.fn(), {

@@ -24,6 +24,7 @@ export async function createOperatorRecoveryFixture(params: {
   context: GatewayRequestContext;
   profileId: string;
   config: OpenClawConfig;
+  agentId?: string;
   sessionKey?: string;
   sessionId?: string;
   parentSessionKey?: string | null;
@@ -105,11 +106,12 @@ export async function createOperatorRecoveryFixture(params: {
     }),
     "authenticated operator source",
   );
+  const agentId = params.agentId ?? "main";
   const target = {
-    agentId: "main",
-    sessionKey: params.sessionKey ?? "agent:main:recovery-authority",
+    agentId,
+    sessionKey: params.sessionKey ?? `agent:${agentId}:recovery-authority`,
     sessionId: params.sessionId ?? "recovery-authority-session",
-    storePath: path.join(params.stateDir, "agents", "main", "sessions", "sessions.json"),
+    storePath: path.join(params.stateDir, "agents", agentId, "sessions", "sessions.json"),
     sourceRunId: params.sourceRunId ?? "original-operator-turn",
     recoveryRunId: "recovered-operator-turn",
   };
@@ -119,7 +121,9 @@ export async function createOperatorRecoveryFixture(params: {
     lifecycleRevision: "original-lifecycle",
     // Dashboard grouping is ancestry, not delegated execution.
     parentSessionKey:
-      params.parentSessionKey === null ? undefined : (params.parentSessionKey ?? "agent:main:main"),
+      params.parentSessionKey === null
+        ? undefined
+        : (params.parentSessionKey ?? `agent:${agentId}:main`),
     spawnDepth: 0,
     restartRecoveryDeliveryRunId: target.recoveryRunId,
     restartRecoveryDeliverySourceRunId: target.sourceRunId,

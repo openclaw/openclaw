@@ -303,6 +303,8 @@ type SessionEntryCore = SessionRestartRecoveryState &
     /** Durable one-shot prompt additions drained before the next agent turn. */
     pluginNextTurnInjections?: Record<string, SessionPluginNextTurnInjection[]>;
     sessionId: string;
+    /** Latest operator client declaration; retained across internal turns and restart. */
+    clientCapabilities?: string[];
     updatedAt: number;
     /** Process-lifetime session whose entry and transcript stay in the in-memory agent database. */
     incognito?: true;

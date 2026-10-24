@@ -1,8 +1,31 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as markdownCore from "../../../packages/markdown-core/src/reasoning-tags.js";
+import * as finalTags from "./final-tags.js";
 import { stripReasoningTagsFromText } from "./reasoning-tags.js";
 
 describe("stripReasoningTagsFromText", () => {
+  it("skips canonical tag scans for ordinary markup and comparisons", () => {
+    const source = "  <article>Array<string>: value < 100 and other > 0.</article>\n".repeat(64);
+    const reasoning = vi.spyOn(markdownCore, "scanReasoningTags");
+    const final = vi.spyOn(finalTags, "findFinalTagMatches");
+    try {
+      expect(stripReasoningTagsFromText(source)).toBe(source);
+      expect(reasoning).not.toHaveBeenCalled();
+      expect(final).not.toHaveBeenCalled();
+      expect(stripReasoningTagsFromText("<think>hidden</think>Answer")).toBe("Answer");
+      expect(reasoning).toHaveBeenCalled();
+      expect(final).toHaveBeenCalled();
+    } finally {
+      reasoning.mockRestore();
+      final.mockRestore();
+    }
+  });
+
   describe("basic functionality", () => {
+    it.each(markdownCore.REASONING_TAG_NAMES)("recognizes the %s provider tag", (name) => {
+      expect(stripReasoningTagsFromText(`<${name}>hidden</${name}>Answer`)).toBe("Answer");
+    });
+
     it.each([
       [
         "never recovers nested unclosed internal reflection as visible text",
@@ -39,6 +62,10 @@ describe("stripReasoningTagsFromText", () => {
       ["A <final/>visible <final data-model='gemini'>answer</final> B", "A visible answer B"],
       ["  <final-result>visible</final-result>  ", "  <final-result>visible</final-result>  "],
       ['A <final reason="a>b">visible B', 'A <final reason="a>b">visible B'],
+      ["  < \u00a0AnTmL:ThiNking >hidden< / antml:thinking >Answer  ", "Answer"],
+      ["  < / FINAL >Answer  ", "Answer"],
+      ['<thinking x="<internal>private reflection</internal>', '<thinking x="'],
+      ["  <thinking", "  <thinking"],
     ] as const)("handles nested/final tag behavior: %j", (input, expected) => {
       expect(stripReasoningTagsFromText(input)).toBe(expected);
     });

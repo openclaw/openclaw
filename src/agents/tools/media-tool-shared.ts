@@ -214,7 +214,6 @@ async function resolveCapabilityModelCandidatesForTool(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   providers: readonly CapabilityProvider[];
 }): Promise<string[]> {
   const providerDefaults = new Map<string, { ref: string; aliases: string[] }>();
@@ -261,7 +260,6 @@ export async function resolveCapabilityModelConfigForTool(params: {
   workspaceDir?: string;
   agentDir?: string;
   authStore?: AuthProfileStore;
-  authProfileStoreSource?: boolean;
   modelConfig?: AgentModelConfig;
   modelOverride?: string;
   providers: CapabilityProviderSource;

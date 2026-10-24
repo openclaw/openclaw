@@ -215,6 +215,7 @@ Removing a `models.providers.<id>` entry while the Gateway is running clears sav
 
 Changes to aliases or model restrictions reuse compatible inventory. Changes to
 the provider, plugin, credentials, environment, or workspace can invalidate it.
+The Gateway excludes temporary skill overrides from its shared catalog worker environment.
 
 Automations and command-palette model search show a warning when a provider refresh
 fails, while keeping the models returned by the Gateway. Open Models to retry the
@@ -326,6 +327,9 @@ openclaw config set agents.defaults.modelPolicy.allow '["openai/gpt-5.4","anthro
 ```
 
 `openclaw models set`, provider setup, and `openclaw models aliases add` can add entries under `agents.defaults.models`, but they never change `modelPolicy.allow`. This keeps model metadata and aliases independent from override policy.
+
+On a fresh installation, provider-added aliases and runtime settings remain metadata;
+they do not create a one-model allowlist. Existing explicit model policies remain enforced.
 
 ### Choose the same model with different runtimes
 

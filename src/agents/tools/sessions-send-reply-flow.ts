@@ -9,28 +9,25 @@ import type { GatewaySessionStoreTargetWithStore } from "../../gateway/session-u
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
-import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { runWithGatewayDetachedWorkContinuation } from "../../process/gateway-work-admission.js";
 import { annotateInterSessionPromptText } from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../prepared-model-runtime-generation-scope.js";
-import {
-  isTerminalAgentWaitTimeout,
-  readLatestAssistantReply,
-  waitForAgentRunReply,
-} from "../run-wait.js";
+import { isTerminalAgentWaitTimeout, waitForAgentRunReply } from "../run-wait.js";
 import { resolveSubagentAnnounceTimeoutMs } from "../subagents/announce/subagent-announce-delivery-retry.js";
 import type { FollowupCompletionOwner } from "../subagents/completion/session-followup-completion.types.js";
-import { getGatewayToolCallerIdentity } from "./gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  resolveGatewayToolOperatorSelection,
+} from "./gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
-  getInProcessGatewayToolContext,
   runWithGatewayToolContinuationContext,
 } from "./in-process-gateway.js";
 import { recordSessionToolActionFact } from "./sessions-access.js";
-import { recoverSessionsSendReply, sendReplyResult } from "./sessions-send-helpers.js";
+import { resolveSessionsSendReply, sendReplyResult } from "./sessions-send-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
 import type { SessionsSendStart } from "./sessions-send-tool.delivery.js";
 import type { AgentStepSession } from "./sessions-send-tool.types.js";
@@ -39,7 +36,7 @@ const log = createSubsystemLogger("agents/sessions-send");
 
 /** Await custody transfer before returning the tool; result observation stays detached. */
 export function startSessionsSendReplyFlow(
-  params: Omit<Parameters<typeof runSessionsSendA2AFlow>[0], "readAcceptedReply"> & {
+  params: Parameters<typeof runSessionsSendA2AFlow>[0] & {
     skip: boolean;
     completion?: FollowupCompletionOwner;
   },
@@ -47,50 +44,14 @@ export function startSessionsSendReplyFlow(
   if (params.skip) {
     return Promise.resolve();
   }
-  // The sender's Gateway binds the accepted run's answer before the sender tool returns.
-  const resolverOwner = getGatewayToolCallerIdentity()?.gatewayContextResolver;
-  const resolveContext = () => getInProcessGatewayToolContext(resolverOwner);
-  const admittedContext = resolverOwner ? resolveContext() : undefined;
-  const acceptedRun = params.targetSession && {
-    runId: params.runId,
-    agentId: params.targetAgentId,
-    sessionKey: params.targetSessionKey,
-    sessionId: params.targetSession.sessionId,
-  };
   const { completion } = params;
-  const readAcceptedReply =
-    admittedContext && acceptedRun
-      ? async () => {
-          try {
-            const assertDeliveryCurrent = () => {
-              if (resolveContext() !== admittedContext) {
-                throw new Error("Accepted reply Gateway changed.");
-              }
-              completion?.assertCurrent();
-              getPluginRuntimeGatewayRequestScope()?.client?.internal?.operatorRunAuthority?.assertCurrent();
-            };
-            assertDeliveryCurrent();
-            if (params.replyAdmission) {
-              if (!params.replyAdmission.assertCurrent) {
-                return undefined;
-              }
-              await params.replyAdmission.assertCurrent(assertDeliveryCurrent);
-            } else if (!completion) {
-              return undefined;
-            }
-            assertDeliveryCurrent();
-            // Loading the tool must not start the Gateway run tracker; its Gateway owns that.
-            const { readAcceptedAgentRunReplyText } =
-              await import("../../gateway/agent-turn/agent-dedupe.js");
-            assertDeliveryCurrent();
-            return readAcceptedAgentRunReplyText(admittedContext, acceptedRun);
-          } catch {
-            return undefined;
-          }
-        }
-      : undefined;
   const continueOwned = async <T>(run: () => Promise<T>) =>
-    completion ? completion.request.custody.run(run) : runWithGatewayToolContinuationContext(run);
+    completion
+      ? completion.request.custody.run(run)
+      : runWithGatewayToolContinuationContext(
+          run,
+          params.replyMode === "peer" ? { retainRequester: true } : undefined,
+        );
   const run = async () => {
     const settledReply = params.reply ?? (await completion?.take());
     const deliverRequesterReply: Parameters<
@@ -228,7 +189,6 @@ export function startSessionsSendReplyFlow(
     return runSessionsSendA2AFlow({
       ...params,
       deliverRequesterReply,
-      readAcceptedReply,
       reply: settledReply,
     });
   };
@@ -281,13 +241,15 @@ export function prepareSessionsSendReplyContext(params: {
   >;
 }): SessionsSendReplyContext {
   const caller = getGatewayToolCallerIdentity();
-  const requester = caller?.requesterOrigin
-    ? {
-        agentId: caller.agentId,
-        sessionKey: caller.sessionKey,
-        requesterOrigin: caller.requesterOrigin,
-      }
-    : undefined;
+  const { requesterOrigin } = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
+  const requester =
+    caller && requesterOrigin
+      ? {
+          agentId: caller.agentId,
+          sessionKey: caller.sessionKey,
+          requesterOrigin,
+        }
+      : undefined;
   const requesterSessionEntry = params.requesterTarget.store[params.requesterTarget.canonicalKey];
   const requesterSessionId = params.requesterSessionId ?? requesterSessionEntry?.sessionId;
   const requesterSession = requesterSessionId
@@ -481,16 +443,14 @@ export async function finishSessionsSendReply(params: {
       ...watchField,
     });
   }
-  const recovered = await recoverSessionsSendReply(result.replyText, () =>
-    readLatestAssistantReply({
-      runId,
-      sessionKey: acceptedTargetSessionKey,
-      agentId: replyContext.targetAgentId,
-      callGateway: replyContext.callGateway,
-    }),
-  );
+  const reply = await resolveSessionsSendReply(result, {
+    runId,
+    sessionKey: acceptedTargetSessionKey,
+    agentId: replyContext.targetAgentId,
+    callGateway: replyContext.callGateway,
+  });
   return sendReplyResult(
     { runId, sessionKey: replyContext.displayKey, ...watchField },
-    { ...result, ...recovered },
+    { ...result, ...reply },
   );
 }

@@ -472,6 +472,12 @@ export function buildOpenAIRealtimeVoiceProvider(
         (await hasOpenAIChatGptSubscriptionAuthInputAsync({ cfg, agentId }, context)))
     );
   };
+  const projectGptLiveCapabilities = (model: string, supportsGatewayControl = false) => ({
+    ...OPENAI_REALTIME_CAPABILITIES,
+    ...OPENAI_QUICKSILVER_CAPABILITIES,
+    ...resolveOpenAIQuicksilverVoiceCapabilities(model),
+    ...(supportsGatewayControl ? { supportsGatewayControl: true } : {}),
+  });
   const internalApi: InternalRealtimeVoiceProviderApi = {
     // Retained for public synchronous SDK calls through 2026-12-31.
     isBrowserSessionConfigured: ({ cfg, providerConfig, agentId }) => {
@@ -511,12 +517,7 @@ export function buildOpenAIRealtimeVoiceProvider(
             providerConfig: { ...providerConfig, model: effectiveModel },
             agentId,
           });
-        return {
-          ...OPENAI_REALTIME_CAPABILITIES,
-          ...OPENAI_QUICKSILVER_CAPABILITIES,
-          ...resolveOpenAIQuicksilverVoiceCapabilities(effectiveModel),
-          ...(supportsGatewayControl ? { supportsGatewayControl: true } : {}),
-        };
+        return projectGptLiveCapabilities(effectiveModel, supportsGatewayControl);
       }
       return {
         ...OPENAI_REALTIME_CAPABILITIES,
@@ -550,12 +551,7 @@ export function buildOpenAIRealtimeVoiceProvider(
             providerConfig: { ...providerConfig, model: effectiveModel },
             agentId,
           }));
-        return {
-          ...OPENAI_REALTIME_CAPABILITIES,
-          ...OPENAI_QUICKSILVER_CAPABILITIES,
-          ...resolveOpenAIQuicksilverVoiceCapabilities(effectiveModel),
-          ...(supportsGatewayControl ? { supportsGatewayControl: true } : {}),
-        };
+        return projectGptLiveCapabilities(effectiveModel, supportsGatewayControl);
       }
       return {
         ...OPENAI_REALTIME_CAPABILITIES,
@@ -608,11 +604,7 @@ export function buildOpenAIRealtimeVoiceProvider(
         return CUSTOM_ENDPOINT_CAPABILITIES;
       }
       if (isOpenAIGptLiveModel(model ?? config.model)) {
-        return {
-          ...OPENAI_REALTIME_CAPABILITIES,
-          ...OPENAI_QUICKSILVER_CAPABILITIES,
-          ...resolveOpenAIQuicksilverVoiceCapabilities(model ?? config.model ?? ""),
-        };
+        return projectGptLiveCapabilities(model ?? config.model ?? "");
       }
       return OPENAI_REALTIME_CAPABILITIES;
     },

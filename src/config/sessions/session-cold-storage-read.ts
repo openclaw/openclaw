@@ -6,8 +6,6 @@ import {
 } from "./session-cold-storage-state.js";
 import type { SessionSourceValidation } from "./session-source-authority.js";
 
-export { readHotSessionTranscriptSnapshot } from "./session-cold-storage-state.js";
-
 /** History callers retain their prepared physical target and read owner through restoration. */
 export type SessionColdReadPreparation = {
   target: ResolvedTranscriptReadScope;

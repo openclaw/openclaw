@@ -83,11 +83,8 @@ export async function inspectGatewayLockRecovery(options: { env?: NodeJS.Process
 }
 
 /** Explicit operator confirmation is bound to file identity, bytes, heartbeat and lease facts. */
-export async function recoverGatewayLock(options: {
-  env?: NodeJS.ProcessEnv;
-  confirmation: string;
-}) {
-  const inspection = await inspectGatewayLockRecovery(options);
+export async function recoverGatewayLock(options: { confirmation: string }) {
+  const inspection = await inspectGatewayLockRecovery();
   if (inspection.confirmation !== options.confirmation) {
     throw new Error(
       "Gateway lock or heartbeat changed since inspection; run `openclaw gateway recover-lock` again.",
@@ -98,14 +95,25 @@ export async function recoverGatewayLock(options: {
   }
   assertGatewayRecoveryLeaseNotLive(inspection.lease);
   for (const { observed } of inspection.files) {
-    if (
-      observed?.holder &&
-      (await resolveGatewayOwnerStatus(observed.holder.pid, observed.holder, process.platform, {
+    if (!observed?.holder) {
+      continue;
+    }
+    const status = await resolveGatewayOwnerStatus(
+      observed.holder.pid,
+      observed.holder,
+      process.platform,
+      {
         lockPath: observed.path,
-      })) === "alive"
+      },
+    );
+    if (
+      status === "alive" ||
+      (status !== "dead" &&
+        process.platform === "win32" &&
+        observed.holder.processNamespace === undefined)
     ) {
       throw new Error(
-        `Gateway holder ${observed.holder.pid} is still live; stop it before recovering its lock.`,
+        `Gateway holder ${observed.holder.pid} ${status === "alive" ? "is still live" : "could not be verified dead"}; stop it before recovering its lock.`,
       );
     }
   }

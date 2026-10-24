@@ -356,6 +356,8 @@ export class NodeWorkerBundleInstaller {
     { build: WorkerAdmissionHandshake; result: Promise<boolean> }
   >();
   readonly #workerEnv: NodeJS.ProcessEnv;
+  #prefetch: AbortController | undefined;
+  #foreground = 0;
 
   constructor(options: { root?: string; env?: NodeJS.ProcessEnv } = {}) {
     const env = options.env ?? process.env;
@@ -423,14 +425,30 @@ export class NodeWorkerBundleInstaller {
     }
   }
 
-  async ensure(params: {
+  async ensure(request: {
     input: NodeWorkerBundleInstallInput;
     gatewayUrl: string;
     gatewayTlsFingerprint?: string;
     gatewayCloudflareAccess?: CloudflareAccessCredentials;
     signal?: AbortSignal;
   }): Promise<WorkerAdmissionHandshake> {
-    const { input } = params;
+    const { input } = request;
+    if (input.prefetch && (this.#prefetch || this.#foreground > 0)) {
+      return input.build;
+    }
+    const prefetch = input.prefetch ? new AbortController() : undefined;
+    const params = prefetch
+      ? {
+          ...request,
+          signal: AbortSignal.any([prefetch.signal, ...(request.signal ? [request.signal] : [])]),
+        }
+      : request;
+    if (prefetch) {
+      this.#prefetch = prefetch;
+    } else {
+      this.#foreground++;
+      this.#prefetch?.abort(new Error("worker bundle prefetch yielded to a session"));
+    }
     // One namespace owns every staging sibling, so serialize it before sweeping crash residue.
     const key = input.gatewayNamespace;
     const bundlesRoot = path.join(this.#root, key, "bundles");
@@ -439,6 +457,7 @@ export class NodeWorkerBundleInstaller {
       params.signal?.throwIfAborted();
       // Share read-only checks after prewarm; downloads and child execution keep caller custody.
       if (
+        !input.prefetch &&
         this.#prewarmedBundles.has(destination) &&
         (await this.#validatePrewarmedBundle(key, destination, input.build))
       ) {
@@ -450,7 +469,19 @@ export class NodeWorkerBundleInstaller {
       this.#pendingValidations.delete(key);
       return await this.#operations.enqueue(key, async () => {
         params.signal?.throwIfAborted();
-        const installed = await validateInstalledBundle(destination, input.build);
+        // Prefetch never repairs or activates an existing bundle; the session owns that work.
+        if (input.prefetch) {
+          try {
+            await fsp.lstat(destination);
+            return input.build;
+          } catch (error) {
+            if (!isMissingPathError(error)) {
+              throw error;
+            }
+          }
+        }
+        const installed =
+          !input.prefetch && (await validateInstalledBundle(destination, input.build));
         params.signal?.throwIfAborted();
         if (!installed) {
           await fsp.mkdir(bundlesRoot, { recursive: true, mode: 0o700 });
@@ -459,24 +490,45 @@ export class NodeWorkerBundleInstaller {
             path.join(bundlesRoot, `.staging-${input.build.bundleHash}-`),
           );
           try {
-            const archivePath = path.join(operationRoot, "bundle.tgz");
+            let archivePath = path.join(operationRoot, "bundle.tgz");
+            const prefetchedArchive = path.join(destination, "bundle.tgz");
             const staging = path.join(operationRoot, "root");
             params.signal?.throwIfAborted();
-            await acquireBundle({
-              packageRoot: this.#packageRoot,
-              gatewayUrl: params.gatewayUrl,
-              gatewayTlsFingerprint: params.gatewayTlsFingerprint,
-              gatewayCloudflareAccess: params.gatewayCloudflareAccess,
-              input,
-              destination: archivePath,
-              signal: params.signal,
-            });
-            params.signal?.throwIfAborted();
-            await verifyBundleArchive({
-              destination: archivePath,
-              archive: input.archive,
-              signal: params.signal,
-            });
+            if (!input.prefetch) {
+              try {
+                await verifyBundleArchive({
+                  destination: prefetchedArchive,
+                  archive: input.archive,
+                  signal: params.signal,
+                });
+                archivePath = prefetchedArchive;
+              } catch {
+                params.signal?.throwIfAborted();
+              }
+            }
+            if (archivePath !== prefetchedArchive) {
+              await acquireBundle({
+                packageRoot: this.#packageRoot,
+                gatewayUrl: params.gatewayUrl,
+                gatewayTlsFingerprint: params.gatewayTlsFingerprint,
+                gatewayCloudflareAccess: params.gatewayCloudflareAccess,
+                input,
+                destination: archivePath,
+                signal: params.signal,
+              });
+              params.signal?.throwIfAborted();
+              await verifyBundleArchive({
+                destination: archivePath,
+                archive: input.archive,
+                signal: params.signal,
+              });
+            }
+            if (input.prefetch) {
+              params.signal?.throwIfAborted();
+              // No extraction or native execution: foreground cancellation only drains I/O.
+              await replaceNodeWorkerDirectory(destination, operationRoot, "bundle", params.signal);
+              return input.build;
+            }
             await extractWorkerBundleArchive({
               tarballPath: archivePath,
               destination: staging,
@@ -530,6 +582,14 @@ export class NodeWorkerBundleInstaller {
         `worker-bundle-install-failed: ${detail || "bundle installation did not complete"}`,
         { cause: error },
       );
+    } finally {
+      if (prefetch) {
+        if (this.#prefetch === prefetch) {
+          this.#prefetch = undefined;
+        }
+      } else {
+        this.#foreground--;
+      }
     }
   }
 

@@ -83,6 +83,12 @@ const schemaIntegerKeywords = new Set([
   "minProperties",
 ]);
 const schemaBooleanKeywords = new Set(["deprecated", "readOnly", "uniqueItems", "writeOnly"]);
+const schemaKeywordGroups = [
+  [schemaStringKeywords, "string"],
+  [schemaNumberKeywords, "number"],
+  [schemaIntegerKeywords, "non-negative integer"],
+  [schemaBooleanKeywords, "boolean"],
+] as const;
 const JSON_POINTER_ARRAY_INDEX_SEGMENT = /^(0|[1-9]\d*)$/;
 
 function schemaTypeIncludes(schema: Record<string, unknown>, type: string): boolean {
@@ -360,31 +366,17 @@ function validateSchemaKeywordShapes(
   schema: Record<string, unknown>,
   path: string,
 ): string | undefined {
-  for (const key of schemaStringKeywords) {
-    const value = schema[key];
-    if (value !== undefined && typeof value !== "string") {
-      return `${path}.${key}: expected string`;
-    }
-  }
-  for (const key of schemaNumberKeywords) {
-    const value = schema[key];
-    if (value !== undefined && typeof value !== "number") {
-      return `${path}.${key}: expected number`;
-    }
-  }
-  for (const key of schemaIntegerKeywords) {
-    const value = schema[key];
-    if (
-      value !== undefined &&
-      (!Number.isInteger(value) || (typeof value === "number" && value < 0))
-    ) {
-      return `${path}.${key}: expected non-negative integer`;
-    }
-  }
-  for (const key of schemaBooleanKeywords) {
-    const value = schema[key];
-    if (value !== undefined && typeof value !== "boolean") {
-      return `${path}.${key}: expected boolean`;
+  for (const [keywords, expected] of schemaKeywordGroups) {
+    for (const key of keywords) {
+      const value = schema[key];
+      if (
+        value !== undefined &&
+        (expected === "non-negative integer"
+          ? !Number.isInteger(value) || (typeof value === "number" && value < 0)
+          : typeof value !== expected)
+      ) {
+        return `${path}.${key}: expected ${expected}`;
+      }
     }
   }
   if (

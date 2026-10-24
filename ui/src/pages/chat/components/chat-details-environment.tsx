@@ -5,6 +5,7 @@ import { SessionGitDiff } from "../../../components/session-git-diff.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
@@ -21,6 +22,7 @@ import { ChatPanePlacement, createChatMachinePresentation } from "./chat-pane-pl
 import { retainedPublication, showWorkRow } from "./chat-pull-requests.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 type Props = { details: ChatDetailsProps; presented: boolean };
 
@@ -285,9 +287,11 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
               </Show>
               <Show when={!published() && !branchName() && !work() && changes()}>
                 <div class="chat-details__row chat-environment__row">
-                  <Show
-                    when={props.onOpenUncommitted ?? props.work?.onOpenSessionDiff}
-                    fallback={
+                  <EnvironmentAction
+                    presented={props.presented}
+                    onOpen={props.onOpenUncommitted ?? props.work?.onOpenSessionDiff}
+                  >
+                    {() => (
                       <>
                         <Icon name="diff" />
                         <span>{t("chat.sessionDetails.changes")}</span>
@@ -295,25 +299,8 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
                           {(result) => <EnvironmentChangeCounts result={result()} />}
                         </Show>
                       </>
-                    }
-                  >
-                    <button
-                      class="chat-environment__action"
-                      type="button"
-                      onClick={() => {
-                        if (props.presented) {
-                          (props.onOpenUncommitted ?? props.work?.onOpenSessionDiff)?.();
-                        }
-                      }}
-                    >
-                      <Icon name="diff" />
-                      <span>{t("chat.sessionDetails.changes")}</span>
-                      <Show when={changes()}>
-                        {(result) => <EnvironmentChangeCounts result={result()} />}
-                      </Show>
-                      <Icon name="chevronRight" />
-                    </button>
-                  </Show>
+                    )}
+                  </EnvironmentAction>
                 </div>
               </Show>
             </ChatDetailsDesktopSection>

@@ -1287,7 +1287,7 @@ it.each([false, true])(
     const { previousClient, replacementClient, operations, ownerDuringRelease, readOwner } =
       await createSameThreadClientMigrationFixture(sessionFile, { rejectOldRelease });
 
-    const result = await runBoundClaim(sessionFile, { timeoutMs: 500 });
+    const result = await runBoundClaim(sessionFile);
     expect(result?.reply?.text).toContain(
       rejectOldRelease ? "previous physical client unsubscribe failed" : "Migrated reply",
     );
@@ -1604,7 +1604,7 @@ it("re-reads source-owned permission roots while resuming an unloaded bound thre
         source: { agentId: source.agentId, sessionId: source.sessionId, threadId: source.threadId },
       }),
     ),
-    { config: { session: { store: storePath } }, timeoutMs: 500 },
+    { config: { session: { store: storePath } } },
   );
 
   await expectReply(result, "Recovered");
@@ -1742,7 +1742,6 @@ it("moves session history while clamping rootless inherited cwd to the agent wor
   await expectReply(
     claimConversation(event, ctx, {
       config: { session: { store: storePath } },
-      timeoutMs: 500,
     }),
     "Bound reply",
   );
@@ -1815,7 +1814,6 @@ it.each([
   const claimSource = async () => {
     const result = await claimConversation(event, ctx, {
       config: { session: { store: storePath } },
-      timeoutMs: 500,
     });
 
     expect(result?.reply?.text).toContain("active run");
@@ -1888,7 +1886,6 @@ it("passes sandbox state when resolving bound turn policy", async () => {
     }),
     conversationClaimContext(legacyConversationData(sessionFile), "agent:main:session-1"),
     {
-      timeoutMs: 50,
       config: config as never,
     },
   );
@@ -1954,7 +1951,6 @@ it.each([
       const result = await claimConversation(
         conversationMessage("hi", { bodyForAgent: "hi", sessionKey }),
         conversationClaimContext(legacyConversationData(sessionFile, { agentDir }), sessionKey),
-        { timeoutMs: 50 },
       );
       await new Promise<void>((resolve) => {
         setImmediate(resolve);
@@ -2185,11 +2181,11 @@ it("interrupts a timed-out incognito turn before removing active tracking and ha
       ...clientListeners(notificationHandlers, (event) => cleanupEvents.push(event)),
     };
     acquireClient.mockResolvedValue(client);
-    const result = runBoundClaim(sessionFile, { timeoutMs: 100 }, sessionKey);
+    const result = runBoundClaim(sessionFile, {}, sessionKey);
 
     await vi.advanceTimersByTimeAsync(0);
     expect(request).toHaveBeenCalledWith("turn/start", expect.any(Object), expect.any(Object));
-    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(20 * 60_000);
 
     await expectReply(
       result,
@@ -2238,11 +2234,11 @@ it.each([
       sharedClientMocks.retireSharedCodexAppServerClientIfCurrent
         .mockReturnValueOnce({ activeLeases: 2, closed: false })
         .mockReturnValue(undefined);
-      const result = runBoundClaim(sessionFile, { timeoutMs: 100 }, sessionKey);
+      const result = runBoundClaim(sessionFile, {}, sessionKey);
 
       await vi.advanceTimersByTimeAsync(0);
       expect(request).toHaveBeenCalledWith("turn/start", expect.any(Object), expect.any(Object));
-      await vi.advanceTimersByTimeAsync(100);
+      await vi.advanceTimersByTimeAsync(20 * 60_000);
       expect(request).toHaveBeenCalledWith(
         "turn/interrupt",
         { threadId: "thread-1", turnId: "turn-1" },
@@ -2303,7 +2299,6 @@ it("refreshes stale network-proxy bound app-server threads before the turn", asy
       pluginConfig: {
         appServer: { ...NETWORK_PROXY_PLUGIN_CONFIG.appServer, serviceTier: "priority" },
       },
-      timeoutMs: 50,
     },
   );
 
@@ -2382,7 +2377,7 @@ it("refuses legacy custom-provider bindings requiring interactive approvals befo
     claimConversation(
       conversationMessage("hello"),
       conversationClaimContext(legacyConversationData(sessionFile)),
-      { timeoutMs: 50, pluginConfig: { appServer: { mode: "guardian" } } },
+      { pluginConfig: { appServer: { mode: "guardian" } } },
     ),
     "OpenClaw native Codex conversation binding cannot route interactive approvals yet",
   );

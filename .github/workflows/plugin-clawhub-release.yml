@@ -657,6 +657,14 @@ jobs:
           path: .release-tooling
           fetch-depth: 1
 
+      - name: Install trusted plugin tooling dependencies
+        if: inputs.prepared_artifact == ''
+        working-directory: .release-tooling
+        env:
+          CI: "true"
+        # Corepack reads this checkout's packageManager before pnpm processes arguments.
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
+
       - name: Pack ClawHub package artifact
         if: inputs.prepared_artifact == ''
         env:
@@ -667,7 +675,6 @@ jobs:
           PACKAGE_TAG: ${{ matrix.plugin.publishTag }}
           PACKAGE_DIR: ${{ matrix.plugin.packageDir }}
           OPENCLAW_CLAWHUB_PACK_OUTPUT_DIR: ${{ runner.temp }}/clawhub-package-artifact
-          PNPM_CONFIG_MODULES_DIR: ${{ github.workspace }}/node_modules
         run: bash .release-tooling/scripts/plugin-clawhub-publish.sh --pack "${PACKAGE_DIR}" --metadata-root .release-tooling
 
       - name: Setup Node for prepared promotion

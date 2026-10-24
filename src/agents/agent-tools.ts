@@ -14,6 +14,7 @@
  */
 import { messageToolOwnsVisibleReply } from "../auto-reply/source-reply-delivery-mode.js";
 import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
+import { readScheduledToolTargets } from "../cron/execution-context-registry.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import { mergeGatewayAgentCliPath } from "../infra/openclaw-cli-shim.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
@@ -68,6 +69,7 @@ import {
   resolveOpenClawPluginToolsForOptions,
   resolveOpenClawPluginToolsForOptionsAsync,
 } from "./openclaw-plugin-tools.js";
+import { resolveSessionToolListingClientCaps } from "./openclaw-tools.client-caps.js";
 import {
   createOpenClawTools,
   createOpenClawToolsWithPreparation,
@@ -83,6 +85,7 @@ import { resolveScheduledToolCallerContext } from "./scheduled-tool-policy.js";
 import { projectEffectiveExecPolicy } from "./session-permission-exec-mode.js";
 import { resolveSessionPlacementComputer } from "./session-placement-computer.js";
 import { withLegacySessionCapabilityRead } from "./subagents/spawn/subagent-session-store-legacy.js";
+import { withPreparedSessionCapabilityRead } from "./subagents/spawn/subagent-session-store.js";
 import { subagentAttachmentRootForRun } from "./subagents/subagent-attachment-paths.js";
 import {
   withPreparedToolConstruction,
@@ -117,6 +120,8 @@ function* assembleOpenClawCodingTools(
   AnyAgentTool[]
 > {
   const preparedTools = preparedSurface?.tools;
+  const listingClientCaps =
+    options?.listingClientCaps ?? resolveSessionToolListingClientCaps(options ?? {});
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const { isMemoryFlushRun, memoryFlush, memoryFlushWritePath } =
     resolveMemoryFlushToolSetup(options);
@@ -326,20 +331,20 @@ function* assembleOpenClawCodingTools(
     capabilityProfile.policy.explicitToolAllowlist,
     runtimePluginToolGrant,
   );
-  // Owner-only tools stay offered (resolveTurnToolSurface gates their calls);
-  // descendants and captured allowlists never inherit them.
+  // Owner-only tools stay listed; descendants and captured allowlists cannot inherit them.
   const pluginToolDenylist = [...capabilityProfile.policy.explicitToolDenylist];
-  const requesterToolDenylist = [...pluginToolDenylist, ...ownerOnlyCoreToolDenylist];
-  const inheritedToolDenylist = [
-    ...requesterToolDenylist,
-    ...(capabilityProfile.policy.inheritedToolPolicyForSpawn?.deny ?? []),
-  ];
+  const requesterToolDenylist = pluginToolDenylist.concat(
+    capabilityProfile.policy.inheritedToolPolicy?.deny ?? [],
+    ownerOnlyCoreToolDenylist,
+  );
+  const inheritedToolDenylist = requesterToolDenylist.concat(
+    capabilityProfile.policy.inheritedToolPolicyForSpawn?.deny ?? [],
+  );
   const delegatedToolDenyFloor = prepareDelegatedToolDenyFloor(
     capabilityProfile,
     ownerOnlyCoreToolDenylist,
   );
-  // sessions_spawn captures this array before the final tool list exists.
-  // Populate it after filtering so children inherit the applicable restrictions.
+  // Populate the spawn-captured array after final filtering.
   const inheritedToolAllowlist = options?.inheritedToolAllowlistRef ?? [];
   const cronCreatorToolAllowlist = options?.cronCreatorToolAllowlistRef ?? [];
   const gatewayCaller = resolveScheduledToolCallerContext({
@@ -349,6 +354,7 @@ function* assembleOpenClawCodingTools(
   });
   const pluginToolOptions = {
     ...options,
+    listingClientCaps,
     agentSessionKey: options?.sessionKey,
     agentChannel: resolveGatewayMessageChannel(options?.messageChannel ?? options?.messageProvider),
     agentTo: options?.messageTo,
@@ -374,6 +380,7 @@ function* assembleOpenClawCodingTools(
             resolvedConfig: options?.config,
           },
         },
+    listingClientCaps,
     options?.clientCaps,
   );
   // Neither flush arm may regain execution tools outside its persistence projection.
@@ -424,6 +431,7 @@ function* assembleOpenClawCodingTools(
             sandboxSessionRenameOnly: capabilityProfile.policy.sandboxSessionRenameOnly,
             questionInputMode: capabilityProfile.conversation.questionInputMode,
             sessionPermissionPolicy,
+            requesterIsSubagent: capabilityProfile.policy.subagentPolicy !== undefined,
             execSession: sessionPermissionPolicy
               ? { permissionMode: sessionPermissionPolicy.mode }
               : undefined,
@@ -441,6 +449,7 @@ function* assembleOpenClawCodingTools(
             gatewayCallerChannel: gatewayCaller.channel,
             gatewayCallerLocal: gatewayCaller.local,
             gatewayCallerScheduled: gatewayCaller.scheduled,
+            scheduledToolTargets: readScheduledToolTargets(options),
             admitScheduledMessageInvocation: options?.messageActionTurnCapability
               ? messageInvocationPolicy.admit
               : undefined,
@@ -698,8 +707,13 @@ export async function createOpenClawCodingToolsInternalAsync(
           sandboxToolPolicy: options?.sandbox?.enabled ? options.sandbox.tools : undefined,
           pluginMetadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
         }));
+      const listingClientCaps =
+        options?.listingClientCaps ??
+        (await withPreparedSessionCapabilityRead(() =>
+          resolveSessionToolListingClientCaps({ ...options, config: shared.config }),
+        ));
       const assembly = assembleOpenClawCodingTools(
-        { ...options, config: shared.config, conversationCapabilityProfile },
+        { ...options, config: shared.config, conversationCapabilityProfile, listingClientCaps },
         skillReadResources,
         onPolicyFilter,
         preparedSurface,

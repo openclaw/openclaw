@@ -389,6 +389,7 @@ export function createWorkerInferenceManager(options: WorkerInferenceManagerOpti
       ),
       entry.storeInput,
     );
+    entry.execution = operation;
     providers.set(operation, entry.request.sessionId);
     void operation.then(
       () => providers.delete(operation),

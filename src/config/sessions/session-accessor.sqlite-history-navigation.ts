@@ -23,27 +23,16 @@ function parseNavigation(eventJson: string): Record<string, unknown> | undefined
     return undefined;
   }
   // SQLite-overdepth rows reach JSON.parse whole; retain only navigation afterward.
-  const {
-    type,
-    id,
-    parentId,
-    targetId,
-    appendParentId,
-    appendMode,
-    firstKeptEntryId,
-    customType,
-    display,
-  } = parsed;
   return {
-    type,
-    id,
-    parentId,
-    targetId,
-    appendParentId,
-    appendMode,
-    firstKeptEntryId,
-    customType,
-    display,
+    type: parsed.type,
+    id: parsed.id,
+    parentId: parsed.parentId,
+    targetId: parsed.targetId,
+    appendParentId: parsed.appendParentId,
+    appendMode: parsed.appendMode,
+    firstKeptEntryId: parsed.firstKeptEntryId,
+    customType: parsed.customType,
+    display: parsed.display,
   };
 }
 

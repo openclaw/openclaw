@@ -23,6 +23,7 @@ import {
   producerCompletionByOperation,
 } from "../../sessions/session-controller.state.js";
 import { SESSION_WATCHDOG_CLEANUP_MS } from "../../sessions/session-controller.watchdog-state.js";
+import { settleReplyDispatcher } from "../dispatch-dispatcher.js";
 import type { RuntimeMsgContext as MsgContext } from "../templating.js";
 import {
   createDispatcher,
@@ -198,6 +199,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
         expect(settled).not.toHaveBeenCalled();
         delivery.release();
         await dispatch;
+        await settleReplyDispatcher({ dispatcher });
         if (expired) {
           await operation?.ownerSettlement;
           expect(delivered).toHaveBeenCalledOnce();
@@ -213,7 +215,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
         delivery.release();
         dispatcher.markComplete();
         await dispatch;
-        await dispatcher.waitForIdle();
+        await settleReplyDispatcher({ dispatcher });
         await operation?.ownerSettlement;
         vi.useRealTimers();
       }
@@ -235,6 +237,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     const events: string[] = [];
     let operation: ReturnType<typeof createReplyOperation> | undefined;
     let successorDispatch: Promise<unknown> | undefined;
+    let dispatcherSettlement: Promise<unknown> | undefined;
     const source = reserveSessionControllerSource(sessionKey, {
       target: captureSessionTarget({
         storeScope: "/tmp/mock-sessions.json",
@@ -290,7 +293,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
     try {
       await withinTest(deliveryEntered.promise, signal);
       await withinTest(dispatch, signal);
-      dispatcher.markComplete();
+      dispatcherSettlement = settleReplyDispatcher({ dispatcher });
       expect(getSessionControllerOperation(sessionKey)).toBeUndefined();
       await withinTest(cleanup.entered, signal);
       expect(() =>
@@ -307,7 +310,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
       expect(ownerSettled).not.toHaveBeenCalled();
       expect(events).toEqual(["successor"]);
       finishDelivery.resolve();
-      await dispatcher.waitForIdle();
+      await dispatcherSettlement;
       await operation?.ownerSettlement;
       expect(events).toEqual(["successor", "delivered"]);
       expect(ownerSettled).toHaveBeenCalledOnce();
@@ -319,7 +322,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
       successorDispatcher.markComplete();
       await Promise.allSettled([dispatch, successorDispatch]);
       await successorDispatcher.waitForIdle();
-      await dispatcher.waitForIdle();
+      await (dispatcherSettlement ?? settleReplyDispatcher({ dispatcher }));
       operation?.complete();
       await operation?.ownerSettlement;
     }
@@ -350,7 +353,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
         },
       });
       dispatcher.markComplete();
-      await dispatcher.waitForIdle();
+      await settleReplyDispatcher({ dispatcher });
       if (!operation) {
         throw new Error("missing fenced owner");
       }
@@ -376,7 +379,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
       releaseExecution?.();
       operation?.complete();
       dispatcher.markComplete();
-      await dispatcher.waitForIdle();
+      await settleReplyDispatcher({ dispatcher });
       await operation?.ownerSettlement;
       await source.settlement.promise;
     }
@@ -524,7 +527,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
       transport.release();
       await successorFinished.promise;
       nextDispatcher.markComplete();
-      const receipt = await nextDispatcher.waitForIdle();
+      const receipt = await settleReplyDispatcher({ dispatcher: nextDispatcher });
       await successor.ownerSettlement;
       expect(receipt?.counts.final.delivered).toBe(1);
       expect(delivered).toEqual(["successor answer"]);
@@ -536,8 +539,8 @@ describe("dispatchReplyFromConfig owner settlement", () => {
       oldDispatcher.markComplete();
       nextDispatcher.markComplete();
       await Promise.allSettled([oldDispatch, nextDispatch]);
-      await oldDispatcher.waitForIdle();
-      await nextDispatcher.waitForIdle();
+      await settleReplyDispatcher({ dispatcher: oldDispatcher });
+      await settleReplyDispatcher({ dispatcher: nextDispatcher });
       await predecessor?.ownerSettlement;
       await successor?.ownerSettlement;
     }
@@ -774,7 +777,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
           await cleanup;
           await progress;
           await dispatch;
-          const receipt = await dispatcher.waitForIdle();
+          const receipt = await settleReplyDispatcher({ dispatcher });
           expect(cleanedUpBeforeDelivery).toBe(cancelled ? 1 : 0);
           expect(onQueuedFollowupSettled).toHaveBeenCalledOnce();
           expect(receipt?.counts.block).toMatchObject({
@@ -800,6 +803,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
           await dispatcher.waitForIdle();
           await progress;
           await dispatch;
+          await settleReplyDispatcher({ dispatcher });
         }
       },
     );
@@ -863,7 +867,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
         } finally {
           transport.release();
           dispatcher.markComplete();
-          await dispatcher.waitForIdle().catch(() => undefined);
+          await settleReplyDispatcher({ dispatcher }).catch(() => undefined);
         }
       },
     );
@@ -973,7 +977,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
           expect(queuedOperation).toBeUndefined();
 
           releaseDelivery.resolve();
-          await dispatcher.waitForIdle();
+          await settleReplyDispatcher({ dispatcher });
           await followupEntered.promise;
           expect(queuedOperation).toBeDefined();
 
@@ -983,7 +987,7 @@ describe("dispatchReplyFromConfig owner settlement", () => {
           releaseDelivery.resolve();
           dispatcher.markComplete();
           await Promise.allSettled([dispatchPromise, receiptCallbackWork]);
-          await dispatcher.waitForIdle();
+          await settleReplyDispatcher({ dispatcher });
           operation?.complete();
           if (operation) {
             await followupEntered.promise;

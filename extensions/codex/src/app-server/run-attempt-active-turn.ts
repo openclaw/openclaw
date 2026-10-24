@@ -594,9 +594,7 @@ export function activateCodexAttemptTurn(
       deadlines.ownsExecutionWait() &&
       resourceState.turnRoute?.signal.aborted === false &&
       !state.completed &&
-      !state.terminalTurnNotificationQueued &&
-      state.activeAppServerTurnRequests === 0 &&
-      state.activeLocalProjections === 0,
+      !state.terminalTurnNotificationQueued,
     isAbortable: () =>
       !terminalState.terminalOutcomeFrozen || terminalState.sharedAbortAllowedAfterTerminalOutcome,
     isCompacting: () => projectorRef.current?.isCompacting() ?? false,

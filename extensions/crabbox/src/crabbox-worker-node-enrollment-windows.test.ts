@@ -194,6 +194,7 @@ async function replay(options: ReplayOptions = {}) {
       tmpdir: () => path.win32.join(home, "Temp"),
     },
     "node:child_process": { spawn, spawnSync },
+    "node:perf_hooks": { performance: { now: () => 0 } },
   };
   await runInNewContext(script, {
     Buffer,
@@ -249,7 +250,7 @@ describe("native Windows node enrollment replay", () => {
     expect(result).toMatchObject({
       code: 0,
       output:
-        "CRABBOX_PHASE:openclaw-bootstrap-preparation\nCRABBOX_PHASE:openclaw-bootstrap-complete",
+        "CRABBOX_PHASE:openclaw-bootstrap-preparation\nCRABBOX_TIMING:openclaw-bootstrap-preparation:0\nCRABBOX_PHASE:openclaw-bootstrap-complete",
     });
     expect(result.spawnSync).toHaveBeenCalledOnce();
     expect(result.fs.mkdirSync).toHaveBeenCalledWith(defaultStateDir, { recursive: true });

@@ -5,17 +5,41 @@ import {
 import { listSessionTranscriptInstancesInWorker } from "../../config/sessions/session-history.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-utils-store-worker.js";
-import { isIncognitoSessionKey } from "../../routing/session-key.js";
+import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import type { CommunicationEndpoint } from "../../sessions/communication-admission.js";
 
-/** A host-held return route minted only after the original request was accepted. */
-export type SessionSendReplyAdmission = ((
-  source: CommunicationEndpoint,
-  target: CommunicationEndpoint,
-) => void) & {
-  /** Revalidate the captured endpoints without reconsidering withdrawn send policy. */
-  assertCurrent?: (assertDeliveryCurrent: () => void) => Promise<void>;
-};
+/** Read parent identity continuity through the same captured endpoint owner. */
+export async function readSessionCommunicationLineage(
+  endpoint: CommunicationEndpoint,
+  read: (endpoint: CommunicationEndpoint) => Promise<CommunicationEndpoint>,
+  assertCurrent: () => void,
+): Promise<CommunicationEndpoint[]> {
+  const chain = [endpoint];
+  while (chain.at(-1)?.entry?.spawnedBy) {
+    const child = chain.at(-1)!;
+    const key = child.entry!.spawnedBy!;
+    if (chain.length >= 32 || chain.some((entry) => entry.sessionKey === key)) {
+      throw new Error("Session communication ancestry is invalid.");
+    }
+    const parent = await read({
+      agentId: parseAgentSessionKey(key)?.agentId ?? child.agentId,
+      sessionKey: key,
+      storePath: "",
+      entry: undefined,
+    });
+    if (
+      !(await matchesSessionCommunicationParent(
+        parent,
+        child.entry?.parentSessionId,
+        assertCurrent,
+      ))
+    ) {
+      throw new Error("The child's parent session lineage changed; re-spawn the child.");
+    }
+    chain.push(parent);
+  }
+  return chain;
+}
 
 export async function matchesSessionCommunicationParent(
   parent: CommunicationEndpoint,
@@ -81,20 +105,4 @@ export async function readSessionCommunicationEndpoint(params: {
     storePath: loaded.readSource?.path ?? loaded.storePath,
     entry: loaded.store[loaded.canonicalKey],
   };
-}
-
-/** Revalidate an accepted return route through current endpoint storage owners. */
-export async function assertSessionSendReplyAdmissionCurrent(
-  config: OpenClawConfig,
-  source: CommunicationEndpoint,
-  target: CommunicationEndpoint,
-  admission: (source: CommunicationEndpoint, target: CommunicationEndpoint) => void,
-  assertCurrent: () => void,
-): Promise<void> {
-  const [currentSource, currentTarget] = await Promise.all([
-    readSessionCommunicationEndpoint({ config, endpoint: source, assertCurrent }),
-    readSessionCommunicationEndpoint({ config, endpoint: target, assertCurrent }),
-  ]);
-  assertCurrent();
-  admission(currentSource, currentTarget);
 }

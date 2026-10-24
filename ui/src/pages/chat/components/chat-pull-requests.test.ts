@@ -326,7 +326,7 @@ describe("ChatPullRequests", () => {
     );
     expect(container.querySelector(".chat-pr__checks")).not.toBeNull();
     container.querySelector<HTMLButtonElement>(".chat-pr__dismiss")?.click();
-    expect(onNewAction).toHaveBeenCalledOnce();
+    expect(onNewAction).not.toHaveBeenCalled();
     expect(onDismiss).toHaveBeenCalledOnce();
   });
 

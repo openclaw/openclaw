@@ -118,9 +118,12 @@ when hover or keyboard focus reveals pin and archive actions.
 
 The owner filter is the only control for this selection. Its saved value belongs
 to the current Gateway and your profile in this browser. A signed-in profile
-without a saved choice starts with **My sessions**. Before a profile is identified,
+without a saved choice starts with **My sessions**, except guests: a role that can
+only view other people's sessions and has no general read access (the role
+[Visitor Access](/gateway/team-server#invite-guests) requires) starts with **Involving me**.
+A saved choice always wins. Before a profile is identified,
 or when the connection has no durable profile, the list shows **All owners**.
-Identifying the profile restores its saved choice or the **My sessions** default.
+Identifying the profile restores its saved choice or the default for that role.
 During reconnection, a known profile's title and filter stay in place until identity
 resolves or the connection changes.
 The filtered session list loads before custom group metadata, so a slow group
@@ -536,7 +539,7 @@ This is a personal display preference, stored in this browser separately for eac
 Changing or clearing an owner or status filter never changes the saved preference.
 **Reset** in the popover restores **When filtering** when the empty-group control is visible. Groups awaiting their initial session list stay visible. Populated groups stay visible even when collapsed, and hidden custom groups remain available in **Move to group**. Choose **Never** to recover their headers as drag targets. Catalog sections and empty agent groups in team mode retain their existing behavior. On phone-width layouts, the choices open as a page inside the filter sheet, with **Back**. Escape returns focus to the setting without closing the filter panel.
 
-Native CLI catalogs appear only when they contain sessions matching the current owner filter. Empty catalogs stay hidden even when discovery fails or the CLI can start new sessions. Catalogs load on connection, then refresh every two minutes while the tab is visible. Returning to a hidden tab refreshes its catalog after a short coalescing delay; explicit refreshes and catalog actions do not wait for the periodic refresh. If more pages remain, discovery follows their cursors until a matching session appears, the catalog is exhausted, or a host reports an error, without repeating the first-page request. Discovery preserves its progress and pauses while the browser tab is hidden. A later refresh checks the first page for new sessions and restarts completed empty scans so older sessions that become visible are still discovered. Expanded catalogs preserve their loaded pages across refreshes. Populated catalogs remain visible when another host fails, with discovery details in their status indicator. Hidden catalogs do not keep the **Other** heading visible when it is the only remaining section. Native CLI starts remain available from **New session**.
+Native CLI catalogs appear when they contain sessions matching the current owner filter. Healthy empty catalogs stay hidden, including when the CLI can start new sessions. A genuine discovery failure can show an empty catalog with an error indicator; healthy pending discovery is not an error. Catalogs whose sessions are excluded by the owner filter stay hidden. Catalogs load on connection, then refresh every two minutes while the tab is visible. Returning to a hidden tab refreshes its catalog after a short coalescing delay; explicit refreshes and catalog actions do not wait for the periodic refresh. If more pages remain, discovery follows their cursors until a matching session appears, the catalog is exhausted, or a host reports an error, without repeating the first-page request. Discovery preserves its progress and pauses while the browser tab is hidden. A later refresh checks the first page for new sessions and restarts completed empty scans so older sessions that become visible are still discovered. Expanded catalogs preserve their loaded pages across refreshes. Populated catalogs remain visible when another host fails, with discovery details in their status indicator. Hidden catalogs do not keep the **Other** heading visible when it is the only remaining section. Native CLI starts remain available from **New session**.
 
 **Mark as unread** creates a reminder that remains unread while the current chat stays open, including while a run streams or completes. Leave and reopen the session, or choose **Mark as read**, to clear it.
 
@@ -608,7 +611,9 @@ If an owner assignment fails on the Sessions page, the page keeps the session an
 shows the Gateway's error. Resolve the reported problem, then reopen **Assign to**
 to retry. A late failure from a previous connection does not replace the current page's state.
 The **Assign to** menu marks the session's current owner and disables that choice,
-including while the team directory is loading or unavailable.
+including while the team directory is loading or unavailable. Once its submenu is open,
+typing filters people and agents without first clicking the search field. Escape clears
+the search; Arrow Down and Enter let you select a matching owner.
 
 ### Share a session publicly
 

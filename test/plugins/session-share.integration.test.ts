@@ -243,6 +243,12 @@ function catalogFixture(stateDir: string) {
     catalog,
     list,
     invoke,
+    read: async (query: Parameters<typeof catalog.list>[0] = {}) => {
+      const page = catalog.list(query);
+      void page.catch(() => {});
+      await vi.advanceTimersByTimeAsync(2);
+      return page;
+    },
     hydrate: async () => {
       const publications: Promise<void>[] = [];
       await catalog.list({
@@ -356,27 +362,28 @@ describe("session-share node commands", () => {
       const response = JSON.stringify(await source.list({ limit: 100 }));
       expect(JSON.stringify(await source.list({ limit: 100 }))).toBe(response);
       await receiver.hydrate();
-      const first = await receiver.catalog.list({ limitPerHost: 1 });
+      const first = await receiver.read({ limitPerHost: 1 });
       expectSingleItem(first[0]?.sessions, named);
       expect(first[0]?.nextCursor).toBeDefined();
-      const second = await receiver.catalog.list({
+      const second = await receiver.read({
         limitPerHost: 2,
         cursors: { "node:alpha": first[0]!.nextCursor! },
       });
       expect(second[0]?.sessions.map(({ threadId, name }) => ({ threadId, name }))).toEqual(
         derived.slice(0, 2),
       );
-      const last = await receiver.catalog.list({
+      const last = await receiver.read({
         limitPerHost: 2,
         cursors: { "node:alpha": second[0]!.nextCursor! },
       });
       expectSingleItem(last[0]?.sessions, derived[2]);
       expect(last[0]?.nextCursor).toBeUndefined();
       for (const search of ["Derived title 2", "MAIN:DERIVED-2"]) {
-        const found = await receiver.catalog.list({ search, limitPerHost: 1 });
+        const found = await receiver.read({ search, limitPerHost: 1 });
         expectSingleItem(found[0]?.sessions, derived[2]);
       }
-      expect(receiver.invoke).toHaveBeenCalledTimes(1);
+      // Every page and search reauthorizes the source; inventory reuse remains source-owned.
+      expect(receiver.invoke).toHaveBeenCalledTimes(6);
       db.prepare("UPDATE transcript_events SET event_json = ? WHERE session_id = ?").run(
         "invalid-json",
         "derived-0",
@@ -760,7 +767,7 @@ describe("session-share receiver identity integration", () => {
       const namespacedHuman = remoteHuman(human.threadId, "4242", hostId);
       const namespacedUnmatched = remoteHuman(unmatched.threadId, "9999", hostId);
       await fixture.hydrate();
-      expect((await fixture.catalog.list({}))[0]?.sessions).toEqual([
+      expect((await fixture.read({}))[0]?.sessions).toEqual([
         namespacedHuman,
         agent,
         namespacedUnmatched,
@@ -781,7 +788,7 @@ describe("session-share receiver identity integration", () => {
         if (linksHumans) {
           identityReads.mockClear();
         }
-        const rows = (await fixture.catalog.list({}))[0]!.sessions;
+        const rows = (await fixture.read({}))[0]!.sessions;
         expect(rows[linksHumans ? 0 : 1]?.createdActor).toMatchObject(linkedActor(profile.id));
         expect(rows[linksHumans ? 1 : 0]).toEqual(linksHumans ? agent : namespacedHuman);
         expect(rows[2]).toEqual(namespacedUnmatched);

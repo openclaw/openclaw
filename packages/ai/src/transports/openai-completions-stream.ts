@@ -52,30 +52,15 @@ import {
 import type { RecoveredTextToolCall, TextToolCallRecoveryPart } from "./text-tool-call-recovery.js";
 import { iterateModelStream, throwIfModelStreamAborted } from "./transport-stream-shared.js";
 
-type OpenAICompatibleChoice = ChatCompletionChunk["choices"][number] & {
-  // Some compatible providers attach usage per choice instead of per chunk.
-  usage?: ChatCompletionChunk["usage"];
-  // Some compatible providers stream a complete message in place of delta.
-  message?: ChatCompletionChunk["choices"][number]["delta"];
-};
-
 type OpenAICompatibleChatCompletionChunk = Omit<ChatCompletionChunk, "choices"> & {
-  choices: OpenAICompatibleChoice[];
+  choices: (ChatCompletionChunk["choices"][number] & {
+    // Some compatible providers attach usage per choice instead of per chunk.
+    usage?: ChatCompletionChunk["usage"];
+    // Some compatible providers stream a complete message in place of delta.
+    message?: ChatCompletionChunk["choices"][number]["delta"];
+  })[];
   timings?: { prompt_ms?: number; predicted_ms?: number };
 };
-
-type CompletionsStreamOptions = {
-  signal?: AbortSignal;
-  emitReasoning?: boolean;
-  strictReasoningTags?: boolean;
-  sawStreamDONE?: () => boolean;
-} & (
-  | {
-      mode: "direct";
-      beforeContentBlock: (nextType: "text" | "thinking" | "toolCall") => void;
-    }
-  | { mode?: "managed"; beforeContentBlock?: never }
-);
 
 function extractToolCallThoughtSignature(toolCall: unknown): string | undefined {
   const tc = toolCall as Record<string, unknown> | undefined;
@@ -140,7 +125,18 @@ export async function processCompletionsStream(
   output: MutableAssistantOutput,
   model: Model,
   stream: { push(event: AssistantMessageEvent): void },
-  options?: CompletionsStreamOptions,
+  options?: {
+    signal?: AbortSignal;
+    emitReasoning?: boolean;
+    strictReasoningTags?: boolean;
+    sawStreamDONE?: () => boolean;
+  } & (
+    | {
+        mode: "direct";
+        beforeContentBlock: (nextType: "text" | "thinking" | "toolCall") => void;
+      }
+    | { mode?: "managed"; beforeContentBlock?: never }
+  ),
 ) {
   const MAX_POST_TOOL_CALL_BUFFER_BYTES = 256_000;
   const directMode = options?.mode === "direct";

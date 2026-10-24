@@ -30,6 +30,7 @@ import { createWorkerSessionPlacementStore } from "./worker-environments/placeme
 import {
   WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
   WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
+  WORKSPACE_HISTORY_NOTE_TRANSCRIPT_TYPE,
   WORKSPACE_RECOVERY_FAILURE_TRANSCRIPT_TYPE,
 } from "./worker-environments/workspace-conflicts.js";
 import { createWorkerWorkspaceConflictTranscriptHandlers } from "./worker-workspace-conflict-transcript.js";
@@ -289,6 +290,23 @@ it("persists bounded recovery failures and deduplicates identical consecutive at
     {},
     { content: expect.stringContaining("snapshot verification failed") },
   ]);
+});
+
+it("records a visible commit fallback note without reporting a recovery failure", async () => {
+  await seedSession();
+  const { reportNote } = await createHandlers();
+  const note =
+    "Cloud worker commits were not adopted because the Gateway branch moved; file changes were reconciled.";
+  await reportNote(note);
+  await reportNote(note);
+
+  const events = (await loadTranscriptEvents(IDENTITY)).filter(
+    (event) => isRecord(event) && event.type === "custom_message",
+  );
+  expect(events).toMatchObject([
+    { customType: WORKSPACE_HISTORY_NOTE_TRANSCRIPT_TYPE, content: note, display: true },
+  ]);
+  expect(await readRecoveryEvents()).toEqual([]);
 });
 
 it("rejects a rebound session identity without touching its replacement transcript", async () => {

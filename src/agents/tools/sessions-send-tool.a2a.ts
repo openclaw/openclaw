@@ -22,7 +22,7 @@ import {
 } from "./in-process-gateway.js";
 import { resolveSessionsSendReplyTarget } from "./sessions-delivery-target.js";
 import {
-  recoverSessionsSendReply,
+  resolveSessionsSendReply,
   SESSIONS_SEND_TRUNCATION_NOTE,
 } from "./sessions-send-helpers.js";
 import type { AgentStepSession } from "./sessions-send-tool.types.js";
@@ -51,8 +51,6 @@ export async function runSessionsSendA2AFlow(params: {
   deliverRequesterReply?: (
     reply: Pick<Parameters<typeof runAgentStep>[0], "message" | "extraSystemPrompt">,
   ) => Promise<void>;
-  /** Host-bound reader for this accepted run's retained full answer. */
-  readAcceptedReply?: () => string | undefined | Promise<string | undefined>;
 }) {
   const gatewayCall = params.callGateway ?? callAgentToolGatewayRequest;
   const child = params.replyMode === "one-way";
@@ -101,16 +99,18 @@ export async function runSessionsSendA2AFlow(params: {
       }
       return;
     }
-    const reply = wait.replyText;
-    if (
-      wait.terminalReply?.disposition !== "visible" ||
-      !reply?.trim() ||
-      reply.trim() === HEARTBEAT_TOKEN
-    ) {
+    if (wait.terminalReply?.disposition !== "visible") {
       return;
     }
-
-    const recover = () => recoverSessionsSendReply(reply, params.readAcceptedReply);
+    const { replyText: reply, replyTruncated } = await resolveSessionsSendReply(wait, {
+      runId: params.runId,
+      sessionKey: params.targetSessionKey,
+      agentId: params.targetAgentId,
+      callGateway: gatewayCall,
+    });
+    if (!reply?.trim() || reply.trim() === HEARTBEAT_TOKEN) {
+      return;
+    }
 
     // Self-sends deliver the original output under its captured session generation.
     const requesterAgentId =
@@ -164,12 +164,7 @@ export async function runSessionsSendA2AFlow(params: {
         }
         // Gateway sends need the selected owner for text routing and media roots;
         // carry the admitted target instead of relying on an implicit default.
-        const recovered = await recover();
-        const {
-          text: message,
-          mediaUrls,
-          audioAsVoice,
-        } = splitMediaFromOutput((recovered.replyText ?? reply).trim());
+        const { text: message, mediaUrls, audioAsVoice } = splitMediaFromOutput(reply.trim());
         if (!message && !mediaUrls?.length) {
           return;
         }
@@ -205,12 +200,11 @@ export async function runSessionsSendA2AFlow(params: {
     }
 
     if (params.requesterSessionKey) {
-      const recovered = await recover();
       await deliverRequesterReply({
         ...requesterStepContext,
         sessionKey: params.requesterSessionKey,
-        message: recovered.replyText ?? reply,
-        extraSystemPrompt: `${child ? "A child session" : "Another session"} returned the result of your earlier sessions_send request. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} This result is delivered once; your response will not be sent back to the ${child ? "child" : "target session"}.${recovered.replyTruncated ? ` ${SESSIONS_SEND_TRUNCATION_NOTE}` : ""}`,
+        message: reply,
+        extraSystemPrompt: `${child ? "A child session" : "Another session"} returned the result of your earlier sessions_send request. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} This result is delivered once; your response will not be sent back to the ${child ? "child" : "target session"}.${replyTruncated ? ` ${SESSIONS_SEND_TRUNCATION_NOTE}` : ""}`,
         sourceAgentId: params.targetAgentId,
       });
     }

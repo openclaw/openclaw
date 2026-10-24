@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createSessionConversationTestRegistry } from "../../test-utils/session-conversation-registry.js";
+import { sanitizeAgentRunTerminalReply } from "../agent-run-terminal-reply.js";
 import { runAgentStep } from "./agent-step.js";
 import type { GatewaySessionListRow } from "./sessions-helpers.js";
 import { runSessionsSendA2AFlow } from "./sessions-send-tool.a2a.js";
@@ -126,61 +127,42 @@ describe("runSessionsSendA2AFlow reply delivery", () => {
     expectNoSend();
   }
 
-  it.each([
-    { available: true, self: false, throws: false },
-    { available: false, self: false, throws: false },
-    { available: false, self: false, throws: true },
-    { available: true, self: true, throws: false },
-    { available: false, self: true, throws: false },
-  ])(
-    "delivers long delayed replies with recovery $available, self=$self, throws=$throws",
-    async ({ available, self, throws }) => {
-      const full = "a".repeat(5_000) + "DELAYED_REPLY_TAIL";
-      const preview = "a".repeat(4_095) + "…";
-      const transport = callGatewayMock.getMockImplementation()!;
-      callGatewayMock.mockImplementation(async (opts: CallGatewayOptions) => {
-        if (opts.method === "chat.history") {
-          throw new Error("Gateway requester authority changed");
+  it.each([true, false])(
+    "recovers a long delayed peer answer or reports missing history (%s)",
+    async (available) => {
+      const fullReply = "A long peer answer. ".repeat(400) + "ANSWER_END";
+      const terminalReply = sanitizeAgentRunTerminalReply(fullReply);
+      callGatewayMock.mockImplementation(async (request: CallGatewayOptions) => {
+        if (request.method === "agent.wait") {
+          return { status: "ok", terminalReply };
         }
-        return transport(opts);
-      });
-      const readAcceptedReply = vi.fn(() => {
-        if (throws) {
-          throw new Error("Retained result unavailable");
+        expect(request.method).toBe("chat.history");
+        expect(request.params).toMatchObject({
+          sessionKey: "agent:worker:main",
+          agentId: "worker",
+        });
+        if (!available) {
+          throw new Error("History access denied");
         }
-        return available ? full : undefined;
+        return {
+          messages: [{ role: "assistant", content: fullReply, __openclaw: { runId: "run-test" } }],
+        };
       });
-      const target = "agent:main:discord:channel:target-room";
-      await runSessionsSendA2AFlow({
+      await runFlow({
         callGateway: callGatewayMock,
-        runId: "run-delayed",
-        readAcceptedReply,
-        targetAgentId: "main",
-        targetSessionKey: target,
-        displayKey: target,
-        requesterSessionKey: self ? target : "agent:main:main",
-        requesterDeliveryGeneration,
-        replyTimeoutMs: 10_000,
-        reply: {
-          status: "ok",
-          replyText: preview,
-          terminalReply: { disposition: "visible", text: preview },
-        },
+        targetAgentId: "worker",
+        targetSessionKey: "agent:worker:main",
+        requesterSessionKey: "agent:main:main",
       });
-      const delivered = self
-        ? (requireGatewayCall("send").params as Record<string, unknown>)
-        : (vi.mocked(runAgentStep).mock.calls[0]?.[0] ?? {});
-      expect(delivered.message).toBe(available ? full : preview);
-      expect(readAcceptedReply).toHaveBeenCalledOnce();
-      expect(callGatewayMock.mock.calls.some(([rpc]) => rpc.method === "chat.history")).toBe(false);
-      if (!self && !available) {
-        expect(delivered.extraSystemPrompt).toContain("The reply may be truncated.");
-        expect(delivered.extraSystemPrompt).toContain(
-          "missing section or a file containing the full reply",
-        );
-        expect(delivered.extraSystemPrompt).toContain("do not repeat the original task");
+      expect(runAgentStep).toHaveBeenCalledOnce();
+      const delivered = vi.mocked(runAgentStep).mock.calls[0]![0];
+      expect(delivered.message).toBe(
+        available ? fullReply : terminalReply.disposition === "visible" ? terminalReply.text : "",
+      );
+      if (available) {
+        expect(delivered.extraSystemPrompt).not.toContain("The reply may be truncated");
       } else {
-        expect(delivered.extraSystemPrompt ?? "").not.toContain("The reply may be truncated.");
+        expect(delivered.extraSystemPrompt).toContain("The reply may be truncated");
       }
     },
   );

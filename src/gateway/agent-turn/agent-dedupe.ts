@@ -6,7 +6,7 @@ import {
   hasUnretiredRpcSource,
 } from "../../sessions/session-controller.rpc-sources.js";
 import type { GatewayRequestContext } from "../server-methods/types.js";
-import { getAgentJobSession, setGatewayDedupeEntry } from "./agent-job.js";
+import { setGatewayDedupeEntry } from "./agent-job.js";
 import type { AgentTurnIo } from "./types.js";
 
 export class AgentRequestReservationEndedError extends Error {
@@ -38,33 +38,6 @@ export function readGatewayDedupeEntry(params: {
     }
   }
   return undefined;
-}
-
-/**
- * Reads the retained final answer of one accepted run. The replay cache must still
- * hold this exact run's successful result, recorded for the same session incarnation
- * in the current run lifecycle generation; otherwise there is no answer to read.
- */
-export function readAcceptedAgentRunReplyText(
-  context: Pick<GatewayRequestContext, "dedupe">,
-  accepted: { runId: string; agentId: string; sessionKey: string; sessionId: string },
-): string | undefined {
-  const entry = context.dedupe.get(`agent:${accepted.runId}`);
-  const payload = asOptionalRecord(entry?.payload);
-  const session = getAgentJobSession(accepted.runId);
-  if (
-    entry?.ok !== true ||
-    entry.incognito === true ||
-    payload?.status !== "ok" ||
-    payload.runId !== accepted.runId ||
-    session?.agentId !== accepted.agentId ||
-    session.sessionKey !== accepted.sessionKey ||
-    session.sessionId !== accepted.sessionId
-  ) {
-    return undefined;
-  }
-  const text = asOptionalRecord(asOptionalRecord(payload.result)?.meta)?.finalAssistantVisibleText;
-  return typeof text === "string" ? text : undefined;
 }
 
 export function isAcceptedAgentDedupePayload(payload: unknown): payload is {
@@ -187,7 +160,6 @@ export function setAbortedAgentDedupeEntries(params: {
   sessionKey?: string;
   runId: string;
   stopReason: string;
-  session?: Parameters<typeof setGatewayDedupeEntry>[0]["session"];
 }): void {
   setGatewayDedupeEntries({
     ...params,

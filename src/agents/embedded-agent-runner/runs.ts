@@ -31,7 +31,6 @@ import {
   assertSessionControllerOperation,
   getAttachedBackend,
   getSessionControllerEntryForOperation,
-  getSessionControllerOperation,
   markReplyOperationExecutionStarted,
   readSessionControllerOperationState,
   resolveReplyRunForCurrentSessionId,
@@ -176,13 +175,10 @@ export function markActiveEmbeddedRunAbandoned(params: {
 }
 
 export function resolveEmbeddedRunAbandonment(
-  params: AbandonmentQuery,
+  params: Omit<AbandonmentQuery, "sessionFile">,
 ): AbandonedEmbeddedRun["reason"] | undefined {
-  const query = { ...params, sessionFile: normalizeSessionFileRegistryKey(params.sessionFile) };
-  const matches = [...ABANDONED_EMBEDDED_RUNS].filter(
-    ([owner, abandoned]) =>
-      (!query.sessionFile || abandoned.sessionFile === query.sessionFile) &&
-      matchesAbandonment(owner, abandoned, query),
+  const matches = [...ABANDONED_EMBEDDED_RUNS].filter(([owner, abandoned]) =>
+    matchesAbandonment(owner, abandoned, params),
   );
   return matches.length === 1 ? matches[0]![1].reason : undefined;
 }
@@ -473,20 +469,6 @@ export function prepareEmbeddedAgentRunCompletionClaim(
 
 export function isEmbeddedAgentRunHandleActive(sessionId: string): boolean {
   return Boolean(getActiveNativeAttempt(sessionId));
-}
-
-/** @internal Exposed for unit tests only. */
-export function resolveActiveEmbeddedRunHandleSessionId(sessionKey: string): string | undefined {
-  const normalizedSessionKey = sessionKey.trim();
-  if (!normalizedSessionKey) {
-    return undefined;
-  }
-  // Logical aliases outlive turns; native lookup follows the exact registration key.
-  const operation = getSessionControllerOperation(normalizedSessionKey);
-  const registration = operation && getControllerEmbeddedAttachment(operation);
-  return registration?.sessionKey?.trim() === normalizedSessionKey
-    ? registration.sessionId
-    : undefined;
 }
 
 export type ActiveEmbeddedRunOwner = {

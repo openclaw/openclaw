@@ -2,8 +2,98 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { registerHooks } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { isMainThread } from "node:worker_threads";
+import { isMainThread, threadId } from "node:worker_threads";
 import type { ArrowFunction, FunctionDeclaration, Node } from "typescript/ast";
+
+const handlersUrl = new URL("../../src/state/openclaw-state-read-handlers.ts", import.meta.url)
+  .href;
+const handlersOverride = process.env.OPENCLAW_BENCH_GITHUB_STATE_HANDLERS;
+const selectedHandlersUrl = handlersOverride
+  ? pathToFileURL(resolve(handlersOverride)).href
+  : handlersUrl;
+if (dirname(fileURLToPath(selectedHandlersUrl)) !== dirname(fileURLToPath(handlersUrl))) {
+  throw new Error("GitHub state handler override must be adjacent to its source owner");
+}
+const publicationReaderUrl = new URL(
+  "../../src/state/github-publication.read.worker.ts",
+  import.meta.url,
+).href;
+const readerOverride = process.env.OPENCLAW_BENCH_GITHUB_PUBLICATION_READER;
+const selectedReaderUrl = readerOverride
+  ? pathToFileURL(resolve(readerOverride)).href
+  : publicationReaderUrl;
+if (dirname(fileURLToPath(selectedReaderUrl)) !== dirname(fileURLToPath(publicationReaderUrl))) {
+  throw new Error("GitHub publication reader override must be adjacent to its source owner");
+}
+
+registerHooks({
+  resolve(specifier, context, nextResolve) {
+    const result = nextResolve(specifier, context);
+    if (result.url === handlersUrl) {
+      return { ...result, url: selectedHandlersUrl };
+    }
+    return result.url === publicationReaderUrl ? { ...result, url: selectedReaderUrl } : result;
+  },
+  load(url, context, nextLoad) {
+    const result = nextLoad(url, context);
+    if (
+      url !== new URL("../../src/infra/runtime-worker-url.ts", import.meta.url).href ||
+      result.source == null
+    ) {
+      return result;
+    }
+    const source =
+      typeof result.source === "string" ? result.source : new TextDecoder().decode(result.source);
+    const original =
+      /\[\s*["']--import["']\s*,\s*import\.meta\.resolve\(\s*["']tsx\/esm["']\s*\)\s*\]/u;
+    if (!original.test(source)) {
+      throw new Error("Missing shared-state worker preload measurement boundary");
+    }
+    return {
+      ...result,
+      source: source.replace(
+        original,
+        `["--import", import.meta.resolve("tsx/esm"), "--import", ${JSON.stringify(import.meta.url)}]`,
+      ),
+    };
+  },
+});
+
+if (!isMainThread) {
+  const workerUrl = new URL("../../src/state/openclaw-state-read.worker.ts", import.meta.url).href;
+  registerHooks({
+    load(url, context, nextLoad) {
+      const result = nextLoad(url, context);
+      if (url !== workerUrl || result.source == null) {
+        return result;
+      }
+      const source =
+        typeof result.source === "string" ? result.source : new TextDecoder().decode(result.source);
+      const original = /await\s+import\(\s*["']\.\/openclaw-state-read-handlers\.js["']\s*\)/u;
+      if (!original.test(source)) {
+        throw new Error("Missing shared-state fallback import measurement boundary");
+      }
+      return {
+        ...result,
+        source: source.replace(
+          original,
+          `await (async () => {
+            const started = performance.now();
+            try { return await import("./openclaw-state-read-handlers.js"); }
+            finally {
+              const durationMs = performance.now() - started;
+              if (durationMs >= 10) console.error("GITHUB_RECEIPT_IMPORT " + JSON.stringify({
+                threadId: ${threadId}, command: input.command.type,
+                module: ${JSON.stringify(selectedHandlersUrl)},
+                startedAtEpochMs: performance.timeOrigin + started, durationMs
+              }));
+            }
+          })()`,
+        ),
+      };
+    },
+  });
+}
 
 // Benchmark IPC only: no source changes, credentials, or request contents are recorded.
 if (isMainThread) {
@@ -98,6 +188,10 @@ if (isMainThread) {
       { verifyGitHubCredential: "credential-verification" },
     ],
     [selectedOwnerUrl, { readSharedGitHubPublication: "receipt" }],
+    [
+      sourceUrl("state/openclaw-state-read-operation.ts"),
+      { run: "state-read-source", query: "state-read-query" },
+    ],
     [sourceUrl("gateway/serialized-json.ts"), { serializeGatewayFrame: "serialization" }],
   ]);
   let ownerLoaded = false;

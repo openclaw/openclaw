@@ -1252,30 +1252,6 @@ describe("GatewayBrowserClient", () => {
     });
   });
 
-  it("does not auto-reconnect on PROTOCOL_MISMATCH", async () => {
-    useNodeFakeTimers();
-
-    const { ws: ws1, connectFrame: connect } = await startConnect(
-      createClient({ token: "shared-auth-token" }),
-    );
-
-    ws1.emitMessage({
-      type: "res",
-      id: connect.id,
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "protocol mismatch",
-        details: { code: "PROTOCOL_MISMATCH" },
-      },
-    });
-    await expectSocketClosed(ws1);
-    ws1.emitClose(4008, "connect failed");
-
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(wsInstances).toHaveLength(1);
-  });
-
   it.each([
     { code: "AUTH_DEVICE_TOKEN_MISMATCH", clear: true },
     { code: "AUTH_SCOPE_MISMATCH", clear: false },

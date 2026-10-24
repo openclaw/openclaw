@@ -300,12 +300,10 @@ export async function collectChannelStatus(params: {
         }),
     )
   ).filter((status): status is ChannelSetupStatus => status !== undefined);
-  const statusByChannel = new Map(
-    statusEntries.map((entry: ChannelSetupStatus) => [entry.channel, entry]),
-  );
+  const statusChannels = new Set(statusEntries.map((entry) => entry.channel));
   const fallbackStatuses = listChatChannels()
     .filter((meta) => shouldShowChannelInSetup(meta))
-    .filter((meta) => !statusByChannel.has(meta.id))
+    .filter((meta) => !statusChannels.has(meta.id))
     .map((meta) => {
       const configured = isChannelConfigured(params.cfg, meta.id);
       const statusLabel = configured ? "configured (plugin disabled)" : "not configured";
@@ -318,7 +316,7 @@ export async function collectChannelStatus(params: {
       };
     });
   const discoveredPluginStatuses = installedCatalogEntries
-    .filter((entry) => !statusByChannel.has(entry.id as ChannelChoice))
+    .filter((entry) => !statusChannels.has(entry.id as ChannelChoice))
     .map((entry) => {
       const configured = isChannelConfigured(params.cfg, entry.id);
       const pluginEnabled =

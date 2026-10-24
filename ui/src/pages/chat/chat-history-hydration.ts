@@ -128,7 +128,6 @@ export async function hydrateChatHistory(
       },
       cursor,
       inputRunIds,
-      undefined,
       historyState,
     );
   };
@@ -337,6 +336,9 @@ export async function hydrateChatHistory(
     state.chatVerboseLevel = res.verboseLevel ?? null;
     state.chatQueueModeOverride = res.sessionInfo?.queueMode;
     state.chatEffectiveQueueMode = res.sessionInfo?.effectiveQueueMode;
+    const observedRunActivity = Boolean(
+      res.inFlightRun && state.knownAgentRunIds?.has(res.inFlightRun.runId),
+    );
     const resetStream = !state.chatRunId || state.chatRunId === previousRunId;
     if (resetStream) {
       const streamReconciliation = {
@@ -418,6 +420,7 @@ export async function hydrateChatHistory(
     applyHistoryRun({
       state,
       run: res.inFlightRun,
+      observedRunActivity,
       sessionInfo: res.sessionInfo,
       historyRun: res.observation.run,
       previousRunProjections,

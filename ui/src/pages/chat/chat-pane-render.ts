@@ -4,7 +4,6 @@ import { patchSettings } from "../../app/settings.ts";
 import { readPresenceEntries, resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import { navigateMarkdownSession } from "../../components/markdown-session-links.ts";
 import { personActivityRouting } from "../../components/person-activity-link.ts";
-import { t } from "../../i18n/index.ts";
 import { registerChatSessionEnglish } from "../../i18n/locales/en-chat-session.ts";
 import {
   pickFreshestObserverDigest,
@@ -157,15 +156,8 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
     );
     const restartRecoveryTombstoned = selectedSession?.restartRecoveryStatus === "tombstoned";
     const multiIdentity = this.hasMultipleIdentities();
-    // Avoid flashing view-only while metadata loads; failed lookups still explain the gate.
-    const catalogDisabledReason =
-      catalogKey &&
-      !this.history.catalogLoading &&
-      this.history.catalogSession?.canContinue !== true
-        ? this.history.catalogHost?.kind === "node"
-          ? t("chat.catalog.remoteViewOnly")
-          : t("chat.catalog.unsupportedViewOnly")
-        : null;
+    const catalogReason = this.catalogComposerReason(catalogKey);
+    const catalogDisabledReason = catalogReason?.text ?? null;
     const { closePanelSlot, openPanelSlot, sessionWorkspace } = createChatPaneRails({
       state,
       sidebarLayout,
@@ -339,6 +331,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         this.sessionCreation.recovering ||
         this.collaboration.addOperation !== undefined,
       placementStartup: placementStartup ?? placementComposer.startup,
+      guestWelcome: this.context.guestWelcome,
       onRetrySessionPlacementStartup: placementStartup?.retryable
         ? this.retrySessionPlacementStartup
         : undefined,
@@ -346,7 +339,11 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       runActive,
       runStatus: state.chatRunStatus,
       startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
-      awaitingActivity: state.chatRunStartup == null,
+      awaitingActivity:
+        state.chatRunStartup == null &&
+        !(state.chatRunId
+          ? state.knownAgentRunIds.has(state.chatRunId)
+          : selectedSession?.activeRunIds?.some((runId) => state.knownAgentRunIds.has(runId))),
       environmentStartStatus:
         placement?.state === "provisioning" ? placement.startStatus : undefined,
       waitingApproval: state.waitingApprovalStatuses.size > 0,
@@ -456,6 +453,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         ? (typing, preview, cursor) => this.sendTypingState(typing, preview, cursor)
         : undefined,
       ...composerAvailability,
+      disabledReasonAction: catalogReason?.action,
       modelSetupRequired:
         modelSetupRequired && !selectedSessionArchived && !restartRecoveryTombstoned,
       onModelSetup: () => this.context.navigate("model-setup"),
@@ -485,6 +483,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         agentsList: state.agentsList,
         hello: state.hello,
       },
+      operatorAuth: state.hello?.auth ?? null,
       providerUsage: {
         basePath: state.basePath,
         modelAuthStatusResult: state.modelAuthStatusResult,

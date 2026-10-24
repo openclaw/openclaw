@@ -152,17 +152,6 @@ export function resolveSessionWorkSubtitle(row: SessionWorktreeDisplayRow): stri
   return checkout ?? node;
 }
 
-type SessionKeyInfo = {
-  /** Typed-session identity; display branching keys off this, not label text. */
-  kind?: "subagent" | "automation";
-  /** Catalog-backed prefix for typed sessions. Empty for others. */
-  prefix: string;
-  /** Human-readable fallback when no label / displayName is available. */
-  fallbackName: string;
-  /** Raw account segment; only a fallback, Gateway rows carry the real one. */
-  accountId?: string;
-};
-
 type SessionDisplayRow = {
   label?: string;
   displayName?: string;
@@ -189,7 +178,16 @@ export function formatSessionChannelLabel(channel: string): string {
   return CHANNEL_LABELS.get(channel) ?? channel.charAt(0).toUpperCase() + channel.slice(1);
 }
 
-function parseSessionKey(key: string): SessionKeyInfo {
+function parseSessionKey(key: string): {
+  /** Typed-session identity; display branching keys off this, not label text. */
+  kind?: "subagent" | "automation";
+  /** Catalog-backed prefix for typed sessions. Empty for others. */
+  prefix: string;
+  /** Human-readable fallback when no label / displayName is available. */
+  fallbackName: string;
+  /** Raw account segment; only a fallback, Gateway rows carry the real one. */
+  accountId?: string;
+} {
   const normalized = normalizeLowercaseStringOrEmpty(key);
 
   if (key === "main" || /^agent:[^:]+:main$/u.test(key)) {
@@ -295,25 +293,20 @@ export function resolveSessionDisplayName(key: string, row?: SessionDisplayRow):
     return prefixPattern.test(name) ? name : `${prefix} ${name}`;
   };
 
-  const resolveNamedOrFallback = (): string => {
-    if (label && label !== key) {
-      return applyTypedPrefix(label);
-    }
-    if (displayName && displayName !== key) {
-      return applyTypedPrefix(displayName);
-    }
+  let name = fallbackName;
+  if (label && label !== key) {
+    name = applyTypedPrefix(label);
+  } else if (displayName && displayName !== key) {
+    name = applyTypedPrefix(displayName);
+  } else {
     // Unnamed work sessions read as their checkout instead of an opaque key.
     const workSubtitle = row ? resolveSessionWorkSubtitle(row) : undefined;
     if (workSubtitle && row?.worktree) {
-      return applyTypedPrefix(workSubtitle);
+      name = applyTypedPrefix(workSubtitle);
+    } else if (derivedTitle && derivedTitle !== key) {
+      name = applyTypedPrefix(derivedTitle);
     }
-    if (derivedTitle && derivedTitle !== key) {
-      return applyTypedPrefix(derivedTitle);
-    }
-    return fallbackName;
-  };
-
-  const name = resolveNamedOrFallback();
+  }
   if (!accountId || accountId === "default") {
     return name;
   }

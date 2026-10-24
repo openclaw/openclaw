@@ -1,17 +1,22 @@
-import { Errored, For, Loading, Show, createMemo, isPending, latest } from "solid-js";
+import { Errored, For, Loading, Show, createMemo, isPending, latest, onSettled } from "solid-js";
 import type { SessionProcessSummary } from "../../../../../packages/gateway-protocol/src/schema/session-processes.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
+import { registerChatDetailsEnglish } from "../../../i18n/locales/en-chat-details.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ProcessesPanelData } from "../processes-panel-data.ts";
 import "./chat-details-processes.css";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
+import { createDetailsProcessesPresentation } from "./chat-details-processes-presentation.ts";
 import { createProcessesPresentation } from "./chat-processes-presentation.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
+registerEnglishCatalog(registerChatDetailsEnglish);
 
 type Props = {
+  sessionKey: string;
+  agentId: string;
   /** Read the native host's projection; it owns observation, refresh and stop authority. */
   processes: () => ProcessesPanelData | undefined;
   presented: boolean;
@@ -27,6 +32,8 @@ function ProcessRow(props: {
   presentation: ReturnType<typeof createProcessesPresentation>;
   presented: boolean;
   onOpen: () => void;
+  onDismiss: (row: SessionProcessSummary) => void;
+  dismissReady: boolean;
 }) {
   const stop = createMemo(() => props.presentation.createStop(() => props.row));
   const nameOverflow = useScrollState(true, false, { revision: () => props.row.name });
@@ -43,13 +50,16 @@ function ProcessRow(props: {
       role="listitem"
       data-process-id={props.row.processId}
       data-status={props.row.status}
-      data-stoppable={props.row.status === "running" && props.row.canStop ? "" : undefined}
       data-stopping={stop().stopping() ? "" : undefined}
+      data-actionable={
+        props.row.status === "completed" || (props.row.status === "running" && props.row.canStop)
+          ? ""
+          : undefined
+      }
     >
       <button
         class="chat-details-processes__open"
         type="button"
-        title={description()}
         aria-label={description()}
         disabled={!props.presented}
         onClick={() => props.onOpen()}
@@ -81,11 +91,9 @@ function ProcessRow(props: {
       </button>
       <Show when={props.row.status === "running" && props.row.canStop}>
         <button
-          class="chat-details-processes__stop"
+          class="chat-details-processes__action chat-details-processes__stop"
           type="button"
-          title={
-            stop().stopping() ? status() : t("chat.processesPanel.stop", { name: props.row.name })
-          }
+          title={t("chat.processesPanel.stopProcess")}
           aria-label={t("chat.processesPanel.stop", { name: props.row.name })}
           disabled={!props.presented || stop().stopping()}
           onClick={() => {
@@ -99,6 +107,18 @@ function ProcessRow(props: {
           </Show>
         </button>
       </Show>
+      <Show when={props.row.status === "completed"}>
+        <button
+          class="chat-details-processes__action chat-details-processes__dismiss"
+          type="button"
+          title={t("chat.processesPanel.dismiss")}
+          aria-label={t("chat.processesPanel.dismiss")}
+          disabled={!props.presented || !props.dismissReady}
+          onClick={() => props.onDismiss(props.row)}
+        >
+          <Icon name="x" />
+        </button>
+      </Show>
       <Show when={stop().stopping()}>
         <span class="sr-only" role="status">
           {status()}
@@ -110,10 +130,22 @@ function ProcessRow(props: {
 
 /** Desktop list using the same process snapshot and operations as the full panel. */
 export function ChatDetailsProcesses(props: Props) {
+  const details = createDetailsProcessesPresentation(() => ({
+    sessionKey: props.sessionKey,
+    agentId: props.agentId,
+    rows: props.processes()?.snapshot.rows ?? [],
+  }));
+  let list: HTMLDivElement | undefined;
+  const dismiss = (row: SessionProcessSummary) => {
+    if (props.presented) {
+      details.dismiss(row);
+      onSettled(() => list?.focus({ preventScroll: true }));
+    }
+  };
   const presentation = createProcessesPresentation(() => props.processes(), true);
   const snapshot = () => props.processes()?.snapshot;
   const rows = createMemo(() =>
-    (snapshot()?.rows ?? []).toSorted((a, b) => order[a.status] - order[b.status]),
+    details.rows().toSorted((a, b) => order[a.status] - order[b.status]),
   );
   const open = () => {
     if (props.presented) {
@@ -149,6 +181,10 @@ export function ChatDetailsProcesses(props: Props) {
           <div
             class="chat-details-processes__list"
             role="list"
+            tabindex={-1}
+            ref={(element) => {
+              list = element;
+            }}
             aria-label={t("chat.sessionDetails.processes")}
           >
             <For each={rows()} keyed={(row) => row.instanceId}>
@@ -158,6 +194,8 @@ export function ChatDetailsProcesses(props: Props) {
                   presentation={presentation}
                   presented={props.presented}
                   onOpen={open}
+                  onDismiss={dismiss}
+                  dismissReady={details.ready()}
                 />
               )}
             </For>

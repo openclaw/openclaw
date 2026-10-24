@@ -15,6 +15,7 @@ import {
   hasCompletionMessageSessionSpawn,
 } from "./accepted-session-spawn.js";
 import { bindOperatorModelExecution, readRunOperatorAuthority } from "./admitted-run-context.js";
+import type { CliOutput } from "./cli-output-contracts.js";
 import { runCliBeforeAgentReply } from "./cli-runner/before-agent-reply.js";
 import { acceptsCliLiveSession } from "./cli-runner/cli-live-session-registry.js";
 import {
@@ -25,7 +26,9 @@ import {
 import {
   buildBlockedCliRunResult,
   buildCliDeliveredFailure,
+  buildCliReseedReceipt,
   buildCliRunResult,
+  buildCliSessionBinding,
   formatCliTerminalInterruption,
   isClaudeCliBackend,
   settleCliPreparationError,
@@ -68,6 +71,7 @@ import {
   runAgentHarnessLlmOutputHook,
 } from "./harness/lifecycle-hook-helpers.js";
 import { isRequiredReplyExpectation, resolveReplyExpectation } from "./reply-completion.js";
+import { isAgentRunDirectAbortReason } from "./run-termination.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -313,6 +317,46 @@ async function runPreparedCliAgentOwned(
   };
 
   let userTurnHandled = false;
+  // A directly stopped first turn rethrows its abort unsettled: no transcript, hooks,
+  // or replay. Its flushed native session is the chat's only continuity, so bind
+  // it into the still-empty binding. Superseded, restarted, resumed, and forked
+  // runs keep the abort guards from #147139 and bind nothing here.
+  const persistStoppedFirstCliSession = async (
+    error: unknown,
+    output: CliOutput,
+    cliSessionIdToUse: string | undefined,
+  ) => {
+    const sessionId = output.sessionId;
+    if (
+      !params.persistStoppedFirstCliSession ||
+      !output.terminalInterruption ||
+      !sessionId ||
+      cliSessionIdToUse ||
+      resolveCliSessionId(context.reusableCliSession) ||
+      sessionBindingDisabled ||
+      !isAgentRunDirectAbortReason(error) ||
+      !isClaudeCliBackend(params.provider) ||
+      !(await isCliBindingFlushed(sessionId, params.provider, context.cwd ?? context.workspaceDir))
+    ) {
+      return;
+    }
+    try {
+      const reseedReceipt = buildCliReseedReceipt({
+        runParams: params,
+        output,
+        usedHistoryPrompt: context.openClawHistoryPrompt !== undefined,
+        userTurnHandled,
+      });
+      await params.persistStoppedFirstCliSession(
+        buildCliSessionBinding(context, sessionId, output, reseedReceipt),
+      );
+    } catch (persistError) {
+      log.warn(
+        `CLI run ${params.runId} could not keep its stopped first session: ${formatErrorMessage(persistError)}`,
+      );
+    }
+  };
+
   const executeCliAttempt = async (cliSessionIdToUse?: string, options?: CliRecoveryOptions) => {
     const timeoutMs = options?.timeoutMs ?? params.timeoutMs;
     const forkCliSessionOnResume =
@@ -358,7 +402,12 @@ async function runPreparedCliAgentOwned(
           }
         : undefined,
     );
-    params.assertCurrent?.();
+    try {
+      params.assertCurrent?.();
+    } catch (error) {
+      await persistStoppedFirstCliSession(error, output, cliSessionIdToUse);
+      throw error;
+    }
     // Test facades and non-instrumented executors may not signal the boundary.
     diagnosticLifecycle?.setPhase("resolve");
     const preparedReply = prepareCliRunTerminalReply(context, output);

@@ -8,6 +8,7 @@ import {
   checkExportScan,
   parseKnipCompactUnusedExportsResult,
 } from "../../scripts/check-deadcode-exports.mts";
+import { readUpdateCompatibilityInventory } from "../../scripts/lib/update-compat-chunks.mts";
 import { vitestWorkerBuildEntries } from "../../scripts/lib/vitest-worker-build-entries.mts";
 import { vitestWorkerDeclarationEntries } from "../../scripts/lib/vitest-worker-declarations.mts";
 
@@ -174,6 +175,62 @@ const catalog = module.loadControlUiSourceCatalog();`;
     vi.mocked(fs.readFileSync).mockReturnValue(withoutStartup);
     expect(compile("// config", "config/knip-vite-consumers.mjs")).not.toContain(
       "loadControlUiStartupCatalog",
+    );
+  });
+
+  it("models retained updater named exports without fabricating private imports", () => {
+    const manifest = fs.readFileSync("package.json", "utf8");
+    const compile = knipConfig.compilers.json;
+    const compiled = compile(manifest, "package.json");
+    expect(compiled).toMatch(
+      /import \{ isPackageManagerUpdateMode as __updateCompatibilityConsumer\d+ \} from "\.\/src\/cli\/update-cli\/update-command-service-recovery\.ts";/u,
+    );
+    for (const [module, symbol] of [
+      ["src/cli/update-cli/update-command-package.ts", "readPackageUpdateIdentity"],
+      [
+        "src/infra/update-managed-service-handoff.ts",
+        "isCurrentManagedServiceUpdateHandoffProcess",
+      ],
+      ["src/infra/update-runner-git-target.ts", "readGitTargetSchemaVersions"],
+    ]) {
+      expect(
+        compiled
+          .split("\n")
+          .some(
+            (line) =>
+              line.startsWith(`import { ${symbol} as `) && line.endsWith(` from "./${module}";`),
+          ),
+      ).toBe(false);
+      expect(compiled).toContain(`from "./${module}";`);
+    }
+    const finishAliases = [
+      ...compiled.matchAll(
+        /import \{ finishUpdateRun as (__updateCompatibilityConsumer\d+) \} from "\.\/src\/infra\/update-run-(?:ledger|write)\.ts";/gu,
+      ),
+    ].map((match) => match[1]);
+    expect(finishAliases).toHaveLength(2);
+    expect(new Set(finishAliases).size).toBe(2);
+  });
+
+  it("rejects retained updater bindings that are neither exports nor real imports", () => {
+    const manifest = fs.readFileSync("package.json", "utf8");
+    const inventoryPath = path.resolve("scripts/lib/update-compat-inventory.json");
+    const inventory = structuredClone(readUpdateCompatibilityInventory(inventoryPath));
+    inventory.releases[0]!.chunks[0]!.exports.push({
+      exported: "missingUpdaterConsumer",
+      origin: {
+        module: "src/cli/update-cli/update-command-service-recovery.ts",
+        symbol: "missingUpdaterConsumer",
+      },
+    });
+    const readFileSync = fs.readFileSync.bind(fs);
+    vi.spyOn(fs, "readFileSync").mockImplementation((file, options) => {
+      return path.resolve(String(file)) === inventoryPath
+        ? JSON.stringify(inventory)
+        : readFileSync(file, options);
+    });
+    expect(() => knipConfig.compilers.json(manifest, "package.json")).toThrow(
+      "Recorded updater binding src/cli/update-cli/update-command-service-recovery.ts:missingUpdaterConsumer is neither a named export nor an imported named binding",
     );
   });
 

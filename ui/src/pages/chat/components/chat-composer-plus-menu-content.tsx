@@ -16,6 +16,7 @@ import {
   resolveWebSearchToolOverrideState,
 } from "../../../lib/sessions/tool-overrides.ts";
 import { uploadsEnabled } from "../../../lib/uploads.ts";
+import "./chat-camera-capture.tsx";
 import { resolveComposerSkills } from "../composer-capability-catalog.ts";
 import { useSingleAttachmentPicker } from "./chat-attachment-picker-policy.ts";
 import {

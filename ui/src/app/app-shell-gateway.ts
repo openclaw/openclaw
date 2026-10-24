@@ -1,7 +1,6 @@
 import type { UiCommandParams } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient, GatewayEventFrame, GatewayHelloOk } from "../api/gateway.ts";
-import type { GatewayAgentRow } from "../api/types.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
@@ -63,25 +62,6 @@ export interface ShellGatewayHost {
     "recoverDeletedActiveSession" | "selectChatSession"
   >;
   invalidate(): void;
-}
-
-function diffAgentRoster(
-  previous: readonly GatewayAgentRow[],
-  next: readonly GatewayAgentRow[],
-): { invalidatedIds: string[]; changedIds: string[] } {
-  const nextById = new Map(next.map((agent) => [agent.id, agent]));
-  const invalidatedIds: string[] = [];
-  const changedIds: string[] = [];
-  for (const agent of previous) {
-    const replacement = nextById.get(agent.id);
-    if (!replacement) {
-      invalidatedIds.push(agent.id);
-    } else if (JSON.stringify(replacement) !== JSON.stringify(agent)) {
-      invalidatedIds.push(agent.id);
-      changedIds.push(agent.id);
-    }
-  }
-  return { invalidatedIds, changedIds };
 }
 
 export class ShellGatewayOwner {
@@ -444,13 +424,25 @@ export class ShellGatewayOwner {
     if (!next || this.host.context !== context) {
       return;
     }
-    const rosterDiff = diffAgentRoster(previous?.agents ?? [], next.agents);
-    if (rosterDiff.invalidatedIds.length > 0) {
-      context.agents.invalidateFiles(rosterDiff.invalidatedIds);
-      context.agentIdentity.invalidate(rosterDiff.invalidatedIds);
+    const previousAgents = previous?.agents ?? [];
+    const nextById = new Map(next.agents.map((agent) => [agent.id, agent]));
+    const invalidatedIds: string[] = [];
+    const changedIds: string[] = [];
+    for (const agent of previousAgents) {
+      const replacement = nextById.get(agent.id);
+      if (!replacement) {
+        invalidatedIds.push(agent.id);
+      } else if (JSON.stringify(replacement) !== JSON.stringify(agent)) {
+        invalidatedIds.push(agent.id);
+        changedIds.push(agent.id);
+      }
     }
-    if (rosterDiff.changedIds.length > 0) {
-      void context.agentIdentity.ensure(rosterDiff.changedIds);
+    if (invalidatedIds.length > 0) {
+      context.agents.invalidateFiles(invalidatedIds);
+      context.agentIdentity.invalidate(invalidatedIds);
+    }
+    if (changedIds.length > 0) {
+      void context.agentIdentity.ensure(changedIds);
     }
     const nextIds = new Set(next.agents.map((agent) => agent.id));
     if (

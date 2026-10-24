@@ -14,7 +14,10 @@ import {
 } from "./control-ui-plugin-tabs.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
 
-function descriptor(id: string, fields: Partial<PluginControlUiDescriptor>) {
+function descriptor(
+  id: string,
+  fields: Partial<PluginControlUiDescriptor & { surface: "link-reader" | "tab" }>,
+) {
   return { id, label: id, surface: "link-reader" as const, ...fields };
 }
 
@@ -130,7 +133,7 @@ describe("plugin link-reader discovery", () => {
       pathPattern: "^/items/[0-9]+$",
       detailMethod: "forge.read",
     };
-    const invalid: Array<Partial<PluginControlUiDescriptor>> = [
+    const invalid: Parameters<typeof descriptor>[1][] = [
       { linkReader: { ...metadata, hosts: ["*.example"] } },
       { linkReader: { ...metadata, hosts: ["https://forge.example"] } },
       { linkReader: { ...metadata, pathPattern: "/items/" } },

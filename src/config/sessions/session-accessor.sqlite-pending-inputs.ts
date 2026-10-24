@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { classifyAgentRunTerminalOutcome } from "@openclaw/normalization-core/agent-run-terminal-outcome";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { AgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.types.js";
@@ -13,6 +12,7 @@ import {
 import type { EngineConnection } from "../../infra/sql-connection.js";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import { AsyncContext } from "../../shared/async-context.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
@@ -50,15 +50,11 @@ export type {
   SessionPendingInputAppend,
 } from "./session-pending-input.types.js";
 
-const workerCustody = resolveGlobalSingleton(
-  Symbol.for("openclaw.sessionPendingInputWorkerCustody"),
-  () =>
-    new AsyncLocalStorage<{
-      owner: SessionPendingInputOwner;
-      assertCurrent(): void;
-      consumed: Set<string>;
-    }>(),
-);
+const workerCustody = new AsyncContext<{
+  owner: SessionPendingInputOwner;
+  assertCurrent(): void;
+  consumed: Set<string>;
+}>(Symbol.for("openclaw.sessionPendingInputWorkerCustody"));
 
 export function captureSessionPendingInputWorkerCustody() {
   const owner = owners.current.getStore();
@@ -151,11 +147,13 @@ export function readSessionPendingInputWorkerReceipt(
 
 const owners = resolveGlobalSingleton(Symbol.for("openclaw.sessionPendingInputOwners"), () => ({
   live: new Map<string, SessionPendingInputOwner>(),
-  current: new AsyncLocalStorage<SessionPendingInputOwner>(),
-  relocation: new AsyncLocalStorage<{
+  current: new AsyncContext<SessionPendingInputOwner>(
+    Symbol.for("openclaw.sessionPendingInputOwners.current"),
+  ),
+  relocation: new AsyncContext<{
     owner: SessionPendingInputOwner;
     sourceInputId: string;
-  }>(),
+  }>(Symbol.for("openclaw.sessionPendingInputOwners.relocation")),
   transactionRelocations: new WeakMap<EngineConnection, Map<SessionPendingInputOwner, string>>(),
 }));
 

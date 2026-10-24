@@ -310,6 +310,23 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
     },
   );
 
+  it("keeps the room-event session mode stable when the channel requests tool-only delivery", () => {
+    expectPolicyFields(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: automaticGroupReplyConfig,
+        ctx: { ChatType: "group", InboundEventKind: "room_event" },
+        requested: "message_tool_only",
+        sendPolicy: "allow",
+      }),
+      {
+        sourceReplyDeliveryMode: "message_tool_only",
+        sessionStableSourceReplyDeliveryMode: "automatic",
+        suppressAutomaticSourceDelivery: true,
+        suppressDelivery: true,
+      },
+    );
+  });
+
   it("keeps the stable mode tool-only under a sender-scoped message denial", () => {
     // A sender-scoped denial downgrades the sender's effective delivery, but
     // the session-stable mode feeds CLI binding facts shared by sender-less

@@ -274,10 +274,10 @@ it("rechecks blocked completion after wake admission", async ({ signal }) => {
   driver.controller.runRequesterSettleWake = (entry, run, isCurrent) =>
     runWake(
       entry,
-      async () => {
+      async (releasePreparation) => {
         admitted.resolve(undefined);
         await release.promise;
-        return run();
+        return run(releasePreparation);
       },
       isCurrent,
     );

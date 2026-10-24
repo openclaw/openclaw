@@ -1,7 +1,8 @@
 import { listen } from "../lib/reactive/listener.ts";
 import type { DockPanelLayoutStore, DockPanelPlacement } from "./dock-panel-layout.ts";
 
-type DockLayoutDependencies<TDock extends DockPanelPlacement> = {
+/** Geometry and open intent stay synchronous for panel actions and persistence. */
+export function createDockLayout<TDock extends DockPanelPlacement>(deps: {
   layout: DockPanelLayoutStore<TDock>;
   reservationPrefix: string;
   isAvailable: () => boolean;
@@ -9,12 +10,7 @@ type DockLayoutDependencies<TDock extends DockPanelPlacement> = {
   isFullscreen?: () => boolean;
   onResize?: () => void;
   notify: () => void;
-};
-
-/** Geometry and open intent stay synchronous for panel actions and persistence. */
-export function createDockLayout<TDock extends DockPanelPlacement>(
-  deps: DockLayoutDependencies<TDock>,
-) {
+}) {
   let suppressed = false;
   let persistedOpen = false;
   let stopResize: (() => void) | undefined;

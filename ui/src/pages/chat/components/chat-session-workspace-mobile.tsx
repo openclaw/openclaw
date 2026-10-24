@@ -412,6 +412,7 @@ export function SessionWorkspaceMobile(props: SessionWorkspaceMobileProps) {
           <Show when={props.status.kind === "empty" && props.status}>
             {(status) => (
               <PanelEmptyState
+                presentation="mobile"
                 heading={status().heading}
                 description={status().description}
                 icon={<Icon name="folder" />}

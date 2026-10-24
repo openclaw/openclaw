@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { setGatewayDedupeEntry } from "../../gateway/agent-turn/agent-job.js";
 import { waitForGatewayDispatch } from "../../gateway/server-in-process-dispatch.js";
-import type { GatewayContextResolver } from "../../gateway/server-methods/types.js";
-import { createContext } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import type { DispatchGatewayMethodInProcessOptions } from "../../gateway/server-plugin-in-process-dispatch.types.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import * as agentRuns from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createTestAdmittedRunContext } from "../admitted-run-context.test-support.js";
@@ -31,15 +27,11 @@ const fixture = vi.hoisted(() => ({
   callGateway: vi.fn(),
   wait: vi.fn(),
   gatewayContext: {},
-  peerReply: vi.fn(),
 }));
-// mock-isolation: Observe requester inputs without starting a provider turn in custody unit tests.
-vi.mock("./agent-step.js", () => ({ runAgentStep: fixture.peerReply }));
 vi.mock("../../config/config.js", () => ({ getRuntimeConfig: () => ({}) }));
 // mock-isolation: The fixture owns dispatch and continuation custody without booting a Gateway.
 vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
   getInProcessGatewayRequestContext: () => fixture.gatewayContext,
-  runWithOperatorToolGatewayContinuationContext: (work: () => unknown) => work(),
   dispatchGatewayMethodInProcess: (
     method: string,
     params: unknown,
@@ -60,9 +52,7 @@ vi.mock("../../gateway/server-plugin-in-process-dispatch.js", () => ({
     run: (work: () => unknown) => work(),
   }),
 }));
-// mock-isolation: Supply the exact operator request scope and resolver continuation used by this fixture.
 vi.mock("../../plugins/runtime/gateway-request-scope.js", () => ({
-  withPluginRuntimeGatewayContextResolver: (_resolver: unknown, work: () => unknown) => work(),
   getPluginRuntimeGatewayRequestScope: () => ({
     client: {
       connect: { scopes: ["operator.admin"] },
@@ -96,12 +86,8 @@ vi.mock("../../config/sessions/transcript-write-context.js", () => ({
 vi.mock("../prepared-model-runtime-generation-scope.js", () => ({
   runOutsidePreparedModelRuntimePluginGenerationScope: (work: () => unknown) => work(),
 }));
-// mock-isolation: Control terminal observation and expired history authority without a live Gateway.
 vi.mock("../run-wait.js", () => ({
   waitForAgentRunReply: fixture.wait,
-  readLatestAssistantReply: () => {
-    throw new Error("Gateway requester authority changed");
-  },
   isTerminalAgentWaitTimeout: () => false,
 }));
 vi.mock("../../logging/subsystem.js", () => {
@@ -168,7 +154,6 @@ async function inRun<T>(
   runId: string,
   work: () => Promise<T>,
   scope?: NonNullable<ReturnType<typeof createCronCreatorAuthorityCapability>>,
-  gatewayContextResolver?: GatewayContextResolver,
 ) {
   const { operationalRunInstance } = createTestAdmittedRunContext(runId);
   const approvalAuthority = agentRuns.claimAgentRunDelegatedAuthority(operationalRunInstance);
@@ -177,7 +162,6 @@ async function inRun<T>(
     return await withGatewayToolCallerIdentity(
       {
         ...requester,
-        gatewayContextResolver,
         operationalRunInstance,
         approvalAuthority,
         receiptAuthority: () => agentRuns.validateAgentRunDelegatedAuthority(approvalAuthority),
@@ -191,8 +175,6 @@ async function inRun<T>(
 }
 afterEach(() => {
   revokeRequesterCronAuthority(SESSION);
-  fixture.log.mockReset();
-  fixture.peerReply.mockReset();
   fixture.callGateway.mockReset();
   fixture.wait.mockReset();
   vi.useRealTimers();
@@ -385,68 +367,4 @@ describe("child followup requester continuation", () => {
     }
     fixture.assertCustody.mockReset();
   });
-});
-
-describe("plain peer retained result", () => {
-  it.each([false, true])(
-    "delivers after requester authority ends, context changed=%s",
-    async (changed) => {
-      const runId = "peer-retained-" + changed;
-      const full = "A".repeat(5_000) + "PEER_UNIQUE_TAIL";
-      const preview = "A".repeat(4_095) + "…";
-      let context = createContext();
-      fixture.gatewayContext = context;
-      setGatewayDedupeEntry({
-        dedupe: context.dedupe,
-        key: "agent:" + runId,
-        session: {
-          agentId: "main",
-          sessionKey: CHILD,
-          sessionId: "accepted-worker",
-          lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        },
-        entry: {
-          ts: Date.now(),
-          ok: true,
-          payload: { runId, status: "ok", result: { meta: { finalAssistantVisibleText: full } } },
-        },
-      });
-      const terminal = createDeferredCore<ReturnType<typeof visibleReply>>();
-      const delivered = createDeferredCore<{ message: string; extraSystemPrompt: string }>();
-      fixture.log.mockImplementation((message, detail) =>
-        delivered.reject(new Error(message + ": " + JSON.stringify(detail))),
-      );
-      fixture.peerReply.mockImplementation((reply) => {
-        delivered.resolve(reply);
-        return Promise.resolve(undefined);
-      });
-      fixture.wait.mockReturnValue(terminal.promise);
-      await inRun(
-        "expired-requester-" + changed,
-        () =>
-          startSessionsSendReplyFlow({
-            ...replyDefaults,
-            runId,
-            replyMode: "peer",
-            targetSession: { sessionId: "accepted-worker" },
-            replyAdmission: Object.assign(() => {}, { assertCurrent: async () => {} }),
-            callGateway: async () => {
-              throw new Error("Gateway requester authority changed");
-            },
-          }),
-        undefined,
-        () => context,
-      );
-      if (changed) {
-        context = createContext();
-        fixture.gatewayContext = context;
-      }
-      terminal.resolve(visibleReply(preview));
-      const reply = await delivered.promise;
-      expect(reply.message).toBe(changed ? preview : full);
-      expect(reply.extraSystemPrompt).toContain("Another session returned");
-      expect(reply.extraSystemPrompt.includes("The reply may be truncated.")).toBe(changed);
-      expect(reply.message).not.toContain("The reply may be truncated.");
-    },
-  );
 });

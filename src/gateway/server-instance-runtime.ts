@@ -48,6 +48,7 @@ import type { AgentRunRequest } from "./server-methods/agent-request-types.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { registerGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
+import { readSessionSendDeliveryAdmission } from "./session-send-delivery.js";
 import {
   cancelSubagentCompletionToolHandoff,
   registerSubagentCompletionToolHandoff,
@@ -371,7 +372,32 @@ export function createGatewayInstanceRuntime(
               },
             })
           : recoveryAgentTurns;
+        const savedPeer =
+          payload.agentId && payload.expectedExistingSessionId && payload.idempotencyKey
+            ? readSessionSendDeliveryAdmission({
+                agentId: payload.agentId,
+                sessionKey: payload.sessionKey,
+                sessionId: payload.expectedExistingSessionId,
+                runId: payload.idempotencyKey,
+              })
+            : undefined;
+        const recoveryInput = target
+          ? {
+              agentId: target.agentId,
+              sessionKey: target.sessionKey,
+              sessionId: target.sessionId,
+              runId: target.recoveryRunId,
+              assertCurrent: assertRecoveryCurrent,
+            }
+          : savedPeer?.acceptedMessage
+            ? {
+                ...savedPeer.delivery.target,
+                runId: savedPeer.delivery.runId,
+                assertCurrent: assertRecoveryCurrent,
+              }
+            : undefined;
         return await agentTurns.dispatch<T>(payload, {
+          recoveryInput,
           controllerInput: dispatchOptions.controllerInput,
           replyExpectation: dispatchOptions.replyExpectation,
           assertAdmissionCurrent: assertRecoveryCurrent,

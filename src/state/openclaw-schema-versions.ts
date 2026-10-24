@@ -1,6 +1,8 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 
-export const OPENCLAW_AGENT_SCHEMA_VERSION = 31;
+// v33 adds a stored PostgreSQL binary vector candidate projection.
+// v32 replaces the PostgreSQL vector decoder without rewriting canonical rows.
+export const OPENCLAW_AGENT_SCHEMA_VERSION = 33;
 
 // v31 stores local workspace baselines by path and checkpoints as recoverable deltas.
 // v30 fences ordinary automation timing and delivery policies from older schedulers.
