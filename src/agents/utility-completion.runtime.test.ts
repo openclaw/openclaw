@@ -4,6 +4,7 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { createAdmittedRunOperatorAuthority } from "./admitted-run-context.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { FailoverError, recordModelFallbackStop } from "./failover-error.js";
 import * as modelAuth from "./model-auth.js";
 import { createModelRuntimeChoiceOwnerFixture } from "./model-runtime-choice.test-support.js";
@@ -76,11 +77,11 @@ function prepared(runtimeId?: string): UtilityCompletionRuntimeParams {
   };
 }
 
-it.each(["missing", "api", "fallback", "native"] as const)(
+it.each(["missing", "api", "fallback", "native", "cooldown"] as const)(
   "preflights utility credentials from the published Gateway facts: %s",
   async (credential) => {
     const params = prepared(credential === "native" ? "claude-cli" : undefined);
-    if (credential === "missing" || credential === "fallback" || credential === "native") {
+    if (credential !== "api") {
       params.cfg.models = undefined;
     }
     if (credential === "fallback") {
@@ -106,7 +107,23 @@ it.each(["missing", "api", "fallback", "native"] as const)(
       metadataSnapshot: params.metadataSnapshot,
       modelCatalog: params.snapshot,
     });
-    bindPreparedModelRuntimeAuth(snapshot, { store: { version: 1, profiles: {} } });
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles:
+        credential === "cooldown"
+          ? {
+              "anthropic:default": {
+                type: "api_key",
+                provider: "anthropic",
+                key: "synthetic-key",
+              },
+            }
+          : {},
+      ...(credential === "cooldown"
+        ? { usageStats: { "anthropic:default": { cooldownUntil: Date.now() + 60_000 } } }
+        : {}),
+    };
+    bindPreparedModelRuntimeAuth(snapshot, { store });
     const release = vi.fn(async () => {});
     using acquire = vi.spyOn(preparedRuntime, "acquirePreparedModelRuntimeSnapshot");
     acquire.mockResolvedValue({
@@ -128,6 +145,11 @@ it.each(["missing", "api", "fallback", "native"] as const)(
           agentId: "main",
           useUtilityModel: true,
         });
+        if (credential === "cooldown") {
+          await expect(
+            resolveUtilityCompletionRuntimeForAgent({ ...params, preparedAuthStore: store }),
+          ).resolves.toBeUndefined();
+        }
         expect(await hasAvailableUtilityCompletionAuth(model)).toBe(credential !== "missing");
         expect(release).toHaveBeenCalledOnce();
       },

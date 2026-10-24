@@ -166,7 +166,6 @@ export type UtilityCompletionRuntimeParams = Pick<
   | "isCurrent"
 >;
 
-/** Resolve a usable utility route from the caller's prepared catalog generation. */
 export async function resolveUtilityCompletionRuntimeForAgent(
   params: UtilityCompletionRuntimeParams,
   preparedModel?: ReturnType<typeof resolveUtilityCompletionForAgent>,
@@ -217,9 +216,11 @@ export async function resolveUtilityCompletionRuntimeForAgent(
         return undefined;
       }
       const host = decisions.evaluateEntry(entry, params.snapshot.routeVariants, runtime.id);
-      const available = decisions.evaluateNative(entry, host, runtime.id).availability;
-      // A selected engine is not evidence that its prepared account is usable.
-      return available === true && decisions.isCurrent()
+      const available = decisions.evaluateNative(entry, host, runtime.id);
+      // Preflight leaves temporary credential cooldowns to the execution retry owner.
+      return (available.availability === true ||
+        (preparedModel && available.unavailableReason === "cooldown")) &&
+        decisions.isCurrent()
         ? {
             id: runtime.id,
             kind: runtime.kind,
