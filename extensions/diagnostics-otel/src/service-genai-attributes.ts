@@ -163,11 +163,17 @@ export function assignGenAiModelCallAttrs(
   evt: {
     api?: string;
     model?: string;
+    /** Provider-reported model from the terminal message; absent on started events. */
+    responseModel?: string;
     observationUnit?: "request" | "turn";
     provider?: string;
   },
 ): void {
   assignGenAiSpanIdentityAttrs(attrs, evt);
+  if (evt.responseModel) {
+    // Span-only, with the same redaction as gen_ai.request.model; never a metric label.
+    attrs["gen_ai.response.model"] = redactSensitiveText(evt.responseModel.trim());
+  }
   attrs["openclaw.model_call.observation_unit"] = evt.observationUnit ?? "request";
 }
 
