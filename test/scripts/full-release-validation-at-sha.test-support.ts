@@ -56,6 +56,7 @@ export function createDispatchFixture(
     qualificationMovedRef?: boolean;
     advanceMainAfterAdmission?: boolean;
     stopAfterAccepted?: "admission" | "qualification";
+    omitAdmissionWorkflowSha?: boolean;
     bareShaFetchFailure?: boolean;
     createRefFailure?: boolean;
     deleteRefFailure?: boolean;
@@ -733,8 +734,9 @@ if (args[0] === "api" && args[1] === "graphql" && fields.has("oid")) {
           : []),
         ...(!recoveryOnly && options.candidateOwned
           ? [
-              "--admission-workflow-sha",
-              workflowSha,
+              ...(!options.omitAdmissionWorkflowSha
+                ? ["--admission-workflow-sha", workflowSha]
+                : []),
               "-f",
               "provider=openai",
               "-f",

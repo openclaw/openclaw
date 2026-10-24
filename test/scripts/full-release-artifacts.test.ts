@@ -691,6 +691,14 @@ describe.skipIf(process.platform === "win32")("immutable release artifact CLI", 
               : [{ ...test.jobs[0], id: 999, run_attempt: 2, conclusion: "failure" }],
     });
     test.artifact("openclaw-npm-package-descriptor-81-1", "prepared-npm-bundle.json", test.raw);
+    if (outcome === "replacement preparation failed") {
+      test.artifact("openclaw-npm-package-descriptor-81-2", "prepared-npm-bundle.json", test.raw);
+    } else {
+      test.api("actions/runs/81/artifacts?name=openclaw-npm-package-descriptor-81-2&per_page=100", {
+        total_count: 0,
+        artifacts: [],
+      });
+    }
     const raw = test.run("wait", { ARTIFACT_OUTPUT: "raw", ARTIFACT_RUN_ATTEMPT: "2" });
     if (outcome === "replacement preparation failed") {
       expectRejected(raw, "Successful npm preparation was replaced");

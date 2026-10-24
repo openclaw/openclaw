@@ -9295,8 +9295,16 @@ test "$package_manager" = "pnpm@12.1.0"
     const decisionDownloads = workflowStep(summary, "Download release decision attempts");
     const drainDownloads = workflowStep(summary, "Download diagnostic drain attempts");
 
-    expect(decision.needs).toEqual(["resolve_target", "release_execution_plan"]);
-    expect(drain.needs).toEqual(["resolve_target", "release_execution_plan"]);
+    const terminalNeeds = [
+      "resolve_target",
+      "prepare_npm_package",
+      "qualify_npm_package",
+      "prepare_plugin_npm",
+      "prepare_docker_release",
+      "release_execution_plan",
+    ];
+    expect(decision.needs).toEqual(terminalNeeds);
+    expect(drain.needs).toEqual(terminalNeeds);
     expect(decision.if).toBe("always()");
     expect(drain.if).toBe("always()");
     expect(decisionStep.run).toBe(drainStep.run);
@@ -9360,6 +9368,10 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(planUpload.with?.name).toBe("full-release-execution-plan-${{ github.run_id }}");
     expect(planUpload.with?.overwrite).toBe(false);
     expect(manifestStep.env).not.toHaveProperty("EVIDENCE_MANIFEST");
+    expect(manifestStep.env).toMatchObject({
+      OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR:
+        "${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}",
+    });
     expect(manifestStep.run).not.toContain("needs.evidence_reuse.outputs");
     expect(decisionUpload.with?.name).toBe(
       "full-release-decision-${{ github.run_id }}-${{ github.run_attempt }}",
@@ -12552,7 +12564,11 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const hydrateScript = readFileSync(CI_HYDRATE_LIVE_AUTH_SCRIPT, "utf8");
 
     expect(hydrateScript).toContain("  ANTHROPIC_OAUTH_TOKEN \\");
-    expect(hydrateScript).toContain("access_token=\"$(jq -r '.claudeAiOauth.accessToken // empty'");
+    expect(hydrateScript).toContain(
+      'local access_token="${ANTHROPIC_OAUTH_TOKEN:-${CLAUDE_CODE_OAUTH_TOKEN:-}}"',
+    );
+    expect(hydrateScript).toContain("candidate=\"$(jq -r '.claudeAiOauth.accessToken // empty'");
+    expect(hydrateScript).toContain('access_token="$candidate"');
     expect(hydrateScript).toContain('export ANTHROPIC_OAUTH_TOKEN="$access_token"');
     expect(hydrateScript).toContain('local min_remaining_ms="$(( 90 * 60 * 1000 ))"');
     expect(hydrateScript).toContain(
@@ -15966,10 +15982,10 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
     ).toEqual(["preflight"]);
     expect(
       jobNeeds(workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "installer_smoke_update_image")),
-    ).toEqual(["preflight"]);
+    ).toEqual(["preflight", "installer_smoke_candidate_payload"]);
     expect(
       jobNeeds(workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "installer_smoke_nonroot_image")),
-    ).toEqual(["preflight"]);
+    ).toEqual(["preflight", "installer_smoke_candidate_payload"]);
     expect(
       jobNeeds(workflowJob(INSTALL_SMOKE_REUSABLE_WORKFLOW, "installer_smoke_update")),
     ).toEqual(["preflight", "installer_smoke_candidate_payload", "installer_smoke_update_image"]);
