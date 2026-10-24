@@ -6,6 +6,8 @@ import { racePromiseWithAbortSignal } from "../../../infra/abort-signal.js";
 import { runWithMainThreadTask } from "../../../infra/main-thread-stall.js";
 import { runOutsideGatewayRootWorkAdmission } from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { resolveCoreOperatorGatewayMethodScope } from "../../methods/core-method-policy.js";
+import type { GatewayMethodRegistryView } from "../../methods/descriptor.js";
 
 type StartBudget = {
   count: number;
@@ -55,6 +57,38 @@ const MAX_QUEUE_WAIT_MS = 30_000;
 let preparations = 0;
 let notifyQueueChanged: (() => void) | undefined;
 let active = false;
+
+// operator.read also permits personal writes and connection-owned enrollment.
+// These must not overtake an earlier preparation on the same connection.
+const CONNECTION_ORDERED_READS = new Set([
+  "sessions.subscribe",
+  "sessions.messages.subscribe",
+  "sessions.messages.unsubscribe",
+  "sessions.viewers.set",
+  "sessions.observer.visibility",
+  "chat.startup", // Short-reference startup enrolls session events before its snapshot.
+  "controlUi.sessionPullRequests.subscribe",
+  "mcp.app.subscribeResource",
+  "mcp.app.unsubscribeResource",
+  "mcp.app.openFile",
+  "sessions.companion.ask",
+  "sessions.setInvolvement",
+  "users.setDisplayName",
+  "users.setAvatar",
+  "users.prefs.set",
+  "users.personalFile.set",
+  "users.github.authorize.start",
+  "users.github.authorize.poll",
+  "users.github.authorize.cancel",
+  "users.github.disconnect",
+  "device.scopes.requestUpgrade",
+  "device.scopes.waitUpgrade",
+  "plugin.surface.refresh",
+  "mentions.dismiss",
+  "plugins.controlUi.report",
+  "presence.activity",
+  "ui.command.result",
+]);
 
 export class GatewayRequestStartTimeoutError extends Error {
   constructor() {
@@ -135,6 +169,7 @@ export function scheduleGatewayRequestStart(
   connId: string,
   settled: Promise<void>,
   signal?: AbortSignal,
+  methodRegistry?: GatewayMethodRegistryView,
 ): Promise<void> | null {
   return runOutsideGatewayRootWorkAdmission(() => {
     // Handshakes bypass this queue. Yield before each snapshot/replay start so
@@ -153,16 +188,16 @@ export function scheduleGatewayRequestStart(
         request.method === "gateway.restart.request" ||
         request.method === "update.status" ||
         request.method === "update.run");
+    const scope = methodRegistry
+      ? methodRegistry.getScope(request.method)
+      : resolveCoreOperatorGatewayMethodScope(request.method);
     const independentRead =
-      request.method === "chat.history" ||
-      request.method === "sessions.list" ||
-      request.method === "cron.list" ||
-      request.method === "push.web.vapidPublicKey" ||
-      request.method === "sessions.github.options" ||
-      request.method === "workboard.cards.list" ||
-      request.method === "github.preview" ||
-      request.method === "gateway.suspend.status" ||
-      request.method === "update.status";
+      !preparation &&
+      ((scope === "operator.read" &&
+        !methodRegistry?.isControlPlaneWrite(request.method) &&
+        !CONNECTION_ORDERED_READS.has(request.method)) ||
+        request.method === "push.web.vapidPublicKey" ||
+        request.method === "update.status");
     const control =
       lifecycle ||
       (frameBytes <= MAX_CONTROL_FRAME_BYTES &&

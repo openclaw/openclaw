@@ -22,6 +22,12 @@ Calling with `{}` preserves the acknowledgment-only response
 List parameters select the snapshot; they do not filter the connection's session
 event subscription.
 
+During reconnect bursts, independent read RPCs such as `board.get`,
+`sessions.resolve`, and `sessions.describe` can start while that connection's
+snapshot preparation is queued. Mutations and subscription changes retain
+connection start order. Start order does not imply completion order: wait for a
+subscription acknowledgment before issuing a read that depends on its admission.
+
 `sessions.subscribe` also accepts `includeMessageBodies: true` to retain complete
 roster `session.message` bodies on that connection, or `false` to release that
 preference. Omitting the option preserves the current preference. This option

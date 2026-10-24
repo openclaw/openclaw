@@ -486,6 +486,7 @@ export function createGatewayAuthenticatedRequestDispatcher(params: {
               connId,
               settled.promise,
               context.requestEntryLifetime?.signal,
+              getMethodRegistry?.(),
             );
             if (!start) {
               respondWithAuthority(

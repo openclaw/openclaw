@@ -2,6 +2,7 @@ import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { createGatewayMethodRegistry } from "../../methods/registry.js";
 import { GatewayRequestStartTimeoutError, scheduleGatewayRequestStart } from "./request-start.js";
 
 const permissions: Promise<void>[] = [];
@@ -21,7 +22,21 @@ const independentReads = [
   "sessions.github.options",
   "workboard.cards.list",
   "github.preview",
+  "board.get",
+  "sessions.resolve",
+  "sessions.describe",
+  "users.list",
+  "agents.list",
+  "example.lookup",
 ];
+const pluginRegistry = createGatewayMethodRegistry(
+  ["workboard.cards.list", "github.preview", "example.lookup", "example.update"].map((name) => ({
+    name,
+    handler: () => {},
+    owner: { kind: "plugin", pluginId: "request-start-test" },
+    scope: name === "example.update" ? "operator.write" : "operator.read",
+  })),
+);
 function requestStart(
   bytes = 1,
   request: Parameters<typeof scheduleGatewayRequestStart>[1] = workRequest,
@@ -29,7 +44,14 @@ function requestStart(
   settled = Promise.resolve(),
   signal?: AbortSignal,
 ): Promise<void> {
-  const permission = scheduleGatewayRequestStart(bytes, request, connId, settled, signal);
+  const permission = scheduleGatewayRequestStart(
+    bytes,
+    request,
+    connId,
+    settled,
+    signal,
+    pluginRegistry.getHandler(request.method) ? pluginRegistry : undefined,
+  );
   if (!permission) {
     throw new Error("expected start capacity");
   }
@@ -115,8 +137,22 @@ describe("Gateway request start fairness", () => {
       key: "main",
       includeApprovals: true,
     });
-    const unsubscribe = start("sessions.messages.unsubscribe", "viewer", { key: "main" });
-    const mutation = start("chat.send", "viewer");
+    const orderedMethods = [
+      "sessions.messages.unsubscribe",
+      "sessions.viewers.set",
+      "sessions.observer.visibility",
+      "chat.startup",
+      "users.prefs.set",
+      "users.personalFile.set",
+      "sessions.setInvolvement",
+      "mcp.app.subscribeResource",
+      "device.scopes.requestUpgrade",
+      "plugins.controlUi.report",
+      "chat.send",
+      "example.update",
+      "unknown.method",
+    ];
+    const ordered = orderedMethods.map((method) => start(method, "viewer"));
     for (const method of independentReads) {
       void start(method, "viewer");
     }
@@ -124,11 +160,10 @@ describe("Gateway request start fairness", () => {
     await nextTurn();
     expect(starts).toEqual([...independentReads, "sessions.create"]);
     held[0]!.resolve();
-    await Promise.all([subscription, unsubscribe, mutation]);
-    expect(starts.slice(8)).toEqual([
+    await Promise.all([subscription, ...ordered]);
+    expect(starts.slice(independentReads.length + 1)).toEqual([
       "sessions.messages.subscribe",
-      "sessions.messages.unsubscribe",
-      "chat.send",
+      ...orderedMethods,
     ]);
   });
 
