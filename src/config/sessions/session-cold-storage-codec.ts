@@ -4,10 +4,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import zlib from "node:zlib";
 import { z } from "zod";
+import { MAX_SESSION_ARCHIVE_PLAINTEXT_BYTES } from "./archive-limits.js";
 import { resolveSessionArtifactDirectory } from "./paths.js";
 import type { SessionColdArchive } from "./session-cold-storage-state.js";
 
-export const MAX_COLD_ARCHIVE_BYTES = 64 * 1024 * 1024;
+export const MAX_COLD_ARCHIVE_BYTES = MAX_SESSION_ARCHIVE_PLAINTEXT_BYTES;
 
 export function resolveSessionColdArchivePath(storePath: string, archiveName: string): string {
   if (!/^[a-f0-9]{64}\.jsonl\.zst$/.test(archiveName)) {

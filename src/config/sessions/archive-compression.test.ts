@@ -10,6 +10,7 @@ import {
   readSessionArchiveContentSync,
   SESSION_ARCHIVE_ZSTD_SUFFIX,
 } from "./archive-compression.js";
+import { SessionArchivePlaintextLimitError } from "./archive-limits.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -61,5 +62,47 @@ describe("archive compression", () => {
     expect(second).toBe(first);
     expect(fs.readFileSync(first, "utf8")).toBe(content);
     expect(first.endsWith(".jsonl")).toBe(true);
+  });
+
+  it("refuses compressed archives whose plaintext exceeds the budget", () => {
+    const encoded = encodeSessionArchiveContent("x".repeat(10_000));
+    expect(encoded.suffix).toBe(SESSION_ARCHIVE_ZSTD_SUFFIX);
+    const dir = tempDirs.make("openclaw-archive-zstd-");
+    const archivePath = path.join(dir, `bomb.jsonl.deleted.2026-07-11${encoded.suffix}`);
+    fs.writeFileSync(archivePath, encoded.bytes);
+    const budget = { maxPlaintextBytes: 1024 };
+
+    expect(() => readSessionArchiveContentSync(archivePath, budget)).toThrow(
+      SessionArchivePlaintextLimitError,
+    );
+    expect(() => decodeSessionArchiveBytes(encoded.bytes, true, budget)).toThrow(
+      SessionArchivePlaintextLimitError,
+    );
+  });
+
+  it("refuses plain archives larger than the budget", () => {
+    const dir = tempDirs.make("openclaw-archive-zstd-");
+    const archivePath = path.join(dir, "sess.jsonl.reset.2026-07-11T00-00-00.000Z");
+    fs.writeFileSync(archivePath, "x".repeat(2048), "utf8");
+    const budget = { maxPlaintextBytes: 1024 };
+
+    expect(() => readSessionArchiveContentSync(archivePath, budget)).toThrow(
+      SessionArchivePlaintextLimitError,
+    );
+    expect(() => decodeSessionArchiveBytes(Buffer.alloc(2048, 0x78), false, budget)).toThrow(
+      SessionArchivePlaintextLimitError,
+    );
+  });
+
+  it("keeps archives that fit the budget readable", () => {
+    const content = `${JSON.stringify({ type: "message", body: "fits" })}\n`;
+    const encoded = encodeSessionArchiveContent(content);
+    const dir = tempDirs.make("openclaw-archive-zstd-");
+    const archivePath = path.join(dir, `ok.jsonl.deleted.2026-07-11${encoded.suffix}`);
+    fs.writeFileSync(archivePath, encoded.bytes);
+    const budget = { maxPlaintextBytes: Buffer.byteLength(content, "utf8") };
+
+    expect(readSessionArchiveContentSync(archivePath, budget)).toBe(content);
+    expect(decodeSessionArchiveBytes(encoded.bytes, true, budget)).toBe(content);
   });
 });

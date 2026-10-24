@@ -7,6 +7,10 @@ import path from "node:path";
 import { walkDirectorySync } from "@openclaw/fs-safe/walk";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { resolveZstdCodec } from "../../infra/zstd-codec.js";
+import {
+  MAX_SESSION_ARCHIVE_PLAINTEXT_BYTES,
+  SessionArchivePlaintextLimitError,
+} from "./archive-limits.js";
 import { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
 export { SESSION_ARCHIVE_ZSTD_SUFFIX } from "./transcript-file-names.js";
 
@@ -25,18 +29,70 @@ export function encodeSessionArchiveContent(content: string): {
   return { bytes: zstdCodec.compress(plain), suffix: SESSION_ARCHIVE_ZSTD_SUFFIX };
 }
 
-export function readSessionArchiveContentSync(filePath: string): string {
-  if (!filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
-    return fs.readFileSync(filePath, "utf8");
-  }
-  return zstdCodec.decompress(fs.readFileSync(filePath)).toString("utf8");
+type ArchivePlaintextLimitOptions = {
+  /** Decoded plaintext budget; defaults to MAX_SESSION_ARCHIVE_PLAINTEXT_BYTES. */
+  maxPlaintextBytes?: number;
+};
+
+function resolvePlaintextLimit(options?: ArchivePlaintextLimitOptions): number {
+  return options?.maxPlaintextBytes ?? MAX_SESSION_ARCHIVE_PLAINTEXT_BYTES;
 }
 
-export function decodeSessionArchiveBytes(bytes: Uint8Array, compressed: boolean): string {
+function decodeArchiveBytesWithinLimit(
+  bytes: Uint8Array,
+  source: string | undefined,
+  limitBytes: number,
+): string {
+  try {
+    return zstdCodec.decompress(bytes, limitBytes).toString("utf8");
+  } catch (error) {
+    if ((error as { code?: unknown } | null)?.code === "ERR_BUFFER_TOO_LARGE") {
+      throw new SessionArchivePlaintextLimitError({
+        source,
+        storedBytes: bytes.byteLength,
+        limitBytes,
+        cause: error,
+      });
+    }
+    throw error;
+  }
+}
+
+export function readSessionArchiveContentSync(
+  filePath: string,
+  options?: ArchivePlaintextLimitOptions,
+): string {
+  const limitBytes = resolvePlaintextLimit(options);
+  if (!filePath.endsWith(SESSION_ARCHIVE_ZSTD_SUFFIX)) {
+    const storedBytes = fs.statSync(filePath).size;
+    if (storedBytes > limitBytes) {
+      throw new SessionArchivePlaintextLimitError({
+        source: filePath,
+        storedBytes,
+        limitBytes,
+      });
+    }
+    return fs.readFileSync(filePath, "utf8");
+  }
+  return decodeArchiveBytesWithinLimit(fs.readFileSync(filePath), filePath, limitBytes);
+}
+
+export function decodeSessionArchiveBytes(
+  bytes: Uint8Array,
+  compressed: boolean,
+  options?: ArchivePlaintextLimitOptions,
+): string {
+  const limitBytes = resolvePlaintextLimit(options);
   if (!compressed) {
+    if (bytes.byteLength > limitBytes) {
+      throw new SessionArchivePlaintextLimitError({
+        storedBytes: bytes.byteLength,
+        limitBytes,
+      });
+    }
     return Buffer.from(bytes).toString("utf8");
   }
-  return zstdCodec.decompress(Buffer.from(bytes)).toString("utf8");
+  return decodeArchiveBytesWithinLimit(bytes, undefined, limitBytes);
 }
 
 /**
