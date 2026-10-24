@@ -78,10 +78,12 @@ bytecode. An AOT artifact needs its own runtime and signing qualification.
 
 AOT artifacts select the `embedded-aot` [runtime execution profile](/concepts/runtime-profiles).
 Host Code Mode using the Node executor, QA expressions, and plugins fetched after
-the build require dynamic execution and report an actionable error before
-evaluating code. Run those features with a Node/Bun installation or a JIT/bytecode
-standalone. An embedded guest runtime has its own qualification requirements;
-OpenClaw does not silently switch executors.
+the build run interpreted. Each feature emits one performance notice per process;
+use a JIT build for full speed. Fetched CJS/TypeScript plugins load from disk
+through the normal loader against the compiled SDK. Missing runtime modules and
+builds with `--disallow-code-generation-from-strings=strict` still report actionable
+guidance. Guest runtimes keep their own qualification requirements; OpenClaw
+does not silently switch executors.
 
 ### WebAssembly in AOT builds
 
