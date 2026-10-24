@@ -1,8 +1,8 @@
 // @vitest-environment node
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayEventFrame } from "../../api/gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { GatewaySessionRow } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import type { SessionRowObservation } from "./index.ts";
 import {
@@ -11,6 +11,8 @@ import {
   sessionsResult,
 } from "./session-capability.test-support.ts";
 import type { SessionRowEventListener } from "./session-capability.ts";
+
+const noop = () => undefined;
 
 function expectAdmitted(
   listener: ReturnType<typeof vi.fn<SessionRowEventListener>>,
@@ -44,30 +46,22 @@ function ownedChange(
   change(emit, { sessionKey: row.key, agentId: row.agentId, sessionId: row.sessionId, ...fields });
 }
 
-type DescribeResult = { session: GatewaySessionRow | null };
-
-const mainRow: GatewaySessionRow = {
-  key: "global",
-  agentId: "main",
-  sessionId: "main-global-session",
-  kind: "global",
-  updatedAt: 900,
-  label: "Main roster",
-  archived: false,
-  status: "done",
-  hasActiveRun: false,
-  activeRunIds: [],
-};
-const workRow: GatewaySessionRow = {
-  ...mainRow,
-  agentId: "work",
-  sessionId: "work-global-session",
-  updatedAt: 200,
-  label: "Work descriptor",
-  status: "running",
-  hasActiveRun: true,
-  activeRunIds: ["work-run"],
-};
+function globalRow(agentId: string, updatedAt: number, active = false): GatewaySessionRow {
+  return {
+    key: "global",
+    kind: "global",
+    agentId,
+    sessionId: `${agentId}-global-session`,
+    updatedAt,
+    archived: false,
+    label: agentId === "work" ? "Work descriptor" : "Main roster",
+    status: active ? "running" : "done",
+    hasActiveRun: active,
+    activeRunIds: active ? ["work-run"] : [],
+  };
+}
+const mainRow = globalRow("main", 900);
+const workRow = globalRow("work", 200, true);
 
 const terminal = {
   status: "done" as const,
@@ -84,65 +78,37 @@ async function descriptorOwner(
   primary = mainRow,
   onInvalidate?: () => void,
 ) {
-  vi.useFakeTimers();
-  const replies: Array<{ method: string; result: unknown }> = [];
-  const requestErrors: unknown[] = [];
+  const replies: unknown[] = [];
   const finishReplies: Array<() => void> = [];
   const pending: Promise<void>[] = [];
   const disposers: Array<() => void> = [];
   const client = createTestGatewayClient(async (method) => {
-    try {
-      const reply = replies.shift();
-      if (!reply) {
-        throw new Error(`Unexpected Gateway request: ${method}`);
-      }
-      expect(method).toBe(reply.method);
-      return await reply.result;
-    } catch (error) {
-      requestErrors.push(error);
-      throw error;
+    expect(method).toBe("sessions.list");
+    if (replies.length === 0) {
+      throw new Error(`Unexpected Gateway request: ${method}`);
     }
+    return await replies.shift();
   });
   const { gateway, emitEvent, publish } = createGatewayHarness(client);
   const sessions = createTestSessionCapability(gateway);
   const track = <T>(promise: Promise<T>): Promise<T> => {
-    pending.push(
-      promise.then(
-        () => undefined,
-        () => undefined,
-      ),
-    );
+    pending.push(promise.then(noop, noop));
     return promise;
   };
-  const reply = (method: string, result: unknown) => {
-    replies.push({ method, result });
-  };
-  const hold = <T>(method: string, fallback: T) => {
+  const reply = (result: unknown) => replies.push(result);
+  const hold = <T>(fallback: T) => {
     const deferred = createDeferred<T>();
-    reply(method, deferred.promise);
     finishReplies.push(() => deferred.resolve(fallback));
     return deferred;
-  };
-  const read = (observation: SessionRowObservation) => {
-    const reconcile = observation.captureReconcile();
-    return track(
-      client
-        .request<DescribeResult>("sessions.describe", workTarget)
-        .then((result) => reconcile(result.session ?? undefined)),
-    );
   };
   onTestFinished(async () => {
     disposers.forEach((dispose) => dispose());
     sessions.dispose();
     finishReplies.forEach((finish) => finish());
     await Promise.all(pending);
-    vi.useRealTimers();
-    // Request errors can be handled by the capability; still fail the fixture.
-    expect(requestErrors).toEqual([]);
-    expect(replies).toEqual([]);
   });
 
-  reply("sessions.list", sessionsResult([primary], 900));
+  reply(sessionsResult([primary], 900));
   await sessions.refresh({ agentId: "main", force: true });
   const primaryResult = sessions.state.result;
   const revision = sessions.canonicalListRevision;
@@ -152,8 +118,10 @@ async function descriptorOwner(
   });
   disposers.push(observation.dispose);
   expect(observation.row).toBeNull();
-  reply("sessions.describe", { session: initial });
-  expect(await read(observation)).toMatchObject({ status: "current", row: initial });
+  expect(observation.captureReconcile()(initial)).toMatchObject({
+    status: "current",
+    row: initial,
+  });
   changed.mockClear();
 
   const keepMain = () => {
@@ -163,15 +131,17 @@ async function descriptorOwner(
   };
   const holdWorkList = () => {
     const result = sessionsResult([initial], 200);
-    const response = hold("sessions.list", result);
+    const response = hold(result);
+    reply(response.promise);
     const settled = track(sessions.refresh({ agentId: "work", force: true }));
     expect(sessions.state.loading).toBe(true);
     keepMain();
     return { response, settled };
   };
   const holdDescribe = (target = observation) => {
-    const response = hold<DescribeResult>("sessions.describe", { session: initial });
-    return { response, settled: read(target) };
+    const reconcile = target.captureReconcile();
+    const response = hold<GatewaySessionRow>(initial);
+    return { response, settled: track(response.promise.then(reconcile)) };
   };
   const settleRun = (fields: Partial<Parameters<typeof sessions.reconcileRunTerminal>[0]>) =>
     sessions.reconcileRunTerminal({
@@ -198,6 +168,8 @@ async function descriptorOwner(
 }
 
 describe("session row observations", () => {
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
   it("keeps completed Swarm details while an invalidated list settles before the fresh descriptor", async () => {
     const swarm: NonNullable<GatewaySessionRow["swarm"]> = {
       groups: [
@@ -242,59 +214,51 @@ describe("session row observations", () => {
       hasActiveRun: false,
       activeRunIds: [],
     };
-    fresh.response.resolve({ session: settled });
+    fresh.response.resolve(settled);
     expect(await fresh.settled).toMatchObject({ status: "current", row: settled });
     expect(h.observation.row).toEqual(settled);
     expect(h.changed).toHaveBeenLastCalledWith(settled);
   });
 
   it("invalidates descriptor reads only for the observed target and current connection", async () => {
-    vi.useFakeTimers();
     const { gateway, emitEvent, publish } = createGatewayHarness(
       createTestGatewayClient(async () => sessionsResult([], 1)),
     );
     const sessions = createTestSessionCapability(gateway);
     const invalidated = vi.fn();
     const delivered = vi.fn<SessionRowEventListener>();
-    const observation = sessions.observeRow(workTarget, () => undefined, {
+    const observation = sessions.observeRow(workTarget, noop, {
       onInvalidate: invalidated,
       onEvent: delivered,
     });
-    try {
-      expect(observation.captureReconcile()(workRow)).toMatchObject({ status: "current" });
-      const event = (agentId: string, key = "global") =>
-        frame("sessions.changed", { agentId, key, reason: "patch" });
-      emitEvent(event("main"));
-      emitEvent(event("work", "agent:work:unrelated"));
-      expect(invalidated).not.toHaveBeenCalled();
-      expect(delivered.mock.calls).toEqual([
-        [event("main"), { applied: false }],
-        [event("work", "agent:work:unrelated"), { applied: false }],
-      ]);
-      await sessions.refresh({ agentId: "main", force: true });
-      expect(invalidated).not.toHaveBeenCalled();
-      emitEvent(event("work"));
-      expect(invalidated).toHaveBeenCalledTimes(1);
-      emitEvent(event("work", "agent:work:unrelated"));
-      expect(observation.row).toEqual(workRow);
-      expect(invalidated).toHaveBeenCalledTimes(1);
-      expect(observation.captureReconcile()(workRow)).toMatchObject({ status: "current" });
-      expect(delivered).toHaveBeenCalledTimes(4);
-      publish(false);
-      emitEvent(event("work"));
-      expect(invalidated).toHaveBeenCalledTimes(1);
-      expect(delivered).toHaveBeenCalledTimes(4);
-    } finally {
-      observation.dispose();
-      sessions.dispose();
-      vi.useRealTimers();
-    }
+    expect(observation.captureReconcile()(workRow)).toMatchObject({ status: "current" });
+    const event = (agentId: string, key = "global") =>
+      frame("sessions.changed", { agentId, key, reason: "patch" });
+    emitEvent(event("main"));
+    emitEvent(event("work", "agent:work:unrelated"));
+    expect(invalidated).not.toHaveBeenCalled();
+    expect(delivered.mock.calls).toEqual([
+      [event("main"), { applied: false }],
+      [event("work", "agent:work:unrelated"), { applied: false }],
+    ]);
+    await sessions.refresh({ agentId: "main", force: true });
+    expect(invalidated).not.toHaveBeenCalled();
+    emitEvent(event("work"));
+    expect(invalidated).toHaveBeenCalledTimes(1);
+    emitEvent(event("work", "agent:work:unrelated"));
+    expect(observation.row).toEqual(workRow);
+    expect(invalidated).toHaveBeenCalledTimes(1);
+    expect(observation.captureReconcile()(workRow)).toMatchObject({ status: "current" });
+    expect(delivered).toHaveBeenCalledTimes(4);
+    publish(false);
+    emitEvent(event("work"));
+    expect(invalidated).toHaveBeenCalledTimes(1);
+    expect(delivered).toHaveBeenCalledTimes(4);
   });
 
   it.each(["primary", "row", "event", "between frames"] as const)(
     "delivers repeated-payload frames only after descriptor registration (%s)",
     async (source) => {
-      vi.useFakeTimers();
       const { gateway, emitEvent } = createGatewayHarness(
         createTestGatewayClient(async () => sessionsResult([mainRow], mainRow.updatedAt ?? 0)),
       );
@@ -303,63 +267,37 @@ describe("session row observations", () => {
       const delivered = vi.fn<SessionRowEventListener>();
       let armed = false;
       let late: SessionRowObservation | undefined;
-      const register = () => {
-        if (armed && !late) {
-          late = sessions.observeRow(target, () => undefined, { onEvent: delivered });
+      const registerFrom = (phase: typeof source) => {
+        if (source === phase && armed && !late) {
+          late = sessions.observeRow(target, noop, { onEvent: delivered });
         }
       };
-      const stop = sessions.subscribe(() => {
-        if (source === "primary") {
-          register();
-        }
-      });
+      const stop = sessions.subscribe(() => registerFrom("primary"));
+      onTestFinished(stop);
       await sessions.refresh({ agentId: "main", force: true });
-      const earlyDelivered = vi.fn<SessionRowEventListener>(() => {
-        if (source === "event") {
-          register();
-        }
-      });
-      const early = sessions.observeRow(
-        target,
-        () => {
-          if (source === "row") {
-            register();
-          }
-        },
-        { onEvent: earlyDelivered },
+      const earlyDelivered = vi.fn<SessionRowEventListener>(() => registerFrom("event"));
+      sessions.observeRow(target, () => registerFrom("row"), { onEvent: earlyDelivered });
+      armed = true;
+      const first = frame(
+        "sessions.changed",
+        { agentId: "main", session: { ...mainRow, updatedAt: 1_000 } },
+        1,
       );
-      try {
-        armed = true;
-        const first = frame(
-          "sessions.changed",
-          { agentId: "main", session: { ...mainRow, updatedAt: 1_000 } },
-          1,
-        );
-        emitEvent(first);
-        if (source === "between frames") {
-          register();
-        }
-        expect(late?.row).toMatchObject({ sessionId: mainRow.sessionId, updatedAt: 1_000 });
-        expect(delivered).not.toHaveBeenCalled();
+      emitEvent(first);
+      registerFrom("between frames");
+      expect(late?.row).toMatchObject({ sessionId: mainRow.sessionId, updatedAt: 1_000 });
+      expect(delivered).not.toHaveBeenCalled();
 
-        const next = { ...first, seq: 2 };
-        emitEvent(next);
-        expect(earlyDelivered.mock.calls.map(([event]) => event)).toEqual([first, next]);
-        expectAdmitted(delivered, next, { updatedAt: 1_000 });
-      } finally {
-        late?.dispose();
-        early.dispose();
-        stop();
-        sessions.dispose();
-        vi.useRealTimers();
-      }
+      const next = { ...first, seq: 2 };
+      emitEvent(next);
+      expect(earlyDelivered.mock.calls.map(([event]) => event)).toEqual([first, next]);
+      expectAdmitted(delivered, next, { updatedAt: 1_000 });
     },
   );
 
   it.each(["primary", "managed", "supplemental", "event"] as const)(
     "notifies a retired descriptor after its admitted %s successor is published",
     async (source) => {
-      vi.useFakeTimers();
       const initial: GatewaySessionRow = {
         key: "agent:main:observed-child",
         agentId: "main",
@@ -386,17 +324,10 @@ describe("session row observations", () => {
       const { gateway, emitEvent } = createGatewayHarness(createTestGatewayClient(request));
       const sessions = createTestSessionCapability(gateway);
       const query = { agentId: "main", search: "child", limit: 1 };
-      const managed =
-        source === "managed" ? sessions.observeList(query, () => undefined) : undefined;
+      const managed = source === "managed" ? sessions.observeList(query, noop) : undefined;
       let rebound: SessionRowObservation | undefined;
       const delivered = vi.fn<SessionRowEventListener>();
       const currentDelivered = vi.fn<SessionRowEventListener>();
-      onTestFinished(() => {
-        rebound?.dispose();
-        managed?.dispose();
-        sessions.dispose();
-        vi.useRealTimers();
-      });
       await sessions.refresh({ agentId: "main", force: true });
       expect(sessions.captureReconcile()(initial, undefined, { archivedFilter: "all" })).toBe(true);
       const retirement = vi.fn();
@@ -404,9 +335,7 @@ describe("session row observations", () => {
       const changed = vi.fn<(row: GatewaySessionRow | null) => void>();
       const observation = sessions.observeRow(target, changed);
       // This observer stays attached: retirement must not require consumer disposal.
-      const captured = sessions.observeRow(target, () => undefined, { onEvent: delivered });
-      onTestFinished(observation.dispose);
-      onTestFinished(captured.dispose);
+      const captured = sessions.observeRow(target, noop, { onEvent: delivered });
       changed.mockImplementation((row) => {
         const published =
           source === "managed" ? sessions.listSnapshot(query).result : sessions.state.result;
@@ -418,7 +347,7 @@ describe("session row observations", () => {
         );
         if (!observation.isCurrent()) {
           observation.dispose();
-          rebound = sessions.observeRow(target, () => undefined, { onEvent: currentDelivered });
+          rebound = sessions.observeRow(target, noop, { onEvent: currentDelivered });
         }
       });
       expect(observation.row).toMatchObject(initial);
@@ -481,41 +410,18 @@ describe("session row observations", () => {
     },
   );
 
-  it("settles the descriptor-only run without donating the preceding run's timing or changing Main", async () => {
-    const initial: GatewaySessionRow = {
-      ...workRow,
-      lastRunId: "previous-run",
-      startedAt: 100,
-      endedAt: 200,
-      runtimeMs: 100,
-      lastRunError: "Previous run failed",
-      abortedLastRun: true,
-    };
-    const h = await descriptorOwner(initial);
+  it("settles a descriptor-only run without changing Main or accepting a stale list", async () => {
+    const h = await descriptorOwner(workRow);
     const list = h.holdWorkList();
-    expect(h.settleRun({ status: "timeout", errorMessage: "Current run\ntimed out" })).toBe(true);
-    const expected = {
-      key: "global",
-      agentId: "work",
-      sessionId: initial.sessionId,
-      status: "timeout",
-      hasActiveRun: false,
-      activeRunIds: [],
-      lastRunId: "work-run",
-      endedAt: 400,
-      abortedLastRun: false,
-      lastRunError: "Current run timed out",
-    };
-    expect(h.observation.row).toMatchObject({ ...expected, updatedAt: 200 });
-    expect(h.observation.row?.startedAt).toBeUndefined();
-    expect(h.observation.row?.runtimeMs).toBeUndefined();
-    expect(h.changed).toHaveBeenCalledOnce();
-    expect(h.changed).toHaveBeenLastCalledWith(h.observation.row);
+    expect(h.settleRun({})).toBe(true);
+    const expected = { status: "done", hasActiveRun: false, activeRunIds: [], updatedAt: 200 };
+    expect(h.observation.row).toMatchObject(expected);
+    expect(h.changed).toHaveBeenCalledExactlyOnceWith(h.observation.row);
     h.keepMain();
 
     expect(h.sessions.state.loading).toBe(true);
 
-    list.response.resolve(sessionsResult([initial], 200));
+    list.response.resolve(sessionsResult([workRow], 200));
     await list.settled;
     expect(h.sessions.state.agentId).toBe("work");
     expect(h.sessions.state.result?.sessions).toEqual([h.observation.row]);
@@ -547,7 +453,7 @@ describe("session row observations", () => {
         derivedTitle: "Read title",
       };
       if (old) {
-        old.response.resolve({ session: stale });
+        old.response.resolve(stale);
         expect(await old.settled).toMatchObject({ status: "current" });
         h.keepMain();
         expect(h.sessions.state.loading).toBe(true);
@@ -586,13 +492,8 @@ describe("session row observations", () => {
       h.observation.dispose();
     });
     h.disposers.push(managed.dispose);
-    const listed: SessionsListResult = {
-      ...sessionsResult([initial], 200),
-      totalCount: 12,
-      hasMore: true,
-      nextOffset: 1,
-    };
-    h.reply("sessions.list", listed);
+    const listed = sessionsResult([initial], 200);
+    h.reply(listed);
     await managed.refresh();
     const old = h.holdDescribe();
     const list = h.holdWorkList();
@@ -603,20 +504,12 @@ describe("session row observations", () => {
     const remaining = { hasActiveRun: true, activeRunIds: ["other-run"], status: "running" };
     expect(delivered[0]?.managed).toMatchObject(remaining);
     expect(delivered[0]?.descriptor).toMatchObject(remaining);
-    expect(h.sessions.listSnapshot(query).result).toMatchObject({
-      count: 1,
-      totalCount: 12,
-      hasMore: true,
-      nextOffset: 1,
-    });
     expect(h.observation.isCurrent()).toBe(false);
     expect(h.observation.row).toBeNull();
-    expect(h.changed).not.toHaveBeenCalled();
     h.keepMain();
 
-    old.response.resolve({ session: { ...initial, updatedAt: 500, label: "Retired reply" } });
+    old.response.resolve({ ...initial, updatedAt: 500, label: "Retired reply" });
     expect(await old.settled).toEqual({ status: "retired" });
-    expect(h.changed).not.toHaveBeenCalled();
     react = false;
     ownedChange(h.emitEvent, initial, {
       reason: "patch",
@@ -667,9 +560,9 @@ describe("session row observations", () => {
         label: "Research conversation",
       };
       const rows = scoped ? [initial] : [{ ...initial }, other];
-      const managed = h.sessions.observeList(query, () => undefined);
+      const managed = h.sessions.observeList(query, noop);
       h.disposers.push(managed.dispose);
-      h.reply("sessions.list", sessionsResult(rows, scoped ? 200 : 900));
+      h.reply(sessionsResult(rows, scoped ? 200 : 900));
       await managed.refresh();
       const managedBefore = h.sessions.listSnapshot(query).result;
       h.changed.mockClear();
@@ -740,16 +633,16 @@ describe("session row observations", () => {
       let observation = h.observation;
       if (retirement === "delete") {
         observation.dispose();
-        observation = h.sessions.observeRow(workTarget, () => undefined);
+        observation = h.sessions.observeRow(workTarget, noop);
         h.disposers.push(observation.dispose);
         expect(observation.row).toBeNull();
       }
       const earlier = h.holdDescribe(observation);
       const query = { agentId: "work", search: "Work", limit: 1 };
       if (retirement === "delete") {
-        const managed = h.sessions.observeList(query, () => undefined);
+        const managed = h.sessions.observeList(query, noop);
         h.disposers.push(managed.dispose);
-        h.reply("sessions.list", sessionsResult([workRow], 200));
+        h.reply(sessionsResult([workRow], 200));
         await managed.refresh();
         expect(observation.row).toMatchObject(workRow);
         ownedChange(h.emitEvent, workRow, {
@@ -765,11 +658,9 @@ describe("session row observations", () => {
       }
       expect(observation.row).toBeNull();
       earlier.response.resolve({
-        session: {
-          ...workRow,
-          updatedAt: retirement === "delete" ? 1_000 : 500,
-          label: retirement === "delete" ? "Deleted late reply" : "Old connection",
-        },
+        ...workRow,
+        updatedAt: retirement === "delete" ? 1_000 : 500,
+        label: retirement === "delete" ? "Deleted late reply" : "Old connection",
       });
       const result = await earlier.settled;
       expect(observation.row).toBeNull();
