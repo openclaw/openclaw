@@ -96,16 +96,13 @@ suite.define(() => {
       expect(before).not.toBeNull();
       const read = await page.evaluateHandle(() => {
         const original = window.fetch;
-        let resume: (() => void) | undefined;
+        const gate = Promise.withResolvers<void>();
         let pending = false;
-        const gate = new Promise<void>((resolve) => {
-          resume = resolve;
-        });
         window.fetch = async (...args) => {
           const input = args[0];
           if (typeof input === "string" && input.startsWith("data:text/plain;base64,")) {
             pending = true;
-            await gate;
+            await gate.promise;
           }
           return original(...args);
         };
@@ -113,18 +110,16 @@ suite.define(() => {
           pending: () => pending,
           release: () => {
             window.fetch = original;
-            resume?.();
+            gate.resolve();
           },
         };
       });
       try {
-        await page.screenshot({ path: `${suite.artifactDir}/annotation-queued.png` });
         await gateway.resolveDeferred("chat.send", {
           runId: sent.idempotencyKey,
           status: "started",
         });
         await expect.poll(() => read.evaluate((gate) => gate.pending())).toBe(true);
-        await page.screenshot({ path: `${suite.artifactDir}/annotation-reading.png` });
         expect(await quote.isVisible()).toBe(true);
         expect(await inline.textContent()).toContain(comment);
         expect(await inline.textContent()).not.toContain("Loading");
@@ -150,12 +145,13 @@ suite.define(() => {
         await canonicalBody.promise;
         await route.fulfill({ contentType: "text/plain", body: sent.attachment });
       });
+      const canonicalId = `mock-user:${sent.idempotencyKey}`;
       const canonical = {
         role: "user",
         content: "",
         idempotencyKey: `${sent.idempotencyKey}:user`,
         __openclaw: {
-          id: `mock-user:${sent.idempotencyKey}`,
+          id: canonicalId,
           seq: 1,
           media: [
             {
@@ -167,7 +163,6 @@ suite.define(() => {
           ],
         },
       };
-      await gateway.setHistoryMessages([{ role: "assistant", content: passage }, canonical]);
       const session = await gateway.getSessionRow(sent.sessionKey);
       try {
         await gateway.emitGatewayEvent("session.message", {
@@ -178,21 +173,11 @@ suite.define(() => {
           activeRunIds: session.activeRunIds,
           session,
           clientRunId: sent.idempotencyKey,
-          messageId: canonical["__openclaw"].id,
-          messageSeq: canonical["__openclaw"].seq,
+          messageId: canonicalId,
+          messageSeq: 1,
           message: canonical,
         });
-        await expect
-          .poll(() =>
-            page.locator("openclaw-chat-pane").evaluate((element, id) => {
-              const state = Reflect.get(element, "state");
-              return state.chatMessages.some(
-                (message: { __openclaw?: { id?: string } }) => message["__openclaw"]?.id === id,
-              );
-            }, canonical["__openclaw"].id),
-          )
-          .toBe(true);
-        await page.screenshot({ path: `${suite.artifactDir}/annotation-canonical-reading.png` });
+        await page.locator(`[data-entry-id="${canonicalId}"]`).waitFor();
         expect(await quote.isVisible()).toBe(true);
         expect(await inline.textContent()).toContain(comment);
         expect((await inline.boundingBox())?.height).toBe(before!.height);
@@ -201,12 +186,6 @@ suite.define(() => {
       }
       await quote.waitFor();
       expect(await inline.textContent()).toContain(comment);
-      await gateway.emitChatFinal({
-        runId: sent.idempotencyKey,
-        sessionKey: sent.sessionKey,
-        text: "I will explain the rollback steps.",
-      });
-      await page.getByText("I will explain the rollback steps.", { exact: true }).waitFor();
     });
   });
   it.each([

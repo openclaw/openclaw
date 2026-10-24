@@ -2,7 +2,6 @@ import type { JSX as SolidJSX } from "@solidjs/web";
 import { createMemo, createSignal, For, Loading, onCleanup, Show } from "solid-js";
 import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { t, registerEnglishCatalog } from "../../../lib/reactive/i18n.ts";
-import { isCrossOriginHttpSource, safePlainTextAttachmentHref } from "./chat-attachment-href.ts";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
 import { parseCommentAttachment, type CommentPreview } from "./chat-comment-preview.ts";
 import { CommentPreviewChip, CommentPreviewRow } from "./chat-comment-preview.tsx";
@@ -11,21 +10,22 @@ import {
   type AttachmentAdmission,
 } from "./chat-message-attachment-admission-model.ts";
 import { createChatAttachmentAdmission } from "./chat-message-attachment-admission-solid.tsx";
-import { resolveAttachmentSourceAsync } from "./chat-message-attachment-source.ts";
 import type { AttachmentItem, ImageRenderOptions } from "./chat-message-media.ts";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 
 type SentCommentSource = {
   identity: string;
-  read: (signal: AbortSignal) => Promise<CommentPreview | null>;
+  src?: string;
+  sizeBytes?: number;
+  pending?: boolean;
   fallback: () => SolidJSX.Element;
 };
 type Props = {
   comments: AttachmentItem[];
   inline?: boolean;
   options: ImageRenderOptions;
-  fallback: (item: AttachmentItem) => SolidJSX.Element;
+  resolve: (item: AttachmentItem) => SentCommentSource;
 };
 
 export function SentCommentAttachments(props: Props) {
@@ -61,32 +61,13 @@ function AdmittedComments(props: Props) {
   return (
     <SentComments
       inline={props.inline}
-      sources={props.comments.map((item) => {
-        const options = { ...props.options };
-        return {
-          identity: JSON.stringify([
-            item.attachment.url,
-            item.attachment.artifactId,
-            item.attachment.label,
-            item.attachment.sizeBytes,
-          ]),
-          read: async (signal: AbortSignal) => {
-            const source = await resolveAttachmentSourceAsync(item.attachment, options, signal);
-            if (!source) {
-              return null;
-            }
-            const src = safePlainTextAttachmentHref(source.src);
-            if (!src || isCrossOriginHttpSource(src)) {
-              return null;
-            }
-            return parseCommentAttachment(await readAttachmentText(src, source.sizeBytes, signal));
-          },
-          fallback: () => props.fallback(item),
-        };
-      })}
+      sources={props.comments.map((item) =>
+        admission.admitted
+          ? props.resolve(item)
+          : { identity: item.attachment.url, pending: true, fallback: () => undefined },
+      )}
       scope={JSON.stringify([props.options.messageId, props.options.canonicalMessageKey])}
       admission={admission}
-      admitted={admission.admitted}
     />
   );
 }
@@ -96,7 +77,6 @@ function SentComments(props: {
   inline?: boolean;
   scope: string;
   admission?: AttachmentAdmission;
-  admitted: boolean;
 }) {
   const sources = () => props.sources;
   const inline = createMemo(() => Boolean(props.inline));
@@ -108,7 +88,7 @@ function SentComments(props: {
       return {
         key: JSON.stringify([
           props.scope,
-          current.map(({ fallback: _fallback, read: _read, ...source }) => source),
+          current.map(({ fallback: _fallback, ...source }) => source),
         ]),
         sources: current,
       };
@@ -117,32 +97,31 @@ function SentComments(props: {
   );
   const comments = createMemo<Array<CommentPreview | null | undefined>>((previous) => {
     const current = request().sources;
-    let values: Array<CommentPreview | null | undefined> = current.map(
-      (_, index) => previous?.[index],
+    let values: Array<CommentPreview | null | undefined> = current.map((source, index) =>
+      !source.src && !source.pending ? null : previous?.[index],
     );
     if (!inline() && !revealed()) {
       return values;
-    }
-    if (!props.admitted) {
-      return previous ?? values;
     }
     const controller = new AbortController();
     onCleanup(() => controller.abort());
     const pending = new Map<number, Promise<{ index: number; comment: CommentPreview | null }>>();
     current.forEach((source, index) => {
-      pending.set(
-        index,
-        source
-          .read(controller.signal)
-          .catch(() => null)
-          .then((comment) => ({ index, comment })),
-      );
+      if (source.src) {
+        pending.set(
+          index,
+          readAttachmentText(source.src, source.sizeBytes, controller.signal)
+            .then(
+              (text) => parseCommentAttachment(text),
+              () => null,
+            )
+            .then((comment) => ({ index, comment })),
+        );
+      }
     });
     // A source handoff retains the committed quote until its replacement read settles.
     return (async function* () {
-      if (!previous || previous.every((value) => value === undefined)) {
-        yield values;
-      }
+      yield values;
       while (pending.size) {
         const { index, comment } = await Promise.race(pending.values());
         pending.delete(index);
