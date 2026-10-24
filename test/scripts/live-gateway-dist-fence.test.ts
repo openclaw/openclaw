@@ -68,6 +68,14 @@ function runningUnit(root: string, unit: string, pid: number) {
   });
 }
 
+function failedRuntime(tasksCurrent?: number): NonNullable<GatewayServiceState["runtime"]> {
+  return {
+    status: tasksCurrent === 0 ? "stopped" : "unknown",
+    state: "failed",
+    systemd: tasksCurrent === undefined ? {} : { tasksCurrent },
+  };
+}
+
 async function inspectFixtureGateway(
   root: string,
   readState: (
@@ -187,11 +195,9 @@ it.each([[], ["--profile", "dev"], ["--profile=dev"], ["--dev"]].map((options) =
 
 it.each([
   ["stopped", { status: "stopped", state: "inactive" }, false],
-  [
-    "failed with remaining cgroup tasks and no MainPID",
-    { status: "unknown", state: "failed", systemd: { tasksCurrent: 2 } },
-    true,
-  ],
+  ["failed with remaining cgroup tasks and no MainPID", failedRuntime(2), true],
+  ["failed with zero cgroup tasks", failedRuntime(0), false],
+  ["failed with an unavailable cgroup task count", failedRuntime(), false],
   [
     "deactivating without a MainPID",
     { status: "stopped", state: "deactivating", subState: "stop-post" },
@@ -338,20 +344,33 @@ it.each([false, true])(
   },
 );
 
-it("names every overlapping live profile", async () => {
+it.each([1, 2])("names every overlapping live profile (%i siblings)", async (count) => {
+  const other = path.join(tmp, "other");
   await writeOpenClawPackage(tmp);
-  const profiles = ["work", "fenceproof"];
+  await writeOpenClawPackage(other);
+  const profiles = count === 1 ? ["fenceproof"] : ["work", "fenceproof"];
   const result = await inspectFixtureGateway(
     tmp,
     async (binding) => {
-      const profile = binding.env.OPENCLAW_PROFILE;
-      return profile
-        ? runningUnit(tmp, `openclaw-gateway-${profile}.service`, 4242)
-        : baseState({ command: null });
+      const profile =
+        count === 1
+          ? binding.env.OPENCLAW_SYSTEMD_UNIT === "openclaw-gateway-fenceproof.service"
+            ? "fenceproof"
+            : undefined
+          : binding.env.OPENCLAW_PROFILE;
+      if (!profile) {
+        return count === 1
+          ? stateForPackage(other, { runtime: { status: "stopped", pid: undefined } })
+          : baseState({ command: null });
+      }
+      return runningUnit(tmp, `openclaw-gateway-${profile}.service`, 4242);
     },
     {
       bindings: profiles.map((profile) => ({
-        env: { OPENCLAW_PROFILE: profile },
+        env: {
+          OPENCLAW_PROFILE: profile,
+          ...(count === 1 ? { OPENCLAW_SYSTEMD_UNIT: "openclaw-gateway-fenceproof.service" } : {}),
+        },
       })),
     },
   );
@@ -363,67 +382,98 @@ it("names every overlapping live profile", async () => {
   expect(message).not.toContain("profiles default, fenceproof");
 });
 
-it("fences a custom Windows Task using its root argv profile without mutating the service", async () => {
-  const { checkout, other } = await packagePair(tmp);
-  const launcher = path.join(tmp, "gateway.cmd");
-  const scriptPath = "C:\\Services\\Recovery\\gateway.cmd";
-  const task = {
-    taskPath: "\\Services\\Recovery",
-    state: 4,
-    actions: [{ type: 0, path: scriptPath, arguments: "", workingDirectory: "" }],
-  };
-  await fs.writeFile(
-    launcher,
-    [
-      "@echo off",
-      'set "OPENCLAW_WINDOWS_TASK_NAME=Services\\Recovery"',
-      'set "OPENCLAW_PROFILE=stale"',
-      'set "OPENCLAW_SERVICE_MARKER=openclaw"',
-      'set "OPENCLAW_SERVICE_KIND=gateway"',
-      `"${process.execPath}" "${path.join(checkout, "dist", "index.js")}" --profile rescue gateway run < NUL`,
-    ].join("\r\n"),
-  );
-  const files = redirectReads((file) => (file === scriptPath ? launcher : file));
-  const inventory = vi.spyOn(schtasksProbe, "listScheduledTasks").mockReturnValue([task]);
-  const probe = vi
-    .spyOn(schtasksProbe, "probeScheduledTaskState")
-    .mockImplementation((name) =>
-      name.replace(/^\\+/, "") === "Services\\Recovery"
-        ? { status: "found", ...task }
-        : { status: "missing" },
+it.each(["saved environment", "root argv"] as const)(
+  "fences a custom Windows Task using its %s profile without mutating the service",
+  async (profileSource) => {
+    const { checkout, other } = await packagePair(tmp);
+    const launcher = path.join(tmp, "gateway.cmd");
+    const scriptPath = "C:\\Services\\Recovery\\gateway.cmd";
+    const task = {
+      taskPath: "\\Services\\Recovery",
+      state: 4,
+      actions: [{ type: 0, path: scriptPath, arguments: "", workingDirectory: "" }],
+    };
+    await fs.writeFile(
+      launcher,
+      [
+        "@echo off",
+        'set "OPENCLAW_WINDOWS_TASK_NAME=Services\\Recovery"',
+        `set "OPENCLAW_PROFILE=${profileSource === "root argv" ? "stale" : "rescue"}"`,
+        'set "OPENCLAW_SERVICE_MARKER=openclaw"',
+        'set "OPENCLAW_SERVICE_KIND=gateway"',
+        `"${process.execPath}" "${path.join(checkout, "dist", "index.js")}" ${profileSource === "root argv" ? "--profile rescue " : ""}gateway run < NUL`,
+      ].join("\r\n"),
     );
-  const native = vi.spyOn(schtasksExec, "execSchtasks").mockImplementation(async (args) => {
-    if (args[0] !== "/Query") {
-      throw new Error("Unexpected Scheduled Task mutation");
-    }
-    return { stdout: "", stderr: "", code: 0 };
-  });
-  const writes = vi.spyOn(fs, "writeFile").mockRejectedValue(new Error("Unexpected write"));
-  const renames = vi.spyOn(fs, "rename").mockRejectedValue(new Error("Unexpected rename"));
-  const removals = vi.spyOn(fs, "rm").mockRejectedValue(new Error("Unexpected removal"));
-  const signals = vi.spyOn(process, "kill").mockReturnValue(true);
-  restoreAfter(signals, removals, renames, writes, native, probe, inventory, files);
-  await withMockedPlatform("win32", async () => {
-    const env = { HOME: tmp, USERPROFILE: tmp, OPENCLAW_PROFILE: "selected" };
-    const result = await resolveLiveManagedGatewayDistFence(checkout, { env });
-    expectRefusal(result, `Scheduled Task ${JSON.stringify("Services\\Recovery")}`);
-    await expect(resolveLiveManagedGatewayDistFence(other, { env })).resolves.toEqual({
-      refuse: false,
+    const files = redirectReads((file) => (file === scriptPath ? launcher : file));
+    const inventory = vi.spyOn(schtasksProbe, "listScheduledTasks").mockReturnValue([task]);
+    const probe = vi
+      .spyOn(schtasksProbe, "probeScheduledTaskState")
+      .mockImplementation((name) =>
+        name.replace(/^\\+/, "") === "Services\\Recovery"
+          ? { status: "found", ...task }
+          : { status: "missing" },
+      );
+    const native = vi.spyOn(schtasksExec, "execSchtasks").mockImplementation(async (args) => {
+      if (args[0] !== "/Query") {
+        throw new Error("Unexpected Scheduled Task mutation");
+      }
+      return { stdout: "", stderr: "", code: 0 };
     });
-    task.state = 2;
-    await expect(resolveLiveManagedGatewayDistFence(checkout, { env })).resolves.toEqual(result);
-    task.state = 3;
-    await expect(resolveLiveManagedGatewayDistFence(checkout, { env })).resolves.toEqual({
-      refuse: false,
-    });
-    expect(probe).toHaveBeenCalled();
-    for (const mutation of [native, writes, renames, removals, signals]) {
-      expect(mutation).not.toHaveBeenCalled();
+    const writes = vi.spyOn(fs, "writeFile").mockRejectedValue(new Error("Unexpected write"));
+    const renames = vi.spyOn(fs, "rename").mockRejectedValue(new Error("Unexpected rename"));
+    const removals = vi.spyOn(fs, "rm").mockRejectedValue(new Error("Unexpected removal"));
+    const signals = vi.spyOn(process, "kill").mockReturnValue(true);
+    const mocks = [signals, removals, renames, writes, native, probe, inventory, files];
+    try {
+      await withMockedPlatform("win32", async () => {
+        const env = { HOME: tmp, USERPROFILE: tmp, OPENCLAW_PROFILE: "selected" };
+        const result = await resolveLiveManagedGatewayDistFence(checkout, { env });
+        expectRefusal(result, `Scheduled Task ${JSON.stringify("Services\\Recovery")}`);
+        const bindings = await gatewayBindings.discoverManagedGatewayBindings(env);
+        expect(bindings).toHaveLength(1);
+        expect(bindings[0]?.env).toMatchObject({
+          OPENCLAW_PROFILE: "rescue",
+          OPENCLAW_WINDOWS_TASK_NAME: "Services\\Recovery",
+        });
+        await expect(
+          gatewayBindings.readManagedGatewayBindingState(bindings[0]!),
+        ).resolves.toMatchObject({
+          installed: true,
+          running: false,
+          runtime: { status: "unknown", state: "Running" },
+        });
+        await expect(resolveLiveManagedGatewayDistFence(other, { env })).resolves.toEqual({
+          refuse: false,
+        });
+        task.state = 2;
+        await expect(resolveLiveManagedGatewayDistFence(checkout, { env })).resolves.toEqual(
+          result,
+        );
+        task.state = 3;
+        await expect(resolveLiveManagedGatewayDistFence(checkout, { env })).resolves.toEqual({
+          refuse: false,
+        });
+        expect(probe).toHaveBeenCalled();
+        for (const mutation of [native, writes, renames, removals, signals]) {
+          expect(mutation).not.toHaveBeenCalled();
+        }
+      });
+    } finally {
+      for (const mock of mocks) {
+        mock.mockRestore();
+      }
     }
-  });
-});
+  },
+);
 
 it.skipIf(process.platform === "win32").each([
+  ["literal", "Environment=OPENCLAW_PROFILE=fenceproof", "custom-rescue.service"],
+  ["spaced", "Environment = OPENCLAW_PROFILE=fenceproof", "custom-rescue.service"],
+  [
+    "last assignment",
+    "Environment=OPENCLAW_PROFILE=stale\nEnvironment=OPENCLAW_PROFILE=fenceproof",
+    "custom-rescue.service",
+  ],
   [
     "spaced reset",
     "Environment=OPENCLAW_PROFILE=stale\nEnvironment =\nEnvironment=OPENCLAW_SERVICE_MARKER=openclaw\nEnvironment=OPENCLAW_SERVICE_KIND=gateway",
@@ -431,16 +481,33 @@ it.skipIf(process.platform === "win32").each([
   ],
   [
     "section and case",
-    "Environment=OPENCLAW_PROFILE=stale\nEnvironment = OPENCLAW_PROFILE=fenceproof\n[Unit]\nEnvironment=OPENCLAW_PROFILE=wrong-section\n[Service]\nenvironment=OPENCLAW_PROFILE=wrong-case",
+    "Environment=OPENCLAW_PROFILE=fenceproof\n[Unit]\nEnvironment=OPENCLAW_PROFILE=wrong-section\n[Service]\nenvironment=OPENCLAW_PROFILE=wrong-case",
     "custom-rescue.service",
   ],
 ] as const)(
   "refuses through modeled Linux real-FS sibling bindings with %s inline profile metadata",
   async (_name, metadata, siblingUnit) =>
     withMockedPlatform("linux", async () => {
+      const hostConnection = {
+        XDG_RUNTIME_DIR: path.join(tmp, "caller-runtime"),
+        DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(tmp, "caller-bus")}`,
+        USER: "fixture-caller",
+        LOGNAME: "fixture-caller",
+        SUDO_USER: "fixture-origin",
+      };
       const { checkout, other, env, bindings } = await systemdFixture(siblingUnit, metadata, {
+        ...hostConnection,
         OPENCLAW_PROFILE: "selected",
       });
+      expect(bindings).toHaveLength(2);
+      expect(bindings.map((binding) => binding.systemdReadTarget?.unitName)).toEqual(
+        expect.arrayContaining([defaultUnit, siblingUnit]),
+      );
+      expect(bindings.every((binding) => binding.scope === "user")).toBe(true);
+      for (const binding of bindings) {
+        expect(binding.env).toMatchObject(hostConnection);
+        expect(binding.env.OPENCLAW_PROFILE).toBeUndefined();
+      }
 
       const result = await inspectFixtureGateway(
         checkout,
@@ -545,11 +612,18 @@ it.skipIf(process.platform !== "linux")(
     const unitPath = "/etc/systemd/system/openclaw@.service";
     const { checkout, other, env, bindings } = await systemdFixture(unitPath);
     const instanceName = `openclaw@${os.userInfo().username}.service`;
+    expect(bindings.find((binding) => binding.scope === "user")).toMatchObject({
+      systemdReadTarget: { unitName: defaultUnit },
+    });
+    expect(bindings.find((binding) => binding.scope === "system")).toMatchObject({
+      systemdReadTarget: { unitName: instanceName, unitPath },
+    });
 
     const result = await inspectFixtureGateway(
       checkout,
       async (binding) => {
         const unitName = binding?.systemdReadTarget?.unitName ?? "";
+        expect(unitName.endsWith("@.service")).toBe(false);
         if (binding?.scope === "system") {
           expect(unitName).toBe(instanceName);
           return runningUnit(checkout, instanceName, 91);
