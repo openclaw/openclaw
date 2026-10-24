@@ -183,7 +183,7 @@ async function detectWorkflowFile(candidate: string, cwd: string) {
 }
 
 async function loadEmbeddedToolRuntimeFromPackage(): Promise<EmbeddedToolRuntime> {
-  const { getRuntimeExecutionProfile } = await import("openclaw/plugin-sdk/host-runtime");
+  const { getRuntimeExecutionProfile } = await import("openclaw/plugin-sdk/runtime-profile");
   const profile = getRuntimeExecutionProfile();
   // Joined specifier keeps bundlers from statically resolving
   // @clawdbot/lobster/core; the plugin's declared @clawdbot/lobster dependency

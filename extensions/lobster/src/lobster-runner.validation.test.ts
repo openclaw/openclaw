@@ -10,8 +10,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createEmbeddedLobsterRunner } from "./lobster-runner.js";
 
 const profile = vi.hoisted(() => ({ value: "dynamic-execution" }));
-vi.mock("openclaw/plugin-sdk/host-runtime", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("openclaw/plugin-sdk/host-runtime")>()),
+vi.mock("openclaw/plugin-sdk/runtime-profile", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-profile")>()),
   getRuntimeExecutionProfile: () => profile.value,
 }));
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);

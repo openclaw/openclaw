@@ -18,6 +18,7 @@
   "runtime-doctor",
   "runtime-doctor-migrations",
   "runtime-env",
+  "runtime-profile",
   "proxy-capture",
   "setup",
   "setup-runtime",

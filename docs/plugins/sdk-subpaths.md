@@ -217,6 +217,7 @@ new code; see the per-row notes below.
     | --- | --- |
     | `plugin-sdk/channel-core` | `defineChannelPluginEntry`, `defineSetupPluginEntry`, `createChatChannelPlugin`, `createChannelPluginBase`, `createChannelConfigUiHints` |
     | `plugin-sdk/json-schema-runtime` | Private-local after July 2026; Cached JSON Schema validation helper for plugin-owned schemas |
+    | `plugin-sdk/json-schema-validator` | Codegen-free JSON Schema validator provider with scoped reference and format ownership |
     | `plugin-sdk/channel-setup` | `defineChannelSetupContract`, channel-owned setup field/input types, `createOptionalChannelSetupSurface`, `createOptionalChannelSetupAdapter`, `createOptionalChannelSetupWizard`, plus `DEFAULT_ACCOUNT_ID`, `createTopLevelChannelDmPolicy`, `setSetupChannelEnabled`, `splitSetupEntries` |
     | `plugin-sdk/channel-dm-policy` | `createChannelDmPolicy` for account-aware setup policy descriptors |
     | `plugin-sdk/setup` | Shared setup wizard helpers, setup translator, allowlist prompts, setup status builders |
@@ -414,6 +415,7 @@ Use `isLoopbackHost(host)` when a plugin must accept only the local machine. It 
     | --- | --- |
     | `plugin-sdk/runtime` | Runtime/logging/backup helpers, plugin install-path warnings, and process helpers |
     | `plugin-sdk/runtime-env` | Narrow runtime env, logger, timeout, retry, and backoff helpers |
+    | `plugin-sdk/runtime-profile` | Lightweight `getRuntimeExecutionProfile` and `RuntimeExecutionProfile` build facts for selecting runtime implementations |
     | `plugin-sdk/browser-cdp` | Private host runtime; `parseBrowserHttpUrl` and `redactCdpUrl` for Browser URL handling. JavaScript-only package export, not a typed third-party SDK contract. |
     | `plugin-sdk/browser-config` | Private-local after July 2026; Supported browser config facade for normalized profile/defaults, CDP URL parsing, and browser-control auth helpers |
     | `plugin-sdk/agent-harness-completion` | Private-local JavaScript-only host runtime for official harness plugins; native completion delivery using a host-issued requester scope, retained completion custody, and a source-bound event sink; no generic Task lifecycle |

@@ -935,7 +935,7 @@ is claimed. These display facts do not change allocation or enrollment ownership
 
 ## Runtime schema validation
 
-`openclaw/plugin-sdk/host-runtime` exports `getRuntimeExecutionProfile()` and
+`openclaw/plugin-sdk/runtime-profile` exports `getRuntimeExecutionProfile()` and
 `RuntimeExecutionProfile` for choosing an implementation appropriate to the host.
 The profile is a process-stable build fact, not execution authorization.
 

@@ -555,6 +555,10 @@
       "types": "./dist/plugin-sdk/runtime-env.d.ts",
       "default": "./dist/plugin-sdk/runtime-env.js"
     },
+    "./plugin-sdk/runtime-profile": {
+      "types": "./dist/plugin-sdk/runtime-profile.d.ts",
+      "default": "./dist/plugin-sdk/runtime-profile.js"
+    },
     "./plugin-sdk/proxy-capture": {
       "types": "./dist/plugin-sdk/proxy-capture.d.ts",
       "default": "./dist/plugin-sdk/proxy-capture.js"
