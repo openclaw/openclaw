@@ -1,5 +1,6 @@
 import { once } from "node:events";
 import { ImapFlow } from "imapflow";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createGatewaySchedulerClock } from "openclaw/plugin-sdk/plugin-test-api";
 import { describe, expect, it, vi } from "vitest";
 import { createImapAuthResult } from "./imap-test-support.js";
@@ -196,10 +197,7 @@ describe("IMAP watcher protocol boundary", () => {
 
   it("keeps arrivals after the baseline FETCH snapshot eligible for the next sweep", async () => {
     const clock = createGatewaySchedulerClock();
-    let releaseFetch!: () => void;
-    const fetchGate = new Promise<void>((resolve) => {
-      releaseFetch = resolve;
-    });
+    const { promise: fetchGate, resolve: releaseFetch } = createDeferred<void>();
     const { server, state, dispatchHookAgentTurn, startup, waitForCursor } = await startWatcher({
       clock,
       omitUidNext: true,
@@ -224,10 +222,7 @@ describe("IMAP watcher protocol boundary", () => {
   });
 
   it("does not write a baseline after stop closes an in-flight metadata FETCH", async () => {
-    let releaseFetch!: () => void;
-    const fetchGate = new Promise<void>((resolve) => {
-      releaseFetch = resolve;
-    });
+    const { promise: fetchGate, resolve: releaseFetch } = createDeferred<void>();
     const cursor = { uidValidity: "16", lastSeenUid: 40, updatedAt: 0 };
     const { server, watcher, state, dispatchHookAgentTurn } = await startWatcher({
       omitUidNext: true,
@@ -633,10 +628,8 @@ describe("IMAP watcher protocol boundary", () => {
 
   it("coalesces a wakeup that arrives during an active sweep", async () => {
     const { server, dispatchHookAgentTurn, waitForCursor } = await startWatcher();
-    let releaseFetch = () => {};
-    server.fetchGate = new Promise<void>((resolve) => {
-      releaseFetch = resolve;
-    });
+    const { promise: fetchGate, resolve: releaseFetch } = createDeferred<void>();
+    server.fetchGate = fetchGate;
     server.append("From: trusted@example.com\r\nSubject: First\r\n\r\nHeld sweep");
     await vi.waitFor(() =>
       expect(server.commands.some((command) => /UID FETCH/u.test(command))).toBe(true),

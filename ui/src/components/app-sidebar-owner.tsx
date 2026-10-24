@@ -38,7 +38,7 @@ import {
   type SidebarToolActivity,
 } from "./app-sidebar-session-types.ts";
 import { SessionOrganizer } from "./session-organizer.ts";
-import type { createSidebarScroll } from "./sidebar-context-controller.ts";
+import { SidebarScrollContext, type createSidebarScroll } from "./sidebar-context-controller.ts";
 import { createSidebarMenus } from "./sidebar-menus.tsx";
 import type { SidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 import { createSidebarPeople, SidebarPeoplePreferences } from "./sidebar-people.ts";
@@ -526,10 +526,13 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                         <>
                           {toolbar}
                           <div
+                            ref={scroll.createContentRef()}
                             class="sidebar-session-content"
                             hidden={Boolean(this.contextualSidebar)}
                           >
-                            <Sessions />
+                            <SidebarScrollContext value={scroll}>
+                              <Sessions />
+                            </SidebarScrollContext>
                           </div>
                           {this.contextualSidebar?.render(
                             this.contextualSidebar.data,

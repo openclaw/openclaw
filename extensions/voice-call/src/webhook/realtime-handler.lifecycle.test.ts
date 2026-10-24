@@ -22,9 +22,7 @@ async function openBridge(
   close: RealtimeVoiceBridge["close"],
   overrides: Partial<RealtimeVoiceBridge> = {},
   options: Parameters<typeof createCarrierLifecycleHarness>[1] = {},
-  delegation:
-    | boolean
-    | NonNullable<Awaited<ReturnType<ResolveRealtimeCallRegistration>>["capabilities"]> = false,
+  delegation = false,
 ) {
   const ready = createDeferred<RealtimeVoiceBridgeCreateRequest>();
   const createBridgeForCall = vi.fn((request: RealtimeVoiceBridgeCreateRequest) => {
@@ -42,15 +40,12 @@ async function openBridge(
             instructions: "Help the caller.",
             provider,
             providerConfig: {},
-            capabilities:
-              typeof delegation === "boolean"
-                ? {
-                    transports: ["gateway-relay"],
-                    inputAudioFormats: [],
-                    outputAudioFormats: [],
-                    handlesAgentConsult: true,
-                  }
-                : delegation,
+            capabilities: {
+              transports: ["gateway-relay"],
+              inputAudioFormats: [],
+              outputAudioFormats: [],
+              handlesAgentConsult: true,
+            },
           }),
         }
       : options,
@@ -430,18 +425,9 @@ describe("RealtimeCallHandler lifecycle", () => {
         {
           connect,
           submitToolResult,
-          outputAudioMode: "continuous",
-          handlesInputAudioBargeIn: true,
         },
         outcome === "disabled" ? { toolPolicy: "none" } : {},
-        {
-          transports: ["gateway-relay"],
-          inputAudioFormats: [],
-          outputAudioFormats: [],
-          handlesAgentConsult: true,
-          supportsBargeIn: false,
-          handlesInputAudioBargeIn: true,
-        },
+        true,
       );
       let admittedSignal: AbortSignal | undefined;
       const pending = defer<void>(undefined);
@@ -465,10 +451,7 @@ describe("RealtimeCallHandler lifecycle", () => {
         prompt: "Read my itinerary",
         signal: controller.signal,
       });
-      const settled = result.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+      const settled = result.catch((error: unknown) => error);
       if (outcome !== "disabled") {
         await vi.waitFor(() => expect(admittedSignal).toBeDefined());
       }
@@ -479,10 +462,10 @@ describe("RealtimeCallHandler lifecycle", () => {
       }
       pending.resolve();
       if (outcome === "complete") {
-        expect(await settled).toEqual({ value: { text: "The train leaves at noon." } });
+        expect(await settled).toEqual({ text: "The train leaves at noon." });
         expect(effects).toEqual(["itinerary-read"]);
       } else {
-        expect(await settled).toEqual({ error: expect.any(Error) });
+        expect(await settled).toBeInstanceOf(Error);
         expect(admittedSignal?.aborted).toBe(outcome === "disabled" ? undefined : true);
         expect(effects).toEqual([]);
       }
