@@ -2,12 +2,19 @@ import { createHash } from "node:crypto";
 import { appendGitConfig, gitMaintenanceEnvironment } from "../../infra/git-maintenance-env.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { SpawnResult } from "../../process/exec.js";
+import type { NodeWorkerWorkspaceExecResult } from "../../worker/node-workspace-protocol.js";
+import { prepareRepositoryPublicationRestore } from "../github-repository-publication-restore.js";
+import type { createNodeWorkspaceTransferCommand } from "./node-workspace-transfer-command.js";
+import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import type {
   PreparedRepositoryWorkspace,
   WorkerWorkspaceCommand,
   WorkerWorkspaceSyncResult,
+  WorkerWorkspaceSyncRequest,
 } from "./tunnel-contract.js";
 import { boundedWorkerError } from "./worker-error.js";
+import { decodeWorkspaceManifest } from "./workspace-manifest-worker.js";
+import { workerWorkspaceTransferPaths } from "./workspace-result-staging.js";
 import {
   workerWorkspaceCommandSucceeded as succeeded,
   workspaceSyncError,
@@ -390,4 +397,91 @@ export function createNodeWorkerRepositoryPreparation(
       return outcome;
     },
   };
+}
+
+export async function restoreNodeWorkerRepositoryCheckpoint(params: {
+  checkpoint: NonNullable<
+    Extract<WorkerWorkspaceSyncRequest["source"], { kind: "repository" }>["checkpoint"]
+  >;
+  baseManifestRef: string;
+  environmentId: string;
+  workspaceTransfer: Pick<NodeWorkspaceTransferService, "publishSnapshot" | "revoke">;
+  signal: AbortSignal;
+  authorize?: () => void;
+  exec: (command: WorkerWorkspaceCommand) => Promise<NodeWorkerWorkspaceExecResult>;
+  transfer: ReturnType<typeof createNodeWorkspaceTransferCommand>;
+}): Promise<string> {
+  const {
+    checkpoint,
+    baseManifestRef,
+    environmentId,
+    workspaceTransfer,
+    signal,
+    authorize,
+    exec,
+    transfer,
+  } = params;
+  const decodedBase = await decodeWorkspaceManifest(checkpoint.baseManifestRaw, undefined, signal);
+  if (decodedBase.manifestRef !== baseManifestRef) {
+    throw new Error("Repository checkpoint baseline differs from its cloned commit");
+  }
+  const decoded = await decodeWorkspaceManifest(checkpoint.currentManifestRaw, undefined, signal);
+  const manifestRef = decoded.manifestRef;
+  const manifest = decoded.manifest;
+  const base = decodedBase.manifest;
+  const token = workspaceTransfer.publishSnapshot(
+    environmentId,
+    {
+      manifest,
+      manifestRef,
+      rawManifest: checkpoint.currentManifestRaw,
+      root: checkpoint.stagingRoot,
+      blobPaths: new Set(workerWorkspaceTransferPaths(manifest, base, signal)),
+      gitPackPath: checkpoint.gitPackPath,
+    },
+    authorize,
+  );
+  try {
+    const restored = await transfer(
+      {
+        direction: "download",
+        token,
+        manifestRef,
+        checkpointBaseManifestRef: baseManifestRef,
+        ...(checkpoint.gitPackPath && checkpoint.gitHistory
+          ? { checkpointGitHistory: checkpoint.gitHistory }
+          : {}),
+      },
+      "Repository checkpoint restore failed",
+      { assertCurrent: authorize },
+    );
+    const historyNote =
+      checkpoint.gitHistoryNote ??
+      (checkpoint.gitHistory && checkpoint.gitPackPath
+        ? JSON.parse(restored.stdout).gitHistoryNote
+        : undefined);
+    if (historyNote) {
+      workspaceSyncLog.info(historyNote);
+    }
+    for (const command of await prepareRepositoryPublicationRestore({
+      ...checkpoint,
+      current: manifest,
+    })) {
+      const publicationRestored = await exec({
+        ...command,
+        timeoutMs: 60_000,
+        transportRetry: "never",
+        assertCurrent: authorize,
+      });
+      if (publicationRestored.code !== 0 || publicationRestored.termination !== "exit") {
+        throw new Error(
+          "Repository publication paths could not be restored; retry workspace preparation",
+        );
+      }
+    }
+  } finally {
+    await workspaceTransfer.revoke(environmentId, token);
+  }
+
+  return manifestRef;
 }

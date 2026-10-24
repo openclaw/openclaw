@@ -524,6 +524,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/worker-environments/workspace-result-ref-mutation.test.ts",
   "src/gateway/worker-environments/workspace-result-repository.editor-admission.test.ts",
   "src/gateway/worker-environments/workspace-result-repository.test.ts",
+  "src/gateway/worker-environments/workspace-result-repository-history.test.ts",
   "src/gateway/worker-workspace-recovery-binding.test.ts",
   "src/gateway/worker-workspace-recovery-transcript.test.ts",
   "src/gateway/workspace-icon-http.test.ts",
