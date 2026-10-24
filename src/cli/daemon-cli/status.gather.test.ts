@@ -7,11 +7,13 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { REDACTED_SENTINEL } from "../../config/redact-sentinel.js";
 import type { ExtraGatewayService } from "../../daemon/inspect.js";
 import type { ForeignLaunchdJob } from "../../daemon/launchd-foreign-jobs.js";
+import type { readScheduledTaskRuntime } from "../../daemon/schtasks-runtime.js";
 import type { ServiceConfigAudit } from "../../daemon/service-audit.js";
-import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
+import type { GatewayService } from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { readSystemdServiceExecStart } from "../../daemon/systemd-service-files.js";
 import { gatewayEdgeAuthValueForTarget } from "../../gateway/edge-auth.js";
+import { resolveGatewayProbeAuthSafeWithSecretInputs } from "../../gateway/probe-auth.js";
 import * as gatewayBootLifecycle from "../../infra/gateway-boot-lifecycle.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
@@ -61,9 +63,10 @@ const preflightOpenClawDatabaseSchemas = vi.fn<
   typeof import("../../state/openclaw-database-preflight.js").preflightOpenClawDatabaseSchemas
 >(async () => ({ incompatible: [], indeterminate: [] }));
 
-const isDefaultInstallIdentity = vi.fn((_env?: NodeJS.ProcessEnv) => true);
 const isGatewayExternallySupervised = vi.fn((_env?: NodeJS.ProcessEnv) => false);
-const resolveGatewayProbeAuthSafeWithSecretInputsCalls = vi.fn<(opts?: unknown) => void>();
+const resolveGatewayProbeAuthSafeWithSecretInputsCalls = vi.mocked(
+  resolveGatewayProbeAuthSafeWithSecretInputs,
+);
 const loadInstalledPluginIndexInstallRecords =
   vi.fn<
     (params?: {
@@ -91,12 +94,10 @@ const inspectWindowsGatewayFirewall = vi.fn<(opts?: unknown) => Promise<unknown>
 const auditGatewayServiceConfig = vi.fn<(_opts?: unknown) => Promise<ServiceConfigAudit>>(
   async () => ({ ok: true, issues: [] }),
 );
-const serviceIsLoaded = vi.fn<
-  (opts?: { env?: NodeJS.ProcessEnv; timeoutMs?: number }) => Promise<boolean>
->(async (_opts?: { env?: NodeJS.ProcessEnv; timeoutMs?: number }) => true);
-const serviceReadRuntime = vi.fn<
-  (_env?: NodeJS.ProcessEnv, _opts?: { timeoutMs?: number }) => Promise<GatewayServiceRuntime>
->(async (_env?: NodeJS.ProcessEnv, _opts?: { timeoutMs?: number }) => ({ status: "running" }));
+const serviceIsLoaded = vi.fn<GatewayService["isLoaded"]>(async () => true);
+const serviceReadRuntime = vi.fn<typeof readScheduledTaskRuntime>(async () => ({
+  status: "running",
+}));
 const inspectGatewayRestart = vi.fn<(opts?: unknown) => Promise<GatewayRestartSnapshot>>(
   async (_opts?: unknown) => ({
     runtime: { status: "running", pid: 1234 },
@@ -178,24 +179,11 @@ function withDatabase<T>(
     db.close();
   }
 }
-const serviceReadCommand = vi.fn<
-  (
-    env?: NodeJS.ProcessEnv,
-  ) => Promise<{ programArguments: string[]; environment?: Record<string, string> } | null>
->(async () => serviceCommand());
+const serviceReadCommand = vi.fn<GatewayService["readCommand"]>(async () => serviceCommand());
 
 const resolveGatewayBindHost =
   vi.fn<(bindMode?: string, customBindHost?: string) => Promise<string>>();
-const resolveAdvertisedControlUiLinks =
-  vi.fn<(opts?: unknown) => Promise<{ httpUrl: string; wsUrl: string }>>();
-const pickPrimaryTailnetIPv4 = vi.fn(() => "100.64.0.9");
 const resolveGatewayPort = vi.fn((_cfg?: unknown, _env?: unknown) => 18789);
-const resolveStateDir = vi.fn(
-  (env: NodeJS.ProcessEnv) => env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-cli",
-);
-const resolveConfigPath = vi.fn((env: NodeJS.ProcessEnv, stateDir: string) => {
-  return env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`;
-});
 const createConfigIOCalls =
   vi.fn<(configPath: string, pluginValidation?: "full" | "skip", observe?: boolean) => void>();
 const readConfigFileSnapshotCalls = vi.fn<(configPath: string) => void>();
@@ -218,10 +206,11 @@ vi.mock("../../config/config.js", () => ({
 
 vi.mock("../../config/paths.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/paths.js")>()),
-  isDefaultInstallIdentity: (env?: NodeJS.ProcessEnv) => isDefaultInstallIdentity(env),
-  resolveConfigPath: (env: NodeJS.ProcessEnv, stateDir: string) => resolveConfigPath(env, stateDir),
+  isDefaultInstallIdentity: () => true,
+  resolveConfigPath: (env: NodeJS.ProcessEnv, stateDir: string) =>
+    env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`,
   resolveGatewayPort: (cfg?: unknown, env?: unknown) => resolveGatewayPort(cfg, env),
-  resolveStateDir: (env: NodeJS.ProcessEnv) => resolveStateDir(env),
+  resolveStateDir: (env: NodeJS.ProcessEnv) => env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-cli",
 }));
 
 vi.mock("../../config/io.runtime.js", () => ({
@@ -326,19 +315,19 @@ vi.mock("../../gateway/net.js", async (importOriginal) => ({
 }));
 
 vi.mock("../../gateway/control-ui-links.js", () => ({
-  resolveAdvertisedControlUiLinks: (opts?: unknown) => resolveAdvertisedControlUiLinks(opts),
+  resolveAdvertisedControlUiLinks: async () => ({
+    httpUrl: "https://10.211.55.3:19001/",
+    wsUrl: "wss://10.211.55.3:19001",
+  }),
 }));
 
 vi.mock("../../gateway/probe-auth.js", async (importOriginal) => {
-  const actual = await importOriginal<Record<string, unknown>>();
+  const actual = await importOriginal<typeof import("../../gateway/probe-auth.js")>();
   return {
     ...actual,
-    resolveGatewayProbeAuthSafeWithSecretInputs: async (opts: unknown) => {
-      resolveGatewayProbeAuthSafeWithSecretInputsCalls(opts);
-      return await (
-        actual.resolveGatewayProbeAuthSafeWithSecretInputs as (opts: unknown) => Promise<unknown>
-      )(opts);
-    },
+    resolveGatewayProbeAuthSafeWithSecretInputs: vi.fn(
+      actual.resolveGatewayProbeAuthSafeWithSecretInputs,
+    ),
   };
 });
 
@@ -367,7 +356,7 @@ vi.mock("../../infra/gateway-supervision.js", async (importOriginal) => ({
 }));
 
 vi.mock("../../infra/tailnet.js", () => ({
-  pickPrimaryTailnetIPv4: () => pickPrimaryTailnetIPv4(),
+  pickPrimaryTailnetIPv4: () => "100.64.0.9",
 }));
 
 vi.mock("../../infra/tls/gateway.js", () => ({
@@ -400,14 +389,6 @@ vi.mock("./restart-health.js", () => ({
   inspectGatewayRestart: (opts: unknown) => inspectGatewayRestart(opts),
 }));
 
-function callArg(mock: { mock: { calls: unknown[][] } }, index = 0): unknown {
-  const call = mock.mock.calls[index];
-  if (!call) {
-    throw new Error(`Expected mock call ${index}`);
-  }
-  return call[0];
-}
-
 function probeInput() {
   const input = callGatewayStatusProbe.mock.calls[0]?.[0];
   assert(input, "expected status probe");
@@ -431,15 +412,10 @@ async function withStatusConfig<T>(
   setTestEnvValue("OPENCLAW_STATE_DIR", tmp);
   setTestEnvValue("OPENCLAW_CONFIG_PATH", configPath);
   serviceReadCommand.mockResolvedValueOnce({
-    programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
-    ...(includeServiceEnv
-      ? {
-          environment: {
-            OPENCLAW_STATE_DIR: tmp,
-            OPENCLAW_CONFIG_PATH: configPath,
-          },
-        }
-      : {}),
+    ...serviceCommand(),
+    environment: includeServiceEnv
+      ? { OPENCLAW_STATE_DIR: tmp, OPENCLAW_CONFIG_PATH: configPath }
+      : undefined,
   });
   return await run(configPath);
 }
@@ -475,14 +451,9 @@ describe("gatherDaemonStatus", () => {
     deleteTestEnvValue("OPENCLAW_GATEWAY_URL");
     deleteTestEnvValue("DAEMON_GATEWAY_TOKEN");
     deleteTestEnvValue("DAEMON_GATEWAY_PASSWORD");
-    isDefaultInstallIdentity.mockReset().mockReturnValue(true);
     isGatewayExternallySupervised.mockReset().mockReturnValue(false);
     auditGatewayServiceConfig.mockClear();
     callGatewayStatusProbe.mockClear();
-    resolveAdvertisedControlUiLinks.mockClear().mockResolvedValue({
-      httpUrl: "https://10.211.55.3:19001/",
-      wsUrl: "wss://10.211.55.3:19001",
-    });
     resolveGatewayBindHost
       .mockClear()
       .mockImplementation(async (bindMode?: string) =>
@@ -562,12 +533,7 @@ describe("gatherDaemonStatus", () => {
     };
     findExtraGatewayServices.mockResolvedValueOnce({
       services: [userService, systemService, otherService],
-      errors: [
-        {
-          source: "/etc/systemd/system/openclaw-unreadable.service",
-          message: "Service path could not be inspected.",
-        },
-      ],
+      errors: [],
     });
     serviceReadRuntime.mockResolvedValueOnce({
       status: "running",
@@ -818,51 +784,44 @@ describe("gatherDaemonStatus", () => {
     expect(inspectGatewayRestart).not.toHaveBeenCalled();
   });
 
-  it.each([["external supervisor", true, true]])(
-    "uses the active %s context instead of an unrelated native service",
-    async (_, isDefault, external) => {
-      setTestEnvValue("OPENCLAW_GATEWAY_PORT", "18900");
-      isDefaultInstallIdentity.mockReturnValue(isDefault);
-      isGatewayExternallySupervised.mockReturnValue(external);
-      serviceReadCommand.mockResolvedValueOnce({
-        programArguments: ["/bin/node", "cli", "gateway", "--port", "18789"],
-        environment: {
-          OPENCLAW_GATEWAY_PORT: "18789",
-          OPENCLAW_CONFIG_PATH: "/tmp/legacy-openclaw/openclaw.json",
-          OPENCLAW_STATE_DIR: "/tmp/legacy-openclaw",
-        },
-      });
-      resolveGatewayPort.mockImplementation((_cfg?: unknown, env?: unknown) =>
-        Number((env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_GATEWAY_PORT ?? 18789),
-      );
-      callGatewayStatusProbe.mockResolvedValueOnce({
-        ok: false,
-        url: "ws://127.0.0.1:18900",
-        error: "connect ECONNREFUSED 127.0.0.1:18900",
-      });
-      loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(officialPlugin());
+  it("uses the active external supervisor context instead of an unrelated native service", async () => {
+    setTestEnvValue("OPENCLAW_GATEWAY_PORT", "18900");
+    isGatewayExternallySupervised.mockReturnValue(true);
+    serviceReadCommand.mockResolvedValueOnce({
+      programArguments: ["/bin/node", "cli", "gateway", "--port", "18789"],
+      environment: {
+        OPENCLAW_GATEWAY_PORT: "18789",
+        OPENCLAW_CONFIG_PATH: "/tmp/legacy-openclaw/openclaw.json",
+        OPENCLAW_STATE_DIR: "/tmp/legacy-openclaw",
+      },
+    });
+    resolveGatewayPort.mockImplementation((_cfg?: unknown, env?: unknown) =>
+      Number((env as NodeJS.ProcessEnv | undefined)?.OPENCLAW_GATEWAY_PORT ?? 18789),
+    );
+    callGatewayStatusProbe.mockResolvedValueOnce({
+      ok: false,
+      url: "ws://127.0.0.1:18900",
+      error: "connect ECONNREFUSED 127.0.0.1:18900",
+    });
+    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(officialPlugin());
 
-      const status = await gatherStatus({
-        requireRpc: true,
-        deep: true,
-        pluginVersionTarget: "restart",
-      });
+    const status = await gatherStatus({
+      requireRpc: true,
+      deep: true,
+      pluginVersionTarget: "restart",
+    });
 
-      expect(status.gateway?.probeUrl).toBe("ws://127.0.0.1:18900");
-      expect(probeInput().url).toBe("ws://127.0.0.1:18900");
-      const input = probeInput();
-      expect(input.configPath).toBe("/tmp/openclaw-cli/openclaw.json");
-      const authInput = callArg(resolveGatewayProbeAuthSafeWithSecretInputsCalls) as {
-        cfg?: unknown;
-        env?: NodeJS.ProcessEnv;
-      };
-      expect(authInput.cfg).toBe(cliLoadedConfig);
-      expect(authInput.env?.OPENCLAW_GATEWAY_PORT).toBe("18900");
-      expect(status.service.targetRole).toBe("diagnostic-only");
-      expect(status.pluginVersionRestartReadiness).toBeUndefined();
-      expect(inspectGatewayRestart).not.toHaveBeenCalled();
-    },
-  );
+    expect(status.gateway?.probeUrl).toBe("ws://127.0.0.1:18900");
+    expect(probeInput().url).toBe("ws://127.0.0.1:18900");
+    const input = probeInput();
+    expect(input.configPath).toBe("/tmp/openclaw-cli/openclaw.json");
+    const authInput = resolveGatewayProbeAuthSafeWithSecretInputsCalls.mock.calls[0]?.[0];
+    expect(authInput?.cfg).toBe(cliLoadedConfig);
+    expect(authInput?.env?.OPENCLAW_GATEWAY_PORT).toBe("18900");
+    expect(status.service.targetRole).toBe("diagnostic-only");
+    expect(status.pluginVersionRestartReadiness).toBeUndefined();
+    expect(inspectGatewayRestart).not.toHaveBeenCalled();
+  });
 
   registerStatusTimeoutTests({
     gatherStatus,
@@ -908,9 +867,7 @@ describe("gatherDaemonStatus", () => {
 
     const status = await gatherStatus({ probe: false, deep: true });
 
-    const handoffInput = callArg(readGatewayRestartHandoffSync) as NodeJS.ProcessEnv;
-    expect(handoffInput.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-daemon");
-    expect(handoffInput.OPENCLAW_CONFIG_PATH).toBe("/tmp/openclaw-daemon/openclaw.json");
+    expect(readGatewayRestartHandoffSync.mock.calls[0]?.[0]).toMatchObject(daemonEnvironment);
     expect(status.service.restartHandoff?.reason).toBe("plugin source changed");
     expect(status.service.restartHandoff?.restartKind).toBe("full-process");
     expect(status.service.restartHandoff?.supervisorMode).toBe("launchd");
@@ -1199,10 +1156,9 @@ describe("gatherDaemonStatus", () => {
     inspectGatewayRestart.mockResolvedValueOnce({
       runtime: { status: "running", pid: 8000 },
       portUsage: {
-        port: 19001,
+        ...freePort(19001),
         status: "busy",
         listeners: [{ pid: 9000, ppid: 8999, commandLine: "openclaw-gateway" }],
-        hints: [],
       },
       healthy: false,
       staleGatewayPids: [9000],
@@ -1210,7 +1166,7 @@ describe("gatherDaemonStatus", () => {
 
     const status = await gatherStatus();
 
-    expect((callArg(inspectGatewayRestart) as { port?: number }).port).toBe(19001);
+    expectPartialCall(inspectGatewayRestart, { port: 19001 });
     expect(status.health).toEqual({
       healthy: false,
       staleGatewayPids: [9000],
@@ -1229,10 +1185,9 @@ describe("gatherDaemonStatus", () => {
         [
           19001,
           {
-            port: 19001,
+            ...freePort(19001),
             status: "busy",
             listeners: [{ pid: 8000, ppid: 1, commandLine: "openclaw gateway" }],
-            hints: [],
           },
         ],
       ]),
@@ -1248,9 +1203,7 @@ describe("gatherDaemonStatus", () => {
 
     const status = await gatherStatus();
 
-    expectPartialCall(readLastGatewayErrorLine, {
-      ...daemonEnvironment,
-    });
+    expectPartialCall(readLastGatewayErrorLine, daemonEnvironment);
     expect(status.port?.status).toBe("busy");
     expect(status.rpc?.ok).toBe(false);
     expect(status.lastError).toBe(
@@ -1265,15 +1218,12 @@ describe("gatherDaemonStatus", () => {
   });
 
   it("compares plugin drift against the running gateway version from the probe, not the CLI VERSION", async () => {
-    // Gateway is still running an older version than the invoking CLI.
-    // An npm plugin pinned to the running gateway version must NOT be
-    // reported as drifted just because the CLI package is newer.
     callGatewayStatusProbe.mockResolvedValueOnce({
       ok: true,
       url: "ws://127.0.0.1:19001",
       error: null,
       server: { version: "2026.5.4", connId: "c1" },
-    } as never);
+    });
     loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
       brave: {
         source: "npm",
@@ -1281,12 +1231,8 @@ describe("gatherDaemonStatus", () => {
         resolvedName: "@openclaw/brave-plugin",
         resolvedVersion: "2026.5.3",
       },
-      whatsapp: {
-        source: "npm",
-        resolvedName: "@openclaw/whatsapp",
-        resolvedVersion: "2026.5.4",
-      },
-    } as never);
+      ...officialPlugin(),
+    });
 
     const status = await gatherStatus();
 
