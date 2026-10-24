@@ -3,7 +3,6 @@ import path from "node:path";
 import { withTempWorkspace } from "@openclaw/fs-safe/temp";
 import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveGatewayInstallEntrypoint } from "../daemon/gateway-entrypoint.js";
 import {
@@ -81,12 +80,16 @@ export async function runUpdateCandidateAdmission(params: {
     };
   }
   const redaction = { env: sourceEnv, stateDir: resolveStateDir(sourceEnv) };
-  const fallback = (reason: string, diagnostic?: string): UpdateCandidateAdmissionResult => ({
+  const fallback = (
+    reason: string,
+    diagnostic?: string,
+    redactedDetail = "",
+  ): UpdateCandidateAdmissionResult => ({
     owner: "installed",
     fallbackReason: reason,
     warning: {
       code: "update-admission-fallback",
-      message: `Candidate admission did not return a valid verdict (${reason}); the installed updater will check admission.${diagnostic ? ` ${redactSupportDiagnosticLine(diagnostic, redaction)}` : ""}`,
+      message: `Candidate admission did not return a valid verdict (${reason}); the installed updater will check admission.${diagnostic ? ` ${redactSupportDiagnosticLine(diagnostic, redaction)}` : ""}${redactedDetail}`,
     },
   });
   try {
@@ -167,10 +170,14 @@ export async function runUpdateCandidateAdmission(params: {
         try {
           value = JSON.parse(running.stdout());
         } catch {
-          // Keep the leading bytes that broke the verdict; stdout is never captured otherwise.
-          const head = running.stdout().trimStart().split(/\r?\n/u, 1)[0] ?? "";
-          const excerpt = `Candidate stdout began with: ${head ? JSON.stringify(sliceUtf16Safe(head, 0, 160)) : "(empty)"}`;
-          return fallback("malformed-json", diagnostic ? `${diagnostic} ${excerpt}` : excerpt);
+          // Keep the leading line that broke the verdict; stdout is never captured otherwise.
+          // Redaction sees the whole line before bounding, so a cut credential cannot escape it.
+          const excerpt = redactSupportDiagnosticLine(running.stdout(), redaction, 160);
+          return fallback(
+            "malformed-json",
+            diagnostic,
+            ` Candidate stdout began with: ${JSON.stringify(excerpt)}`,
+          );
         }
         if (isRecord(value) && value.protocol !== UPDATE_ADMISSION_PROTOCOL) {
           return fallback("protocol-mismatch", diagnostic);
