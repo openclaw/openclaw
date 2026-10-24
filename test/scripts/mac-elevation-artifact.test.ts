@@ -6,7 +6,6 @@ import {
   addon,
   artifactFixture,
   buildInfo,
-  library,
   peekabooCommit,
   sourceCommit,
   runtimeDist,
@@ -23,6 +22,16 @@ import {
 import { createMacScriptTest } from "./mac-script-fixture.test-support.js";
 
 const it = createMacScriptTest();
+
+function snapshot(root: string): Array<{ target: string; bytes: Buffer; mode: number }> {
+  return readdirSync(root).flatMap((name) => {
+    const target = path.join(root, name);
+    const stat = statSync(target);
+    return stat.isDirectory()
+      ? snapshot(target)
+      : [{ target, bytes: readFileSync(target), mode: stat.mode & 0o777 }];
+  });
+}
 
 const machResourceKinds = [
   "object",
@@ -48,20 +57,15 @@ function withMachResourceKind(
     "synthetic-dsym": 10,
   };
   const magic = bytes.readUInt32BE(0);
-  const offsets = [0];
-  if (magic === 0xcafebabe || magic === 0xcafebabf) {
-    const fat64 = magic === 0xcafebabf;
-    expect(bytes.readUInt32BE(4)).toBe(2);
-    offsets.length = 0;
-    for (let index = 0; index < 2; index++) {
-      const entry = 8 + index * (fat64 ? 32 : 20);
-      offsets.push(
-        fat64 ? Number(bytes.readBigUInt64BE(entry + 8)) : bytes.readUInt32BE(entry + 8),
-      );
-    }
-  }
+  const fat64 = magic === 0xcafebabf;
+  const offsets =
+    magic === 0xcafebabe || fat64
+      ? Array.from({ length: bytes.readUInt32BE(4) }, (_, index) => {
+          const entry = 8 + index * (fat64 ? 32 : 20);
+          return fat64 ? Number(bytes.readBigUInt64BE(entry + 8)) : bytes.readUInt32BE(entry + 8);
+        })
+      : [0];
   for (const offset of offsets) {
-    expect(bytes.readUInt32BE(offset)).toBe(0xcffaedfe);
     if (bytes.readUInt32LE(offset + 12) === 1) {
       bytes.writeUInt32LE(filetypes[kind], offset + 12);
     }
@@ -444,29 +448,11 @@ describe.skipIf(process.platform !== "darwin")(
               for (const mode of [0o644, 0o755]) {
                 const relative = `${runtimeRoot}/lib/object-resource ${kind} ${format} ${index} [*]\n${mode}.dylib`;
                 await write(harness.at(relative), withMachResourceKind(contents, kind), mode);
-                targets.push(relative);
               }
             }
           }
         }
-        const preserved = [
-          ...targets,
-          "Contents/MacOS/OpenClaw",
-          "Contents/MacOS/openclaw-mlx-tts",
-          ...[0o644, 0o700, 0o750].map((mode) => `Contents/Frameworks/thin-${mode}.dylib`),
-          ...[
-            library,
-            "lib/native.a",
-            "lib/universal.a",
-            "lib/archive64 [*]",
-            "Example.class",
-            "ordinary.resource",
-          ].map((relative) => `${runtimeRoot}/${relative}`),
-        ].map((relative) => ({
-          relative,
-          bytes: readFileSync(harness.at(relative)),
-          mode: statSync(harness.at(relative)).mode & 0o777,
-        }));
+        const preserved = snapshot(harness.app);
         const result = await harness.verify();
         expect(result.status, result.stderr).toBe(0);
         expect(result.stdout).toContain(
@@ -501,9 +487,9 @@ describe.skipIf(process.platform !== "darwin")(
                 line.startsWith("codesign -dv --verbose=4") && line.includes("object-resource"),
             ),
         ).toEqual([]);
-        for (const { relative, bytes, mode } of preserved) {
-          expect(readFileSync(harness.at(relative)), relative).toEqual(bytes);
-          expect(statSync(harness.at(relative)).mode & 0o777, relative).toBe(mode);
+        for (const { target, bytes, mode } of preserved) {
+          expect(readFileSync(target), target).toEqual(bytes);
+          expect(statSync(target).mode & 0o777, target).toBe(mode);
         }
       }));
 

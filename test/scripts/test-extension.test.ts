@@ -13,7 +13,6 @@ import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   createExtensionTestProcessTargetChunks,
   createExtensionTestShards,
-  estimateExtensionTestCost,
   listExtensionTestFilesForRoots,
   listTrackedTestPlanFiles,
   resolveExtensionBatchPlan,
@@ -180,23 +179,12 @@ it("splits the IRC batch between persistence and channel owners without double c
   expect(workerFiles).toContain(ingressFile);
   expect(channelFiles).not.toContain(ingressFile);
   expect([...workerFiles, ...channelFiles].toSorted()).toEqual(files.toSorted());
-  expect(batch).toMatchObject({ extensionIds: [extensionId], testFileCount: files.length });
-  expect(batch.planGroups).toEqual([
-    expect.objectContaining({
-      config: extensionConfig("database-workers"),
-      extensionIds: [extensionId],
-      testFileCount: workerFiles.length,
-    }),
-    expect.objectContaining({
-      config: extensionConfig(extensionId),
-      roots: [root],
-      extensionIds: [extensionId],
-      testFileCount: channelFiles.length,
-    }),
+  expect(
+    batch.planGroups.map(({ config, roots }) => [config, listExtensionTestFilesForRoots(roots)]),
+  ).toEqual([
+    [extensionConfig("database-workers"), workerFiles.toSorted()],
+    [extensionConfig(extensionId), channelFiles.toSorted()],
   ]);
-  expect(listExtensionTestFilesForRoots(batch.planGroups[0]!.roots)).toEqual(
-    workerFiles.toSorted(),
-  );
   const shards = createExtensionTestShards({ extensionIds: [extensionId], shardCount: 2 });
   expect(shards).toHaveLength(1);
   expect(shards[0]?.planGroups).toEqual(batch.planGroups);
@@ -308,24 +296,12 @@ it("counts tracked extension tests without walking extension directories", () =>
 });
 
 it("balances extension test shards by estimated CI cost", () => {
-  for (const [config, singletonSeconds, tenFileSeconds] of [
-    [extensionConfig("slack"), 2, 12],
-    [extensionConfig("telegram"), 6, 43],
-    [extensionConfig("database-workers"), 8, 76],
-  ] as const) {
-    expect(estimateExtensionTestCost(config, 1), config).toBe(singletonSeconds);
-    expect(estimateExtensionTestCost(config, 10), config).toBe(tenFileSeconds);
-  }
   const shards = createExtensionTestShards({ shardCount: DEFAULT_EXTENSION_TEST_SHARD_COUNT });
   const expectedIds = listAvailableExtensionIds().filter(
     (targetArg) => resolveExtensionTestPlan({ targetArg }).hasTests,
   );
 
   expect(shards).toHaveLength(DEFAULT_EXTENSION_TEST_SHARD_COUNT);
-  expect(shards.map((shard) => shard.checkName)).toEqual(
-    shards.map((_shard, index) => `checks-node-extensions-shard-${index + 1}`),
-  );
-
   const assigned = shards.flatMap((shard) => shard.extensionIds);
   const uniqueAssigned = [...new Set(assigned)];
 

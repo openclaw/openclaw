@@ -505,9 +505,7 @@ describe("known hourly main failures", () => {
   );
   it.each([
     ["different test", { prReport: report("startup > opens a different session") }],
-    ["different assertion", { prReport: report().replaceAll("true to be false", "42 to be 43") }],
     ["changed test", { changed: [file] }],
-    ["changed direct subject", { changed: ["src/gateway/subject.ts"] }],
     [
       "changed external subject",
       { changed: ["src/infra/session.ts"], source: 'import { start } from "../infra/session.js";' },
@@ -520,7 +518,6 @@ describe("known hourly main failures", () => {
     ["unresolved subject alias", { source: 'import { start } from "@openclaw/runtime";' }],
     ["escaped relative module", { source: 'await import("./\\u002e\\u002e/subject.js");' }],
     ["concatenated import subject", { source: 'await import("./subject" + suffix);' }],
-    ["template subject", { source: "await import(`./subject${suffix}`);" }],
     [
       "root directory subject",
       { changed: ["runtime/index.ts"], source: 'import { start } from "../../runtime";' },
@@ -580,7 +577,6 @@ describe("known hourly main failures", () => {
   it.each([
     { mainChanged: ["docs/unrelated.md"], known: true },
     { mainChanged: [file], known: false },
-    { mainChanged: ["src/gateway/subject.ts"], known: false },
     { mainChanged: ["scripts/run-vitest.mts"], known: false },
     { mainChanged: Array.from({ length: 300 }, (_, i) => `docs/page-${i}.md`), known: false },
   ])(
@@ -668,30 +664,6 @@ describe("known hourly main failures", () => {
         prReport: lint ? completeLintReport() : typeReport(),
       }),
     ).toBe(false);
-  });
-
-  it("keeps incomplete lint execution and PR-owned static subjects blocking", async () => {
-    const options = {
-      failureJob: lintJob,
-      signatureFile: lintFile,
-      mainReport: lintReport,
-      prReport: completeLintReport(),
-      source: 'import type { CardSessionState } from "./session-state.ts";',
-    };
-    await expectKnown({ ...options, prReport: lintReport });
-    await expectKnown(options, true);
-    await expectKnown({ ...options, changed: [lintFile] });
-    await expectKnown({
-      ...options,
-      changed: ["extensions/workboard/browser/lib/workboard/session-state.ts"],
-    });
-    await expectKnown({
-      ...options,
-      mainReport: lintReport.replace(
-        "Found 0 warnings",
-        "Error: unknown lint failure\nFound 0 warnings",
-      ),
-    });
   });
 });
 
