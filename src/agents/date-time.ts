@@ -20,9 +20,7 @@ export function resolveUserTimezone(configured?: string): string {
     try {
       getDateStampFormatter(trimmed);
       return trimmed;
-    } catch {
-      // ignore invalid timezone
-    }
+    } catch {}
   }
   const host = Intl.DateTimeFormat().resolvedOptions().timeZone;
   return host?.trim() || "UTC";

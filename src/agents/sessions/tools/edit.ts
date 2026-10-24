@@ -211,16 +211,6 @@ export function createEditTool(
           );
         } catch (error: unknown) {
           const normalizedError = error instanceof Error ? error : new Error(String(error));
-          const currentContent = await runWithAgentToolSourceExecutionScope(
-            assertCurrent,
-            async () => {
-              assertCurrent();
-              return ops
-                .readFile(absolutePath)
-                .then((current) => current.toString("utf-8"))
-                .catch(() => rawContent);
-            },
-          );
           const recoveryContent = expectedContent;
           if (
             recoveryContent !== undefined &&
@@ -235,7 +225,7 @@ export function createEditTool(
             );
           }
           if (normalizedError.message.includes(EDIT_MISMATCH_MESSAGE)) {
-            throw appendMismatchHint(normalizedError, currentContent);
+            throw appendMismatchHint(normalizedError, rawContent);
           }
           throw normalizedError;
         }
