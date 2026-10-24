@@ -55,24 +55,21 @@ assert_scheduler_owner() { :; }
 
 // Exercise the actual shell control flow with synthetic external effects and time.
 // This does not prove GNU timeout, process capabilities, or live Gateway behavior.
-function ownerFunction(source, name, optional = false) {
+function ownerFunction(source, name) {
   const declarations = [...source.matchAll(/^([a-zA-Z_][a-zA-Z_0-9]*)\(\) \{/gm)];
   const index = declarations.findIndex((match) => match[1] === name);
-  if (index === -1 && optional) {
-    return "";
-  }
   assert.notEqual(index, -1, `missing owner function ${name}`);
   return source.slice(declarations[index].index, declarations[index + 1]?.index ?? source.length);
 }
 
-function deadlineRecovery(t, terminalAtMs, failure = null, admissionReadyAtMs = 0, options = {}) {
+// Journal retirement/retention is exercised through runOwner in release.test.mjs.
+// Here the real acceptance owner gets a virtual clock and synthetic transports.
+function deadlineMarker(t, options) {
+  const { terminalAtMs = 590_000, observationFailure = null, admissionReadyAtMs = 0 } = options;
   const root = fixtureRoot(t);
-  const journal = join(root, "journal.json"), events = join(root, "events.jsonl");
-  const before = "a".repeat(40), after = "b".repeat(40);
-  for (const sha of [before, after]) {
-    const sdk = join(root, sha, "dist/plugin-sdk");
-    mkdirSync(sdk, { recursive: true });
-    writeFileSync(join(root, sha, "package.json"), '{"type":"module"}');
+  const events = join(root, "events.jsonl"), sdk = join(root, "dist/plugin-sdk");
+  mkdirSync(sdk, { recursive: true });
+  writeFileSync(join(root, "package.json"), '{"type":"module"}');
     // Closed native SDK examples; parsing itself belongs to the public SDK.
     writeFileSync(join(sdk, "model-ref-parse.js"), `
 export function splitTrailingAuthProfile(raw) {
@@ -85,62 +82,36 @@ export function splitTrailingAuthProfile(raw) {
   return { model: routes[raw] };
 }
 `);
-  }
-  const original = JSON.stringify({ phase: "ROLLBACK_FAILED", topology: "system",
-    predecessor: { sha: before }, candidate: { sha: after },
-    process: { pid: 123, generation: 456 }, protectedPaths: {} });
-  writeFileSync(journal, original);
-  symlinkSync(join(root, after), join(root, "current"));
   const helper = join(root, "helper.mjs");
   writeFileSync(helper, String.raw`
 import assert from "node:assert/strict";
-import { appendFileSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-const root=process.env.FIXTURE_ROOT, [kind,...args]=process.argv.slice(2);
+const root=process.env.FIXTURE_ROOT, cfg=JSON.parse(process.env.FIXTURE_CONFIG), [kind,...args]=process.argv.slice(2);
 const emit=value=>process.stdout.write(JSON.stringify(value));
 const record=value=>appendFileSync(join(root,"events.jsonl"),JSON.stringify(value)+"\n");
 const eventLoop=atMs=>{
-  const delayed=atMs<Number(process.env.FIXTURE_LOOP_READY_AT_MS),busy=process.env.FIXTURE_BUSY_CPU==="1";
+  const delayed=atMs<(cfg.loopReadyAtMs??0),busy=Boolean(cfg.busyCpu);
   return {degraded:delayed||busy,reasons:[...(delayed?["event_loop_delay"]:[]),...(busy?["cpu","event_loop_utilization"]:[])],
     intervalMs:1000,delayP99Ms:delayed?1000:busy?50:0,delayMaxMs:delayed?1000:busy?50:0,
     utilization:busy?1:0.1,cpuCoreRatio:busy?1.2:0.1,degradedSinceMs:delayed||busy?0:null};
 };
 if(kind==="proof") {
-  const [operation,...rest]=args;
-  record({kind:"proof",operation});
-  switch(operation) {
-    case "worker-config": process.stdout.write("none"); break;
-    case "journal-read": process.stdout.write(readFileSync(rest[0],"utf8")); break;
-    case "journal-field": {
-      const value=rest[1].split(".").reduce((value,key)=>value[key],JSON.parse(readFileSync(rest[0],"utf8")));
-      process.stdout.write(typeof value==="object"?JSON.stringify(value):String(value)); break;
-    }
-    case "journal-original-witness": case "recovery-snapshot": emit({}); break;
+  switch(args[0]) {
     case "validate-release": emit({buildId:"fixture"}); break;
-    case "policy": process.stdout.write(process.env.FIXTURE_POLICY); break;
     case "approvals": process.stdout.write("0"); break;
     case "session-preservation-verify": case "compatibility": case "recovery-check": case "gateway-runtime": break;
-    case "recovery-finish": case "unlink-exact": record({kind:operation}); unlinkSync(rest[0]); break;
-    case "journal-phase": {
-      const value=JSON.parse(readFileSync(rest[0],"utf8"));
-      writeFileSync(rest[0],JSON.stringify({...value,phase:rest[1]}));break;
-    }
-    case "service-restart": record({kind:operation}); break;
-    default: throw Error("unexpected proof operation "+operation);
+    default: throw Error("unexpected proof operation "+args[0]);
   }
 } else if(kind==="rpc") {
   const [method,raw,clientBudget,clock]=args,params=JSON.parse(raw),atMs=Number(clock);
   record({kind:method,atMs,clientBudget:Number(clientBudget),nativeWait:params.timeoutMs,idempotencyKey:params.idempotencyKey});
   if(method==="system.info") {
-    if(atMs<Number(process.env.FIXTURE_RPC_READY_AT_MS)) {process.stdout.write("RETRYABLE_READINESS_TRANSPORT");process.exit(78);}
-    emit({pid:123,processInstanceId:process.env.FIXTURE_PROCESS_DRIFT==="1"?"wrong-instance":"fixture-instance"});
-  } else if(method==="channels.status") {
-    emit({eventLoop:eventLoop(atMs),channelAccounts:Object.fromEntries(JSON.parse(process.env.OPENCLAW_TEAM_OPERATOR_PROFILE).channels.map(([channel,accountId])=>
-      [channel,[{accountId,configured:true,enabled:true,running:true,connected:true,lifecycle:"ready",restartPending:false,lastError:null}]]))});
-  } else if(method==="sessions.list") {emit({sessions:[]});
+    if(atMs<(cfg.rpcReadyAtMs??0)) {process.stdout.write("RETRYABLE_READINESS_TRANSPORT");process.exit(78);}
+    emit({pid:123,processInstanceId:cfg.processDrift?"wrong-instance":"fixture-instance"});
   } else if(method==="agent") {
-    if(atMs<Number(process.env.FIXTURE_ADMISSION_READY_AT_MS)) {process.stdout.write("RETRYABLE_ADMISSION_PENDING");process.exit(76);}
-    const dispatchFailure=JSON.parse(process.env.FIXTURE_DISPATCH_FAILURE), accepted=join(root,"accepted.json");
+    if(atMs<(cfg.admissionReadyAtMs??0)) {process.stdout.write("RETRYABLE_ADMISSION_PENDING");process.exit(76);}
+    const dispatchFailure=cfg.dispatchFailure, accepted=join(root,"accepted.json");
     let prior; try {prior=readFileSync(accepted,"utf8");} catch(error) {if(error.code!=="ENOENT")throw error;}
     if(prior) assert.equal(prior,raw,"retry must preserve the exact native request");
     else {writeFileSync(accepted,raw);record({kind:"native-run",runId:params.idempotencyKey});}
@@ -149,29 +120,33 @@ if(kind==="proof") {
   } else {
     const accepted=JSON.parse(readFileSync(join(root,"accepted.json"),"utf8"));
     assert.equal(method,"agent.wait"); assert.equal(params.runId,accepted.idempotencyKey);
-    const failure=JSON.parse(process.env.FIXTURE_OBSERVATION_FAILURE);
+    const failure=cfg.observationFailure;
     if(failure) {process.stdout.write(failure.output);process.exit(failure.exit);}
-    if(atMs<Number(process.env.FIXTURE_TERMINAL_AT_MS)) emit({runId:params.runId,status:"timeout"});
+    if(atMs<(cfg.terminalAtMs??0)) emit({runId:params.runId,status:"timeout"});
     else {
       emit({runId:params.runId,status:"ok",endedAt:atMs,stopReason:"stop",
         terminalReply:{disposition:"visible",text:accepted.message.split(": ").at(-1)},
         terminalReceipt:{runId:params.runId,sessionId:accepted.sessionId,turnId:"fixture-turn",
-          requested:{provider:"fixture",model:process.env.FIXTURE_REQUESTED_MODEL},
-          terminalDisposition:"visible",effective:{provider:"fixture",model:process.env.FIXTURE_EFFECTIVE_MODEL}}});
+          requested:{provider:"fixture",model:(cfg.requestedModel??"exact-model")},
+          terminalDisposition:"visible",effective:{provider:"fixture",model:(cfg.effectiveModel??"exact-model")}}});
     }
   }
 } else if(kind==="probe") {
   const [endpoint,clock]=args,atMs=Number(clock);
-  if(atMs<Number(process.env.FIXTURE_PROBE_READY_AT_MS))process.exit(28);
-  if(endpoint==="healthz") emit({ok:true,status:"live"});
-  else if(endpoint==="startupz") emit(atMs<Number(process.env.FIXTURE_STARTUP_READY_AT_MS)||process.env.FIXTURE_OTHER_AGENT_PENDING==="1"
-    ?{ok:false,status:"starting",pendingReason:process.env.FIXTURE_OTHER_AGENT_PENDING==="1"?"agent-database-inspection":"startup-sidecars",uptimeMs:atMs}:{ok:true,status:"started",uptimeMs:atMs});
+  const respond=(status,body)=>process.stdout.write(status+" "+JSON.stringify(body));
+  if(atMs<(cfg.probeReadyAtMs??0))process.exit(28);
+  if(endpoint==="startupz") {
+    const starting=atMs<(cfg.startupReadyAtMs??0)||cfg.otherAgentPending;
+    respond(starting?503:200,starting
+      ?{ok:false,status:"starting",pendingReason:cfg.otherAgentPending?"agent-database-inspection":"startup-sidecars",uptimeMs:atMs}
+      :{ok:true,status:"started",uptimeMs:atMs});
+  }
   else {
-    const pending=atMs<Number(process.env.FIXTURE_MARKER_READY_AT_MS),code=process.env.FIXTURE_REFUSAL_CODE;
-    const agentDatabases=[...(process.env.FIXTURE_OTHER_AGENT_PENDING==="1"?[{agentId:"other-agent",code:"agent-database-inspection-pending"}]:[]),
+    const pending=atMs<(cfg.markerReadyAtMs??0),code=cfg.refusalCode;
+    const agentDatabases=[...(cfg.otherAgentPending?[{agentId:"other-agent",code:"agent-database-inspection-pending"}]:[]),
       ...(pending||code?[{agentId:JSON.parse(process.env.OPENCLAW_TEAM_OPERATOR_PROFILE).modelAgent,code:code||"agent-database-inspection-pending"}]:[])];
-    const ready=atMs>=Number(process.env.FIXTURE_READYZ_READY_AT_MS);
-    emit({ready,failing:ready?[]:["discord"],uptimeMs:atMs,eventLoop:eventLoop(atMs),...(agentDatabases.length?{agentDatabases}:{})});
+    const ready=atMs>=(cfg.readyzReadyAtMs??0);
+    respond(ready?200:503,{ready,failing:ready?[]:["discord"],uptimeMs:atMs,eventLoop:eventLoop(atMs),...(agentDatabases.length?{agentDatabases}:{})});
   }
 } else if(kind==="pause") {
   const [at,budget,seconds]=args,ms=Number(seconds)*1000;
@@ -182,57 +157,34 @@ if(kind==="proof") {
 `);
   const source = readFileSync(ownerPath, "utf8");
   const functions = ["verification_failure", "verification_step", "wait_for_marker_readiness", "verify_marker",
-    "load_journal_witness", "wait_for_live", "recover_journal", "rollback_activation"].map((name) => ownerFunction(source, name, name === "wait_for_marker_readiness")).join("\n");
-  const convergenceOwner = ownerFunction(source, "verify_convergence").replace(/^verify_convergence\(\)/, "verify_convergence_owner()");
+    "wait_for_live"].map((name) => ownerFunction(source, name)).join("\n");
   const script = shellSetup + String.raw`
 SECONDS=0
 clock_ms=0
-mode=recover
-fixture_defaults '' reconcile_config_hash reconcile_journal_hash reconcile_request
-reconcile_stopped=0
-config_file="$FIXTURE_ROOT/config.json"
 state_database="$FIXTURE_ROOT/state.sqlite"
-session_proof=original-pre-cutover
+session_witness='{}'
 policy_identity="$FIXTURE_POLICY"
 proof() {
-  if [[ "$1" == marker-readiness || "$1" == probes || "$1" == channels ]]; then "$node_bin" "$FIXTURE_LIBRARY" "$@"
+  if [[ "$1" == marker-readiness ]]; then "$node_bin" "$FIXTURE_LIBRARY" "$@"
   else "$node_bin" "$FIXTURE_HELPER" proof "$@"; fi
 }
-read_pointer() { readlink "$1"; }
 fail() { printf '%s\n' "$*" >&2; return 1; }
-migration_check_existing_guard() { :; }
 assert_protected_identity() { :; }
 assert_policy() { :; }
 assert_exclusive_owner() { :; }
-capture_generation() { service_pid=123; service_generation=456; }
-capture_service_generation() { capture_generation; }
-assert_single_listener() { :; }
 recheck_generation() { :; }
-rollback_armed=1
-predecessor_stopped=1
-record_failed() { :; }
-predecessor_is_stopped() { :; }
-restore_pointer_topology() { ln -sfn "$previous_release" "$current_link"; }
-system_systemctl() { [[ "$1" == restart ]] || return 90; proof service-restart; }
-realpath() { printf '%s' "$previous_release"; }
 verify_convergence() {
   # Convergence has used 590 seconds of the existing 600-second deadline.
   if ((clock_ms == 0)); then clock_ms="$FIXTURE_CONVERGENCE_AT_MS"; SECONDS=$((clock_ms / 1000)); fi
   verified_pid=123; verified_generation=456; verified_instance=fixture-instance
-  if [[ "$FIXTURE_NATIVE_CONVERGENCE" == 1 ]]; then verify_convergence_owner "$@"; fi
 }
 run_marker_rpc() { "$node_bin" "$FIXTURE_HELPER" rpc "$2" "$3" "$4" "$clock_ms"; }
 read_probe() {
   local body
   body="$("$node_bin" "$FIXTURE_HELPER" probe "$1" "$clock_ms")" || return "$?"
-  probe_body="$body"; probe_status=200
-  if [[ "$1" == readyz ]] && ((clock_ms < FIXTURE_READYZ_READY_AT_MS)); then probe_status=503; fi
-  if [[ "$1" == startupz ]] && { ((clock_ms < FIXTURE_STARTUP_READY_AT_MS)) || [[ "$FIXTURE_OTHER_AGENT_PENDING" == 1 ]]; }; then probe_status=503; fi
+  read -r probe_status probe_body <<< "$body"
 }
-run_gateway() {
-  if [[ "$FIXTURE_NATIVE_CONVERGENCE" != 1 ]]; then printf '{"pid":123,"processInstanceId":"fixture-instance"}'; return; fi
-  if [[ "$3" == status ]]; then printf '{}'; else run_marker_rpc "$1" "$4" "$6" "$9"; fi
-}
+run_gateway() { printf '{"pid":123,"processInstanceId":"fixture-instance"}'; }
 sleep() { bounded "$((verification_deadline - SECONDS))" sleep "$1"; }
 bounded() {
   local budget="$1" milliseconds
@@ -241,56 +193,34 @@ bounded() {
   milliseconds="$("$node_bin" "$FIXTURE_HELPER" pause "$clock_ms" "$budget" "$2")" || return 1
   clock_ms=$((clock_ms + milliseconds)); SECONDS=$((clock_ms / 1000))
 }
-` + functions + "\n" + convergenceOwner + String.raw`
-if [[ "$FIXTURE_FLOW" == rollback ]]; then rollback_activation 1; exit "$?"; fi
-if recover_journal; then exit 0; else exit "$?"; fi
+` + functions + String.raw`
+if wait_for_live "$serving_root" '{"buildId":"fixture"}' system; then exit 0; else exit "$?"; fi
 `;
   const result = runShell(root, script, {
-      FIXTURE_HELPER: helper,
-      FIXTURE_POLICY: JSON.stringify({ model: options.policyModel ?? "fixture/exact-model", fallbacks: options.fallbacks ?? [] }),
-      FIXTURE_REQUESTED_MODEL: options.requestedModel ?? "exact-model",
-      FIXTURE_EFFECTIVE_MODEL: options.effectiveModel ?? "exact-model",
-      FIXTURE_TERMINAL_AT_MS: String(terminalAtMs), FIXTURE_OBSERVATION_FAILURE: JSON.stringify(failure),
-      FIXTURE_ADMISSION_READY_AT_MS: String(admissionReadyAtMs),
-      FIXTURE_LIBRARY: join(dirname(ownerPath), "release-lib.mjs"),
-      FIXTURE_CONVERGENCE_AT_MS: String(options.convergenceAtMs ?? 590_000),
-      FIXTURE_MARKER_READY_AT_MS: String(options.markerReadyAtMs ?? 0),
-      FIXTURE_READYZ_READY_AT_MS: String(options.readyzReadyAtMs ?? 0),
-      FIXTURE_STARTUP_READY_AT_MS: String(options.startupReadyAtMs ?? 0),
-      FIXTURE_RPC_READY_AT_MS: String(options.rpcReadyAtMs ?? 0),
-      FIXTURE_LOOP_READY_AT_MS: String(options.loopReadyAtMs ?? 0),
-      FIXTURE_PROBE_READY_AT_MS: String(options.probeReadyAtMs ?? 0),
-      FIXTURE_DISPATCH_FAILURE: JSON.stringify(options.dispatchFailure ?? null),
-      FIXTURE_PROCESS_DRIFT: options.processDrift ? "1" : "0",
-      FIXTURE_REFUSAL_CODE: options.refusalCode ?? "", FIXTURE_FLOW: options.flow ?? "recover",
-      FIXTURE_NATIVE_CONVERGENCE: options.nativeConvergence ? "1" : "0",
-      FIXTURE_BUSY_CPU: options.busyCpu ? "1" : "0",
-      FIXTURE_OTHER_AGENT_PENDING: options.otherAgentPending ? "1" : "0",
-  }, options.nativeConvergence ? 90_000 : 20_000);
+    FIXTURE_HELPER: helper, FIXTURE_LIBRARY: join(dirname(ownerPath), "release-lib.mjs"),
+    FIXTURE_POLICY: JSON.stringify({ model: options.policyModel ?? "fixture/exact-model", fallbacks: options.fallbacks ?? [] }),
+    FIXTURE_CONVERGENCE_AT_MS: String(options.convergenceAtMs ?? 590_000),
+    FIXTURE_CONFIG: JSON.stringify({ ...options, terminalAtMs, observationFailure, admissionReadyAtMs },
+      (_key, value) => typeof value === "number" && !Number.isFinite(value) ? String(value) : value),
+  }, 20_000);
   assert.ok(existsSync(events), result.stderr || result.stdout);
   const rows = readFileSync(events, "utf8").trim().split("\n").map((line) => JSON.parse(line));
-  return { result, rows, journal, original };
+  return { result, rows, root };
 }
 
 function markerCase(name, options, check = () => {}, failure = false) {
   test(name, t => {
-    const { terminalAtMs = 590_000, observationFailure = null, admissionReadyAtMs = 0 } = options;
-    const state = deadlineRecovery(t, terminalAtMs, observationFailure, admissionReadyAtMs, options);
-    const { result, rows, journal, original } = state;
+    const state = deadlineMarker(t, options);
+    const { result, rows } = state;
     const events = kind => rows.filter(row => row.kind === kind);
     const dispatches = events("agent"), observations = events("agent.wait"), pauses = events("pause");
     if (failure) {
       assert.notEqual(result.status, 0, result.stdout);
-      assert.equal(readFileSync(journal, "utf8"), original);
-      assert.doesNotMatch(result.stdout, /MARKER_VERIFIED|RECOVERED/);
-      assert.equal(events("recovery-finish").length, 0);
+      assert.doesNotMatch(result.stdout, /MARKER_VERIFIED/);
       if (failure instanceof RegExp) { assert.match(result.stderr, failure); }
     } else {
-      assert.equal(result.status, options.flow === "rollback" ? 1 : 0, result.stderr);
-      assert.equal(existsSync(journal), false);
+      assert.equal(result.status, 0, result.stderr);
       assert.match(result.stdout, /MARKER_VERIFIED .*observation=agent.wait/);
-      if (options.flow === "rollback") { assert.match(result.stderr, /ROLLED_BACK/); }
-      else { assert.match(result.stdout, /RECOVERED phase=ROLLBACK_FAILED/); }
     }
     assert.ok(dispatches.every(row => row.atMs < 600_000));
     assert.ok(new Set(dispatches.map(row => row.idempotencyKey)).size <= 1);
@@ -317,7 +247,7 @@ for (const [label, observationFailure, retry] of [
   ["unclassified native failure", { exit: 75, output: "unclassified native failure" }, false],
   ["wrong transport exit", { exit: 1, output: "RETRYABLE_OBSERVATION_TRANSPORT" }, false],
 ]) {
-  markerCase(`${label} preserves evidence and the absolute observation deadline`,
+  markerCase(`${label} preserves the absolute observation deadline`,
     { terminalAtMs: Infinity, observationFailure }, ({ result, dispatches, observations, pauses }) => {
       assert.equal(dispatches.length, 1);
       if (retry !== false) {
@@ -339,21 +269,23 @@ markerCase("pending admission retries the identical request before dispatch",
     assert.equal(admissionPauses.length, 2);
     assert.ok(admissionPauses.every(row => row.ms === 3000));
   });
-markerCase("pending admission expires without dispatch or evidence retirement",
-  { terminalAtMs: Infinity, admissionReadyAtMs: Infinity }, ({ journal, dispatches, observations }) => {
-    assert.equal(existsSync(join(dirname(journal), "accepted.json")), false);
+markerCase("pending admission expires without dispatch",
+  { terminalAtMs: Infinity, admissionReadyAtMs: Infinity }, ({ root, dispatches, observations }) => {
+    assert.equal(existsSync(join(root, "accepted.json")), false);
     assert.equal(observations.length, 0);
     assert.ok(dispatches.length >= 2 && dispatches.length <= 5);
   }, /stage=marker.admission-budget/);
 
+// Full convergence load policy is covered by release.test.mjs; these cases own
+// the later marker-readiness gate and its remaining absolute budget.
 for (const [label, options, earliest, exact = false] of [
   ["critical startup and responsive probes", { startupReadyAtMs: 591_000, markerReadyAtMs: 592_000,
     probeReadyAtMs: 593_000, rpcReadyAtMs: 596_000, loopReadyAtMs: 594_000 }, 596_000],
   ["native readiness after convergence", { readyzReadyAtMs: 596_000 }, 596_000, true],
-  ["responsive sustained CPU load", { nativeConvergence: true, busyCpu: true }, 590_000],
-  ["event-loop delay settles", { nativeConvergence: true, busyCpu: true, loopReadyAtMs: 592_000 }, 592_000],
-  ["other agent inspects", { nativeConvergence: true, otherAgentPending: true }, 590_000],
-  ["model agent also waits", { nativeConvergence: true, otherAgentPending: true, markerReadyAtMs: 593_000 }, 593_000],
+  ["responsive sustained CPU load", { busyCpu: true }, 590_000],
+  ["event-loop delay settles", { busyCpu: true, loopReadyAtMs: 592_000 }, 592_000],
+  ["other agent inspects", { otherAgentPending: true }, 590_000],
+  ["model agent also waits", { otherAgentPending: true, markerReadyAtMs: 593_000 }, 593_000],
 ]) {
   markerCase(`marker waits for ${label} without a CPU waiver`, { ...options, terminalAtMs: earliest },
     ({ result, dispatches }) => {
@@ -374,15 +306,13 @@ for (const [label, options] of [
   ["unsettled readiness", { markerReadyAtMs: Infinity }],
   ["persistent dispatch timeout", { convergenceAtMs: 596_000, dispatchFailure: { exit: 77, output: "RETRYABLE_DISPATCH_TIMEOUT" } }],
 ]) {
-  markerCase(`${label} retains evidence without renewing the deadline`, { ...options, terminalAtMs: Infinity }, undefined, true);
+  markerCase(`${label} fails without renewing the deadline`, { ...options, terminalAtMs: Infinity }, undefined, true);
 }
 
-markerCase("rollback reconciles one native run after fresh readiness",
-  { terminalAtMs: 598_000, flow: "rollback", markerReadyAtMs: 593_000,
+markerCase("dispatch reconciles one native run after fresh readiness",
+  { terminalAtMs: 598_000, markerReadyAtMs: 593_000,
     dispatchFailure: { exit: 77, output: "RETRYABLE_DISPATCH_TIMEOUT", once: true } },
-  ({ result, rows, events, dispatches }) => {
-    assert.doesNotMatch(result.stderr, /activation rollback failed/);
-    assert.equal(events("service-restart").length, 1);
+  ({ rows, events, dispatches }) => {
     assert.equal(events("native-run").length, 1);
     assert.equal(dispatches.length, 2);
     assert.ok(rows.slice(rows.indexOf(dispatches[0]) + 1, rows.indexOf(dispatches[1])).some(row => row.kind === "system.info"));
@@ -661,8 +591,8 @@ for (const [fault, reason] of [
 }
 
 for (const [label, options, rejected] of [
-  ["recovery strips auth profiles", { policyModel: "fixture/exact-model@work", fallbacks: ["fixture/fallback@work"], effectiveModel: "fallback" }],
-  ["rollback accepts configured fallback", { flow: "rollback", fallbacks: ["fixture/fallback"], effectiveModel: "fallback" }],
+  ["auth profiles are stripped", { policyModel: "fixture/exact-model@work", fallbacks: ["fixture/fallback@work"], effectiveModel: "fallback" }],
+  ["configured fallback", { fallbacks: ["fixture/fallback"], effectiveModel: "fallback" }],
   ["unconfigured effective model", { effectiveModel: "other-model" }, true],
   ["different requested model", { requestedModel: "other-model", effectiveModel: "fallback" }, true],
   ["model-version suffix is not an auth profile", { fallbacks: ["fixture/fallback@20251001"], effectiveModel: "fallback" }, true],
