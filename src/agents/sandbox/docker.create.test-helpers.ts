@@ -38,6 +38,8 @@ const registryMocks = vi.hoisted(() => ({
   removeRegistryEntry: vi.fn(),
   updateRegistry: vi.fn(),
   completeSandboxRegistryReservation: vi.fn(),
+  withSandboxRegistryEntryLock: async <T>(_entry: unknown, operation: () => Promise<T>) =>
+    await operation(),
 }));
 
 const runtimeMocks = vi.hoisted(() => ({ log: vi.fn() }));

@@ -63,6 +63,8 @@ vi.mock("./registry.js", () => ({
       }
     },
   ),
+  withSandboxRegistryEntryLock: async <T>(_entry: unknown, operation: () => Promise<T>) =>
+    await operation(),
 }));
 vi.mock("./mount-plan.js", () => ({
   prepareSandboxMountPlan: vi.fn(async () => ({ binds: [], skippedBinds: [] })),

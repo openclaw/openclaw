@@ -112,7 +112,7 @@ async function pruneSandboxBrowsers(config: OpenClawConfig, assertCurrent?: () =
     assertCurrent,
     read: readBrowserRegistry,
     remove: async (entry, prune) => {
-      await withSandboxRegistryEntryLock({ ...entry, backendId: "docker" }, async () => {
+      await withSandboxRegistryEntryLock(entry, async () => {
         assertCurrent?.();
         const current = (await readBrowserRegistry()).entries.find(
           (candidate) => candidate.containerName === entry.containerName,
