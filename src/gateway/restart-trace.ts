@@ -1,5 +1,6 @@
 import { performance } from "node:perf_hooks";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { isRestartTraceHandoff } from "../infra/restart-trace-handoff.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 
 const restartTraceLog = createSubsystemLogger("gateway");
@@ -312,28 +313,16 @@ export function collectGatewayProcessMemoryUsageMb(): ReadonlyArray<readonly [st
 function normalizeRestartTraceHandoff(value: unknown): GatewayRestartTraceHandoff | null {
   // Handoff values come from another process. Reject stale/future values so a
   // reused shell environment cannot poison later restart measurements.
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return null;
-  }
-  const record = value as { startedAt?: unknown; lastAt?: unknown };
-  if (
-    typeof record.startedAt !== "number" ||
-    !Number.isFinite(record.startedAt) ||
-    typeof record.lastAt !== "number" ||
-    !Number.isFinite(record.lastAt) ||
-    record.startedAt <= 0 ||
-    record.lastAt < record.startedAt ||
-    record.lastAt - record.startedAt > RESTART_TRACE_HANDOFF_MAX_AGE_MS
-  ) {
+  if (!isRestartTraceHandoff(value)) {
     return null;
   }
   const now = nowMs();
-  if (record.startedAt > now || now - record.startedAt > RESTART_TRACE_HANDOFF_MAX_AGE_MS) {
+  if (value.startedAt > now || now - value.startedAt > RESTART_TRACE_HANDOFF_MAX_AGE_MS) {
     return null;
   }
   return {
-    startedAt: record.startedAt,
-    lastAt: record.lastAt,
+    startedAt: value.startedAt,
+    lastAt: value.lastAt,
   };
 }
 

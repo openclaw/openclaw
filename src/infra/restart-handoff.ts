@@ -24,6 +24,7 @@ import type {
   GatewayRestartHandoffSource,
   GatewayRestartHandoffSupervisorMode,
 } from "./restart-lifecycle.types.js";
+import { isRestartTraceHandoff } from "./restart-trace-handoff.js";
 import type { EngineConnection } from "./sql-connection.js";
 import {
   createSqliteWorkerOperationAdmission,
@@ -38,7 +39,6 @@ const GATEWAY_SUPERVISOR_RESTART_HANDOFF_KIND = "gateway-supervisor-restart-hand
 const GATEWAY_SUPERVISOR_RESTART_HANDOFF_KEY = "current";
 const GATEWAY_RESTART_HANDOFF_SCHEMA_VERSION = 1;
 const GATEWAY_RESTART_HANDOFF_TTL_MS = 60_000;
-const GATEWAY_RESTART_TRACE_HANDOFF_MAX_DURATION_MS = 10 * 60_000;
 const MAX_INTENT_ID_LENGTH = 120;
 const MAX_PROCESS_INSTANCE_ID_LENGTH = 120;
 const MAX_REASON_LENGTH = 200;
@@ -111,24 +111,12 @@ function normalizeTtlMs(value: number | undefined): number {
 function normalizeRestartTraceHandoff(
   value: unknown,
 ): GatewayRestartHandoff["restartTrace"] | undefined {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return undefined;
-  }
-  const record = value as { startedAt?: unknown; lastAt?: unknown };
-  if (
-    typeof record.startedAt !== "number" ||
-    !Number.isFinite(record.startedAt) ||
-    typeof record.lastAt !== "number" ||
-    !Number.isFinite(record.lastAt) ||
-    record.startedAt <= 0 ||
-    record.lastAt < record.startedAt ||
-    record.lastAt - record.startedAt > GATEWAY_RESTART_TRACE_HANDOFF_MAX_DURATION_MS
-  ) {
+  if (!isRestartTraceHandoff(value)) {
     return undefined;
   }
   return {
-    startedAt: Math.floor(record.startedAt),
-    lastAt: Math.floor(record.lastAt),
+    startedAt: Math.floor(value.startedAt),
+    lastAt: Math.floor(value.lastAt),
   };
 }
 
