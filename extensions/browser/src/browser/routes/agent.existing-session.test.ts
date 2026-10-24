@@ -21,7 +21,7 @@ import {
   delayed,
   existingSessionRouteState,
 } from "./existing-session.test-support.js";
-import { createBrowserRouteApp, createBrowserRouteResponse } from "./test-helpers.js";
+import { createBrowserRouteApp } from "./test-helpers.js";
 
 vi.mock("node:timers/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:timers/promises")>();
@@ -91,6 +91,7 @@ const mcp = vi.hoisted(() => ({
 }));
 
 const {
+  clickChromeMcpCoords: clickAt,
   clickChromeMcpElement: click,
   evaluateChromeMcpScript: evaluate,
   fillChromeMcpElement: fill,
@@ -431,31 +432,13 @@ describe("existing-session browser routes", () => {
   });
 
   it.each([
-    ["snapshot", { format: "ai", selector: "#admin" }, 400, "selector/frame", snapshotMock],
-    ["screenshot", { element: "#submit" }, 400, "element screenshots", screenshotMock],
-    ["act", { kind: "wait", loadState: "networkidle" }, 501, "loadState=networkidle", evaluate],
-    [
-      "act",
-      { kind: "type", ref: "input-1", text: "hello", timeoutMs: 1234 },
-      501,
-      "type does not support timeoutMs",
-      fill,
-    ],
-    ["dialog", { accept: true, dialogId: "d1" }, 501, "dialogId", evaluate],
-    [
-      "act",
-      { kind: "clickCoords", x: 25, y: 32, button: "right" },
-      501,
-      "left-click",
-      mcp.clickChromeMcpCoords,
-    ],
-    [
-      "act",
-      { kind: "clickCoords", x: 25, y: 32, delayMs: 5 },
-      501,
-      "delayMs",
-      mcp.clickChromeMcpCoords,
-    ],
+    ["snapshot", { selector: "#x" }, 400, "selector/frame", snapshotMock],
+    ["screenshot", { element: "#x" }, 400, "element screenshots", screenshotMock],
+    ["act", { kind: "wait", loadState: "networkidle" }, 501, "networkidle", evaluate],
+    ["act", { kind: "type", ref: "x", text: "x", timeoutMs: 1 }, 501, "timeoutMs", fill],
+    ["dialog", { accept: true, dialogId: "d" }, 501, "dialogId", evaluate],
+    ["act", { kind: "clickCoords", x: 1, y: 1, button: "right" }, 501, "left-click", clickAt],
+    ["act", { kind: "clickCoords", x: 1, y: 1, delayMs: 1 }, 501, "delayMs", clickAt],
   ] as const)(
     "rejects unsupported %s/%j before effects",
     async (kind, body, status, error, effect) => {
@@ -565,16 +548,14 @@ describe("existing-session interaction navigation guard", () => {
     ssrfPolicy: Policy = DEFAULT_SSRF_POLICY,
   ) {
     const { response, completion: pending } = startRoute(actRoute(ssrfPolicy), { body });
+    void pending.catch(() => {});
     await vi.runAllTimersAsync();
     await pending;
     return response;
   }
 
   async function expectActionToThrow(body: Record<string, unknown>, message: string) {
-    const { completion: pending } = startRoute(actRoute(), { body });
-    void pending.catch(() => {});
-    await vi.runAllTimersAsync();
-    await expect(pending).rejects.toThrow(message);
+    await expect(runAction(body)).rejects.toThrow(message);
   }
 
   function mockProbeResults(...values: unknown[]) {
@@ -626,20 +607,18 @@ describe("existing-session interaction navigation guard", () => {
     });
   });
 
-  it("includes browser and tab preparation in the overall action deadline", async () => {
-    const preparationSteps: string[] = [];
+  it("includes preparation in the overall action deadline", async () => {
+    let prepared = false;
     vi.mocked(withRouteTabContext).mockImplementationOnce(async (params) => {
-      await sleep(55_000, undefined, { signal: params.req.signal });
-      preparationSteps.push("browser ready");
-      await sleep(55_000, undefined, { signal: params.req.signal });
-      preparationSteps.push("tab verified");
+      await sleep(110_000, undefined, { signal: params.req.signal });
+      prepared = true;
       return await originalRoute(params);
     });
     evaluate.mockImplementationOnce(delayed(20_000, "evaluation complete"));
     const request = await startClientAction(evaluateAction);
 
     await vi.advanceTimersByTimeAsync(121_249);
-    expect(preparationSteps).toEqual(["browser ready", "tab verified"]);
+    expect(prepared).toBe(true);
     await expectDeadline(
       request,
       evaluate.mock.calls[0]?.[0].signal,
@@ -852,11 +831,11 @@ describe("existing-session interaction navigation guard", () => {
 
   it("cancels a pending existing-session wait when its request aborts", async () => {
     const ctrl = new AbortController();
-    const pending = actRoute(null)?.(
-      { params: {}, query: {}, body: { kind: "wait", timeMs: 30_000 }, signal: ctrl.signal },
-      createBrowserRouteResponse().res,
-    );
-    void pending?.catch(() => {});
+    const { completion: pending } = startRoute(actRoute(null), {
+      body: { kind: "wait", timeMs: 30_000 },
+      signal: ctrl.signal,
+    });
+    void pending.catch(() => {});
 
     ctrl.abort(new Error("request cancelled after browser crash"));
 
@@ -925,9 +904,7 @@ describe("existing-session interaction navigation guard", () => {
   });
 
   it("still probes navigation when the interaction command throws", async () => {
-    click.mockImplementationOnce(() => {
-      throw new Error("stale element");
-    });
+    click.mockRejectedValueOnce(new Error("stale element"));
 
     await expectActionToThrow({ kind: "click", ref: "btn-1" }, "stale element");
     expect(evaluate).toHaveBeenCalled();
