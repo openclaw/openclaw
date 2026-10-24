@@ -3448,6 +3448,15 @@ opt-in; the additional requests do not warm the measured workload.
 For `sessions.list` response comparisons, `--capture-responses` can run without
 allocation or CPU profiling.
 
+For `--scenario sessions.list`, add `--list-filter-churn` to cycle ordinary, open,
+archived, `team-shape` search, main-agent, and kind-exclusion requests. Every tenth
+logical list operation first changes the harness-owned parent's label; seeded
+sessions remain untouched, and capture removes the parent before writing goldens.
+`samples[].rpc["sessions.list"]` reports list latency separately from patch RPCs;
+CPU and allocation per logical list operation include churn work. The report records
+`listFilterChurn`. Use the generated Team-shaped fixture so every filter has a
+nonempty page.
+
 For profile-reference filtering over 5,000 prepared sessions, run:
 
 ```sh

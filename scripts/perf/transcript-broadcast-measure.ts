@@ -70,6 +70,7 @@ const { values } = parseArgs({
     "cpu-profile": { type: "boolean", default: false },
     "workload-cpu-profile": { type: "boolean", default: false },
     "capture-responses": { type: "boolean", default: false },
+    "list-filter-churn": { type: "boolean", default: false },
     "trace-gc": { type: "boolean", default: false },
     "worker-memory": { type: "boolean", default: false },
     "baseline-owners": { type: "boolean", default: false },
@@ -194,6 +195,9 @@ if (
   );
 }
 const retentionScenario = scenario === "attempt-retention";
+if (values["list-filter-churn"] && scenario !== "sessions.list") {
+  throw new Error("--list-filter-churn requires --scenario sessions.list");
+}
 const idleScenario = scenario === "session-idle-retention";
 const soakScenario = scenario === "memory-soak";
 const historyTurns = integer(values["history-turns"], "--history-turns", 0);
@@ -3956,6 +3960,16 @@ try {
   }
   console.log("PHASE subscribed-and-reset");
   let idleTurnCohorts: Awaited<ReturnType<typeof runRound>>[] = [];
+  const listFilterShapes = [
+    {},
+    { archived: false },
+    { archived: true },
+    { search: "team-shape" },
+    { agentId: "main" },
+    { excludeSubagents: true },
+    { excludeSystem: true, excludeCron: true },
+  ];
+  let listChurnSequence = 0;
   const runScenario = async (measuredRound?: number, operationCount = operations) => {
     if (idleScenario) {
       idleTurnCohorts = [];
@@ -4021,10 +4035,19 @@ try {
               }
             } else if (scenario === "sessions.list" || scenario === "subscribe") {
               const method = scenario === "subscribe" ? "sessions.subscribe" : "sessions.list";
+              if (values["list-filter-churn"] && (offset + index) % 10 === 0) {
+                const params = {
+                  key: parentKey,
+                  label: `Synthetic list filter churn ${listChurnSequence++}`,
+                };
+                assertSessionPatch(params, await rpc(workerClient, "sessions.patch", params));
+              }
               const result = await rpc(workerClient, method, {
                 limit,
                 rowMode,
-                archived: "all",
+                ...(values["list-filter-churn"]
+                  ? listFilterShapes[(offset + index) % listFilterShapes.length]
+                  : { archived: "all" }),
               });
               assertListPage(
                 scenario === "subscribe"
@@ -5333,6 +5356,7 @@ try {
     cpuProfile: values["cpu-profile"],
     workloadCpuProfile: values["workload-cpu-profile"],
     captureResponses: values["capture-responses"],
+    listFilterChurn: values["list-filter-churn"],
     traceGc: values["trace-gc"] || values.allocations || values["stream-start-allocations"],
     streamStartDiagnostics: values["stream-start-diagnostics"],
     streamStartAllocations: values["stream-start-allocations"],
