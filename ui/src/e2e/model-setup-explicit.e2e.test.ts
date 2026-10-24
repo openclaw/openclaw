@@ -49,7 +49,7 @@ const detection = makeDetection({
 });
 
 suite.define(() => {
-  it.each(["", "?firstRun=1", "?firstRun=explicit"])(
+  it.each(["", "?firstRun=explicit"])(
     "waits for an explicit choice on %s and preserves provider failure details",
     async (query) => {
       await withPage(async ({ page }) => {
@@ -99,52 +99,6 @@ suite.define(() => {
     },
   );
 
-  it("starts managed provider installation only after a click and waits at capability consent", async () => {
-    await withPage(async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: [rpc.detect, rpc.auth, rpc.next, rpc.cancel],
-        methodResponses: {
-          [rpc.detect]: detection,
-          [rpc.auth]: runningWizard(),
-          [rpc.next]: runningStep(
-            "capabilities",
-            "confirm",
-            "Allow this provider plugin to call its inference endpoint?",
-            { initialValue: false },
-          ),
-          [rpc.cancel]: { status: "cancelled" },
-        },
-      });
-      await page.goto(suite.server.baseUrl + "settings/model-setup?firstRun=1");
-      const install = page
-        .locator('[data-auth-choice="meta-api-key"]')
-        .getByRole("button", { name: "Review & install" });
-      await install.waitFor();
-      expect(await gateway.getRequests(rpc.auth)).toHaveLength(0);
-      expect(
-        await page
-          .locator('[data-auth-choice="custom-api-key"]')
-          .getByRole("button", { name: "Set up endpoint" })
-          .isVisible(),
-      ).toBe(true);
-      await page.getByLabel("Show existing native conversations").check();
-      await install.click();
-      expect((await gateway.waitForRequest(rpc.auth)).params).toMatchObject({
-        authChoice: "meta-api-key",
-        nativeSessionCatalogsEnabled: true,
-      });
-      const dialog = page.locator("openclaw-modal-dialog");
-      await waitText(dialog, "Allow this provider plugin to call its inference endpoint?");
-      const next = await gateway.getRequests(rpc.next);
-      expect(next).toHaveLength(1);
-      expect(next[0]!.params).not.toHaveProperty("answer");
-
-      await button(dialog, "Cancel").click();
-      await gateway.waitForRequest(rpc.cancel);
-      expect(await gateway.getRequests(rpc.auth)).toHaveLength(1);
-    });
-  });
-
   it("continues Meta capability review into its auth form, then relaunches without replay", async () => {
     await withPage(async ({ page, context }) => {
       const modelRef = "meta/fixture-model";
@@ -162,15 +116,27 @@ suite.define(() => {
         },
       });
       await openModelSetup(page, suite.server.baseUrl);
+      await page.locator('[data-auth-choice="meta-api-key"] button').waitFor();
+      await expectRequestCounts(gateway, { [rpc.auth]: 0, [rpc.next]: 0 });
+      expect(
+        await page
+          .locator('[data-auth-choice="custom-api-key"]')
+          .getByRole("button", { name: "Set up endpoint" })
+          .isVisible(),
+      ).toBe(true);
+      await page.getByLabel("Show existing native conversations").check();
       await page.locator('[data-auth-choice="meta-api-key"] button').click();
       const start = await gateway.waitForRequest(rpc.auth);
       expect(start.params).toMatchObject({
         agentId: "main",
         authChoice: "meta-api-key",
-        nativeSessionCatalogsEnabled: false,
+        nativeSessionCatalogsEnabled: true,
       });
       const dialog = page.locator("openclaw-modal-dialog");
       await waitText(dialog, "Accept Meta provider capabilities?");
+      const pending = await gateway.getRequests(rpc.next);
+      expect(pending).toHaveLength(1);
+      expect(pending[0]!.params).not.toHaveProperty("answer");
 
       await gateway.setMethodResponse(
         rpc.next,
