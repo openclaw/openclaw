@@ -11,7 +11,8 @@ const packageRoot = path.join(revisionRoot, "node_modules", "typescript");
 const packageJson = JSON.parse(readFileSync(path.join(packageRoot, "package.json"), "utf8"));
 
 function revisionTypeScriptUrl(specifier) {
-  const exportName = specifier === "typescript" ? "." : `./${specifier.slice("typescript/".length)}`;
+  const exportName =
+    specifier === "typescript" ? "." : `./${specifier.slice("typescript/".length)}`;
   const target = packageJson.exports?.[exportName];
   if (typeof target !== "string" || !target.startsWith("./")) {
     throw new Error(`Unsupported revision TypeScript export: ${specifier}`);

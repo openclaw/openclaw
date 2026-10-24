@@ -218,7 +218,9 @@ async function renderRevision(
   useRevisionCompiler: boolean,
 ): Promise<void> {
   await runAbortableChild({
-    command: process.execPath,
+    // The trusted compiler loader uses Node's synchronous module hooks. Bun
+    // test shards must still render revisions in the checked Node runtime.
+    command: process.versions.bun ? "node" : process.execPath,
     args: [
       "--max-old-space-size=6144",
       ...(useRevisionCompiler
