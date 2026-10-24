@@ -73,9 +73,8 @@ function commentItem(overrides: Record<string, unknown> = {}) {
   };
 }
 function publicFetch(payload: unknown, ...pages: Response[]) {
-  const fetchMock = vi
-    .fn<typeof fetch>()
-    .mockImplementation(async (url) => {
+  return fetchResponses(json(publicRepo), json(payload), ...pages).mockImplementation(
+    async (url) => {
       const href = requestUrl(url);
       if (href.endsWith("/check-runs?filter=latest&per_page=100")) {
         return json({ total_count: 0, check_runs: [] });
@@ -84,13 +83,12 @@ function publicFetch(payload: unknown, ...pages: Response[]) {
         return json({ sha, total_count: 0, state: "pending", statuses: [] });
       }
       throw new Error("Unexpected request " + href);
-    })
-    .mockResolvedValueOnce(json(publicRepo))
-    .mockResolvedValueOnce(json(payload));
-  for (const page of pages) {
-    fetchMock.mockResolvedValueOnce(page);
-  }
-  return fetchMock;
+    },
+  );
+}
+
+function copies<T>(length: number, value: T): T[] {
+  return Array.from({ length }, () => value);
 }
 
 function identity(scope = "selected"): ControlUiGitHubPreviewIdentity {
@@ -169,66 +167,60 @@ afterEach(() => {
 });
 
 describe("GitHub detail selected read identity", () => {
-  it.each(["pull", "commit"] as const)(
-    "authenticates the full %s document and refresh",
-    async (kind) => {
-      const payload = kind === "commit" ? commit({}, 1) : fullPull();
-      const { selected, fetchMock, read } = fixture(kind, payload);
-      const first = await read();
-      expect(first.partial).toBe(false);
-      expect(first.body).toBe(kind === "pull" ? item().body : commit().commit.message);
-      expect(first.comments).toHaveLength(kind === "pull" ? 2 : 1);
-      if (kind === "pull") {
-        expect(first.checks).toMatchObject({ state: "neutral", commit: sha, items: [] });
-        expect(first.metadata).toEqual(
-          expect.arrayContaining([
-            { label: "Files", value: "1" },
-            { label: "Comments", value: "1" },
-          ]),
-        );
-      }
-      expect(await read()).toBe(first);
-      await read(undefined, true);
-      for (const [, options] of fetchMock.mock.calls) {
-        expect(options?.headers).toHaveProperty("Authorization", "Bearer " + selected.token);
-      }
-      const itemPath = kind === "commit" ? "/commits/" + sha : "/pulls/1";
-      expect(
-        fetchMock.mock.calls.filter(([url]) => requestPath(url).endsWith(itemPath)),
-      ).toHaveLength(2);
-    },
-  );
+  it.each(["pull", "commit"] as const)("authenticates %s and refresh", async (kind) => {
+    const payload = kind === "commit" ? commit({}, 1) : fullPull();
+    const { selected, fetchMock, read } = fixture(kind, payload);
+    const first = await read();
+    expect(first.partial).toBe(false);
+    expect(first.body).toBe(kind === "pull" ? item().body : commit().commit.message);
+    expect(first.comments).toHaveLength(kind === "pull" ? 2 : 1);
+    if (kind === "pull") {
+      expect(first.checks).toMatchObject({ state: "neutral", commit: sha, items: [] });
+      expect(first.metadata).toEqual(
+        expect.arrayContaining([
+          { label: "Files", value: "1" },
+          { label: "Comments", value: "1" },
+        ]),
+      );
+    }
+    expect(await read()).toBe(first);
+    await read(undefined, true);
+    for (const [, options] of fetchMock.mock.calls) {
+      expect(options?.headers).toHaveProperty("Authorization", "Bearer " + selected.token);
+    }
+    const itemPath = kind === "commit" ? "/commits/" + sha : "/pulls/1";
+    expect(
+      fetchMock.mock.calls.filter(([url]) => requestPath(url).endsWith(itemPath)),
+    ).toHaveLength(2);
+  });
 
-  it.each([401, 403, 429])(
-    "retries optional HTTP %s credentials anonymously, even from cache",
-    async (status) => {
-      for (const cached of [false, true]) {
-        const selected = { ...identity(), optionalAuth: true as const };
-        let unavailable = !cached;
-        const { input, fetchMock, read } = fixture(
-          "issue",
-          item(),
-          (_, options) =>
-            unavailable && new Headers(options?.headers).has("Authorization")
-              ? json({}, status)
-              : undefined,
-          selected,
-        );
-        if (cached) {
-          await read();
-          unavailable = true;
-        }
-        expect((await read()).title).toBe("Read me");
-        const anonymous = fetchMock.mock.calls.filter(
-          ([, options]) => !new Headers(options?.headers).has("Authorization"),
-        );
-        expect(anonymous.map(([url]) => requestPath(url))).toEqual([
-          `/repos/${input.owner}/${input.repo}`,
-          `/repos/${input.owner}/${input.repo}/issues/1`,
-        ]);
+  it.each([401, 403, 429])("falls back after optional HTTP %s", async (status) => {
+    for (const cached of [false, true]) {
+      const selected = { ...identity(), optionalAuth: true as const };
+      let unavailable = !cached;
+      const { input, fetchMock, read } = fixture(
+        "issue",
+        item(),
+        (_, options) =>
+          unavailable && new Headers(options?.headers).has("Authorization")
+            ? json({}, status)
+            : undefined,
+        selected,
+      );
+      if (cached) {
+        await read();
+        unavailable = true;
       }
-    },
-  );
+      expect((await read()).title).toBe("Read me");
+      const anonymous = fetchMock.mock.calls.filter(
+        ([, options]) => !new Headers(options?.headers).has("Authorization"),
+      );
+      expect(anonymous.map(([url]) => requestPath(url))).toEqual([
+        `/repos/${input.owner}/${input.repo}`,
+        `/repos/${input.owner}/${input.repo}/issues/1`,
+      ]);
+    }
+  });
 
   it("does not bypass a managed identity after an authentication failure", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(json({}, 401));
@@ -242,20 +234,17 @@ describe("GitHub detail selected read identity", () => {
     { name: "internal", repository: { id: 123, private: false, visibility: "internal" } },
     { name: "missing-visibility", repository: { id: 123, private: false } },
     { name: "replacement", repository: { id: 456, private: false, visibility: "public" } },
-  ])("withholds fresh and cached $name repository content", async ({ repository }) => {
+  ])("blocks fresh and cached $name data", async ({ repository }) => {
     for (const cached of [false, true]) {
-      const upstream = authenticatedFetch();
       let changed = false;
-      const { read } = fixture("issue", item(), async (path, options) => {
-        const isRepository = /^\/repos\/[^/]+\/[^/]+$/u.test(path);
-        if (changed && isRepository) {
-          return json(repository);
+      const { read } = fixture("issue", item(), (path) => {
+        if (/^\/repos\/[^/]+\/[^/]+$/u.test(path)) {
+          return changed ? json(repository) : undefined;
         }
-        const response = await upstream("https://api.github.com" + path, options);
-        if (!cached && !isRepository) {
+        if (!cached) {
           changed = true;
         }
-        return response;
+        return undefined;
       });
       if (cached) {
         await read();
@@ -265,28 +254,23 @@ describe("GitHub detail selected read identity", () => {
     }
   });
 
-  it.each(["item", "review", "files"] as const)(
-    "blocks cross-repository %s redirects before sending credentials",
-    async (stage) => {
-      const suffix =
-        "/pulls/1" + (stage === "item" ? "" : stage === "review" ? "/comments" : "/files");
-      const { read, fetchMock } = fixture("pull", fullPull(), (pathname) => {
-        if (pathname === "/repos/octocat/another") {
-          return json({ id: 456, private: false, visibility: "public" });
-        }
-        if (pathname.endsWith(suffix)) {
-          return redirect("/repos/octocat/another" + suffix);
-        }
-        return undefined;
-      });
-      await expectStatus(read(), 404);
-      expect(fetchMock.mock.calls.some(([url]) => requestUrl(url).includes("/another/"))).toBe(
-        false,
-      );
-    },
-  );
+  it.each(["item", "review", "files"] as const)("blocks cross-repo %s redirects", async (stage) => {
+    const suffix =
+      "/pulls/1" + (stage === "item" ? "" : stage === "review" ? "/comments" : "/files");
+    const { read, fetchMock } = fixture("pull", fullPull(), (pathname) => {
+      if (pathname === "/repos/octocat/another") {
+        return json({ id: 456, private: false, visibility: "public" });
+      }
+      if (pathname.endsWith(suffix)) {
+        return redirect("/repos/octocat/another" + suffix);
+      }
+      return undefined;
+    });
+    await expectStatus(read(), 404);
+    expect(fetchMock.mock.calls.some(([url]) => requestUrl(url).includes("/another/"))).toBe(false);
+  });
 
-  it("allows a public repository rename while retaining its immutable identity", async () => {
+  it("follows renames with the same repository ID", async () => {
     const { input, read, fetchMock } = fixture("issue", item(), (pathname) => {
       if (pathname === "/repos/octocat/" + input.repo + "/issues/1") {
         return redirect("/repositories/123/issues/1");
@@ -299,7 +283,7 @@ describe("GitHub detail selected read identity", () => {
     ).toBe(true);
   });
 
-  it("separates selected credential scopes and rotations", async () => {
+  it("isolates credential scopes and rotations", async () => {
     const first = identity("first");
     const { read } = fixture("issue", item(), (path, options) => {
       if (path.endsWith("/issues/1")) {
@@ -313,7 +297,7 @@ describe("GitHub detail selected read identity", () => {
   });
 
   it.each(["optional content", "concurrent repository read"])(
-    "isolates caller revocation during %s",
+    "isolates revocation at %s",
     async (stage) => {
       const pending = createDeferred<Response>();
       const started = createDeferred<void>();
@@ -359,7 +343,7 @@ describe("GitHub detail public read boundary", () => {
     vi.stubEnv("GITHUB_TOKEN", "test-other-ambient-token");
   });
 
-  it("stops private repositories before fetching the object", async () => {
+  it("blocks private repositories before item reads", async () => {
     for (const selected of [undefined, identity()]) {
       const fetchMock = fetchResponses(
         json({ ...publicRepo, private: true, visibility: "private" }),
@@ -387,7 +371,7 @@ describe("GitHub detail public read boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
-  it("normalizes a retry-after rate limit and caches repeated opens", async () => {
+  it("normalizes and caches rate limits", async () => {
     const input = target();
     const fetchMock = fetchResponses(json({ message: "upstream" }, 403, { "retry-after": "60" }));
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -405,23 +389,15 @@ describe("GitHub detail public read boundary", () => {
     expect((await loadGitHubDetail(input, undefined, fetchMock)).partial).toBe(false);
   });
 
-  it("bounds discussion, review context, and UTF-16-safe patches with partial flags", async () => {
+  it("bounds UTF-16 content, pages and patch totals", async () => {
     const comment = commentItem({ body: "x".repeat(5000) });
     const bodyPrefix = "b".repeat(32 * 1024 - 1);
     const patchPrefix = "p".repeat(16 * 1024 - 1);
     const fetchMock = publicFetch(
       item({ body: bodyPrefix + "😀tail", comments: 25, review_comments: 25, changed_files: 35 }),
-      json(
-        Array.from({ length: 25 }, () => comment),
-        200,
-        { Link: '<https://api.github.com/ignored>; rel="next"' },
-      ),
-      json(
-        Array.from({ length: 25 }, () =>
-          commentItem({ body: comment.body, path: "src/file.ts", diff_hunk: "h".repeat(5000) }),
-        ),
-      ),
-      json(Array.from({ length: 35 }, () => file({ patch: patchPrefix + "😀tail" }))),
+      json(copies(25, comment), 200, { Link: '<https://api.github.com/ignored>; rel="next"' }),
+      json(copies(25, commentItem({ body: comment.body, diff_hunk: "h".repeat(5000) }))),
+      json(copies(35, file({ patch: patchPrefix + "😀tail" }))),
     );
     const detail = await loadGitHubDetail(target("pull"), undefined, fetchMock);
     expect(detail).toMatchObject({
@@ -436,15 +412,10 @@ describe("GitHub detail public read boundary", () => {
     expect(detail.files[0]?.patch).toBe(patchPrefix);
     const reviews = detail.comments.filter((entry) => entry.label === "Review comment");
     expect(reviews).toMatchObject(
-      Array.from({ length: 20 }, () => ({
-        context: { diff: "h".repeat(4096), diffTruncated: true },
-      })),
+      copies(20, { context: { diff: "h".repeat(4096), diffTruncated: true } }),
     );
     expect(detail.comments).toMatchObject(
-      Array.from({ length: 40 }, () => ({
-        body: "x".repeat(4096),
-        bodyTruncated: true,
-      })),
+      copies(40, { body: "x".repeat(4096), bodyTruncated: true }),
     );
     expect(detail.files).toHaveLength(30);
     expect(detail.files.reduce((sum, entry) => sum + (entry.patch?.length ?? 0), 0)).toBe(
@@ -461,15 +432,12 @@ describe("GitHub detail public read boundary", () => {
     }
   });
 
-  it("renders complete discussion, review context and renamed files", async () => {
+  it("renders sorted discussion, review context and renames", async () => {
     const discussion = commentItem({ id: 3, created_at: "2026-09-13T12:01:00Z", user: null });
     const diffHunk = "@@ -12,3 +12,3 @@\n-old\n+new";
     const review = commentItem({
       html_url: "https://github.com/octocat/repo/pull/1#discussion_r1",
-      path: "src/file.ts",
-      line: null,
       original_line: 14,
-      start_line: null,
       original_start_line: 12,
       side: "RIGHT",
       diff_hunk: diffHunk,
@@ -479,7 +447,6 @@ describe("GitHub detail public read boundary", () => {
       created_at: "2026-09-13T12:02:00Z",
       html_url: "https://github.com/octocat/repo/pull/1#discussion_r2",
       in_reply_to_id: 1,
-      path: "src/file.ts",
       line: 15,
       start_line: 13,
       diff_hunk: diffHunk,
@@ -496,25 +463,22 @@ describe("GitHub detail public read boundary", () => {
       commentsTotal: 3,
       files: [{ previousPath: "old.ts", patch: file().patch, patchTruncated: false }],
     });
-    expect(detail.comments.map(({ id }) => id)).toEqual([
-      "discussion_r1",
-      "issuecomment-1",
-      "discussion_r2",
-    ]);
-    expect(detail.comments[0]).toMatchObject({
-      context: {
-        lineLabel: "12–14",
-        label: "After change · Outdated",
-      },
+    const ids = detail.comments.map(({ id }) => id);
+    expect(ids).toEqual(["discussion_r1", "issuecomment-1", "discussion_r2"]);
+    expect(detail.comments[0]?.context).toMatchObject({
+      lineLabel: "12–14",
+      label: "After change · Outdated",
     });
     expect(detail.comments[1]?.author).toBe("ghost");
     expect(detail.comments[1]?.context).toBeUndefined();
-    expect(detail.comments[2]).toMatchObject({
-      context: { lineLabel: "13–15", replyLabel: "In reply to #1", replyUrl: review.html_url },
+    expect(detail.comments[2]?.context).toMatchObject({
+      lineLabel: "13–15",
+      replyLabel: "In reply to #1",
+      replyUrl: review.html_url,
     });
   });
 
-  it("loads anonymous commit comments with permalinks and optional locations", async () => {
+  it("loads anonymous commit comments and locations", async () => {
     const first = commentItem({
       html_url: "https://github.com/octocat/repo/commit/" + sha + "#commitcomment-1",
       path: "src/file.ts",
@@ -545,28 +509,25 @@ describe("GitHub detail public read boundary", () => {
     }
   });
 
-  it.each(["comments", "files"] as const)(
-    "keeps the item visible when %s cannot load",
-    async (section) => {
-      const detail = await readPublic(
-        "pull",
-        item({
-          comments: section === "comments" ? 1 : 0,
-          changed_files: section === "files" ? 1 : 0,
-        }),
-        json({}, 429),
-      );
-      expect(detail).toMatchObject({
-        title: "Read me",
-        partial: true,
-        [section + "Truncated"]: true,
-        [section]: [],
-      });
-    },
-  );
+  it.each(["comments", "files"] as const)("keeps the item after %s failure", async (section) => {
+    const detail = await readPublic(
+      "pull",
+      item({
+        comments: section === "comments" ? 1 : 0,
+        changed_files: section === "files" ? 1 : 0,
+      }),
+      json({}, 429),
+    );
+    expect(detail).toMatchObject({
+      title: "Read me",
+      partial: true,
+      [section + "Truncated"]: true,
+      [section]: [],
+    });
+  });
 
   it.each(["https://example.com/steal", "https://user:secret@github.com/owner/repo"])(
-    "omits unsafe commit permalink %s without losing the commit",
+    "omits unsafe permalink %s",
     async (html_url) => {
       const detail = await readPublic("commit", commit({}, 1), json([commentItem({ html_url })]));
       expect(detail).toMatchObject({
@@ -579,7 +540,7 @@ describe("GitHub detail public read boundary", () => {
     },
   );
 
-  it("marks omitted binary patches and paginated commit files incomplete", async () => {
+  it("marks binary patches and pagination incomplete", async () => {
     const fetchMock = fetchResponses(
       json(publicRepo),
       json(
@@ -603,58 +564,52 @@ describe("GitHub detail public read boundary", () => {
     expect(detail.createdAt).toBeUndefined();
   });
 
-  it.each([false, true])(
-    "rejects oversized main responses (declared length: %s)",
-    async (declaredLength) => {
-      const response = new Response("x".repeat(1024 * 1024 + 1), {
-        headers: declaredLength ? { "Content-Length": String(1024 * 1024 + 1) } : {},
-      });
-      const fetchMock = fetchResponses(json(publicRepo), response);
-      await expect(loadGitHubDetail(target(), undefined, fetchMock)).rejects.toThrow();
-      expect(response.bodyUsed).toBe(true);
-    },
-  );
+  it.each([false, true])("bounds response bytes (declared=%s)", async (declaredLength) => {
+    const response = new Response("x".repeat(1024 * 1024 + 1), {
+      headers: declaredLength ? { "Content-Length": String(1024 * 1024 + 1) } : {},
+    });
+    const fetchMock = fetchResponses(json(publicRepo), response);
+    await expect(loadGitHubDetail(target(), undefined, fetchMock)).rejects.toThrow();
+    expect(response.bodyUsed).toBe(true);
+  });
 });
 
 describe("progressive GitHub documents", () => {
-  it.each([200, 503])(
-    "overlaps discussion and review reads when discussion returns %s",
-    async (status) => {
-      vi.useFakeTimers();
-      try {
-        const { read } = fixture("pull", fullPull(), async (path) => {
-          if (!path.endsWith("/comments")) {
-            return undefined;
-          }
-          await new Promise((resolve) => {
-            setTimeout(resolve, 100);
-          });
-          return path.includes("/issues/")
-            ? json([commentItem()], status)
-            : json([
-                commentItem({
-                  id: 2,
-                  html_url: "https://github.com/octocat/repo/pull/1#discussion_r2",
-                }),
-              ]);
+  it.each([200, 503])("overlaps comment reads (HTTP %s)", async (status) => {
+    vi.useFakeTimers();
+    try {
+      const { read } = fixture("pull", fullPull(), async (path) => {
+        if (!path.endsWith("/comments")) {
+          return undefined;
+        }
+        await new Promise((resolve) => {
+          setTimeout(resolve, 100);
         });
-        const started = Date.now();
-        const pending = read("discussion");
-        await vi.runAllTimersAsync();
-        const document = await pending;
-        expect(Date.now() - started).toBe(100);
-        expect(document.comments?.map((comment) => comment.id)).toEqual(
-          status === 200 ? ["discussion_r2", "issuecomment-1"] : ["discussion_r2"],
-        );
-        expect(document.commentsTotal).toBe(2);
-        expect(document.commentsTruncated).toBe(status !== 200);
-      } finally {
-        vi.useRealTimers();
-      }
-    },
-  );
+        return path.includes("/issues/")
+          ? json([commentItem()], status)
+          : json([
+              commentItem({
+                id: 2,
+                html_url: "https://github.com/octocat/repo/pull/1#discussion_r2",
+              }),
+            ]);
+      });
+      const started = Date.now();
+      const pending = read("discussion");
+      await vi.runAllTimersAsync();
+      const document = await pending;
+      expect(Date.now() - started).toBe(100);
+      expect(document.comments?.map((comment) => comment.id)).toEqual(
+        status === 200 ? ["discussion_r2", "issuecomment-1"] : ["discussion_r2"],
+      );
+      expect(document.commentsTotal).toBe(2);
+      expect(document.commentsTruncated).toBe(status !== 200);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
-  it("delivers overview first, discussion independently, and files on demand", async () => {
+  it("loads independent sections and retires old heads", async () => {
     const checks = createDeferred<Response>();
     const checksStarted = createDeferred<void>();
     let delayChecks = true;
@@ -724,7 +679,7 @@ describe("progressive GitHub documents", () => {
     });
   });
 
-  it("rejects an on-demand PR diff if its head moves during the files read", async () => {
+  it("rejects files when the PR head moves", async () => {
     const upstream = authenticatedFetch(item({ changed_files: 1 }));
     let filesRead = false;
     const { read } = fixture("pull", item(), async (path, options) => {
@@ -738,7 +693,7 @@ describe("progressive GitHub documents", () => {
     await expectStatus(read("files"), 409);
   });
 
-  it("rechecks visibility and caller authority for settled overviews", async () => {
+  it("rechecks settled overview authority", async () => {
     const { selected, read } = fixture("pull");
     await read("overview");
     selected.assertSelected = () => {
@@ -759,27 +714,24 @@ describe("progressive GitHub documents", () => {
     });
   });
 
-  it.each(["issue", "commit"] as const)(
-    "defers %s sections with fresh issue or pinned commit revisions",
-    async (kind) => {
-      const { selected, read, fetchMock } = fixture(kind, kind === "commit" ? commit() : item());
-      const overview = await read("overview");
-      expect(overview.revision).toBe(kind === "commit" ? sha : date);
-      expect(overview.deferredSections).toEqual(
-        kind === "commit" ? ["files", "discussion"] : ["discussion"],
-      );
-      expect(overview.files).toBeUndefined();
-      expect(overview.comments).toBeUndefined();
-      const updatedAt = "2026-10-17T00:00:00Z";
-      const transport =
-        kind === "commit" ? fetchMock : authenticatedFetch(item({ updated_at: updatedAt }));
-      expect(await read("discussion", false, selected, transport)).toMatchObject({
-        revision: kind === "commit" ? sha : updatedAt,
-        comments: [],
-        commentsTotal: 0,
-      });
-    },
-  );
+  it.each(["issue", "commit"] as const)("binds deferred %s revisions", async (kind) => {
+    const { selected, read, fetchMock } = fixture(kind, kind === "commit" ? commit() : item());
+    const overview = await read("overview");
+    expect(overview.revision).toBe(kind === "commit" ? sha : date);
+    expect(overview.deferredSections).toEqual(
+      kind === "commit" ? ["files", "discussion"] : ["discussion"],
+    );
+    expect(overview.files).toBeUndefined();
+    expect(overview.comments).toBeUndefined();
+    const updatedAt = "2026-10-17T00:00:00Z";
+    const transport =
+      kind === "commit" ? fetchMock : authenticatedFetch(item({ updated_at: updatedAt }));
+    expect(await read("discussion", false, selected, transport)).toMatchObject({
+      revision: kind === "commit" ? sha : updatedAt,
+      comments: [],
+      commentsTotal: 0,
+    });
+  });
 });
 
 describe("GitHub detail target validation", () => {
