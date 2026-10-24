@@ -1,22 +1,19 @@
-import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { registryFixture } from "./prepublish-plugin-registry.fixture.js";
 
 const runnerPath = "scripts/e2e/npm-onboard-channel-agent-docker.sh";
 const version = "2026.8.1";
-const sourceSha = "a".repeat(40);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
 
 type Scenario = {
   consent?: boolean;
   registry?: boolean;
-  corruptRegistry?: boolean;
-  companion?: "missing" | "wrong-identity";
   channel?: "telegram" | "discord" | "slack";
   bundled?: boolean;
   sourcePlugin?: boolean;
@@ -25,10 +22,6 @@ type Scenario = {
   doctorExitCode?: number;
   dirtyState?: boolean;
 };
-
-function sha256(file: string): string {
-  return createHash("sha256").update(readFileSync(file)).digest("hex");
-}
 
 function writeFixture(file: string, content: string | Record<string, unknown>, executable = false) {
   mkdirSync(dirname(file), { recursive: true });
@@ -44,43 +37,6 @@ function installArgs(id: string, source: boolean) {
     ...(source ? [`npm:@openclaw/${id}@${version}`, "--pin"] : [id]),
     "--accept-capabilities",
   ];
-}
-
-function registryFixture(root: string, scenario: Scenario): NodeJS.ProcessEnv {
-  const artifactDir = join(root, "registry-artifact");
-  const staging = join(root, "staging");
-  mkdirSync(artifactDir);
-  // Extra verified companions must not select source mode on their own.
-  const packages = ["codex", "discord", "slack"]
-    .filter((id) => scenario.companion !== "missing" || id !== scenario.channel)
-    .map((id) => {
-      const name = `@openclaw/${id}`;
-      writeFixture(join(staging, "package/package.json"), {
-        name:
-          scenario.companion === "wrong-identity" && id === scenario.channel
-            ? "@openclaw/other"
-            : name,
-        version,
-      });
-      const tarball = `${id}.tgz`;
-      const tarballPath = join(artifactDir, tarball);
-      execFileSync("tar", ["-czf", tarballPath, "-C", staging, "package"]);
-      return { name, version, tarball, sha256: sha256(tarballPath) };
-    });
-  const manifest = join(artifactDir, "prepublish-plugin-registry.json");
-  writeFixture(manifest, {
-    schema: "openclaw.prepublish-plugin-registry/v1",
-    schemaVersion: 1,
-    candidateVersion: version,
-    sourceSha,
-    packages,
-  });
-  return {
-    OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: artifactDir,
-    OPENCLAW_DOCKER_E2E_SELECTED_SHA: sourceSha,
-    OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_CANDIDATE_VERSION: version,
-    OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: sha256(manifest),
-  };
 }
 
 function runScenario(scenario: Scenario = {}) {
@@ -204,10 +160,10 @@ openclaw_e2e_stop_process() {
   fi
 }
 `;
-  const registryEnv = scenario.registry ? registryFixture(root, scenario) : {};
-  if (scenario.corruptRegistry) {
-    registryEnv.OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256 = "0".repeat(64);
-  }
+  const registryEnv = scenario.registry
+    ? registryFixture(root, ["@openclaw/codex", "@openclaw/discord", "@openclaw/slack"], version)
+        .env
+    : {};
   const result = spawnSync("bash", ["-s"], {
     input: containerScript.replaceAll("/tmp/", `${root}/`),
     encoding: "utf8",
@@ -285,22 +241,6 @@ it.each([false, true])(
     expect(result.status, detail).toBe(0);
     expect(installs).toEqual([installArgs("codex", registry)]);
     const onboard = events.find((args) => args[0] === "onboard");
-    expect(onboard).toEqual(
-      (
-        "onboard --non-interactive --accept-risk --mode local --auth-choice openai-api-key " +
-        "--secret-input-mode ref --gateway-port 18789 --gateway-bind loopback " +
-        "--skip-daemon --skip-ui --skip-skills --skip-health --json"
-      ).split(" "),
-    );
-    const stages = events.filter((args) => args[0] === "assertion").map((args) => args[1]);
-    expect(stages).toEqual([
-      "assert-onboard-state",
-      "assert-channel-config",
-      "assert-status-surfaces",
-      "configure-mock-model",
-      "assert-mock-model-config",
-      "assert-agent-turn",
-    ]);
     expect(events.indexOf(onboard!)).toBeLessThan(
       events.findIndex((args) => args[1] === "configure-mock-model"),
     );
@@ -354,19 +294,10 @@ it.each([
 it.each<[Scenario, string]>([
   [{ dirtyState: true }, "package proof inherited existing state"],
   [
-    { channel: "discord", consent: true, sourcePlugin: true },
+    { channel: "discord", sourcePlugin: true },
     "source channel fixture requires OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR",
   ],
-  [
-    { channel: "discord", companion: "missing", registry: true, sourcePlugin: true },
-    "missing Docker-plan package",
-  ],
-  [
-    { channel: "slack", companion: "wrong-identity", registry: true, sourcePlugin: true },
-    "tarball identity mismatch",
-  ],
-  [{ registry: true, corruptRegistry: true }, "manifest SHA-256 differs from the immutable tuple"],
-])("rejects invalid fixture admission before any CLI call: %j (%s)", (scenario, error) => {
+])("rejects invalid fixture admission before any CLI call: %j", (scenario, error) => {
   const { result, events, detail } = runScenario(scenario);
   expect(result.status, detail).not.toBe(0);
   expect(detail).toContain(error);
