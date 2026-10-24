@@ -34,6 +34,7 @@ export type CronCompactJob = Pick<
   | "enabled"
   | "updatedAtMs"
   | "streamExecutionHost"
+  | "reauthorizationRequired"
 > &
   Pick<
     CronJob["state"],

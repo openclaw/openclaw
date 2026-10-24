@@ -39,6 +39,7 @@ export const createServiceCronHost = (): PluginServiceCronHost => ({
     storage: "sqlite",
     sqlitePath: "/synthetic/openclaw.sqlite",
     jobs: 0,
+    reauthorizationRequired: 0,
     nextWakeAtMs: null,
   })),
   list: vi.fn<PluginServiceCronHost["list"]>(),

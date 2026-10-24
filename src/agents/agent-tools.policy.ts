@@ -493,9 +493,11 @@ export function resolveEffectiveToolPolicy(params: {
   return { ...effectivePolicy, gatewayConfigReadAllowed };
 }
 
-function throwUnavailableScheduledAccount(accountId: string): never {
+function throwUnavailableScheduledAccount(accountId: string, missingCreatorChannel = false): never {
   throw new Error(
-    `Scheduled account "${accountId}" is unavailable. Re-add it to the channel configuration, or recreate this automation from the intended account.`,
+    missingCreatorChannel
+      ? `Scheduled account "${accountId}" is unavailable: the job has no recorded creator channel, so its scheduled authority cannot be resolved. Re-save the job's tool cap from the creator's authenticated turn to record it, or recreate the automation from the intended account.`
+      : `Scheduled account "${accountId}" is unavailable. Re-add it to the channel configuration, or recreate this automation from the intended account.`,
   );
 }
 
@@ -539,7 +541,7 @@ export function resolveGroupToolPolicy(params: {
   const accountId = normalizeAccountId(params.accountId);
   if (!channel) {
     return params.requireConfiguredAccount && accountId !== DEFAULT_ACCOUNT_ID
-      ? throwUnavailableScheduledAccount(accountId)
+      ? throwUnavailableScheduledAccount(accountId, true)
       : undefined;
   }
   let plugin;
