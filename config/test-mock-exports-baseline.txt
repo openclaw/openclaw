@@ -4254,7 +4254,6 @@
 ["src/commands/models/list.probe.targets.test.ts","../../secrets/resolve.js","28150dce08bed824d8e7229243c7213c2c9edbb7ba8bfe5ff0659605179e6fb8",1]
 ["src/commands/models/list.probe.targets.test.ts","../status-all/format.js","4ecda4578fc62356c44de1004cce3446449584d07749c089404c3b418c6c8f5a",1]
 ["src/commands/models/list.probe.targets.test.ts","./shared.js","c8342d59668d77fad108f88a6423ef884d18c65959e5f533f891cd458c088571",1]
-["src/commands/models/list.status.test.ts","../../agents/agent-scope.js","97b38b0300da0797f5de2f296eb5ade0a02a58496d1c78bf55b263543413d4e6",1]
 ["src/commands/models/list.status.test.ts","../../agents/auth-profiles/paths.js","de0c9478cbe42e432fee7a885c570e6340743ec1f1f29184e6349cf1db02d3f9",1]
 ["src/commands/models/list.status.test.ts","../../agents/auth-profiles/persisted.js","6a83769a074caa7bd3b28734c46c7d5d673902532a66a1ef4778676d81392169",1]
 ["src/commands/models/list.status.test.ts","../../agents/auth-profiles/usage.js","5d1a0945f20a309bbb1d18a72fd9e6d1953f0dce9d7f89f3c437f8b07507dad2",1]
