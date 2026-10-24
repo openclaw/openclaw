@@ -148,7 +148,7 @@ function encodeSkillLibraryFile(buffer: Buffer): Pick<SkillLibraryFile, "content
   if (isAscii(buffer)) {
     const content = buffer.toString("utf8");
     if (
-      !/[^\t\n\r -~]/u.test(content) &&
+      !content.includes("\0") &&
       JSON.stringify(content).length - 2 <= Math.ceil(buffer.length / 3) * 4
     ) {
       return { content, encoding: "utf8" };

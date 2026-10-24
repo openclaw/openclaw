@@ -49,6 +49,8 @@ it("avoids expanding retained text without enlarging escaped or binary resources
     ["unicode.txt", Buffer.from(`${"a".repeat(3000)}🦞`)],
     ["binary.dat", Buffer.from([0, 255, 128, 192])],
     ["controls.dat", Buffer.alloc(3000)],
+    ["sparse-nul.dat", Buffer.from(`${"a".repeat(3000)}\0`)],
+    ["controls.txt", Buffer.concat([Buffer.from("a".repeat(3000)), Buffer.from([1, 8, 12, 127])])],
     ["escaped.txt", Buffer.from('"\\\t\n\r'.repeat(600))],
     ["empty.txt", Buffer.alloc(0)],
   ]);
@@ -71,6 +73,8 @@ it("avoids expanding retained text without enlarging escaped or binary resources
   );
   // Mixed Unicode must not turn a mostly ASCII payload into a two-byte JS string.
   expect(delivery.find((entry) => entry.path === "unicode.txt")?.encoding).toBe("base64");
+  // Keep NUL payloads classified as binary even when UTF-8 would be smaller.
+  expect(delivery.find((entry) => entry.path === "sparse-nul.dat")?.encoding).toBe("base64");
 });
 
 it.each([
