@@ -1,3 +1,4 @@
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   prepareColdLoadTraceEvent,
   type ColdLoadCpuProfile,
@@ -32,6 +33,106 @@ function union(intervals: readonly Interval[]): Interval[] {
 
 const durationMs = (intervals: readonly Interval[]) =>
   union(intervals).reduce((total, interval) => total + interval.end - interval.start, 0) / 1_000;
+
+export type InteractionStyleSheet = {
+  sourceURL: string;
+  origin: string;
+  title: string;
+  startLine: number;
+  startColumn: number;
+};
+
+/** Chromium emits one aggregate per style pass, in microseconds, on blink.debug.
+ * Source: third_party/blink/renderer/core/css/element_rule_collector.cc,
+ * ElementRuleCollector::DumpAndClearRulesPerfMap (SelectorStats).
+ */
+export function summarizeInteractionSelectors(
+  rawEvents: readonly unknown[],
+  interval: { startUs: number; endUs: number; rendererPid: number; rendererTid: number },
+  styleSheets: ReadonlyMap<string, InteractionStyleSheet> = new Map(),
+) {
+  const selectors = new Map<
+    string,
+    {
+      selector: string;
+      styleSheetId: string;
+      styleSheet?: InteractionStyleSheet;
+      elapsedUs: number;
+      matchAttempts: number;
+      matches: number;
+      fastRejects: number;
+    }
+  >();
+  let stylePasses = 0;
+  for (const raw of rawEvents) {
+    const event = prepareColdLoadTraceEvent(raw);
+    if (
+      event.name !== "SelectorStats" ||
+      event.pid !== interval.rendererPid ||
+      event.tid !== interval.rendererTid ||
+      event.ts < interval.startUs ||
+      event.ts > interval.endUs
+    ) {
+      continue;
+    }
+    const stats = asRecord(asRecord(raw)?.args)?.selector_stats;
+    // Chromium can emit payload-free SelectorStats slices when no rules were collected.
+    if (stats === undefined) {
+      continue;
+    }
+    const timings = asRecord(stats)?.selector_timings;
+    if (!Array.isArray(timings)) {
+      throw new Error("SelectorStats event is missing selector_timings");
+    }
+    stylePasses++;
+    for (const timing of timings) {
+      const row = asRecord(timing);
+      const elapsedUs = row?.["elapsed (us)"];
+      const matchAttempts = row?.match_attempts;
+      const matches = row?.match_count;
+      const fastRejects = row?.fast_reject_count;
+      if (
+        !row ||
+        typeof row.selector !== "string" ||
+        typeof row.style_sheet_id !== "string" ||
+        typeof elapsedUs !== "number" ||
+        typeof matchAttempts !== "number" ||
+        typeof matches !== "number" ||
+        typeof fastRejects !== "number" ||
+        ![elapsedUs, matchAttempts, matches, fastRejects].every(
+          (value) => Number.isFinite(value) && value >= 0,
+        )
+      ) {
+        throw new Error("Invalid Chromium selector timing");
+      }
+      const key = JSON.stringify([row.style_sheet_id, row.selector]);
+      const previous = selectors.get(key);
+      if (previous) {
+        previous.elapsedUs += elapsedUs;
+        previous.matchAttempts += matchAttempts;
+        previous.matches += matches;
+        previous.fastRejects += fastRejects;
+      } else {
+        selectors.set(key, {
+          selector: row.selector,
+          styleSheetId: row.style_sheet_id,
+          styleSheet: styleSheets.get(row.style_sheet_id),
+          elapsedUs,
+          matchAttempts,
+          matches,
+          fastRejects,
+        });
+      }
+    }
+  }
+  return {
+    stylePasses,
+    // Snapshots are indivisible: attribute a style pass to its emitted event timestamp.
+    selectors: [...selectors.values()].toSorted(
+      (left, right) => right.elapsedUs - left.elapsedUs || right.matchAttempts - left.matchAttempts,
+    ),
+  };
+}
 
 /** Warm actions are bounded by unique performance marks, never navigation timing. */
 export function summarizeInteractionTrace(
