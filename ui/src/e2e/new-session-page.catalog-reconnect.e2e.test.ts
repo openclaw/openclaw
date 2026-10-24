@@ -1,8 +1,12 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
+import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
 } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   TERMINAL_START_FEATURE_METHODS,
@@ -29,6 +33,7 @@ import {
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
+const captureCliAgentsProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
 function mainAndResearchAgents(mainWorkspace: string, researchWorkspace: string) {
   return {
@@ -48,10 +53,74 @@ function mainAndResearchAgents(mainWorkspace: string, researchWorkspace: string)
   };
 }
 
+function recordingOptions(name: string): BrowserContextOptions {
+  const viewport = { height: 900, width: 1280 };
+  return {
+    locale: "en-US",
+    serviceWorkers: "block",
+    viewport,
+    ...(captureCliAgentsProof
+      ? { recordVideo: { dir: path.join(suite.artifactDir, name), size: viewport } }
+      : {}),
+  };
+}
+
+async function captureCatalogProof(page: Page, name: string, surface: Locator, content: Locator[]) {
+  if (captureCliAgentsProof) {
+    await writeFile(
+      path.join(suite.artifactDir, "cli-agents-picker", name),
+      await takeControlUiViewportScreenshot(page, surface, content),
+    );
+  }
+}
+
 suite.define(() => {
   const openPage = createPageOpener(suite);
-  it("waits for the roster, then routes the CLI picker through catalog-target mode", async () => {
-    const page = await openPage(createControlUiE2eContextOptions());
+  it("waits for the current roster before loading the CLI catalog", async () => {
+    const page = await openPage({ locale: "en-US", serviceWorkers: "block" });
+    const gateway = await installMockGateway(page, {
+      assistantAgentId: "roboclaw",
+      assistantName: "Roboclaw",
+      cliAgentsEnabled: true,
+      defaultAgentId: "roboclaw",
+      deferredRequests: [{ method: "agents.list" }],
+      featureMethods: [...TERMINAL_START_FEATURE_METHODS],
+      methodResponses: {
+        "sessions.catalog.list": {
+          cases: [
+            {
+              match: { metadataOnly: true },
+              response: { catalogs: [{ ...cliAgentCatalog(true), hosts: [] }] },
+            },
+            { match: {}, response: { catalogs: [cliAgentCatalog(true)] } },
+          ],
+        },
+      },
+    });
+    await page.goto(`${suite.server.baseUrl}new`);
+    await gateway.waitForRequest("agents.list");
+    await page.locator(".new-session-page__message").waitFor({ state: "visible" });
+    expect(await gateway.getRequests("sessions.catalog.list", { metadataOnly: true })).toEqual([]);
+    await gateway.resolveDeferred("agents.list");
+    await page.getByRole("heading", { name: "Roboclaw" }).waitFor();
+    await expect
+      .poll(async () => await gateway.getRequests("sessions.catalog.list", { metadataOnly: true }))
+      .toHaveLength(1);
+    const catalogRequest = (
+      await gateway.getRequests("sessions.catalog.list", { metadataOnly: true })
+    ).at(0);
+    expect(catalogRequest?.params).toEqual({ agentId: "roboclaw", metadataOnly: true });
+    await page.locator('[data-chat-model-select="true"]').click();
+    const cliGroup = page.locator('[data-chat-model-target-group="cliAgents"]');
+    await expect.poll(() => cliGroup.isVisible()).toBe(true);
+    await pollLocatorText(cliGroup).toContain("Claude Code");
+  });
+
+  it("routes a Labs-enabled CLI agent picker row through catalog-target mode", async () => {
+    if (captureCliAgentsProof) {
+      await mkdir(path.join(suite.artifactDir, "cli-agents-picker"), { recursive: true });
+    }
+    const page = await openPage(recordingOptions("cli-agents-picker"));
     const terminalCatalog = cliAgentCatalog(true);
     const historyCatalog = {
       id: "history-only",
@@ -60,10 +129,6 @@ suite.define(() => {
       hosts: [],
     };
     const gateway = await installMockGateway(page, {
-      assistantAgentId: "roboclaw",
-      assistantName: "Roboclaw",
-      defaultAgentId: "roboclaw",
-      deferredRequests: [{ method: "agents.list" }],
       cliAgentsEnabled: true,
       featureMethods: [
         "chat.metadata",
@@ -85,33 +150,39 @@ suite.define(() => {
       },
     });
     await page.goto(`${suite.server.baseUrl}new`);
-    await gateway.waitForRequest("agents.list");
-    await page.locator(".new-session-page__message").waitFor({ state: "visible" });
-    expect(await gateway.getRequests("sessions.catalog.list", { metadataOnly: true })).toEqual([]);
-    await gateway.resolveDeferred("agents.list");
-    await page.getByRole("heading", { name: "Roboclaw" }).waitFor();
     await expect
-      .poll(() => gateway.getRequests("sessions.catalog.list", { metadataOnly: true }))
-      .toEqual([expect.objectContaining({ params: { agentId: "roboclaw", metadataOnly: true } })]);
+      .poll(async () =>
+        (await gateway.getRequests("sessions.catalog.list", { metadataOnly: true })).at(0),
+      )
+      .toMatchObject({ params: { agentId: "main", metadataOnly: true } });
     await page.locator('[data-chat-model-select="true"]').click();
     const cliGroup = page.locator('[data-chat-model-target-group="cliAgents"]');
     await expect.poll(() => cliGroup.isVisible()).toBe(true);
     await pollLocatorText(cliGroup).toContain("CLI agents");
     await pollLocatorText(cliGroup).toContain("Claude Code");
     expect(await cliGroup.textContent()).not.toContain("History only");
+    await captureCatalogProof(
+      page,
+      "picker-group.png",
+      page.locator(".chat-controls__model-picker > [data-anchored-overlay]"),
+      [cliGroup],
+    );
     await cliGroup.getByRole("option", { name: "Claude Code" }).click();
     await expect.poll(() => new URL(page.url()).searchParams.get("catalog")).toBe("claude");
     await expect
       .poll(async () =>
         (await gateway.getRequests("sessions.catalog.list", { catalogId: "claude" })).at(0),
       )
-      .toMatchObject({ params: { agentId: "roboclaw", catalogId: "claude", limitPerHost: 1 } });
+      .toMatchObject({ params: { agentId: "main", catalogId: "claude", limitPerHost: 1 } });
     const targetRequest = (
       await gateway.getRequests("sessions.catalog.list", { catalogId: "claude" })
     ).at(0);
     expect(targetRequest?.params).not.toHaveProperty("metadataOnly");
     await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
     expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(0);
+    await captureCatalogProof(page, "catalog-target.png", page.locator(".shell"), [
+      page.locator(".new-session-page__runtime"),
+    ]);
   });
 
   it.each<[string, boolean, boolean, boolean]>([

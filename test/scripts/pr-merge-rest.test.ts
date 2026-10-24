@@ -101,10 +101,10 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     return { f, landed };
   }
 
-  it.each(["malformed", "unavailable", "head-changed"])(
+  it.each(["null", "empty", "malformed", "unavailable", "head-changed"])(
     "retains accepted intent on invalid %s receipt",
     (fault) => {
-      const malformed = fault === "malformed";
+      const malformed = ["null", "empty", "malformed"].includes(fault);
       const { f } = asyncReceipt(
         {
           restMergeCommit: malformed ? fault : "missing",
@@ -123,7 +123,7 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     },
   );
 
-  it.each(["failed", "enqueued", "expired"])(
+  it.each(["failed", "enqueued", "expired", "unknown"])(
     "prevents replay and cleanup on async %s",
     (asyncMergeStatus) => {
       const f = restFixture({ asyncMergeStatus });
@@ -314,10 +314,10 @@ describePosix("native merge with exhausted GraphQL quota", () => {
 
   it.each([
     { restReadFailure: "core", restReadFailuresRemaining: 1 },
-    {
-      pr: unknownProjection,
+    ...[unknownProjection, { mergeable: "UNKNOWN" }, { mergeStateStatus: "UNKNOWN" }].map((pr) => ({
+      pr,
       observations: [{ pr: { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" } }],
-    },
+    })),
   ])(
     "settles REST read failure or UNKNOWN projection %j via one pinned GraphQL merge",
     (changes) => {
@@ -399,6 +399,33 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     },
   );
 
+  it.each(["preview", "observe"])(
+    "preserves human credit on REST fallback during %s",
+    (quotaAt) => {
+      const f = restFixture(
+        {},
+        "Repair\n\nCo-authored-by: Source <source@example.com>\nCo-authored-by: Codex <codex@openai.com>",
+        undefined,
+        false,
+        { name: "Contributor", email: "contributor@example.com" },
+      );
+      configureMerge(f, { quotaAt, restReadFailure: "core", restReadFailuresRemaining: 1 });
+
+      expectExit(f.run(), 0);
+      expect(f.record()).toMatchObject({ phase: "complete", transport: "rest", head: f.head });
+      expect(f.state().restMergePayload).toMatchObject({ sha: f.head, merge_method: "squash" });
+      expect(f.state().mergeBody).toContain(
+        "Co-authored-by: Contributor <contributor@example.com>",
+      );
+      expect(f.state().mergeBody).toContain("Co-authored-by: Source <source@example.com>");
+      expect(f.state().mergeBody).not.toContain("codex@openai.com");
+      expect(f.state()).toMatchObject({ mutations: 1, posts: 1 });
+      expect(f.state().calls.some((call) => call[1] === "pr" && call[2] === "merge")).toBe(false);
+      expect(f.git(["show", `${f.record().landed}:owner.txt`])).toBe("after");
+      expect(existsSync(f.worktree)).toBe(false);
+    },
+  );
+
   it.each(["none", "head", "lifecycle", "main"])(
     "settles UNKNOWN via REST without hiding %s drift",
     (drift) => {
@@ -458,16 +485,7 @@ describePosix("native merge with exhausted GraphQL quota", () => {
   );
   it.each([false, true])("retains prepared body across fallback (round trip=%s)", (roundTrip) => {
     const credit = "Co-authored-by: Contributor <contributor@example.com>";
-    const sourceCredit = "Co-authored-by: Source <source@example.com>";
-    const f = roundTrip
-      ? restFixture({}, `Repair\n\n${credit}`)
-      : restFixture(
-          {},
-          `Repair\n\n${sourceCredit}\nCo-authored-by: Codex <codex@openai.com>`,
-          undefined,
-          false,
-          { name: "Contributor", email: "contributor@example.com" },
-        );
+    const f = restFixture({}, `Repair\n\n${credit}`);
     configureMerge(f, {
       quotaAt: "observe",
       restReadFailure: "core",
@@ -477,10 +495,7 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     });
     expectExit(f.run(), 0);
     expect(f.record()).toMatchObject({ phase: "complete", head: f.head });
-    expect(f.state()).toMatchObject({
-      mergeBody: `Fixture body\n\n${roundTrip ? "" : `${sourceCredit}\n`}${credit}\n`,
-      mutations: 1,
-    });
+    expect(f.state()).toMatchObject({ mergeBody: `Fixture body\n\n${credit}\n`, mutations: 1 });
     if (roundTrip) {
       expect(f.record()).not.toHaveProperty("transport");
       expect(f.state()).toMatchObject({ restReadFailureAtMainReads: [], restMergePayload: null });
@@ -488,12 +503,8 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       expect(f.record()).toMatchObject({ transport: "rest" });
       expect(f.state()).toMatchObject({
         observationReads: 1,
-        posts: 1,
         restMergePayload: { sha: f.head, merge_method: "squash" },
       });
-      expect(f.state().calls.some((call) => call[1] === "pr" && call[2] === "merge")).toBe(false);
-      expect(f.git(["show", `${f.record().landed}:owner.txt`])).toBe("after");
-      expect(existsSync(f.worktree)).toBe(false);
     }
   });
 
@@ -530,6 +541,19 @@ describePosix("native merge with exhausted GraphQL quota", () => {
     expect(() => f.record()).toThrow();
   });
 
+  it("lands ordinary REST squash without classic-policy discovery", () => {
+    const f = restFixture({ restPolicy: "not-found" });
+    expectAdmission(f);
+    expect(f.state().restMergePayload).toMatchObject({
+      sha: f.head,
+      merge_method: "squash",
+      bypass_rules: false,
+    });
+    expect(
+      f.state().calls.some((call) => call.some((arg) => arg.endsWith("/branches/main/protection"))),
+    ).toBe(false);
+  });
+
   it("retains a provider protection refusal without replaying through another route", () => {
     const f = restFixture({
       restPolicy: "not-found",
@@ -556,9 +580,6 @@ describePosix("native merge with exhausted GraphQL quota", () => {
       restMergePayload: { sha: f.head, merge_method: "squash", bypass_rules: false },
     });
     expect(f.state().graphqlMergePayloads).toEqual([]);
-    expect(
-      f.state().calls.some((call) => call.some((arg) => arg.endsWith("/branches/main/protection"))),
-    ).toBe(false);
   });
 
   it.each(["missing", "queue", "unsupported", "no-write"])(
