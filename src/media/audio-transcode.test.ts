@@ -141,6 +141,16 @@ describe("transcodeAudioBufferToOpus", () => {
     expect(ffmpegArgs).toEqual(expect.arrayContaining(["-t", "300", "-c:a", "libopus"]));
   });
 
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "rejects invalid maximum duration %s before ffmpeg",
+    async (maxDurationSeconds) => {
+      await expect(
+        transcodeAudioBufferToOpus({ audioBuffer: Buffer.from("source"), maxDurationSeconds }),
+      ).rejects.toThrow("maxDurationSeconds must be a positive finite number");
+      expect(runFfmpegMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("keeps temp prefixes and output names inside the preferred temp root", async () => {
     let capturedInputPath: string | undefined;
     let capturedOutputPath: string | undefined;
