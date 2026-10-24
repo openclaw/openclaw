@@ -67,6 +67,23 @@
         {
           "group": "运行时",
           "pages": ["zh-CN/install/node-compatibility", "zh-CN/install/bun-compatibility"]
+        },
+        {
+          "group": "容器",
+          "pages": [
+            "zh-CN/install/docker",
+            "zh-CN/install/docker/compose-operations",
+            "zh-CN/install/docker/environment-variables",
+            "zh-CN/install/docker/networking-and-storage",
+            "zh-CN/install/docker/sandbox-and-troubleshooting",
+            "zh-CN/install/podman"
+          ]
+        },
+        {
+          "group": "高级设置",
+          "pages": [
+            "zh-CN/start/setup"
+          ]
         }
       ]
     },
@@ -110,6 +127,44 @@
             "zh-CN/channels/channel-routing",
             "zh-CN/channels/location",
             "zh-CN/channels/troubleshooting"
+          ]
+        },
+        {
+          "group": "开发者与自托管",
+          "pages": [
+            "zh-CN/channels/a2a",
+            "zh-CN/channels/buzz",
+            "zh-CN/channels/clickclack",
+            "zh-CN/channels/irc",
+            "zh-CN/channels/mattermost",
+            "zh-CN/channels/nextcloud-talk",
+            "zh-CN/channels/nostr",
+            "zh-CN/channels/raft",
+            "zh-CN/channels/reef",
+            "zh-CN/channels/synology-chat",
+            "zh-CN/channels/tlon",
+            "zh-CN/channels/twitch"
+          ]
+        },
+        {
+          "group": "地区性平台",
+          "pages": [
+            "zh-CN/channels/feishu",
+            "zh-CN/channels/feishu/access-control",
+            "zh-CN/channels/feishu/advanced-configuration",
+            "zh-CN/channels/feishu/configuration-reference",
+            "zh-CN/channels/feishu/dynamic-agents",
+            "zh-CN/channels/feishu/messaging",
+            "zh-CN/channels/feishu/setup",
+            "zh-CN/channels/feishu/troubleshooting",
+            "zh-CN/channels/line",
+            "zh-CN/channels/qqbot",
+            "zh-CN/channels/wechat",
+            "zh-CN/channels/wecom",
+            "zh-CN/channels/yuanbao",
+            "zh-CN/channels/zalo",
+            "zh-CN/channels/zaloclawbot",
+            "zh-CN/channels/zalouser"
           ]
         }
       ]
@@ -416,6 +471,36 @@
             "zh-CN/web/webchat",
             "zh-CN/web/tui"
           ]
+        },
+        {
+          "group": "节点与媒体",
+          "pages": [
+            "zh-CN/nodes/audio",
+            "zh-CN/nodes/camera",
+            "zh-CN/nodes/command-policy",
+            "zh-CN/nodes/computer-use",
+            "zh-CN/nodes/device-commands",
+            "zh-CN/nodes/file-transfers",
+            "zh-CN/nodes/images",
+            "zh-CN/nodes/index",
+            "zh-CN/nodes/location-command",
+            "zh-CN/nodes/mcp-and-skills",
+            "zh-CN/nodes/media-playback",
+            "zh-CN/nodes/media-understanding",
+            "zh-CN/nodes/node-exec",
+            "zh-CN/nodes/node-host",
+            "zh-CN/nodes/pairing-and-status",
+            "zh-CN/nodes/presence",
+            "zh-CN/nodes/session-catalogs",
+            "zh-CN/nodes/session-hosting",
+            "zh-CN/nodes/talk",
+            "zh-CN/nodes/talk/client-ui",
+            "zh-CN/nodes/talk/macos-relay",
+            "zh-CN/nodes/talk/realtime-sessions",
+            "zh-CN/nodes/talk/session-ownership",
+            "zh-CN/nodes/troubleshooting",
+            "zh-CN/nodes/voicewake"
+          ]
         }
       ]
     },
@@ -515,6 +600,114 @@
             "zh-CN/plugins/plugin-inventory",
             "zh-CN/plugins/reference",
             "zh-CN/plugins/dependency-resolution"
+          ]
+        },
+        {
+          "group": "Codex 运行时参考",
+          "pages": [
+            "zh-CN/plugins/codex-harness-reference",
+            "zh-CN/plugins/codex-harness-reference/app-server-transport",
+            "zh-CN/plugins/codex-harness-reference/approval-and-sandbox",
+            "zh-CN/plugins/codex-harness-reference/auth",
+            "zh-CN/plugins/codex-harness-reference/dynamic-tools",
+            "zh-CN/plugins/codex-harness-reference/model-discovery",
+            "zh-CN/plugins/codex-harness-reference/restricted-turns",
+            "zh-CN/plugins/codex-harness-reference/supervision",
+            "zh-CN/plugins/codex-harness-reference/timeouts",
+            "zh-CN/plugins/codex-harness-reference/workspace-bootstrap-files",
+            "zh-CN/plugins/codex-harness-runtime",
+            "zh-CN/plugins/codex-harness-runtime/compaction",
+            "zh-CN/plugins/codex-harness-runtime/hooks",
+            "zh-CN/plugins/codex-harness-runtime/permissions",
+            "zh-CN/plugins/codex-harness-runtime/queue-and-feedback",
+            "zh-CN/plugins/codex-harness-runtime/recovery",
+            "zh-CN/plugins/codex-harness-runtime/replies",
+            "zh-CN/plugins/codex-harness-runtime/sandbox-streaming",
+            "zh-CN/plugins/codex-harness-runtime/threads",
+            "zh-CN/plugins/codex-harness-runtime/v1-support-contract"
+          ]
+        },
+        {
+          "group": "插件 SDK 参考",
+          "pages": [
+            "zh-CN/plugins/manifest",
+            "zh-CN/plugins/manifest/capabilities",
+            "zh-CN/plugins/manifest/config-and-secrets",
+            "zh-CN/plugins/manifest/models",
+            "zh-CN/plugins/manifest/package-json",
+            "zh-CN/plugins/manifest/providers",
+            "zh-CN/plugins/manifest/setup-and-auth",
+            "zh-CN/plugins/manifest/surfaces",
+            "zh-CN/plugins/sdk-agent-harness",
+            "zh-CN/plugins/sdk-agent-harness/attempt-runtime",
+            "zh-CN/plugins/sdk-agent-harness/core-ownership",
+            "zh-CN/plugins/sdk-agent-harness/native-inventories",
+            "zh-CN/plugins/sdk-agent-harness/registration",
+            "zh-CN/plugins/sdk-agent-harness/runtime-config",
+            "zh-CN/plugins/sdk-agent-harness/selection-policy",
+            "zh-CN/plugins/sdk-agent-harness/sessions-and-results",
+            "zh-CN/plugins/sdk-agent-harness/user-input-and-execution",
+            "zh-CN/plugins/sdk-entrypoints",
+            "zh-CN/plugins/sdk-entrypoints/define-channel-plugin-entry",
+            "zh-CN/plugins/sdk-entrypoints/define-plugin-entry",
+            "zh-CN/plugins/sdk-entrypoints/define-setup-plugin-entry",
+            "zh-CN/plugins/sdk-entrypoints/define-tool-plugin",
+            "zh-CN/plugins/sdk-entrypoints/native-providers",
+            "zh-CN/plugins/sdk-entrypoints/package-entries",
+            "zh-CN/plugins/sdk-entrypoints/registration-mode",
+            "zh-CN/plugins/sdk-entrypoints/tool-policy-and-sandbox",
+            "zh-CN/plugins/sdk-gateway-ingress",
+            "zh-CN/plugins/sdk-overview",
+            "zh-CN/plugins/sdk-overview/capabilities",
+            "zh-CN/plugins/sdk-overview/cli-and-discovery",
+            "zh-CN/plugins/sdk-overview/events-and-hooks",
+            "zh-CN/plugins/sdk-overview/host-hooks",
+            "zh-CN/plugins/sdk-overview/imports",
+            "zh-CN/plugins/sdk-overview/infrastructure",
+            "zh-CN/plugins/sdk-overview/memory-and-context",
+            "zh-CN/plugins/sdk-overview/tools-and-commands",
+            "zh-CN/plugins/sdk-runtime",
+            "zh-CN/plugins/sdk-runtime/agent",
+            "zh-CN/plugins/sdk-runtime/background-work",
+            "zh-CN/plugins/sdk-runtime/channel",
+            "zh-CN/plugins/sdk-runtime/config-and-utilities",
+            "zh-CN/plugins/sdk-runtime/gateway-and-nodes",
+            "zh-CN/plugins/sdk-runtime/media",
+            "zh-CN/plugins/sdk-runtime/models",
+            "zh-CN/plugins/sdk-runtime/state-and-system",
+            "zh-CN/plugins/sdk-setup",
+            "zh-CN/plugins/sdk-subpaths",
+            "zh-CN/plugins/sdk-testing"
+          ]
+        },
+        {
+          "group": "插件内部机制",
+          "pages": [
+            "zh-CN/plugins/architecture",
+            "zh-CN/plugins/architecture-internals",
+            "zh-CN/plugins/architecture-internals/channel-surfaces",
+            "zh-CN/plugins/architecture-internals/context-engines",
+            "zh-CN/plugins/architecture-internals/gateway-routes",
+            "zh-CN/plugins/architecture-internals/load-pipeline",
+            "zh-CN/plugins/architecture-internals/new-capability",
+            "zh-CN/plugins/architecture-internals/packaging",
+            "zh-CN/plugins/architecture-internals/provider-hooks",
+            "zh-CN/plugins/architecture-internals/runtime-helpers",
+            "zh-CN/plugins/compatibility",
+            "zh-CN/plugins/install-overrides",
+            "zh-CN/plugins/message-presentation",
+            "zh-CN/plugins/sdk-channel-inbound",
+            "zh-CN/plugins/sdk-channel-ingress",
+            "zh-CN/plugins/sdk-channel-outbound",
+            "zh-CN/plugins/sdk-migration",
+            "zh-CN/plugins/sdk-migration/async-transcript-and-tts",
+            "zh-CN/plugins/sdk-migration/compatibility-policy",
+            "zh-CN/plugins/sdk-migration/how-to-migrate",
+            "zh-CN/plugins/sdk-migration/import-paths",
+            "zh-CN/plugins/sdk-migration/removal-timeline",
+            "zh-CN/plugins/sdk-migration/removed-surfaces",
+            "zh-CN/plugins/sdk-migration/sqlite-async",
+            "zh-CN/plugins/sdk-migration/talk"
           ]
         }
       ]
