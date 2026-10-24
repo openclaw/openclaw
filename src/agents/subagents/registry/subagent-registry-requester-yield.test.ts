@@ -304,6 +304,16 @@ describe("adoptSubagentRunForRequesterTurnInRuns", () => {
       },
     },
     {
+      reason: "ordinary cohort",
+      changes: {
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          batchRunIds: ["steered-child", "another-child"],
+        },
+      },
+    },
+    {
       reason: "missing cohort",
       changes: {
         requesterSettleWake: {

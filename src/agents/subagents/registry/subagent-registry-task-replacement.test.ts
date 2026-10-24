@@ -556,6 +556,9 @@ it("rearms native execution for an interrupted run's successor", async () => {
     await finalizeInterruptedSubagentRun({ runId: previous.runId, expectedEntry: previous, error }),
   ).toBe(0);
   expect(subagentRuns.get(successor.runId)).toBe(successor);
+  expect(await replaceRun(successor.runId, "interrupted-task-newer", { expected: successor })).toBe(
+    true,
+  );
 });
 
 it("admits a child follow-up while its predecessor's browser cleanup is still pending", async () => {

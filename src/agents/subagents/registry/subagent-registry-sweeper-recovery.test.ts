@@ -745,6 +745,20 @@ describe("subagent registry recovery scheduling", () => {
 
       if (change === "suppressed recovery") {
         expect(callGateway).not.toHaveBeenCalled();
+      } else {
+        expect(callGateway).toHaveBeenCalledWith({
+          method: "sessions.delete",
+          params: {
+            key: entry.childSessionKey,
+            agentId: "main",
+            deleteTranscript: true,
+            emitLifecycleHooks: false,
+            expectedSessionId: "session-id",
+            expectedLifecycleRevision: "session-revision",
+          },
+          timeoutMs: 10_000,
+          assertDispatchCurrent: expect.any(Function),
+        });
       }
       expect(runs.has(entry.runId)).toBe(false);
       if (successor) {

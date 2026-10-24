@@ -1369,6 +1369,28 @@ describe("provider-runtime", () => {
     expect(getLastResolvePluginProvidersParams().modelRefs).toEqual(["tui-pty-mock/gpt-5.5"]);
   });
 
+  it("invalidates cached runtime providers when config mutates in place", () => {
+    const config = {
+      plugins: {
+        entries: {
+          demo: { enabled: false },
+        },
+      },
+    };
+    resolvePluginProvidersMock.mockImplementation((params) => {
+      const runtimeConfig = params?.config as typeof config | undefined;
+      return runtimeConfig?.plugins?.entries?.demo?.enabled === true ? [createDemoProvider()] : [];
+    });
+    expect(
+      runtime.resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config }),
+    ).toBeUndefined();
+    config.plugins.entries.demo.enabled = true;
+    expect(runtime.resolveProviderRuntimePlugin({ provider: DEMO_PROVIDER_ID, config })?.id).toBe(
+      DEMO_PROVIDER_ID,
+    );
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(2);
+  });
+
   it("dispatches model, replay, schema, and usage hooks through the matched owner", async () => {
     resolvePluginProvidersMock.mockReturnValue([
       createDemoProvider({

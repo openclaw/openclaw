@@ -43,6 +43,8 @@ import {
   setSubagentAnnounceDeliveryDepsForTest,
   type SubagentAnnounceDeliveryTestDeps,
 } from "../announce/subagent-announce-overrides.test-support.js";
+import { resolveStoredSubagentCapabilities } from "../spawn/subagent-capabilities.js";
+import { withPreparedSessionCapabilityRead } from "../spawn/subagent-session-store.js";
 import { holdQueuedSwarmRun, releaseSwarmRun, reserveSwarmRun } from "../swarm/swarm-scheduler.js";
 import { killSessionSubagentRuns } from "./subagent-control-kill.js";
 import { adoptSubagentProgressDraft } from "./subagent-progress-draft.js";
@@ -276,10 +278,13 @@ it.each(["same-ID replacement", "cold hydration"] as const)(
 );
 
 it.each([
+  "active",
   "queued",
   "queued without child store",
   "completion",
+  "subagent caller",
   "subagent caller with opaque id",
+  "subagent caller with cross-agent key",
   "earlier success",
 ] as const)("settles registered runId Stop for an %s native child", async (kind) =>
   withEnvAsync({ OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" }, async () => {
@@ -292,6 +297,8 @@ it.each([
       `agent:${missingStore && id === runId ? "missing" : "main"}:subagent:${id}`;
     const capacityOwner = `${runId}-capacity`;
     const subagentCaller = kind.startsWith("subagent caller");
+    const opaqueParentId = kind === "subagent caller with opaque id";
+    const keyedParent = kind === "subagent caller with cross-agent key";
     const earlierSuccess = kind === "earlier success";
     const terminalRace = kind === "completion" || earlierSuccess;
     const startedAt = Date.now();
@@ -310,17 +317,28 @@ it.each([
     const requester = subagentCaller ? "agent:main:subagent:controller" : "agent:main:main";
     const config = structuredClone(getRuntimeConfig());
     if (subagentCaller) {
-      const parentId = "agent:other:subagent:parent-by-session-id";
+      const parentId = `agent:${opaqueParentId ? "other" : "main"}:subagent:parent-by-session-id`;
+      const parentAgentId = keyedParent ? "other" : "main";
+      const parentKey = `agent:${parentAgentId}:controller-parent`;
       config.agents ??= {};
       config.agents.defaults ??= {};
       config.agents.defaults.subagents = { ...config.agents.defaults.subagents, maxSpawnDepth: 2 };
       seedSession(requester, {
         sessionId: "controller-session",
         lifecycleRevision: "controller-original",
-        spawnedBy: parentId,
+        spawnedBy: keyedParent ? parentKey : parentId,
       });
-      seedSession("agent:main:controller-parent", { sessionId: parentId, spawnDepth: 0 });
-      seedSession("agent:other:controller-decoy", { sessionId: parentId, spawnDepth: 7 }, "other");
+      const parent = { sessionId: keyedParent ? "parent-session" : parentId, spawnDepth: 0 };
+      seedSession(parentKey, parent, parentAgentId);
+      if (opaqueParentId) {
+        const decoy = { sessionId: parentId, spawnDepth: 7 };
+        seedSession("agent:other:controller-decoy", decoy, "other");
+      }
+      expect(
+        await withPreparedSessionCapabilityRead(() =>
+          resolveStoredSubagentCapabilities(requester, { cfg: config, agentId: "main" }),
+        ),
+      ).toMatchObject({ controlScope: "children" });
     }
     const entered = sync.createDeferred();
     const release = sync.createDeferred();

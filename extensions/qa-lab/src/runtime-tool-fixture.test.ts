@@ -564,18 +564,49 @@ describe("runtime tool fixture transcript evidence", () => {
     await expectAbsent(staleStorePath);
   });
 
-  it("rejects an exec result that precedes its call", async () => {
-    await expectRejected(
-      runTranscriptFixture(
-        [
-          transcriptToolResult("exec", "happy", "done"),
-          transcriptToolCall("exec", "happy", { command: "proof" }),
-        ],
-        { toolName: "exec" },
-      ),
-      "expected live happy-path tool output for exec",
-    );
-  });
+  it.each([
+    {
+      name: "native cell wait control output",
+      toolName: "wait",
+      happyMessages: [
+        transcriptToolCall("exec", "happy", { input: 'await Promise.resolve("done");' }),
+        transcriptToolResult(
+          "exec",
+          "happy",
+          "Script running with cell ID native-cell\nWall time 0.01 seconds\nOutput:\n",
+        ),
+        transcriptToolCall("wait", "happy", {
+          arguments: JSON.stringify({ cell_id: "native-cell" }),
+        }),
+        transcriptToolResult("wait", "happy", "done"),
+      ],
+      expectedError: "expected live happy-path tool call for wait",
+    },
+    {
+      name: "an exec result that precedes its call",
+      happyMessages: [
+        transcriptToolResult("exec", "happy", "done"),
+        transcriptToolCall("exec", "happy", { command: "proof" }),
+      ],
+      expectedError: "expected live happy-path tool output for exec",
+    },
+    {
+      name: "a nonzero physical exit despite isError=false",
+      happyMessages: [
+        transcriptToolCall("exec", "happy", { command: "proof" }),
+        {
+          ...transcriptToolResult("exec", "happy", "process completed", false),
+          details: { status: "completed", exitCode: 1 },
+        },
+      ],
+      expectedError: "expected live happy-path successful tool output for exec",
+    },
+  ])(
+    "rejects $name as runtime execution proof",
+    async ({ happyMessages, expectedError, toolName = "exec" }) => {
+      await expectRejected(runTranscriptFixture(happyMessages, { toolName }), expectedError);
+    },
+  );
 
   it.each([false, true])(
     "links provider function calls to nameless results without rewriting arguments (block fallback: %s)",
