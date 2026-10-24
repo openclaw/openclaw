@@ -538,6 +538,15 @@ export function createTelegramDraftStream(params: {
     loop.resetThrottleWindow();
     await loop.waitForInFlight();
     throwTerminalDeliveryError();
+    if (streamState.stopped && !terminalDeliveryError) {
+      const pendingText = lastRequestedText.trimEnd();
+      if (pendingText && pendingText !== lastDeliveredText.trimEnd()) {
+        params.warn?.(
+          "telegram stream stopped with undelivered final text; recovering via fresh final send",
+        );
+        resetStreamToNewMessage("page");
+      }
+    }
     if (streamState.stopped) {
       return;
     }
