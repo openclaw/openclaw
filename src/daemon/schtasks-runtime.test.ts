@@ -148,10 +148,14 @@ describe("scheduled task runtime derivation", () => {
     { name: "running before deadline", elapsedMs: 14_999, expected: true },
     { name: "running at deadline", elapsedMs: 15_000, expected: false },
   ])("bounds Scheduler takeover evidence for $name", async (task) => {
-    vi.useFakeTimers();
-    vi.setSystemTime(0);
+    // The takeover-evidence budget runs on the monotonic clock, so the probe
+    // mock advances the monotonic reading the way elapsed real time would.
+    let monotonicMs = 0;
+    let probeTimeoutMs = 0;
+    const perfNow = vi.spyOn(performance, "now").mockImplementation(() => monotonicMs);
     spawnSync.mockImplementation((_command, _args, options) => {
-      vi.setSystemTime(Date.now() + (task.elapsedMs ?? options.timeout));
+      probeTimeoutMs = options?.timeout ?? 15_000;
+      monotonicMs += task.elapsedMs ?? probeTimeoutMs;
       return task.elapsedMs === undefined
         ? {
             status: null,
@@ -163,10 +167,10 @@ describe("scheduled task runtime derivation", () => {
     });
     try {
       await expect(waitForScheduledTaskRunningEvidence({})).resolves.toBe(task.expected);
-      expect(Date.now()).toBe(task.elapsedMs ?? 15_000);
+      expect(monotonicMs).toBe(task.elapsedMs ?? probeTimeoutMs);
       expect(spawnSync).toHaveBeenCalledOnce();
     } finally {
-      vi.useRealTimers();
+      perfNow.mockRestore();
     }
   });
 });
