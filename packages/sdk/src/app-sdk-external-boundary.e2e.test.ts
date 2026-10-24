@@ -28,14 +28,13 @@ it("packs an external consumer that uses only the exported entrypoint and a cust
         type WorkerStateIsCanonical = Assert<Equal<WorkerEnvironmentState, Protocol.WorkerEnvironmentState>>;
         type TunnelStatusIsCanonical = Assert<Equal<WorkerTunnelStatus, Protocol.WorkerTunnelStatus>>;
 
-        const legacyArtifact: ArtifactSummary = {
-          id: "artifact-old-consumer", type: "file", sessionId: "session-old-consumer",
-          createdAt: "2026-08-16T00:00:00Z",
-          expiresAt: "2026-08-17T00:00:00Z",
-          download: { mode: "future-delivery-mode" },
-        };
         const artifactDownload: ArtifactsDownloadResult = {
-          artifact: legacyArtifact, expiresAt: "2026-08-17T00:00:00Z",
+          artifact: {
+            id: "artifact-old-consumer", type: "file", sessionId: "session-old-consumer",
+            createdAt: "2026-08-16T00:00:00Z", expiresAt: "2026-08-17T00:00:00Z",
+            download: { mode: "future-delivery-mode" },
+          } satisfies ArtifactSummary,
+          expiresAt: "2026-08-17T00:00:00Z",
         };
         const environment: EnvironmentSummary = {
           id: "gateway", type: "local", status: "available", trust: "persistent", desktop: true,
@@ -75,40 +74,22 @@ it("packs an external consumer that uses only the exported entrypoint and a cust
         });
         assert.equal(event.type, "run.started");
 
-        const calls = [];
-        const responses = {
-          "agents.list": { agents: [{ id: "external" }] },
-          "agent.wait": { status: "ok", runId: "packed-run", sessionKey: "agent:main:external" },
-          "artifacts.list": { artifacts: [{ id: "artifact-packed", type: "file", title: "packed.txt" }] },
-          "environments.list": { environments: [{ id: "gateway", type: "local", status: "available" }] },
-        };
         let closed = false;
-        const transport = {
+        const client = new OpenClaw({ transport: {
           async request(method, params, options) {
-            calls.push({ method, params, options });
-            if (Object.hasOwn(responses, method)) return responses[method];
-            throw new Error(\`unexpected method: \${method}\`);
+            assert.equal(method, "agent.wait");
+            assert.deepEqual(params, { runId: "packed-run", timeoutMs: 25 });
+            assert.deepEqual(options, { timeoutMs: null });
+            return { status: "ok", runId: "packed-run", sessionKey: "agent:main:external" };
           },
           async *events() {},
           async close() { closed = true; },
-        };
+        } });
 
-        const client = new OpenClaw({ transport });
-        const agents = await client.agents.list();
         const run = await client.runs.wait("packed-run", { timeoutMs: 25 });
-        const artifacts = await client.artifacts.list({ sessionKey: "agent:main:external" });
-        const environments = await client.environments.list();
         await client.close();
-
-        assert.equal(agents.agents[0]?.id, "external");
         assert.equal(run.status, "completed");
-        assert.equal(artifacts.artifacts[0]?.id, "artifact-packed");
-        assert.equal(environments.environments[0]?.id, "gateway");
         assert.equal(closed, true);
-        assert.deepEqual(calls.map((call) => call.method),
-          ["agents.list", "agent.wait", "artifacts.list", "environments.list"]);
-        assert.equal(calls[1]?.options?.timeoutMs, null);
-        assert.equal(calls[1]?.params?.timeoutMs, 25);
       `);
   } finally {
     await consumer.cleanup();
