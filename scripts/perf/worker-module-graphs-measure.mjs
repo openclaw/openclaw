@@ -169,8 +169,8 @@ const report = {
   fixture: { workspaces: 4, skillsPerWorkspace: 8, admissionRoots: 100, admissionFiles: 5000 },
   limitations: [
     "Synthetic worker-boundary workload, not a full Team-shaped Gateway",
-    "Main-isolate heap, GC and allocations are not measured",
-    "Promotion requires separate trace-gc-nvp isolate attribution",
+    "Main-isolate heap and total allocated bytes are not measured",
+    "GC time and promotion require separate trace-gc-nvp isolate attribution",
   ],
   baselineDir: values["baseline-dir"] ?? null,
   workers: {},

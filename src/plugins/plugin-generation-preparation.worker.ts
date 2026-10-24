@@ -242,8 +242,18 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
         if (command.operation === "capture") {
           const state = nativeAdmissionStateFor();
           state.createRoot = createNativeRoot;
-          // This artifact owns its worker and the maps already cloned at the host boundary.
-          Object.assign(state, command.admission);
+          for (const key of [
+            "owners",
+            "managedRoots",
+            "receipts",
+            "files",
+            "namespaces",
+          ] as const) {
+            // Import into the owner, then release entries retained by the capture command.
+            const target: Map<string, unknown> = state[key];
+            command.admission[key].forEach((value, name) => target.set(name, value));
+            command.admission[key].clear();
+          }
           for (const [key, receipt] of state.receipts) {
             sentReceipts.set(key, receipt);
           }

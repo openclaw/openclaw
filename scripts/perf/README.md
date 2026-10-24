@@ -2736,8 +2736,10 @@ appear in the worker's inventory. Plugin resolve calls must return the captured
 source bytes, and close must release the artifact. Discovery verifies every
 skill; Code Mode checks the computed result across fresh completed contexts.
 This is a worker-boundary workload, not a full Gateway benchmark. Main-isolate
-heap and GC are not included. GC trace markers delimit each workload, but
-promotion must be attributed to the worker isolate before reporting it.
+heap and total allocated bytes are not measured. GC trace markers delimit each
+workload; identify the worker isolate from the forced collection between the
+identification markers. Report worker and whole-process GC time and promoted
+bytes separately so deferred host work remains visible.
 
 ## Sandbox measurements
 
