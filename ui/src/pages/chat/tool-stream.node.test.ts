@@ -358,6 +358,43 @@ describe("app-tool-stream approval lifecycle", () => {
     resetToolStream(host);
   });
 
+  it("keeps text output next to node browser tab details in a completed live result", () => {
+    const host = createHost();
+    emitTool(host, "browser-text-run", 1, {
+      phase: "start",
+      name: "browser",
+      toolCallId: "browser-text-call",
+      args: { action: "open" },
+    });
+    emitTool(host, "browser-text-run", 2, {
+      phase: "result",
+      name: "browser",
+      toolCallId: "browser-text-call",
+      result: {
+        content: [{ type: "text", text: "CLI result" }],
+        details: {
+          browserTab: {
+            profile: "shared",
+            target: "node",
+            node: "node-1",
+            targetId: "tab-shared",
+            url: "https://example.org/",
+            title: "Shared tab",
+          },
+        },
+      },
+    });
+    const entry = [...host.toolStreamById.values()][0];
+    const [card] = extractToolCardsCached(entry?.message);
+    expect(card).toMatchObject({
+      completed: true,
+      outputText: "CLI result",
+      browserTab: { profile: "shared", target: "node", node: "node-1", targetId: "tab-shared" },
+      preview: { kind: "browser-tab", profile: "shared", target: "node", targetId: "tab-shared" },
+    });
+    resetToolStream(host);
+  });
+
   const approval = (runId: string | undefined, sessionKey = "main") => ({
     id: "approval-1",
     kind: "exec" as const,
