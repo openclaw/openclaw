@@ -564,10 +564,10 @@ it.each([false, true])(
     let reply = createDeferred<unknown>();
     worker.on("message", (message: unknown) => reply.resolve(message));
     worker.on("error", (error: Error) => reply.reject(error));
-    const command = async (message: string) => {
+    const command = async (message: string, expected: unknown = message) => {
       reply = createDeferred<unknown>();
       worker.postMessage(message, []);
-      return await reply.promise;
+      expect(await reply.promise).toEqual(expected);
     };
     let sibling:
       | { worker: Worker; relay: ReturnType<typeof createSqliteDatabaseAdmissionRelay> }
@@ -587,10 +587,10 @@ it.each([false, true])(
       expect((await once(siblingWorker, "message"))[0]).toEqual({ value: 42, admissionId });
       database.close();
       expect(recordsFor(location)).toHaveLength(1);
-      expect(await command("close")).toBe("close");
+      await command("close");
       expect(recordsFor(location)).toHaveLength(1);
-      expect(await command("open")).toEqual({ value: 42, admissionId });
-      expect(await command("close")).toBe("close");
+      await command("open", { value: 42, admissionId });
+      await command("close");
       const siblingReply = once(siblingWorker, "message");
       siblingWorker.postMessage("read", []);
       expect((await siblingReply)[0]).toEqual({ value: 42, admissionId });
@@ -598,24 +598,18 @@ it.each([false, true])(
       siblingRelay.finish();
       sibling = undefined;
       expect(recordsFor(location)).toEqual([]);
-      expect(await command("open")).toEqual({ value: 42, admissionId });
-      expect(await command("close")).toBe("close");
+      await command("open", { value: 42, admissionId });
+      await command("close");
       expect(recordsFor(location)).toEqual([]);
-      expect(await command("retire")).toBe("retire");
+      await command("retire");
       expect(() => fstatSync(descriptor)).toThrow();
 
       database.open();
       admitSqliteSchema(database);
-      expect(await command("open")).toEqual({
-        value: 42,
-        admissionId: schemaFacts(database)?.admissionId,
-      });
+      await command("open", { value: 42, admissionId: schemaFacts(database)?.admissionId });
       const beforeWrite = pathToken(location);
       const scopedBeforeWrite = scopedToken(database, "proof");
-      expect(await command("write")).toEqual({
-        value: 43,
-        admissionId: schemaFacts(database)?.admissionId,
-      });
+      await command("write", { value: 43, admissionId: schemaFacts(database)?.admissionId });
       expect(pathToken(location)).not.toBe(beforeWrite);
       expect(scopedToken(database, "proof")).not.toBe(scopedBeforeWrite);
       expect(database.prepare("SELECT value FROM proof").get()).toEqual({ value: 43 });
@@ -814,8 +808,7 @@ it("PostgreSQL keeps publications local until commit and restores nested and out
         throw new Error("outer rollback");
       }),
     ).toThrow("outer rollback");
-    expect(getFact(connection, key)).toBe("outer");
-    expect(getFact(peer, key)).toBe("outer");
+    expect([getFact(connection, key), getFact(peer, key)]).toEqual(["outer", "outer"]);
     publishFact(connection, key, "autocommit");
     expect(getFact(peer, key)).toBe("autocommit");
   }));
@@ -863,8 +856,7 @@ it("keeps PostgreSQL publications independent of native SQLite callback facts an
     try {
       publishFact(anchor, key, "native callback");
       publishFact(connection, key, "postgres");
-      expect(getFact(connection, key)).toBe("postgres");
-      expect(getFact(peer, key)).toBe("postgres");
+      expect([getFact(connection, key), getFact(peer, key)]).toEqual(["postgres", "postgres"]);
       suspendAdmission(anchor, true);
       expect(getFact(connection, key)).toBeUndefined();
       publishFact(connection, key, "suspended");

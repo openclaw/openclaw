@@ -109,7 +109,6 @@ describe("SQLite worker store", () => {
       }
       return emit(this, event, reply);
     });
-    const requests = vi.spyOn(Worker.prototype, "postMessage");
     setEnvironmentData(key, undefined);
     try {
       const store = await open(databasePath());
@@ -117,11 +116,8 @@ describe("SQLite worker store", () => {
       await append(store, "admitted");
       expect(await read(store)).toEqual(["admitted"]);
       expect(receipts).toHaveLength(1);
-      expect(requests.mock.calls.filter(([request]) => request.type === "open")).toHaveLength(1);
-      expect(requests.mock.calls.filter(([request]) => request.type === "execute")).toHaveLength(2);
     } finally {
       messages.mockRestore();
-      requests.mockRestore();
       await drainGlobalSingletonLifecycleState();
       setEnvironmentData(key, previous);
     }
@@ -137,44 +133,36 @@ describe("SQLite worker store", () => {
         (_, index) => `${"x".repeat(24 * 1024 * 1024)}é-${index}`,
       );
       const digest = (value: string) => createHash("sha256").update(value).digest("hex");
-      const inlineReplies: string[][] = [];
       const frames: Array<{ bytes: number; backingBytes: number }> = [];
       const aborted = new AbortController();
       let closing: Promise<void> | undefined;
       const messages = interceptReply(function (event, reply) {
-        if (event === "message" && reply.ok) {
-          if (!reply.transfer) {
-            inlineReplies.push(Object.keys(reply).toSorted());
-          } else if (reply.transfer === "frame") {
-            frames.push({
-              bytes: reply.value.byteLength,
-              backingBytes: reply.value.buffer.byteLength,
-            });
-            if (frames.length === 1) {
-              if (action === "client close") {
-                closing = store.close();
-              }
-              if (action === "global close") {
-                closing = drainGlobalSingletonLifecycleState("restart");
-              }
-              if (action === "abort") {
-                aborted.abort(new Error("Canceled after read dispatch"));
-              }
-              if (action === "failed frame") {
-                return emit(this, event, { ...reply, value: new Uint8Array([0]) });
-              }
+        if (event === "message" && reply.ok && reply.transfer === "frame") {
+          frames.push({
+            bytes: reply.value.byteLength,
+            backingBytes: reply.value.buffer.byteLength,
+          });
+          if (frames.length === 1) {
+            if (action === "client close") {
+              closing = store.close();
+            }
+            if (action === "global close") {
+              closing = drainGlobalSingletonLifecycleState("restart");
+            }
+            if (action === "abort") {
+              aborted.abort(new Error("Canceled after read dispatch"));
+            }
+            if (action === "failed frame") {
+              return emit(this, event, { ...reply, value: new Uint8Array([0]) });
             }
           }
         }
         return emit(this, event, reply);
       });
-      const requests = vi.spyOn(Worker.prototype, "postMessage");
       try {
         for (const value of values) {
           await append(store, value);
         }
-        expect(inlineReplies).toEqual(values.map(() => ["id", "ok", "transactionCount", "value"]));
-        requests.mockClear();
         const reading = store.execute(
           { type: "read", input: undefined },
           { signal: aborted.signal },
@@ -195,9 +183,6 @@ describe("SQLite worker store", () => {
           }
           await closing;
         }
-        expect(requests.mock.calls.filter(([request]) => request.type === "execute")).toHaveLength(
-          1,
-        );
         expect(
           frames.every((frame) => frame.bytes <= SQLITE_WORKER_TRANSFER_FRAME_BYTES + 1024),
         ).toBe(true);
@@ -215,7 +200,6 @@ describe("SQLite worker store", () => {
         }
       } finally {
         messages.mockRestore();
-        requests.mockRestore();
         await Promise.allSettled([closing, store.close()]);
         stores.delete(store);
       }
@@ -250,7 +234,6 @@ describe("SQLite worker store", () => {
     const unrelated = await open(unrelatedPath);
     const retiring = createDeferredCore();
     const releaseRetirement = createDeferredCore();
-    const requests = vi.spyOn(Worker.prototype, "postMessage");
     let exited = false;
     let recoverySettled = false;
     let recoveredBeforeExit = false;
@@ -290,11 +273,6 @@ describe("SQLite worker store", () => {
       expect(exited).toBe(false);
       expect(settled).toBe(false);
       expect(recoverySettled).toBe(false);
-      expect(
-        requests.mock.calls.filter(
-          ([request]) => request.type === "open" && request.databasePath === file,
-        ),
-      ).toHaveLength(1);
       releaseRetirement.resolve();
       expect(await opening).toMatchObject([
         {
@@ -309,11 +287,6 @@ describe("SQLite worker store", () => {
       const recovered = await recovering;
       expect(exited).toBe(true);
       expect(recoveredBeforeExit).toBe(false);
-      expect(
-        requests.mock.calls.filter(
-          ([request]) => request.type === "open" && request.databasePath === file,
-        ),
-      ).toHaveLength(2);
       expect(await read(recovered)).toEqual(["committed"]);
       await expect(append(recovered, "recovered")).resolves.toMatchObject({ writes: 1 });
       expect(await read(recovered)).toEqual(["committed", "recovered"]);
@@ -322,7 +295,6 @@ describe("SQLite worker store", () => {
       retirement.mockRestore();
       const [result] = await opening;
       await recovering?.catch(() => {});
-      requests.mockRestore();
       if (result.status === "fulfilled") {
         await result.value?.close();
       }

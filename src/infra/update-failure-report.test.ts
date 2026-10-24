@@ -31,6 +31,7 @@ import {
 import type { UpdateRunResult } from "./update-runner-types.js";
 
 const tempDirs = useStateDatabaseTempDirs();
+const issueUrl = (id = 123) => `https://github.com/openclaw/openclaw/issues/${id}`;
 
 type PreparedReport = Awaited<ReturnType<typeof prepareUpdateFailureReport>>;
 
@@ -95,6 +96,27 @@ async function prepareFailedReport(attemptId: string) {
     { stateDir },
   );
   return createUpdateFailureReportFixture(prepared, stateDir);
+}
+
+function pausedValidation() {
+  const gate = createDeferred<boolean>();
+  const entered = createDeferred();
+  const validateCurrentAttempt = vi
+    .fn<() => boolean | Promise<boolean>>()
+    .mockReturnValueOnce(true)
+    .mockImplementationOnce(() => {
+      entered.resolve();
+      return gate.promise;
+    });
+  return { entered: entered.promise, finish: () => gate.resolve(false), validateCurrentAttempt };
+}
+
+async function expectSaved(report: { savedReportPath: string }, prepared: PreparedReport) {
+  expect(await fs.readFile(report.savedReportPath, "utf8")).toBe(prepared.body);
+}
+
+function expectIssue(result: unknown, status: "created" | "duplicate", id = 123) {
+  expect(result).toMatchObject({ status, url: issueUrl(id) });
 }
 
 describe("update failure report", () => {
@@ -235,7 +257,7 @@ describe("update failure report", () => {
 
   it("submits once and rejects a duplicate click for the same attempt", async () => {
     const { submit } = await prepareFailedReport("attempt-once");
-    const createIssue = mockCreatedIssue("https://github.com/openclaw/openclaw/issues/123");
+    const createIssue = mockCreatedIssue(issueUrl());
 
     const [first, second] = await Promise.all([submit({ createIssue }), submit({ createIssue })]);
     const third = await submit({
@@ -245,17 +267,12 @@ describe("update failure report", () => {
 
     expect(createIssue).toHaveBeenCalledOnce();
     expect([first.status, second.status].toSorted()).toEqual(["created", "retryable"]);
-    expect(third).toMatchObject({
-      status: "duplicate",
-      url: "https://github.com/openclaw/openclaw/issues/123",
-    });
+    expectIssue(third, "duplicate");
     await expectMissing(first.savedReportPath);
   });
 
   it("returns the fallback when issue creation cannot start after auth preflight", async () => {
-    const { prepared, receipt, submit } = await prepareFailedReport(
-      "attempt-post-auth-spawn-no-start",
-    );
+    const { prepared, receipt, submit } = await prepareFailedReport("post-auth-no-start");
     const createIssue = mockFallbackAfterIssueCreateNoStart(prepared.url);
 
     const first = await submit({ createIssue });
@@ -283,7 +300,7 @@ describe("update failure report", () => {
         condition === "authority closes"
           ? { hasCurrentAuthority: () => current, validateCurrentAttempt: () => true }
           : { validateCurrentAttempt: () => current };
-      const createIssue = mockCreatedIssue("https://github.com/openclaw/openclaw/issues/123", {
+      const createIssue = mockCreatedIssue(issueUrl(), {
         afterAuth: () => {
           current = false;
         },
@@ -300,7 +317,7 @@ describe("update failure report", () => {
       await expect(listSavedReportArtifacts(prepared)).resolves.toEqual([]);
 
       current = true;
-      const retryCreateIssue = mockCreatedIssue("https://github.com/openclaw/openclaw/issues/124", {
+      const retryCreateIssue = mockCreatedIssue(issueUrl(124), {
         onCreate: () => issueCreateCalls++,
       });
       await expect(submit({ createIssue: retryCreateIssue, ...guards })).resolves.toMatchObject({
@@ -320,7 +337,7 @@ describe("update failure report", () => {
       .mockImplementationOnce(() => {
         throw new Error("restart sentinel refresh unavailable");
       });
-    const createIssue = mockCreatedIssue("https://github.com/openclaw/openclaw/issues/123", {
+    const createIssue = mockCreatedIssue(issueUrl(), {
       onCreate: () => issueCreateCalls++,
     });
 
@@ -333,14 +350,11 @@ describe("update failure report", () => {
     expect(issueCreateCalls).toBe(0);
     await expect(listSavedReportArtifacts(prepared)).resolves.toEqual([]);
 
-    const retryCreateIssue = mockCreatedIssue("https://github.com/openclaw/openclaw/issues/124", {
+    const retryCreateIssue = mockCreatedIssue(issueUrl(124), {
       onCreate: () => issueCreateCalls++,
     });
     await expect(
-      submit({
-        createIssue: retryCreateIssue,
-        validateCurrentAttempt: () => true,
-      }),
+      submit({ createIssue: retryCreateIssue, validateCurrentAttempt: () => true }),
     ).resolves.toMatchObject({ status: "created" });
     expect(issueCreateCalls).toBe(1);
   });
@@ -348,9 +362,7 @@ describe("update failure report", () => {
   it("does not let a pending-reservation loser delete the winner's fallback report", async ({
     signal,
   }) => {
-    const { prepared, stateDir, submit } = await prepareFailedReport(
-      "attempt-pending-fallback-race",
-    );
+    const { prepared, stateDir, submit } = await prepareFailedReport("pending-fallback-race");
     const fallbackUrl = prepared.url;
     if (!fallbackUrl) {
       throw new Error("expected an available browser handoff");
@@ -406,73 +418,71 @@ describe("update failure report", () => {
     }
   });
 
-  it("does not let expired validation cleanup delete a replacement fallback report", async () => {
-    const { prepared, stateDir, submit } = await prepareFailedReport(
-      "attempt-expired-validation-cleanup",
-    );
-    const { promise: validationGate, resolve: finishValidation } = createDeferred<boolean>();
-    const { promise: validationStarted, resolve: markValidationStarted } = createDeferred();
-    const validateCurrentAttempt = vi
-      .fn<() => boolean | Promise<boolean>>()
-      .mockReturnValueOnce(true)
-      .mockImplementationOnce(() => {
-        markValidationStarted();
-        return validationGate;
+  it.each([false, true])(
+    "preserves a replacement fallback after expired validation (new preview: %s)",
+    async (changed) => {
+      const { prepared, stateDir, submit } = await prepareFailedReport("expired-validation");
+      const next = changed
+        ? await prepareUpdateFailureReport(
+            { attemptId: prepared.attemptId, result: failedUpdate({ reason: "install-failed" }) },
+            { stateDir },
+          )
+        : prepared;
+      if (changed) {
+        expect(next.body).not.toBe(prepared.body);
+      }
+      const validation = pausedValidation();
+      const oldCreateIssue = vi.fn();
+      const oldSubmission = submit({
+        createIssue: oldCreateIssue,
+        validateCurrentAttempt: validation.validateCurrentAttempt,
       });
-    const oldCreateIssue = vi.fn();
-    const oldSubmission = submit({
-      createIssue: oldCreateIssue,
-      validateCurrentAttempt,
-    });
-    try {
-      await validationStarted;
-      expect(validateCurrentAttempt).toHaveBeenCalledTimes(2);
-      const oldReportPath = await currentSavedReportArtifactPath(prepared, stateDir);
-      expect(await fs.readFile(`${oldReportPath}.pending`, "utf8")).toBe(prepared.body);
+      try {
+        await validation.entered;
+        const oldReportPath = await currentSavedReportArtifactPath(prepared, stateDir);
+        expect(await fs.readFile(`${oldReportPath}.pending`, "utf8")).toBe(prepared.body);
 
-      expireUpdateFailureReportReceipt(prepared.attemptId, stateDir);
-      const replacement = await submit({ createIssue: mockFallbackIssue(prepared.url) });
-      finishValidation(false);
-      const oldResult = await oldSubmission;
+        expireUpdateFailureReportReceipt(prepared.attemptId, stateDir);
+        const replacement = await submitUpdateFailureReport(next, next.previewDigest, {
+          createIssue: mockFallbackIssue(next.url),
+          stateDir,
+        });
+        validation.finish();
+        const oldResult = await oldSubmission;
 
-      expect(replacement).toMatchObject({ fallbackUrl: prepared.url, status: "fallback" });
-      expect(oldResult).toMatchObject({ fallbackUrl: prepared.url, status: "duplicate" });
-      expect(oldCreateIssue).not.toHaveBeenCalled();
-      expect(replacement.savedReportPath).not.toBe(oldReportPath);
-      expect(await fs.readFile(replacement.savedReportPath, "utf8")).toBe(prepared.body);
-      await expect(fs.stat(`${oldReportPath}.pending`)).rejects.toMatchObject({ code: "ENOENT" });
-    } finally {
-      finishValidation(false);
-      await oldSubmission;
-    }
-  });
+        expect(replacement).toMatchObject({ fallbackUrl: next.url, status: "fallback" });
+        if (changed) {
+          expect(oldResult).toMatchObject({
+            status: "duplicate",
+            message: expect.stringContaining("different reviewed preview"),
+          });
+          expect(oldResult).not.toHaveProperty("fallbackUrl");
+        } else {
+          expect(oldResult).toMatchObject({ fallbackUrl: prepared.url, status: "duplicate" });
+        }
+        expect(oldCreateIssue).not.toHaveBeenCalled();
+        expect(replacement.savedReportPath).not.toBe(oldReportPath);
+        await expectSaved(replacement, next);
+        await expectMissing(`${oldReportPath}.pending`);
+      } finally {
+        validation.finish();
+        await oldSubmission;
+      }
+    },
+  );
 
   it("does not let a delayed cleanup worker delete a successor report artifact", async () => {
-    const { prepared, stateDir, submit } = await prepareFailedReport(
-      "attempt-delayed-cleanup-successor",
-    );
-    let finishValidation!: () => void;
-    const validationGate = new Promise<boolean>((resolve) => {
-      finishValidation = () => resolve(false);
-    });
-    const { promise: validationStarted, resolve: markValidationStarted } = createDeferred();
-    const validateCurrentAttempt = vi
-      .fn<() => boolean | Promise<boolean>>()
-      .mockReturnValueOnce(true)
-      .mockImplementationOnce(() => {
-        markValidationStarted();
-        return validationGate;
-      });
+    const { prepared, stateDir, submit } = await prepareFailedReport("delayed-cleanup");
+    const validation = pausedValidation();
     const oldCreateIssue = vi.fn();
     const { promise: firstCleanupGate, resolve: releaseFirstCleanup } = createDeferred();
     const { promise: firstCleanupStart, resolve: firstCleanupStarted } = createDeferred();
     const oldSubmission = submit({
       createIssue: oldCreateIssue,
-      validateCurrentAttempt,
+      validateCurrentAttempt: validation.validateCurrentAttempt,
     });
     try {
-      await validationStarted;
-      expect(validateCurrentAttempt).toHaveBeenCalledTimes(2);
+      await validation.entered;
       const oldReportPath = await currentSavedReportArtifactPath(prepared, stateDir);
       expect(await fs.readFile(`${oldReportPath}.pending`, "utf8")).toBe(prepared.body);
 
@@ -487,7 +497,7 @@ describe("update failure report", () => {
         return await realRm(target, options);
       });
 
-      finishValidation();
+      validation.finish();
       await firstCleanupStart;
       let replacement: Awaited<ReturnType<typeof submitUpdateFailureReport>>;
       let oldResult: Awaited<ReturnType<typeof submitUpdateFailureReport>>;
@@ -495,7 +505,7 @@ describe("update failure report", () => {
         replacement = await submit({ createIssue: mockFallbackIssue(prepared.url) });
         expect(replacement).toMatchObject({ fallbackUrl: prepared.url, status: "fallback" });
         expect(replacement.savedReportPath).not.toBe(oldReportPath);
-        expect(await fs.readFile(replacement.savedReportPath, "utf8")).toBe(prepared.body);
+        await expectSaved(replacement, prepared);
         releaseFirstCleanup();
         oldResult = await oldSubmission;
       } finally {
@@ -505,81 +515,18 @@ describe("update failure report", () => {
 
       expect(oldResult).toMatchObject({ fallbackUrl: prepared.url, status: "duplicate" });
       expect(oldCreateIssue).not.toHaveBeenCalled();
-      expect(await fs.readFile(replacement.savedReportPath, "utf8")).toBe(prepared.body);
+      await expectSaved(replacement, prepared);
       await expectMissing(oldReportPath);
       await expectMissing(`${oldReportPath}.pending`);
     } finally {
-      finishValidation();
+      validation.finish();
       releaseFirstCleanup();
       await Promise.allSettled([oldSubmission]);
     }
   });
 
-  it("isolates a replacement from an expired owner's mismatched report artifact", async () => {
-    const stateDir = tempDirs.make("openclaw-update-report-");
-    const attemptId = "attempt-expired-mismatched-report";
-    const oldPrepared = await prepareUpdateFailureReport(
-      { attemptId, result: failedUpdate() },
-      { stateDir },
-    );
-    const replacementPrepared = await prepareUpdateFailureReport(
-      { attemptId, result: failedUpdate({ reason: "install-failed" }) },
-      { stateDir },
-    );
-    expect(replacementPrepared.body).not.toBe(oldPrepared.body);
-    const { promise: validationGate, resolve: finishValidation } = createDeferred<boolean>();
-    const { promise: validationStarted, resolve: markValidationStarted } = createDeferred();
-    const validateCurrentAttempt = vi
-      .fn<() => boolean | Promise<boolean>>()
-      .mockReturnValueOnce(true)
-      .mockImplementationOnce(() => {
-        markValidationStarted();
-        return validationGate;
-      });
-    const oldCreateIssue = vi.fn();
-    const oldSubmission = submitUpdateFailureReport(oldPrepared, oldPrepared.previewDigest, {
-      createIssue: oldCreateIssue,
-      stateDir,
-      validateCurrentAttempt,
-    });
-    try {
-      await validationStarted;
-      expect(validateCurrentAttempt).toHaveBeenCalledTimes(2);
-      const oldReportPath = await currentSavedReportArtifactPath(oldPrepared, stateDir);
-      expect(await fs.readFile(`${oldReportPath}.pending`, "utf8")).toBe(oldPrepared.body);
-
-      expireUpdateFailureReportReceipt(oldPrepared.attemptId, stateDir);
-      const replacement = await submitUpdateFailureReport(
-        replacementPrepared,
-        replacementPrepared.previewDigest,
-        { createIssue: mockFallbackIssue(replacementPrepared.url), stateDir },
-      );
-      finishValidation(false);
-      const oldResult = await oldSubmission;
-
-      expect(replacement).toMatchObject({
-        fallbackUrl: replacementPrepared.url,
-        status: "fallback",
-      });
-      expect(oldResult).toMatchObject({
-        message: expect.stringContaining("different reviewed preview"),
-        status: "duplicate",
-      });
-      expect(oldResult).not.toHaveProperty("fallbackUrl");
-      expect(oldCreateIssue).not.toHaveBeenCalled();
-      expect(replacement.savedReportPath).not.toBe(oldReportPath);
-      expect(await fs.readFile(replacement.savedReportPath, "utf8")).toBe(replacementPrepared.body);
-      await expectMissing(`${oldReportPath}.pending`);
-    } finally {
-      finishValidation(false);
-      await oldSubmission;
-    }
-  });
-
   it("fences an expired staged writer and recovers its interrupted cleanup", async () => {
-    const { prepared, receipt, stateDir, submit } = await prepareFailedReport(
-      "attempt-expired-preparation",
-    );
+    const { prepared, receipt, stateDir, submit } = await prepareFailedReport("expired-write");
     const { promise: oldWriteGate, resolve: releaseOldWrite } = createDeferred();
     const { promise: oldWriteStartedGate, resolve: oldWriteStarted } = createDeferred();
     let delayFirstStagedWrite = true;
@@ -592,7 +539,7 @@ describe("update failure report", () => {
       }
       return writeFile(...args);
     });
-    const oldCreateIssue = mockCreatedIssue("https://github.com/openclaw/openclaw/issues/122");
+    const oldCreateIssue = mockCreatedIssue(issueUrl(122));
 
     const oldSubmission = submit({ createIssue: oldCreateIssue });
     try {
@@ -602,9 +549,7 @@ describe("update failure report", () => {
       expect(await receipt()).toMatchObject({ status: "preparing" });
 
       expireUpdateFailureReportReceipt(prepared.attemptId, stateDir);
-      const replacement = await submit({
-        createIssue: mockCreatedIssue("https://github.com/openclaw/openclaw/issues/123"),
-      });
+      const replacement = await submit({ createIssue: mockCreatedIssue(issueUrl()) });
       await fs.mkdir(path.dirname(oldReportPath), { mode: 0o700, recursive: true });
       const rm = fs.rm;
       const rmSpy = vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
@@ -619,14 +564,8 @@ describe("update failure report", () => {
         writeSpy.mockRestore();
       });
 
-      expect(replacement).toMatchObject({
-        status: "created",
-        url: "https://github.com/openclaw/openclaw/issues/123",
-      });
-      expect(oldResult).toMatchObject({
-        status: "duplicate",
-        url: "https://github.com/openclaw/openclaw/issues/123",
-      });
+      expectIssue(replacement, "created");
+      expectIssue(oldResult, "duplicate");
       expect(oldCreateIssue).not.toHaveBeenCalled();
       expect(await receipt()).toMatchObject({
         artifactSweep: "pending",
@@ -635,15 +574,10 @@ describe("update failure report", () => {
       await expectMissing(oldReportPath);
       expect(await fs.readFile(oldStagedReportPath, "utf8")).toBe(prepared.body);
 
-      const reconnectCreateIssue = mockCreatedIssue(
-        "https://github.com/openclaw/openclaw/issues/124",
-      );
+      const reconnectCreateIssue = mockCreatedIssue(issueUrl(124));
       const reconnected = await submit({ createIssue: reconnectCreateIssue });
 
-      expect(reconnected).toMatchObject({
-        status: "duplicate",
-        url: "https://github.com/openclaw/openclaw/issues/123",
-      });
+      expectIssue(reconnected, "duplicate");
       expect(reconnectCreateIssue).not.toHaveBeenCalled();
       await expectMissing(oldReportPath);
       await expectMissing(oldStagedReportPath);
@@ -754,9 +688,7 @@ describe("update failure report", () => {
   );
 
   it("does not publish a fallback after its preparation lease is replaced", async ({ signal }) => {
-    const { prepared, stateDir, submit } = await prepareFailedReport(
-      "attempt-expired-fallback-preparation",
-    );
+    const { prepared, stateDir, submit } = await prepareFailedReport("expired-fallback");
     const fallbackEntered = createDeferred();
     const { promise: oldFallbackGate, resolve: releaseOldFallback } = createDeferred();
     const oldFallback = vi.fn(
@@ -784,22 +716,14 @@ describe("update failure report", () => {
       );
       expect(oldFallback).toHaveBeenCalledOnce();
       expireUpdateFailureReportReceipt(prepared.attemptId, stateDir);
-      const replacementSubmission = submit({
-        createIssue: mockCreatedIssue("https://github.com/openclaw/openclaw/issues/123"),
-      });
+      const replacementSubmission = submit({ createIssue: mockCreatedIssue(issueUrl()) });
       submissions.push(replacementSubmission);
       const replacement = await withinTest(replacementSubmission, signal);
       releaseOldFallback();
       const oldResult = await withinTest(oldSubmission, signal);
 
-      expect(replacement).toMatchObject({
-        status: "created",
-        url: "https://github.com/openclaw/openclaw/issues/123",
-      });
-      expect(oldResult).toMatchObject({
-        status: "duplicate",
-        url: "https://github.com/openclaw/openclaw/issues/123",
-      });
+      expectIssue(replacement, "created");
+      expectIssue(oldResult, "duplicate");
       expect(oldResult).not.toHaveProperty("fallbackUrl");
       await expectMissing(`${prepared.savedReportPath}.result.json`);
     } finally {
@@ -820,8 +744,7 @@ describe("update failure report", () => {
     "returns a created URL without retrying refused or unknown finalization when it %s",
     async (_failure, fail) => {
       const { submit } = await prepareFailedReport("attempt-created-finalize-failure");
-      const issueUrl = "https://github.com/openclaw/openclaw/issues/123";
-      const createIssue = mockCreatedIssue(issueUrl);
+      const createIssue = mockCreatedIssue(issueUrl());
       const finalizeReceipt = vi
         .fn((...args: Parameters<typeof finalizeUpdateFailureReportReceipt>) =>
           finalizeUpdateFailureReportReceipt(...args),
@@ -834,7 +757,7 @@ describe("update failure report", () => {
       });
       const second = await submit({ createIssue });
 
-      expect(first).toMatchObject({ status: "created", url: issueUrl });
+      expectIssue(first, "created");
       expect(createIssue).toHaveBeenCalledOnce();
       expect(second).toMatchObject({ status: "pending" });
       expect(finalizeReceipt).toHaveBeenCalledOnce();
@@ -844,8 +767,7 @@ describe("update failure report", () => {
 
   it("does not hide a created result when saved-report cleanup fails", async () => {
     const { prepared, submit } = await prepareFailedReport("attempt-created-cleanup-failure");
-    const issueUrl = "https://github.com/openclaw/openclaw/issues/123";
-    const createIssue = mockCreatedIssue(issueUrl);
+    const createIssue = mockCreatedIssue(issueUrl());
     const realRm = fs.rm.bind(fs);
     const rm = vi.spyOn(fs, "rm").mockImplementation(async (target, options) => {
       if (
@@ -863,10 +785,10 @@ describe("update failure report", () => {
       rm.mockRestore();
     }
 
-    expect(first).toMatchObject({ status: "created", url: issueUrl });
-    expect(await fs.readFile(first.savedReportPath, "utf8")).toBe(prepared.body);
+    expectIssue(first, "created");
+    await expectSaved(first, prepared);
     const second = await submit({ createIssue });
-    expect(second).toMatchObject({ status: "duplicate", url: issueUrl });
+    expectIssue(second, "duplicate");
     expect(createIssue).toHaveBeenCalledOnce();
     await expect(fs.stat(first.savedReportPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
