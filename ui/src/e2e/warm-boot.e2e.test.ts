@@ -1,4 +1,3 @@
-import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
@@ -98,8 +97,6 @@ suite.define(() => {
     "reconciles the cached shell, roster, and transcript with a %s profile",
     (profile) =>
       suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-        const capture = (name: string) =>
-          page.screenshot({ path: path.join(suite.artifactDir, name) });
         const timestamp = Date.now();
         const rememberedMessage = {
           role: "assistant",
@@ -217,7 +214,6 @@ suite.define(() => {
         );
         await gateway.waitForRequest("connect");
         await page.locator(".connect-splash").waitFor();
-        await capture("cold-connecting.png");
         await gateway.resolveDeferred("connect");
         const sidebar = page.locator("openclaw-app-sidebar");
         const transcript = page.locator(".chat-thread-inner");
@@ -278,14 +274,12 @@ suite.define(() => {
         expect(await gateway.getRequests("sessions.list")).toEqual([]);
         expect(await gateway.getRequests("chat.startup")).toEqual([]);
         if (profile === "trusted-proxy") {
-          await capture("bootstrap-before-hello.png");
           expect(bootstrapRequests).toBe(0);
           await sidebar.getByRole("button", { name: /^Observatory ·/u }).waitFor();
         }
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);
         }
-        await capture(`warm-${profile}-before-hello.png`);
 
         await gateway.setSessionsListResponse({
           ownerSessionCounts: [],
@@ -355,7 +349,6 @@ suite.define(() => {
         const finalText =
           profile === "different" ? "This is profile B's conversation." : transcriptText;
         await transcript.getByText(finalText, { exact: true }).waitFor();
-        await capture(`warm-${profile}-after-hello.png`);
         if (profile === "matching") {
           await expectOwnMessageAlignment(page);
           const connectCount = (await gateway.getRequests("connect")).length;

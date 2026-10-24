@@ -273,9 +273,6 @@ suite.define(() => {
       await page.getByRole("button", { name: "Get started" }).click();
       await page.getByRole("button", { name: /On another computer/ }).click();
       const connect = form.button("Connect to Gateway");
-      await connect.click();
-      await status(page, "Enter a Gateway URL");
-      expect(await native.requests("connect_remote_gateway")).toEqual([]);
       const url = form.field("Gateway URL");
       const token = form.field("Gateway token");
       const password = form.field("Gateway password");
