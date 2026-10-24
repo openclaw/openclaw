@@ -68,6 +68,18 @@ describe("database config", () => {
     expect(OpenClawSchema.parse({ database }).database).toEqual(database);
   });
 
+  it("accepts a bounded SQLite worker store limit", () => {
+    expect(OpenClawSchema.parse({ database: { sqlite: { maxStores: 192 } } }).database).toEqual({
+      sqlite: { maxStores: 192 },
+    });
+    expect(OpenClawSchema.safeParse({ database: { sqlite: { maxStores: 0 } } }).success).toBe(
+      false,
+    );
+    expect(OpenClawSchema.safeParse({ database: { sqlite: { maxStores: 16_385 } } }).success).toBe(
+      false,
+    );
+  });
+
   it.each([
     { engine: "unknown" },
     { postgres: { connection: 123 } },

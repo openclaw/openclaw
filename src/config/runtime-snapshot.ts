@@ -30,6 +30,7 @@ import {
   prepareRuntimeConfigValueFact,
   type RuntimeConfigValueFact,
 } from "./runtime-snapshot-value-fact.js";
+import { publishSqliteWorkerMaxStores } from "./sqlite-worker-max-stores.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "./types.js";
 
 export type RuntimeConfigSnapshotRefreshOptions = {
@@ -240,6 +241,7 @@ function publishRuntimeConfigSnapshot(
   clearExecutablePathCache();
   runtimeConfigSnapshot = config;
   runtimeConfigCapturedSnapshot = null;
+  publishSqliteWorkerMaxStores(config);
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
   runtimeConfigSnapshotMetadata = metadata;
   if (
@@ -346,6 +348,7 @@ export function resetConfigRuntimeState(options: { preserveConfigEnv?: boolean }
   prepareRuntimePluginsConfig(null);
   runtimeConfigSnapshot = null;
   runtimeConfigCapturedSnapshot = null;
+  publishSqliteWorkerMaxStores();
   runtimeConfigSourceSnapshot = null;
   runtimeConfigSnapshotMetadata = null;
   runtimeModelConfigCacheKey = null;

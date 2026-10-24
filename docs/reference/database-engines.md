@@ -86,8 +86,11 @@ selecting PostgreSQL alone is not a warning.
 | -------------------------------- | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `database.engine`                | `"sqlite"`   | Default `"sqlite"` or `"postgres"` for supported families. Families without PostgreSQL support remain on SQLite.                                                   |
 | `database.families.<id>.engine`  | Inherit      | Override for `state`, `agent`, `workboard`, `logbook`, or `team-reports`. Each override requires `engine`; explicit unsupported PostgreSQL overrides are rejected. |
+| `database.sqlite.maxStores`      | Automatic    | Maximum SQLite worker stores retained per Gateway process. Defaults to the larger of 64 or twice the configured agent count.                                       |
 | `database.postgres.connection`   | None         | Required when any effective family uses PostgreSQL. A shared DSN string or env/file/exec SecretRef; store-backed refs are rejected.                                |
 | `database.postgres.schemaPrefix` | `"openclaw"` | Prefix for new store schemas: 1–27 lowercase letters, digits, or underscores, starting with a letter or underscore. Existing anchors keep their recorded schema.   |
+
+The SQLite worker broker is process-global, so its store limit must cover the configured agent roster plus local safety and plugin stores. OpenClaw derives the limit from the configured agent count by default; set `database.sqlite.maxStores` when an operator needs an explicit bound. Raising the limit does not close stores that are already open; lowering it prevents new stores until the live count falls below the configured value.
 
 Shared state, agent databases, Workboard, Logbook, and Team Reports support PostgreSQL.
 Before its first shared-state read, the Gateway resolves the effective family

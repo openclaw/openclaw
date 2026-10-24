@@ -12,6 +12,10 @@ import {
   reserveSqliteWorkerClient,
 } from "./sqlite-worker-broker-admission.js";
 import * as workerLifecycle from "./sqlite-worker-broker-lifecycle.js";
+import {
+  SQLITE_WORKER_DEFAULT_MAX_STORES,
+  setSqliteWorkerMaxStores,
+} from "./sqlite-worker-broker-limits.js";
 import { SqliteWorkerBroker } from "./sqlite-worker-broker.js";
 import { createSqliteWorkerClient } from "./sqlite-worker-client.js";
 import { createSqliteWorkerClientActor } from "./sqlite-worker-client.test-support.js";
@@ -23,6 +27,14 @@ import {
 import { SqliteWorkerInputAdmission } from "./sqlite-worker-input-admission.js";
 import type { FixtureOperations } from "./sqlite-worker-store.test-support.js";
 
+function openBroker(broker: SqliteWorkerBroker, pathname: string) {
+  return broker.open<FixtureOperations>({
+    moduleUrl: new URL("./sqlite-worker-store.test-support.ts", import.meta.url),
+    databasePath: pathname,
+    input: undefined,
+  });
+}
+
 function inputAdmission() {
   return new SqliteWorkerInputAdmission({
     queuedBytes: () => 0,
@@ -30,7 +42,7 @@ function inputAdmission() {
     maxQueuedBytes: 1024,
     maxQueuedInputBytes: 1024,
     maxMessageBytes: 1024,
-    maxPendingOpens: 2,
+    maxPendingOpens: () => 2,
   });
 }
 
@@ -262,5 +274,23 @@ it("joins host drainage during reclamation without cycling through open admissio
     await draining;
   } finally {
     await broker.close();
+  }
+});
+
+it("honors a configured SQLite worker store limit", async () => {
+  setSqliteWorkerMaxStores(2);
+  const broker = new SqliteWorkerBroker();
+  try {
+    const first = await openBroker(broker, databasePath());
+    const second = await openBroker(broker, databasePath());
+    assert(first, "First store missing");
+    assert(second, "Second store missing");
+    await expect(openBroker(broker, databasePath())).rejects.toMatchObject({
+      code: "overloaded",
+      message: "SQLite worker store capacity reached",
+    });
+  } finally {
+    await broker.close();
+    setSqliteWorkerMaxStores(SQLITE_WORKER_DEFAULT_MAX_STORES);
   }
 });
