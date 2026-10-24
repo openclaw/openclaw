@@ -11,6 +11,7 @@ import * as execRunner from "../../process/exec-runner.js";
 import * as processExec from "../../process/exec.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { resolveWorktreeBase } from "./base-ref.js";
+import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import { gitIdentity } from "./git-fixture.test-support.js";
 import {
   commandError,
@@ -56,6 +57,23 @@ describe("Git ref mutation ownership", () => {
     await requireGit(root, ["update-ref", queuedRef, "HEAD"]);
     return root;
   }
+
+  it.each([false, true])(
+    "disables automatic maintenance on an unregistered repository (sourceOnly=%s)",
+    async (sourceOnly) => {
+      const root = await repository();
+      await requireGit(root, ["config", "--local", "maintenance.auto", "true"]);
+      await requireGit(root, ["config", "--local", "gc.auto", "1"]);
+      await withWorktreeGitConfig(root, sourceOnly, {}, async (git) => {
+        expect(await git.require(root, ["config", "--get", "maintenance.auto"])).toBe("false");
+        expect(await git.require(root, ["config", "--get", "gc.auto"])).toBe("0");
+      });
+      expect(await requireGit(root, ["config", "--local", "--get", "maintenance.auto"])).toBe(
+        "true",
+      );
+      expect(await requireGit(root, ["config", "--local", "--get", "gc.auto"])).toBe("1");
+    },
+  );
 
   it("rejects incomplete required stdout through the worktree wrapper", async () => {
     const root = await repository();

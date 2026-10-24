@@ -171,7 +171,7 @@ export async function fixture(fixtureOptions: { setupRecipe?: boolean } = {}) {
         {
           ...options,
           baseEnv: { ...options?.baseEnv, GIT_ALLOW_PROTOCOL: "http" },
-          env: { ...options?.env, GIT_CONFIG_KEY_2: `http.${endpoint}.extraHeader` },
+          env: { ...options?.env, GIT_CONFIG_KEY_4: `http.${endpoint}.extraHeader` },
         },
       );
       if (result.code !== 0) {

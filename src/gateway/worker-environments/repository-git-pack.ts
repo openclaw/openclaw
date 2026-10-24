@@ -54,9 +54,9 @@ export async function prepareRepositoryWorkerGitPack(params: {
         ...(authenticated
           ? {
               env: {
-                GIT_CONFIG_COUNT: "3",
-                GIT_CONFIG_KEY_2: `http.${params.url}.extraHeader`,
-                GIT_CONFIG_VALUE_2: `Authorization: Basic ${Buffer.from(`x-access-token:${params.token}`).toString("base64")}`,
+                GIT_CONFIG_COUNT: "5",
+                GIT_CONFIG_KEY_4: `http.${params.url}.extraHeader`,
+                GIT_CONFIG_VALUE_4: `Authorization: Basic ${Buffer.from(`x-access-token:${params.token}`).toString("base64")}`,
               },
             }
           : {}),

@@ -12,6 +12,7 @@ import {
   type GitBufferedCommandOptions,
   type GitCommandOptions,
 } from "../../infra/git-exec.js";
+import { gitMaintenanceEnvironment } from "../../infra/git-maintenance-env.js";
 import { withGitRepositoryRepair } from "../../infra/git-repository-repair.js";
 import { hasGitWorkerContext, requestGitWorkerCommand } from "../../infra/git-worker-context.js";
 import { lstatIfExists } from "../../infra/path-existence.js";
@@ -84,7 +85,7 @@ export function gitEnvironment(
   return {
     ...baseEnv,
     ...windowsNoGlob,
-    GIT_CONFIG_COUNT: "2",
+    ...gitMaintenanceEnvironment(2),
     GIT_CONFIG_KEY_0: "core.hooksPath",
     GIT_CONFIG_VALUE_0: os.devNull,
     GIT_CONFIG_KEY_1: "core.fsmonitor",

@@ -214,8 +214,6 @@ describe("Gateway GitHub publication", () => {
       expect.arrayContaining([
         `core.hooksPath=${os.devNull}`,
         "core.fsmonitor=false",
-        "maintenance.auto=false",
-        "gc.auto=0",
         "--no-auto-maintenance",
         "--recurse-submodules=no",
       ]),
@@ -231,9 +229,13 @@ describe("Gateway GitHub publication", () => {
     });
     for (const [, options] of mocks.runCommand.mock.calls) {
       expect(options?.env).toMatchObject({
-        GIT_CONFIG_COUNT: "1",
+        GIT_CONFIG_COUNT: "3",
         GIT_CONFIG_KEY_0: "core.hooksPath",
         GIT_CONFIG_VALUE_0: os.devNull,
+        GIT_CONFIG_KEY_1: "maintenance.auto",
+        GIT_CONFIG_VALUE_1: "false",
+        GIT_CONFIG_KEY_2: "gc.auto",
+        GIT_CONFIG_VALUE_2: "0",
       });
     }
     const persisted = database.db
