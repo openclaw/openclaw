@@ -89,12 +89,6 @@ const activation = {
   allowlist: "unset",
 };
 const readJson = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
-const fixtureReceipts = (root: string): { sequence: number; kind: string; tool: string }[] =>
-  fs
-    .readFileSync(path.join(root, "receipts.jsonl"), "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line));
 describe("Gateway code-mode matrix fixtures", () => {
   it("supplies a full oversized invoice export with an independently verified unpaid-total oracle", () => {
     const { fixture, root, entry } = prepare("invoices-auto-retention");
@@ -196,10 +190,11 @@ describe("Gateway code-mode matrix fixtures", () => {
     expect(settled.tools.map((tool) => tool.name).toSorted()).toEqual(
       fixture.requiredTools.toSorted(),
     );
-    const schema = expectDefined(
-      settled.tools.find((tool) => tool.name === "matrix_settle")?.outputSchema,
-      "settlement output schema",
-    );
+    const schema = settled.tools.find((tool) => tool.name === "matrix_settle")?.outputSchema;
+    expect(schema).toBeDefined();
+    if (!schema) {
+      throw new Error("Settlement output schema is required for the fault scenario");
+    }
     expect(Value.Check(schema, expectDefined(settled.results[0], "settlement reply").details)).toBe(
       false,
     );
@@ -219,7 +214,11 @@ describe("Gateway code-mode matrix fixtures", () => {
       effectCount: 2,
       totalCents: Number(fixture.expected.totalCents) * 2,
     });
-    const receipts = fixtureReceipts(root);
+    const receipts = fs
+      .readFileSync(path.join(root, "receipts.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { kind: string; tool: string });
     expect(receipts.map(({ kind, tool }) => `${kind}:${tool}`)).toEqual([
       "call:matrix_settle",
       "effect:matrix_settle",
@@ -239,7 +238,11 @@ describe("Gateway code-mode matrix fixtures", () => {
       { name: "matrix_return_effect", input },
     ]);
     expect(run.results.map((result) => result.details)).toEqual([input, input]);
-    const receipts = fixtureReceipts(root);
+    const receipts = fs
+      .readFileSync(path.join(root, "receipts.jsonl"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
     expect(receipts).toEqual([
       { sequence: 1, kind: "call", tool: "matrix_return_effect", ...input },
       { sequence: 2, kind: "effect", tool: "matrix_return_effect", ...input },
@@ -268,8 +271,9 @@ describe("Gateway code-mode matrix fixtures", () => {
     expect(fixture.requiredTools).toEqual([]);
   });
 
-  it("varies fixture identity between repetitions and rejects invalid repetitions", () => {
+  it("keeps each repetition reproducible across runtime/model consumers", () => {
     for (const task of GATEWAY_MATRIX_TASKS) {
+      expect(createGatewayMatrixFixture(task, 3)).toEqual(createGatewayMatrixFixture(task, 3));
       expect(createGatewayMatrixFixture(task, 4).expected).not.toEqual(
         createGatewayMatrixFixture(task, 3).expected,
       );
@@ -286,6 +290,10 @@ import { pathToFileURL } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 const fixtureData = JSON.parse(fs.readFileSync(new URL("./case.json", import.meta.url), "utf8"));
 const config = JSON.parse(fs.readFileSync(process.env.OPENCLAW_CONFIG_PATH, "utf8"));
+fs.writeFileSync(new URL("./observed-config.json", import.meta.url), JSON.stringify({
+  codeMode: config.tools.codeMode,
+  plugins: { allow: config.plugins.allow, quickjs: config.plugins.entries["code-mode-quickjs"] }
+}));
 const pluginDir = config.plugins.load.paths[0];
 const { default: register } = await import(pathToFileURL(path.join(pluginDir, "index.mjs")).href);
 const tools = new Map();
@@ -382,6 +390,7 @@ if (process.argv.includes("call")) {
 
 it.each([
   ["node", undefined, false, false],
+  ["quickjs", undefined, false, false],
   ["node", "The model does not exist or is not available", false, false],
   ["node", undefined, true, false],
   ["node", undefined, true, true],
@@ -389,6 +398,7 @@ it.each([
   "routes %s and preserves failure evidence (modelError=%s, capture=%s, wrongActivation=%s)",
   async (executor, modelError, capture, wrongActivation) => {
     const builtOwner = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.serviceChildGroupAnchor);
+    expect(builtOwner.pathname).toMatch(/\.js$/u);
     // The fake Gateway owns fixture data; supervision still needs the prepared runtime.
     const runtimeRoot = path.resolve(path.dirname(fileURLToPath(builtOwner)), "../../..");
     const root = tempDirs.make("openclaw-matrix-producer-");
@@ -441,7 +451,17 @@ it.each([
         sourceDirty: false,
         sourcePatchSha256: null,
       });
+      const observedConfig = readJson(path.join(root, "observed-config.json"));
+      expect(observedConfig.codeMode.executor).toBe(executor);
+      expect(observedConfig.plugins.allow.includes("code-mode-quickjs")).toBe(
+        executor === "quickjs",
+      );
+      expect(observedConfig.plugins.quickjs).toEqual(
+        executor === "quickjs" ? { enabled: true } : undefined,
+      );
+      expect(result.executor).toBe(executor);
       const gateway = expectDefined(result.gateway, "producer Gateway evidence");
+      expect(gateway.settings.executor).toBe(executor);
       if (capture) {
         expect(result).toMatchObject({
           passed: !wrongActivation,

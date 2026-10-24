@@ -287,14 +287,16 @@ $root = Join-Path ([IO.Path]::GetTempPath()) ('openclaw-native-stderr-' + [Guid]
 $child = Join-Path $root 'child.cjs'
 [IO.File]::WriteAllText($child, 'if (process.argv[2] === "marker") { require("node:fs").writeFileSync(process.argv[3], "spawned"); process.exit(0); } if (process.argv[2] === "warning") process.stderr.write("npm warn proof\n"); process.stdout.write("native-complete\n"); process.exit(Number(process.argv[3]));')
 try {
-    foreach ($stream in @('warning', 'quiet')) {
-        foreach ($code in @(0, 17)) {
-            $output = @(Invoke-NpmCommand -CommandPath $node -Arguments @($child, $stream, [string]$code) -WorkingDirectory $root 2>&1)
-            if ($LASTEXITCODE -ne $code) { throw "changed native exit $code" }
-            $text = ($output | ForEach-Object { $_.ToString() }) -join " "
-            if (-not $text.Contains('native-complete')) { throw 'lost stdout' }
-            if ($text.Contains('npm warn proof') -ne ($stream -eq 'warning')) { throw 'changed stderr' }
-            if ($ErrorActionPreference -ne 'Stop' -or (Get-Location).Path -ne $beforeLocation) { throw 'leaked caller state' }
+    foreach ($wrapper in @('Invoke-NpmCommand', 'Invoke-CommandFromWindowsSafeDirectory')) {
+        foreach ($stream in @('warning', 'quiet')) {
+            foreach ($code in @(0, 17)) {
+                $output = @(& $wrapper -CommandPath $node -Arguments @($child, $stream, [string]$code) -WorkingDirectory $root 2>&1)
+                if ($LASTEXITCODE -ne $code) { throw "$wrapper changed native exit $code" }
+                $text = ($output | ForEach-Object { $_.ToString() }) -join " "
+                if (-not $text.Contains('native-complete')) { throw "$wrapper lost stdout" }
+                if ($text.Contains('npm warn proof') -ne ($stream -eq 'warning')) { throw "$wrapper changed stderr" }
+                if ($ErrorActionPreference -ne 'Stop' -or (Get-Location).Path -ne $beforeLocation) { throw "$wrapper leaked caller state" }
+            }
         }
     }
     $marker = Join-Path $root 'unexpected-spawn'
@@ -381,8 +383,11 @@ try {
       "  New-Item -ItemType Directory -Force -Path $project | Out-Null",
       "  Remove-Item Env:PNPM_CONFIG_PREFER_OFFLINE -ErrorAction SilentlyContinue",
       "  Remove-Item Env:pnpm_config_prefer_offline -ErrorAction SilentlyContinue",
+      "  if (-not (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project -PnpmCommand 'Get-TestPnpmConfig')) { throw 'default was disabled' }",
       "  $script:PnpmConfigValue = 'false'",
       "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project -PnpmCommand 'Get-TestPnpmConfig') { throw 'false pnpm config was ignored' }",
+      "  $script:PnpmConfigValue = 'true'",
+      "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project -PnpmCommand 'Get-TestPnpmConfig') { throw 'true pnpm config was ignored' }",
       "  $script:PnpmConfigValue = 'failure'",
       "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project -PnpmCommand 'Get-TestPnpmConfig') { throw 'failed pnpm config query enabled the default' }",
       "  $env:PNPM_CONFIG_PREFER_OFFLINE = 'false'",
@@ -788,7 +793,6 @@ foreach ($script:portableFailure in @('throw', 'unsupported')) {
     ),
     "quiet-main-success": installerFixture(
       "function Check-Node { return $true }",
-      "function Install-Node { throw 'supported Node must not be reinstalled' }",
       "function Check-ExistingOpenClaw { return $false }",
       "function Install-OpenClaw { Write-Output 'npm stdout'; return $true }",
       "function Ensure-OpenClawOnPath { return $true }",
@@ -1277,7 +1281,14 @@ try {
   );
 
   runIfPowerShell("rejects unknown and positional options before starting the installer", () => {
-    const invalidArgs = [["-Frobnicate"], ["-DryRun", "beta"], ["beta", "git"]];
+    const invalidArgs = [
+      ["-Frobnicate"],
+      ["-DryRnu"],
+      ["-NoOnbord"],
+      ["-InstallMthod", "git"],
+      ["-DryRun", "beta"],
+      ["beta", "git"],
+    ];
 
     for (const args of invalidArgs) {
       const result = runInstallerFile(args, {
@@ -1299,7 +1310,12 @@ try {
     expect(`${result.stdout}\n${result.stderr}`).not.toContain("[OK] Windows detected");
   });
 
-  runIfPowerShell("shows streamed help without starting the installer", () => {
+  runIfPowerShell("shows help without starting the installer", () => {
+    const fileResult = runInstallerFile(["-?"]);
+    expect(fileResult.status).toBe(0);
+    expect(`${fileResult.stdout}\n${fileResult.stderr}`).toContain("install.ps1");
+    expect(`${fileResult.stdout}\n${fileResult.stderr}`).not.toContain("[OK] Windows detected");
+
     const scriptPath = toPowerShellSingleQuotedLiteral(join(process.cwd(), SCRIPT_PATH));
     const scriptblockResult = runPowerShell([
       "-NonInteractive",
@@ -1384,6 +1400,17 @@ try {
       );
     },
   );
+
+  runConcurrentIfPowerShell("exits non-zero when run as a script file", async () => {
+    const result = await runFixtureFile(
+      installerFixture(
+        "function Check-Node { return $false }",
+        "function Install-Node { return $false }",
+        ...entrypointLines,
+      ),
+    );
+    expect(result.status).toBe(1);
+  });
 
   (process.platform === "win32" ? it : it.skip)(
     "reports native upgrade PATH failures without losing caller or service/Doctor ordering",
@@ -1586,9 +1613,12 @@ function Reset-Fixture {
     $global:State = 'missing'
     $global:PendingState = 'missing'
     $global:Events = New-Object 'System.Collections.Generic.List[string]'
+    $global:WingetCalls = New-Object 'System.Collections.Generic.List[object]'
     $global:Fallbacks = New-Object 'System.Collections.Generic.List[string]'
+    $global:Messages = New-Object 'System.Collections.Generic.List[string]'
     $global:InstallExitCode = 0
     $global:Advanced = 0
+    $global:ProbeCount = 0
     $global:LASTEXITCODE = 0
 }
 function Get-Command {
@@ -1609,19 +1639,22 @@ function Invoke-FixtureNode {
     if ($args[0] -eq '-v') {
         return 'v26.12.1'
     }
-    $input | Out-Null
+    $probe = @($input) -join [Environment]::NewLine
+    if (-not $probe.Contains('CREATE TABLE probe') -or -not $probe.Contains('a\u0000b\u0000')) {
+        throw 'current SQLite capability probe was not executed'
+    }
+    $global:ProbeCount++
     if ($global:State -eq 'probe-error') { $global:LASTEXITCODE = 1; return }
     $version = if ($global:State -eq 'old-sqlite') { '3.50.6' } else { '3.51.3' }
     return (@{ available = $true; version = $version; text = ($global:State -ne 'text'); blob = ($global:State -ne 'blob'); json = ($global:State -ne 'json') } | ConvertTo-Json -Compress)
 }
 function winget {
     $global:Events.Add($args[0])
-    if ($args -notcontains 'OpenJS.NodeJS.LTS' -or $args -notcontains '--source' -or $args[[Array]::IndexOf($args, '--source') + 1] -ne 'winget') { throw 'unexpected Winget package source' }
+    $global:WingetCalls.Add(@($args))
     if ($args[0] -eq 'install') {
         $global:LASTEXITCODE = $case.installExit
         $global:PendingState = $case.afterInstall
     } elseif ($args[0] -eq 'repair') {
-        if ($args -notcontains '--exact') { throw 'repair must select the exact package' }
         $global:LASTEXITCODE = $case.repairExit
         $global:PendingState = $case.afterRepair
     } else { throw "unexpected Winget command: $args" }
@@ -1646,7 +1679,7 @@ function scoop {
     $global:LASTEXITCODE = 0
     Write-Output 'Scoop output must not become a Boolean result'
 }
-function Write-Host { }
+function Write-Host { $global:Messages.Add(($args -join ' ')) }
 function Install-PortableNode {
     $global:Fallbacks.Add('portable')
     if ($case.fallback -eq 'portable') { $global:State = $case.afterFallback; return }
@@ -1664,15 +1697,18 @@ function Invoke-OpenClawCommand { return 'fixture-version' }
 $NoOnboard = $true
 $env:USERPROFILE = [System.IO.Path]::GetTempPath()
 $InstallMethod = 'npm'
-if ($case.afterInstall -eq 'text' -and $case.afterRepair -eq 'healthy') {
-    Reset-Fixture
-    $result = @(Install-Node)
-    if ($result.Count -ne 1 -or $result[0] -isnot [bool] -or -not $result[0]) { throw "Install-Node output leaked: $result" }
-}
+Reset-Fixture
+$result = @(Install-Node)
+if ($result.Count -ne 1 -or $result[0] -isnot [bool]) { throw "Install-Node output leaked: $result" }
+$direct = @{ success = $result[0]; events = $global:Events.ToArray(); calls = $global:WingetCalls.ToArray(); probes = $global:ProbeCount; fallbacks = $global:Fallbacks.ToArray(); messages = $global:Messages.ToArray() }
 Reset-Fixture
 $null = Main
-$main = @{ advanced = $global:Advanced; exit = $global:InstallExitCode; events = $global:Events.ToArray(); fallbacks = $global:Fallbacks.ToArray() }
-Write-Output ('RESULT:' + ($main | ConvertTo-Json -Depth 8 -Compress))
+$main = @{ advanced = $global:Advanced; exit = $global:InstallExitCode; events = $global:Events.ToArray(); calls = $global:WingetCalls.ToArray(); probes = $global:ProbeCount; fallbacks = $global:Fallbacks.ToArray(); messages = $global:Messages.ToArray() }
+Reset-Fixture
+$global:State = 'healthy'
+$null = Main
+$healthy = @{ advanced = $global:Advanced; calls = $global:WingetCalls.Count }
+Write-Output ('RESULT:' + (@{ direct = $direct; main = $main; healthy = $healthy } | ConvertTo-Json -Depth 8 -Compress))
 `,
     ].join("\n");
     const result = runPowerShell(["-NonInteractive", "-Command", fixture]);
@@ -1681,36 +1717,52 @@ Write-Output ('RESULT:' + ($main | ConvertTo-Json -Depth 8 -Compress))
     expect(line, result.stdout).toBeDefined();
     const proof = JSON.parse(line!.slice("RESULT:".length));
     expect(proof).toMatchObject({
-      advanced: options.success ? 1 : 0,
-      exit: options.success ? 0 : 1,
+      direct: { success: options.success },
+      main: { advanced: options.success ? 1 : 0, exit: options.success ? 0 : 1 },
     });
-    const repaired =
-      options.repair && options.repairExit === 0 && options.afterRepair === "healthy";
-    const fallbackExpected = !repaired && options.afterInstall !== "healthy";
-    const fallbacks: string[] = [];
-    if (fallbackExpected) {
-      if (options.fallback === "choco") {
-        fallbacks.push("choco");
-      } else if (options.fallback === "scoop") {
-        fallbacks.push("scoop:update", "scoop:install nodejs-lts", "scoop:update nodejs-lts");
+    expect(proof.healthy).toEqual({ advanced: 1, calls: 0 });
+    const agreements = [
+      "--source",
+      "winget",
+      "--accept-package-agreements",
+      "--accept-source-agreements",
+    ];
+    const installArgs = ["install", "OpenJS.NodeJS.LTS", ...agreements];
+    const repairArgs = ["repair", "--id", "OpenJS.NodeJS.LTS", "--exact", ...agreements];
+    for (const run of [proof.direct, proof.main]) {
+      expect(run.calls).toEqual(options.repair ? [installArgs, repairArgs] : [installArgs]);
+      const repaired =
+        options.repair && options.repairExit === 0 && options.afterRepair === "healthy";
+      const fallbackExpected = !repaired && options.afterInstall !== "healthy";
+      const fallbacks: string[] = [];
+      if (fallbackExpected) {
+        if (options.fallback === "choco") {
+          fallbacks.push("choco");
+        } else if (options.fallback === "scoop") {
+          fallbacks.push("scoop:update", "scoop:install nodejs-lts", "scoop:update nodejs-lts");
+        }
+        if (!["choco", "scoop"].includes(options.fallback) || options.afterFallback !== "healthy") {
+          fallbacks.push("portable");
+        }
       }
-      if (!["choco", "scoop"].includes(options.fallback) || options.afterFallback !== "healthy") {
-        fallbacks.push("portable");
+      expect(run.fallbacks).toEqual(fallbacks);
+      expect(
+        run.messages.filter((message: string) => message.includes("Node.js repaired via winget")),
+      ).toHaveLength(repaired ? 1 : 0);
+      const events = run === proof.main ? run.events.slice(1) : run.events;
+      expect(events.slice(0, 4)).toEqual([
+        "install",
+        "refresh",
+        "discover",
+        `check:${options.afterInstall}`,
+      ]);
+      if (options.repair) {
+        expect(events.slice(4, 7)).toEqual(["repair", "refresh", "discover"]);
       }
-    }
-    expect(proof.fallbacks).toEqual(fallbacks);
-    const events = proof.events.slice(1);
-    expect(events.slice(0, 4)).toEqual([
-      "install",
-      "refresh",
-      "discover",
-      `check:${options.afterInstall}`,
-    ]);
-    if (options.repair) {
-      expect(events.slice(4, 7)).toEqual(["repair", "refresh", "discover"]);
-    }
-    if (options.success) {
-      expect(events.at(-1)).toBe("check:healthy");
+      if (options.success) {
+        expect(events.at(-1)).toBe("check:healthy");
+        expect(run.probes).toBeGreaterThan(0);
+      }
     }
   });
 });

@@ -35,20 +35,6 @@ function git(root: string, args: string[]) {
   return result.stdout.trim();
 }
 
-function commitFixture(root: string, message: string) {
-  git(root, ["add", "."]);
-  git(root, [
-    "-c",
-    "user.name=Test",
-    "-c",
-    "user.email=test@example.com",
-    "commit",
-    "-qm",
-    message,
-  ]);
-  return git(root, ["rev-parse", "HEAD"]);
-}
-
 function makeFixture(name: string, config?: unknown, copyConfig = !config) {
   const root = fs.realpathSync(createTempDir(`openclaw-oxlint-${name}-`));
   const write = (file: string, content: string) => writeFixture(root, file, content);
@@ -62,24 +48,6 @@ function makeFixture(name: string, config?: unknown, copyConfig = !config) {
     json(".oxlintrc.json", config);
   }
   return { root, write, copy, json };
-}
-
-function makeReleaseFixture(name: string, policy?: string) {
-  const fixture = makeFixture(name, tinyLimit);
-  const { root, write, json } = fixture;
-  linkDependencies(root);
-  for (const stem of ["changed", "untouched"]) {
-    write(`src/${stem}.ts`, `export const ${stem} = [\n  0,\n  1,\n];\n`);
-  }
-  if (policy) {
-    write(
-      "scripts/lib/oxlint-changed-scope.mts",
-      `export const policy = ${JSON.stringify(policy)};\n`,
-    );
-  }
-  json("package.json", { name: "fixture", version: "2026.10.10-beta.3" });
-  git(root, ["init", "--quiet"]);
-  return { ...fixture, base: commitFixture(root, "base") };
 }
 
 type LintReport = {
@@ -103,8 +71,6 @@ const parseReport = (output: string): LintReport => JSON.parse(output);
 const normalized = (value: string) => value.replaceAll("\\", "/");
 const byFile = (report: LintReport, file: string) =>
   report.diagnostics.filter((item) => normalized(item.filename) === file);
-const codes = (report: LintReport, file: string) => byFile(report, file).map((item) => item.code);
-const tinyLimit = { categories: { correctness: "off" }, rules: { "max-lines": ["error", 2] } };
 const tsgolint = resolveRepoToolBinPath(process.platform === "win32" ? "tsgolint.CMD" : "tsgolint");
 
 function runLint(
@@ -130,20 +96,19 @@ function runFocused(root: string, files: string[], env: NodeJS.ProcessEnv) {
   );
 }
 
-function expectSeverities(root: string, env: NodeJS.ProcessEnv, severities: string[]) {
-  const files = ["src/changed.ts", "src/untouched.ts"];
-  const report = parseReport(
-    checked(runFocused(root, files, { GITHUB_ACTIONS: "false", ...env }), 1),
-  );
-  expect(files.map((file) => byFile(report, file)[0]?.severity)).toEqual(severities);
-}
-
 const oxlintBin = path.resolve("node_modules/oxlint/bin/oxlint");
 const oxlintRunner = path.resolve("scripts/run-oxlint.mts");
 
-const sourceProjectOwners = "agents gateway infra commands plugins config cli auto-reply".split(
-  " ",
-);
+const sourceProjectOwners = [
+  "agents",
+  "gateway",
+  "infra",
+  "commands",
+  "plugins",
+  "config",
+  "cli",
+  "auto-reply",
+];
 const sourceAugmentations = [
   "src/agents/sessions/keybindings.ts",
   "src/cli/program/openclaw-command.ts",
@@ -164,6 +129,14 @@ function writeSourceProjectFixture(root: string) {
     writeFixture(root, file, "export {};\n");
   }
 }
+
+type OxlintTsconfig = {
+  compilerOptions?: {
+    allowJs?: boolean;
+  };
+  include?: string[];
+  exclude?: string[];
+};
 
 function readJson(filePath: string): unknown {
   return JSON5.parse(fs.readFileSync(filePath, "utf8"));
@@ -192,30 +165,41 @@ function writeSessionCompatibilityFixture(root: string) {
 describe("oxlint config", () => {
   it("enforces namespace, evaluation, and unused-binding policies with the installed binary", () => {
     const { root: tempRoot, write } = makeFixture("policy");
+    const typescriptExtensions = ["ts", "tsx", "mts", "cts"];
+    const javascriptExtensions = ["js", "jsx", "cjs", "mjs"];
+    const allExtensions = [...typescriptExtensions, ...javascriptExtensions];
     const evaluation = 'eval("1 + 1");\nglobalThis.eval("1 + 1");\n';
-    const unused =
-      "function meaningful(_event) { return true; }\nfunction bare(_) { return true; }\nmeaningful(1);\nbare(1);\n";
-    const makeCase = (file: string, source: string, ...rules: string[]) => ({
-      file,
-      source,
-      rules,
-    });
+    const variants = (name: string, source: string, rules: string[], extensions = allExtensions) =>
+      extensions.map((extension) => ({ file: `src/${name}.${extension}`, source, rules }));
     const fixtures = [
-      makeCase(
-        "src/namespaces.ts",
-        "export type A = { ready: boolean }; export const A = { ready: true }; export interface B { ready: boolean } export const B: B = { ready: true };",
+      ...variants(
+        "namespaces",
+        [
+          "export type Profile = { ready: boolean };",
+          "export const Profile = { ready: true };",
+          "export interface Adapter { ready: boolean; }",
+          "export const Adapter: Adapter = { ready: true };",
+        ].join("\n"),
+        [],
+        typescriptExtensions,
       ),
-      makeCase(
-        "src/redeclaration.js",
+      ...variants(
+        "redeclaration",
         "var duplicateBinding = 1;\nvar duplicateBinding = 2;\nconsole.log(duplicateBinding);\n",
-        "eslint(no-redeclare)",
-        "eslint(no-var)",
-        "eslint(no-var)",
+        ["eslint(no-redeclare)", "eslint(no-var)", "eslint(no-var)"],
+        javascriptExtensions,
       ),
-      makeCase("src/no-var.ts", "export var legacyBinding = 1;\n", "eslint(no-var)"),
-      makeCase("src/evaluation.ts", evaluation, "eslint(no-eval)", "eslint(no-eval)"),
-      ...["ts", "js"].map((extension) =>
-        makeCase(`src/unused.${extension}`, unused, "eslint(no-unused-vars)"),
+      ...variants(
+        "no-var",
+        "export var legacyBinding = 1;\n",
+        ["eslint(no-var)"],
+        typescriptExtensions,
+      ),
+      ...variants("evaluation", evaluation, ["eslint(no-eval)", "eslint(no-eval)"]),
+      ...variants(
+        "unused",
+        "function meaningful(_event) { return true; }\nfunction bare(_) { return true; }\nmeaningful(1);\nbare(1);\n",
+        ["eslint(no-unused-vars)"],
       ),
       ...[
         "extensions/qa-lab/src/web-runtime.ts",
@@ -260,7 +244,9 @@ describe("oxlint config", () => {
     const unusedDiagnostics = report.diagnostics.filter(
       (diagnostic) => diagnostic.code === "eslint(no-unused-vars)",
     );
-    expect(unusedDiagnostics.map((diagnostic) => diagnostic.labels[0]?.span.line)).toEqual([2, 2]);
+    expect(unusedDiagnostics.map((diagnostic) => diagnostic.labels[0]?.span.line)).toEqual(
+      allExtensions.map(() => 2),
+    );
   });
 
   it("checks unbound methods in TypeScript and CommonJS source test support", () => {
@@ -281,7 +267,18 @@ describe("oxlint config", () => {
     for (const file of files) {
       write(file, source);
     }
-    const lint = () => runLint(tempRoot, files, {}, ["--type-aware"]);
+    const lint = () =>
+      runLint(
+        tempRoot,
+        files,
+        {
+          OXLINT_TSGOLINT_PATH: path.resolve(
+            "node_modules/.bin",
+            process.platform === "win32" ? "tsgolint.CMD" : "tsgolint",
+          ),
+        },
+        ["--type-aware"],
+      );
     const broken = lint();
     const report = parseReport(checked(broken, 1));
     expect(report.diagnostics.map(({ filename, code }) => [normalized(filename), code])).toEqual(
@@ -299,7 +296,13 @@ describe("oxlint config", () => {
 
   it("bounds package fallback roots while preserving existing projects and ambient types", () => {
     const { root, write, copy } = makeFixture("package-project");
-    const packageOwners = "ai llm-core model-catalog-core normalization-core plugin-sdk".split(" ");
+    const packageOwners = [
+      "ai",
+      "llm-core",
+      "model-catalog-core",
+      "normalization-core",
+      "plugin-sdk",
+    ];
     for (const file of [
       "tsconfig.json",
       "ui/src/css.d.ts",
@@ -310,10 +313,10 @@ describe("oxlint config", () => {
     write("package.json", '{"type":"module"}');
     writeSourceProjectFixture(root);
     linkDependencies(root);
-    // Type errors outside the package graph must not leak into its typecheck.
-    for (const file of ["src/library-owner.ts", "ui/unrelated.ts", "extensions/unrelated.ts"]) {
-      write(file, "export const outside: never = 1;");
-    }
+    // The original repository graph acquires ESNext through unrelated roots.
+    write("src/library-owner.ts", '/// <reference lib="esnext" />\nexport {};');
+    write("ui/unrelated.ts", "export {};");
+    write("extensions/unrelated.ts", "export {};");
     const contract = "packages/example/contract.ts";
     write(contract, "export interface Contract {} export declare const contract: Contract;");
     for (const [index, file] of sourceAugmentations.entries()) {
@@ -377,22 +380,63 @@ describe("oxlint config", () => {
       ].join("\n"),
     );
     const selected = [...fallback, ...configured, ...inferred];
+    const lint = () =>
+      runLint(root, selected, { OXC_LOG: "debug", GOMAXPROCS: "2" }, ["--type-aware"], 30_000);
+    const baseline = lint();
     copy("packages/tsconfig.json");
-    const narrowed = runLint(root, selected, { GOMAXPROCS: "2" }, ["--type-aware"], 30_000);
-    const report = parseReport(checked(narrowed, 1));
+    const narrowed = lint();
+    const reports = [baseline, narrowed].map((result) => parseReport(checked(result, 1)));
+    expect(reports.map((report) => report.number_of_files)).toEqual([
+      selected.length,
+      selected.length,
+    ]);
+    expect(reports[0]!.diagnostics.map((item) => JSON.stringify(item)).toSorted()).toEqual(
+      reports[1]!.diagnostics.map((item) => JSON.stringify(item)).toSorted(),
+    );
+    const expectProject = (result: ReturnType<typeof runTool>, file: string, project: string) => {
+      expect(normalized(result.stderr)).toContain(
+        `Got tsconfig for file ${normalized(path.join(root, file))}: ${normalized(path.join(root, project))}`,
+      );
+    };
     for (const file of fallback) {
-      expect(codes(report, file)).toEqual(
+      expect(byFile(reports[1]!, file).map((item) => item.code)).toEqual(
         Array.from(
           { length: sourceAugmentations.length + declarations.length + 1 },
           () => "typescript(no-floating-promises)",
         ),
       );
+      expectProject(baseline, file, "tsconfig.json");
+      expectProject(narrowed, file, "packages/tsconfig.json");
     }
-    for (const file of configured) {
-      expect(codes(report, file)).toEqual(["typescript(no-floating-promises)"]);
+    for (const result of [baseline, narrowed]) {
+      for (const file of configured) {
+        expectProject(result, file, file.split("/").slice(0, 2).join("/") + "/tsconfig.json");
+      }
+      for (const file of inferred) {
+        expect(normalized(result.stderr)).toContain(
+          `Unmatched file: ${normalized(path.join(root, file))}`,
+        );
+      }
     }
-    for (const file of inferred) {
-      expect(codes(report, file)).toEqual([]);
+    const expanded = spawnSync(
+      resolveRepoToolBinPath("tsgo"),
+      ["--showConfig", "--project", "packages/tsconfig.json"],
+      { cwd: root, encoding: "utf8", timeout: 10_000 },
+    );
+    const roots = (JSON.parse(checked(expanded, 0)) as { files: string[] }).files.map((file) =>
+      path.resolve(root, "packages", file),
+    );
+    for (const file of [...fallback, ...configured, ...sourceAugmentations, ...declarations]) {
+      expect(roots, file).toContain(path.resolve(root, file));
+    }
+    for (const file of [
+      "src/library-owner.ts",
+      "ui/unrelated.ts",
+      "extensions/unrelated.ts",
+      "src/config/sessions/session-entry.test-compat.d.ts",
+      ...inferred,
+    ]) {
+      expect(roots, file).not.toContain(path.resolve(root, file));
     }
     const typecheck = spawnSync(
       resolveRepoToolBinPath("tsgo"),
@@ -402,9 +446,20 @@ describe("oxlint config", () => {
     checked(typecheck, 0);
   });
 
+  it("has a discoverable scripts tsconfig for type-aware linting", () => {
+    const tsconfig = readJson("scripts/tsconfig.json") as OxlintTsconfig;
+
+    expect(tsconfig).toMatchObject({
+      compilerOptions: { allowJs: true },
+      include: expect.arrayContaining(["**/*.ts", "**/*.mts"]),
+    });
+    expect(tsconfig.exclude ?? []).not.toContain("**/*.ts");
+    expect(tsconfig.exclude ?? []).not.toContain("**/*.mts");
+  });
+
   it("keeps native cap scopes and correctness while warning on untouched local line debt", () => {
     const config = readJson(".oxlintrc.json") as OxlintConfig;
-    const { root, write } = makeFixture(
+    const { root, write, json } = makeFixture(
       "ci-limits",
       {
         ...config,
@@ -436,18 +491,31 @@ describe("oxlint config", () => {
     }
     write("src/correctness.ts", "export var legacy = 1;\n");
     write("src/globals.js", "window.console.log(configuredGlobal);\n");
+    const ownConfig = readJson(path.join(root, ".oxlintrc.json")) as OxlintConfig;
+    json("base.json", {});
     type Scenario = [
       severity: "error" | "warning",
       github?: boolean,
       correctness?: boolean,
       evidence?: boolean,
       changedPaths?: string[],
+      inherited?: boolean,
     ];
     const scenarios: Scenario[] = [
       ["error"],
+      ["warning", true],
+      ["warning", true, true],
       ["warning", true, true, true],
-      ["warning", false, false, true, ["src/globals.js"]],
-      ["warning", false, true, false, ["src/globals.js"]],
+      ["error", false, false, true, ["src/globals.js"], true],
+      ...[false, true].flatMap((evidence) =>
+        [false, true].map((correctness): Scenario => [
+          "warning",
+          false,
+          correctness,
+          evidence,
+          ["src/globals.js"],
+        ]),
+      ),
       ...[
         [],
         ["src/oversized.ts"],
@@ -455,12 +523,14 @@ describe("oxlint config", () => {
         ["src/.oxlintrc.json"],
         ["package.json"],
         ["pnpm-lock.yaml"],
+        ["pnpm-workspace.yaml"],
         ["patches/oxlint.patch"],
         ["scripts/run-oxlint.mts"],
       ].map((changedPaths): Scenario => ["error", false, false, false, changedPaths]),
     ];
     for (const [index, scenario] of scenarios.entries()) {
-      const [severity, github, correctness, evidence, changedPaths] = scenario;
+      const [severity, github, correctness, evidence, changedPaths, inherited] = scenario;
+      json(".oxlintrc.json", inherited ? { ...ownConfig, extends: ["./base.json"] } : ownConfig);
       const summary = path.join(root, `summary-${index}.md`);
       const result = runFocused(
         root,
@@ -515,7 +585,8 @@ describe("oxlint config", () => {
   });
 
   it("matches changed paths literally and keeps inherited config limits strict", () => {
-    const { root, write, json } = makeFixture("changed-paths", tinyLimit);
+    const config = { categories: { correctness: "off" }, rules: { "max-lines": ["error", 2] } };
+    const { root, write, json } = makeFixture("changed-paths", config);
     linkDependencies(root);
     const sources = [
       "!root.ts",
@@ -536,7 +607,7 @@ describe("oxlint config", () => {
     ];
     for (const inherited of [false, true]) {
       if (inherited) {
-        json("base.json", tinyLimit);
+        json("base.json", config);
         json(".oxlintrc.json", { extends: ["./base.json"] });
       }
       const result = runFocused(root, sources, {
@@ -555,22 +626,71 @@ describe("oxlint config", () => {
   });
 
   it("keeps untouched limits advisory for release-version-only manifest changes", () => {
-    const { root, json, base } = makeReleaseFixture("release-version-scope");
+    const config = { categories: { correctness: "off" }, rules: { "max-lines": ["error", 2] } };
+    const { root, write, json } = makeFixture("release-version-scope", config);
+    linkDependencies(root);
+    write("src/changed.ts", "export const changed = [\n  0,\n  1,\n];\n");
+    write("src/untouched.ts", "export const untouched = [\n  0,\n  1,\n];\n");
+    json("package.json", { name: "fixture", version: "2026.10.10-beta.3" });
+    git(root, ["init", "--quiet"]);
+    git(root, ["add", "."]);
+    git(root, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "--quiet",
+      "-m",
+      "base",
+    ]);
+    const base = git(root, ["rev-parse", "HEAD"]);
     json("package.json", { name: "fixture", version: "2026.10.10-beta.4" });
-    expectSeverities(
-      root,
-      {
-        OPENCLAW_OXLINT_CHANGED_PATHS: JSON.stringify(["package.json", "src/changed.ts"]),
-        OPENCLAW_OXLINT_CHANGED_BASE: base,
-      },
-      ["error", "warning"],
-    );
+
+    const result = runFocused(root, ["src/changed.ts", "src/untouched.ts"], {
+      GITHUB_ACTIONS: "false",
+      OPENCLAW_OXLINT_CHANGED_PATHS: JSON.stringify(["package.json", "src/changed.ts"]),
+      OPENCLAW_OXLINT_CHANGED_BASE: base,
+    });
+    const report = parseReport(checked(result, 1));
+    expect(byFile(report, "src/changed.ts")[0]?.severity).toBe("error");
+    expect(byFile(report, "src/untouched.ts")[0]?.severity).toBe("warning");
   });
 
   it("trusts changed lint policy files only when they match authoritative main", () => {
-    const { root, write, json, base } = makeReleaseFixture("trusted-release-policy", "base");
+    const config = { categories: { correctness: "off" }, rules: { "max-lines": ["error", 2] } };
+    const { root, write, json } = makeFixture("trusted-release-policy", config);
+    linkDependencies(root);
+    write("src/changed.ts", "export const changed = [\n  0,\n  1,\n];\n");
+    write("src/untouched.ts", "export const untouched = [\n  0,\n  1,\n];\n");
+    write("scripts/lib/oxlint-changed-scope.mts", 'export const policy = "base";\n');
+    json("package.json", { name: "fixture", version: "2026.10.10-beta.3" });
+    git(root, ["init", "--quiet"]);
+    git(root, ["add", "."]);
+    git(root, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "--quiet",
+      "-m",
+      "base",
+    ]);
+    const base = git(root, ["rev-parse", "HEAD"]);
     write("scripts/lib/oxlint-changed-scope.mts", 'export const policy = "trusted";\n');
-    const trustedPolicyRef = commitFixture(root, "trusted policy");
+    git(root, ["add", "scripts/lib/oxlint-changed-scope.mts"]);
+    git(root, [
+      "-c",
+      "user.name=Test",
+      "-c",
+      "user.email=test@example.com",
+      "commit",
+      "--quiet",
+      "-m",
+      "trusted policy",
+    ]);
+    const trustedPolicyRef = git(root, ["rev-parse", "HEAD"]);
     json("package.json", { name: "fixture", version: "2026.10.10-beta.4" });
 
     const changedPaths = ["package.json", "scripts/lib/oxlint-changed-scope.mts", "src/changed.ts"];
@@ -585,18 +705,24 @@ describe("oxlint config", () => {
     );
     expect(trustedEnv.OPENCLAW_OXLINT_CHANGED_BASE).toBe(base);
     expect(trustedEnv.OPENCLAW_OXLINT_CHANGED_PATHS).toBe(JSON.stringify(changedPaths));
-    expectSeverities(root, trustedEnv, ["error", "warning"]);
+    const trusted = runFocused(root, ["src/changed.ts", "src/untouched.ts"], {
+      GITHUB_ACTIONS: "false",
+      ...trustedEnv,
+    });
+    const trustedReport = parseReport(checked(trusted, 1));
+    expect(byFile(trustedReport, "src/changed.ts")[0]?.severity).toBe("error");
+    expect(byFile(trustedReport, "src/untouched.ts")[0]?.severity).toBe("warning");
 
     write("scripts/lib/oxlint-changed-scope.mts", 'export const policy = "untrusted";\n');
-    expectSeverities(
-      root,
-      {
-        OPENCLAW_OXLINT_CHANGED_PATHS: JSON.stringify(changedPaths),
-        OPENCLAW_OXLINT_CHANGED_BASE: base,
-        OPENCLAW_OXLINT_TRUSTED_POLICY_REF: trustedPolicyRef,
-      },
-      ["error", "error"],
-    );
+    const untrusted = runFocused(root, ["src/changed.ts", "src/untouched.ts"], {
+      GITHUB_ACTIONS: "false",
+      OPENCLAW_OXLINT_CHANGED_PATHS: JSON.stringify(changedPaths),
+      OPENCLAW_OXLINT_CHANGED_BASE: base,
+      OPENCLAW_OXLINT_TRUSTED_POLICY_REF: trustedPolicyRef,
+    });
+    const untrustedReport = parseReport(checked(untrusted, 1));
+    expect(byFile(untrustedReport, "src/changed.ts")[0]?.severity).toBe("error");
+    expect(byFile(untrustedReport, "src/untouched.ts")[0]?.severity).toBe("error");
   });
 
   it("preserves native config validation locally and in Actions", () => {
@@ -604,7 +730,12 @@ describe("oxlint config", () => {
     linkDependencies(root);
     write("fixture.ts", "console.log(1);\n");
     const invalidConfigs = [
-      JSON.stringify({ ...tinyLimit, rules: { "max-lines": ["not-a-severity", { max: 1 }] } }),
+      ...["not-a-severity", 3, null].map((severity) =>
+        JSON.stringify({
+          categories: { correctness: "off" },
+          rules: { "max-lines": [severity, { max: 1 }] },
+        }),
+      ),
       '{categories: {correctness: "off"}, rules: {"max-lines": ["error", {max: 1}]}}',
     ];
     for (const config of invalidConfigs) {

@@ -1,16 +1,19 @@
 import type { Server as HttpServer } from "node:http";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
 import { SANDBOX_HOST_PATH } from "../../../src/agents/sandbox-host.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
+import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
 import {
+  controlUiBundledSettingsStorageKey,
+  controlUiSessionUrl,
   installMockGateway,
   type ControlUiMockGatewayScenario,
 } from "../test-helpers/control-ui-e2e.ts";
+import { focusChatSidePanel } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
-import { bounds } from "./new-session-page.scenario.test-support.ts";
-import { pollText, pollCount } from "./new-session-page.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "dashboard fullscreen modes",
@@ -19,6 +22,7 @@ const suite = createControlUiE2eSuite({
 
 const sessionKey = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
 const initialFocusPath = "focus/dashboard/main/12345678";
+const canonicalFocusPath = "/focus/dashboard/main/deploy-monitor-12345678";
 const sessionRow = {
   key: sessionKey,
   kind: "direct",
@@ -48,8 +52,17 @@ const makeWidget = (name: string, title: string, position: number) => ({
 const boardSnapshot = {
   sessionKey,
   revision: 1,
-  tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" }],
-  widgets: [makeWidget("status", "Status", 0), makeWidget("permissions", "Permissions", 1)],
+  tabs: [
+    { tabId: "main", title: "Main", position: 0, chatDock: "right" },
+    { tabId: "research", title: "Research", position: 1, chatDock: "right" },
+  ],
+  widgets: [
+    makeWidget("status", "Status", 0),
+    {
+      ...makeWidget("permissions", "Permissions", 1),
+      declared: { tools: ["openclaw.data.read"], netOrigins: [] },
+    },
+  ],
 };
 
 function installBoard(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
@@ -76,6 +89,24 @@ async function expectWidgetReady(board: Locator, frame: Locator) {
   await expect.poll(() => frame.getAttribute("inert")).toBeNull();
   expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
   expect(await board.getByRole("status", { name: "Loading…", exact: true }).count()).toBe(0);
+}
+
+async function rememberMainTab(page: Page): Promise<void> {
+  const settingsKey = controlUiBundledSettingsStorageKey(suite.server.baseUrl);
+  await page.addInitScript(
+    ({ key, storageKey }) => {
+      const settings = JSON.parse(localStorage.getItem(storageKey) ?? "{}") as Record<
+        string,
+        unknown
+      >;
+      settings.boardSessionViews = {
+        ...(settings.boardSessionViews as Record<string, unknown> | undefined),
+        [key]: { activeTabId: "main" },
+      };
+      localStorage.setItem(storageKey, JSON.stringify(settings));
+    },
+    { key: sessionKey, storageKey: settingsKey },
+  );
 }
 
 async function openFocusFromDashboards(page: Page, focusPath: string): Promise<void> {
@@ -106,6 +137,12 @@ async function listenOnLoopback(server: HttpServer): Promise<number> {
   return address.port;
 }
 
+async function closeServer(server: HttpServer): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.close((error) => (error ? reject(error) : resolve()));
+  });
+}
+
 suite.define(() => {
   it("fails an unsupported focus target visibly without mounting the application shell", async () => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
@@ -114,6 +151,83 @@ suite.define(() => {
       await page.getByRole("alert").getByText("This focused view is not supported.").waitFor();
       expect(await page.locator("openclaw-app-shell").count()).toBe(0);
       await closeFocusedView(page, "Back");
+    });
+  });
+
+  it("renders a live interactive board in the shell-free dashboard document", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        deferredMethods: ["sessions.resolve"],
+        featureCapabilities: [GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC],
+        featureMethods: ["board.get", "board.update", "board.widget.grant", "board.widget.put"],
+        methodResponses: {
+          "sessions.describe": { session: sessionRow },
+          "board.get": boardSnapshot,
+          "board.widget.grant": {
+            ...boardSnapshot,
+            revision: 2,
+            widgets: boardSnapshot.widgets.map((widget) =>
+              widget.name === "permissions" ? { ...widget, grantState: "rejected" } : widget,
+            ),
+          },
+        },
+      });
+
+      await page.goto(`${suite.server.baseUrl}${initialFocusPath}`);
+      await gateway.waitForRequest("sessions.resolve");
+      expect(await gateway.getRequests("board.get")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(0);
+      const initialSessionListCount = (await gateway.getRequests("sessions.list")).length;
+      await gateway.resolveDeferred("sessions.resolve", resolvedSession);
+      const document = page.locator("openclaw-board-document");
+      await document.locator("openclaw-board-view").waitFor();
+
+      expect(await gateway.getRequests("sessions.resolve")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.describe")).toHaveLength(0);
+      expect(await gateway.getRequests("sessions.list")).toHaveLength(initialSessionListCount);
+      expect(await page.locator("openclaw-app-shell").count()).toBe(0);
+      expect(await page.locator(".agent-chat").count()).toBe(0);
+      expect((await gateway.getRequests("board.get"))[0]?.params).toEqual({
+        sessionKey,
+        agentId: "main",
+      });
+      await document.getByRole("tab", { name: "Research" }).waitFor();
+      const widget = document.locator('[data-widget-name="status"]');
+      await widget.waitFor();
+      expect(await widget.getAttribute("aria-label")).toContain("Dashboard widget: Status.");
+      await document.getByRole("button", { name: "Close dashboard" }).waitFor();
+      expect(new URL(page.url()).pathname).toBe(canonicalFocusPath);
+
+      await document
+        .locator('[data-widget-name="permissions"]')
+        .getByRole("button", { name: "Reject" })
+        .click();
+      const grant = await gateway.waitForRequest("board.widget.grant");
+      expect(grant.params).toEqual({
+        sessionKey,
+        agentId: "main",
+        name: "permissions",
+        decision: "rejected",
+        revision: 1,
+      });
+
+      await gateway.setMethodResponse("board.get", {
+        ...boardSnapshot,
+        revision: 2,
+        widgets: [{ ...boardSnapshot.widgets[0], title: "Updated status", revision: 2 }],
+      });
+      await gateway.emitGatewayEvent("board.changed", { sessionKey, widget: "status" });
+      await expect.poll(() => widget.getAttribute("aria-label")).toContain("Updated status");
+
+      await gateway.setMethodResponse("board.get", {
+        sessionKey,
+        revision: 3,
+        tabs: [],
+        widgets: [],
+      });
+      await gateway.emitGatewayEvent("board.changed", { sessionKey });
+      await document.getByText("A clear board, ready for work", { exact: true }).waitFor();
     });
   });
 
@@ -233,6 +347,7 @@ suite.define(() => {
                   .some((candidate) => candidate.parentFrame()?.url().includes(SANDBOX_HOST_PATH)),
               )
               .toBe(true);
+            await page.screenshot({ path: `${suite.artifactDir}/dashboard-loading.png` });
             expect(await frame.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
             expect(await frame.getAttribute("inert")).toBe("");
             await board.getByRole("status", { name: "Loading…", exact: true }).waitFor();
@@ -240,6 +355,7 @@ suite.define(() => {
             releaseDocument();
           }
           await expectWidgetReady(board, frame);
+          await page.screenshot({ path: `${suite.artifactDir}/dashboard-ready.png` });
           await expect
             .poll(() => board.evaluate((element) => element.scrollHeight > element.clientHeight))
             .toBe(true);
@@ -250,9 +366,12 @@ suite.define(() => {
             throw new Error("Dashboard widget document is not mounted");
           }
           const localScroller = embeddedFrame.locator(".local-scroll");
-          const localScrollerBox = await bounds(localScroller);
-          const boardBox = await bounds(board);
-          const frameBox = await bounds(frame);
+          const localScrollerBox = await localScroller.boundingBox();
+          const boardBox = await board.boundingBox();
+          const frameBox = await frame.boundingBox();
+          if (!localScrollerBox || !boardBox || !frameBox) {
+            throw new Error("Dashboard scroll owner or widget frame is not visible");
+          }
 
           await resetScroll(board);
           await page.mouse.move(
@@ -285,8 +404,11 @@ suite.define(() => {
           await resetScroll(board);
           const cdp = await context.newCDPSession(page);
           for (let attempt = 0; attempt < 4; attempt += 1) {
-            const currentBoardBox = await bounds(board);
-            const currentFrameBox = await bounds(frame);
+            const currentBoardBox = await board.boundingBox();
+            const currentFrameBox = await frame.boundingBox();
+            if (!currentBoardBox || !currentFrameBox) {
+              throw new Error("Dashboard scroll owner or widget frame disappeared");
+            }
             const touchX = currentFrameBox.x + currentFrameBox.width / 2;
             const touchStartY = Math.min(
               currentFrameBox.y + currentFrameBox.height - 24,
@@ -312,8 +434,11 @@ suite.define(() => {
             }
           }
           await expect.poll(() => scrollRemaining(board)).toBeLessThanOrEqual(1);
-          const finalRowBox = await bounds(embeddedFrame.locator("#dashboard-final-row"));
-          const finalBoardBox = await bounds(board);
+          const finalRowBox = await embeddedFrame.locator("#dashboard-final-row").boundingBox();
+          const finalBoardBox = await board.boundingBox();
+          if (!finalRowBox || !finalBoardBox) {
+            throw new Error("Dashboard final row or scroll owner is not visible");
+          }
           expect(finalRowBox.y + finalRowBox.height).toBeLessThanOrEqual(
             finalBoardBox.y + finalBoardBox.height + 1,
           );
@@ -349,13 +474,109 @@ suite.define(() => {
           await replacement
             .getByRole("button", { name: "Cleanup requested", exact: true })
             .waitFor();
+          await page.screenshot({ path: `${suite.artifactDir}/dashboard-fixed-controls.png` });
         },
       );
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        sandboxHost.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeServer(sandboxHost);
     }
+  });
+
+  it("expands dashboard and restores split without replacing its iframe", async () => {
+    await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      const widgetUrl = `${suite.server.baseUrl}__widget/seamless-dashboard`;
+      await page.route(widgetUrl, (route) =>
+        route.fulfill({
+          contentType: "text/html",
+          body: buildWidgetDocument(
+            "Release overview",
+            `<style>body{min-height:100vh;background:#e8f0ee;color:#193e35}main{padding:32px}h1{font-size:48px}</style>
+            <main><p>RELEASE OVERVIEW</p><h1>Everything in view.</h1><p>One dashboard, one uninterrupted canvas.</p>
+            <input aria-label="Release note" placeholder="Release note"></main>`,
+          ),
+        }),
+      );
+      const singleWidget = {
+        ...boardSnapshot,
+        tabs: [boardSnapshot.tabs[0]],
+        widgets: [
+          { ...boardSnapshot.widgets[0], sizeW: 12, grantState: "none", frameUrl: widgetUrl },
+        ],
+      };
+      const gateway = await installMockGateway(page, {
+        sessionKey,
+        featureMethods: ["board.get"],
+        methodResponses: { "board.get": singleWidget },
+      });
+      await rememberMainTab(page);
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey, "dashboard"));
+      await gateway.waitForRequest("board.get");
+
+      await page.locator(".board-session-surface").waitFor();
+      await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
+      await page.locator(".chat-thread").waitFor();
+      const widget = page.locator('[data-widget-name="status"]');
+      const frame = widget.locator("iframe");
+      const note = page.frameLocator('[data-widget-name="status"] iframe').getByRole("textbox");
+      await note.fill("Keep this draft");
+      const frameHandle = await frame.elementHandle();
+      // Side dashboards keep their card chrome; a main dashboard remains a page.
+      expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
+        "1px",
+      );
+      const frameInsets = () =>
+        frame.evaluate((element) => {
+          const board = element.closest("openclaw-board-view")!;
+          const outer = board.getBoundingClientRect();
+          const inner = element.getBoundingClientRect();
+          return {
+            left: inner.left - outer.left,
+            right: outer.right - inner.right,
+            top: inner.top - outer.top,
+            bottom: outer.bottom - inner.bottom,
+          };
+        });
+      await focusChatSidePanel(page);
+      await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(1);
+      await expect.poll(() => page.locator(".chat-thread").isHidden()).toBe(true);
+      await page.mouse.move(0, 0);
+      await page.screenshot({ path: `${suite.artifactDir}/single-widget-focused.png` });
+      await expect.poll(frameInsets).toEqual({ left: 12, right: 12, top: 12, bottom: 12 });
+      expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
+        "0px",
+      );
+      expect(await widget.evaluate((element) => getComputedStyle(element).borderRadius)).toBe(
+        "0px",
+      );
+      await selectChatLayoutAction(page, "Restore split");
+      await expect.poll(() => page.locator(".sidebar-region--expanded").count()).toBe(0);
+      await page.locator('.sidebar-region__primary[data-region="main"] .chat-thread').waitFor();
+      await page.locator('[data-panel-slot="dashboard"][data-region="side"]').waitFor();
+      // Side cards scroll as the widget reports new content height.
+      await expect.poll(frameInsets).toMatchObject({ left: 29, right: 29, top: 25 });
+      expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
+        "1px",
+      );
+      expect(await frame.evaluate((element, previous) => element === previous, frameHandle)).toBe(
+        true,
+      );
+      expect(await note.inputValue()).toBe("Keep this draft");
+      await selectChatLayoutAction(page, "Focus");
+      await frame.waitFor({ state: "visible" });
+      await expect.poll(frameInsets).toEqual({ left: 12, right: 12, top: 12, bottom: 12 });
+      await gateway.setMethodResponse("board.get", {
+        ...singleWidget,
+        revision: 2,
+        widgets: [...singleWidget.widgets, boardSnapshot.widgets[1]],
+      });
+      await gateway.emitGatewayEvent("board.changed", { sessionKey });
+      await expect.poll(() => page.locator(".board-widget").count()).toBe(2);
+      expect(await widget.evaluate((element) => getComputedStyle(element).borderTopWidth)).toBe(
+        "1px",
+      );
+      expect((await frameInsets()).left).toBeGreaterThan(0);
+      expect(await note.inputValue()).toBe("Keep this draft");
+    });
   });
 
   it("keeps ambiguity candidates inside the focused dashboard namespace", async () => {
@@ -366,19 +587,27 @@ suite.define(() => {
         methodResponses: {
           "sessions.resolve": {
             ok: false,
-            candidates: [sessionKey, secondKey].map((key, index) => ({
-              key,
-              agentId: "main",
-              boardFace: sessionRow.boardFace,
-              displayName: index ? "Deploy monitor beta" : sessionRow.displayName,
-            })),
+            candidates: [
+              {
+                key: sessionKey,
+                agentId: "main",
+                displayName: sessionRow.displayName,
+                boardFace: sessionRow.boardFace,
+              },
+              {
+                key: secondKey,
+                agentId: "main",
+                displayName: "Deploy monitor beta",
+                boardFace: sessionRow.boardFace,
+              },
+            ],
           },
         },
       });
 
       await openFocusFromDashboards(page, initialFocusPath);
       const links = page.getByRole("link");
-      await pollCount(links).toBe(2);
+      await expect.poll(() => links.count()).toBe(2);
       for (const link of await links.all()) {
         expect(new URL((await link.getAttribute("href")) ?? "", page.url()).pathname).toMatch(
           /^\/focus\/dashboard\/main\//u,
@@ -421,7 +650,7 @@ suite.define(() => {
       await openFocusFromDashboards(page, initialFocusPath);
       const alert = page.getByRole("alert");
       await alert.waitFor();
-      await pollText(alert).toContain("session routing is unavailable");
+      await expect.poll(() => alert.textContent()).toContain("session routing is unavailable");
       expect(await page.locator("openclaw-app-shell").count()).toBe(0);
       await closeFocusedView(page, "Close dashboard");
     });
@@ -441,8 +670,8 @@ suite.define(() => {
       await gateway.waitForRequest("board.get");
       const alert = page.getByRole("alert");
       await alert.waitFor();
-      await pollText(alert).toContain("dashboard storage is unavailable");
-      await pollText(alert).toContain("try again");
+      await expect.poll(() => alert.textContent()).toContain("dashboard storage is unavailable");
+      await expect.poll(() => alert.textContent()).toContain("try again");
       await closeFocusedView(page, "Close dashboard");
     });
   });

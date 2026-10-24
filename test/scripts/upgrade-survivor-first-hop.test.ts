@@ -79,18 +79,6 @@ function runNode(args: string[], env: NodeJS.ProcessEnv) {
 }
 
 function rollbackSuccessSummary() {
-  const sessions: { key: string; sessionId: string }[] = [];
-  const tables: typeof historyTables = [];
-  const database = <T extends object>(kind: string, version: number, extra: T) => ({
-    kind,
-    present: true,
-    relative: `/private/host/${kind}`,
-    userVersion: version,
-    contentVersion: version,
-    sessions,
-    tables,
-    ...extra,
-  });
   return {
     ...successSummary("2026.9.4", "2026.9.5"),
     backupRollback: {
@@ -110,16 +98,29 @@ function rollbackSuccessSummary() {
       restoredStateDir: "/private/host/restored",
       before: {
         databases: [
-          database("state", 16, {}),
-          database("agent", 19, {
+          {
+            kind: "state",
+            present: true,
+            relative: "/private/host/state",
+            userVersion: 16,
+            contentVersion: 16,
+            sessions: [],
+            tables: [],
+          },
+          {
+            kind: "agent",
             agentId: "main",
+            present: true,
+            userVersion: 19,
+            contentVersion: 19,
+            relative: "/private/host/agent",
             metadata: { secret: "PRIVATE_VALUE" },
             sessions: [{ key: "PRIVATE_SESSION_KEY", sessionId: "PRIVATE_SESSION_ID" }],
             tables: [
               { ...historyTables[0]!, columns: ["PRIVATE_COLUMN"] },
               { ...historyTables[1]!, raw: "PRIVATE_TRANSCRIPT" },
             ],
-          }),
+          },
           { kind: "agent", agentId: "ops", present: false, relative: "/private/host/ops" },
         ],
         files: [
@@ -131,7 +132,13 @@ function rollbackSuccessSummary() {
           },
         ],
       },
-      preflights: [{ agentId: "main", ...preflight, output: "/private/host/preflight.json" }],
+      preflights: [
+        {
+          agentId: "main",
+          ...preflight,
+          output: "/private/host/preflight.json",
+        },
+      ],
       sessionReads: [
         {
           agentId: "main",
@@ -143,34 +150,6 @@ function rollbackSuccessSummary() {
     },
   };
 }
-
-it.each([
-  ["legacy-operator-state", "2026.9.4", "manual", "restored-index-post-update.json"],
-  ["update-report-recovery", "2026.9.6", "manual", "update-report-recovery.json"],
-  ["legacy-operator-state", "2026.9.4", "manual", "legacy-operator-post-update-cron-history.json"],
-  [
-    "legacy-operator-state",
-    "2026.9.6",
-    "auto-auth",
-    "legacy-operator-post-update-cron-history.json",
-  ],
-])("publishes scenario log %s / %s / %s", async (scenario, version, mode, name) => {
-  const summary = rollbackSuccessSummary();
-  summary.baseline = { spec: `openclaw@${version}`, version };
-  summary.backupRollback.baselineVersion = version;
-  summary.backupRollback.runtime.version = version;
-  const { publish, published } = await publishSuccess(
-    {
-      ...summary,
-      scenario,
-      updateRestartMode: mode,
-      backupRollback: scenario === "legacy-operator-state" ? summary.backupRollback : undefined,
-    },
-    { [name]: { proof: "retained" } },
-  );
-  publish();
-  expect(readJson(join(published, "summary.json")).logs[name]).toBe('{"proof":"retained"}');
-});
 
 async function publishSuccess(
   summary: unknown,
@@ -307,6 +286,7 @@ describe("upgrade survivor rollback publication", () => {
 
   it.each<[string, (proof: ReturnType<typeof rollbackSuccessSummary>["backupRollback"]) => void]>([
     ["missing", () => undefined],
+    ["null", () => undefined],
     ["unfinished", (p) => Object.assign(p, { status: "captured" })],
     ["wrong-candidate", (p) => Object.assign(p, { candidateVersion: "2026.9.6" })],
     ["missing-preflight", (p) => Object.assign(p, { preflights: [] })],
@@ -353,9 +333,11 @@ describe("upgrade survivor rollback publication", () => {
     alter(proof);
     const { publish, published } = await publishSuccess({
       ...summary,
-      backupRollback: kind === "missing" ? undefined : proof,
+      backupRollback: kind === "missing" ? undefined : kind === "null" ? null : proof,
     });
-    expect(publish).toThrow(kind === "missing" ? "Invalid backup rollback evidence" : undefined);
+    expect(publish).toThrow(
+      kind === "missing" || kind === "null" ? "Invalid backup rollback evidence" : undefined,
+    );
     expect(existsSync(join(published, "summary.json"))).toBe(false);
   });
 });
@@ -395,12 +377,11 @@ function seedSessionMigration(root: string, issueCount = 1) {
 }
 
 describe("upgrade survivor first-hop process evidence", () => {
-  it("retains first-hop identities and Doctor IPC on a failed update", async () => {
-    const code = 1;
+  it.each([0, 1])("retains first-hop identities and Doctor IPC on exit %i", async (code) => {
     const { root, ipc, manifest, entrypoint, run } = processFixture();
     const artifacts = join(root, "artifacts");
     mkdirSync(artifacts);
-    const migration = seedSessionMigration(root, 4791);
+    const migration = code === 1 ? seedSessionMigration(root, 4791) : null;
     // Files change under the running parent. Reading package.json at exit would
     // falsely attribute that parent's result to the newly installed updater.
     writeFileSync(
@@ -416,7 +397,7 @@ if (process.argv[2] === 'update') {
   process.exitCode = child.status;
 } else {
   fs.writeFileSync(process.env.OPENCLAW_UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH, JSON.stringify({
-    status: 'error',
+    status: ${JSON.stringify(code === 0 ? "ok" : "error")},
     failureFacts: [{check:'plugin-doctor-post-session-state',code:'blocked-by-session-repair-failure',message:'private-doctor-value', extra:'private-ignored-value'}],
     configHash:'private-config-value'
   }), {mode:0o600});
@@ -454,7 +435,7 @@ if (process.argv[2] === 'update') {
       (report) => report.role === "doctor" && report.event === "exited",
     );
     expect(doctorExit.doctorResult).toEqual({
-      status: "error",
+      status: code === 0 ? "ok" : "error",
       failureFacts: failureFacts("private-doctor-value"),
     });
     const capture = runNode(
@@ -462,16 +443,18 @@ if (process.argv[2] === 'update') {
       { OPENCLAW_STATE_DIR: root, OPENCLAW_CONFIG_PATH: join(root, "missing-config.json") },
     );
     expect(capture.status, capture.stderr).toBe(0);
-    expect(Buffer.byteLength(migration.manifest)).toBeGreaterThan(256 * 1024);
-    expect(Buffer.byteLength(migration.failureReport)).toBeGreaterThan(256 * 1024);
-    const captured = readJson(join(artifacts, "diagnostics/raw.json"));
-    expect(captured.sessionMigration).toEqual({
-      runId: migration.runId,
-      manifest: migration.manifest,
-      failureReport: migration.failureReport,
-    });
-    // Publication must still work after the failed container's runtime is gone.
-    rmSync(migration.directory, { recursive: true });
+    if (migration) {
+      expect(Buffer.byteLength(migration.manifest)).toBeGreaterThan(256 * 1024);
+      expect(Buffer.byteLength(migration.failureReport)).toBeGreaterThan(256 * 1024);
+      const raw = readJson(join(artifacts, "diagnostics/raw.json"));
+      expect(raw.sessionMigration).toEqual({
+        runId: migration.runId,
+        manifest: migration.manifest,
+        failureReport: migration.failureReport,
+      });
+      // Publication must still work after the failed container's runtime is gone.
+      rmSync(migration.directory, { recursive: true });
+    }
     const { publishDiagnostics } = await import(observer);
     const published = join(root, "published");
     publishDiagnostics(artifacts, published, (text: string) =>
@@ -488,7 +471,7 @@ if (process.argv[2] === 'update') {
           parentPid: parent.pid,
           packageVersion: "2026.8.1",
           exitCode: code,
-          status: "error",
+          status: code === 0 ? "ok" : "error",
           failureFacts: failureFacts("[REDACTED]"),
         },
       ],
@@ -496,35 +479,39 @@ if (process.argv[2] === 'update') {
     expect(JSON.stringify(report)).not.toMatch(
       /private-doctor-value|private-ignored-value|private-config-value|private-issue-value|private-agent-value|private-session-key|outside\/do-not-read/,
     );
-    const projected = {
-      version: "2026.8.1",
-      targets: [
-        {
-          agentId: "main",
-          validationBeforeArchive: "passed",
-          completedMoves: 0,
-          plannedMoves: 0,
-          issueCount: 4791,
-          issueHistogram: [
-            { code: "active_sqlite_transcript_jsonl", count: 4781 },
-            { code: "transcript_missing", count: 10 },
-          ],
-        },
-      ],
-    };
-    expect(report.sessionMigration).toEqual({
-      availability: "captured",
-      runId: migration.runId,
-      manifest: projected,
-      failureReport: projected,
-    });
+    if (migration) {
+      const projected = {
+        version: "2026.8.1",
+        targets: [
+          {
+            agentId: "main",
+            validationBeforeArchive: "passed",
+            completedMoves: 0,
+            plannedMoves: 0,
+            issueCount: 4791,
+            issueHistogram: [
+              { code: "active_sqlite_transcript_jsonl", count: 4781 },
+              { code: "transcript_missing", count: 10 },
+            ],
+          },
+        ],
+      };
+      expect(report.sessionMigration).toEqual({
+        availability: "captured",
+        runId: migration.runId,
+        manifest: projected,
+        failureReport: projected,
+      });
+    }
     const rawPath = join(artifacts, "diagnostics/raw.json");
     const raw = readJson(rawPath);
     raw.doctorResults[0].exited.parentPid++;
-    raw.sessionMigration.manifest = JSON.stringify({
-      ...JSON.parse(migration.manifest),
-      runId: "session-sqlite-1789528941490-00000000",
-    });
+    if (migration) {
+      raw.sessionMigration.manifest = JSON.stringify({
+        ...JSON.parse(migration.manifest),
+        runId: "session-sqlite-1789528941490-00000000",
+      });
+    }
     writeJson(rawPath, raw);
     const mismatched = join(root, "mismatched");
     publishDiagnostics(artifacts, mismatched, (text: string) => text);
@@ -532,9 +519,11 @@ if (process.argv[2] === 'update') {
       availability: "unknown",
       observations: [],
     });
-    const changed = readJson(join(mismatched, "failure.json"));
-    expect(changed.sessionMigration.manifest).toBeNull();
-    expect(changed.omissions["session migration manifest"]).toBe("invalid observation; omitted");
+    if (migration) {
+      const changed = readJson(join(mismatched, "failure.json"));
+      expect(changed.sessionMigration.manifest).toBeNull();
+      expect(changed.omissions["session migration manifest"]).toBe("invalid observation; omitted");
+    }
     const serialized = JSON.stringify(reports);
     for (const value of ["private-argument-value", "private-environment-value", root]) {
       expect(serialized).not.toContain(value);
@@ -693,4 +682,72 @@ if (process.argv[2] === 'update') {
       expect.objectContaining({ role: "update", event: "started", packageVersion: "2026.7.1-2" }),
     ]);
   });
+});
+
+it.each([
+  {
+    name: "restored-index readback",
+    scenario: "legacy-operator-state",
+    version: "2026.9.4",
+    mode: "manual",
+    logs: {
+      "restored-index-post-update.json": {
+        status: "passed",
+        current: { label: "Renamed session", pinnedAt: 1234 },
+      },
+    },
+  },
+  {
+    name: "report recovery receipts and transport witnesses",
+    scenario: "update-report-recovery",
+    version: "2026.9.6",
+    mode: "manual",
+    logs: {
+      "update-report-recovery.json": { postCounts: [2, 1] },
+      "update-report-baseline.json": { version: "2026.9.6" },
+      "update-report-retry-status.log": { runId: "retry-run" },
+      "update-report-pending-status.log": { runId: "pending-run" },
+      "update-report-retry.gh.jsonl": { kind: "create", status: 422 },
+      "update-report-pending.gh.jsonl": { kind: "lookup", matches: [] },
+    },
+  },
+  ...[
+    { version: "2026.9.4", mode: "manual" },
+    { version: "2026.9.6", mode: "auto-auth" },
+  ].map(({ version, mode }) => ({
+    name: `${version} ${mode} Cron readback`,
+    scenario: "legacy-operator-state",
+    version,
+    mode,
+    logs: Object.fromEntries(
+      ["post-update", "candidate"].map((stage) => [
+        `legacy-operator-${stage}-cron-history.json`,
+        {
+          status: "passed",
+          stage,
+          source: version === "2026.9.4" ? "legacy-doctor-import" : "published-native-runs",
+          pages: [{ jobId: "synthetic", runId: "retained" }],
+        },
+      ]),
+    ),
+  })),
+])("publishes $name", async ({ scenario, version, mode, logs }) => {
+  const summary = rollbackSuccessSummary();
+  summary.baseline = { spec: `openclaw@${version}`, version };
+  summary.backupRollback.baselineVersion = version;
+  summary.backupRollback.runtime.version = version;
+  const publication = await publishSuccess(
+    {
+      ...summary,
+      scenario,
+      updateRestartMode: mode,
+      backupRollback: scenario === "legacy-operator-state" ? summary.backupRollback : undefined,
+    },
+    logs,
+  );
+  publication.publish();
+  const result = readJson(join(publication.published, "summary.json"));
+  expect(result.logs).toMatchObject(
+    Object.fromEntries(Object.entries(logs).map(([name, proof]) => [name, JSON.stringify(proof)])),
+  );
 });

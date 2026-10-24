@@ -1,8 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { copyFile, readFile } from "node:fs/promises";
+import { copyFile, readFile, realpath } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import type { Locator, Page } from "playwright";
+import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiDocument } from "../../../src/commands/control-ui-handoff.js";
 import { appendTranscriptMessage } from "../../../src/config/sessions/session-accessor.js";
@@ -46,7 +46,10 @@ type BrowserResponseProof = {
   id: string;
   fetchId: number;
   status: number;
-  events: string[];
+  cancelCount: number;
+  nativeCancelResolvedCount: number;
+  cancelRejectedCount: number;
+  blobReads: number;
   blobBytes: number;
 };
 type ProofWindow = typeof window & { avatarResponseProof: BrowserResponseProof[] };
@@ -166,7 +169,10 @@ async function observeAvatarResponses(page: Page, pathname: string | RegExp) {
           id: "",
           fetchId: ++fetchId,
           status: 0,
-          events: [],
+          cancelCount: 0,
+          nativeCancelResolvedCount: 0,
+          cancelRejectedCount: 0,
+          blobReads: 0,
           blobBytes: 0,
         };
         proof.push(record);
@@ -178,19 +184,19 @@ async function observeAvatarResponses(page: Page, pathname: string | RegExp) {
         }
         const originalCancel = response.body.cancel.bind(response.body);
         response.body.cancel = async (reason) => {
-          record.events.push("cancel");
+          record.cancelCount += 1;
           await originalCancel(reason);
-          record.events.push("cancelled");
+          record.nativeCancelResolvedCount += 1;
           // Reject only after native cancellation, so recovery must contain cleanup
           // failure without replacing the real Response or faking stream release.
           if (response.status === 401 || response.status === 403) {
-            record.events.push("rejected");
+            record.cancelRejectedCount += 1;
             throw new Error("avatar fixture cancellation rejection");
           }
         };
         const originalBlob = response.blob.bind(response);
         response.blob = async () => {
-          record.events.push("blob");
+          record.blobReads += 1;
           const blob = await originalBlob();
           record.blobBytes = blob.size;
           return blob;
@@ -245,6 +251,18 @@ const suite = createControlUiE2eSuite({
         expect(entrypoint[0]).toMatch(/^dist\/index\.m?js$/);
       }
       await owner.startGateway();
+      if (runtime.gatewayCommandPrefix) {
+        const pid = owner.child?.pid;
+        if (!pid) {
+          throw new Error("missing Gateway process for runtime proof");
+        }
+        // The custody view no longer exposes spawn metadata; inspect the live executable.
+        const executable =
+          process.platform === "linux"
+            ? await realpath(`/proc/${pid}/exe`)
+            : (await import("@openclaw/proc-safe/inspect")).readProcessCommand(pid)?.executable;
+        expect(executable).toBe(await realpath(runtime.gatewayCommandPrefix[0]));
+      }
       const created = await owner.cli([
         "gateway",
         "call",
@@ -378,10 +396,10 @@ async function expectReleasedResponses(page: Page, caseName: StreamCase, count?:
           const observed = browser.find((entry) => entry.id === response.id);
           return (
             observed?.status === response.status &&
-            observed.events.join(",") ===
-              (status === 401 || status === 403
-                ? "cancel,cancelled,rejected"
-                : "cancel,cancelled") &&
+            observed.cancelCount === 1 &&
+            observed.nativeCancelResolvedCount === 1 &&
+            observed.cancelRejectedCount === (status === 401 || status === 403 ? 1 : 0) &&
+            observed.blobReads === 0 &&
             !response.finished &&
             response.closed &&
             response.endedAtClose === false &&
@@ -393,18 +411,6 @@ async function expectReleasedResponses(page: Page, caseName: StreamCase, count?:
     .toBe(true);
 }
 
-async function expectDecodedAvatar(image: Locator) {
-  await expect
-    .poll(async () =>
-      (await image.count()) === 1
-        ? image.evaluate((element: HTMLImageElement) => element.naturalWidth)
-        : 0,
-    )
-    .toBeGreaterThan(0);
-  expect(await image.getAttribute("src")).toMatch(/^blob:/);
-  expect(await image.isVisible()).toBe(true);
-}
-
 suite.define(() => {
   it("renders the configured workspace avatar beside a persisted assistant reply", async () => {
     await suite.withPage(
@@ -412,8 +418,14 @@ suite.define(() => {
       async ({ page }) => {
         await openAvatarChat(page);
         const avatar = page.locator("img.chat-avatar.assistant");
-        await expectDecodedAvatar(avatar);
+        const decodedWidth = async () =>
+          (await avatar.count()) === 1
+            ? avatar.evaluate((element) => (element as HTMLImageElement).naturalWidth)
+            : 0;
+        await expect.poll(decodedWidth).toBeGreaterThan(0);
+        expect(await avatar.getAttribute("src")).toMatch(/^blob:/);
         expect(await avatar.getAttribute("alt")).toBe("Avatar Proof");
+        expect(await avatar.isVisible()).toBe(true);
         expect(
           await avatar.evaluate((element) => element.closest(".chat-group")?.textContent),
         ).toContain(reply);
@@ -495,9 +507,14 @@ suite.define(() => {
         ]);
         await expectReleasedResponses(page, caseName, 1);
         const image = consumer.locator("img.workspace-icon");
-        await expectDecodedAvatar(image);
+        await image.waitFor();
+        await expect
+          .poll(() => image.evaluate((element: HTMLImageElement) => element.naturalWidth))
+          .toBeGreaterThan(0);
+        expect(await image.getAttribute("src")).toMatch(/^blob:/);
+        expect(await image.isVisible()).toBe(true);
         const browser = await readBrowserResponses(page);
-        expect(browser).toMatchObject([{ status }, { status: 200, events: ["blob"] }]);
+        expect(browser).toMatchObject([{ status }, { status: 200, cancelCount: 0, blobReads: 1 }]);
         const success = browser[1];
         expect(success?.blobBytes).toBeGreaterThan(0);
         expect(readServerResponses(caseName)).toMatchObject([

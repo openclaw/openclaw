@@ -327,6 +327,7 @@ async function trackReader(page: Page, colorScheme: "dark" | "light") {
   await expect.poll(visibilityMatchesViewport).toBe(true);
   await markerForIndex(4).hover();
   await expect.poll(() => preview.textContent()).toContain("Transcript checkpoint 4");
+  const ticks = markers.locator(".chat-position-rail__tick");
   const waveWidths = async () =>
     (await readStyles(ticks, ["width"])).slice(0, 9).map(([width]) => Number.parseFloat(width!));
   const expectWave = async () => {

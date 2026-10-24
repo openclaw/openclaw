@@ -223,9 +223,13 @@ describe("release tooling identity", () => {
   });
 
   it.each([
+    ["active", "in_progress", undefined, false],
     ["active", "completed", "success", false],
     ["active-or-failure", "completed", "failure", true],
+    ["active-or-failure", "completed", "success", false],
     ["active-or-success", "completed", "success", true],
+    ["active-or-success", "completed", "failure", false],
+    ["manual-recovery", "completed", "success", true],
     ["manual-recovery", "completed", "failure", true],
     ["manual-recovery", "completed", "cancelled", false],
   ] as const)("enforces parent policy %s for %s/%s", (policy, status, conclusion, accepted) => {
@@ -245,9 +249,11 @@ describe("release tooling identity", () => {
 
   it.each([
     ["active", "waiting", null, true],
+    ["active", "completed", "success", false],
     ["active", "waiting", "success", false],
     ["success", "completed", "success", true],
     ["success", "waiting", null, false],
+    ["success", "completed", "failure", false],
   ] as const)(
     "enforces writer policy %s for %s/%s",
     (runStatePolicy, status, conclusion, accepted) => {
@@ -330,13 +336,17 @@ describe("historical npm preflight tooling", () => {
     );
   });
 
-  it.each([undefined, { workflowRef: producer.workflowRef.replace("refs/tags/", "refs/heads/") }])(
-    "rejects incomplete or mismatched immutable producer evidence %j",
-    (override) => {
-      const manifest = { version: 2, ...(override && { producer: { ...producer, ...override } }) };
-      expect(() => validateNpmPreflightProducer({ ...expectedProducer, manifest })).toThrow();
-    },
-  );
+  it.each([
+    undefined,
+    { workflowRef: producer.workflowRef.replace("refs/tags/", "refs/heads/") },
+    { workflowSha: OTHER_SHA },
+    { runId: PARENT_RUN_ID },
+    { runAttempt: "2" },
+    { repository: "other/repo" },
+  ])("rejects incomplete or mismatched immutable producer evidence %j", (override) => {
+    const manifest = { version: 2, ...(override && { producer: { ...producer, ...override } }) };
+    expect(() => validateNpmPreflightProducer({ ...expectedProducer, manifest })).toThrow();
+  });
 
   function proof(overrides: Record<string, unknown> = {}) {
     const responses: Record<string, unknown> = {
@@ -410,11 +420,13 @@ function qualificationFixture({
   fullRunId,
   fullRunAttempt,
   retainedTransport = false,
+  producerRunAttempt = "1",
 }: {
   workflowPath: string;
   fullRunId: string;
   fullRunAttempt: string;
   retainedTransport?: boolean;
+  producerRunAttempt?: string;
 }) {
   const sourceSha = retainedTransport ? SHA : OTHER_SHA;
   const producerRef = retainedTransport ? `release-ci/${SHA.slice(0, 12)}-100` : "main";
@@ -431,7 +443,7 @@ function qualificationFixture({
     workflowRef: `openclaw/openclaw/${workflowPath}@${fullRef}`,
     workflowSha: SHA,
     runId: RUN_ID,
-    runAttempt: "1",
+    runAttempt: producerRunAttempt,
     jobId: "999",
     jobName: "Qualify release npm artifacts / Qualify prepared npm package",
     producerWorkflowPath: ".github/workflows/openclaw-npm-preflight.yml",
@@ -459,7 +471,7 @@ function qualificationFixture({
       name: `openclaw-npm-preflight-${OTHER_SHA}`,
       digest: "e".repeat(64),
       runId: RUN_ID,
-      runAttempt: "1",
+      runAttempt: producerRunAttempt,
     },
   };
   const fullReleaseManifest = {
@@ -495,7 +507,7 @@ function qualificationFixture({
     workflowSha: SHA,
     workflowPath,
     runId: RUN_ID,
-    runAttempt: "1",
+    runAttempt: producerRunAttempt,
     fullReleaseManifest,
     fullReleaseRunId: fullRunId,
     fullReleaseRunAttempt: fullRunAttempt,
@@ -509,42 +521,49 @@ function qualificationFixture({
     sourceSha,
     toolingSha: SHA,
   };
-  function reader(artifactOverrides = {}, runOverrides = {}) {
-    const run = parentRun({
-      id: Number(RUN_ID),
-      run_attempt: 1,
-      path: workflowPath,
-      head_branch: producerRef,
+  function reader(jobOverrides = {}, artifactOverrides = {}, runOverrides = {}) {
+    const job = {
+      id: 999,
+      name: producer.jobName,
+      run_id: Number(RUN_ID),
+      run_attempt: Number(producerRunAttempt),
+      head_sha: SHA,
       status: "completed",
       conclusion: "success",
-      head_repository: { full_name: producer.repository },
-      ...runOverrides,
-    });
-    const responses: Record<string, unknown> = {
-      [`actions/runs/${RUN_ID}`]: run,
-      [`actions/runs/${RUN_ID}/attempts/1`]: run,
-      [`actions/runs/${RUN_ID}/attempts/1/jobs?per_page=100&page=1`]: {
-        total_count: 1,
-        jobs: [
-          {
-            id: 999,
-            name: producer.jobName,
-            run_id: Number(RUN_ID),
-            run_attempt: 1,
-            head_sha: SHA,
+      ...jobOverrides,
+    };
+    return (args: string[]) => {
+      const endpoint = args[1];
+      if (!endpoint) {
+        throw new Error("Expected GitHub API endpoint.");
+      }
+      if (endpoint.endsWith("/artifacts/555")) {
+        return JSON.stringify({
+          ...artifactMetadata(qualified.artifact),
+          ...artifactOverrides,
+        });
+      }
+      if (endpoint.includes("/jobs?")) {
+        return JSON.stringify({ total_count: 1, jobs: [job] });
+      }
+      if (
+        endpoint.endsWith(`/attempts/${producerRunAttempt}`) ||
+        endpoint.endsWith(`/actions/runs/${RUN_ID}`)
+      ) {
+        return JSON.stringify(
+          parentRun({
+            id: Number(RUN_ID),
+            run_attempt: Number(producerRunAttempt),
+            path: workflowPath,
+            head_branch: producerRef,
             status: "completed",
             conclusion: "success",
-          },
-        ],
-      },
-      "actions/artifacts/555": { ...artifactMetadata(qualified.artifact), ...artifactOverrides },
-    };
-    return ([, endpoint]: string[]) => {
-      const route = endpoint?.replace(`repos/${producer.repository}/`, "");
-      if (!route || !Object.hasOwn(responses, route)) {
-        throw new Error(`Unexpected proof request: ${endpoint}`);
+            head_repository: { full_name: producer.repository },
+            ...runOverrides,
+          }),
+        );
       }
-      return JSON.stringify(responses[route]);
+      throw new Error(`Unexpected proof request: ${endpoint}`);
     };
   }
   return {
@@ -565,7 +584,7 @@ function qualificationFixture({
 describe("npm qualification", () => {
   const { input, resolutionInput, reader, verify, resolve } =
     qualificationFixture(independentProducerRoute);
-  const { manifest, fullReleaseManifest } = input;
+  const { manifest, fullReleaseManifest, workflowPath } = input;
   const { producer } = manifest;
   it.each(qualificationRoutes)("requires exact qualifier and artifact for $label", (route) => {
     const fixture = qualificationFixture(route);
@@ -578,6 +597,9 @@ describe("npm qualification", () => {
       `repos/openclaw/openclaw/actions/runs/${RUN_ID}/attempts/1`,
     );
     expect(fixture.verify()).toMatchObject({ provenance: "immutable-manifest" });
+    expect(() => fixture.verify({}, fixture.reader({ conclusion: "failure" }))).toThrow(
+      "completed producer job",
+    );
     expect(() => fixture.verify({ manifestSha256: "f".repeat(64) })).toThrow(
       "exact full release qualification",
     );
@@ -585,9 +607,12 @@ describe("npm qualification", () => {
       "qualified npm preflight",
     );
   });
-  it("rejects mismatched source and unqualified package evidence", () => {
+  it("rejects stale source or attempt and raw-only package evidence", () => {
     expect(() => verify({ manifest: { version: 1 } })).toThrow("qualified version 3");
     expect(() => validateFullReleaseNpmPreflight({ ...resolutionInput, sourceSha: SHA })).toThrow(
+      "qualified npm preflight",
+    );
+    expect(() => validateFullReleaseNpmPreflight({ ...resolutionInput, runAttempt: "2" })).toThrow(
       "qualified npm preflight",
     );
     expect(() =>
@@ -601,36 +626,66 @@ describe("npm qualification", () => {
     ).toThrow("qualification");
   });
 
-  it.each(["root", "transport"])("rejects changed retained %s evidence", (mismatch) => {
-    const fixture = qualificationFixture(retainedProducerRoute);
-    const reuse = fixture.input.fullReleaseManifest.evidenceReuse;
-    if (!reuse) {
-      throw new Error("Expected retained producer fixture");
-    }
-    if (mismatch === "root") {
-      reuse.selectedRunId = "99999";
-    }
-    if (mismatch === "transport") {
-      const retainedProducer = fixture.input.manifest.producer;
-      retainedProducer.workflowRef = retainedProducer.workflowRef.replace("-100", "-300");
-    }
-    expect(() => fixture.resolve()).toThrow("qualified npm preflight");
-  });
+  it.each(["root", "candidate", "policy", "transport"])(
+    "rejects changed retained %s evidence",
+    (mismatch) => {
+      const fixture = qualificationFixture(retainedProducerRoute);
+      const reuse = fixture.input.fullReleaseManifest.evidenceReuse;
+      if (!reuse) {
+        throw new Error("Expected retained producer fixture");
+      }
+      if (mismatch === "root") {
+        reuse.selectedRunId = "99999";
+      }
+      if (mismatch === "candidate") {
+        reuse.publication.sourceAdmission.candidateSha = OTHER_SHA;
+      }
+      if (mismatch === "policy") {
+        reuse.policy = "changelog-only-release-v1";
+      }
+      if (mismatch === "transport") {
+        const retainedProducer = fixture.input.manifest.producer;
+        retainedProducer.workflowRef = retainedProducer.workflowRef.replace("-100", "-300");
+      }
+      expect(() => fixture.resolve()).toThrow("qualified npm preflight");
+    },
+  );
 
-  it("rejects a descriptor detached from its producer", () => {
+  it.each([
+    ["run", "artifact", { runId: "99999" }],
+    ["attempt", "artifact", { runAttempt: "2" }],
+    ["tooling", "producer", { workflowSha: OTHER_SHA }],
+    [
+      "workflow",
+      "producer",
+      { workflowRef: producer.workflowRef.replace(workflowPath, ".github/workflows/ci.yml") },
+    ],
+    ["repository", "producer", { repository: "other/repository" }],
+    [
+      "ref",
+      "producer",
+      { workflowRef: producer.workflowRef.replace("refs/heads/main", "refs/heads/other") },
+    ],
+  ] as const)("rejects a descriptor detached from its %s binding", (_mismatch, section, patch) => {
     const changed = structuredClone(fullReleaseManifest);
-    changed.publicationArtifacts.npmPreflight.artifact.runId = "99999";
+    const descriptor = changed.publicationArtifacts.npmPreflight;
+    Object.assign(descriptor[section], patch);
     expect(() => resolve({ manifest: changed })).toThrow();
   });
 
   it.each([
     ["run", { id: 777 }, {}],
+    ["attempt", { run_attempt: 2 }, {}],
+    ["tooling", { head_sha: OTHER_SHA }, {}],
+    ["workflow", { path: ".github/workflows/ci.yml" }, {}],
+    ["repository", { repository: { full_name: "other/repository" } }, {}],
+    ["unfinished", { status: "in_progress", conclusion: null }, {}],
     ["artifact", {}, { workflow_run: { id: 777, head_sha: SHA } }],
   ])("rejects changed live %s evidence", (_mismatch, runOverrides, artifactOverrides) => {
-    expect(() => resolve({}, reader(artifactOverrides, runOverrides))).toThrow();
+    expect(() => resolve({}, reader({}, artifactOverrides, runOverrides))).toThrow();
   });
 
-  it.each(["valid", "manifest changed", "deadline exceeded"])(
+  it.each(["valid", "archive changed", "manifest changed", "deadline exceeded"])(
     "downloads only the exact qualified archive (%s)",
     async (outcome) => {
       const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`);
@@ -660,12 +715,16 @@ describe("npm qualification", () => {
         size_in_bytes: archive.length,
         expires_at: "2099-10-01T00:00:00Z",
       };
+      const delivered = Buffer.from(archive);
+      if (outcome === "archive changed") {
+        delivered.writeUInt8(delivered.readUInt8(0) ^ 1, 0);
+      }
       const requests: string[] = [];
       const fetchImpl: typeof fetch = async (url) => {
         const requestUrl = typeof url === "string" ? url : url instanceof URL ? url.href : url.url;
         requests.push(requestUrl);
         return requestUrl.endsWith("/zip")
-          ? new Response(new Uint8Array(archive))
+          ? new Response(new Uint8Array(delivered))
           : Response.json(metadata);
       };
       const root = tempDirs.make("qualified-npm-preflight-");
@@ -678,7 +737,7 @@ describe("npm qualification", () => {
         manifest: selected,
         outputDir,
         token: "test-artifact-token",
-        runGh: reader(metadata),
+        runGh: reader({}, metadata),
         fetchImpl,
         archivePath: join(root, "555.zip"),
         deadlineMs: Date.now() + (outcome === "deadline exceeded" ? -1 : 10_000),
@@ -691,9 +750,17 @@ describe("npm qualification", () => {
         for (const [name, bytes] of Object.entries(files)) {
           expect(readFileSync(join(outputDir, name)).equals(bytes), name).toBe(true);
         }
+        const retriedDir = join(root, "retried");
+        await downloadFullReleaseNpmPreflight({ ...downloadOptions, outputDir: retriedDir });
+        expect(readFileSync(join(retriedDir, manifest.tarballName))).toEqual(tarballBytes);
+        expect(requests.filter((url) => url.endsWith("/zip"))).toHaveLength(1);
       } else {
         await expect(download).rejects.toThrow(
-          outcome === "deadline exceeded" ? "deadline exceeded" : "qualified descriptor",
+          outcome === "archive changed"
+            ? "digest"
+            : outcome === "deadline exceeded"
+              ? "deadline exceeded"
+              : "qualified descriptor",
         );
         expect(existsSync(outputDir)).toBe(false);
         if (outcome === "deadline exceeded") {

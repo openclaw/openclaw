@@ -2,6 +2,7 @@ import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { SessionMoveTarget } from "../../../packages/gateway-protocol/src/index.js";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
 import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
 import {
   chatSessionListResponse,
@@ -10,8 +11,7 @@ import {
   installMockGateway,
   requireString,
 } from "./chat-flow.test-support.ts";
-import { bounds } from "./new-session-page.scenario.test-support.ts";
-import { pollCount } from "./new-session-page.test-support.ts";
+import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 
@@ -35,6 +35,7 @@ async function openPlacement(scope: Page | Locator) {
 }
 const sessionKey = "agent:main:placement-move";
 const expectedSource = { generation: 4, environmentId: "worker:source", ownerEpoch: 7 };
+const moveMethods = ["chat.startup", "environments.list", "sessions.move"];
 type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
 async function expectMove(gateway: Gateway, target: SessionMoveTarget, abandonSource?: true) {
   expect((await gateway.waitForRequest("sessions.move")).params).toEqual({
@@ -53,7 +54,7 @@ const localPlacement = {
   stateChangedAtMs: 3,
 };
 async function expectCount(locator: Locator, count = 1) {
-  await pollCount(locator).toBe(count);
+  await expect.poll(() => locator.count()).toBe(count);
 }
 async function resolveMove(gateway: Gateway, placement: unknown) {
   await gateway.resolveDeferred("sessions.move", {
@@ -77,8 +78,11 @@ function installPlacementGateway(page: Page, options: Parameters<typeof installM
 async function assertPromptBeforeReply(transcript: Locator, prompt: string, reply: string) {
   expect(await transcript.getByText(prompt, { exact: true }).count()).toBe(1);
   expect(await transcript.getByText(reply, { exact: true }).count()).toBe(1);
-  const promptBounds = await bounds(transcript.getByText(prompt, { exact: true }));
-  const replyBounds = await bounds(transcript.getByText(reply, { exact: true }));
+  const promptBounds = await transcript.getByText(prompt, { exact: true }).boundingBox();
+  const replyBounds = await transcript.getByText(reply, { exact: true }).boundingBox();
+  if (!promptBounds || !replyBounds) {
+    throw new Error("The placement prompt and reply must both be visible");
+  }
   expect(promptBounds.y).toBeLessThan(replyBounds.y);
 }
 
@@ -111,7 +115,139 @@ function activeSession() {
   };
 }
 
+function observedRunnerStatus(page: Page, key: string) {
+  return evaluateControlUiContext(
+    page,
+    ({ sessions }, target) => {
+      // Descriptor admission can precede every list while chat.startup is held.
+      const observation = sessions.observeRow(target, () => undefined);
+      try {
+        const placement = observation.row?.placement;
+        return placement?.state === "active" ? placement.runner?.status : undefined;
+      } finally {
+        observation.dispose();
+      }
+    },
+    { key, agentId: "main" },
+  );
+}
+
 suite.define(() => {
+  it("shows authoritative device targets to writers and moves through the exact-source RPC", () =>
+    suite.withPage(contextOptions, async ({ page }) => {
+      const gateway = await installPlacementGateway(page, {
+        featureMethods: moveMethods,
+        operatorScopes: ["operator.read", "operator.write"],
+        historyMessages: [{ role: "assistant", content: "Placement move proof." }],
+        methodResponses: {
+          "sessions.list": chatSessionListResponse([activeSession()]),
+          "environments.list": {
+            profiles: [{ id: "aws", providerId: "crabbox", trust: "disposable" }],
+            environments: (
+              [
+                ["writer-runner", "Writer runner", { workerSlots: { total: 1, available: 1 } }],
+                ["saturated", "Busy runner", { workerSlots: { total: 2, available: 0 } }],
+                ["offline", "Offline runner", { status: "unavailable" }],
+                ["nonhost", "Hosting disabled", { sessionHost: false }],
+              ] as const
+            ).map(([id, label, overrides]) =>
+              Object.assign(
+                { id: `node:${id}`, type: "node", label, status: "available", sessionHost: true },
+                overrides,
+              ),
+            ),
+          },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await gateway.deferNext("sessions.move");
+      await openPlacement(page);
+      await page.getByRole("menuitem", { name: "Move session…", exact: true }).click();
+      await page.getByText("The active turn will be interrupted.", { exact: false }).waitFor();
+      await page.locator('[data-value="gateway"]').waitFor();
+      await page.locator('[data-value="device:writer-runner"]').waitFor();
+      expect(await page.locator('[data-value="cloud:aws"]').count()).toBe(0);
+      expect(await page.locator('[data-value="device:saturated"]').isDisabled()).toBe(true);
+      expect(await page.locator('[data-value="device:offline"]').isDisabled()).toBe(true);
+      expect(await page.locator('[data-value="device:nonhost"]').isDisabled()).toBe(true);
+      await page.getByText("No worker slots are available", { exact: false }).waitFor();
+      await page.getByText("Device unavailable", { exact: false }).waitFor();
+      await page.getByText("Session hosting is disabled", { exact: false }).waitFor();
+      expect(await gateway.getRequests("node.list")).toHaveLength(0);
+      await page.locator('[data-value="device:writer-runner"]').click();
+
+      await page.getByRole("button", { name: "Move session", exact: true }).click();
+      await expectMove(gateway, { kind: "device", deviceId: "writer-runner" });
+      await (
+        await placementTrigger(page)
+      )
+        .and(page.getByRole("button", { name: /Moving session/ }))
+        .waitFor();
+
+      await resolveMove(gateway, { state: "active", generation: 10 });
+    }));
+
+  it("waits for an offline device or explicitly continues from Gateway-synced state", () =>
+    suite.withPage(contextOptions, async ({ page }) => {
+      const session = runnerSession("offline");
+      const gateway = await installPlacementGateway(page, {
+        featureMethods: ["chat.startup", "sessions.move"],
+        operatorScopes: ["operator.read", "operator.write"],
+        historyMessages: [{ role: "assistant", content: "Offline device recovery proof." }],
+        methodResponses: {
+          "sessions.list": chatSessionListResponse([session]),
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await openPlacement(page);
+      await page.getByRole("button", { name: /Device offline/ }).waitFor();
+      await page
+        .getByText("Waiting for device to reconnect; retry after it returns", { exact: false })
+        .waitFor();
+      session.placement.runner.status = "available";
+      await gateway.setSessionsListResponse(chatSessionListResponse([session]));
+      await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
+      await page.getByRole("button", { name: /Runs on device/ }).waitFor();
+      expect(await page.locator(".chat-pane__placement-note").count()).toBe(0);
+
+      session.placement.runner.status = "offline";
+      await gateway.setSessionsListResponse(chatSessionListResponse([session]));
+      await gateway.emitGatewayEvent("sessions.changed", { reason: "runner-availability" });
+      await page.getByRole("button", { name: /Device offline/ }).waitFor();
+      const continueAction = page.getByRole("menuitem", {
+        name: "Continue on Gateway…",
+        exact: true,
+      });
+      if (!(await continueAction.isVisible())) {
+        await openPlacement(page);
+      }
+      const moveItem = page.locator(".chat-pane__placement-move");
+      const reclaimItem = page.locator(".chat-pane__placement-reclaim");
+      expect(await moveItem.isDisabled()).toBe(false);
+      expect(await reclaimItem.isDisabled()).toBe(true);
+      await expect.poll(() => tooltipTitleText(reclaimItem)).toContain("Reconnect the device");
+
+      await gateway.deferNext("sessions.move");
+      await continueAction.click();
+      await page.getByText("Unsynced device files", { exact: false }).waitFor();
+      await page.getByRole("button", { name: "Continue on Gateway", exact: true }).click();
+
+      await expectMove(gateway, { kind: "gateway" }, true);
+      expect(await gateway.getRequests("environments.list")).toHaveLength(0);
+      expect(await gateway.getRequests("node.list")).toHaveLength(0);
+      const localSession = {
+        ...session,
+        hasActiveRun: false,
+        placement: localPlacement,
+      };
+      await gateway.setSessionsListResponse(chatSessionListResponse([localSession]));
+      await resolveMove(gateway, localSession.placement);
+      await page.locator(".chat-environment__machine-trigger").waitFor({ state: "detached" });
+
+      expect(await page.getByRole("button", { name: "Move failed" }).count()).toBe(0);
+      expect(await page.getByText("Continue on Gateway…", { exact: true }).count()).toBe(0);
+    }));
+
   it("preserves an abandoned partial and one owned local final in both panes", () =>
     suite.withPage(contextOptions, async ({ page }) => {
       const abandonedRunId = "abandoned-placement-run";
@@ -152,6 +288,7 @@ suite.define(() => {
         },
         operatorScopes: ["operator.read", "operator.write"],
         sessionInfo: session,
+        sessionKey,
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await (
@@ -360,6 +497,7 @@ suite.define(() => {
       )
         .and(page.getByRole("button", { name: /Runs on device/ }))
         .waitFor();
+      await expect.poll(() => observedRunnerStatus(page, available.key)).toBe("available");
       const presentation = await page.evaluateHandle(() => {
         const state = { returnedOnline: false, seenOffline: false };
         const inspect = () => {
@@ -443,6 +581,7 @@ suite.define(() => {
         match: descriptorMatch,
       });
       await page.getByRole("button", { name: /Device offline/ }).waitFor();
+      expect(await observedRunnerStatus(page, available.key)).toBe("offline");
       expect(await gateway.getRequests("sessions.describe", descriptorMatch)).toHaveLength(
         descriptorCount + 2,
       );
@@ -470,4 +609,61 @@ suite.define(() => {
         .getByText("Waiting for device to reconnect; retry after it returns", { exact: false })
         .waitFor();
     }));
+
+  it.each(["fast", undefined] as const)("moves to a cloud profile with machine %s", (machineId) =>
+    suite.withPage(contextOptions, async ({ page }) => {
+      const gateway = await installPlacementGateway(page, {
+        featureMethods: moveMethods,
+        operatorScopes: ["operator.admin", "operator.read", "operator.write"],
+        historyMessages: [{ role: "assistant", content: "Placement machine proof." }],
+        methodResponses: {
+          "sessions.list": chatSessionListResponse([activeSession()]),
+          "environments.list": {
+            profiles: [
+              {
+                id: "aws",
+                providerId: "crabbox",
+                trust: "disposable",
+                ...(machineId
+                  ? {
+                      machines: [
+                        { id: "standard", label: "Standard", default: true },
+                        { id: "fast", label: "Fast" },
+                      ],
+                    }
+                  : {}),
+              },
+            ],
+            environments: [],
+          },
+        },
+      });
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await gateway.deferNext("sessions.move");
+      await openPlacement(page);
+      await page.getByRole("menuitem", { name: "Move session…", exact: true }).click();
+      const profile = page.locator('[data-value="cloud:aws"]');
+      await profile.click();
+      await expect.poll(() => profile.getAttribute("aria-pressed")).toBe("true");
+      if (machineId) {
+        await page.getByRole("button", { name: "Machine", exact: true }).click();
+        await page
+          .getByRole("menu", { name: "Machine", exact: true })
+          .locator(`[role="menuitemradio"][data-value="${machineId}"]`)
+          .click();
+      } else {
+        const dialog = page.locator("openclaw-modal-dialog");
+        expect(await dialog.getByText("Machine", { exact: true }).count()).toBe(0);
+        expect(await dialog.getByRole("button", { name: "Machine", exact: true }).count()).toBe(0);
+      }
+      await page.getByRole("button", { name: "Move session", exact: true }).click();
+
+      await expectMove(gateway, {
+        kind: "profile",
+        profileId: "aws",
+        ...(machineId ? { machineClass: machineId } : {}),
+      });
+      await resolveMove(gateway, { state: "active", generation: 10 });
+    }),
+  );
 });

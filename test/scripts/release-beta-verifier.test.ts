@@ -3,8 +3,8 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { crc32 } from "node:zlib";
 import { expectDefined } from "@openclaw/normalization-core";
-import JSZip from "jszip";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   parsePublicationDiagnostic,
@@ -22,6 +22,7 @@ import {
   validateClawHubBootstrapEvidence,
   verifyBetaRelease,
 } from "../../scripts/lib/release-beta-verifier.ts";
+import { verifyPreparedNpmRegistry } from "../../scripts/plugin-npm-prepared-release.mjs";
 import { scriptProcessEntrypoints } from "../../scripts/script-process-runtime.test-support.js";
 import {
   resolveRuntimeWorkerArgv,
@@ -30,26 +31,6 @@ import {
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
-
-function writeJson(file: string, value: unknown) {
-  writeFileSync(file, JSON.stringify(value));
-}
-
-function readJson(file: string) {
-  return JSON.parse(readFileSync(file, "utf8"));
-}
-
-const bootstrapRun = {
-  id: 34,
-  name: "Plugin ClawHub New",
-  event: "workflow_dispatch",
-  head_branch: "main",
-  head_sha: "b".repeat(40),
-  path: ".github/workflows/plugin-clawhub-new.yml@refs/heads/main",
-  run_attempt: 2,
-  status: "completed",
-  conclusion: "success",
-};
 
 const tempDirs = createTempDirTracker();
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -74,12 +55,47 @@ function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
 }
 
-async function createStoredZip(files: Array<{ name: string; bytes: Buffer }>): Promise<Buffer> {
-  const zip = new JSZip();
-  for (const { name, bytes } of files) {
-    zip.file(name, bytes, { unixPermissions: 0o100600 });
+function createStoredZip(files: Array<{ name: string; bytes: Buffer }>): Buffer {
+  const localParts: Buffer[] = [];
+  const centralParts: Buffer[] = [];
+  let localOffset = 0;
+  for (const file of files) {
+    const name = Buffer.from(file.name, "utf8");
+    const checksum = crc32(file.bytes);
+    const local = Buffer.alloc(30);
+    local.writeUInt32LE(0x04034b50, 0);
+    local.writeUInt16LE(20, 4);
+    local.writeUInt16LE(0, 6);
+    local.writeUInt16LE(0, 8);
+    local.writeUInt32LE(checksum, 14);
+    local.writeUInt32LE(file.bytes.length, 18);
+    local.writeUInt32LE(file.bytes.length, 22);
+    local.writeUInt16LE(name.length, 26);
+    localParts.push(local, name, file.bytes);
+
+    const central = Buffer.alloc(46);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(0x0314, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt16LE(0, 8);
+    central.writeUInt16LE(0, 10);
+    central.writeUInt32LE(checksum, 16);
+    central.writeUInt32LE(file.bytes.length, 20);
+    central.writeUInt32LE(file.bytes.length, 24);
+    central.writeUInt16LE(name.length, 28);
+    central.writeUInt32LE((0o100600 * 0x10000) >>> 0, 38);
+    central.writeUInt32LE(localOffset, 42);
+    centralParts.push(central, name);
+    localOffset += local.length + name.length + file.bytes.length;
   }
-  return zip.generateAsync({ type: "nodebuffer", compression: "STORE", platform: "UNIX" });
+  const centralDirectory = Buffer.concat(centralParts);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(files.length, 8);
+  end.writeUInt16LE(files.length, 10);
+  end.writeUInt32LE(centralDirectory.length, 12);
+  end.writeUInt32LE(localOffset, 16);
+  return Buffer.concat([...localParts, centralDirectory, end]);
 }
 
 afterEach(() => {
@@ -98,7 +114,7 @@ describe("verifyBetaRelease workflow outcomes", () => {
   };
 
   function readDiagnostic(rootDir: string) {
-    return readJson(join(rootDir, "release-postpublish-diagnostics.json"));
+    return JSON.parse(readFileSync(join(rootDir, "release-postpublish-diagnostics.json"), "utf8"));
   }
 
   function historicalFixture(conclusion: string, overrides: Record<string, unknown> = {}) {
@@ -107,21 +123,32 @@ describe("verifyBetaRelease workflow outcomes", () => {
     vi.stubEnv("OPENCLAW_NPM_EXPECTED_WORKFLOW_REF", `refs/tags/${originalRef}`);
     vi.stubEnv("OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA", "a".repeat(40));
     vi.stubEnv("OPENCLAW_NPM_EXPECTED_RUN_ATTEMPT", "1");
-    const original = readJson(join(fixture.binDir, "run.json"));
-    writeJson(join(fixture.binDir, "attempt.json"), {
-      ...original,
-      databaseId: 44,
-      attempt: 1,
-      headSha: "a".repeat(40),
-      conclusion: "success",
-      url: "https://example.invalid/runs/44/attempts/1",
-      ...overrides,
-    });
+    const original = JSON.parse(readFileSync(join(fixture.binDir, "run.json"), "utf8"));
+    writeFileSync(
+      join(fixture.binDir, "attempt.json"),
+      JSON.stringify({
+        ...original,
+        databaseId: 44,
+        attempt: 1,
+        headSha: "a".repeat(40),
+        conclusion: "success",
+        url: "https://example.invalid/runs/44/attempts/1",
+        ...overrides,
+      }),
+    );
     return fixture;
   }
 
   it.each([
+    { label: "a later successful rerun", conclusion: "success", overrides: {} },
     { label: "a later failed rerun", conclusion: "failure", overrides: {} },
+    {
+      label: "an optional notification failure",
+      conclusion: "failure",
+      overrides: {
+        jobs: [{ name: "publish_openclaw_npm", conclusion: "success" }, notificationFailure],
+      },
+    },
     {
       label: "delayed registry readback failure",
       conclusion: "success",
@@ -147,10 +174,11 @@ describe("verifyBetaRelease workflow outcomes", () => {
 
       await verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
 
-      expect(readJson(join(fixture.rootDir, "evidence.json")).workflowRuns).toEqual([
+      expect(
+        JSON.parse(readFileSync(join(fixture.rootDir, "evidence.json"), "utf8")).workflowRuns,
+      ).toEqual([
         expect.objectContaining({
           id: "44",
-          label: "OpenClaw NPM Release",
           runAttempt: 1,
           url: "https://example.invalid/runs/44/attempts/1",
         }),
@@ -190,6 +218,18 @@ describe("verifyBetaRelease workflow outcomes", () => {
     },
   );
 
+  it("retains the original npm publisher when a recovery parent uses newer tooling", async () => {
+    const originalRef = "release-publish/aaaaaaaaaaaa-123";
+    const fixture = workflowFixture({ headBranch: originalRef }, false);
+    vi.stubEnv("OPENCLAW_NPM_EXPECTED_WORKFLOW_REF", `refs/tags/${originalRef}`);
+
+    await verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
+
+    expect(
+      JSON.parse(readFileSync(join(fixture.rootDir, "evidence.json"), "utf8")).workflowRuns,
+    ).toEqual([expect.objectContaining({ id: "44", label: "OpenClaw NPM Release" })]);
+  });
+
   function workflowFixture(
     overrides: Record<string, unknown> = {},
     telegram = true,
@@ -213,19 +253,22 @@ describe("verifyBetaRelease workflow outcomes", () => {
     const binDir = join(rootDir, "bin");
     mkdirSync(binDir);
     mkdirSync(join(rootDir, "extensions"));
-    writeJson(join(rootDir, "package.json"), {
-      version: npm.version,
-      dependencies: npm.dependencies,
-    });
-    writeJson(join(binDir, "npm.json"), npm);
+    writeFileSync(
+      join(rootDir, "package.json"),
+      JSON.stringify({ version: npm.version, dependencies: npm.dependencies }),
+    );
+    writeFileSync(join(binDir, "npm.json"), JSON.stringify(npm));
     for (const name of npm.corePackages ?? []) {
       const directory = join(rootDir, "packages", name.slice("@openclaw/".length));
       mkdirSync(directory, { recursive: true });
-      writeJson(join(directory, "package.json"), {
-        name,
-        version: npm.version,
-        openclaw: { release: { publishToNpm: true } },
-      });
+      writeFileSync(
+        join(directory, "package.json"),
+        JSON.stringify({
+          name,
+          version: npm.version,
+          openclaw: { release: { publishToNpm: true } },
+        }),
+      );
     }
     for (const name of Object.keys(npm.tags).filter((packageName) => packageName !== "openclaw")) {
       if (npm.corePackages?.includes(name)) {
@@ -250,7 +293,7 @@ describe("verifyBetaRelease workflow outcomes", () => {
       jobs: [],
       ...overrides,
     };
-    writeJson(join(binDir, "run.json"), run);
+    writeFileSync(join(binDir, "run.json"), JSON.stringify(run));
     const command = `#!${testNodeExecPath}
 const fs = require("node:fs");
 const path = require("node:path");
@@ -356,25 +399,73 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
     );
   }
 
-  it("does not issue success evidence when qualified plugin readback fails", async () => {
-    const fixture = workflowFixture({}, true, undefined, {
-      version,
-      distTag: "beta",
-      tags: { openclaw: { beta: version }, "@openclaw/demo": { beta: version } },
-    });
-    await expect(
-      verifyBetaRelease(fixture.args, {
+  it.each(["missing", "conflicting", "exact"])(
+    "requires the parent's qualified plugin bytes when registry metadata is healthy: %s",
+    async (tarballState) => {
+      const name = "@openclaw/demo";
+      const fixture = workflowFixture({}, true, undefined, {
+        version,
+        distTag: "beta",
+        tags: { openclaw: { beta: version }, [name]: { beta: version } },
+      });
+      const bytes = Buffer.from("qualified plugin bytes");
+      const tarballPath = join(fixture.rootDir, "qualified.tgz");
+      writeFileSync(tarballPath, bytes);
+      let tarballReads = 0;
+      const options = {
         rootDir: fixture.rootDir,
         pluginNpmReadback: {
           evidence: [],
-          verify: async () => {
-            throw new Error("qualified bytes differ");
+          verify: async (packageName: string) => {
+            await verifyPreparedNpmRegistry({
+              packageName,
+              version,
+              publishTags: ["beta"],
+              route: "npm-oidc",
+              tarballPath,
+              allowMissing: false,
+              fetchImpl: async (url: string) => {
+                if (url.endsWith(".tgz")) {
+                  tarballReads += 1;
+                  return tarballState === "missing"
+                    ? new Response(null, { status: 404 })
+                    : new Response(
+                        tarballState === "conflicting" ? Buffer.alloc(bytes.length) : bytes,
+                      );
+                }
+                return Response.json({
+                  name,
+                  "dist-tags": { beta: version },
+                  versions: {
+                    [version]: {
+                      name,
+                      version,
+                      dist: {
+                        integrity: `sha512-${createHash("sha512").update(bytes).digest("base64")}`,
+                        shasum: createHash("sha1").update(bytes).digest("hex"),
+                        tarball: "https://registry.npmjs.org/@openclaw/demo/-/demo.tgz",
+                      },
+                    },
+                  },
+                });
+              },
+            });
+            return undefined;
           },
         },
-      }),
-    ).rejects.toThrow("qualified bytes differ");
-    expect(existsSync(join(fixture.rootDir, "evidence.json"))).toBe(false);
-  });
+      };
+      const verification = verifyBetaRelease(fixture.args, options);
+      if (tarballState === "exact") {
+        await verification;
+      } else {
+        await expect(verification).rejects.toThrow(
+          tarballState === "missing" ? "HTTP 404" : "bytes differ",
+        );
+      }
+      expect(tarballReads).toBe(1);
+      expect(existsSync(join(fixture.rootDir, "evidence.json"))).toBe(tarballState === "exact");
+    },
+  );
 
   it("reports a superseded plugin readback as a warning line, not a failure", async () => {
     const fixture = workflowFixture({}, true, undefined, {
@@ -462,17 +553,20 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
       writeFileSync(join(fixture.binDir, "git"), `#!/bin/sh\nprintf '%s\\n' '${releaseSha}'\n`, {
         mode: 0o755,
       });
-      writeJson(join(fixture.binDir, "bootstrap.json"), {
-        id: bound ? 34 : 35,
-        name: "Plugin ClawHub New",
-        event: "workflow_dispatch",
-        head_branch: "main",
-        head_sha: "b".repeat(40),
-        run_attempt: 3,
-        path: ".github/workflows/plugin-clawhub-new.yml",
-        status: "completed",
-        conclusion: "success",
-      });
+      writeFileSync(
+        join(fixture.binDir, "bootstrap.json"),
+        JSON.stringify({
+          id: bound ? 34 : 35,
+          name: "Plugin ClawHub New",
+          event: "workflow_dispatch",
+          head_branch: "main",
+          head_sha: "b".repeat(40),
+          run_attempt: 3,
+          path: ".github/workflows/plugin-clawhub-new.yml",
+          status: "completed",
+          conclusion: "success",
+        }),
+      );
       const result = runCli(fixture, [
         "--release-sha",
         releaseSha,
@@ -510,12 +604,15 @@ if (path.basename(process.argv[1]) === "npm" && args[0] === "view") {
         });
         fixture.npm.tags[`@openclaw/${extensionId}`] = { beta: version };
       }
-      writeJson(join(fixture.binDir, "npm.json"), fixture.npm);
+      writeFileSync(join(fixture.binDir, "npm.json"), JSON.stringify(fixture.npm));
       // The collector's order is alphabetical: first, last, middle.
       if (surface === "npm") {
-        writeJson(join(fixture.binDir, "npm-failures.json"), {
-          [`@openclaw/last@${version}`]: "EACCES: synthetic-secret",
-        });
+        writeFileSync(
+          join(fixture.binDir, "npm-failures.json"),
+          JSON.stringify({
+            [`@openclaw/last@${version}`]: "EACCES: synthetic-secret",
+          }),
+        );
       } else {
         fixture.args.skipClawHub = false;
         vi.stubGlobal(
@@ -566,7 +663,7 @@ syncBuiltinESMExports();
     expect(result.stderr).not.toContain("synthetic-secret");
     const diagnosticPath = join(fixture.rootDir, "release-postpublish-diagnostics.json");
     expect(readFileSync(diagnosticPath)).toEqual(readFileSync(`${diagnosticPath}.original`));
-    expect(readJson(diagnosticPath).verification).toBe("unattempted");
+    expect(JSON.parse(readFileSync(diagnosticPath, "utf8")).verification).toBe("unattempted");
     expect(existsSync(join(fixture.rootDir, "evidence.json"))).toBe(false);
   });
 
@@ -595,7 +692,7 @@ syncBuiltinESMExports();
 
   it("initializes bounded, redacted diagnostics before checkout verification", () => {
     const fixture = workflowFixture({}, false);
-    writeJson(join(fixture.rootDir, "package.json"), { version: "2026.1.1" });
+    writeFileSync(join(fixture.rootDir, "package.json"), JSON.stringify({ version: "2026.1.1" }));
     const names = Array.from({ length: 300 }, (_, i) => `@openclaw/plugin-${i}`);
     const result = runCli(fixture, [
       "--plugins",
@@ -865,27 +962,33 @@ syncBuiltinESMExports();`,
     expect(parsePublicationDiagnostic(diagnostic, run)).toBeNull();
   });
 
-  it("keeps notification failure optional", async () => {
-    const fixture = workflowFixture(
-      {
-        jobs: [{ name: "publish_openclaw_npm", conclusion: "success" }, notificationFailure],
-      },
-      false,
-    );
-    const warning = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      await verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
-      expect(warning).toHaveBeenCalledWith(
-        expect.stringContaining("optional Gateway publication notification"),
+  it.each(["failure", "timed_out", "cancelled"])(
+    "keeps notification %s optional",
+    async (conclusion) => {
+      const fixture = workflowFixture(
+        {
+          jobs: [
+            { name: "publish_openclaw_npm", conclusion: "success" },
+            { ...notificationFailure, conclusion },
+          ],
+        },
+        false,
       );
-      expect(readDiagnostic(fixture.rootDir)).toMatchObject({
-        verification: "success",
-        children: { openclawNpm: { failedJobCount: 1 } },
-      });
-    } finally {
-      warning.mockRestore();
-    }
-  });
+      const warning = vi.spyOn(console, "error").mockImplementation(() => {});
+      try {
+        await verifyBetaRelease(fixture.args, { rootDir: fixture.rootDir });
+        expect(warning).toHaveBeenCalledWith(
+          expect.stringContaining("optional Gateway publication notification"),
+        );
+        expect(readDiagnostic(fixture.rootDir)).toMatchObject({
+          verification: "success",
+          children: { openclawNpm: { failedJobCount: 1 } },
+        });
+      } finally {
+        warning.mockRestore();
+      }
+    },
+  );
 
   it.each<[boolean, Record<string, unknown>, string]>([
     [true, { conclusion: "failure" }, "NPM Telegram Beta E2E: run 44 is completed/failure"],
@@ -955,7 +1058,7 @@ describe("parseReleaseVerifyBetaArgs", () => {
     });
   });
 
-  it("parses run IDs, selections, and repair flags", () => {
+  it("parses child run IDs and repair flags", () => {
     expect(
       parseReleaseVerifyBetaArgs([
         "--",
@@ -964,21 +1067,57 @@ describe("parseReleaseVerifyBetaArgs", () => {
         "release/2026.5.10",
         "--release-sha",
         "a".repeat(40),
+        "--clawhub-workflow-ref",
+        "v2026.5.10-beta.3",
+        "--plugins",
+        "@openclaw/plugin-a,@openclaw/plugin-b",
+        "--full-release-validation-run",
+        "10",
+        "--openclaw-npm-run",
+        "11",
+        "--plugin-npm-run",
+        "22",
+        "--plugin-clawhub-run",
+        "33",
         "--plugin-clawhub-bootstrap-run",
         "34",
         "--clawhub-bootstrap-plugins",
         "@openclaw/plugin-b",
-        "--plugins",
-        "@openclaw/plugin-a,@openclaw/plugin-b",
+        "--npm-telegram-run",
+        "44",
+        "--evidence-out",
+        ".artifacts/release-evidence.json",
+        "--postpublish-verifier",
+        "/tmp/trusted-postpublish.ts",
+        "--skip-github-release",
+        "--skip-clawhub",
         "--rerun-failed-clawhub",
       ]),
-    ).toMatchObject({
-      workflowRef: "release/2026.5.10",
+    ).toEqual({
+      version: "2026.5.10-beta.3",
+      tag: "v2026.5.10-beta.3",
+      distTag: "beta",
+      repo: "openclaw/openclaw",
+      registry: "https://clawhub.ai",
       releaseSha: "a".repeat(40),
+      workflowRef: "release/2026.5.10",
+      clawHubWorkflowRef: "v2026.5.10-beta.3",
       pluginSelection: ["@openclaw/plugin-a", "@openclaw/plugin-b"],
       clawHubBootstrapPlugins: ["@openclaw/plugin-b"],
+      evidenceOut: ".artifacts/release-evidence.json",
+      postpublishVerifier: "/tmp/trusted-postpublish.ts",
+      skipPostpublish: false,
+      skipGitHubRelease: true,
+      skipClawHub: true,
       rerunFailedClawHub: true,
-      workflowRuns: { pluginClawHubBootstrap: "34" },
+      workflowRuns: {
+        fullReleaseValidation: "10",
+        openclawNpm: "11",
+        pluginNpm: "22",
+        pluginClawHub: "33",
+        pluginClawHubBootstrap: "34",
+        npmTelegram: "44",
+      },
     });
   });
 
@@ -1038,7 +1177,15 @@ describe("validateClawHubBootstrapEvidence", () => {
   const packageSha = "c".repeat(64);
   const readbackSha = "d".repeat(64);
   const run = {
-    ...bootstrapRun,
+    id: 34,
+    name: "Plugin ClawHub New",
+    event: "workflow_dispatch",
+    head_branch: "main",
+    head_sha: workflowSha,
+    path: ".github/workflows/plugin-clawhub-new.yml@refs/heads/main",
+    run_attempt: 2,
+    status: "completed",
+    conclusion: "success",
     html_url: "https://github.com/openclaw/openclaw/actions/runs/34",
     created_at: "2026-07-10T00:00:00Z",
     updated_at: "2026-07-10T00:02:00Z",
@@ -1104,10 +1251,10 @@ describe("validateClawHubBootstrapEvidence", () => {
 
   function validate(
     overrides: {
-      run?: Partial<typeof run>;
-      readbackArtifact?: Partial<typeof readbackArtifact>;
-      packageArtifact?: Partial<typeof packageArtifact>;
-      evidence?: Partial<typeof evidence>;
+      run?: unknown;
+      readbackArtifact?: unknown;
+      packageArtifact?: unknown;
+      evidence?: unknown;
       expectedPackages?: string[];
     } = {},
   ) {
@@ -1117,11 +1264,11 @@ describe("validateClawHubBootstrapEvidence", () => {
       releaseSha,
       expectedVersion: "2026.7.1-beta.3",
       expectedPackages: overrides.expectedPackages ?? ["@openclaw/meta"],
-      run: { ...run, ...overrides.run },
-      readbackArtifact: { ...readbackArtifact, ...overrides.readbackArtifact },
+      run: overrides.run ?? run,
+      readbackArtifact: overrides.readbackArtifact ?? readbackArtifact,
       readbackArchiveSha256: readbackSha,
-      packageArtifact: { ...packageArtifact, ...overrides.packageArtifact },
-      evidence: { ...evidence, ...overrides.evidence },
+      packageArtifact: overrides.packageArtifact ?? packageArtifact,
+      evidence: overrides.evidence ?? evidence,
     });
   }
 
@@ -1154,40 +1301,46 @@ describe("validateClawHubBootstrapEvidence", () => {
       "first beta release package evidence",
     );
     const cases: [Parameters<typeof validate>[0], string][] = [
-      [{ run: { head_branch: "release/2026.7.1" } }, "not dispatched from trusted main"],
+      [{ run: { ...run, head_branch: "release/2026.7.1" } }, "not dispatched from trusted main"],
       [
-        { run: { path: ".github/workflows/not-plugin-clawhub-new.yml" } },
+        { run: { ...run, path: ".github/workflows/not-plugin-clawhub-new.yml" } },
         "unexpected workflow path",
       ],
-      [{ evidence: { targetSha: "e".repeat(40) } }, "target SHA mismatch"],
+      [{ evidence: { ...evidence, targetSha: "e".repeat(40) } }, "target SHA mismatch"],
       [{ expectedPackages: ["@openclaw/other"] }, "requested package set mismatch"],
       [
-        { readbackArtifact: { name: "clawhub-bootstrap-readback-34-1" } },
+        { readbackArtifact: { ...readbackArtifact, name: "clawhub-bootstrap-readback-34-1" } },
         "does not bind the run attempt",
       ],
-      [{ evidence: { terminalRunAttempt: "1" } }, "readback evidence run tuple mismatch"],
       [
-        { evidence: { producerRunAttempt: "3" } },
+        { evidence: { ...evidence, terminalRunAttempt: "1" } },
+        "readback evidence run tuple mismatch",
+      ],
+      [
+        { evidence: { ...evidence, producerRunAttempt: "3" } },
         "producer attempt is newer than its terminal attempt",
       ],
       [
         {
           packageArtifact: {
+            ...packageArtifact,
             name: `clawhub-bootstrap-${releaseSha.slice(0, 12)}-34-2`,
           },
           evidence: {
+            ...evidence,
             artifactName: `clawhub-bootstrap-${releaseSha.slice(0, 12)}-34-2`,
           },
         },
         "package artifact name does not bind the target and attempt",
       ],
       [
-        { packageArtifact: { digest: `sha256:${"e".repeat(64)}` } },
+        { packageArtifact: { ...packageArtifact, digest: `sha256:${"e".repeat(64)}` } },
         "package artifact digest mismatch",
       ],
       [
         {
           evidence: {
+            ...evidence,
             packages: [
               {
                 ...packageEvidence,
@@ -1201,7 +1354,10 @@ describe("validateClawHubBootstrapEvidence", () => {
         },
         "artifact metadata does not match downloaded bytes",
       ],
-      [{ evidence: { clawhubToolchainSha256: "e".repeat(64) } }, "clawhubToolchainSha256 mismatch"],
+      [
+        { evidence: { ...evidence, clawhubToolchainSha256: "e".repeat(64) } },
+        "clawhubToolchainSha256 mismatch",
+      ],
     ];
     for (const [overrides, error] of cases) {
       expect(() => validate(overrides)).toThrow(error);
@@ -1210,15 +1366,38 @@ describe("validateClawHubBootstrapEvidence", () => {
 });
 
 describe("downloadClawHubBootstrapReadback", () => {
-  const run = bootstrapRun;
+  const workflowSha = "b".repeat(40);
+  const run = {
+    id: 34,
+    name: "Plugin ClawHub New",
+    event: "workflow_dispatch",
+    head_branch: "main",
+    head_sha: workflowSha,
+    path: ".github/workflows/plugin-clawhub-new.yml@refs/heads/main",
+    run_attempt: 2,
+    status: "completed",
+    conclusion: "success",
+  };
   const workflowAttempt = {
-    ...bootstrapRun,
+    id: 34,
+    run_attempt: 2,
+    head_sha: workflowSha,
+    head_branch: "main",
+    event: "workflow_dispatch",
     path: ".github/workflows/plugin-clawhub-new.yml",
+    status: "completed",
+    conclusion: "success",
     repository: { full_name: "openclaw/openclaw" },
     head_repository: { full_name: "openclaw/openclaw" },
   };
 
-  async function download(archive: Buffer) {
+  function createFixture(
+    archive: Buffer,
+    overrides: {
+      artifactMetadata?: Record<string, unknown>;
+      workflowAttempt?: Record<string, unknown>;
+    } = {},
+  ) {
     const readbackArtifact = {
       id: 45,
       name: "clawhub-bootstrap-readback-34-2",
@@ -1228,16 +1407,24 @@ describe("downloadClawHubBootstrapReadback", () => {
       workflow_run: {
         id: 34,
         head_branch: "main",
-        head_sha: bootstrapRun.head_sha,
+        head_sha: workflowSha,
       },
+    };
+    const artifactMetadata = {
+      ...readbackArtifact,
+      ...overrides.artifactMetadata,
+    };
+    const attemptMetadata = {
+      ...workflowAttempt,
+      ...overrides.workflowAttempt,
     };
     const fetchImpl = vi.fn<typeof fetch>(async (input) => {
       const url = String(input);
       if (url.endsWith("/actions/artifacts/45")) {
-        return Response.json(readbackArtifact);
+        return Response.json(artifactMetadata);
       }
       if (url.endsWith("/actions/runs/34/attempts/2")) {
-        return Response.json(workflowAttempt);
+        return Response.json(attemptMetadata);
       }
       if (url.endsWith("/actions/artifacts/45/zip")) {
         return new Response(archive as unknown as BodyInit, {
@@ -1246,23 +1433,34 @@ describe("downloadClawHubBootstrapReadback", () => {
       }
       throw new Error(`unexpected request: ${url}`);
     });
+    return { fetchImpl, readbackArtifact };
+  }
+
+  async function download(
+    archive: Buffer,
+    overrides?: Parameters<typeof createFixture>[1],
+  ): Promise<{
+    result: Awaited<ReturnType<typeof downloadClawHubBootstrapReadback>>;
+    requests: number;
+  }> {
+    const fixture = createFixture(archive, overrides);
     const result = await downloadClawHubBootstrapReadback({
       repo: "openclaw/openclaw",
       runId: "34",
       run,
-      readbackArtifact,
+      readbackArtifact: fixture.readbackArtifact,
       token: "test-token",
-      fetchImpl,
+      fetchImpl: fixture.fetchImpl,
       retryAttempts: 1,
       retryDelayMs: 1,
       timeoutMs: 1_000,
     });
-    return { result, requests: fetchImpl.mock.calls.length };
+    return { result, requests: fixture.fetchImpl.mock.calls.length };
   }
 
   it("downloads one exact readback file from the bound successful main attempt", async () => {
     const evidence = { schemaVersion: 2, targetSha: "a".repeat(40) };
-    const archive = await createStoredZip([
+    const archive = createStoredZip([
       {
         name: "clawhub-bootstrap-readback.json",
         bytes: Buffer.from(JSON.stringify(evidence)),
@@ -1278,12 +1476,38 @@ describe("downloadClawHubBootstrapReadback", () => {
     });
   });
 
-  it("rejects additional readback entries through the shared ZIP policy", async () => {
-    const archive = await createStoredZip([
-      { name: "clawhub-bootstrap-readback.json", bytes: Buffer.from("{}") },
-      { name: "extra.json", bytes: Buffer.from("{}") },
+  it("rejects stale live artifact and workflow-attempt metadata", async () => {
+    const archive = createStoredZip([
+      {
+        name: "clawhub-bootstrap-readback.json",
+        bytes: Buffer.from("{}"),
+      },
     ]);
-    await expect(download(archive)).rejects.toThrow(/Actions artifact ZIP/u);
+
+    await expect(
+      download(archive, {
+        artifactMetadata: { digest: `sha256:${"c".repeat(64)}` },
+      }),
+    ).rejects.toThrow("artifact metadata does not match the immutable publication tuple");
+    await expect(
+      download(archive, {
+        workflowAttempt: { run_attempt: 1 },
+      }),
+    ).rejects.toThrow("workflow run does not match the immutable publication tuple");
+  });
+
+  it("rejects hostile or expanded readback inventories through the shared ZIP policy", async () => {
+    const hostileArchives = [
+      createStoredZip([{ name: "../clawhub-bootstrap-readback.json", bytes: Buffer.from("{}") }]),
+      createStoredZip([
+        { name: "clawhub-bootstrap-readback.json", bytes: Buffer.from("{}") },
+        { name: "extra.json", bytes: Buffer.from("{}") },
+      ]),
+    ];
+
+    for (const archive of hostileArchives) {
+      await expect(download(archive)).rejects.toThrow(/(?:Unsafe ZIP entry|Actions artifact ZIP)/u);
+    }
   });
 });
 
@@ -1481,6 +1705,8 @@ describe("fetchJsonWithRetry", () => {
     "rate limit",
     "invalid JSON",
     "client error",
+    "TLS",
+    "oversized",
     "streamed oversize",
   ])("recovers only transient reads: %s", async (mode) => {
     const delays: number[] = [];
@@ -1495,9 +1721,9 @@ describe("fetchJsonWithRetry", () => {
         if (requests > 1) {
           return Response.json({ ok: true });
         }
-        if (mode === "connection") {
+        if (mode === "connection" || mode === "TLS") {
           throw new TypeError("fetch failed", {
-            cause: { code: "ECONNRESET" },
+            cause: { code: mode === "TLS" ? "CERT_HAS_EXPIRED" : "ECONNRESET" },
           });
         }
         if (mode === "body") {
@@ -1516,6 +1742,9 @@ describe("fetchJsonWithRetry", () => {
         }
         if (mode === "streamed oversize") {
           return new Response("x".repeat(1048577));
+        }
+        if (mode === "oversized") {
+          return new Response("{}", { headers: { "content-length": "1048577" } });
         }
         return new Response(
           new ReadableStream<Uint8Array>({
@@ -1538,9 +1767,11 @@ describe("fetchJsonWithRetry", () => {
       await expect(result).rejects.toThrow(
         mode === "invalid JSON"
           ? "invalid JSON"
-          : mode === "streamed oversize"
-            ? "exceeded 1048576 bytes"
-            : "returned HTTP 403",
+          : mode === "TLS"
+            ? "fetch failed"
+            : mode === "oversized" || mode === "streamed oversize"
+              ? "exceeded 1048576 bytes"
+              : "returned HTTP 403",
       );
       expect(requests).toBe(1);
       expect(delays).toEqual([]);
