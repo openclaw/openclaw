@@ -276,13 +276,10 @@ export function createPrometheusMetricStore(
 
   const render = () => {
     const parts: (Prefix | string)[] = [];
-    let index = 0;
     let bytes = 0;
     const write = (prefix: Prefix, value: number) => {
       const number = formatPrometheusNumber(value);
-      parts[index++] = prefix;
-      parts[index++] = number;
-      parts[index++] = "\n";
+      parts.push(prefix, number, "\n");
       bytes += prefix.bytes + number.length + 1;
     };
     const emitted = new Set<string>();
@@ -290,7 +287,7 @@ export function createPrometheusMetricStore(
       if (!emitted.has(name)) {
         emitted.add(name);
         const text = createPrefix(`# HELP ${name} ${escapeHelp(help)}\n# TYPE ${name} ${type}\n`);
-        parts[index++] = text;
+        parts.push(text);
         bytes += text.bytes;
       }
     };
