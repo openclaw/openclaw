@@ -182,6 +182,15 @@ describe("secrets runtime snapshot channel inactive variants", () => {
       resolved: { serviceAccount: "default-service-account-json" },
     },
     {
+      channel: "mattermost",
+      root: {
+        baseUrl: "https://mattermost.example.invalid",
+        botToken: envRef("MATTERMOST_DEFAULT"),
+      },
+      work: { baseUrl: "https://work.example.invalid", botToken: "work-bot-token" },
+      resolved: { botToken: "default-bot-token" },
+    },
+    {
       channel: "x",
       root: {
         clientId: "fixture-client",
@@ -202,6 +211,7 @@ describe("secrets runtime snapshot channel inactive variants", () => {
         { [channel]: { ...root, accounts: { work: { enabled: true, ...work } } } },
         {
           GOOGLECHAT_DEFAULT: "default-service-account-json",
+          MATTERMOST_DEFAULT: "default-bot-token",
           X_CLIENT_SECRET: "default-client-secret",
           X_REFRESH_TOKEN: "default-refresh-token",
         },
