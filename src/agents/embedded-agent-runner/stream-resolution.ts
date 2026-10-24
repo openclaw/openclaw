@@ -8,8 +8,10 @@ import { admitProviderRateLimitStream } from "../../llm/provider-rate-limit-stre
 import "../ai-transport-runtime-host.js";
 import { createAnthropicVertexStreamFnForModel } from "../anthropic-vertex-stream.js";
 import type { StreamFn } from "../runtime/index.js";
+import type { ResolveRenewableApiKey } from "./run/auth-store.js";
 import type { EmbeddedRunAttemptParams } from "./run/types.js";
 import { wrapStreamFnWithSessionFork, type EmbeddedSessionForkIdentity } from "./session-fork.js";
+import { createRenewalGuardedStream } from "./stream-renewal-guard.js";
 
 const embeddedAgentBaseStreamFnCache = new WeakMap<object, StreamFn | undefined>();
 
@@ -76,6 +78,8 @@ type EmbeddedAgentStreamParams = EmbeddedStreamRuntimeOwner & {
   signal?: AbortSignal;
   model: EmbeddedRunAttemptParams["model"];
   resolvedApiKey?: string;
+  /** Re-resolves the selected renewable OAuth profile's access for each request. */
+  resolveRenewableApiKey?: ResolveRenewableApiKey;
   transportAuthAvailable?: boolean;
   authProfileId?: string;
   authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
@@ -117,6 +121,7 @@ export function selectEmbeddedAgentStream(params: EmbeddedAgentStreamParams): {
     wrapEmbeddedAgentStreamApiKey(streamFn, {
       providerId: params.model.provider,
       resolvedApiKey: params.resolvedApiKey,
+      resolveRenewableApiKey: params.resolveRenewableApiKey,
       authStorage: params.authStorage,
       assertCurrent: params.assertCurrent,
     });
@@ -282,22 +287,60 @@ function wrapEmbeddedAgentStreamApiKey(
   params: {
     providerId: string;
     resolvedApiKey?: string;
+    resolveRenewableApiKey?: ResolveRenewableApiKey;
     authStorage?: { getApiKey(provider: string): Promise<string | undefined> };
     assertCurrent?: () => void;
   },
 ): StreamFn {
-  if (!params.authStorage && !params.resolvedApiKey) {
+  if (!params.authStorage && !params.resolvedApiKey && !params.resolveRenewableApiKey) {
     return inner;
   }
-  const { authStorage, providerId, resolvedApiKey } = params;
+  const { authStorage, providerId, resolvedApiKey, resolveRenewableApiKey, assertCurrent } = params;
+  const resolveCapturedApiKey = async (): Promise<string | undefined> =>
+    resolveEmbeddedAgentApiKey({ provider: providerId, resolvedApiKey, authStorage });
   return async (m, context, options) => {
-    params.assertCurrent?.();
-    const apiKey = await resolveEmbeddedAgentApiKey({
-      provider: providerId,
-      resolvedApiKey,
-      authStorage,
-    });
-    params.assertCurrent?.();
-    return inner(m, context, { ...options, apiKey: apiKey ?? options?.apiKey });
+    assertCurrent?.();
+    let apiKey: string | undefined;
+    let renewableActive = false;
+    if (resolveRenewableApiKey) {
+      // The selected renewable profile's current access leads the captured key
+      // and the static runtime-key override for every request of this attempt.
+      apiKey = await resolveRenewableApiKey();
+      assertCurrent?.();
+      renewableActive = Boolean(apiKey?.trim());
+      if (!apiKey?.trim()) {
+        apiKey = await resolveCapturedApiKey();
+      }
+    } else {
+      apiKey = await resolveCapturedApiKey();
+    }
+    assertCurrent?.();
+    const requestOptions = { ...options, apiKey: apiKey ?? options?.apiKey };
+    const openRequest = async (retriesLeft: number) => {
+      const stream = await inner(m, context, requestOptions);
+      if (!renewableActive || retriesLeft <= 0) {
+        return stream;
+      }
+      return createRenewalGuardedStream({
+        source: stream,
+        onUnauthorizedExpiry: async () => {
+          // The provider rejected this request before any output was accepted,
+          // so no tool work settled: one forced same-profile reacquisition and
+          // one retried request preserve replay safety.
+          assertCurrent?.();
+          const renewed = await resolveRenewableApiKey?.({ forceRefresh: true });
+          assertCurrent?.();
+          if (!renewed?.trim() || renewed === requestOptions.apiKey) {
+            return null;
+          }
+          return createRenewalGuardedStream({
+            source: await inner(m, context, { ...options, apiKey: renewed }),
+            // The single renewal budget is spent; any further expiry is terminal.
+            onUnauthorizedExpiry: async () => null,
+          });
+        },
+      });
+    };
+    return await openRequest(1);
   };
 }

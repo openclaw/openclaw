@@ -473,6 +473,7 @@ export async function prepareEmbeddedRunTransport(input: {
     attemptedThinking,
     advanceAttemptAuthProfile,
     maybeRefreshRuntimeAuthForAuthError: authController.maybeRefreshRuntimeAuthForAuthError,
+    resolveRequestCredential: authController.resolveRequestCredential,
     stopRuntimeAuthRefreshTimer: authController.stopRuntimeAuthRefreshTimer,
     getApiKeyInfo: () => authState.apiKeyInfo,
     setThinkLevel: (next: ThinkLevel) => {

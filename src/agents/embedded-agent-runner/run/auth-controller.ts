@@ -37,6 +37,7 @@ import { protectPreparedProviderRuntimeAuth } from "../../provider-runtime-auth-
 import { clampRuntimeAuthRefreshDelayMs } from "../../runtime-auth-refresh.js";
 import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import type { AuthProfileFailurePolicy } from "./auth-profile-failure-policy.types.js";
+import { createRenewableRequestApiKeyResolver } from "./auth-store.js";
 import {
   RUNTIME_AUTH_REFRESH_MARGIN_MS,
   RUNTIME_AUTH_REFRESH_MIN_DELAY_MS,
@@ -652,5 +653,15 @@ export function createEmbeddedRunAuthController(params: {
     initializeAuthProfile,
     maybeRefreshRuntimeAuthForAuthError,
     stopRuntimeAuthRefreshTimer,
+    resolveRequestCredential: createRenewableRequestApiKeyResolver({
+      getAuthState: () => state,
+      getModel: () => state.models.runtime,
+      cfg: params.config,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+      resolveAuthStore: () => params.authStore,
+      publishApiKey: (providerId, apiKey) =>
+        params.authStorage.setRuntimeApiKey(providerId, apiKey),
+    }),
   };
 }

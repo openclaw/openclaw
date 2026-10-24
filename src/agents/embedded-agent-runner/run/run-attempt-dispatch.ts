@@ -83,6 +83,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
     attemptAuthProfileStore,
     lockedProfileId,
     resolveRunAttemptAuthProfileStore,
+    resolveRequestCredential,
   } = preparedRuntime;
   const runtime = preparedRuntime.snapshot();
   const effectiveModel = attachModelProviderRuntimePluginHandle(
@@ -526,6 +527,7 @@ export async function prepareAndDispatchEmbeddedRunAttempt(
       runtime.transportConfig,
     ),
     resolvedApiKey: resolvedAttemptApiKey,
+    resolveRenewableApiKey: resolveRequestCredential,
     authProfileId: runtime.lastProfileId,
     authProfileIdSource: params.authProfileBinding
       ? params.authProfileIdSource

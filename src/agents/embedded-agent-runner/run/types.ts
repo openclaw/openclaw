@@ -195,6 +195,12 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   contextWindowInfo?: ContextWindowInfo;
   /** Resolved API key for this run when runtime auth did not replace it. */
   resolvedApiKey?: string;
+  /**
+   * Re-resolves the selected Sign-in-with-ChatGPT profile's current access
+   * immediately before each model request. Absent for static-key, token,
+   * and provider-exchange credentials, which keep the captured contract.
+   */
+  resolveRenewableApiKey?: import("./auth-store.js").ResolveRenewableApiKey;
   /** Auth profile resolved for this attempt's provider/model call. */
   authProfileId?: string;
   /** Source for the resolved auth profile (user-locked or automatic). */

@@ -113,6 +113,8 @@ export async function prepareEmbeddedRunRuntime(
     maybeRefreshRuntimeAuthForAuthError: (
       ...args: Parameters<typeof initial.maybeRefreshRuntimeAuthForAuthError>
     ) => transport.maybeRefreshRuntimeAuthForAuthError(...args),
+    resolveRequestCredential: (...args: Parameters<typeof initial.resolveRequestCredential>) =>
+      transport.resolveRequestCredential(...args),
     getApiKeyInfo: () => transport.getApiKeyInfo(),
     resolveRunAttemptAuthProfileStore: () => transport.resolveRunAttemptAuthProfileStore(),
     snapshot,
