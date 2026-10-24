@@ -1,3 +1,4 @@
+import { tryResolveConfiguredAgentWorkspaceDir } from "../agents/agent-scope-config.js";
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import { prepareBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
 import { getCompatibleProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
@@ -177,6 +178,7 @@ function resolveConfigWideMetadataSelection(params: ResolveConfigWidePluginMetad
       "config-wide",
       resolvePluginMetadataSnapshotCacheKey(params),
       workspaceDirs,
+      tryResolveConfiguredAgentWorkspaceDir(params.config, env),
     ]),
   };
 }
@@ -301,6 +303,9 @@ function resolveConfigWidePluginMetadataSnapshotImpl(
     buildPluginMetadataSnapshot(
       {
         ...firstSnapshot,
+        // The fleet inventory carries the Gateway's plugin context. Discovery
+        // provenance stays on each record and the original persistence index.
+        workspaceDir: tryResolveConfiguredAgentWorkspaceDir(params.config, env),
         index,
         discovery,
         manifestRegistry,
