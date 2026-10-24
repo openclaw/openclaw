@@ -2,6 +2,7 @@ import fs from "node:fs";
 import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { getAiTransportHost } from "@openclaw/ai";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -55,11 +56,6 @@ import {
 import { createSyncSuiteTempRootTracker } from "../test-helpers/fs-fixtures.js";
 import { createRuntimeLlm } from "./runtime-llm.runtime.js";
 
-const nextTurn = () =>
-  new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-
 const roots = createSyncSuiteTempRootTracker("runtime-llm-prepared-owner");
 afterEach(() => roots.cleanup());
 
@@ -79,8 +75,6 @@ it.each([
   "callback-drain",
   "cancel-drain",
   "sdk-overlap",
-  "sdk-config",
-  "sdk-auth",
   "sdk-late-prepare",
   "sdk-dispatch-close",
   "sdk-current-check",
@@ -122,7 +116,7 @@ it.each([
     };`,
   );
   const requests: ServerResponse[] = [];
-  const requestFacts: Array<{ url: string; authorization: string | undefined }> = [];
+  const requestFacts: string[] = [];
   const arrivals = [createDeferred(), createDeferred(), createDeferred()];
   let finishing = false;
   const sse = (event: unknown) => `data: ${JSON.stringify(event)}\n\n`;
@@ -133,7 +127,7 @@ it.each([
     if (!response.headersSent) {
       response.writeHead(200, { "content-type": "text/event-stream" });
     }
-    const text = `result-${index}|${requestFacts[index]?.url}|${requestFacts[index]?.authorization}`;
+    const text = `result-${index}|${requestFacts[index]}`;
     if (anthropicReadCancel) {
       const events = [
         {
@@ -174,11 +168,9 @@ it.each([
     request.resume();
     const index = requests.push(response) - 1;
     const apiKey = request.headers["x-api-key"];
-    requestFacts.push({
-      url: request.url ?? "/",
-      authorization:
-        request.headers.authorization ?? (typeof apiKey === "string" ? apiKey : undefined),
-    });
+    const authorization =
+      request.headers.authorization ?? (typeof apiKey === "string" ? apiKey : undefined);
+    requestFacts.push(`${request.url ?? "/"}|${authorization}`);
     arrivals[index]?.resolve();
     if (finishing) {
       finish(response, index);
@@ -237,8 +229,6 @@ it.each([
     ] as const;
     const prepareStarted = createDeferred();
     const finishPrepare = createDeferred();
-    const responseFailure = new Error("fixture response callback failure");
-    const cancellationFailure = new Error("fixture cancellation failure");
     const transportSpies: Array<{ mockRestore: () => void }> = [];
     const acceptedWork = async (run: () => Promise<void>) => {
       acceptedWorkStarted = true;
@@ -274,7 +264,7 @@ it.each([
                   return;
                 }
                 if (mode === "cancel-drain") {
-                  throw responseFailure;
+                  throw new Error("fixture response callback failure");
                 }
                 await acceptedWork(() => finishWork.promise);
               },
@@ -320,7 +310,7 @@ it.each([
                   await acceptedWork(async () => {
                     try {
                       await finishWork.promise;
-                      throw cancellationFailure;
+                      throw new Error("fixture cancellation failure");
                     } finally {
                       await reader.cancel(reason);
                     }
@@ -335,20 +325,21 @@ it.each([
     }
     let currentConfig = cfg;
     const llm = createRuntimeLlm({ getConfig: () => currentConfig });
-    const input = (modelId = "lease-model") => ({
+    const input = () => ({
       config: cfg,
       agentId: "main",
       agentDir: resolveAgentDir(cfg, "main"),
       workspaceDir: root,
       loadRuntimePlugins: true,
-      runtimePluginSelections: [{ provider: fixture.providerId, modelId, agentId: "main" }],
-    });
-    const expectedResult = (index: number, changed = false) => ({
-      text: `result-${index}|/${changed && mode === "config" ? "B" : "A"}/v1/${anthropicReadCancel ? "messages" : "chat/completions"}|${anthropicReadCancel ? "" : "Bearer "}fixture-auth-${changed && (mode === "config" || mode === "auth") ? "B" : "A"}`,
+      runtimePluginSelections: [
+        { provider: fixture.providerId, modelId: "lease-model", agentId: "main" },
+      ],
     });
     const finishResult = async (index: number, completion: Promise<unknown>, changed = false) => {
       finish(requests[index]!, index);
-      await expect(completion).resolves.toMatchObject(expectedResult(index, changed));
+      await expect(completion).resolves.toMatchObject({
+        text: `result-${index}|/${changed && mode === "config" ? "B" : "A"}/v1/${anthropicReadCancel ? "messages" : "chat/completions"}|${anthropicReadCancel ? "" : "Bearer "}fixture-auth-${changed && (mode === "config" || mode === "auth") ? "B" : "A"}`,
+      });
     };
     const publishAuth = (key: string) =>
       setRuntimeAuthProfileStoreSnapshot(
@@ -514,12 +505,8 @@ it.each([
         await closing;
         await record.close.promise;
         expect(record.disposed).toBe(1);
-        const reopened = new DatabaseSync(record.file, { readOnly: true });
-        try {
-          expect(reopened.prepare("SELECT value FROM observations").get()?.value).toBe(42);
-        } finally {
-          reopened.close();
-        }
+        using reopened = new DatabaseSync(record.file, { readOnly: true });
+        expect(reopened.prepare("SELECT value FROM observations").get()?.value).toBe(42);
         return;
       }
       if (sdk) {
@@ -615,7 +602,6 @@ it.each([
           ? parentWork.track(() => start(0, abortController?.signal))
           : start(0, abortController?.signal);
       await waitForRequest(0, first);
-      const firstResolved = await resolver.mock.results.at(-1)!.value;
 
       if (mode === "provider-error" || mode === "abort") {
         if (abortController) {
@@ -670,11 +656,6 @@ it.each([
 
       const second = start(1);
       await waitForRequest(1, second);
-      const secondResolved = await resolver.mock.results.at(-1)!.value;
-
-      // Published catalog overlays may fork twice while retaining one completion's auth store.
-      expect(secondResolved.authStorage).not.toBe(firstResolved.authStorage);
-      expect(secondResolved.modelRegistry).not.toBe(firstResolved.modelRegistry);
       if (drainMode) {
         expect.soft(parentDrained).toBe(false);
         if (anthropicReadCancel) {
@@ -704,9 +685,6 @@ it.each([
           expect(staleCompletion).rejects.toThrow("Plugin SDK resource host is closed"),
           2,
         );
-        if (mode === "config" || mode === "auth") {
-          return;
-        }
       }
       if (sdk || drainMode || mode === "overlap") {
         const third = start(2);

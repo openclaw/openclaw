@@ -136,8 +136,8 @@ describe("plugin runtime session creation", () => {
     }),
   );
 
-  it("creates a canonical transcript with trusted initial session state", async () => {
-    const { key, read, create } = sessionFixture(
+  it("creates and recovers a trusted harness session without changing its title", async () => {
+    const { key, read, create, seed } = sessionFixture(
       "agent:main:harness:codex:supervision:codex-native-thread",
     );
     const initialPluginExtensions = supervision({ initializing: true, modelLocked: true });
@@ -192,6 +192,43 @@ describe("plugin runtime session creation", () => {
       }),
     ).rejects.toThrow("trusted initial session state requires a new session");
     expect(read()).toEqual(created.entry);
+
+    const location = {
+      spawnedCwd: "/workspace/project",
+      sessionRoot: "/workspace",
+      permissionMode: "guarded",
+    } satisfies Pick<Create, "spawnedCwd" | "sessionRoot" | "permissionMode">;
+    const initialEntry = recoveryInitial();
+    await seed({
+      ...created.entry,
+      ...initialEntry,
+      ...location,
+      pluginExtensions: supervision({ initializing: true, sourceThreadId: "source-1" }),
+      initializationPending: true,
+    });
+    const recovered = await create({
+      ...location,
+      label: "Replacement label must be ignored",
+      displayName: "Replacement title must be ignored",
+      initialEntry,
+      recoverMatchingInitialEntry: true,
+      afterCreate: async (recovering) => {
+        expect(recovering.sessionId).toBe(created.sessionId);
+        expect(recovering.entry.initializationPending).toBe(true);
+        return { pluginExtensions: supervision({ sourceThreadId: "source-1", modelLocked: true }) };
+      },
+    });
+    expect(recovered.sessionId).toBe(created.sessionId);
+    expect(recovered.entry).toMatchObject({
+      ...location,
+      label: "Native Codex thread",
+      displayName: "Native display title",
+    });
+    expect(recovered.entry.initializationPending).toBeUndefined();
+    expect(recovered.entry.pluginExtensions).toEqual(
+      supervision({ sourceThreadId: "source-1", modelLocked: true }),
+    );
+    expect(read()).toEqual(recovered.entry);
   });
 
   it("rolls back a plugin-owned locked CLI session when initialization fails", async () => {
@@ -333,66 +370,6 @@ describe("plugin runtime session creation", () => {
 
     releaseWork.resolve();
     await work;
-  });
-
-  it("recovers an exact initializer without replacing its label or title", async () => {
-    const naming = { label: "Operator label", displayName: "Original title snapshot" };
-    const { runtime, key, storePath, read, create } = sessionFixture();
-    const sessionId = "interrupted-initializer";
-    const sessionFile = path.join(state.sessionsDir(), `${sessionId}.jsonl`);
-    const initialPluginExtensions = supervision({
-      sourceThreadId: "source-1",
-      initializing: true,
-    });
-
-    fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
-    fs.writeFileSync(
-      sessionFile,
-      `${JSON.stringify({ type: "session", version: 3, id: sessionId })}\n`,
-    );
-    await runtime.session.upsertSessionEntry({
-      storePath,
-      sessionKey: key,
-      entry: {
-        ...naming,
-        sessionId,
-        sessionFile,
-        updatedAt: Date.now(),
-        initializationPending: true,
-        agentHarnessId: "codex",
-        modelSelectionLocked: true,
-        pluginExtensions: supervision({ initializing: true, sourceThreadId: "source-1" }),
-        spawnedCwd: "/workspace/project",
-        sessionRoot: "/workspace",
-        permissionMode: "guarded",
-      },
-    });
-
-    const recovered = await create({
-      label: "Replacement label must be ignored",
-      displayName: "Renamed upstream title must be ignored",
-      spawnedCwd: "/workspace/project",
-      sessionRoot: "/workspace",
-      permissionMode: "guarded",
-      recoverMatchingInitialEntry: true,
-      initialEntry: harnessInitial(initialPluginExtensions),
-      afterCreate: async (created) => {
-        expect(created.sessionId).toBe(sessionId);
-        expect(created.entry.initializationPending).toBe(true);
-        return {
-          pluginExtensions: supervision({ sourceThreadId: "source-1", modelLocked: true }),
-        };
-      },
-    });
-
-    expect(recovered.sessionId).toBe(sessionId);
-    expect(recovered.entry.label).toBe(naming.label);
-    expect(recovered.entry.displayName).toBe(naming.displayName);
-    expect(recovered.entry.initializationPending).toBeUndefined();
-    expect(recovered.entry.pluginExtensions).toEqual(
-      supervision({ sourceThreadId: "source-1", modelLocked: true }),
-    );
-    expect(read()).toEqual(recovered.entry);
   });
 
   it.each([
@@ -557,66 +534,65 @@ describe("plugin runtime session work admission", () => {
     }
   });
 
-  it("waits for a queued archive mutation and rejects the stale start", async () => {
-    const runtime = createRuntimeAgent();
-    const { mutation, releaseMutation } = await queueMutation(async () => {
-      await runtime.session.patchSessionEntry({
-        storePath,
-        sessionKey,
-        update: () => ({ archivedAt: Date.now() }),
+  it.each(["archive", "replace"] as const)(
+    "rejects a queued %s before plugin work starts",
+    async (change) => {
+      const runtime = createRuntimeAgent();
+      const { mutation, releaseMutation } = await queueMutation(async () => {
+        if (change === "replace") {
+          await runtime.session.upsertSessionEntry({
+            storePath,
+            sessionKey,
+            entry: { sessionId: "replacement-session", updatedAt: Date.now() },
+          });
+        } else {
+          await runtime.session.patchSessionEntry({
+            storePath,
+            sessionKey,
+            update: () => ({ archivedAt: Date.now() }),
+          });
+        }
       });
-    });
 
-    let ran = false;
-    const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, async () => {
-      ran = true;
-    });
-    releaseMutation.resolve();
-    await mutation;
-
-    await expect(work).rejects.toThrow(`Session "${sessionKey}" is archived`);
-    expect(ran).toBe(false);
-  });
-
-  it("rejects a session replaced while work waits for lifecycle admission", async () => {
-    const runtime = createRuntimeAgent();
-    const { mutation, releaseMutation } = await queueMutation(async () => {
-      await runtime.session.upsertSessionEntry({
-        storePath,
-        sessionKey,
-        entry: { sessionId: "replacement-session", updatedAt: Date.now() },
-      });
-    });
-
-    const snapshotRead = createDeferred();
-    const readEntry = sessionEntryRead.withSessionEntryReadOnlyInWorker;
-    using captureRead = vi
-      .spyOn(sessionEntryRead, "withSessionEntryReadOnlyInWorker")
-      .mockImplementationOnce((input, assertCurrent, consume, ...rest) =>
-        readEntry(
-          input,
-          assertCurrent,
-          async (...result) => {
-            snapshotRead.resolve();
-            return consume(...result);
-          },
-          ...rest,
-        ),
-      );
-    const run = vi.fn(async () => {});
-    const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, run);
-    try {
-      await snapshotRead.promise;
-      captureRead.mockRestore();
-      releaseMutation.resolve();
-      await mutation;
-      await expect(work).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
-      expect(run).not.toHaveBeenCalled();
-    } finally {
-      releaseMutation.resolve();
-      await Promise.allSettled([mutation, work]);
-    }
-  });
+      const snapshotRead = createDeferred();
+      const readEntry = sessionEntryRead.withSessionEntryReadOnlyInWorker;
+      using captureRead =
+        change === "replace"
+          ? vi
+              .spyOn(sessionEntryRead, "withSessionEntryReadOnlyInWorker")
+              .mockImplementationOnce((input, assertCurrent, consume, ...rest) =>
+                readEntry(
+                  input,
+                  assertCurrent,
+                  async (...result) => {
+                    snapshotRead.resolve();
+                    return consume(...result);
+                  },
+                  ...rest,
+                ),
+              )
+          : undefined;
+      const run = vi.fn(async () => {});
+      const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, run);
+      try {
+        if (change === "replace") {
+          await snapshotRead.promise;
+          captureRead?.mockRestore();
+        }
+        releaseMutation.resolve();
+        await mutation;
+        if (change === "replace") {
+          await expect(work).rejects.toMatchObject({ code: "SESSION_WORK_START_CHANGED" });
+        } else {
+          await expect(work).rejects.toThrow(`Session "${sessionKey}" is archived`);
+        }
+        expect(run).not.toHaveBeenCalled();
+      } finally {
+        releaseMutation.resolve();
+        await Promise.allSettled([mutation, work]);
+      }
+    },
+  );
 
   it("holds admission through the callback and relays lifecycle interruption", async () => {
     const runtime = createRuntimeAgent();
