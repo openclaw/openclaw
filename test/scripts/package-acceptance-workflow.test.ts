@@ -15525,8 +15525,8 @@ wait_for_run plugin-clawhub-new.yml 123 "${expectedSha}" || status=$?
         root_dockerfile_image: ["preflight"],
         root_dockerfile_image_ready: ["preflight", "root_dockerfile_image"],
         installer_smoke_candidate_payload: ["preflight"],
-        installer_smoke_update_image: ["preflight"],
-        installer_smoke_nonroot_image: ["preflight"],
+        installer_smoke_update_image: ["preflight", "installer_smoke_candidate_payload"],
+        installer_smoke_nonroot_image: ["preflight", "installer_smoke_candidate_payload"],
         installer_smoke_update: [
           "preflight",
           "installer_smoke_candidate_payload",

@@ -548,7 +548,10 @@ it("binds independent installer producer-consumer pairs to immutable artifact tu
     const producerScope = `needs.${producerName}.outputs`;
     const consumerName = `installer_smoke_${group}`;
     const producer = job(producerName);
-    expect(producer.needs, producerName).toEqual(["preflight"]);
+    expect(producer.needs, producerName).toEqual([
+      "preflight",
+      "installer_smoke_candidate_payload",
+    ]);
     expect(producer["timeout-minutes"], producerName).toBe(45);
     expect(producer.outputs, producerName).toEqual({
       ...imageOutputs,
@@ -779,16 +782,28 @@ install -d -m 0750 "$payload_dir"
     assertText(binding.run).contains(`verify-upload "Candidate payload"
 expected_artifact_name="install-smoke-candidate-payload-\${TARGET_SHA}-\${ARTIFACT_RUN_ID}-\${ARTIFACT_RUN_ATTEMPT}"`);
     const verify = step(consumer, "Verify candidate payload contents");
-    expect(verify.env).toMatchObject(
-      references(candidateScope, "manifest_sha256 package_version source_archive_sha256", true),
-    );
-    assertText(verify.run).contains(`--manifest-sha256
+    expect(verify.env).toMatchObject({
+      ...references(candidateScope, "manifest_sha256 package_version source_archive_sha256", true),
+      PRODUCER_RUN_ATTEMPT: reference(candidateScope, "artifact_run_attempt"),
+      PRODUCER_RUN_ID: reference(candidateScope, "artifact_run_id"),
+    });
+    assertText(verify.run).contains(`--run-id "$PRODUCER_RUN_ID"
+--run-attempt "$PRODUCER_RUN_ATTEMPT"
+--manifest-sha256
 --source-archive-sha256`);
+    assertText(verify.run).excludes(`--run-id "$GITHUB_RUN_ID"
+--run-attempt "$GITHUB_RUN_ATTEMPT"`);
   }
 });
 
 it("drains every independent producer and consumer without sibling failure suppression", () => {
   const aggregate = job("installer_smoke");
+  for (const group of ["update", "nonroot"]) {
+    expect(job(`installer_smoke_${group}_image`).needs).toEqual([
+      "preflight",
+      "installer_smoke_candidate_payload",
+    ]);
+  }
   for (const group of ["update", "nonroot"]) {
     expect(job(`installer_smoke_${group}`).needs).toEqual([
       "preflight",
