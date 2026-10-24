@@ -1,4 +1,3 @@
-import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";

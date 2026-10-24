@@ -25,7 +25,6 @@ import type { ChatEvent } from "./tui-types.js";
 
 const { GatewayChatClient } = await import("./gateway-chat.js");
 const { GatewayClient, GatewayClientRequestError } = await import("../gateway/client.js");
-type Client = InstanceType<typeof GatewayChatClient>;
 const connection = { url: "ws://127.0.0.1:18789", token: "test-token" };
 const model = (id: string, name = id) => ({ provider: "fixture", id, name });
 const writeOptions = {
