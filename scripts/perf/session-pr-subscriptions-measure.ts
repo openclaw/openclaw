@@ -29,6 +29,8 @@ const { values } = parseArgs({
     child: { type: "boolean" },
     "owner-suffix": { type: "string" },
     revision: { type: "string" },
+    "trace-gc": { type: "boolean", default: false },
+    "warmup-ms": { type: "string", default: "0" },
     port: { type: "string", default: "41567" },
     clients: { type: "string", default: "8" },
     keys: { type: "string", default: "50" },
@@ -334,7 +336,7 @@ if (values.child) {
     gateway = spawn(
       process.execPath,
       [
-        "--trace-gc-nvp",
+        ...(values["trace-gc"] ? ["--trace-gc-nvp"] : []),
         "--import",
         "./scripts/tsx.mjs",
         fileURLToPath(import.meta.url),
@@ -441,6 +443,7 @@ if (values.child) {
       await rpc(peers[0]!, "sessions.patch", { key: key(4991), [mutation]: `warmup-${index % 2}` });
     }
     const warmupSettlement = await command("settle");
+    await delay(integer(values["warmup-ms"], "--warmup-ms", 0));
     if (values["start-at"]) {
       const startAt = integer(values["start-at"], "--start-at");
       assert(Date.now() < startAt, "Gateway setup missed the paired start time");
@@ -533,7 +536,9 @@ if (values.child) {
       "Subscription setup did not exercise parent selection",
     );
     await delay(100);
-    const promotion = readGatewayGcTrace(path.join(output, "gateway.log"), profilePath);
+    const promotion = values["trace-gc"]
+      ? readGatewayGcTrace(path.join(output, "gateway.log"), profilePath)
+      : null;
     const family = familyBytes(profilePath);
     // A response on each transport also consumes all earlier frames sent after settlement.
     for (const peer of peers) {
@@ -559,6 +564,8 @@ if (values.child) {
       preMeasurementSettlement,
       finalSettlement,
       revision: values.revision ?? null,
+      traceGc: values["trace-gc"],
+      warmupMs: Number(values["warmup-ms"]),
       testedOwners: Object.fromEntries(
         benchmarkOwners.map((name) => {
           const suffix = values["owner-suffix"] ? `.${values["owner-suffix"]}` : "";
