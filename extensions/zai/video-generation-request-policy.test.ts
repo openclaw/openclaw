@@ -1,5 +1,6 @@
 import type { postJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { afterEach, expect, it, vi } from "vitest";
+import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 import { buildZaiVideoGenerationProvider } from "./video-generation-provider.js";
 
 const { postJsonResponseMock } = vi.hoisted(() => ({
@@ -29,17 +30,13 @@ it.each([false, true])(
       provider: "zai",
       model: "cogvideox-3",
       prompt: "a synthetic lobster",
-      cfg: {
-        models: {
-          providers: {
-            zai: {
-              baseUrl: "http://127.0.0.1:9",
-              models: [],
-              request: { allowPrivateNetwork },
-            },
-          },
+      cfg: createModelProviderConfig({
+        zai: {
+          baseUrl: "http://127.0.0.1:9",
+          models: [],
+          request: { allowPrivateNetwork },
         },
-      },
+      }),
     });
     if (allowPrivateNetwork) {
       await expect(pending).rejects.toThrow(intercepted.message);

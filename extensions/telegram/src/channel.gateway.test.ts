@@ -14,6 +14,7 @@ import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
 import { getOrCreateAccountThrottler, releaseAccountThrottler } from "./account-throttler.js";
 import { readCachedTelegramBotInfo, writeCachedTelegramBotInfo } from "./bot-info-cache.js";
 import type { TelegramBotInfo } from "./bot-info.js";
+import { telegramBotInfoForTest } from "./bot.create-telegram-bot.test-support.js";
 import { telegramPlugin } from "./channel.js";
 import { acquireTelegramPollingLease } from "./polling-lease.js";
 import { setTelegramRuntime } from "./runtime.js";
@@ -40,21 +41,7 @@ vi.mock(import("./monitor.js"), async (importOriginal) => ({
 }));
 let testState: OpenClawTestState;
 
-const startupBotInfo: TelegramBotInfo = {
-  id: 123456,
-  is_bot: true,
-  first_name: "OpenClaw",
-  username: "openclaw_bot",
-  can_join_groups: true,
-  can_read_all_group_messages: false,
-  can_manage_bots: false,
-  supports_inline_queries: false,
-  supports_join_request_queries: false,
-  can_connect_to_business: false,
-  has_main_web_app: false,
-  has_topics_enabled: false,
-  allows_users_to_create_topics: false,
-};
+const startupBotInfo: TelegramBotInfo = { ...telegramBotInfoForTest, id: 123456 };
 
 function installTelegramRuntime() {
   const runtime: TelegramRuntime = createPluginRuntimeMock({

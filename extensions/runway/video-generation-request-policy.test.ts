@@ -4,6 +4,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { postJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { afterEach, assert, expect, it, vi } from "vitest";
+import { createProxyRequestModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 import plugin from "./index.js";
 
 const { postJsonResponseMock } = vi.hoisted(() => ({
@@ -36,21 +37,7 @@ it("applies configured request policy to the submitted Runway task", async () =>
       provider: "runway",
       model: "gen4.5",
       prompt: "a synthetic lobster",
-      cfg: {
-        models: {
-          providers: {
-            runway: {
-              baseUrl: "https://runway.example.test",
-              models: [],
-              request: {
-                headers: { "X-Relay": "synthetic-route" },
-                proxy: { mode: "explicit-proxy", url: "http://proxy.example:8080" },
-                allowPrivateNetwork: true,
-              },
-            },
-          },
-        },
-      },
+      cfg: createProxyRequestModelProviderConfig("runway", "https://runway.example.test"),
     }),
   ).rejects.toBe(intercepted);
 
