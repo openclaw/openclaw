@@ -29,6 +29,7 @@ import { sameWorkerSessionTurnClaim } from "./placement-record.js";
 import { isWorkerEnvironmentAttachedTo } from "./placement-target.js";
 import {
   bindWorkerTurnCapabilities,
+  assertWorkerTurnInputAdmitted,
   getWorkerTurnToolSurface,
 } from "./placement-turn-claim-events.js";
 import { prepareWorkerDesktopLaunchPlan } from "./worker-desktop-launch-plan.js";
@@ -429,12 +430,13 @@ export async function executeWorkerTurn(
       assertCurrent: assertActive,
       signal,
     });
-    bindWorkerTurnCapabilities(params.placements, params.turnClaim, {
+    const assertInputAdmitted = bindWorkerTurnCapabilities(params.placements, params.turnClaim, {
       toolSurface: toolRuntime,
       prepareReplyMedia,
       inference,
       admitTurn: workerAdmission
-        ? (request, assertCurrent) => admitTurn(request, assertCurrent)
+        ? (request, assertCurrent, recordApproval) =>
+            admitTurn(request, assertCurrent, recordApproval)
         : undefined,
     });
     const connectionIdentity = {
@@ -504,6 +506,7 @@ export async function executeWorkerTurn(
       throw new StaleWorkerBuildError();
     }
     const persistInput = async () => {
+      assertWorkerTurnInputAdmitted(connectionIdentity);
       baseLeafId = await persistWorkerTurnInput({
         ...inputContext,
         manager,
@@ -519,6 +522,7 @@ export async function executeWorkerTurn(
       ...inputContext,
       assertCurrent: assertActive,
       runtime: preparedRuntime.snapshot,
+      preparedInput: media,
       persist: persistInput,
       onBlockedResult: (result) => {
         blockedResult = result;
@@ -680,6 +684,7 @@ export async function executeWorkerTurn(
       await releaseClaimIfOwned(params.placements, params.turnClaim);
       return blockedResult;
     }
+    assertInputAdmitted();
     return await finalizeWorkerTurnResult({
       ...params,
       turn,

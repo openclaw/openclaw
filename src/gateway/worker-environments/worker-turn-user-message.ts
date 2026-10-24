@@ -137,16 +137,29 @@ export async function persistWorkerTurnInput(
 export function createWorkerTurnInputAdmission(
   params: WorkerTurnInputParams & {
     runtime: PreparedModelRuntimeSnapshot;
+    preparedInput: Pick<Awaited<ReturnType<typeof prepareWorkerTurnMedia>>, "prompt" | "history">;
     persist: () => Promise<string | null>;
     onBlockedResult: (result: NonNullable<Awaited<ReturnType<typeof gateWorkerTurnInput>>>) => void;
   },
 ) {
   // The RPC retains the launching turn's transcript and plugin scopes.
   const runAdmission = AsyncLocalStorage.snapshot();
+  const { prompt, history } = params.preparedInput;
+  const preparedInput = {
+    prompt:
+      typeof prompt === "string"
+        ? prompt
+        : prompt
+            .filter((part) => part.type === "text")
+            .map((part) => part.text)
+            .join("\n"),
+    messages: convertToLlm(history),
+  };
   let started = false;
   return (
     request: WorkerTurnAdmissionParams,
     assertRpcCurrent: () => void,
+    recordApproval: () => void,
   ): Promise<WorkerTurnAdmissionResult> =>
     runAdmission(async (): Promise<WorkerTurnAdmissionResult> => {
       if (started) {
@@ -160,13 +173,22 @@ export function createWorkerTurnInputAdmission(
         composeSessionSourceAssertion([params.assertSourceCurrent, assertCurrent]),
         async () => {
           const blocked = await withPluginRuntimeGenerationScope(params.runtime, () =>
-            gateWorkerTurnInput({ ...params, assertCurrent }, request),
+            // Host-local prompt bytes cannot be verified here. All other event fields
+            // come from the Gateway; plugins must not trust systemPrompt as authority.
+            gateWorkerTurnInput(
+              { ...params, assertCurrent },
+              {
+                ...preparedInput,
+                systemPrompt: request.systemPrompt,
+              },
+            ),
           );
           assertCurrent();
           if (blocked) {
             params.onBlockedResult(blocked);
             return { outcome: "block" };
           }
+          recordApproval();
           const baseLeafId = await params.persist();
           assertCurrent();
           params.turn.userTurnTranscriptRecorder?.markSentToProvider?.();

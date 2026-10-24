@@ -175,12 +175,19 @@ plugin instance and reruns registration with the new settings.
 The catalog is the registration API, not a promise that every runtime emits
 every hook. For example, `before_agent_run` is implemented by the embedded and
 CLI runners and by Gateway admission for OpenClaw worker turns. Workers with the
-`worker-turn-admission-v1` capability send their final system prompt, triggering
-prompt, and loaded history to the Gateway's plugin gate after completing host
-runtime facts and skill references. The worker waits for approval before any
-model call, including worker-local inference. The Gateway supplies the channel,
-account, sender, and run identity and persists the user message only after approval.
-Blocks and hook failures persist only the redacted block message.
+`worker-turn-admission-v1` capability report their final system prompt after
+completing host runtime facts and skill references. The Gateway supplies its
+authoritative prepared triggering prompt, history, channel, account, sender, and
+run identity to the plugin gate; worker-provided prompt and history are ignored.
+Approval is bound to the active turn claim and is required for persistence,
+Gateway-proxied inference, Gateway tools, and content-bearing live events. The
+worker also waits for approval before worker-local inference. Blocks and hook
+failures persist only the redacted block message; terminal cleanup receipts omit
+worker-provided content before approval.
+
+The Gateway cannot verify host-local system prompt bytes: a buggy or compromised
+worker can misreport `systemPrompt`. Plugins must not treat that field as a trust
+boundary or use it as proof of worker behavior.
 
 Older workers retain Gateway admission before the user message is persisted or
 the worker launches. That path omits `systemPrompt` because the worker completes

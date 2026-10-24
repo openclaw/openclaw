@@ -59,8 +59,9 @@ export async function bindWorkerFixtureTurnSource(
   bindWorkerTurnCapabilities(store, claim, {
     inference,
     // Fault scenarios start with admitted input and exercise later transport failures.
-    admitTurn: async (_request, assertAdmissionCurrent) => {
+    admitTurn: async (_request, assertAdmissionCurrent, recordApproval) => {
       assertAdmissionCurrent();
+      recordApproval();
       return { outcome: "allow", baseLeafId: assignment.transcript.baseLeafId };
     },
     toolSurface: createWorkerGatewayToolRuntime({

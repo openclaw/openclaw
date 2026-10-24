@@ -3,6 +3,7 @@ import type {
   WorkerTurnAdmissionParams,
   WorkerTurnAdmissionResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
+import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import type {
   AdmittedRunOperatorAuthority,
   OperationalRunInstanceRef,
@@ -110,6 +111,7 @@ type BoundWorkerTurnOwner = {
     toolSurface?: WorkerGatewayToolRuntime;
     inference?: WorkerInferenceExecutor;
     admitTurn?: WorkerTurnAdmission;
+    inputApproved?: boolean;
     prepareReplyMedia?: WorkerReplyMediaPreparer;
     githubGrant?: WorkerGitHubBindingGrant;
     delegatedAuthority: AgentRunDelegatedAuthority;
@@ -131,6 +133,7 @@ type BoundWorkerTurnOwner = {
 type WorkerTurnAdmission = (
   request: WorkerTurnAdmissionParams,
   assertCurrent: () => void,
+  recordApproval: () => void,
 ) => Promise<WorkerTurnAdmissionResult>;
 
 const workerTurnOwners = resolveGlobalMap<string, Map<string, BoundWorkerTurnOwner>>(
@@ -427,7 +430,7 @@ export function bindWorkerTurnCapabilities(
     inference?: WorkerInferenceExecutor;
     admitTurn?: WorkerTurnAdmission;
   },
-): void {
+): () => void {
   const path = store[WORKER_TURN_EXECUTION_IDENTITY_PATH];
   const owner = path ? workerTurnOwners.get(path)?.get(claim.sessionId) : undefined;
   if (
@@ -440,6 +443,13 @@ export function bindWorkerTurnCapabilities(
   }
   owner.runtime.toolSurface?.abort();
   Object.assign(owner.runtime, capabilities);
+  owner.runtime.inputApproved = false;
+  // Finalization retains this claim's decision after execution authority closes.
+  return () => {
+    if (capabilities.admitTurn) {
+      assertWorkerTurnInputApproval(owner.runtime);
+    }
+  };
 }
 
 export function captureWorkerReplyMedia(identity: WorkerConnectionIdentity) {
@@ -489,8 +499,21 @@ export function getWorkerTurnInference(identity: WorkerConnectionIdentity) {
   return resolveWorkerTurnRuntime(identity)?.inference;
 }
 
-export function getWorkerTurnAdmission(identity: WorkerConnectionIdentity) {
-  return resolveWorkerTurnRuntime(identity)?.admitTurn;
+function assertWorkerTurnInputApproval(runtime: BoundWorkerTurnOwner["runtime"] | undefined): void {
+  if (!runtime?.inputApproved) {
+    throw new Error("Worker turn input admission is required before persistence or inference");
+  }
+}
+
+export function assertWorkerTurnInputAdmitted(identity: WorkerConnectionIdentity): void {
+  const runtime = resolveWorkerTurnRuntime(identity);
+  if (
+    runtime?.admitTurn ||
+    identity.protocolFeatures.includes(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE)
+  ) {
+    assertWorkerTurnInputApproval(runtime);
+    runtime?.assertActive();
+  }
 }
 
 export async function admitWorkerTurnInput(
@@ -509,7 +532,11 @@ export async function admitWorkerTurnInput(
     runtime.assertActive();
   };
   assertCurrent();
-  const result = await runtime.admitTurn(request, assertCurrent);
+  const result = await runtime.admitTurn(request, assertCurrent, () => {
+    assertCurrent();
+    // Approval belongs to this claim's callback and its captured Gateway input.
+    runtime.inputApproved = true;
+  });
   assertCurrent();
   return { ok: true as const, result };
 }

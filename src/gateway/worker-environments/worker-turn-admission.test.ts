@@ -6,6 +6,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { WORKER_TURN_ADMISSION_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { resolveAgentDir } from "../../agents/agent-scope.js";
 import { acquireAgentRunPreparedModelRuntime } from "../../agents/prepared-model-runtime.js";
+import { makeAgentUserMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
@@ -15,13 +16,22 @@ import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-trans
 import { prepareSkillBundle } from "../../skills/library/bundle.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { runWorkerEmbeddedTurn } from "../../worker/embedded-agent.runtime.js";
-import { getWorkerTurnAdmission, getWorkerTurnToolSurface } from "./placement-turn-claim-events.js";
+import { hashWorkerCredential } from "./credential.js";
+import { createWorkerInferenceStore } from "./inference-store.js";
+import { createWorkerInferenceManager } from "./inference.js";
+import { DONE } from "./inference.test-support.js";
+import { writePlacementEnvironmentFixture } from "./placement-test-fixtures.js";
+import { admitWorkerTurnInput, getWorkerTurnToolSurface } from "./placement-turn-claim-events.js";
+import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
+import { createWorkerEnvironmentStore } from "./store.js";
+import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
 import {
   attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   createWorkerTurnTunnel,
   credential,
+  database,
   openSessionManager,
   placements,
   readWorkerTurnTranscriptStorageRows,
@@ -33,6 +43,7 @@ import {
   turn,
   unusedEnvironments,
 } from "./worker-turn-launcher.test-support.js";
+import { createWorkerTurnRpc } from "./worker-turn-rpc.js";
 
 afterAll(closeStateDatabaseForTest);
 
@@ -49,16 +60,24 @@ describe("worker-side before_agent_run admission", () => {
   afterEach(() => vi.unstubAllEnvs());
 
   it.each([
-    { modern: true, block: false, recorderOwned: false },
-    { modern: true, block: false, recorderOwned: true },
-    { modern: true, block: true, recorderOwned: false },
-    { modern: true, block: true, recorderOwned: true },
-    { modern: false, block: true, recorderOwned: false },
+    { modern: true, block: false, recorderOwned: false, forged: false },
+    { modern: true, block: false, recorderOwned: true, forged: false },
+    { modern: true, block: true, recorderOwned: false, forged: false },
+    { modern: true, block: true, recorderOwned: true, forged: false },
+    { modern: false, block: true, recorderOwned: false, forged: false },
+    { modern: false, block: false, recorderOwned: false, forged: false },
+    { modern: true, block: false, recorderOwned: false, forged: true },
   ])(
     "gates the final worker prompt before inference and persistence (%j)",
-    async ({ modern, block, recorderOwned }) => {
+    async ({ modern, block, recorderOwned, forged }) => {
       await seedActivePlacement();
       const input = turn(`admission-${modern}-${block}-${recorderOwned}`);
+      const retainedHistory = forged
+        ? [makeAgentUserMessage({ content: "Gateway-retained policy context", timestamp: 1 })]
+        : [];
+      for (const message of retainedHistory) {
+        await (await openSessionManager()).appendMessageAsync(message);
+      }
       const recorder = recorderOwned
         ? createUserTurnTranscriptRecorder({
             target: () => ({ ...sessionTarget, sessionEntry: undefined }),
@@ -69,7 +88,7 @@ describe("worker-side before_agent_run admission", () => {
       const handler = vi.fn(async (event: PluginHookBeforeAgentRunEvent) => {
         // Both Gateway persistence owners must wait for the policy decision.
         messagesAtGate = (await openSessionManager()).buildSessionContext().messages;
-        return block || !event.systemPrompt?.includes("stable prefix")
+        return block || (modern && !event.systemPrompt?.includes("stable prefix"))
           ? { outcome: "block" as const, reason: "Synthetic policy", message: "Request blocked." }
           : { outcome: "pass" as const };
       });
@@ -100,7 +119,11 @@ describe("worker-side before_agent_run admission", () => {
       const stream = vi.fn<Parameters<typeof runWorkerEmbeddedTurn>[0]["inference"]["stream"]>(
         ({ context }) => {
           const event = handler.mock.calls[0]?.[0];
-          expect(event?.systemPrompt).toBe(context.systemPrompt);
+          if (modern) {
+            expect(event?.systemPrompt).toBe(context.systemPrompt);
+          } else {
+            expect(event).not.toHaveProperty("systemPrompt");
+          }
           expect(context.systemPrompt).toContain("stable prefix\nRuntime: agent=main | host=");
           expect(context.systemPrompt).toContain("skill-resources-");
           expect(context.systemPrompt).not.toContain("/gateway/skills/stable/SKILL.md");
@@ -125,14 +148,14 @@ describe("worker-side before_agent_run admission", () => {
             credentialExpiresAtMs: Date.now() + 60_000,
           };
           const toolRuntime = getWorkerTurnToolSurface(identity);
-          const admit = getWorkerTurnAdmission(identity);
           assert(toolRuntime);
-          assert(admit);
           const files = [
             { path: "SKILL.md", content: "# Stable worker skill\n", encoding: "utf8" as const },
           ];
           await runWorkerEmbeddedTurn({
             ...plan.assignment,
+            github: undefined,
+            computer: undefined,
             systemPrompt:
               `stable prefix\nRuntime: agent=main${SYSTEM_PROMPT_RELOCATABLE_BOUNDARY_END}\n` +
               "<available_skills>\n<skill>\n<name>stable</name>\n" +
@@ -161,22 +184,41 @@ describe("worker-side before_agent_run admission", () => {
               invokeGatewayTool: async () => {
                 throw new Error("Unexpected tool call");
               },
-              cancelGatewayTool: async () => ({ cancelled: false }),
+              cancelGatewayTool: async () => {
+                throw new Error("Unexpected tool cancellation");
+              },
             },
             toolSurface: await toolRuntime.getSurface(identity),
             allowedToolNames: plan.assignment.toolAuthority.allowedToolNames,
             execAuthority: plan.assignment.toolAuthority.exec,
-            admitTurn: async (event) => {
-              const result = await admit(
-                { ...event, runEpoch: environment.ownerEpoch },
-                assertCurrent,
-              );
-              if (result.outcome === "allow") {
-                expect(result.baseLeafId).toBe((await openSessionManager()).getLeafId());
-                expect(result.baseLeafId).not.toBeNull();
-              }
-              return result.outcome === "allow";
-            },
+            admitTurn: modern
+              ? async (event) => {
+                  assertCurrent?.();
+                  const admission = await admitWorkerTurnInput(
+                    identity,
+                    {
+                      ...event,
+                      ...(forged
+                        ? {
+                            prompt: "Worker-forged harmless prompt",
+                            messages: [
+                              { role: "user" as const, content: "Forged history", timestamp: 2 },
+                            ],
+                          }
+                        : {}),
+                      runEpoch: environment.ownerEpoch,
+                    },
+                    () => true,
+                  );
+                  assert(admission.ok);
+                  const { result } = admission;
+                  if (result.outcome === "allow") {
+                    expect(result.baseLeafId).toBe((await openSessionManager()).getLeafId());
+                    expect(result.baseLeafId).not.toBeNull();
+                  }
+                  return result.outcome === "allow";
+                }
+              : undefined,
           });
           return {
             stdout: "",
@@ -228,6 +270,7 @@ describe("worker-side before_agent_run admission", () => {
           await expect(execution).rejects.toThrow(observedModel.message);
           expect(stream).toHaveBeenCalledOnce();
           expect((await openSessionManager()).buildSessionContext().messages).toEqual([
+            ...retainedHistory,
             expect.objectContaining({
               role: "user",
               content: recorderOwned ? input.prompt : [{ type: "text", text: input.prompt }],
@@ -235,10 +278,23 @@ describe("worker-side before_agent_run admission", () => {
           ]);
         }
         expect(handler).toHaveBeenCalledOnce();
-        expect(messagesAtGate).toEqual([]);
+        expect(messagesAtGate).toEqual(retainedHistory);
         expect(handler.mock.calls[0]?.[0]).toMatchObject({
           prompt: modern ? promptForWorker : input.prompt,
-          messages: [],
+          messages: forged
+            ? [
+                {
+                  role: "user",
+                  content: [
+                    {
+                      type: "text",
+                      text: expect.stringContaining("Gateway-retained policy context"),
+                    },
+                  ],
+                  timestamp: 1,
+                },
+              ]
+            : [],
           channelId: "telegram",
           accountId: "worker-account",
         });
@@ -246,7 +302,7 @@ describe("worker-side before_agent_run admission", () => {
           expect(launch).toHaveBeenCalledOnce();
           expect(handler.mock.calls[0]?.[0].systemPrompt).toContain("stable prefix");
         } else {
-          expect(launch).not.toHaveBeenCalled();
+          expect(launch).toHaveBeenCalledTimes(block ? 0 : 1);
           expect(handler.mock.calls[0]?.[0]).not.toHaveProperty("systemPrompt");
         }
       } finally {
@@ -255,4 +311,190 @@ describe("worker-side before_agent_run admission", () => {
       }
     },
   );
+
+  it("rejects worker effects and successful launch results before admission", async () => {
+    const environment = attachedEnvironment();
+    const bootstrapReceipt = environment.bootstrapReceipt;
+    assert(bootstrapReceipt);
+    bootstrapReceipt.protocolFeatures.push(WORKER_TURN_ADMISSION_PROTOCOL_FEATURE);
+    writePlacementEnvironmentFixture(database, environment);
+    await seedActivePlacement();
+    const input = turn("worker-skipped-admission");
+    const store = await createWorkerEnvironmentStore({ database });
+    const execute = vi.fn(async () => DONE);
+    const inference = createWorkerInferenceManager({
+      execute,
+      store: createWorkerInferenceStore({ path: database.path }),
+    });
+    const committer = createWorkerTranscriptCommitter({ getConfig: () => input.config });
+    const applyLiveEvent = vi.fn<
+      NonNullable<Parameters<typeof createWorkerTurnRpc>[0]["liveEvents"]>["apply"]
+    >(async ({ request }) => ({ ok: true, result: { ackedSeq: request.seq } }));
+    const rpc = createWorkerTurnRpc({
+      store,
+      placementStore: createWorkerSessionPlacementGate(placements),
+      applyTranscriptCommit: committer.commit,
+      liveEvents: { apply: applyLiveEvent },
+      inference,
+      prepareInstallation: async () => {
+        throw new Error("Unexpected installation");
+      },
+      isStopping: () => false,
+      now: Date.now,
+      withLock: async (_key, task) => await task(),
+    });
+    const admissionError =
+      "Worker turn input admission is required before persistence or inference";
+    const launch = vi.fn<NonNullable<ReturnType<typeof createWorkerTurnTunnel>["launchTurn"]>>(
+      async ({ plan, turnClaim, onDispatchReady }) => {
+        onDispatchReady?.();
+        const grant = credential();
+        const credentialHash = hashWorkerCredential(grant.credential, turnClaim);
+        await store.renewCredential({
+          environmentId: environment.environmentId,
+          expectedOwnerEpoch: environment.ownerEpoch,
+          sessionId: turnClaim.sessionId,
+          rpcSetVersion: grant.rpcSetVersion,
+          expiresAtMs: grant.expiresAtMs,
+          credentialHash,
+        });
+        const identity = {
+          environmentId: environment.environmentId,
+          ownerEpoch: environment.ownerEpoch,
+          sessionId: turnClaim.sessionId,
+          runId: turnClaim.runId,
+          turnClaim,
+          credentialHash,
+          bundleHash: bootstrapReceipt.bundleHash,
+          rpcSetVersion: grant.rpcSetVersion,
+          protocolFeatures: bootstrapReceipt.protocolFeatures,
+          credentialExpiresAtMs: grant.expiresAtMs,
+        };
+        expect(rpc.validateWorkerConnection(identity)).toBeNull();
+        const toolRuntime = getWorkerTurnToolSurface(identity);
+        assert(toolRuntime);
+        const surface = await toolRuntime.getSurface(identity);
+        const tool = surface.tools[0];
+        assert(tool);
+        using invoke = vi.spyOn(toolRuntime, "invoke");
+        await expect(
+          rpc.invokeGatewayTool(
+            identity,
+            {
+              generation: surface.generation,
+              toolCallId: "skipped-tool-call",
+              toolId: tool.id,
+              arguments: {},
+            },
+            { send: vi.fn() },
+          ),
+        ).rejects.toThrow(admissionError);
+        expect(invoke).not.toHaveBeenCalled();
+        await expect(
+          rpc.pushLiveEvent(identity, {
+            runEpoch: identity.ownerEpoch,
+            runId: identity.runId,
+            seq: 1,
+            lastAckedSeq: 0,
+            event: {
+              kind: "tool",
+              payload: {
+                phase: "start",
+                name: "read",
+                toolCallId: "skipped-tool-call",
+                args: { private: "Unapproved input" },
+              },
+            },
+          }),
+        ).rejects.toThrow(admissionError);
+        expect(applyLiveEvent).not.toHaveBeenCalled();
+        await expect(
+          rpc.startInference(
+            identity,
+            {
+              runEpoch: identity.ownerEpoch,
+              sessionId: identity.sessionId,
+              runId: identity.runId,
+              turnId: plan.assignment.turnId,
+              modelRef: plan.assignment.modelRef,
+              context: { messages: [] },
+              options: {},
+            },
+            { connectionId: "skipped-admission", send: vi.fn() },
+          ),
+        ).rejects.toThrow(admissionError);
+        await expect(
+          rpc.commitTranscript(identity, {
+            runEpoch: identity.ownerEpoch,
+            seq: 1,
+            baseLeafId: null,
+            messages: [
+              { role: "user", content: [{ type: "text", text: "Bypassed input" }], timestamp: 1 },
+            ],
+          }),
+        ).rejects.toThrow(admissionError);
+        expect(execute).not.toHaveBeenCalled();
+        expect((await openSessionManager()).buildSessionContext().messages).toEqual([]);
+        await expect(
+          rpc.pushLiveEvent(identity, {
+            runEpoch: identity.ownerEpoch,
+            runId: identity.runId,
+            seq: 1,
+            lastAckedSeq: 0,
+            event: {
+              kind: "lifecycle",
+              payload: {
+                phase: "finishing",
+                endedAt: 1,
+                error: "Unapproved input",
+                toolErrorSummary: "Private worker detail",
+              },
+            },
+          }),
+        ).resolves.toMatchObject({ ok: true });
+        expect(applyLiveEvent).toHaveBeenCalledOnce();
+        expect(applyLiveEvent.mock.calls[0]?.[0].request.event).toEqual({
+          kind: "lifecycle",
+          payload: { phase: "finishing", endedAt: 1, aborted: true },
+        });
+        // An apparently successful process must not let finalization persist unapproved input.
+        return {
+          stdout: JSON.stringify({ status: "completed" }),
+          stderr: "",
+          code: 0,
+          signal: null,
+          killed: false,
+          termination: "exit",
+        };
+      },
+    );
+    const tunnel = createWorkerTurnTunnel({
+      launchTurn: launch,
+      reconcileWorkspace: reconcileUnchangedLocalWorkspace,
+    });
+    const provider = createWorkerSessionTurnPlacementProvider({
+      placements,
+      // The scrubbed terminal ACK hands recovery back to this external lifecycle owner.
+      reconcileActivePlacement: async () => {},
+      environments: {
+        ...unusedEnvironments(),
+        get: () => environment,
+        acquireTurnCredential: async () => credential(),
+        startTunnel: async () => tunnel,
+        acknowledgeCredentialDelivery: async () => true,
+      },
+    });
+    try {
+      await expect(
+        provider.executeTurn({ ...sessionTarget, runId: input.runId }, input, vi.fn()),
+      ).rejects.toThrow(admissionError);
+      expect(launch).toHaveBeenCalledOnce();
+      expect(execute).not.toHaveBeenCalled();
+      expect(readWorkerTurnTranscriptStorageRows()).toEqual([]);
+    } finally {
+      await inference.stop();
+      rpc.clear();
+      input.preparedRunAdmission.close();
+    }
+  });
 });

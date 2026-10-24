@@ -29,6 +29,7 @@ import {
   acknowledgeWorkerTurnFinishing,
   getWorkerTurnToolSurface,
   admitWorkerTurnInput,
+  assertWorkerTurnInputAdmitted,
   type WorkerTurnExecutionIdentityCapability,
 } from "./placement-turn-claim-events.js";
 import type { WorkerGatewayToolSink } from "./worker-gateway-tool-contract.js";
@@ -46,7 +47,11 @@ import type {
   WorkerLiveEventServiceResult,
   WorkerInferenceServiceResult,
 } from "./worker-turn-rpc.types.js";
-import { captureWorkerTurnLiveEventOwner } from "./worker-turn-run-owner.js";
+import {
+  captureWorkerTurnLiveEventOwner,
+  isWorkerTerminalLiveEvent,
+  prepareWorkerTurnAdmittedLiveEvent,
+} from "./worker-turn-run-owner.js";
 
 class WorkerTranscriptAuthorityError extends Error {
   constructor(readonly outcome: Exclude<WorkerTranscriptCommitServiceResult, { ok: true }>) {
@@ -55,17 +60,12 @@ class WorkerTranscriptAuthorityError extends Error {
 }
 
 export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
-  const { store } = options;
-  const inference = options.inference;
-  const now = options.now;
-  const withLock = options.withLock;
+  const { store, inference, now, withLock } = options;
   const observedAckCursors = new Map<string, WorkerTerminalTurnFence>();
   const pendingTerminalTurnFences = new Map<string, WorkerPendingTerminalTurnFence>();
   const terminalTurnFences = new Map<string, WorkerTerminalTurnFence>();
   const workerAdmissionReceiptScope = randomUUID();
   let workerAdmissionOrdinal = 0;
-
-  const placementClaim = (identity: WorkerConnectionIdentity) => identity.turnClaim ?? undefined;
 
   const sourceFor = (identity: WorkerConnectionIdentity) =>
     identity.turnClaim
@@ -75,7 +75,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
   const processTurnBinding = (
     identity: WorkerConnectionIdentity,
   ): WorkerProcessTurnBinding | undefined => {
-    const turnClaim = placementClaim(identity);
+    const turnClaim = identity.turnClaim;
     return turnClaim ? { turnClaim, credentialHash: identity.credentialHash } : undefined;
   };
 
@@ -203,17 +203,9 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     if (!options.placementStore) {
       return "invalid";
     }
-    const claim = placementClaim(identity);
+    const claim = identity.turnClaim;
     return claim && options.placementStore.validateWorkerTurn(claim) ? "durable" : "invalid";
   };
-
-  const isTerminalLiveEvent = (request: WorkerLiveEventParams): boolean =>
-    request.event.kind === "lifecycle" &&
-    (request.event.payload.phase === "finishing" ||
-      request.event.payload.phase === "end" ||
-      (request.event.payload.phase === "error" &&
-        (request.event.payload.aborted === true ||
-          request.event.payload.fallbackExhaustedFailure === true)));
 
   const validateAttachedWorkerRequest = (
     identity: WorkerConnectionIdentity,
@@ -312,6 +304,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
           throw new WorkerTranscriptAuthorityError(binding);
         }
         source.receiptAuthority();
+        assertWorkerTurnInputAdmitted(identity);
       };
       try {
         assertCurrent();
@@ -327,7 +320,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
             assertCurrent();
             // Stale base consumes a sequence just like success, including on replay.
             if (committed.ok || committed.reason === "stale-base-leaf") {
-              const placement = placementClaim(identity);
+              const placement = identity.turnClaim;
               const processTurn = processTurnBinding(identity);
               if (!placement || !processTurn) {
                 throw new WorkerTranscriptAuthorityError({
@@ -360,6 +353,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
   const executeComputer = createWorkerComputerRpc({
     execute: options.executeComputer,
     validate: (identity) => {
+      assertWorkerTurnInputAdmitted(identity);
       const requestAdmission = validateAttachedWorkerRequest(identity, identity.ownerEpoch, {
         kind: "session-tool",
       });
@@ -368,7 +362,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
           ? requestAdmission
           : { ok: false as const, closeReason: "placement-mismatch" as const };
       }
-      const binding = placementClaim(identity);
+      const binding = identity.turnClaim;
       if (!binding || !options.placementStore?.isWorkerTurnToolAuthorized(binding, "computer")) {
         return { ok: false as const, closeReason: "method-not-allowed" as const };
       }
@@ -411,9 +405,10 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     sink: WorkerGatewayToolSink,
     signal?: AbortSignal,
   ) =>
-    withToolSurface(identity, (runtime) =>
-      runtime.invoke(identity, request, sink, signal).catch(workerSessionToolErrorResult),
-    );
+    withToolSurface(identity, (runtime) => {
+      assertWorkerTurnInputAdmitted(identity);
+      return runtime.invoke(identity, request, sink, signal).catch(workerSessionToolErrorResult);
+    });
   const cancelGatewayTool = (
     identity: WorkerConnectionIdentity,
     request: WorkerGatewayToolCancelParams,
@@ -458,9 +453,10 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
 
   const pushLiveEvent = async (
     identity: WorkerConnectionIdentity,
-    request: WorkerLiveEventParams,
+    input: WorkerLiveEventParams,
   ): Promise<WorkerLiveEventServiceResult> => {
     return await withLock(identity.environmentId, async () => {
+      const request = prepareWorkerTurnAdmittedLiveEvent(identity, input);
       const invalid = validateLiveEvent(identity, request);
       if (invalid) {
         return invalid;
@@ -472,7 +468,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       if (!source) {
         return { ok: false, closeReason: "placement-mismatch" };
       }
-      const placement = placementClaim(identity);
+      const placement = identity.turnClaim;
       const processTurn = processTurnBinding(identity);
       const placementStore = options.placementStore;
       if (!placement || !processTurn || !placementStore) {
@@ -508,7 +504,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       if (pending && !matchesTurnBinding(pending, processTurn)) {
         pendingTerminalTurnFences.delete(placement.sessionId);
       }
-      if (isTerminalLiveEvent(request) && wasNewSequence) {
+      if (isWorkerTerminalLiveEvent(request) && wasNewSequence) {
         pendingTerminalTurnFences.set(placement.sessionId, {
           ...processTurn,
           terminalLiveSeq: request.seq,
@@ -569,6 +565,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
     if (request.sessionId !== identity.sessionId || request.runId !== identity.runId) {
       return { ok: false, reason: "session-not-attached" } as const;
     }
+    assertWorkerTurnInputAdmitted(identity);
     return validateAttachedWorkerRequest(identity, request.runEpoch, {
       kind: "inference",
     });
@@ -659,7 +656,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
         return finish(preflight);
       }
       if (preflightAtMs >= preflight.identity.credentialExpiresAtMs) {
-        const placement = placementClaim(preflight.identity);
+        const placement = preflight.identity.turnClaim;
         if (!placement || !options.placementStore?.validateWorkerTurn(placement)) {
           return finish({ ok: false, reason: "credential-expired" } as const);
         }
@@ -685,7 +682,7 @@ export function createWorkerTurnRpc(options: WorkerTurnRpcOptions) {
       ) {
         return finish(expired ? ({ ok: false, reason: "credential-expired" } as const) : admitted);
       }
-      const placement = placementClaim(admitted.identity);
+      const placement = admitted.identity.turnClaim;
       if (!placement || !options.placementStore.validateWorkerTurn(placement)) {
         return finish({
           ok: false,
