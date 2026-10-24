@@ -19,6 +19,32 @@ import {
 const dirs = useAutoCleanupTempDirTracker(afterAll);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
+function afterBaselineOutput(
+  f: ReturnType<typeof createBaselineFixture>,
+  command: string,
+  body: string,
+) {
+  const preload = f.local(`after-${command}.mjs`);
+  const match =
+    command === "gh"
+      ? "process.argv[1]?.endsWith('/gh')"
+      : `process.argv[1]?.endsWith('/baseline-refresh.mjs') && process.argv[2] === ${JSON.stringify(command)}`;
+  writeFileSync(
+    preload,
+    `import fs from 'node:fs';
+if (${match}) {
+  const write = process.stdout.write;
+  process.stdout.write = function(chunk, ...rest) {
+    const result = write.call(this, chunk, ...rest);
+${body}
+    return result;
+  };
+}
+`,
+  );
+  return { NODE_OPTIONS: `--import=${preload}` };
+}
+
 function createSigningContext() {
   const f = createBaselineFixture(dirs.make("openclaw-pr-signing-"), 1);
   f.pass("prepare-baseline-refresh", f.manifest(f.advanceMain("initial upstream")));
