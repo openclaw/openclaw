@@ -300,6 +300,14 @@ sidebarTitle: "Voice and speech"
     `cove` belongs to `gpt-live-1-codex`; selecting it with the public
     `gpt-live-1` model falls back to `marin`.
 
+    To use a saved [custom voice](https://developers.openai.com/api/docs/guides/custom-voices),
+    set its `voice_...` ID as `talk.realtime.speakerVoiceId`,
+    `channels.discord.voice.realtime.speakerVoiceId`, or `speakerVoiceId` in an
+    OpenAI realtime provider block. OpenClaw sends it as the saved voice
+    reference; browser WebRTC session reservations omit it. Saved voices
+    require `gpt-live-1`; other models and malformed IDs fail session setup
+    instead of falling back.
+
     The public API uses `/v1/live/sessions` for WebRTC creation and primary
     WebSockets. Direct sockets start with `session.start`; browser sessions
     start during the SDP exchange. A Gateway sideband handles delegated work

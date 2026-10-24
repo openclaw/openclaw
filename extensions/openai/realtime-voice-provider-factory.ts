@@ -24,9 +24,12 @@ import { buildOpenAIQuicksilverInstructions } from "./realtime-quicksilver-instr
 import type { OpenAIQuicksilverBrowserSessionBroker } from "./realtime-quicksilver-session.js";
 import {
   OPENAI_QUICKSILVER_CAPABILITIES,
+  assertOpenAIGptLiveCustomVoiceModel,
   isOpenAIGptLiveModel,
   isOpenAIGptLiveSubscriptionModel,
+  normalizeOpenAIQuicksilverVoiceInput,
   resolveOpenAIQuicksilverVoiceCapabilities,
+  resolveOpenAIQuicksilverVoice,
 } from "./realtime-quicksilver.js";
 import { OpenAIRealtimeBridge } from "./realtime-voice-bridge.js";
 import {
@@ -173,6 +176,7 @@ export function buildOpenAIRealtimeVoiceProvider(
     createBridge: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
       const model = config.model;
+      assertOpenAIGptLiveCustomVoiceModel(model, config.voice);
       if (model && isOpenAIGptLiveModel(model)) {
         if (config.baseUrl) {
           throw new Error(
@@ -187,7 +191,7 @@ export function buildOpenAIRealtimeVoiceProvider(
         const bridgeConfig = {
           ...req,
           model,
-          voice: config.voice,
+          voice: resolveOpenAIQuicksilverVoice(model, config.voice),
           instructions: buildOpenAIQuicksilverInstructions(model, req.instructions),
         };
         const authParams = {
@@ -252,6 +256,9 @@ export function buildOpenAIRealtimeVoiceProvider(
       }
 
       const model = req.model ?? config.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
+      // Talk passes talk.realtime.speakerVoiceId through this string override.
+      const requestedVoice = normalizeOpenAIQuicksilverVoiceInput(req.voice) ?? config.voice;
+      assertOpenAIGptLiveCustomVoiceModel(model, requestedVoice);
       if (isOpenAIGptLiveModel(model)) {
         if (!quicksilverBroker) {
           throw new Error("OpenAI GPT-Live browser session broker is unavailable");
@@ -260,7 +267,7 @@ export function buildOpenAIRealtimeVoiceProvider(
           ...req,
           model,
           instructions: buildOpenAIQuicksilverInstructions(model, req.instructions),
-          voice: req.voice ?? config.voice,
+          voice: resolveOpenAIQuicksilverVoice(model, requestedVoice),
         };
         const auth = await resolveOpenAIQuicksilverBridgeAuth({ ...authParams, model }, context);
         return await quicksilverBroker.createBrowserSession(quicksilverRequest, auth);

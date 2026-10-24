@@ -15,7 +15,7 @@ import {
   isOpenAIGptLiveModel,
   isOpenAIGptLiveApiModel,
   resolveOpenAIQuicksilverVoice,
-  type OpenAIGptLiveVoice,
+  type OpenAIGptLiveVoiceSelection,
 } from "./realtime-quicksilver.js";
 
 const OPENAI_QUICKSILVER_APPEND_MAX_BYTES = 500;
@@ -70,7 +70,7 @@ export function createOpenAIQuicksilverRequestIds(): OpenAIQuicksilverRequestIds
 type OpenAIQuicksilverSession = {
   model: string;
   instructions: string;
-  audio: { output: { voice: OpenAIGptLiveVoice } };
+  audio: { output: { voice: OpenAIGptLiveVoiceSelection } };
   delegation: { type: "client"; ack_filler?: false };
   initial_items?: Array<{
     type: "message";
@@ -94,7 +94,7 @@ export function buildOpenAIQuicksilverSession(params: {
   model: string;
   hostControlsInput?: boolean;
   instructions?: string;
-  voice?: string;
+  voice?: string | { id: string };
   initialItems?: readonly RealtimeVoiceAgentConsultTranscriptEntry[];
 }): OpenAIQuicksilverSession {
   const history = boundOpenAIQuicksilverContextItems(params.initialItems ?? []);

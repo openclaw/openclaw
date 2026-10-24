@@ -568,6 +568,7 @@ describe("OpenAI Talk account defaults", () => {
   it.each([
     { name: "existing", config: { voice: "cedar", interruptResponseOnInputAudio: false } },
     { name: "explicit Live", config: { model: "gpt-live-1", voice: "marin" } },
+    { name: "blank speaker voice", config: { speakerVoice: "   " } },
   ])("preserves provider defaults for $name Discord relay configuration", async ({ config }) => {
     const provider = buildOpenAIRealtimeVoiceProvider();
     const resolved = await resolveConfiguredRealtimeVoiceProviderAsync({

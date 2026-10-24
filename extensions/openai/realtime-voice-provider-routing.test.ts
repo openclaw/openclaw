@@ -465,6 +465,45 @@ describe("OpenAI realtime voice provider routing", () => {
     expect(quicksilverRequest.instructions).toMatch(/Always address the caller as Captain\.$/);
   });
 
+  it.each([
+    { source: "provider speakerVoiceId", rawConfig: { speakerVoiceId: "voice_Demo123" } },
+    // Talk forwards talk.realtime.speakerVoiceId as the request's string voice override.
+    { source: "Talk speakerVoiceId", rawConfig: {}, voice: "voice_Demo123" },
+  ])("passes a $source saved voice reference to the native broker", async (setting) => {
+    const { provider, createBrowserSession } = browserFixture();
+    await provider.createBrowserSession?.({
+      providerConfig: await provider.resolveConfigAsync?.({
+        cfg: {} as never,
+        rawConfig: { apiKey: PLATFORM_KEY, model: "gpt-live-1", ...setting.rawConfig },
+      }),
+      ...browserRequest,
+      voice: setting.voice,
+      runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+    } as never);
+
+    expect(createBrowserSession).toHaveBeenCalledWith(
+      expect.objectContaining({ model: "gpt-live-1", voice: { id: "voice_Demo123" } }),
+      { type: "api-key", token: PLATFORM_KEY },
+    );
+  });
+
+  it.each([GA_MODEL, SUBSCRIPTION_MODEL])(
+    "rejects a saved voice reference for %s before session creation",
+    async (model) => {
+      const { provider, createBrowserSession } = browserFixture();
+      await expect(
+        provider.createBrowserSession?.({
+          providerConfig: { apiKey: PLATFORM_KEY, model },
+          ...browserRequest,
+          voice: "voice_Demo123",
+          runAgentConsult: vi.fn(async () => ({ text: "Done" })),
+        } as never),
+      ).rejects.toThrow("GPT-Live custom voice references require model gpt-live-1");
+      expect(createBrowserSession).not.toHaveBeenCalled();
+      expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects OAuth-only gpt-live-1 before broker session creation", async () => {
     const model = "gpt-live-1";
     mockOAuth();

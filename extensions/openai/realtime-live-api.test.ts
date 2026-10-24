@@ -10,6 +10,7 @@ import {
   parseSent,
   reserveSession as reserveBrowserSession,
 } from "./realtime-quicksilver.test-helpers.js";
+import { normalizeProviderConfig } from "./realtime-voice-session-policy.js";
 
 const LIVE_URL = "https://api.openai.com/v1/live/sessions";
 const SESSION_ID = "live_opaque/id?part=one";
@@ -90,6 +91,38 @@ async function answerOffer(fixture: Broker, token: string, body = SDP) {
 }
 
 const EMPTY_COUNTS = { pending: 0, inFlight: 0, active: 0, reservations: 0 };
+
+it("sends a configured saved voice ID to the public API without exposing it to the browser", async () => {
+  const fetchImpl = liveFetch();
+  const fixture = liveBroker({ fetchImpl });
+  const providerConfig = normalizeProviderConfig({
+    model: "gpt-live-1",
+    speakerVoiceId: "voice_Demo123",
+  });
+  const reservation = await fixture.realtime.broker.createBrowserSession(
+    {
+      providerConfig,
+      model: "gpt-live-1",
+      voice: providerConfig.voice,
+      runAgentConsult: fixture.runAgentConsult,
+    },
+    { type: "api-key", token: "platform-key" },
+  );
+  if (reservation.transport !== "webrtc") {
+    throw new Error("Expected WebRTC reservation");
+  }
+  expect(JSON.stringify(reservation)).not.toContain("voice_Demo123");
+  const response = await answerOffer(fixture, reservation.clientSecret);
+  expect([response.res.statusCode, response.readBody()]).toEqual([200, SDP]);
+  const [url, init] = fetchImpl.mock.calls[0]!;
+  expect(url).toBe(LIVE_URL);
+  if (typeof init?.body !== "string") {
+    throw new Error("Expected the public session JSON body");
+  }
+  expect(JSON.parse(init.body)).toMatchObject({
+    session: { model: "gpt-live-1", audio: { output: { voice: { id: "voice_Demo123" } } } },
+  });
+});
 
 it.each([
   { reason: "expired", outcome: "completed" },

@@ -48,14 +48,17 @@ import {
   type OpenAIQuicksilverAuth,
   type OpenAIQuicksilverInboundEvent,
 } from "./realtime-quicksilver-wire.js";
-import { isOpenAIGptLiveApiModel } from "./realtime-quicksilver.js";
+import {
+  isOpenAIGptLiveApiModel,
+  type OpenAIGptLiveVoiceSelection,
+} from "./realtime-quicksilver.js";
 
 const OPENAI_QUICKSILVER_READY_TIMEOUT_MS = 15_000;
 const WEBSOCKET_OPEN = 1;
 
 type OpenAIQuicksilverVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   model: string;
-  voice?: string;
+  voice?: OpenAIGptLiveVoiceSelection;
   resolveAuth: () => Promise<OpenAIQuicksilverAuth>;
   logger?: Pick<PluginLogger, "warn">;
   mediaSocketFactory?: QuicksilverMediaSocketFactory;

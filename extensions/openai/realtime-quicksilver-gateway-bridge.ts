@@ -54,6 +54,7 @@ import {
 import {
   isOpenAIGptLiveApiModel,
   isOpenAIGptLiveSubscriptionModel,
+  type OpenAIGptLiveVoiceSelection,
 } from "./realtime-quicksilver.js";
 
 const RELAY_SAMPLE_RATE = 24_000;
@@ -63,7 +64,7 @@ const WEBSOCKET_OPEN = 1;
 
 type OpenAIQuicksilverBridgeConfig = RealtimeVoiceBridgeCreateRequest & {
   model: string;
-  voice?: string;
+  voice?: OpenAIGptLiveVoiceSelection;
   logger: Pick<PluginLogger, "debug" | "warn">;
   resolveAuth: () => Promise<OpenAIQuicksilverAuth>;
   createPeer?: (
