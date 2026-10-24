@@ -595,20 +595,24 @@ describe("Mistral provider", () => {
   });
 
   it.each([
-    [undefined, "prompt-cache-key", "prompt-cache-key", "session-affinity"],
-    ["none", "prompt-cache-key", undefined, undefined],
-    [undefined, undefined, "session-affinity", "session-affinity"],
+    [undefined, "prompt-cache-key", "prompt-cache-key", "session-affinity", undefined],
+    ["none", "prompt-cache-key", undefined, undefined, undefined],
+    [undefined, undefined, "session-affinity", "session-affinity", undefined],
+    [undefined, "prompt-cache-key", "prompt-cache-key", "session-affinity", { "X-Affinity": "" }],
+    [undefined, "prompt-cache-key", "prompt-cache-key", "explicit", { "X-Affinity": "explicit" }],
+    [undefined, "prompt-cache-key", "prompt-cache-key", undefined, { "X-Affinity": null }],
   ] as const)(
-    "resolves cache retention %s and key %s",
-    async (cacheRetention, promptCacheKey, key, affinity) => {
+    "resolves cache retention %s and key %s (key %s, affinity %s, headers %j)",
+    async (cacheRetention, promptCacheKey, key, affinity, headers) => {
       await runSimpleMistralFixture(context, {
         sessionId: "session-affinity",
         promptCacheKey,
         cacheRetention,
+        headers,
       });
       const options = mistralMockState.requestOptions[0] as { headers?: Record<string, string> };
       expect(payload().promptCacheKey).toBe(key);
-      expect(options.headers?.["x-affinity"]).toBe(affinity);
+      expect(new Headers(options.headers).get("x-affinity") ?? undefined).toBe(affinity);
     },
   );
 

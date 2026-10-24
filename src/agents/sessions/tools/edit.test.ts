@@ -7,7 +7,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { applyPatch } from "diff";
 import { Value } from "typebox/value";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { hasErrnoCode } from "../../../infra/errno.js";
 import { createEditTool, type EditToolOptions } from "./edit.js";
+import { readPersistedFileStat } from "./file-write-verification.js";
 import type { EditToolDetails, EditToolInput } from "./tool-contracts.js";
 
 type EditOperations = NonNullable<EditToolOptions["operations"]>;
@@ -37,20 +39,16 @@ describe("edit tool", () => {
     return filePath;
   }
 
-  async function statEditFile(absolutePath: string) {
-    try {
-      const stat = await fs.stat(absolutePath);
-      return {
-        type: stat.isFile() ? "file" : stat.isDirectory() ? "directory" : "other",
-        size: stat.size,
-        mtimeMs: stat.mtimeMs,
-      } as const;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        return null;
-      }
-      throw error;
-    }
+  function createEditOperations(writeFile: EditOperations["writeFile"]): EditOperations {
+    return {
+      access: async (absolutePath) => {
+        await fs.access(absolutePath);
+      },
+      readFile: (absolutePath) => fs.readFile(absolutePath),
+      statFile: (absolutePath) =>
+        readPersistedFileStat(absolutePath, (error) => hasErrnoCode(error, "ENOENT")),
+      writeFile,
+    };
   }
 
   it("preserves a valid UTF-8 BOM when editing a real file", async () => {
@@ -149,17 +147,10 @@ describe("edit tool", () => {
     // Some backends throw after flushing content; a readback match is the
     // contract that lets the tool report success without duplicating edits.
     const filePath = await createTempFile('const value = "foo";\r\n');
-    const operations: EditOperations = {
-      access: async (absolutePath) => {
-        await fs.access(absolutePath);
-      },
-      readFile: (absolutePath) => fs.readFile(absolutePath),
-      statFile: statEditFile,
-      writeFile: async (absolutePath, content) => {
-        await fs.writeFile(absolutePath, content, "utf-8");
-        throw new Error("Simulated post-write failure");
-      },
-    };
+    const operations = createEditOperations(async (absolutePath, content) => {
+      await fs.writeFile(absolutePath, content, "utf-8");
+      throw new Error("Simulated post-write failure");
+    });
     const tool = createEditTool(tmpDir, { operations });
 
     const result = await executeEdit(tool, filePath, [
@@ -178,16 +169,9 @@ describe("edit tool", () => {
 
   it("does not recover false success when the file never changed", async () => {
     const filePath = await createTempFile("old replacement already present");
-    const operations: EditOperations = {
-      access: async (absolutePath) => {
-        await fs.access(absolutePath);
-      },
-      readFile: (absolutePath) => fs.readFile(absolutePath),
-      statFile: statEditFile,
-      writeFile: async () => {
-        throw new Error("Simulated write failure");
-      },
-    };
+    const operations = createEditOperations(async () => {
+      throw new Error("Simulated write failure");
+    });
     const tool = createEditTool(tmpDir, { operations });
 
     await expect(
@@ -197,14 +181,7 @@ describe("edit tool", () => {
 
   it("rejects false success when a delegated write resolves without persisting", async () => {
     const filePath = await createTempFile("old\n");
-    const operations: EditOperations = {
-      access: async (absolutePath) => {
-        await fs.access(absolutePath);
-      },
-      readFile: (absolutePath) => fs.readFile(absolutePath),
-      statFile: statEditFile,
-      writeFile: async () => {},
-    };
+    const operations = createEditOperations(async () => {});
     const tool = createEditTool(tmpDir, { operations });
 
     await expect(executeEdit(tool, filePath, [{ oldText: "old", newText: "new" }])).rejects.toThrow(
@@ -339,16 +316,9 @@ describe("edit tool", () => {
 
   it("does not hide unrelated errors that mention no changes", async () => {
     const filePath = await createTempFile("old content\n");
-    const operations: EditOperations = {
-      access: async (absolutePath) => {
-        await fs.access(absolutePath);
-      },
-      readFile: (absolutePath) => fs.readFile(absolutePath),
-      statFile: statEditFile,
-      writeFile: async () => {
-        throw new Error("No changes made to the disk because it is full");
-      },
-    };
+    const operations = createEditOperations(async () => {
+      throw new Error("No changes made to the disk because it is full");
+    });
     const tool = createEditTool(tmpDir, { operations });
 
     await expect(executeEdit(tool, filePath, [{ oldText: "old", newText: "new" }])).rejects.toThrow(

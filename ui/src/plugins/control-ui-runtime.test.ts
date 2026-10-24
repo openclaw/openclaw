@@ -75,7 +75,14 @@ function connectedContext(
     config: configuration,
     gateway: {
       snapshot: client
-        ? { phase: "connected", client, hello: { features: { methods: advertised } } }
+        ? {
+            phase: "connected",
+            client,
+            hello: {
+              features: { methods: advertised },
+              auth: { role: "operator", scopes: ["operator.admin"] },
+            },
+          }
         : { phase: "connecting" },
       subscribe: () => () => undefined,
       subscribeEvents: () => () => undefined,
@@ -88,6 +95,21 @@ const pluginDescriptor = (revision = "one", entryUrl = "/review.js") => ({
   revision,
   entryUrl,
   styles: [],
+});
+
+it("completes an unavailable catalog without requests or diagnostics for a limited connection", async () => {
+  const request = vi.fn();
+  const context = connectedContext({ gatewayUrl: localGateway(), request }, configForRuntime());
+  context.gateway.snapshot.hello!.auth!.scopes = ["operator.sessions.read"];
+  const runtime = new ControlUiPluginRuntime(() => context);
+  runtimes.push(runtime);
+  runtime.start();
+  await runtime.refresh();
+  await runtime.refresh();
+  expect(request).not.toHaveBeenCalled();
+  expect(runtime.registryStatus).toBe("complete");
+  expect(runtime.errors).toEqual([]);
+  expect(runtime.hasPlugins).toBe(false);
 });
 
 it("dispatches only explicitly advertised inline versions and restores saved version eligibility", async () => {
@@ -643,6 +665,7 @@ it.each(["plugins.changed", "plugins.controlUi.changed"] as const)(
     const runtime = runtimeFor(context);
     const hello = {
       ...GATEWAY_STORE_TEST_HELLO,
+      auth: { role: "operator", scopes: ["operator.admin"] },
       server: { connId: "native-connection-one" },
       features: { methods },
     };

@@ -88,10 +88,6 @@ export type ToolParameterSchemaOptions = {
 
 const toolParameterSchemaCache = createToolSchemaNormalizationCache<TSchema>();
 
-function isGeminiModelId(modelId: string): boolean {
-  return /(?:^|[/:])gemini(?:$|[-/:.])/.test(modelId);
-}
-
 function extractEnumValues(schema: unknown, requireAllVariants = false): unknown[] | undefined {
   if (!schema || typeof schema !== "object") {
     return undefined;
@@ -291,7 +287,7 @@ export function normalizeToolParameterSchema(
   const isGeminiProvider =
     normalizedProvider.includes("google") ||
     normalizedProvider.includes("gemini") ||
-    isGeminiModelId(normalizedModelId) ||
+    /(?:^|[/:])gemini(?:$|[-/:.])/.test(normalizedModelId) ||
     normalizedToolSchemaProfile === "gemini";
   const isAnthropicProvider = normalizedProvider.includes("anthropic");
   const isLlamacppGbnfProfile = normalizedToolSchemaProfile === "llamacpp";

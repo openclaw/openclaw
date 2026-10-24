@@ -76,7 +76,12 @@ export function createNativeNavPageOpener(suite: ReturnType<typeof createControl
       await installNativeWebChrome(page);
     }
     const gateway = await installMockGateway(page, {
-      featureMethods: ["chat.metadata", "chat.startup", "sessions.create"],
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "sessions.companion.state",
+        "sessions.create",
+      ],
       ...options.scenario,
     });
     await options.beforeNavigate?.(page);

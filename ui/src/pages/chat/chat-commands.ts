@@ -206,17 +206,35 @@ export async function dispatchChatSlashCommand(
         return "failed";
       }
       break;
-    case "export-session":
+    case "export-session": {
       if (args.trim()) {
         setChatError(host, t("chat.commandResults.exportPathUnsupported"));
         return "failed";
       }
       setChatError(host, null);
-      if ((await host.exportCurrentChat?.()) === "empty") {
-        injectCommandResult(host, t("chat.commandResults.emptyExport"));
-        scheduleChatScroll(host, false, false, { contentChanged: true });
+      const target = captureChatCommandTarget(host);
+      const { sessionKey, currentSessionId } = host;
+      const targetIsCurrent = () =>
+        host.sessionKey === sessionKey &&
+        host.currentSessionId === currentSessionId &&
+        (!target || isChatCommandTargetCurrent(host, target));
+      try {
+        const result = await host.exportCurrentChat?.();
+        if (!targetIsCurrent()) {
+          return "cancelled";
+        }
+        if (result === "empty") {
+          injectCommandResult(host, t("chat.commandResults.emptyExport"));
+          scheduleChatScroll(host, false, false, { contentChanged: true });
+        }
+        return "completed";
+      } catch (error) {
+        if (targetIsCurrent()) {
+          setChatError(host, formatUiError(error));
+        }
+        return "failed";
       }
-      return "completed";
+    }
   }
 
   const target = captureChatCommandTarget(host);

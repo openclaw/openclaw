@@ -95,14 +95,25 @@ export async function recoverGatewayLock(options: { confirmation: string }) {
   }
   assertGatewayRecoveryLeaseNotLive(inspection.lease);
   for (const { observed } of inspection.files) {
-    if (
-      observed?.holder &&
-      (await resolveGatewayOwnerStatus(observed.holder.pid, observed.holder, process.platform, {
+    if (!observed?.holder) {
+      continue;
+    }
+    const status = await resolveGatewayOwnerStatus(
+      observed.holder.pid,
+      observed.holder,
+      process.platform,
+      {
         lockPath: observed.path,
-      })) === "alive"
+      },
+    );
+    if (
+      status === "alive" ||
+      (status !== "dead" &&
+        process.platform === "win32" &&
+        observed.holder.processNamespace === undefined)
     ) {
       throw new Error(
-        `Gateway holder ${observed.holder.pid} is still live; stop it before recovering its lock.`,
+        `Gateway holder ${observed.holder.pid} ${status === "alive" ? "is still live" : "could not be verified dead"}; stop it before recovering its lock.`,
       );
     }
   }

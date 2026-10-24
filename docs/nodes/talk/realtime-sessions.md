@@ -233,7 +233,9 @@ uses the `inputTranscriptionModel` deployment when set, or `whisper-1` when
 unset. The transcription deployment must be available on the Azure resource.
 Azure authentication uses the resource key in the `api-key` header; it does not
 use an OpenAI Platform key. An explicit `azureApiVersion` keeps the preview URL
-and preview session protocol; omit it to use GA. The setting is also available
+and preview session protocol, including its existing endpoint path; omit it to use GA.
+For GA, the endpoint may be the resource root or end in `/openai` or `/openai/v1`.
+The setting is also available
 under the Voice Call plugin provider config at
 `plugins.entries.voice-call.config.realtime.providers.openai.inputTranscriptionModel`.
 

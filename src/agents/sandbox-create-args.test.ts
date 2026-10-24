@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveSandboxBrowserDockerCreateConfig,
+  resolveSandboxConfigForAgent,
+} from "./sandbox/config.js";
 import { SANDBOX_DOCKER_CREATE_ARGS_EPOCH } from "./sandbox/constants.js";
-import { buildSandboxCreateArgs } from "./sandbox/docker.js";
+import { buildSandboxCreateArgs } from "./sandbox/container-allocation.js";
 import type { SandboxDockerConfig } from "./sandbox/types.js";
 
 describe("buildSandboxCreateArgs", () => {
@@ -44,6 +48,30 @@ describe("buildSandboxCreateArgs", () => {
       expect(valuesForFlag(args, flag)).toEqual(expect.arrayContaining(values));
     }
   }
+
+  it.each([
+    [undefined, undefined, "agent", "1024"],
+    [256, undefined, "agent", "256"],
+    [256, 512, "agent", "512"],
+    [256, 2048, "agent", "2048"],
+    [256, 512, "shared", "256"],
+  ] as const)(
+    "applies the resolved PID budget to tool and browser containers (%s, %s, %s)",
+    (globalLimit, agentLimit, scope, expected) => {
+      const config = resolveSandboxConfigForAgent(
+        {
+          agents: {
+            defaults: { sandbox: { scope, docker: { pidsLimit: globalLimit } } },
+            entries: { test: { sandbox: { docker: { pidsLimit: agentLimit } } } },
+          },
+        },
+        "test",
+      );
+      for (const docker of [config.docker, resolveSandboxBrowserDockerCreateConfig(config)]) {
+        expect(valuesForFlag(build(docker).argv, "--pids-limit")).toEqual([expected]);
+      }
+    },
+  );
 
   it("includes hardening and resource flags", () => {
     vi.spyOn(Date, "now").mockReturnValue(1700000000000);

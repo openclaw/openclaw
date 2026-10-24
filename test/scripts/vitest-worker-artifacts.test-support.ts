@@ -452,7 +452,7 @@ export function workerProbe(
       expect(Object.values(runtimeProcessBuildEntries)).toHaveLength(runtimeProcessBuildEntrypoints.length);
       for (const source of Object.values(runtimeProcessBuildEntries)) {
         expect(source).not.toContain('/dist/');
-        expect(source).toMatch(/\\.m?ts$/);
+        expect(source).toMatch(/\\.m?[jt]s$/);
         expect(fs.existsSync(source)).toBe(true);
       }
       expect(entriesPresentAtCollection).toBe(true);

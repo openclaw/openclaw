@@ -446,20 +446,20 @@ it.each(["projection retirement", "ACP read failure"] as const)(
   },
 );
 
-it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as const)(
+it.each(["overlapping pinned pages", "transcript-only invalidation"] as const)(
   "handles an exact cold archive suffix during %s",
   async (mode) => {
     await withSessionRowProjectionState(
       async (create) => {
+        const transcriptOnly = mode === "transcript-only invalidation";
         const cfg = {
           agents: {
-            entries: { main: {} },
+            entries: { main: {}, ...(!transcriptOnly && { "archive-pin": {} }) },
             defaults: { utilityModel: "unit-test/small" },
           },
         };
         setRuntimeConfigSnapshot(cfg);
         clearSubagentRunsReadCacheForTest();
-        const transcriptOnly = mode === "transcript-only invalidation";
         const queries = Array.from({ length: transcriptOnly ? 2 : 102 }, (_, index) => ({
           agentId: "main",
           key: `agent:main:accepted-archive-${index}`,
@@ -475,6 +475,16 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
             entries[index]!,
           );
         }
+        const pinnedQuery = { agentId: "archive-pin", key: "agent:archive-pin:awaiting-page" };
+        if (!transcriptOnly) {
+          replaceSessionEntrySync(
+            { agentId: pinnedQuery.agentId, sessionKey: pinnedQuery.key },
+            { sessionId: "awaiting-archive-page", updatedAt: 1, archivedAt: 1 },
+          );
+        }
+        const firstPageQueries = transcriptOnly
+          ? queries.slice(0, 2)
+          : [...queries.slice(0, 2), pinnedQuery];
         const suffixScope = {
           agentId: "main",
           sessionKey: queries[1]!.key,
@@ -504,6 +514,9 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
         const releaseRegistry = createDeferredCore();
         const accepted = createDeferredCore();
         const releaseExact = createDeferredCore();
+        const pinnedReadEntered = createDeferredCore();
+        const releasePinnedRead = createDeferredCore();
+        const suffixReady = createDeferredCore();
         let holdBulk = false;
         const createDrain = projectionWork.createSessionProjectionDrain;
         vi.spyOn(projectionWork, "createSessionProjectionDrain").mockImplementationOnce((params) =>
@@ -560,6 +573,10 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
           const reads: SessionRowDatabaseFacts[][] = [];
           watchRowFacts((owner) => async (input) => {
             const result = await owner.readRowFacts(input);
+            if (input.sessionKeys.includes(pinnedQuery.key)) {
+              pinnedReadEntered.resolve();
+              await releasePinnedRead.promise;
+            }
             reads.push(structuredClone(result.rows));
             return result;
           });
@@ -583,8 +600,8 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
           );
           page = withReadySessionRows(
             projection,
-            () => queries.slice(0, 2),
-            (read) => queries.slice(0, 2).map((query) => read.describe(query)!.key),
+            () => firstPageQueries,
+            (read) => firstPageQueries.map((query) => read.describe(query)!.key),
           );
           await Promise.race([
             accepted.promise,
@@ -645,7 +662,13 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
           holdBulk = false;
           releaseBulk.resolve();
           bulk = projection.ensureMaterialized();
-          await bulk;
+          projection.onFactsChange((change) => {
+            if (change.kind === "row" && change.key === queries[1]!.key && ready(suffix)) {
+              suffixReady.resolve();
+            }
+          });
+          releaseExact.resolve();
+          await Promise.all([suffixReady.promise, pinnedReadEntered.promise]);
           expect(reads.map((rows) => rows.map((row) => row.sessionKey))).toEqual([
             queries.slice(0, 2).map((query) => query.key),
           ]);
@@ -662,7 +685,8 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
               expect(projection.selectEntries().filter(ready)).toHaveLength(102);
             },
           );
-          // Releasing the other page trims through the real LRU; the first page stays pinned.
+          // The first page retains its ready rows while its other physical store is pending.
+          // Releasing the other page trims through the real LRU without evicting those pins.
           expect(projection.selectEntries().filter(ready)).toHaveLength(100);
           const residentKeys = new Set(
             projection
@@ -671,12 +695,14 @@ it.each(["bulk completion with pinned pages", "transcript-only invalidation"] as
               .map((row) => row.key),
           );
           expect(queries.slice(0, 2).every((query) => residentKeys.has(query.key))).toBe(true);
-          releaseExact.resolve();
-          expect(await page).toEqual(queries.slice(0, 2).map((query) => query.key));
+          releasePinnedRead.resolve();
+          expect(await page).toEqual(firstPageQueries.map((query) => query.key));
+          await bulk;
         } finally {
           holdBulk = false;
           releaseRegistry.resolve();
           releaseExact.resolve();
+          releasePinnedRead.resolve();
           releaseBulk.resolve();
           await Promise.allSettled([recovery, page, bulk, projection.ensureMaterialized()]);
         }

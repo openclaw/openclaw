@@ -1,7 +1,10 @@
 import { expect, it } from "vitest";
+import { validateConfigObjectRaw } from "../config/validation-core.js";
+import { buildCatalogModel } from "./provider-catalog.test-support.js";
 import {
   applyOpencodeZenModelDefault,
   applyAgentDefaultMediaModel,
+  applyProviderConfigWithDefaultModels,
   createAliasOnlyPresetAppliers,
   OPENCODE_ZEN_DEFAULT_MODEL,
   resolveAgentModelPrimaryValue,
@@ -75,4 +78,25 @@ it("preserves fallbacks when setting primary", () => {
     primary: OPENCODE_ZEN_DEFAULT_MODEL,
     fallbacks: ["google/gemini-3.1-pro-preview"],
   });
+});
+
+it("writes catalog model rows to config without their catalog family", () => {
+  const row = buildCatalogModel("family-model", { name: "Family model", family: "moonshot" });
+  const written = applyProviderConfigWithDefaultModels(
+    { models: { mode: "replace" } },
+    {
+      agentModels: {},
+      providerId: "family-host",
+      api: "openai-completions",
+      baseUrl: "https://family.example/v1",
+      defaultModels: [row],
+    },
+  );
+  const { family: _family, ...authored } = row;
+  expect(written.models?.providers?.["family-host"]?.models).toEqual([authored]);
+  // Strict config validation rejects the catalog-only field the onboarding write omits.
+  const models = structuredClone(written.models);
+  expect(validateConfigObjectRaw({ models }).ok).toBe(true);
+  models!.providers!["family-host"]!.models[0]!.family = "moonshot";
+  expect(validateConfigObjectRaw({ models }).ok).toBe(false);
 });

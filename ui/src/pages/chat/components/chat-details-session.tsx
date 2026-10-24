@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal, createStore, onSettled } from "solid-js";
+import { For, Show, createMemo, createSignal, createStore } from "solid-js";
 import type { SessionParticipant } from "../../../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import type { MenuHandle } from "../../../components/solid/menu.tsx";
@@ -14,10 +14,9 @@ import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-b
 import { ProcessesPanelData } from "../processes-panel-data.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { ChatDetailsBackground } from "./chat-details-background.tsx";
-import { ChatDetailsDesktopContext } from "./chat-details-context.tsx";
 import { ChatDetailsDesktopBody } from "./chat-details-desktop-body.tsx";
 import { ChatDetailsDesktopSection } from "./chat-details-desktop-section.tsx";
-import { ChatDetailsContext, ChatDetailsEnvironment } from "./chat-details-environment.tsx";
+import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import { ChatDetailsPeople, ChatDetailsPeopleSummary } from "./chat-details-people.tsx";
 import { ChatDetailsProcesses } from "./chat-details-processes.tsx";
 import { ChatDetailsProgress } from "./chat-details-progress.tsx";
@@ -70,18 +69,7 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
         props.props?.selectedSession?.sessionId,
       ]);
     const identity = createMemo(readIdentity);
-    const outputsDemand = createMemo(() =>
-      props.presented && props.desktop && props.props?.outputs
-        ? props.props.retainOutputs
-        : undefined,
-    );
-    return [
-      <Show when={outputsDemand()} keyed>
-        {(retain) => {
-          onSettled(retain);
-          return null;
-        }}
-      </Show>,
+    return (
       <Show when={identity()} keyed>
         {(_identity) => {
           const [pullRequestsOpen, setPullRequestsOpen] = createSignal(true);
@@ -397,17 +385,6 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     </>
                   )}
                 </Show>
-                <Show
-                  when={props.desktop}
-                  fallback={<ChatDetailsContext details={props.props!} presented={active()} />}
-                >
-                  <ChatDetailsDesktopContext
-                    details={props.props!}
-                    presented={active()}
-                    expanded={sectionExpanded("context")}
-                    onExpandedChange={(expanded) => changeSection("context", expanded)}
-                  />
-                </Show>
                 <Show when={!props.desktop}>
                   <Background details={props.props!} presented={active()} />
                 </Show>
@@ -482,6 +459,8 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
                     showProcesses={false}
                   />
                   <ChatDetailsProcesses
+                    sessionKey={props.props?.sessionKey ?? ""}
+                    agentId={props.props?.currentAgentId ?? "main"}
                     processes={processes}
                     presented={active()}
                     expanded={sectionExpanded("processes")}
@@ -521,8 +500,8 @@ export const ChatDetailsSession = defineSolidBridge<Props>(
             </Show>
           );
         }}
-      </Show>,
-    ];
+      </Show>
+    );
   },
   {
     propertyChanged: (host, key) => {

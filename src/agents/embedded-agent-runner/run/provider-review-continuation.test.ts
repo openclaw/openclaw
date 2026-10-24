@@ -11,6 +11,7 @@ import {
 } from "../../../../packages/ai/src/providers/openai-chatgpt-responses.js";
 import { createTransportAwareStreamFnForModel } from "../../../../packages/ai/src/transports/provider-transport-stream.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { Context, Model } from "../../../llm/types.js";
 import { issueProviderReviewAcknowledgment } from "../../../sessions/provider-review.js";
@@ -354,14 +355,7 @@ describe("explicit direct Responses continuation", () => {
         ...context,
         messages: [
           ...context.messages,
-          {
-            role: "toolResult",
-            toolCallId: "tool-1",
-            toolName: "read",
-            content: [{ type: "text", text: "tool result" }],
-            isError: false,
-            timestamp: 3,
-          },
+          makeTextToolResult("tool-1", "read", "tool result", false, 3),
         ],
       };
       await (await f.stream(model, later, f.options)).result();

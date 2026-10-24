@@ -9,6 +9,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../styles/chat/composer-surface.css";
 import "../../../styles/chat/composer-mobile.css";
 import { McpAppContextStrip } from "../../../components/solid/mcp-app-context-strip.tsx";
+import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { PaneSubagentStop } from "../chat-pane-header-view.tsx";
@@ -42,7 +43,6 @@ import { renderFallbackIndicatorSolid } from "./chat-composer-status.tsx";
 import { renderComposerTextarea, type ComposerTextareaProps } from "./chat-composer-textarea.tsx";
 import type { ChatComposerProps, ChatComposerState } from "./chat-composer-types.ts";
 import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
-import { isPastedTextAttachment } from "./chat-pasted-text.ts";
 import { ChatPermissionPicker } from "./chat-permission-picker.tsx";
 import { ChatVoiceStatus, ComposerDictationStatus } from "./chat-voice-activity.tsx";
 
@@ -93,9 +93,7 @@ export function renderChatComposerView(
   const placeholder = createMemo(() =>
     context().goalComposer.active
       ? t("chat.goals.objectivePlaceholder")
-      : (props.attachments ?? []).some((attachment) => !isPastedTextAttachment(attachment))
-        ? t("chat.composer.placeholderWithAttachments")
-        : t("chat.composer.placeholder", { name: props.assistantName || "agent" }),
+      : t("chat.composer.placeholder", { name: props.assistantName || "agent" }),
   );
   const mirrorCameraPreview = createMemo(
     () =>
@@ -245,6 +243,22 @@ export function renderChatComposerView(
             {status.icon}
           </span>
           <span class="agent-chat__composer-status-text">{status.text}</span>
+          <Show when={props.disabledReason ? props.disabledReasonAction : undefined}>
+            {(action) => (
+              <a
+                class="btn btn--sm"
+                href={action().href}
+                onClick={(event: MouseEvent) => {
+                  if (shouldHandleNavigationClick(event)) {
+                    event.preventDefault();
+                    action().onNavigate();
+                  }
+                }}
+              >
+                {action().label}
+              </a>
+            )}
+          </Show>
         </div>
       </div>
     ) : undefined;
@@ -616,6 +630,9 @@ export function renderChatComposerView(
                     session={props.selectedSession}
                     messages={props.messages}
                     providerUsage={props.providerUsage}
+                    gateway={props.contextGateway}
+                    agentId={props.currentAgentId}
+                    onOpenContext={props.onOpenContext}
                   />
                 </div>
                 <Show when={props.composerControls}>

@@ -16,6 +16,7 @@ import * as pluginCacheFiles from "../plugins/plugin-cache-files.js";
 import { resetPluginCache } from "../plugins/plugin-cache.js";
 import * as exec from "../process/exec.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { createCommandResult } from "../test-utils/npm-spec-install-test-helpers.js";
 import { runDoctorLintCli } from "./doctor-lint.js";
 import { maybeRepairInvalidPluginConfig } from "./doctor/shared/invalid-plugin-config.js";
 import { inspectPluginMigrationAvailability } from "./doctor/shared/plugin-migration-availability.js";
@@ -286,14 +287,9 @@ it.skipIf(process.platform === "win32")(
           source: pluginPath,
           fixHint: guidance,
         });
-        vi.spyOn(exec, "runUtf8CommandWithTimeout").mockResolvedValue({
-          stdout: reportText,
-          stderr: "",
-          code: 0,
-          signal: null,
-          killed: false,
-          termination: "exit",
-        });
+        vi.spyOn(exec, "runUtf8CommandWithTimeout").mockResolvedValue(
+          createCommandResult({ stdout: reportText }),
+        );
         const readiness = await applyPostPluginUpdateReadiness({
           root: f.root,
           entryPath: path.join(f.root, "openclaw.mjs"),

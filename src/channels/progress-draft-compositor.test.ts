@@ -309,6 +309,13 @@ it("merges reasoning deltas within a burst and separates bursts across tools", a
   lines().toEqual(["🧠 _Listing the workspace_", "ls", "🧠 _Picking the largest_", "wc"]);
 });
 
+it("preserves the reasoning budget and italic markers with astral text", async () => {
+  const { progress, rendered } = createProgress({ label: false, toolProgress: true });
+  await progress.pushToolProgress("Exec", { startImmediately: true });
+  await progress.pushReasoningProgress(`${"𠮷".repeat(40)} ${"x".repeat(100)}`);
+  rendered().toBe(`• Exec\n• _${"𠮷".repeat(40)} ${"x".repeat(76)}…_`);
+});
+
 it.each([
   ["buffers tags", ["<thin", "k>Check</think>Answer"], "_Check_", true],
   ["literal code", ["```html\n<think>x</think>\n```"], "_```html <think>x</think> ```_", false],

@@ -1,5 +1,6 @@
+import { Check } from "typebox/schema";
 import { beforeEach, expect, it, vi } from "vitest";
-import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
+import { createProtocolValidator } from "../../../packages/gateway-protocol/src/protocol-validator.js";
 import { WebSearchStatusResultSchema } from "../../../packages/gateway-protocol/src/schema/web-search.js";
 import { listProfilesForProvider } from "../../agents/auth-profiles/profile-list.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
@@ -79,7 +80,9 @@ vi.mock("./users-profile-access.js", () => ({
 }));
 import { webSearchHandlers } from "./web-search.js";
 
-const validateStatus = lazyCompile(WebSearchStatusResultSchema);
+const validateStatus = createProtocolValidator(WebSearchStatusResultSchema, (value) =>
+  Check(WebSearchStatusResultSchema, value),
+);
 
 const readStatus = async (config: OpenClawConfig) => {
   const context = { getRuntimeConfig: () => config } as GatewayRequestContext;

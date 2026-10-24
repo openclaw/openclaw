@@ -16,7 +16,7 @@ import type { CodexNativeSubagentHistoryOwner } from "./native-subagent-history-
 import { defaultNativeSubagentMonitorRuntime } from "./native-subagent-monitor-runtime.js";
 import { codexNativeSubagentMonitorRuntime } from "./native-subagent-monitor.js";
 import {
-  childTurnCompletedNotification,
+  collabItem,
   createClient,
   createNativeModelSourceFixture,
   directSpawnItem,
@@ -240,46 +240,20 @@ export async function fixture() {
 }
 
 export async function completeInForeground(client: ReturnType<typeof createClient>) {
-  await client.notify(
-    childTurnCompletedNotification({
-      status: "completed",
-      items: [{ id: "final", type: "agentMessage", phase: "final_answer", text: "Native result" }],
+  await client.completeTurn({
+    status: "completed",
+    items: [{ id: "final", type: "agentMessage", phase: "final_answer", text: "Native result" }],
+  });
+  await client.item(
+    collabItem("wait", ["child-thread"], {
+      id: "wait",
+      agentsStates: { "child-thread": { status: "completed", message: "Native result" } },
     }),
   );
-  await client.notify({
-    method: "item/completed",
-    params: {
-      threadId: "parent-thread",
-      turnId: "parent-turn",
-      item: {
-        id: "wait",
-        type: "collabAgentToolCall",
-        tool: "wait",
-        status: "completed",
-        senderThreadId: "parent-thread",
-        receiverThreadIds: ["child-thread"],
-        agentsStates: { "child-thread": { status: "completed", message: "Native result" } },
-      },
-    },
-  });
 }
 
 export async function submitFollowup(client: ReturnType<typeof createClient>) {
-  await client.notify({
-    method: "item/completed",
-    params: {
-      threadId: "parent-thread",
-      turnId: "parent-turn",
-      item: {
-        id: "followup",
-        type: "collabAgentToolCall",
-        tool: "sendInput",
-        status: "completed",
-        senderThreadId: "parent-thread",
-        receiverThreadIds: ["child-thread"],
-      },
-    },
-  });
+  await client.item(collabItem("sendInput", ["child-thread"], { id: "followup" }));
   await client.notify(
     successfulSendInputOutput({ callId: "followup", submissionId: "followup-turn" }),
   );

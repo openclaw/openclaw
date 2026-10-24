@@ -220,7 +220,21 @@ const VoiceCallRealtimeConfigSchema = z
       VoiceCallRealtimeAgentContextConfigSchema.parse({}),
     ),
     /** Provider-owned raw config blobs keyed by provider id. */
-    providers: VoiceCallProvidersConfigSchema,
+    providers: z
+      .record(
+        z.string(),
+        z
+          .object({
+            inputTranscriptionModel: z
+              .string()
+              .optional()
+              .describe(
+                "Input transcription model or deployment name. Omit to keep the provider default.",
+              ),
+          })
+          .catchall(z.unknown()),
+      )
+      .default({}),
   })
   .strict();
 export type VoiceCallRealtimeConfig = z.infer<typeof VoiceCallRealtimeConfigSchema>;

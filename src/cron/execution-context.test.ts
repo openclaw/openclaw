@@ -132,7 +132,7 @@ describe("buildScheduledExecutionContext principals", () => {
       mediaSessionKey: PARENT_KEY,
       eventTargetSessionKey: PARENT_KEY,
       workspace: { source: "parent-row", dir: "/work/parent" },
-      fileScope: "session",
+      fileScope: "root",
       bootstrap: "default",
       messageAccounts: { ownerAccountId: "default" },
       delivery: { sourceConversation: SOURCE },

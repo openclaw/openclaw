@@ -249,11 +249,10 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
             "files",
             "namespaces",
           ] as const) {
-            // Assign the cloned owner snapshot before acquisition; maps never cross back by reference.
+            // Import into the owner, then release entries retained by the capture command.
             const target: Map<string, unknown> = state[key];
-            for (const [name, value] of command.admission[key]) {
-              target.set(name, value);
-            }
+            command.admission[key].forEach((value, name) => target.set(name, value));
+            command.admission[key].clear();
           }
           for (const [key, receipt] of state.receipts) {
             sentReceipts.set(key, receipt);
@@ -264,9 +263,6 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
               command.entryFile,
               (run) => run(),
               (filename) => mapSource(command.captureId, filename),
-              undefined,
-              undefined,
-              command.bundledReloadSource,
             ),
           );
           const captureRecovery = artifact.captureRecoverySource.bind(artifact);

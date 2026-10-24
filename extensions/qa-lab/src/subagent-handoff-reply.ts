@@ -14,8 +14,12 @@ export async function findSubagentHandoffReply(
   readRequesterTranscript: () => Promise<readonly unknown[]>,
 ): Promise<string | undefined> {
   const visible = new Map<string, string>();
-  // Compare forward through the producer's lossy framing, never decode or accept a truncation.
-  const resultBlock = wrapPromptDataBlock({ label: "Child result", text: childReply });
+  // Compare forward through the producer's framing, never decode or accept a truncation.
+  const resultBlock = wrapPromptDataBlock({
+    label: "Child result",
+    text: childReply,
+    encoding: "verbatim",
+  });
   if (!resultBlock) {
     return undefined;
   }
@@ -70,7 +74,7 @@ export async function findSubagentHandoffReply(
         // buildChildCompletionFindings frames the result separately from the task.
         // This scenario has one child; another result in the wake is ambiguous.
         const [result, another] = extractGatewayMessageText(message).matchAll(
-          /^status: ([^\n]+)\n(Child result [^\n]*\n<prompt-data>\n[^<>]*\n<\/prompt-data>)$/gm,
+          /^status: ([^\n]+)\n(Child result [^\n]*\n<prompt-data>\n[\s\S]*?\n<\/prompt-data>)$/gm,
         );
         if (!another && result?.[1] === "ok" && result[2] === resultBlock) {
           afterDelivery.add(id);

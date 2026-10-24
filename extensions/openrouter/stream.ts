@@ -44,13 +44,12 @@ function mergeOpenRouterAuthHeaders(options: Parameters<StreamFn>[2]): Parameter
   if (!apiKey) {
     return options;
   }
-  const headers = new Headers(options?.headers);
-  if (!headers.has("authorization")) {
-    headers.set("Authorization", `Bearer ${apiKey}`);
+  if (Object.keys(options?.headers ?? {}).some((name) => name.toLowerCase() === "authorization")) {
+    return options;
   }
   return {
     ...options,
-    headers: Object.fromEntries(headers.entries()),
+    headers: { ...options?.headers, Authorization: `Bearer ${apiKey}` },
   };
 }
 

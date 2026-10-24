@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { createQueuedDiagnosticPhaseEmitter } from "../../infra/diagnostic-events.js";
+import { recordDiagnosticsTimelineDuration } from "../../infra/diagnostics-timeline.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
 type PreparationPhase =
@@ -30,6 +31,8 @@ type PreparationPhase =
   | "snapshot"
   | "synchronizeCanonical"
   | "synchronizeProjection"
+  | "runtimeQuiesce"
+  | "runtimeResume"
   | "containerStart"
   | "workspaceLayout";
 type TemplateState = "warm" | "cold" | "unavailable" | "reused";
@@ -134,6 +137,14 @@ export async function withWorktreePreparationTiming<T>(
         const unattributedMs = Math.round(Math.max(0, end - start - coveredMs));
         const phaseDurationsMs = Object.fromEntries(
           Object.entries(current.phases).map(([phase, duration]) => [phase, Math.round(duration)]),
+        );
+        recordDiagnosticsTimelineDuration(`worktree.${kind}`, end - start);
+        for (const [phase, duration] of Object.entries(current.phases)) {
+          recordDiagnosticsTimelineDuration(`worktree.${kind}.${phase}`, duration);
+        }
+        recordDiagnosticsTimelineDuration(
+          `worktree.${kind}.unattributed`,
+          Math.max(0, end - start - coveredMs),
         );
         log.info("managed worktree preparation", {
           consoleMessage: `managed worktree preparation kind=${kind} template=${current.template} templateDetails=${JSON.stringify(current.templateDetails)} outcome=${outcome} durationMs=${durationMs} unattributedMs=${unattributedMs} phaseDurationsMs=${JSON.stringify(phaseDurationsMs)}`,

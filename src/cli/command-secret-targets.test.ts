@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { expandPathTokens, parsePathPattern } from "../secrets/target-registry-pattern.js";
 
 const FETCH_KEY = "plugins.entries.firecrawl.config.webFetch.apiKey";
 const SEARCH_KEY = "plugins.entries.firecrawl.config.webSearch.apiKey";
@@ -63,35 +64,14 @@ vi.mock("../secrets/target-registry.js", () => ({
   ),
   discoverConfigSecretTargetsByIds: vi.fn((config: unknown, targetIds?: Iterable<string>) => {
     const allowed = targetIds ? new Set(targetIds) : null;
-    const matches = (pattern: string, path: string): boolean => {
-      const patternSegments = pattern.split(".");
-      const pathSegments = path.split(".");
-      if (patternSegments.length !== pathSegments.length) {
-        return false;
-      }
-      return patternSegments.every(
-        (segment, index) => segment === "*" || segment === pathSegments[index],
-      );
-    };
-    const collectPaths = (node: unknown, segments: string[], prefix: string[] = []): string[] => {
-      const [segment, ...rest] = segments;
-      if (!segment) {
-        return node === undefined ? [] : [prefix.join(".")];
-      }
-      if (!node || typeof node !== "object" || Array.isArray(node)) {
-        return [];
-      }
-      if (segment === "*") {
-        return Object.entries(node).flatMap(([key, value]) =>
-          collectPaths(value, rest, [...prefix, key]),
-        );
-      }
-      return collectPaths((node as Record<string, unknown>)[segment], rest, [...prefix, segment]);
-    };
     return REGISTRY_IDS.filter((id) => !allowed || allowed.has(id)).flatMap((id) =>
-      collectPaths(config, id.split("."))
-        .filter((path) => matches(id, path))
-        .map((path) => ({ entry: { id }, path, pathSegments: path.split(".") })),
+      expandPathTokens(config, parsePathPattern(id))
+        .filter(({ value }) => value !== undefined)
+        .map(({ segments }) => ({
+          entry: { id },
+          path: segments.join("."),
+          pathSegments: segments,
+        })),
     );
   }),
 }));

@@ -18,6 +18,7 @@ import "../test-helpers/app-sidebar-suite.ts";
 import { domProbe } from "../test-helpers/dom-probe.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
+import { sidebarBootSnapshot } from "../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { renderAppSidebarOnline } from "./app-sidebar-online.tsx";
 import { renderSidebarAgentCard } from "./app-sidebar-render.tsx";
@@ -34,29 +35,8 @@ import {
 import { installTitleTooltips } from "./tooltip-title.ts";
 
 const emptySnapshot: SidebarSnapshotModel = {
-  routingDefaults: { mainKey: "main", scope: "per-sender" },
-  roster: null,
+  ...sidebarBootSnapshot(null),
   mode: "chip",
-  navigationView: "sessions",
-  pages: [],
-  pageScopeId: null,
-  pinnedSessions: [],
-  entries: [],
-  sessions: [],
-  sections: [],
-  cards: [],
-  collapsedAgentIds: [],
-  collapsedSections: [],
-  plugins: [],
-  onlineUsers: [],
-  onlineCounts: [],
-  peopleSortMode: "presence",
-  peopleStatusFilter: "all",
-  peoplePresenceFilter: "online",
-  offlineUsers: [],
-  ownerId: null,
-  involvingMe: false,
-  footer: null,
   brand: { name: "Harbor", avatar: null, icon: "claw", environment: null },
 };
 

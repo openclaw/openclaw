@@ -155,8 +155,9 @@ The built-in `memory-core` plugin can index and search a PostgreSQL agent databa
 SQLite remains the default. PostgreSQL memory search is supported on the
 [qualified runtime](/gateway/postgresql#support-matrix). Text ranking is
 engine-local, so result ordering and scores can differ from SQLite. PostgreSQL
-calibrates unnormalized cover-density rank `r` as `r / (r + 0.1)` before the
-shared hybrid merge. This gives keywords a useful weight without penalizing
+uses the faster native `ts_rank` function and calibrates its unnormalized rank
+`r` as `r / (r + 0.0027)` before the shared hybrid merge. The calibration is fitted to
+the previous keyword score scale, giving keywords a useful weight without penalizing
 long chunks by their full length. It is not BM25: PostgreSQL's native rank lacks
 corpus-wide inverse document frequency (IDF), so common and mixed-frequency
 queries can still rank differently. Hybrid search retains the same vector/text
@@ -310,23 +311,9 @@ success alone does not complete the flush. Skipping or failing this optional ste
 does not prevent compaction. Plugin authors can find the contract and retry
 identity in [Pre-compaction memory flush](/plugins/sdk-overview/memory-and-context#pre-compaction-memory-flush).
 
-To keep that housekeeping turn on a local model, set an exact override that
-applies only to the memory-flush turn (it does not inherit the active
-session's model fallback chain):
-
-```json
-{
-  "agents": {
-    "defaults": {
-      "compaction": {
-        "memoryFlush": {
-          "model": "ollama/qwen3:8b"
-        }
-      }
-    }
-  }
-}
-```
+The flush uses the active session model and its normal fallback chain. To keep
+memory extraction local, use a local model for the session and configure local
+fallbacks.
 
 <Tip>
 The memory flush gives the agent a chance to save important facts before

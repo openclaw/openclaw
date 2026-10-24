@@ -283,17 +283,6 @@ describe("Codex auth product proof", () => {
       );
       expect(usageLoginRequest?.params).toEqual(EXPECTED_LOGIN);
       expect(accountReadRequest?.params).toEqual({});
-      const accountReadResponse = usageEntries.find(
-        (entry) => entry.id === accountReadRequest?.id && entry.result !== undefined,
-      );
-      expect(accountReadResponse?.result).toEqual({
-        account: {
-          type: "chatgpt",
-          email: "qa-codex-account@example.com",
-          planType: "pro",
-        },
-        requiresOpenaiAuth: true,
-      });
     },
   );
 

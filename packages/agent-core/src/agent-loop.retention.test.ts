@@ -9,7 +9,9 @@ import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import type { ContextRetentionResult } from "./agent-loop.retention.test-support.js";
 import { agentCoreRetentionEntrypoints } from "./retention-runtime.test-support.js";
 
-it("releases replaced histories while the next model request is pending", async ({ signal }) => {
+it("releases replaced histories and settled agents through retained tool contexts", async ({
+  signal,
+}) => {
   const result = await runNodeScript(
     [
       "--expose-gc",
@@ -36,5 +38,12 @@ it("releases replaced histories while the next model request is pending", async 
     observedHistories: 4,
     retained: [],
     completed: true,
+    settledToolContext: {
+      snapshots: 1,
+      agentRetained: false,
+      historyRetained: false,
+      attributionPreserved: true,
+      pendingInput: false,
+    },
   });
 }, 30_000);

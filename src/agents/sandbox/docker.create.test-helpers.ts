@@ -21,6 +21,7 @@ function freshSpawnState() {
     calls: [] as SpawnCall[],
     containerExists: true,
     inspectRunning: true,
+    readOnlyRoot: true,
     inspectError: "",
     createError: "",
     labelHash: "",
@@ -112,6 +113,9 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     }
     if (format === "{{.Id}}") {
       return result(0, "c".repeat(64));
+    }
+    if (format === "{{.Id}} {{.HostConfig.ReadonlyRootfs}}") {
+      return result(0, `${"c".repeat(64)} ${spawnState.readOnlyRoot}`);
     }
     if (args[1] === "-f" && format?.includes('index .Config.Labels "openclaw.configHash"')) {
       return spawnState.containerExists ? result(0, `${spawnState.labelHash}\n`) : missing();

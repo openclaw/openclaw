@@ -50,7 +50,7 @@ function captureHeaders(
   extraParams?: Record<string, unknown>,
   model: Partial<Model<"openai-completions">> = {},
 ) {
-  const calls: Array<{ headers?: Record<string, string> }> = [];
+  const calls: Array<{ headers?: Model["headers"] }> = [];
   const baseStreamFn: StreamFn = (_model, _context, options) => {
     calls.push({ headers: options?.headers });
     return createAssistantMessageEventStream();

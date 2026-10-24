@@ -27,6 +27,7 @@ import { isReplyRunEvidenceStale } from "../../sessions/session-controller.state
 import { steerSessionControllerOperation } from "../../sessions/session-controller.steer.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import { createWorkerConnectionIdentity } from "./connection-identity.test-support.js";
 import { createWorkerLiveEventReceiver } from "./live-events.js";
 import { projectWorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
@@ -191,18 +192,15 @@ describe("cloud worker run ownership", () => {
         getWorkerTurnExecutionIdentityCapability(placements, turnClaim),
         "expected worker turn capability",
       );
-      const identity: WorkerConnectionIdentity = {
+      const identity: WorkerConnectionIdentity = createWorkerConnectionIdentity(turnClaim, {
         environmentId: ENVIRONMENT_ID,
         ownerEpoch: OWNER_EPOCH,
         sessionId: SESSION_ID,
         runId,
-        turnClaim,
         credentialHash: "worker-test-credential-hash",
-        bundleHash: "a".repeat(64),
-        rpcSetVersion: 1,
         protocolFeatures: ["worker-live-event-v1"],
         credentialExpiresAtMs: Date.now() + input.timeoutMs,
-      };
+      });
       const receiver = createWorkerLiveEventReceiver();
       const receive = (event: WorkerLiveEventParams["event"], seq: number, sender = identity) =>
         receiver.apply({

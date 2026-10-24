@@ -3,8 +3,8 @@
 // sockets, without mocking global fetch, SSRF runtime, or logging redaction.
 import "openclaw/plugin-sdk/compiled-subprocess-testing";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { createOllamaEmbeddingProvider } from "./embedding-provider.js";
 
 type OllamaRequest = {
@@ -55,13 +55,7 @@ async function startOllamaServer(
     })();
   });
 
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  const port = await listenOnLoopback(server);
 
   servers.push({
     close: () =>
@@ -70,8 +64,7 @@ async function startOllamaServer(
       }),
   });
 
-  const address = server.address() as AddressInfo;
-  return { baseUrl: `http://127.0.0.1:${address.port}`, requests };
+  return { baseUrl: `http://127.0.0.1:${port}`, requests };
 }
 
 type EmbeddingOptions = Parameters<typeof createOllamaEmbeddingProvider>[0];

@@ -7,17 +7,10 @@ import type {
   GoogleChatUser,
 } from "./types.js";
 
-class GoogleChatEventPayloadError extends Error {
-  constructor() {
-    super("invalid payload");
-    this.name = "GoogleChatEventPayloadError";
-  }
-}
-
 /** Normalize only at authenticated dispatch; durable admission stores the untouched envelope. */
 export function parseGoogleChatInboundPayload(raw: unknown): GoogleChatEvent {
   if (!isRecord(raw)) {
-    throw new GoogleChatEventPayloadError();
+    throw new Error("invalid payload");
   }
 
   let eventPayload: Record<string, unknown> = raw;
@@ -85,14 +78,14 @@ export function parseGoogleChatInboundPayload(raw: unknown): GoogleChatEvent {
   const event = eventPayload as GoogleChatEvent;
   const eventType = event.type ?? event.eventType;
   if (typeof eventType !== "string" || !isRecord(event.space)) {
-    throw new GoogleChatEventPayloadError();
+    throw new Error("invalid payload");
   }
   if (eventType === "MESSAGE") {
     if (!isRecord(event.message) || !event.space?.name?.trim() || !event.message?.name?.trim()) {
-      throw new GoogleChatEventPayloadError();
+      throw new Error("invalid payload");
     }
   } else if (eventType === "CARD_CLICKED" && !isRecord(event.user)) {
-    throw new GoogleChatEventPayloadError();
+    throw new Error("invalid payload");
   }
 
   return event;

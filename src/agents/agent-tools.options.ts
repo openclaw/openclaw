@@ -145,6 +145,8 @@ export type OpenClawCodingToolsOptions = {
 
 export type InternalCodingToolsOptions = OpenClawCodingToolsOptions & {
   assertInvocationCurrent?: () => void;
+  /** Live harness-owned local execution, independent of the Gateway tool catalog. */
+  nativeHarnessExecution?: true;
   pluginExecutionAuthority?: import("./admitted-run-context.js").AdmittedRunOperatorAuthority;
   pluginExecutionSkillsSnapshot?: SkillSnapshot;
   awaitSessionDiffBaseline?: () => Promise<void>;

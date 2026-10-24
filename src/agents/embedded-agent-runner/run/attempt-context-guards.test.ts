@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { createDiagnosticTraceContext } from "../../../infra/diagnostic-trace-context.js";
 import type { AssistantMessage, Model } from "../../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
@@ -104,22 +105,11 @@ function prunableHistory(): AgentMessage[] {
   return [
     { role: "user", content: "first", timestamp: 1 },
     assistant("a1"),
-    toolResult("old-tool", "x".repeat(5_000), 1),
+    makeTextToolResult("old-tool", "read", "x".repeat(5_000), false, 1),
     assistant("a2"),
     assistant("a3"),
     assistant("a4"),
   ];
-}
-
-function toolResult(toolCallId: string, text: string, timestamp: number): AgentMessage {
-  return {
-    role: "toolResult",
-    toolCallId,
-    toolName: "read",
-    content: [{ type: "text", text }],
-    isError: false,
-    timestamp,
-  };
 }
 
 describe("installEmbeddedAttemptContextGuards", () => {
@@ -395,7 +385,10 @@ describe("installEmbeddedAttemptContextGuards", () => {
         }
         vi.setSystemTime(requestStart + 20_000);
         const expanded = thresholdCrossing
-          ? [...history, toolResult("new-tool", "y".repeat(10_000), Date.now())]
+          ? [
+              ...history,
+              makeTextToolResult("new-tool", "read", "y".repeat(10_000), false, Date.now()),
+            ]
           : history;
         const second = await project(expanded);
         if (outcome === "success") {

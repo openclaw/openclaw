@@ -100,6 +100,7 @@ export type CreateChannelIngressMonitorOptions<TRaw, TBody, TStoredPayload, TMet
     | Promise<ChannelIngressMonitorDeliveryResult | void>
     | ChannelIngressMonitorDeliveryResult
     | void;
+  /** Recovery sweep interval (minimum one minute); admissions and retries wake directly. */
   pollIntervalMs: number;
   retention: "standard" | Partial<ChannelIngressMonitorRetention>;
   appendRetryDelaysMs?: readonly number[];

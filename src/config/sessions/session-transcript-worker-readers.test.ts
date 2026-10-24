@@ -95,6 +95,27 @@ it("preserves the direct read request, signal, and projected result", async () =
   await expect(readers.readMessagePresence(input, signal)).resolves.toBe(true);
 });
 
+it("keeps interleaved decorated readers on their own request runner", async () => {
+  const first = Promise.withResolvers<boolean>();
+  const second = Promise.withResolvers<boolean>();
+  const create = (result: Promise<boolean>) => ({
+    ...createSessionHistoryWorkerReaders(
+      createSessionHistoryWorkerRequestStub(async () => ({
+        kind: "transcript-message-presence",
+        present: await result,
+      })),
+    ),
+    assertCurrent() {},
+  });
+  const input = { scope: { agentId: "main", sessionId: "synthetic-session" } };
+  const firstRead = create(first.promise).readMessagePresence(input);
+  const secondRead = create(second.promise).readMessagePresence(input);
+  second.resolve(false);
+  await expect(secondRead).resolves.toBe(false);
+  first.resolve(true);
+  await expect(firstRead).resolves.toBe(true);
+});
+
 it.each(["archives", "corpus", "targets", "exact entries", "row facts"] as const)(
   "serializes Windows storage environments for %s requests",
   async (inventory) => {

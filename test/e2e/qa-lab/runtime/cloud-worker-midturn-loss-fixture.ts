@@ -296,14 +296,9 @@ export async function startMidturnProvider(
           return;
         }
         execOutput = deniedExecOutput;
-        const visibleDenial = [
-          /workspace/iu,
-          /approval_required/iu,
-          /run this command locally/iu,
-          /interactive approval/iu,
-          /administrator/iu,
-          /clear the session permission mode/iu,
-        ].every((pattern) => pattern.test(execOutput));
+        const visibleDenial =
+          execOutput.split("\n", 1)[0] ===
+          "Exec denied (SYSTEM_RUN_DENIED: approval cannot safely bind this command): printf WORKER_EXEC_ESCAPED > worker-exec-escaped.txt";
         const outsideRejected = /escape|outside|containment|workspace/iu.test(outsideWriteOutput);
         writeCompletedAssistant(
           response,

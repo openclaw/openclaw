@@ -167,6 +167,8 @@ type ResolveNativeModelFacts = Awaited<ReturnType<typeof loadBundledModelIdentit
 // Upstream catalogs whose first-party model facts are qualified for routed rows. A row
 // inherits only when its upstream id and wire API match the bundled native row exactly.
 const NATIVE_MODEL_FACT_PROVIDERS = new Set(["openai", "anthropic"]);
+// Catalog providers whose id differs from the bundled provider serving the same native API.
+const BUNDLED_CATALOG_PROVIDER_IDS = new Map([["google-gemini", "google"]]);
 
 function microsPerMillionToCost(value: number | undefined): number {
   return value === undefined ? 0 : value / 1_000_000;
@@ -247,9 +249,13 @@ function buildRoutedModel(
   const serviceTiers = Array.isArray(pricing?.serviceTiers)
     ? normalizeTrimmedStringList(pricing.serviceTiers.map((tier) => asOptionalRecord(tier)?.id))
     : undefined;
-  const nativeFacts = NATIVE_MODEL_FACT_PROVIDERS.has(provider.id)
-    ? resolveNativeModelFacts({ provider: provider.id, api, modelId: upstream })
-    : undefined;
+  // Identity facts match only an exact bundled row with the same upstream id and wire API.
+  const identityFacts = resolveNativeModelFacts({
+    provider: BUNDLED_CATALOG_PROVIDER_IDS.get(provider.id) ?? provider.id,
+    api,
+    modelId: upstream,
+  });
+  const nativeFacts = NATIVE_MODEL_FACT_PROVIDERS.has(provider.id) ? identityFacts : undefined;
   // Service catalog facts win over inherited native defaults.
   const compat = {
     ...nativeFacts?.compat,
@@ -271,6 +277,8 @@ function buildRoutedModel(
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(Object.keys(compat).length > 0 ? { compat } : {}),
     ...(nativeFacts?.mediaInput ? { mediaInput: nativeFacts.mediaInput } : {}),
+    // A family comes from the bundled catalog's declaration, never from this row's id.
+    ...(identityFacts?.family ? { family: identityFacts.family } : {}),
     input:
       parseCatalogInput(row?.input) ??
       ((provider.id === "openai" && OPENAI_NATIVE_IMAGE_MODEL_IDS.has(upstream)) ||
@@ -317,24 +325,6 @@ function buildRoutedModel(
   };
 }
 
-function buildDiscoveredModels(
-  rootUrl: string,
-  providers: CatalogProvider[],
-  resolveNativeModelFacts: ResolveNativeModelFacts,
-): ModelDefinitionConfig[] {
-  const models = new Map<string, ModelDefinitionConfig>();
-  for (const provider of providers) {
-    for (const model of provider.models) {
-      const routed = buildRoutedModel(rootUrl, provider, model, resolveNativeModelFacts);
-      if (!routed || models.has(routed.id)) {
-        continue;
-      }
-      models.set(routed.id, routed);
-    }
-  }
-  return [...models.values()].toSorted((left, right) => left.id.localeCompare(right.id));
-}
-
 export async function buildClawRouterProviderConfig(params: {
   apiKey: string;
   discoveryApiKey?: string;
@@ -353,15 +343,23 @@ export async function buildClawRouterProviderConfig(params: {
   const providers = rows
     .map(parseCatalogProvider)
     .filter((provider): provider is CatalogProvider => Boolean(provider));
+  const apiKey = params.apiKey;
+  const resolveNativeModelFacts = await loadBundledModelIdentityFactsResolver();
+  const models = new Map<string, ModelDefinitionConfig>();
+  for (const provider of providers) {
+    for (const model of provider.models) {
+      const routed = buildRoutedModel(rootUrl, provider, model, resolveNativeModelFacts);
+      if (!routed || models.has(routed.id)) {
+        continue;
+      }
+      models.set(routed.id, routed);
+    }
+  }
   return {
     baseUrl: `${rootUrl}/v1`,
     api: "openai-responses",
-    apiKey: params.apiKey,
-    models: buildDiscoveredModels(
-      rootUrl,
-      providers,
-      await loadBundledModelIdentityFactsResolver(),
-    ),
+    apiKey,
+    models: [...models.values()].toSorted((left, right) => left.id.localeCompare(right.id)),
   };
 }
 

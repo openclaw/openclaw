@@ -7,6 +7,17 @@ import { collectPolicyEvidence } from "../policy-state.js";
 import {
   workspaceDir,
   cfgWithPolicy,
+  createDeniedTelegramPolicy,
+  runToolMetadataFixture,
+  cfgWithPolicyAgentDefaults,
+  cfgWithPolicyAgentEntries,
+  policyForAgents,
+  createDocsMcpPolicyConfig,
+  createStandardIngressPolicy,
+  createDisabledOpenChannelInput,
+  createCanonicalModelPolicyConfig,
+  cfgWithPolicyOverrides,
+  rawCfgWithPolicy,
   ctx,
   repairCtx,
   registerChecks,
@@ -57,14 +68,11 @@ describe("registerPolicyDoctorChecks", () => {
         ],
       },
     };
-    const configPath = await writePolicyFixture({
-      scopes: {
-        reviewer: {
-          agentIds: ["reviewer"],
-          agents: { workspace: { denyTools: ["exec", "write", "edit"] } },
-        },
-      },
-    });
+    const configPath = await writePolicyFixture(
+      policyForAgents("reviewer", ["reviewer"], {
+        agents: { workspace: { denyTools: ["exec", "write", "edit"] } },
+      }),
+    );
 
     const result = await runPolicyRepairCheck(
       "policy/agents-tool-not-denied",
@@ -94,14 +102,11 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     } satisfies OpenClawConfig;
-    const configPath = await writePolicyFixture({
-      scopes: {
-        reviewer: {
-          agentIds: ["reviewer"],
-          agents: { workspace: { denyTools: ["exec", "write", "edit"] } },
-        },
-      },
-    });
+    const configPath = await writePolicyFixture(
+      policyForAgents("reviewer", ["reviewer"], {
+        agents: { workspace: { denyTools: ["exec", "write", "edit"] } },
+      }),
+    );
 
     const result = await runPolicyRepairCheck(
       "policy/agents-tool-not-denied",
@@ -127,14 +132,9 @@ describe("registerPolicyDoctorChecks", () => {
         entries: { reviewer: {} },
       },
     } satisfies OpenClawConfig;
-    const configPath = await writePolicyFixture({
-      scopes: {
-        reviewer: {
-          agentIds: ["reviewer"],
-          tools: { denyTools: ["exec", "write"] },
-        },
-      },
-    });
+    const configPath = await writePolicyFixture(
+      policyForAgents("reviewer", ["reviewer"], { tools: { denyTools: ["exec", "write"] } }),
+    );
 
     const result = await runPolicyRepairCheck(
       "policy/tools-required-deny-missing",
@@ -167,22 +167,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not report denied providers for disabled channels", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       channels: { telegram: { enabled: false } },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writePolicyFixture(
-      {
-        channels: {
-          denyRules: [
-            {
-              id: "no-telegram",
-              when: { provider: "telegram" },
-              reason: "Telegram is not approved for this workspace.",
-            },
-          ],
-        },
-      },
+      createDeniedTelegramPolicy("Telegram is not approved for this workspace."),
       null,
       2,
     );
@@ -193,13 +182,12 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not run policy checks for empty category namespaces", async () => {
-    const cfg: Record<string, unknown> = {
-      ...cfgWithPolicy(),
+    const cfg: Record<string, unknown> = rawCfgWithPolicy({
       channels: { telegram: { enabled: true } },
       mcp: { servers: { untrusted: { command: "uvx", args: ["untrusted-mcp"] } } },
       models: { providers: { openrouter: {} } },
       browser: { ssrfPolicy: { dangerouslyAllowPrivateNetwork: true } },
-    };
+    });
     const configPath = await writePolicyFixture({
       channels: {},
       mcp: {},
@@ -215,12 +203,10 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports invalid requireMetadata policy entries", async () => {
-    const configPath = await writePolicyFixture({
-      tools: { requireMetadata: ["risk", "unsupported"] },
-    });
-    await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n### deploy\n", "utf-8");
-
-    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
+    const result = await runToolMetadataFixture(
+      ["risk", "unsupported"],
+      "## Tools\n\n### deploy\n",
+    );
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -270,12 +256,10 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports governed tools missing risk and sensitivity metadata", async () => {
-    const configPath = await writePolicyFixture({
-      tools: { requireMetadata: ["risk", "sensitivity", "owner"] },
-    });
-    await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n### deploy\n", "utf-8");
-
-    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
+    const result = await runToolMetadataFixture(
+      ["risk", "sensitivity", "owner"],
+      "## Tools\n\n### deploy\n",
+    );
 
     expect(result.findings).toHaveLength(3);
     expect(result.findings).toEqual(
@@ -333,16 +317,10 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("runs required metadata checks for a tool literally named tools", async () => {
-    const configPath = await writePolicyFixture({
-      tools: { requireMetadata: ["risk", "sensitivity", "owner"] },
-    });
-    await fs.writeFile(
-      join(workspaceDir, "AGENTS.md"),
+    const result = await runToolMetadataFixture(
+      ["risk", "sensitivity", "owner"],
       "# Tools\n\n## Local notes\n\n- SSH: prod-host\n\n## tools risk: high\n",
-      "utf-8",
     );
-
-    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
 
     expect(result.findings).toHaveLength(2);
     expect(result.findings).toEqual(
@@ -360,27 +338,19 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not capture an unrelated nested Tools section as governed evidence", async () => {
-    const configPath = await writePolicyFixture({
-      tools: { requireMetadata: ["risk", "sensitivity", "owner"] },
-    });
-    await fs.writeFile(
-      join(workspaceDir, "AGENTS.md"),
+    const result = await runToolMetadataFixture(
+      ["risk", "sensitivity", "owner"],
       "## Build\n\n### Tools\n\n- npm: install dependencies\n",
-      "utf-8",
     );
-
-    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
 
     expect(result.findings).toEqual([]);
   });
 
   it("reports governed bullet tools missing required metadata", async () => {
-    const configPath = await writePolicyFixture({
-      tools: { requireMetadata: ["risk", "sensitivity", "owner"] },
-    });
-    await fs.writeFile(join(workspaceDir, "AGENTS.md"), "## Tools\n\n- deploy: deploys\n", "utf-8");
-
-    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
+    const result = await runToolMetadataFixture(
+      ["risk", "sensitivity", "owner"],
+      "## Tools\n\n- deploy: deploys\n",
+    );
 
     expect(result.findings).toHaveLength(3);
     expect(result.findings).toEqual(
@@ -408,11 +378,8 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("accepts governed tool metadata declared on following lines", async () => {
-    const configPath = await writePolicyFixture({
-      tools: { requireMetadata: ["risk", "sensitivity", "owner"] },
-    });
-    await fs.writeFile(
-      join(workspaceDir, "AGENTS.md"),
+    const result = await runToolMetadataFixture(
+      ["risk", "sensitivity", "owner"],
       [
         "## Tools",
         "",
@@ -428,10 +395,7 @@ describe("registerPolicyDoctorChecks", () => {
         "owner: support",
         "",
       ].join("\n"),
-      "utf-8",
     );
-
-    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
     const evidence = collectPolicyEvidence(
       {},
       {
@@ -462,14 +426,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports unknown governed tool risk metadata", async () => {
-    const configPath = await writePolicyFixture({ tools: { requireMetadata: ["risk"] } });
-    await fs.writeFile(
-      join(workspaceDir, "AGENTS.md"),
-      "## Tools\n\n### deploy risk:critcal\n",
-      "utf-8",
-    );
-
-    const result = await runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
+    const result = await runToolMetadataFixture(["risk"], "## Tools\n\n### deploy risk:critcal\n");
 
     expect(result.findings).toEqual([
       expect.objectContaining({
@@ -482,8 +439,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports model providers denied by policy", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       models: {
         providers: {
           openrouter: {
@@ -497,7 +453,7 @@ describe("registerPolicyDoctorChecks", () => {
           model: "openrouter/openai/gpt-5.5",
         },
       },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const result = await runModelPolicyFixture({ deny: ["openrouter"] }, cfg);
 
     expect(result.findings).toEqual([
@@ -517,19 +473,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("compares canonical model provider refs for deny policy checks", async () => {
-    const cfg: Record<string, unknown> = {
-      ...cfgWithPolicy(),
-      models: {
-        providers: {
-          "aws-bedrock": {},
-        },
-      },
-      agents: {
-        defaults: {
-          model: "OpenRouter/openai/gpt-5.5",
-        },
-      },
-    };
+    const cfg: Record<string, unknown> = createCanonicalModelPolicyConfig();
     const result = await runModelPolicyFixture({ deny: ["openrouter", "amazon-bedrock"] }, cfg);
 
     expect(result.findings).toEqual([
@@ -543,19 +487,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("compares canonical model provider refs for allow policy checks", async () => {
-    const cfg: Record<string, unknown> = {
-      ...cfgWithPolicy(),
-      models: {
-        providers: {
-          "aws-bedrock": {},
-        },
-      },
-      agents: {
-        defaults: {
-          model: "OpenRouter/openai/gpt-5.5",
-        },
-      },
-    };
+    const cfg: Record<string, unknown> = createCanonicalModelPolicyConfig();
     const result = await runModelPolicyFixture({ allow: ["openrouter", "amazon-bedrock"] }, cfg);
 
     expect(result.findings).toEqual([
@@ -569,17 +501,12 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports model refs outside the policy allowlist", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
-      agents: {
-        defaults: {
-          model: {
-            primary: "openai/gpt-5.5",
-            fallbacks: ["anthropic/claude-sonnet-4.7"],
-          },
-        },
+    const cfg = cfgWithPolicyAgentDefaults({
+      model: {
+        primary: "openai/gpt-5.5",
+        fallbacks: ["anthropic/claude-sonnet-4.7"],
       },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const result = await runModelPolicyFixture({ allow: ["openai"] }, cfg);
 
     expect(result.findings).toEqual([
@@ -593,16 +520,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports model allowlist keys outside the policy allowlist", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
-      agents: {
-        defaults: {
-          models: {
-            "openrouter/*": {},
-          },
-        },
+    const cfg = cfgWithPolicyAgentDefaults({
+      models: {
+        "openrouter/*": {},
       },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const result = await runModelPolicyFixture({ allow: ["openai"] }, cfg);
 
     expect(result.findings).toEqual([
@@ -616,18 +538,13 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports per-agent model allowlist keys outside the policy allowlist", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
-      agents: {
-        entries: {
-          research: {
-            models: {
-              "openrouter/*": {},
-            },
-          },
+    const cfg = cfgWithPolicyAgentEntries({
+      research: {
+        models: {
+          "openrouter/*": {},
         },
       },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const result = await runModelPolicyFixture({ allow: ["openai"] }, cfg);
 
     expect(result.findings).toEqual([
@@ -641,14 +558,13 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports configured model providers outside the policy allowlist", async () => {
-    const cfg: Record<string, unknown> = {
-      ...cfgWithPolicy(),
+    const cfg: Record<string, unknown> = rawCfgWithPolicy({
       models: {
         providers: {
           anthropic: {},
         },
       },
-    };
+    });
     const result = await runModelPolicyFixture({ allow: ["openai"] }, cfg);
 
     expect(result.findings).toEqual([
@@ -662,17 +578,12 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports non-default agent model refs outside the policy allowlist", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
-      agents: {
-        defaults: {
-          imageModel: "openai/gpt-5.5",
-          subagents: {
-            model: "anthropic/claude-sonnet-4.7",
-          },
-        },
+    const cfg = cfgWithPolicyAgentDefaults({
+      imageModel: "openai/gpt-5.5",
+      subagents: {
+        model: "anthropic/claude-sonnet-4.7",
       },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const result = await runModelPolicyFixture({ allow: ["openai"] }, cfg);
 
     expect(result.findings).toEqual([
@@ -686,16 +597,11 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports per-agent model refs outside the policy allowlist", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
-      agents: {
-        entries: {
-          research: {
-            model: { primary: "openrouter/openai/gpt-5.5" },
-          },
-        },
+    const cfg = cfgWithPolicyAgentEntries({
+      research: {
+        model: { primary: "openrouter/openai/gpt-5.5" },
       },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const result = await runModelPolicyFixture({ deny: ["openrouter"] }, cfg);
 
     expect(result.findings).toEqual([
@@ -720,8 +626,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports MCP servers denied by policy", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       mcp: {
         servers: {
           untrusted: {
@@ -730,7 +635,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writeMcpPolicyFixture({ deny: ["untrusted"] });
 
     const result = await runPolicyDoctorLint(ctx(configPath, cfg));
@@ -746,17 +651,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("preserves MCP server casing for deny rules", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
-      mcp: {
-        servers: {
-          DocsServer: {
-            command: "npx",
-            args: ["-y", "@modelcontextprotocol/server-fetch"],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = createDocsMcpPolicyConfig() satisfies OpenClawConfig;
     const configPath = await writeMcpPolicyFixture({ deny: ["DocsServer"] });
 
     const result = await runPolicyDoctorLint(ctx(configPath, cfg));
@@ -772,8 +667,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports MCP servers outside the policy allowlist", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       mcp: {
         servers: {
           docs: {
@@ -786,7 +680,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writeMcpPolicyFixture({ allow: ["docs"] });
 
     const result = await runPolicyDoctorLint(ctx(configPath, cfg));
@@ -802,17 +696,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("preserves MCP server casing for allowlists", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
-      mcp: {
-        servers: {
-          DocsServer: {
-            command: "npx",
-            args: ["-y", "@modelcontextprotocol/server-fetch"],
-          },
-        },
-      },
-    } satisfies OpenClawConfig;
+    const cfg = createDocsMcpPolicyConfig() satisfies OpenClawConfig;
     const configPath = await writeMcpPolicyFixture({ allow: ["DocsServer"] });
 
     const result = await runPolicyDoctorLint(ctx(configPath, cfg));
@@ -876,8 +760,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("reports ingress channel access conformance findings", async () => {
-    const cfg: Record<string, unknown> = {
-      ...cfgWithPolicy(),
+    const cfg: Record<string, unknown> = rawCfgWithPolicy({
       session: { dmScope: "main" },
       channels: {
         telegram: {
@@ -889,15 +772,8 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    };
-    const configPath = await writeIngressPolicyFixture({
-      session: { requireDmScope: "per-channel-peer" },
-      channels: {
-        allowDmPolicies: ["pairing", "allowlist", "disabled"],
-        denyOpenGroups: true,
-        requireMentionInGroups: true,
-      },
     });
+    const configPath = await writeIngressPolicyFixture(createStandardIngressPolicy());
 
     const result = await runPolicyDoctorLint(ctx(configPath, cfg));
 
@@ -933,10 +809,9 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("normalizes mixed-case session DM scope before checking ingress policy", async () => {
-    const cfg: Record<string, unknown> = {
-      ...cfgWithPolicy(),
+    const cfg: Record<string, unknown> = rawCfgWithPolicy({
       session: { dmScope: "Per-Channel-Peer" },
-    };
+    });
     const configPath = await writeIngressPolicyFixture({
       session: { requireDmScope: "per-channel-peer" },
     });
@@ -953,8 +828,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("applies channel-scoped ingress claims to matching channel posture", async () => {
-    const cfg: Record<string, unknown> = {
-      ...cfgWithPolicy(),
+    const cfg: Record<string, unknown> = rawCfgWithPolicy({
       session: { dmScope: "main" },
       channels: {
         telegram: {
@@ -965,7 +839,7 @@ describe("registerPolicyDoctorChecks", () => {
           requireMention: false,
         },
       },
-    };
+    });
     const configPath = await writePolicyFixture({
       ingress: {
         session: { requireDmScope: "per-channel-peer" },
@@ -1010,8 +884,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not apply channel-scoped ingress claims from invalid scopes", async () => {
-    const cfg: Record<string, unknown> = {
-      ...cfgWithPolicy(),
+    const cfg: Record<string, unknown> = rawCfgWithPolicy({
       channels: {
         telegram: {
           dmPolicy: "open",
@@ -1019,7 +892,7 @@ describe("registerPolicyDoctorChecks", () => {
           requireMention: false,
         },
       },
-    };
+    });
     const configPath = await writePolicyFixture({
       scopes: {
         telegramIngress: {
@@ -1056,8 +929,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not treat wildcard groupPolicy as channel ingress posture", async () => {
-    const cfg: Record<string, unknown> = {
-      ...cfgWithPolicy(),
+    const cfg: Record<string, unknown> = rawCfgWithPolicy({
       channels: {
         telegram: {
           enabled: true,
@@ -1072,7 +944,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    };
+    });
     const configPath = await writeIngressPolicyFixture({
       channels: {
         denyOpenGroups: true,
@@ -1101,8 +973,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("honors wildcard mention ingress for channel posture", async () => {
-    const cfg: Record<string, unknown> = {
-      ...cfgWithPolicy(),
+    const cfg: Record<string, unknown> = rawCfgWithPolicy({
       channels: {
         telegram: {
           enabled: true,
@@ -1114,7 +985,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    };
+    });
     const configPath = await writeIngressPolicyFixture({
       channels: {
         requireMentionInGroups: true,
@@ -1141,8 +1012,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("honors strict channel group policy defaults", async () => {
-    const cfg: Record<string, unknown> = {
-      ...cfgWithPolicy(),
+    const cfg: Record<string, unknown> = rawCfgWithPolicy({
       channels: {
         signal: {
           enabled: true,
@@ -1151,7 +1021,7 @@ describe("registerPolicyDoctorChecks", () => {
           requireMention: true,
         },
       },
-    };
+    });
     const configPath = await writeIngressPolicyFixture({
       channels: {
         denyOpenGroups: true,
@@ -1180,8 +1050,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("treats disabled nested DM config as disabled ingress", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       channels: {
         slack: {
           dmPolicy: "open",
@@ -1189,7 +1058,7 @@ describe("registerPolicyDoctorChecks", () => {
           groupPolicy: "allowlist",
         },
       },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writeIngressPolicyFixture({
       channels: {
         allowDmPolicies: ["disabled"],
@@ -1219,22 +1088,12 @@ describe("registerPolicyDoctorChecks", () => {
   it("ignores disabled channel and account ingress posture", () => {
     const cfg = {
       channels: {
-        telegram: {
-          enabled: false,
-          dmPolicy: "open",
-          groupPolicy: "open",
-          requireMention: false,
-        },
+        telegram: createDisabledOpenChannelInput(),
         slack: {
           dmPolicy: "allowlist",
           groupPolicy: "allowlist",
           accounts: {
-            disabled: {
-              enabled: false,
-              dmPolicy: "open",
-              groupPolicy: "open",
-              requireMention: false,
-            },
+            disabled: createDisabledOpenChannelInput(),
           },
         },
       },
@@ -1314,21 +1173,13 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("uses effective ingress defaults when policy governs omitted fields", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       session: { dmScope: "per-channel-peer" },
       channels: {
         qqbot: {},
       },
-    } satisfies OpenClawConfig;
-    const configPath = await writeIngressPolicyFixture({
-      session: { requireDmScope: "per-channel-peer" },
-      channels: {
-        allowDmPolicies: ["pairing", "allowlist", "disabled"],
-        denyOpenGroups: true,
-        requireMentionInGroups: true,
-      },
-    });
+    }) satisfies OpenClawConfig;
+    const configPath = await writeIngressPolicyFixture(createStandardIngressPolicy());
 
     const result = await runPolicyDoctorLint(ctx(configPath, cfg));
 
@@ -1341,8 +1192,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("infers allowlist group posture from configured groups", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       session: { dmScope: "per-channel-peer" },
       channels: {
         telegram: {
@@ -1352,7 +1202,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writeIngressPolicyFixture({
       channels: {
         allowDmPolicies: ["pairing"],
@@ -1382,8 +1232,7 @@ describe("registerPolicyDoctorChecks", () => {
   });
 
   it("does not infer allowlist posture from Slack channel entries", async () => {
-    const cfg = {
-      ...cfgWithPolicy(),
+    const cfg = cfgWithPolicyOverrides({
       session: { dmScope: "per-channel-peer" },
       channels: {
         slack: {
@@ -1393,7 +1242,7 @@ describe("registerPolicyDoctorChecks", () => {
           },
         },
       },
-    } satisfies OpenClawConfig;
+    }) satisfies OpenClawConfig;
     const configPath = await writeIngressPolicyFixture({
       channels: {
         denyOpenGroups: true,

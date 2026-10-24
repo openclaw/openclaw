@@ -1,6 +1,5 @@
 import { createComponent, createSignal, flush } from "solid-js";
 import { expect, it, vi } from "vitest";
-import type { GatewaySessionRow } from "../../../api/types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { selectWorkingClawSurprise } from "./chat-working-indicator-surprise.ts";
 import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
@@ -51,28 +50,26 @@ it("pops in for new work but continues a claw that another one just handed off",
   expect(isContinued(indicator("handoff"))).toBe(true);
 });
 
-it("promotes child activity above supporting totals and restores the standalone glyph", async () => {
-  const { draw, find } = indicator("task-first", { outputTokens: 4_100 });
+it("keeps the parent's own glyph beside child counts and restores it after a wait", () => {
+  const { container, draw, find } = indicator("parent-work", {
+    outputTokens: 4_100,
+    runningSubagents: 2,
+  });
   expect(find(bubbleSelector)).not.toBeNull();
-  const session: GatewaySessionRow = { key: "agent:a:subagent:b", kind: "direct", updatedAt: 1 };
+  expect(container.textContent).toContain("2 subagents running");
+  expect(container.textContent).toContain("4.1k output tokens");
+  expect(find(".chat-subagent-activity")).toBeNull();
   draw({
     outputTokens: 4_100,
-    subagentActivity: {
-      rows: [{ key: session.key, label: "Task", status: "running", listed: true, session }],
-    },
+    runningSubagents: 2,
+    waitingSubagents: { startedAt: 1, runningCount: 2 },
   });
-  await vi.dynamicImportSettled();
-  flush();
-  const task = find(".chat-subagent-activity");
-  const status = find(".chat-working-indicator");
-  expect(status?.classList.contains("chat-working-indicator--supporting")).toBe(true);
-  expect(task!.compareDocumentPosition(status!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   expect(find(bubbleSelector)).toBeNull();
-  expect(status?.textContent).toContain("4.1k output tokens");
-  draw({ outputTokens: 4_100 });
-  expect(find(".chat-subagent-activity")).toBeNull();
-  expect(find(".chat-working-indicator--supporting")).toBeNull();
+  expect(find("openclaw-working-phrase")).toBeNull();
+  expect(container.textContent).toContain("2 subagents running");
+  draw({ outputTokens: 4_100, runningSubagents: 1 });
   expect(find(bubbleSelector)).not.toBeNull();
+  expect(container.textContent).toContain("1 subagent running");
 });
 
 it("selects the working glyph independently of the mascot and keeps text when hidden", () => {
@@ -111,10 +108,10 @@ it("retains an open activity disclosure and its animation when usage updates", (
   const totals = { bubbleMode: true, outputTokens: 12 };
   const { container, draw, find } = indicator("run", totals);
   const details = Object.assign(container.querySelector("details")!, { open: true });
-  const glyph = find(bubbleSelector)!;
+  const glyph = find("summary .chat-bubble-dots")!;
   draw({ ...totals, outputTokens: 27 });
   expect(find("details")).toBe(details);
   expect(details.open).toBe(true);
-  expect(find(bubbleSelector)).toBe(glyph);
+  expect(find("summary .chat-bubble-dots")).toBe(glyph);
   expect(container.textContent).toContain("27 output tokens");
 });

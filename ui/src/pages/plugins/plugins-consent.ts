@@ -35,41 +35,11 @@ import type { PluginInstallProgress } from "./install-progress.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.tsx";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
 
-type PluginMutationSuccess<Result> = (
-  result: Result,
-  refreshError: string | null,
-  client: GatewayBrowserClient,
-  isLatest: () => boolean,
-) => Promise<void>;
-
-type PluginMutationOptions = {
-  action: PluginMutationAction;
-  confirm?: () => Promise<boolean>;
-  preserveMessageWhilePending?: boolean;
-};
-
 export type PluginMutationPresentation = {
   scope: GatewayConnectionScope;
   rowKey: string;
   action: Exclude<PluginMutationAction, "install">;
   result: Promise<void>;
-};
-
-type PluginsConsentOptions = {
-  gateway: GatewayPageBinding;
-  getContext: () => ApplicationContext;
-  getResult: () => PluginListResult | null;
-  canMutate: () => boolean;
-  isBusy: (rowKey: string) => boolean;
-  setBusy: (rowKey: string, action: PluginMutationAction | null) => void;
-  setMessage: (rowKey: string, message: PluginRowMessage | null) => void;
-  getMessages: () => Readonly<Record<string, PluginRowMessage>>;
-  clearPageNotice: () => void;
-  closeDetails: () => void;
-  applyMutationResult: (result: PluginMutationResult) => void;
-  refreshCatalogAfterMutation: (client: GatewayBrowserClient) => Promise<void>;
-  presentMutation: (mutation: PluginMutationPresentation) => Promise<void>;
-  onChange: () => void;
 };
 
 export function pluginMutationWarnings(
@@ -93,7 +63,22 @@ function pluginRuntimeFailureText(details: Record<string, unknown> | undefined, 
     : text;
 }
 
-export function createPluginsConsent(host: PluginsConsentOptions) {
+export function createPluginsConsent(host: {
+  gateway: GatewayPageBinding;
+  getContext: () => ApplicationContext;
+  getResult: () => PluginListResult | null;
+  canMutate: () => boolean;
+  isBusy: (rowKey: string) => boolean;
+  setBusy: (rowKey: string, action: PluginMutationAction | null) => void;
+  setMessage: (rowKey: string, message: PluginRowMessage | null) => void;
+  getMessages: () => Readonly<Record<string, PluginRowMessage>>;
+  clearPageNotice: () => void;
+  closeDetails: () => void;
+  applyMutationResult: (result: PluginMutationResult) => void;
+  refreshCatalogAfterMutation: (client: GatewayBrowserClient) => Promise<void>;
+  presentMutation: (mutation: PluginMutationPresentation) => Promise<void>;
+  onChange: () => void;
+}) {
   const state: {
     consent: PluginConsentState | null;
     inspection: PluginsInspectResult | null;
@@ -174,8 +159,17 @@ export function createPluginsConsent(host: PluginsConsentOptions) {
   async function runMutation<Result>(
     rowKey: string,
     mutate: (client: GatewayBrowserClient) => Promise<Result>,
-    onSuccess: PluginMutationSuccess<Result>,
-    options: PluginMutationOptions,
+    onSuccess: (
+      result: Result,
+      refreshError: string | null,
+      client: GatewayBrowserClient,
+      isLatest: () => boolean,
+    ) => Promise<void>,
+    options: {
+      action: PluginMutationAction;
+      confirm?: () => Promise<boolean>;
+      preserveMessageWhilePending?: boolean;
+    },
     onError: (
       error: unknown,
       scope: GatewayConnectionScope,

@@ -1,9 +1,8 @@
-// Responses streams must report every SSE event as request activity so the
-// embedded-runner idle watchdog stays quiet while bookkeeping-only events
-// (in_progress, *.done echoes) arrive, matching the completions and anthropic
-// transports.
+// Every physical event keeps the connection alive, while advancing output alone
+// resets the independent model-progress deadline.
 import { describe, expect, it, vi } from "vitest";
-import type { AssistantMessage, Model } from "../types.js";
+import { makeProviderModel } from "../providers/provider-model.test-support.js";
+import type { AssistantMessage } from "../types.js";
 import { createZeroUsage } from "../usage.test-support.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
 import {
@@ -11,18 +10,11 @@ import {
   type OpenAIResponsesStreamEvent,
 } from "./openai-responses-stream-internal.js";
 
-const model = {
-  id: "gpt-5.6-luna",
+const model = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
   name: "GPT-5.6 Luna",
-  api: "openai-responses",
-  provider: "openai",
   baseUrl: "https://api.openai.com/v1",
-  reasoning: true,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 200_000,
-  maxTokens: 8192,
-} satisfies Model<"openai-responses">;
+});
 
 function createOutput(): AssistantMessage {
   return {
@@ -46,7 +38,7 @@ async function* eventStream(
 }
 
 describe("processResponsesStream request activity", () => {
-  it("notifies request activity for every SSE event, including ignored ones", async () => {
+  it("distinguishes physical activity from output advancement and repeated snapshots", async () => {
     const abortController = new AbortController();
     const onActivity = vi.fn();
     const unsubscribe = onLlmRequestActivity(abortController.signal, onActivity);
@@ -56,6 +48,46 @@ describe("processResponsesStream request activity", () => {
         // Ignored bookkeeping event: no consumer-visible event is pushed.
         { type: "response.in_progress", response: { id: "resp_activity" } },
         {
+          type: "response.output_item.added",
+          output_index: 0,
+          item: { id: "reasoning_activity", type: "reasoning", summary: [] },
+        },
+        {
+          type: "response.reasoning_text.delta",
+          output_index: 0,
+          delta: "Synthetic hidden progress",
+        },
+        { type: "response.reasoning_text.delta", output_index: 0, delta: "" },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            id: "reasoning_activity",
+            type: "reasoning",
+            summary: [{ type: "summary_text", text: "Synthetic snapshot" }],
+          },
+        },
+        {
+          type: "response.output_item.done",
+          output_index: 0,
+          item: {
+            id: "reasoning_activity",
+            type: "reasoning",
+            summary: [{ type: "summary_text", text: "Synthetic snapshot" }],
+          },
+        },
+        // Hosted tools do not use the model-output tracker. Repeated lifecycle
+        // echoes must not masquerade as fresh model output.
+        ...[
+          "response.output_item.added",
+          "response.output_item.done",
+          "response.output_item.done",
+        ].map((type) => ({
+          type,
+          output_index: 1,
+          item: { id: "hosted_activity", type: "web_search_call", status: "completed" },
+        })),
+        {
           type: "response.completed",
           response: { id: "resp_activity", status: "completed", output: [] },
         },
@@ -63,7 +95,11 @@ describe("processResponsesStream request activity", () => {
       await processResponsesStream(eventStream(events), createOutput(), { push: () => {} }, model, {
         signal: abortController.signal,
       });
-      expect(onActivity).toHaveBeenCalledTimes(events.length);
+      expect(onActivity.mock.calls).toEqual(
+        [false, false, true, true, false, true, false, false, false, false, true].map(
+          (progress) => [progress, 900_000],
+        ),
+      );
     } finally {
       unsubscribe();
     }

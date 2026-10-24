@@ -1,3 +1,4 @@
+import "./session-send-recovery.delivery.mocks.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { SessionPendingInput } from "../config/sessions/session-pending-input.types.js";
@@ -14,46 +15,8 @@ import { createMockGatewayRecoveryRuntime } from "./server-recovery-runtime.test
 import { recoverSessionSendDeliveries } from "./session-send-recovery.js";
 import { config, delivery, input, sourceSnapshot } from "./session-send-recovery.test-support.js";
 
-const io = vi.hoisted(() => ({
-  discover: vi.fn(),
-  entries: vi.fn(),
-  pending: vi.fn(),
-  source: vi.fn(),
-  load: vi.fn(),
-  report: vi.fn(),
-  withdraw: vi.fn(),
-}));
-vi.mock(
-  import("../agents/main-session-recovery/main-session-restart-recovery-shared.js"),
-  async (original) => ({
-    ...(await original()),
-    discoverRestartRecoveryStoreTargets: io.discover,
-  }),
-);
-vi.mock(import("../config/sessions/session-entry-read-maintenance.js"), async (original) => ({
-  ...(await original()),
-  readPendingInputRecoveryEntriesInWorker: io.entries,
-}));
-vi.mock(import("../config/sessions/session-pending-input-history.js"), async (original) => ({
-  ...(await original()),
-  readSessionSendRecoveryPage: io.pending,
-}));
-vi.mock(import("../config/sessions/session-pending-input-source.js"), async (original) => ({
-  ...(await original()),
-  readPendingInputSource: io.source,
-}));
-vi.mock(import("../config/sessions/session-accessor.js"), async (original) => ({
-  ...(await original()),
-  appendSessionTranscriptReport: io.report,
-}));
-vi.mock(import("../config/sessions/session-pending-input-withdrawal.js"), async (original) => ({
-  ...(await original()),
-  discardSessionPendingInput: io.withdraw,
-}));
-vi.mock(import("./session-utils-store-worker.js"), async (original) => ({
-  ...(await original()),
-  resolveGatewaySessionStoreTargetInWorker: io.load,
-}));
+const { recoveryDeliveryMocks: io } =
+  await import("./session-send-recovery.delivery.mocks.test-support.js");
 const dispatch = vi.fn();
 beforeEach(() => {
   vi.resetAllMocks();

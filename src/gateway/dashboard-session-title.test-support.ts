@@ -30,6 +30,7 @@ export async function withTitleProvider(
   api: "openai-completions" | "ollama" = "openai-completions",
 ) {
   await withOpenClawTestState({ label: "title-transport" }, async (state) => {
+    const storePath = state.statePath("sessions.json");
     const requests: TitleRequest[] = [];
     await withServer(
       (request, response) => {
@@ -71,6 +72,7 @@ export async function withTitleProvider(
         const fixtureModel = api === "ollama" ? "qwen3.6:35b" : model;
         const fixtureModelRef = fixtureProvider + "/" + fixtureModel;
         const cfg: OpenClawConfig = {
+          session: { store: storePath },
           plugins: api === "ollama" ? { allow: ["ollama"] } : { enabled: false },
           agents: {
             defaults: {
@@ -109,7 +111,7 @@ export async function withTitleProvider(
         await run({
           cfg,
           agentDir: state.agentDir(),
-          storePath: state.statePath("sessions.json"),
+          storePath,
           workspaceDir: state.workspaceDir,
           requests,
           env: state.envVars,

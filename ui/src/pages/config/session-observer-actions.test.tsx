@@ -4,6 +4,7 @@ import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import { mountRouterOutlet } from "../../app/router-outlet.test-support.tsx";
+import { configSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import {
@@ -36,7 +37,7 @@ async function setup() {
     if (method === "config.schema") {
       return { schema: { type: "object", properties: {} }, uiHints: {} };
     }
-    return { config, raw: JSON.stringify(config), hash: "original", valid: true, issues: [] };
+    return configSnapshot(config, "original", JSON.stringify(config));
   });
   const client = createTestGatewayClient(request);
   const { gateway } = createGatewayHarness(client);

@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { PluginRuntime, PluginStateKeyedStore } from "../api.js";
 import { createVisitorAccessReader } from "./access.js";
 import { VisitorPolicyClient, type VisitorTarget } from "./cloudflare.js";
 import type { VisitorAccessConfig } from "./config.js";
-import { VisitorAccessService, type VisitorGrant } from "./visitors.js";
+import type { VisitorGrant } from "./grant-record.js";
+import { VisitorAccessService } from "./visitors.js";
 
 export const NOW = Date.parse("2026-08-28T12:00:00.000Z");
 export const DAY_MS = 86_400_000;
@@ -27,18 +27,7 @@ export function useVisitorFixtures() {
   });
 }
 
-export function visitorGate() {
-  const entered = createDeferred<void>();
-  const release = createDeferred<void>();
-  return {
-    entered: entered.promise,
-    release: release.resolve,
-    wait: async () => {
-      entered.resolve();
-      await release.promise;
-    },
-  };
-}
+export { createAsyncGate as visitorGate } from "../../test-support/async-gate.test-support.js";
 
 export function closeVisitorFixtures(): void {
   services.forEach((service) => service.close());
@@ -186,6 +175,7 @@ export function visitorProfileFixture(
     },
     readSessionFacts: unexpected,
     withSessionFacts: unexpected,
+    appendAgentMessage: unexpected,
     openPluginPanel: unexpected,
     withUserProfileIdentity,
     resolveGitHubAccount: async ({ login }) => ({ accountId: 42, login }),

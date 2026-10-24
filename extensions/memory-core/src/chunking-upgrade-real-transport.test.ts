@@ -5,6 +5,7 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
+import { json } from "node:stream/consumers";
 import { MEMORY_CHUNKING_VERSION } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import {
@@ -31,14 +32,6 @@ type ServerMode = "ok" | "unauthorized" | "quota";
 
 const closeServers: Array<() => Promise<void>> = [];
 
-async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknown>> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of req) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
-}
-
 function errorBody(mode: Exclude<ServerMode, "ok">): Record<string, unknown> {
   const quota = mode === "quota";
   return {
@@ -62,7 +55,7 @@ async function startEmbeddingServer() {
   const server = createServer((req: IncomingMessage, res: ServerResponse) => {
     void (async () => {
       try {
-        const body = await readJsonBody(req);
+        const body = (await json(req)) as Record<string, unknown>;
         if (mode !== "ok") {
           const status = mode === "quota" ? 429 : 401;
           requests.push({ status, body });

@@ -1,25 +1,14 @@
 // Tool warning tests ensure failed actions remain visible without exposing
 // verbose execution details unless the operator explicitly requests them.
-import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
-import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
 import {
   buildPayloads,
+  makePayloadAssistant as makeAssistant,
   expectSinglePayloadText,
   expectSingleToolErrorPayload,
 } from "./payloads.test-helpers.js";
 
 describe("buildEmbeddedRunPayloads tool warnings", () => {
-  const errorJson =
-    '{"type":"error","error":{"details":null,"type":"overloaded_error","message":"Overloaded"},"request_id":"req_011CX7DwS7tSvggaNHmefwWg"}';
-  const makeAssistant = (overrides: Partial<AssistantMessage>): AssistantMessage =>
-    // Default to an overloaded provider error so each test can override only
-    // the assistant fields relevant to user-visible payload sanitization.
-    makeAssistantMessageFixture({
-      errorMessage: errorJson,
-      content: [{ type: "text", text: errorJson }],
-      ...overrides,
-    });
   const makeStoppedAssistant = (text = "") =>
     makeAssistant({
       stopReason: "stop",
@@ -47,11 +36,7 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
   function expectNoSyntheticCompletionForSession(sessionKey: string) {
     expectNoPayloads({
       sessionKey,
-      lastAssistant: makeAssistant({
-        stopReason: "stop",
-        errorMessage: undefined,
-        content: [],
-      }),
+      lastAssistant: makeStoppedAssistant(),
     });
   }
 
@@ -88,11 +73,7 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
     expectNoPayloads({
       sessionKey: "agent:main:discord:direct:u123",
       didSendViaMessagingTool: true,
-      lastAssistant: makeAssistant({
-        stopReason: "stop",
-        errorMessage: undefined,
-        content: [],
-      }),
+      lastAssistant: makeStoppedAssistant(),
     });
   });
 
@@ -335,6 +316,25 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
       expected:
         "⚠️ Exec failed: `python3 /tmp/audit.py (in /tmp/build @everyone)`: Command exited with code 1",
     },
+    {
+      title: "preserves raw exec cwd context before trailing raw command metadata",
+      meta: "run python3 audit.py (in /tmp/build) · `python3 audit.py`",
+      toolResultFormat: "markdown",
+      expected: "⚠️ Exec failed: `python3 audit.py (in /tmp/build)`: Command exited with code 1",
+    },
+    {
+      title: "preserves raw exec workspace and node context before trailing raw command metadata",
+      meta: "run python3 audit.py (workspace), node: mac-1, `python3 audit.py`",
+      toolResultFormat: "markdown",
+      expected:
+        "⚠️ Exec failed: `node: mac-1 · python3 audit.py (workspace)`: Command exited with code 1",
+    },
+    {
+      title: "preserves semantic compact repo context before trailing raw command metadata",
+      meta: "check git status (repo), `git status`",
+      toolResultFormat: "markdown",
+      expected: "⚠️ Exec failed: `git status (repo)`: Command exited with code 1",
+    },
   ] as const)("$title", ({ meta, toolResultFormat, expected }) => {
     const payloads = buildPayloads({
       lastToolError: {
@@ -349,52 +349,6 @@ describe("buildEmbeddedRunPayloads tool warnings", () => {
 
     expectSinglePayloadSummary(payloads, {
       text: expected,
-      isError: true,
-    });
-  });
-
-  it("preserves raw exec cwd context before trailing raw command metadata", () => {
-    const cwdPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run python3 audit.py (in /tmp/build) · `python3 audit.py`",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-      verboseLevel: "full",
-    });
-    const workspaceNodePayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run python3 audit.py (workspace), node: mac-1, `python3 audit.py`",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-      verboseLevel: "full",
-    });
-    const semanticCompactPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "check git status (repo), `git status`",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-      verboseLevel: "full",
-    });
-
-    expectSinglePayloadSummary(cwdPayloads, {
-      text: "⚠️ Exec failed: `python3 audit.py (in /tmp/build)`: Command exited with code 1",
-      isError: true,
-    });
-    expectSinglePayloadSummary(workspaceNodePayloads, {
-      text: "⚠️ Exec failed: `node: mac-1 · python3 audit.py (workspace)`: Command exited with code 1",
-      isError: true,
-    });
-    expectSinglePayloadSummary(semanticCompactPayloads, {
-      text: "⚠️ Exec failed: `git status (repo)`: Command exited with code 1",
       isError: true,
     });
   });

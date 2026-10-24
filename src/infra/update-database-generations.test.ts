@@ -8,6 +8,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import {
+  createSqliteFileGenerationReader,
   readStableSqliteFileGeneration,
   sameSqliteFileGeneration,
 } from "./sqlite-file-generation.js";
@@ -249,105 +250,171 @@ it.each([
   expect(fs.readdirSync(staging)).toEqual([]);
 });
 
-it.each(["before acquisition", "after acquisition"] as const)(
-  "refuses a same-size write after a source digest %s",
-  async (timing) => {
-    const { file, staging, prepare } = generationFixture();
-    const changed = fs.readFileSync(file);
-    const offset = changed.indexOf("before");
-    expect(offset).toBeGreaterThan(0);
-    changed.write("after!", offset);
-    let acquired = false;
-    let mutated = false;
-    vi.mocked(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).mockImplementation(
-      (pathname, _staging, ...rest) => {
-        const prepared = prepare(pathname, staging, ...rest);
-        acquired = true;
-        return prepared;
-      },
+it.each([
+  "before acquisition",
+  "after acquisition",
+  "after acquisition within a timestamp quantum",
+] as const)("refuses a same-size write after a source digest %s", async (timing) => {
+  const { file, staging, prepare } = generationFixture();
+  const changed = fs.readFileSync(file);
+  const offset = changed.indexOf("before");
+  expect(offset).toBeGreaterThan(0);
+  changed.write("after!", offset);
+  const source = fs.statSync(file, { bigint: true });
+  const coarse = timing === "after acquisition within a timestamp quantum";
+  const now = Date.now();
+  const timestamp = BigInt(Math.floor(now / 2_000) * 2_000) * 1_000_000n;
+  const sourceStat = (stat: fs.BigIntStats) => {
+    if (coarse && stat.dev === source.dev && stat.ino === source.ino) {
+      // A real write may collide in a filesystem clock quantum.
+      Object.defineProperties(stat, {
+        mtimeNs: { value: timestamp },
+        ctimeNs: { value: timestamp },
+      });
+    }
+    return stat;
+  };
+  if (coarse) {
+    vi.spyOn(Date, "now").mockReturnValue(now);
+    const fstatSync = fs.fstatSync;
+    vi.spyOn(fs, "fstatSync").mockImplementation((...args) =>
+      args[1]?.bigint ? sourceStat(fstatSync(args[0], { bigint: true })) : fstatSync(...args),
     );
-    const statSync = fs.statSync;
-    vi.spyOn(fs, "statSync").mockImplementation((...args) => {
-      const stat = statSync(...args);
-      if (!mutated && String(args[0]) === file && acquired === (timing === "after acquisition")) {
-        // The digest is already computed; the outer identity check sees the
-        // same inode and size. Subsequent content verification must catch it.
-        fs.writeFileSync(file, changed);
-        mutated = true;
-      }
+  }
+  let acquired = false;
+  let mutated = false;
+  vi.mocked(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).mockImplementation(
+    (pathname, _staging, ...rest) => {
+      const prepared = prepare(pathname, staging, ...rest);
+      acquired = true;
+      return prepared;
+    },
+  );
+  const statSync = fs.statSync;
+  vi.spyOn(fs, "statSync").mockImplementation((...args) => {
+    const stat = args[1]?.bigint
+      ? sourceStat(statSync(args[0], { bigint: true }))
+      : statSync(...args);
+    if (!mutated && String(args[0]) === file && acquired === (timing !== "before acquisition")) {
+      // The digest is already computed; the outer identity check sees the
+      // same inode and size. Subsequent content verification must catch it.
+      fs.writeFileSync(file, changed);
+      mutated = true;
+    }
+    return stat;
+  });
+  await expect(readUpdatePhysicalDatabaseGenerations([file])).rejects.toThrow(
+    timing === "before acquisition" ? /snapshot hash mismatch/ : /generation changed/,
+  );
+  expect(mutated).toBe(true);
+  expect(acquired).toBe(timing !== "before acquisition");
+  expect(fs.readFileSync(file)).toEqual(changed);
+  expect(fs.readdirSync(staging)).toEqual([]);
+});
+
+it.each(["bigint", "number"] as const)(
+  "rehashes when only %s millisecond stats are available",
+  (milliseconds) => {
+    const file = path.join(dirs.make("update-generation-milliseconds-"), "state.sqlite");
+    fs.writeFileSync(file, "before");
+    const withoutNanoseconds = (stat: fs.BigIntStats) => {
+      Object.defineProperties(stat, {
+        mtimeNs: { value: undefined },
+        ctimeNs: { value: undefined },
+        birthtimeNs: { value: undefined },
+        ...(milliseconds === "number"
+          ? {
+              mtimeMs: { value: Number(stat.mtimeMs) },
+              ctimeMs: { value: Number(stat.ctimeMs) },
+              birthtimeMs: { value: Number(stat.birthtimeMs) },
+            }
+          : {}),
+      });
       return stat;
-    });
-    await expect(readUpdatePhysicalDatabaseGenerations([file])).rejects.toThrow(
-      timing === "before acquisition" ? /snapshot hash mismatch/ : /generation changed/,
+    };
+    const fstat = fs.fstatSync;
+    const stat = fs.statSync;
+    vi.spyOn(fs, "fstatSync").mockImplementation((...args) =>
+      args[1]?.bigint ? withoutNanoseconds(fstat(args[0], { bigint: true })) : fstat(...args),
     );
-    expect(mutated).toBe(true);
-    expect(acquired).toBe(timing === "after acquisition");
-    expect(fs.readFileSync(file)).toEqual(changed);
-    expect(fs.readdirSync(staging)).toEqual([]);
+    vi.spyOn(fs, "statSync").mockImplementation((...args) =>
+      args[1]?.bigint ? withoutNanoseconds(stat(args[0], { bigint: true })) : stat(...args),
+    );
+    const read = createSqliteFileGenerationReader();
+    read(file);
+    fs.writeFileSync(file, "after!");
+    expect(read(file).database.sha256).toBe(createHash("sha256").update("after!").digest("hex"));
   },
 );
 
-it("acquires one private payload with three source-family verification passes", async () => {
-  const { file, staging, prepare } = generationFixture();
-  const database = new DatabaseSync(file);
-  database.exec(
-    "CREATE TABLE payload(value BLOB); INSERT INTO payload VALUES (zeroblob(2097152));",
-  );
-  database.close();
-  const expected = expectedClosedGeneration(file);
-  const source = fs.statSync(file, { bigint: true });
-  const isolatedCapture = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync");
-  const read = fs.readSync.bind(fs);
-  let sourceBytes = 0;
-  let generationBytes = 0;
-  let privateBytes = 0;
-  let acquiring = false;
-  vi.mocked(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).mockImplementation(
-    (pathname, _staging, ...rest) => {
-      acquiring = true;
-      try {
-        return prepare(pathname, staging, ...rest);
-      } finally {
-        acquiring = false;
-      }
-    },
-  );
-  vi.spyOn(fs, "readSync").mockImplementation(
-    (
-      descriptor: number,
-      buffer: NodeJS.ArrayBufferView,
-      offsetOrOptions: number | fs.ReadOptions = {},
-      length?: number,
-      position?: fs.ReadPosition | null,
-    ) => {
-      const options =
-        typeof offsetOrOptions === "number"
-          ? { offset: offsetOrOptions, length, position }
-          : offsetOrOptions;
-      const count = read(descriptor, buffer, options);
-      const opened = fs.fstatSync(descriptor, { bigint: true });
-      if (opened.dev === source.dev && opened.ino === source.ino) {
-        sourceBytes += count;
-        if (!acquiring) {
-          generationBytes += count;
+it.each([
+  ["recent", 0, 3],
+  ["older", 3_000, 1],
+] as const)(
+  "verifies %s source digests and one private payload",
+  async (_age, elapsedMs, passes) => {
+    const { file, staging, prepare } = generationFixture();
+    const database = new DatabaseSync(file);
+    database.exec(
+      "CREATE TABLE payload(value BLOB); INSERT INTO payload VALUES (zeroblob(2097152));",
+    );
+    database.close();
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + elapsedMs);
+    const expected = expectedClosedGeneration(file);
+    const source = fs.statSync(file, { bigint: true });
+    const isolatedCapture = vi.spyOn(snapshotSource, "prepareSqliteReadOnlyLocationSync");
+    const read = fs.readSync.bind(fs);
+    let sourceBytes = 0;
+    let generationBytes = 0;
+    let privateBytes = 0;
+    let acquiring = false;
+    vi.mocked(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).mockImplementation(
+      (pathname, _staging, ...rest) => {
+        acquiring = true;
+        try {
+          return prepare(pathname, staging, ...rest);
+        } finally {
+          acquiring = false;
         }
-      } else if (opened.isFile() && opened.size === source.size) {
-        privateBytes += count;
-      }
-      return count;
-    },
-  );
-  expect(await readUpdatePhysicalDatabaseGenerations([file])).toEqual({ [file]: expected });
-  expect(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).toHaveBeenCalledTimes(1);
-  expect(isolatedCapture).not.toHaveBeenCalled();
-  const size = Number(source.size);
-  expect(generationBytes).toBe(3 * size);
-  expect(sourceBytes).toBeGreaterThanOrEqual(3 * size);
-  // A byte-copy fallback can add one source pass. Headers are bounded overhead.
-  expect(sourceBytes).toBeLessThanOrEqual(4 * size + 256);
-  expect(privateBytes).toBe(size);
-  expect(fs.readdirSync(staging)).toEqual([]);
-});
+      },
+    );
+    vi.spyOn(fs, "readSync").mockImplementation(
+      (
+        descriptor: number,
+        buffer: NodeJS.ArrayBufferView,
+        offsetOrOptions: number | fs.ReadOptions = {},
+        length?: number,
+        position?: fs.ReadPosition | null,
+      ) => {
+        const options =
+          typeof offsetOrOptions === "number"
+            ? { offset: offsetOrOptions, length, position }
+            : offsetOrOptions;
+        const count = read(descriptor, buffer, options);
+        const opened = fs.fstatSync(descriptor, { bigint: true });
+        if (opened.dev === source.dev && opened.ino === source.ino) {
+          sourceBytes += count;
+          if (!acquiring) {
+            generationBytes += count;
+          }
+        } else if (opened.isFile() && opened.size === source.size) {
+          privateBytes += count;
+        }
+        return count;
+      },
+    );
+    expect(await readUpdatePhysicalDatabaseGenerations([file])).toEqual({ [file]: expected });
+    expect(readOnlyLocation.prepareSqliteReadOnlyLocationSyncInProcess).toHaveBeenCalledTimes(1);
+    expect(isolatedCapture).not.toHaveBeenCalled();
+    const size = Number(source.size);
+    expect(generationBytes).toBe(passes * size);
+    expect(sourceBytes).toBeGreaterThanOrEqual(passes * size);
+    // A byte-copy fallback can add one source pass. Headers are bounded overhead.
+    expect(sourceBytes).toBeLessThanOrEqual((passes + 1) * size + 256);
+    expect(privateBytes).toBe(size);
+    expect(fs.readdirSync(staging)).toEqual([]);
+  },
+);
 
 it("preserves update custody when database timestamps drift during hashing", async () => {
   const file = path.join(dirs.make("update-generation-drift-"), "state.sqlite");
@@ -374,6 +441,36 @@ it("preserves update custody when database timestamps drift during hashing", asy
   fs.utimesSync(file, timestamp.atime, new Date(timestamp.mtimeMs + 1_000));
   expect(await readUpdatePhysicalDatabaseGenerations([file])).toEqual(before);
   expect(observations).toBeGreaterThan(1);
+});
+
+it("invalidates ctime-only source changes across interleaved files", () => {
+  const directory = dirs.make("update-generation-reuse-");
+  const first = path.join(directory, "first.sqlite");
+  const second = path.join(directory, "second.sqlite");
+  fs.writeFileSync(first, "before");
+  fs.writeFileSync(second, "second");
+  vi.spyOn(Date, "now").mockReturnValue(Date.now() + 3_000);
+  const read = createSqliteFileGenerationReader();
+  const before = read(first);
+  const other = read(second);
+  fs.writeFileSync(first, "after!");
+  const fstat = fs.fstatSync;
+  const stat = fs.statSync;
+  const preserveMtime = (current: fs.BigIntStats) => {
+    if (current.dev === before.database.dev && current.ino === before.database.ino) {
+      current.mtimeNs = before.database.mtimeNs;
+      current.ctimeNs = before.database.ctimeNs + 1n;
+    }
+    return current;
+  };
+  vi.spyOn(fs, "fstatSync").mockImplementation((...args) =>
+    args[1]?.bigint ? preserveMtime(fstat(args[0], { bigint: true })) : fstat(...args),
+  );
+  vi.spyOn(fs, "statSync").mockImplementation((...args) =>
+    args[1]?.bigint ? preserveMtime(stat(args[0], { bigint: true })) : stat(...args),
+  );
+  expect(read(first).database.sha256).toBe(createHash("sha256").update("after!").digest("hex"));
+  expect(read(second)).toEqual(other);
 });
 
 it.each(["dev", "ino"] as const)(

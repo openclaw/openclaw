@@ -1,4 +1,5 @@
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { isChannelVisibleInConfiguredLists } from "../../channels/plugins/exposure.js";
 import { listReadOnlyChannelPluginsForConfig } from "../../channels/plugins/read-only.js";
@@ -22,11 +23,6 @@ import {
   NO_CONFIGURED_CHAT_CHANNELS_LINE,
   requireValidChannelConfig,
 } from "./shared.js";
-
-type ChannelsListOptions = {
-  json?: boolean;
-  all?: boolean;
-};
 
 async function readGatewayChannelStatus(): Promise<RuntimeChannelStatusPayload | null> {
   try {
@@ -101,7 +97,10 @@ function formatAccountLine(params: {
 }
 
 export async function channelsListCommand(
-  opts: ChannelsListOptions,
+  opts: {
+    json?: boolean;
+    all?: boolean;
+  },
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const cfg = await requireValidChannelConfig(runtime);
@@ -278,7 +277,9 @@ export async function channelsListCommand(
       if (repairHint) {
         bits.push(repairHint);
       }
-      lines.push(`- ${theme.accent(entry.meta.label ?? entry.id)}: ${bits.join(", ")}`);
+      lines.push(
+        `- ${theme.accent(sanitizeTerminalText(entry.meta.label ?? entry.id))}: ${bits.join(", ")}`,
+      );
     }
   }
 

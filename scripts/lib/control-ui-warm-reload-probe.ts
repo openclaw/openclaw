@@ -166,6 +166,9 @@ export function warmReloadProbe() {
       };
       socket.addEventListener("message", (event) => {
         const frame = JSON.parse(event.data);
+        if (frame.type === "event" && frame.event === "connect.challenge") {
+          mark("challenge");
+        }
         const method = pending.get(frame.id);
         if (method) {
           pending.delete(frame.id);

@@ -7,6 +7,20 @@ import {
   parseGitHubReadParams,
 } from "./src/targets.js";
 
+async function wrappedGitHubResult(
+  result: unknown,
+  context: { assertInvocationCurrent: () => void },
+  signal?: AbortSignal,
+) {
+  const { wrapExternalContent } = await import("openclaw/plugin-sdk/security-runtime");
+  context.assertInvocationCurrent();
+  signal?.throwIfAborted();
+  return textResult(
+    wrapExternalContent(JSON.stringify(result, null, 2), { source: "api", includeWarning: false }),
+    result,
+  );
+}
+
 export default definePluginEntry({
   id: "github",
   name: "GitHub",
@@ -53,16 +67,7 @@ export default definePluginEntry({
               // The bounded reader may make several sequential upstream requests.
               { scopes: ["operator.sessions.read"], timeoutMs: 120_000, signal },
             );
-            const { wrapExternalContent } = await import("openclaw/plugin-sdk/security-runtime");
-            context.assertInvocationCurrent();
-            signal?.throwIfAborted();
-            return textResult(
-              wrapExternalContent(JSON.stringify(document, null, 2), {
-                source: "api",
-                includeWarning: false,
-              }),
-              document,
-            );
+            return wrappedGitHubResult(document, context, signal);
           },
         }),
       },
@@ -110,68 +115,46 @@ export default definePluginEntry({
               timeoutMs: 120_000,
               signal,
             });
-            const { wrapExternalContent } = await import("openclaw/plugin-sdk/security-runtime");
-            context.assertInvocationCurrent();
-            signal?.throwIfAborted();
-            return textResult(
-              wrapExternalContent(JSON.stringify(result, null, 2), {
-                source: "api",
-                includeWarning: false,
-              }),
-              result,
-            );
+            return wrappedGitHubResult(result, context, signal);
           },
         }),
       },
       { name: "github_search", workspaceAccess: false },
     );
-    // Commits open in the reader, but do not spend anonymous quota on hover.
-    for (const reader of [
-      { id: "github", pathPattern: GITHUB_ITEM_PATH_PATTERN, previewMethod: "github.preview" },
-      { id: "github-commit", pathPattern: GITHUB_COMMIT_PATH_PATTERN },
-    ]) {
-      api.session.controls.registerControlUiDescriptor({
-        surface: "link-reader",
-        id: reader.id,
-        label: "GitHub",
-        icon: "github",
-        linkReader: {
-          hosts: ["github.com"],
-          pathPattern: reader.pathPattern,
-          detailMethod: "github.detail",
-          progressive: true,
-          imageMethod: "github.image",
-          ...(reader.previewMethod ? { previewMethod: reader.previewMethod } : {}),
-        },
-        requiredScopes: ["operator.read"],
-      });
-    }
-    const host = api.config.gateway?.github?.host?.trim().toLowerCase();
-    if (host && host !== "github.com") {
-      for (const reader of [
-        {
-          id: "github-session",
-          pathPattern: GITHUB_ITEM_PATH_PATTERN,
-          previewMethod: "github.sessionPreview",
-        },
-        { id: "github-session-commit", pathPattern: GITHUB_COMMIT_PATH_PATTERN },
-      ]) {
+    const registerReaders = (host: string, sessionScoped = false) => {
+      for (const [suffix, pathPattern] of [
+        ["", GITHUB_ITEM_PATH_PATTERN],
+        ["-commit", GITHUB_COMMIT_PATH_PATTERN],
+      ] as const) {
         api.session.controls.registerControlUiDescriptor({
           surface: "link-reader",
-          id: reader.id,
+          id: `github${sessionScoped ? "-session" : ""}${suffix}`,
           label: "GitHub",
           icon: "github",
           requiredScopes: ["operator.read"],
           linkReader: {
             hosts: [host],
-            pathPattern: reader.pathPattern,
-            sessionScoped: true,
-            detailMethod: "github.sessionDetail",
+            pathPattern,
             progressive: true,
-            ...(reader.previewMethod ? { previewMethod: reader.previewMethod } : {}),
+            ...(sessionScoped
+              ? {
+                  sessionScoped: true,
+                  detailMethod: "github.sessionDetail",
+                  previewMethod: "github.sessionPreview",
+                }
+              : {
+                  detailMethod: "github.detail",
+                  previewMethod: "github.preview",
+                  imageMethod: "github.image",
+                }),
           },
         });
       }
+    };
+    registerReaders("github.com");
+    const host = api.config.gateway?.github?.host?.trim().toLowerCase();
+    if (host && host !== "github.com") {
+      registerReaders(host, true);
       for (const [method, kind] of [
         ["github.sessionPreview", "preview"],
         ["github.sessionDetail", "detail"],

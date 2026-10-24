@@ -9,6 +9,7 @@ import type {
   SessionsPatchResult,
 } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { withSessionMutationOperations } from "../../lib/sessions/session-mutation-operations.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { renderPaneModelControl } from "./chat-pane-model-control.test-support.ts";
 import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-support.ts";
@@ -109,6 +110,10 @@ it.each([
       expect(previousTail).toBeDefined();
       queued = switchChatSetting(pane.state, { kind: "thinkingLevel", value: "low" });
       expect(getPendingChatPickerPatch(pane.state, placeholder.key, "main")).not.toBe(previousTail);
+      expect(sessions.settingsPreview(placeholder.key, "main")).toMatchObject({
+        thinkingLevel: "low",
+      });
+      await withSessionMutationOperations(() => undefined);
       expect(patch).toHaveBeenCalledOnce();
       expect(patch.mock.calls[0]?.[1]).toMatchObject({
         key: placeholder.key,
@@ -251,6 +256,8 @@ it.each(["unbound", "materialized"] as const)(
       expect(middleReady).toBeDefined();
       expect(lastReady).toBeDefined();
       expect(lastReady).not.toBe(middleReady);
+      expect(sessions.settingsPreview(key, "main")).toMatchObject({ thinkingLevel: "medium" });
+      await withSessionMutationOperations(() => undefined);
       expect(patch).toHaveBeenCalledOnce();
 
       if (lastTarget === "unbound") {
@@ -408,8 +415,6 @@ it.each([
       queued.push(switchChatSetting(pane.state, { kind: "thinkingLevel", value: "low" }));
       queued.push(switchChatSetting(pane.state, { kind: "fastMode", value: "on" }));
       queued.push(switchChatSetting(pane.state, { kind: "contextWindow", value: "128k" }));
-      expect(patch).toHaveBeenCalledOnce();
-      expect(patch.mock.calls[0]?.[1]).toEqual({ key, thinkingLevel: "high" });
       const pendingPreview = {
         thinkingLevel: "low",
         fastMode: true,
@@ -417,6 +422,9 @@ it.each([
         contextWindow: "128k",
       };
       expect(sessions.settingsPreview(key, "main")).toEqual(pendingPreview);
+      await withSessionMutationOperations(() => undefined);
+      expect(patch).toHaveBeenCalledOnce();
+      expect(patch.mock.calls[0]?.[1]).toEqual({ key, thinkingLevel: "high" });
 
       if (initialState === "published placeholder") {
         rows.push(placeholder);

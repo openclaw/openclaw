@@ -26,7 +26,6 @@ import {
   OPENAI_REALTIME_ACTIVE_RESPONSE_ERROR_PREFIX,
   OPENAI_REALTIME_NO_ACTIVE_RESPONSE_CANCEL_ERROR,
   OPENAI_REALTIME_DEFAULT_MODEL,
-  OPENAI_REALTIME_API_KEY_REQUIRED,
   OPENAI_REALTIME_CONFIGURED_API_KEY_REJECTED,
   OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED,
   OPENAI_REALTIME_SIDEBAND_STARTUP_MAX_BYTES,
@@ -220,16 +219,17 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
     | Promise<{ url: string; headers: Record<string, string> }> {
     const cfg = this.config;
     const model = cfg.model ?? OPENAI_REALTIME_DEFAULT_MODEL;
-    if (cfg.azureEndpoint && cfg.azureDeployment) {
+    if (cfg.azureEndpoint) {
       const apiKey = requireOpenAIRealtimeApiKey(cfg.apiKey);
+      this.azureRealtimeApi = cfg.azureApiVersion ? "preview" : "ga";
       const base = cfg.azureEndpoint
         .replace(/\/$/, "")
-        .replace(/^http(s?):/, (_, secure: string) => `ws${secure}:`)
-        // Callers may provide the resource root or a legacy endpoint ending in /openai.
-        .replace(/\/openai(?:\/v1)?$/i, "");
-      const url = cfg.azureApiVersion
-        ? `${base}/openai/realtime?api-version=${cfg.azureApiVersion}&deployment=${encodeURIComponent(cfg.azureDeployment)}`
-        : `${base}/openai/v1/realtime?model=${encodeURIComponent(cfg.azureDeployment)}`;
+        .replace(/^http(s?):/, (_, secure: string) => `ws${secure}:`);
+      // Explicit preview configurations retain their original URL and wire contract.
+      const url =
+        this.azureRealtimeApi === "preview"
+          ? `${base}/openai/realtime?api-version=${cfg.azureApiVersion}&deployment=${encodeURIComponent(cfg.azureDeployment ?? model)}`
+          : `${base.replace(/\/openai(?:\/v1)?$/i, "")}/openai/v1/realtime?model=${encodeURIComponent(cfg.azureDeployment ?? model)}`;
       return {
         url,
         headers: resolveOpenAIRealtimeRequestHeaders(
@@ -245,14 +245,6 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
       const directApiKey = resolveOpenAIRealtimeSecretInput(cfg.apiKey);
       if (!directApiKey) {
         throw new Error(OPENAI_REALTIME_PLATFORM_AUTH_REQUIRED);
-      }
-      return this.resolveApiKeyConnectionParams(directApiKey, model);
-    }
-
-    if (cfg.azureEndpoint) {
-      const directApiKey = resolveOpenAIRealtimeSecretInput(process.env.OPENAI_API_KEY);
-      if (!directApiKey) {
-        throw new Error(OPENAI_REALTIME_API_KEY_REQUIRED);
       }
       return this.resolveApiKeyConnectionParams(directApiKey, model);
     }
@@ -292,23 +284,19 @@ export class OpenAIRealtimeBridge extends OpenAIRealtimeProtocol implements Real
         : [];
       endpoint.search = [...query, `model=${encodeURIComponent(model)}`].join("&");
       url = endpoint.toString();
-    } else if (cfg.azureEndpoint) {
-      const base = cfg.azureEndpoint
-        .replace(/\/$/, "")
-        .replace(/^http(s?):/, (_, secure: string) => `ws${secure}:`)
-        .replace(/\/openai(?:\/v1)?$/i, "");
-      url = `${base}/openai/v1/realtime?model=${encodeURIComponent(model)}`;
     } else {
       url = cfg.callId
         ? buildOpenAIRealtimeSidebandUrl(cfg.callId)
         : `wss://api.openai.com/v1/realtime?model=${encodeURIComponent(model)}`;
     }
-    const defaultHeaders: Record<string, string> = cfg.azureEndpoint
-      ? { "api-key": apiKey }
-      : { Authorization: `Bearer ${apiKey}` };
     return {
       url,
-      headers: resolveOpenAIRealtimeRequestHeaders(this.runtime, url, defaultHeaders, "websocket"),
+      headers: resolveOpenAIRealtimeRequestHeaders(
+        this.runtime,
+        url,
+        { Authorization: `Bearer ${apiKey}` },
+        "websocket",
+      ),
     };
   }
 

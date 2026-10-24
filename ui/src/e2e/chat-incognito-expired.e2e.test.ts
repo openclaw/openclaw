@@ -2,6 +2,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
+import { sessionResponseCase } from "./chat-layout-fixtures.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -17,14 +18,10 @@ async function recoverIncognito(page: Page) {
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   // Identity-free history, not discovery, authorizes Incognito expiry.
-  const expiredHistory = {
-    cases: [
-      {
-        match: { sessionKey: expiredKey },
-        response: { sessionKey: expiredKey, messages: [] },
-      },
-    ],
-  };
+  const expiredHistory = sessionResponseCase(
+    { sessionKey: expiredKey },
+    { sessionKey: expiredKey, messages: [] },
+  );
   const gateway = await installMockGateway(page, {
     sessions: [],
     sessionTranscripts: {

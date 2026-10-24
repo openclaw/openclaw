@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, expect, it, vi } from "vitest";
 import { relayTestKey } from "../../chrome-extension/relay-key.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
@@ -52,21 +53,14 @@ it("refuses to start without a relay credential", async () => {
 
 it("exits quietly when the relay port is already served", async () => {
   await stageRelaySecret();
-  const server = net.createServer();
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
-  const address = server.address();
-  const port = typeof address === "object" && address ? address.port : 0;
-  try {
-    const run = await runExtensionRelayDaemon({ port });
-    expect(run.port).toBeNull();
-    await expect(run.done).resolves.toBe("port-in-use");
-  } finally {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-  }
+  await withServer(
+    (_req, res) => res.end(),
+    async (baseUrl) => {
+      const run = await runExtensionRelayDaemon({ port: Number(new URL(baseUrl).port) });
+      expect(run.port).toBeNull();
+      await expect(run.done).resolves.toBe("port-in-use");
+    },
+  );
 });
 
 it("serves the relay until the idle grace elapses with no peers", async () => {

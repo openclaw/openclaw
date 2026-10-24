@@ -379,7 +379,6 @@ function createAccountBindingManager<TKind extends string>(
       throw new SessionBindingError(
         "BINDING_ADAPTER_UNAVAILABLE",
         "Account conversation binding manager is no longer active",
-        { channel: params.channel, accountId },
       );
     }
   };

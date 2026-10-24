@@ -165,6 +165,39 @@ it("keeps pending cleanup when an earlier resource failure arrives through paren
   expect(claims.size).toBe(0);
 });
 
+it("notifies every captured resource and retains callback failures in order", () => {
+  const { claims, capture, callbacks } = fixture();
+  capture(1);
+  capture(2);
+  const failure = new Error("transport lost");
+  const callbackFailure = new Error("first callback failed");
+  const secondCallbackFailure = new Error("second callback failed");
+  callbacks.failed
+    .mockImplementationOnce(() => {
+      throw callbackFailure;
+    })
+    .mockImplementationOnce(() => {
+      throw secondCallbackFailure;
+    });
+  try {
+    claims.fail(failure);
+    expect.unreachable("callback failures must be reported");
+  } catch (error) {
+    expect(error).toBeInstanceOf(AggregateError);
+    if (!(error instanceof AggregateError)) {
+      throw error;
+    }
+    expect(error.message).toBe("Native resource failure callback failed");
+    expect(error.errors).toHaveLength(2);
+    expect(error.errors[0]).toBe(callbackFailure);
+    expect(error.errors[1]).toBe(secondCallbackFailure);
+  }
+  expect(callbacks.failed.mock.calls).toEqual([[failure], [failure]]);
+  expect(claims.hasOpenClaims).toBe(true);
+  expect(() => claims.fail(failure)).not.toThrow();
+  expect(callbacks.failed).toHaveBeenCalledTimes(2);
+});
+
 it("settles owner receipts independently and preserves rejection through cleanup and close", async () => {
   const { claims, capture, transmit, callbacks, closeRequest } = fixture();
   const lease = capture(1);

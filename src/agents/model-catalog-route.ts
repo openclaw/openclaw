@@ -103,6 +103,8 @@ function logicalIdentity(
     name: name ?? id,
     provider: entry.provider,
     ...(entry.alias ? { alias: entry.alias } : {}),
+    // Family names the model's developer, so it survives a route projection with the identity.
+    ...(lifecycleEntry.family ? { family: lifecycleEntry.family } : {}),
     ...(lifecycleEntry.providerOrder !== undefined
       ? { providerOrder: lifecycleEntry.providerOrder }
       : {}),

@@ -79,7 +79,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     return this.readPullRequestSnapshot()?.status ?? "ready";
   }
 
-  private deferredSessionHydration: { resume?: () => void } | null = null;
+  deferredSessionHydration: { resume?: () => void } | null = null;
   /** Hidden-run acknowledgements in flight or sent, keyed by run and activity revision. */
   private readonly hiddenRunReadRequests = new Map<
     string,

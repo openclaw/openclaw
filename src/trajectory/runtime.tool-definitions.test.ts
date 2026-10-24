@@ -7,10 +7,6 @@ import { resetSecretRedactionRegistryForTest } from "../logging/secret-redaction
 import * as runtimeStoreWriter from "./runtime-store-writer.js";
 import { createTrajectoryRuntimeRecorder, toTrajectoryToolDefinitions } from "./runtime.js";
 
-function arrayReturning(value: unknown): unknown[] {
-  return Object.defineProperty([], "slice", { value: () => ({ map: () => value }) });
-}
-
 function projectParameters(parameters: unknown) {
   return toTrajectoryToolDefinitions([{ name: "sample", parameters }])[0]?.parameters;
 }
@@ -103,33 +99,16 @@ describe("trajectory tool definition preparation", () => {
     expect(captured).toEqual(expected);
   });
 
-  it("does not invoke custom serialization hooks or cache opaque array-operation results", () => {
+  it("projects array elements without invoking custom array operations or serialization hooks", () => {
     const toJSON = vi.fn(() => ({ unexpected: true }));
-    const opaque = Object.defineProperty({ ordinary: "first" }, "toJSON", { value: toJSON });
-    const parameters = arrayReturning(opaque);
-    expect(projectParameters(parameters)).toEqual({ ordinary: "first" });
-    opaque.ordinary = "second";
-    expect(projectParameters(parameters)).toEqual({ ordinary: "second" });
+    const slice = vi.fn(() => [{ unexpected: true }]);
+    const element = Object.defineProperty({ ordinary: "first" }, "toJSON", { value: toJSON });
+    const parameters = Object.defineProperty([element], "slice", { value: slice });
+    expect(projectParameters(parameters)).toEqual([{ ordinary: "first" }]);
+    element.ordinary = "second";
+    expect(projectParameters(parameters)).toEqual([{ ordinary: "second" }]);
+    expect(slice).not.toHaveBeenCalled();
     expect(toJSON).not.toHaveBeenCalled();
-  });
-
-  it("preserves native headers returned by custom array operations", () => {
-    const headers = new Headers({ "retry-after": "7", authorization: "Bearer test" });
-    expect(projectParameters({ ordinary: "kept", nested: arrayReturning(headers) })).toEqual({
-      ordinary: "kept",
-      nested: { "retry-after-ms": 7_000 },
-    });
-  });
-
-  it("preserves prototype traps returned by custom array operations", () => {
-    const getPrototypeOf = vi.fn(() => null);
-    const parameters = {
-      ["__proto__"]: arrayReturning(new Proxy({}, { getPrototypeOf })),
-      ordinary: "kept",
-    };
-    expect(projectParameters(parameters)).toEqual({ ordinary: "kept" });
-    expect(getPrototypeOf).toHaveBeenCalled();
-    expect(Object.getPrototypeOf(parameters)).toBe(Object.prototype);
   });
 
   it("reads source getters once while preserving inert serialization hooks", () => {

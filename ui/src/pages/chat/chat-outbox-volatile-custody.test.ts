@@ -72,7 +72,7 @@ it.each([
   { subscribed: false, replacement: false },
   { subscribed: true, replacement: true },
 ])(
-  "retains a genuinely volatile send across account return ($subscribed/$replacement)",
+  "replays a bound volatile send only after its account returns ($subscribed/$replacement)",
   async ({ subscribed, replacement }) => {
     failStorageWrites(new DOMException("quota exceeded", "QuotaExceededError"));
     let attempts = 0;
@@ -83,6 +83,7 @@ it.each([
     } = custodyHost(
       {
         chatMessage: "Only unsaved copy",
+        currentSessionId: "volatile-original-session",
         requestHandlers: {
           "chat.send": (params: unknown) => {
             const payload = requireRecord(params, "memory send");
@@ -103,7 +104,7 @@ it.each([
     const original = host.chatQueue[0]!;
     expect(host).toMatchObject({
       chatMessage: "",
-      chatQueue: [{ text: "Only unsaved copy", sendState: "unconfirmed", sendAttempts: 1 }],
+      chatQueue: [{ text: "Only unsaved copy", sendState: "waiting-reconnect", sendAttempts: 1 }],
     });
     expect(originalOwner.hasVolatile(host, original.id)).toBe(true);
     select("owner-b");
@@ -117,12 +118,10 @@ it.each([
         id: original.id,
         text: original.text,
         sendRunId: original.sendRunId,
-        sendState: "unconfirmed",
+        sendState: "waiting-reconnect",
       },
     ]);
     await resumeStoredChatOutboxes(host);
-    expect(requestCalls(host.request, "chat.send")).toHaveLength(1);
-    await retryQueuedChatMessage(host, original.id);
     expect(requestCalls(host.request, "chat.send")).toHaveLength(2);
     expect(requestCalls(host.request, "chat.send")[1]?.[1]).toMatchObject({
       idempotencyKey: original.sendRunId,
@@ -314,7 +313,11 @@ it("moves peer panes together while retaining each volatile input under its orig
   const { host: left, select } = custodyHost({
     chatMessage: "Left private input",
   });
-  const right = makeChatHost({ client: left.client, chatMessage: "Right private input" });
+  const right = makeChatHost({
+    client: left.client,
+    sessionKey: "agent:main:right",
+    chatMessage: "Right private input",
+  });
   onTestFinished(chatOutboxOwner(right).subscribe(right));
   await handleSendChat(left);
   await handleSendChat(right);

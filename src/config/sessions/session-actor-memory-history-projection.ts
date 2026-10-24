@@ -490,6 +490,7 @@ export function readSessionActorMemoryProjection(
     }
     case "source": {
       const options = selection.options;
+      const messageIds = options.messageIds && new Set(options.messageIds);
       if (options.cursor?.kind === "archive") {
         throw new Error("Memory sessions have no archive source");
       }
@@ -532,18 +533,25 @@ export function readSessionActorMemoryProjection(
       let bytes = 0;
       let consumed = 0;
       const activeSeqs = new Set(active.slice(0, count).map((row) => row.rawSeq));
+      let rawPosition = 0;
       while (cursor && consumed < SOURCE_PAGE_MAX_MESSAGES) {
+        if (cursor.kind === "off-path") {
+          while (
+            rawPosition < window.events.length &&
+            (window.events[rawPosition]!.rawSeq <= cursor.position ||
+              activeSeqs.has(window.events[rawPosition]!.rawSeq))
+          ) {
+            rawPosition++;
+          }
+        }
         const row =
           cursor.kind === "kept"
             ? navigation.keptMessages[cursor.position]
             : cursor.kind === "active"
               ? active[cursor.position < count ? cursor.position : -1]
-              : window.events.find(
-                  (candidate) =>
-                    candidate.rawSeq > cursor!.position &&
-                    candidate.rawSeq <= snapshot.indexedSeq &&
-                    !activeSeqs.has(candidate.rawSeq),
-                );
+              : (window.events[rawPosition]?.rawSeq ?? Infinity) <= snapshot.indexedSeq
+                ? window.events[rawPosition]
+                : undefined;
         if (!row) {
           cursor =
             cursor.kind === "kept"
@@ -552,6 +560,24 @@ export function readSessionActorMemoryProjection(
                 ? { ...cursor, kind: "off-path", position: -1 }
                 : undefined;
           continue;
+        }
+        if (messageIds) {
+          const event = isRecord(row.event) ? row.event : undefined;
+          const storedMessage = isRecord(event?.message) ? event.message : undefined;
+          const storedMeta = isRecord(storedMessage?.["__openclaw"])
+            ? storedMessage["__openclaw"]
+            : undefined;
+          const messageId = typeof event?.id === "string" ? event.id : storedMeta?.id;
+          if (typeof messageId !== "string" || !messageIds.has(messageId)) {
+            cursor = {
+              ...cursor,
+              position: cursor.kind === "off-path" ? row.rawSeq : cursor.position + 1,
+              messageSeq:
+                cursor.messageSeq +
+                (cursor.kind !== "off-path" && isVisibleTranscriptRecord(row.event) ? 1 : 0),
+            };
+            continue;
+          }
         }
         const size = Buffer.byteLength(row.eventJson) + 1;
         if (size > SOURCE_PAGE_MAX_BYTES) {

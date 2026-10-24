@@ -67,6 +67,8 @@ import { codexApprovalTimeoutText } from "./plugin-approval-roundtrip.js";
 import {
   appInfo,
   appSummary,
+  codexPluginConfig,
+  curatedPlugin,
   pluginDetail,
   pluginInstalled,
   pluginList,
@@ -1541,15 +1543,9 @@ describe("runCodexAppServerAttempt", () => {
       {
         pluginConfig: {
           appServer: { mode: "yolo" },
-          codexPlugins: {
-            enabled: true,
-            plugins: {
-              "google-calendar": {
-                marketplaceName: "openai-curated",
-                pluginName: "google-calendar",
-              },
-            },
-          },
+          ...codexPluginConfig({
+            plugins: { "google-calendar": curatedPlugin("google-calendar") },
+          }),
         },
         developerInstructions: params.extraSystemPrompt,
       },

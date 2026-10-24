@@ -366,6 +366,7 @@ suite.define(() => {
         .locator('a.markdown-file-link[data-file-path="/workspace/packages/app/README.md"]')
         .click();
       await polledAttribute(fileView.locator(".file-view__line--target"), "data-line").toBe("3");
+      await page.getByRole("button", { name: "Toggle file tree", exact: true }).click();
       await polledAttribute(browserRow, "aria-current").toBe("true");
       expect(
         await page

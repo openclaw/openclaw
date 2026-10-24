@@ -27,7 +27,7 @@ import {
   normalizeAgentId,
   normalizeMainKey,
   parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
+  toAgentStoreSessionKey,
 } from "../routing/session-key.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 import { sessionDeliveryChannel } from "../utils/delivery-context.read.js";
@@ -53,15 +53,6 @@ export async function sandboxExplainCommand(
     throw new Error("--agent must not be blank");
   }
   const requestedAgentId = requestedAgent ? normalizeAgentId(requestedAgent) : undefined;
-  const sessionAgentId =
-    requestedSession && requestedSession !== "global" && requestedSession.includes(":")
-      ? normalizeAgentId(resolveAgentIdFromSessionKey(requestedSession))
-      : undefined;
-  if (requestedAgentId && sessionAgentId && requestedAgentId !== sessionAgentId) {
-    throw new Error(
-      `Sandbox explain agent "${requestedAgentId}" does not match session agent "${sessionAgentId}".`,
-    );
-  }
   if (requestedAgentId) {
     resolveConfiguredAgentId(cfg, requestedAgentId);
   }
@@ -71,16 +62,16 @@ export async function sandboxExplainCommand(
     agentId: requestedAgentId,
   });
 
-  const rawSession = (opts.session ?? "").trim();
-  // Fully-qualified session keys are already scoped; only short names need
-  // agent/main-key expansion.
-  const sessionKey = !rawSession
+  // Channel-prefixed aliases still need agent scope before lookup; only parsed
+  // agent keys and the global sentinel already name their store session.
+  const sessionKey = !requestedSession
     ? resolveAgentMainSessionKey({ cfg, agentId: resolvedAgentId })
-    : rawSession.includes(":") || rawSession === "global"
-      ? rawSession
-      : buildAgentMainSessionKey({
+    : requestedSession === "global"
+      ? requestedSession
+      : toAgentStoreSessionKey({
           agentId: resolvedAgentId,
-          mainKey: normalizeMainKey(rawSession),
+          requestKey: requestedSession,
+          mainKey: cfg.session?.mainKey,
         });
 
   const storePath = resolveSessionStorePathCore(cfg.session?.store, {

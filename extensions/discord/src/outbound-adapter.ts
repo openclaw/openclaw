@@ -84,7 +84,8 @@ export const discordOutbound: ChannelOutboundAdapter = {
   ...createAttachedChannelResultAdapter({
     channel: "discord",
     sendText: async (ctx) => {
-      if (!ctx.silent) {
+      // Execute Webhook cannot create native replies; use the bot message endpoint.
+      if (!ctx.silent && !resolveDiscordReplyReference(ctx)) {
         try {
           const threadId = normalizeOptionalStringifiedId(ctx.threadId) ?? "";
           if (threadId) {
@@ -105,7 +106,6 @@ export const discordOutbound: ChannelOutboundAdapter = {
                 accountId: binding.accountId,
                 threadId: binding.threadId,
                 cfg: ctx.cfg,
-                replyTo: resolveDiscordReplyReference(ctx),
                 username: truncateUtf16Safe(username, 80) || undefined,
                 avatarUrl: normalizeOptionalString(ctx.identity?.avatarUrl),
                 tableMode: ctx.formatting?.tableMode,

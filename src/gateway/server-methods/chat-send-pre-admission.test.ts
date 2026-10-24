@@ -32,6 +32,7 @@ import { registerChatAbortController } from "../chat-abort.js";
 import { createChatAbortMarker } from "../server-chat-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { writePreRegisteredChatAbort } from "./chat-abort-authorization.js";
@@ -43,9 +44,19 @@ import {
   runChatSendPreAdmission,
 } from "./chat-send-pre-admission.js";
 
+const submittedInput = vi.hoisted(() =>
+  vi.fn<() => Promise<Awaited<ReturnType<typeof readSessionSubmittedInput>>>>(),
+);
 vi.mock("../../config/sessions/session-accessor.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../config/sessions/session-accessor.js")>()),
-  readSessionSubmittedInput: vi.fn(),
+  readSessionSubmittedInput: vi.fn(
+    async (_scope: unknown, _key: string, options?: { includeSource: true }) => {
+      const message = await submittedInput();
+      return message && options?.includeSource
+        ? { message, source: "transcript" as const }
+        : message;
+    },
+  ),
 }));
 vi.mock("./chat-restart-recovery.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./chat-restart-recovery.js")>()),
@@ -152,7 +163,8 @@ async function expectRetryConflict(params: RetryParams) {
 
 let params: ReturnType<typeof createFixture>;
 beforeEach(() => {
-  vi.mocked(readSessionSubmittedInput).mockReset().mockResolvedValue(undefined);
+  vi.mocked(readSessionSubmittedInput).mockClear();
+  submittedInput.mockReset().mockResolvedValue(undefined);
   vi.mocked(resolveDurableChatClaim).mockReset();
   params = createFixture();
 });
@@ -302,15 +314,16 @@ it("stops selected-agent work without cancelling the compatibility owner's run",
   });
 });
 
-it.each(["pending", "active", "terminal"] as const)(
-  "rejects changed mention recipients before a %s acknowledgement",
+it.each(["pending", "active", "accepted", "terminal"] as const)(
+  "requires accepted custody and rejects changed mention recipients for a %s retry",
   async (state) => {
     const { clientRunId, pendingChatSendKey, sessionKey } = params.session;
     params.context.dedupe.set(state === "pending" ? pendingChatSendKey : `chat:${clientRunId}`, {
       ts: 100,
       ok: true,
       requestIdentity: params.request.requestIdentity,
-      ...(state !== "active"
+      ...(state === "accepted" ? { effectAccepted: true } : {}),
+      ...(state === "pending" || state === "terminal"
         ? {
             payload: {
               runId: clientRunId,
@@ -336,15 +349,19 @@ it.each(["pending", "active", "terminal"] as const)(
       await claimRpcSourceForTest(source);
     }
     expect(await retry(params)).toBe(true);
-    expect(params.respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        runId: clientRunId,
-        status: state === "terminal" ? "ok" : "in_flight",
-      }),
-      undefined,
-      expect.objectContaining({ cached: true }),
-    );
+    if (state === "pending" || state === "active") {
+      expectFailure(params.respond, { code: "UNAVAILABLE", retryable: true });
+    } else {
+      expect(params.respond).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          runId: clientRunId,
+          status: state === "terminal" ? "ok" : "in_flight",
+        }),
+        undefined,
+        expect.objectContaining({ cached: true }),
+      );
+    }
 
     params.respond.mockClear();
     params.request.requestIdentity = "changed-carol-selection";
@@ -458,7 +475,7 @@ it.each(["unchanged", "removed", "uncached removal", "rotated device"] as const)
     } else {
       cacheSuccess(params, 200);
     }
-    vi.mocked(readSessionSubmittedInput).mockResolvedValue({
+    submittedInput.mockResolvedValue({
       ...submittedMessage(params),
       ...(selection === "rotated device"
         ? { __openclaw: { chatRequestIdentity: "original-device-fingerprint" } }
@@ -503,7 +520,7 @@ it.each(["missing", "work context", "redacted"] as const)(
     }
     cacheSuccess(params, 200);
     if (source === "redacted") {
-      vi.mocked(readSessionSubmittedInput).mockResolvedValue({
+      submittedInput.mockResolvedValue({
         role: "user",
         timestamp: 100,
         content: "[REDACTED]",
@@ -521,7 +538,7 @@ it.each(["missing", "work context", "redacted"] as const)(
 
 it("refuses stale projection evidence before replaying a cached response", async () => {
   cacheSuccess(params, 100);
-  vi.mocked(readSessionSubmittedInput).mockRejectedValue(
+  submittedInput.mockRejectedValue(
     new SessionTranscriptProjectionUnavailableError(params.session.entry!.sessionId),
   );
   expect(await runChatSendPreAdmission(params)).toBe(false);
@@ -531,7 +548,7 @@ it("refuses stale projection evidence before replaying a cached response", async
 it("rejects a competing identity published while submitted comparison yields", async () => {
   cacheSuccess(params, 100);
   const read = createDeferred<Awaited<ReturnType<typeof readSessionSubmittedInput>>>();
-  vi.mocked(readSessionSubmittedInput).mockReturnValue(read.promise);
+  submittedInput.mockReturnValue(read.promise);
   const pending = runChatSendPreAdmission(params);
   cacheSuccess(params, 200, "competing-input");
   read.resolve(submittedMessage(params));
@@ -540,7 +557,7 @@ it("rejects a competing identity published while submitted comparison yields", a
 });
 
 it.each(["ready", "routing changed", "archived"] as const)(
-  "consumes new-input policy in one current read when recovery needs no work (%s)",
+  "revalidates new-input policy after the indexed receipt read (%s)",
   async (outcome) => {
     vi.mocked(resolveDurableChatClaim).mockImplementation(recoverDurableChatClaim);
     if (outcome === "archived") {
@@ -566,8 +583,8 @@ it.each(["ready", "routing changed", "archived"] as const)(
     };
 
     expect(await runChatSendPreAdmission(params)).toBe(outcome === "ready");
-    expect(authorityReads).toBe(1);
-    expect(readSessionSubmittedInput).not.toHaveBeenCalled();
+    expect(authorityReads).toBe(2);
+    expect(readSessionSubmittedInput).toHaveBeenCalledOnce();
     if (outcome === "ready") {
       expect(params.respond).not.toHaveBeenCalled();
     } else {
@@ -618,19 +635,8 @@ it.each(["unchanged", "cached-success", "new-admission"] as const)(
       session.storePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
       const client: NonNullable<Parameters<typeof runChatSendPreAdmission>[0]["client"]> = {
         connId: "profile-recovery",
-        authenticatedUserProfile: {
-          profileId: source.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: source.updatedAt,
-        },
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          role: "operator",
-          scopes: ["operator.admin"],
-          client: { id: "test", version: "1", platform: "test", mode: "test" },
-        },
+        authenticatedUserProfile: gatewayProfile(source.id, null, source.updatedAt),
+        connect: gatewayConnect(["operator.admin"], { id: "test", version: "1", mode: "test" }),
       };
       params.client = client;
       const mismatch = new SessionMutationAuthorizationChangedError({

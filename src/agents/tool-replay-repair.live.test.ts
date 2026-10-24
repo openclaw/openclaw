@@ -238,47 +238,76 @@ function isKnownLiveBlocker(errorMessage: string): boolean {
   );
 }
 
+async function prepareLiveTarget(target: TargetModelRef) {
+  const cfg = await readLiveTestConfig();
+  await ensureOpenClawModelsJson(cfg);
+
+  const agentDir = resolveDefaultAgentDir(cfg);
+  const { authStorage } = await discoverAuthStorageFacts(agentDir);
+  const modelRegistry = await discoverModelsAsync(authStorage, agentDir);
+  const model =
+    (modelRegistry.find(target.provider, target.modelId) as Model | null) ??
+    createDirectTargetModel(target);
+
+  if (!model) {
+    logProgress(`[tool-replay-repair] model missing from registry: ${target.ref}`);
+    return undefined;
+  }
+
+  let apiKeyInfo;
+  try {
+    apiKeyInfo = await getApiKeyForModelCore({
+      model,
+      cfg,
+      credentialPrecedence: resolveLiveCredentialPrecedence(model.provider, REQUIRE_PROFILE_KEYS),
+    });
+  } catch (error) {
+    logProgress(`[tool-replay-repair] skip ${target.ref} (${String(error)})`);
+    return undefined;
+  }
+
+  if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
+    logProgress(
+      `[tool-replay-repair] skip ${target.ref} (non-profile credential source: ${apiKeyInfo.source})`,
+    );
+    return undefined;
+  }
+  return { model, apiKeyInfo };
+}
+
+async function completeReplay(
+  model: Model,
+  apiKeyInfo: Awaited<ReturnType<typeof getApiKeyForModelCore>>,
+  messages: Context["messages"],
+) {
+  const response = await completeSimpleWithTimeout(
+    model,
+    {
+      systemPrompt: "You are a concise assistant. Follow the user's instruction exactly.",
+      messages,
+      tools: replayValidationTools(model),
+    },
+    { apiKey: requireApiKey(apiKeyInfo, model.provider), reasoning: "low", maxTokens: 96 },
+    120_000,
+  );
+  const text = responseText(response.content);
+  const errorMessage =
+    typeof (response as { errorMessage?: unknown }).errorMessage === "string"
+      ? ((response as { errorMessage?: string }).errorMessage ?? "")
+      : "";
+  return { response, text, errorMessage };
+}
+
 describeLive("tool replay repair live", () => {
   for (const target of TARGET_MODEL_REFS) {
     it(
       `accepts repaired displaced and missing tool results with ${target.ref}`,
       async () => {
-        const cfg = await readLiveTestConfig();
-        await ensureOpenClawModelsJson(cfg);
-
-        const agentDir = resolveDefaultAgentDir(cfg);
-        const { authStorage } = await discoverAuthStorageFacts(agentDir);
-        const modelRegistry = await discoverModelsAsync(authStorage, agentDir);
-        const model =
-          (modelRegistry.find(target.provider, target.modelId) as Model | null) ??
-          createDirectTargetModel(target);
-
-        if (!model) {
-          logProgress(`[tool-replay-repair] model missing from registry: ${target.ref}`);
+        const prepared = await prepareLiveTarget(target);
+        if (!prepared) {
           return;
         }
-
-        let apiKeyInfo;
-        try {
-          apiKeyInfo = await getApiKeyForModelCore({
-            model,
-            cfg,
-            credentialPrecedence: resolveLiveCredentialPrecedence(
-              model.provider,
-              REQUIRE_PROFILE_KEYS,
-            ),
-          });
-        } catch (error) {
-          logProgress(`[tool-replay-repair] skip ${target.ref} (${String(error)})`);
-          return;
-        }
-
-        if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
-          logProgress(
-            `[tool-replay-repair] skip ${target.ref} (non-profile credential source: ${apiKeyInfo.source})`,
-          );
-          return;
-        }
+        const { model, apiKeyInfo } = prepared;
 
         logProgress(`[tool-replay-repair] target=${target.ref} auth source=${apiKeyInfo.source}`);
         const sanitized = await sanitizeSessionHistory({
@@ -317,26 +346,11 @@ describeLive("tool replay repair live", () => {
         // Sending the repaired transcript to the real model is the live proof:
         // providers reject malformed tool-call adjacency before generation, so
         // any non-error response here validates the repair shape end to end.
-        const response = await completeSimpleWithTimeout(
+        const { response, text, errorMessage } = await completeReplay(
           model,
-          {
-            systemPrompt: "You are a concise assistant. Follow the user's instruction exactly.",
-            messages: sanitized as never,
-            tools: replayValidationTools(model),
-          },
-          {
-            apiKey: requireApiKey(apiKeyInfo, model.provider),
-            reasoning: "low",
-            maxTokens: 96,
-          },
-          120_000,
+          apiKeyInfo,
+          sanitized as never,
         );
-
-        const text = responseText(response.content);
-        const errorMessage =
-          typeof (response as { errorMessage?: unknown }).errorMessage === "string"
-            ? ((response as { errorMessage?: string }).errorMessage ?? "")
-            : "";
         if (errorMessage && isKnownLiveBlocker(errorMessage)) {
           logProgress(`[tool-replay-repair] skip ${target.ref} (${errorMessage})`);
           return;
@@ -353,42 +367,11 @@ describeLive("tool replay repair live", () => {
     it(
       `accepts transport replay after dropping aborted assistant tool calls with ${target.ref}`,
       async () => {
-        const cfg = await readLiveTestConfig();
-        await ensureOpenClawModelsJson(cfg);
-
-        const agentDir = resolveDefaultAgentDir(cfg);
-        const { authStorage } = await discoverAuthStorageFacts(agentDir);
-        const modelRegistry = await discoverModelsAsync(authStorage, agentDir);
-        const model =
-          (modelRegistry.find(target.provider, target.modelId) as Model | null) ??
-          createDirectTargetModel(target);
-
-        if (!model) {
-          logProgress(`[tool-replay-repair] model missing from registry: ${target.ref}`);
+        const prepared = await prepareLiveTarget(target);
+        if (!prepared) {
           return;
         }
-
-        let apiKeyInfo;
-        try {
-          apiKeyInfo = await getApiKeyForModelCore({
-            model,
-            cfg,
-            credentialPrecedence: resolveLiveCredentialPrecedence(
-              model.provider,
-              REQUIRE_PROFILE_KEYS,
-            ),
-          });
-        } catch (error) {
-          logProgress(`[tool-replay-repair] skip ${target.ref} (${String(error)})`);
-          return;
-        }
-
-        if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
-          logProgress(
-            `[tool-replay-repair] skip ${target.ref} (non-profile credential source: ${apiKeyInfo.source})`,
-          );
-          return;
-        }
+        const { model, apiKeyInfo } = prepared;
 
         const transformed = transformTransportMessages(buildAbortedTransportMessages(model), model);
         expect(transformed.map((message) => message.role)).toEqual(["user"]);
@@ -397,26 +380,11 @@ describeLive("tool replay repair live", () => {
         // This is the transport replay regression proof: providers reject
         // assistant(tool_call)->user replays without a matching result, so the
         // dropped transcript must still be accepted by real model APIs.
-        const response = await completeSimpleWithTimeout(
+        const { response, text, errorMessage } = await completeReplay(
           model,
-          {
-            systemPrompt: "You are a concise assistant. Follow the user's instruction exactly.",
-            messages: transformed as never,
-            tools: replayValidationTools(model),
-          },
-          {
-            apiKey: requireApiKey(apiKeyInfo, model.provider),
-            reasoning: "low",
-            maxTokens: 96,
-          },
-          120_000,
+          apiKeyInfo,
+          transformed as never,
         );
-
-        const text = responseText(response.content);
-        const errorMessage =
-          typeof (response as { errorMessage?: unknown }).errorMessage === "string"
-            ? ((response as { errorMessage?: string }).errorMessage ?? "")
-            : "";
         if (errorMessage && isKnownLiveBlocker(errorMessage)) {
           logProgress(`[tool-replay-repair] skip ${target.ref} (${errorMessage})`);
           return;

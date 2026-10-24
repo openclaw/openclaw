@@ -8,32 +8,14 @@ import type { AddressInfo } from "node:net";
 import net from "node:net";
 import path from "node:path";
 import { promisify } from "node:util";
-import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
+import {
+  PROXY_FIXTURE_CERTIFICATE,
+  PROXY_FIXTURE_KEY,
+  useAutoCleanupTempDirTracker,
+} from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { resolveSlackMonitorDispatchers } from "./client-options.js";
-
-// Public test-only material. Valid through 2126; SANs cover the fixture host and loopback.
-const PROXY_FIXTURE_CERTIFICATE = `-----BEGIN CERTIFICATE-----
-MIIBsDCCAVagAwIBAgIUYQmcXrXXGwb7iM9LvhwniX+tYY8wCgYIKoZIzj0EAwIw
-GzEZMBcGA1UEAwwQZmlsZXMucHJveHkudGVzdDAgFw0yNjA4MjgwMDM2NDlaGA8y
-MTI2MDgwNDAwMzY0OVowGzEZMBcGA1UEAwwQZmlsZXMucHJveHkudGVzdDBZMBMG
-ByqGSM49AgEGCCqGSM49AwEHA0IABLZqBKM03chE4ezcYB0l3E7SyeaqBbZF624k
-p5Fuf97TzZNHxLHn/I9wBzICnqEQfX2De0X8JPv9AaIab3oFmF6jdjB0MB0GA1Ud
-DgQWBBRQmY8ZLuaAJjUU4JiehaVg+f+KoDAfBgNVHSMEGDAWgBRQmY8ZLuaAJjUU
-4JiehaVg+f+KoDAPBgNVHRMBAf8EBTADAQH/MCEGA1UdEQQaMBiCEGZpbGVzLnBy
-b3h5LnRlc3SHBH8AAAEwCgYIKoZIzj0EAwIDSAAwRQIhAL9IXiyh36hCytGAMVBn
-6/BdZ4GB+I9sJxihRSip4G+wAiAsSHjAkfx+Yn8VgTrjXWOF9dGhzxnD/kWC4BMK
-j3DhDg==
------END CERTIFICATE-----`;
-const PRIVATE_KEY_LABEL = "PRIVATE KEY";
-const PROXY_FIXTURE_KEY = [
-  `-----BEGIN ${PRIVATE_KEY_LABEL}-----`, // pragma: allowlist secret
-  "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgfspG17/CYh4YJnUX",
-  "Wg6IAGuJtpZH2Kw8B0TE9aBKz26hRANCAAS2agSjNN3IROHs3GAdJdxO0snmqgW2",
-  "RetuJKeRbn/e082TR8Sx5/yPcAcyAp6hEH19g3tF/CT7/QGiGm96BZhe",
-  `-----END ${PRIVATE_KEY_LABEL}-----`,
-].join("\n");
 
 const PROXY_KEYS = [
   "ALL_PROXY",

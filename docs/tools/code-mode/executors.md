@@ -15,6 +15,15 @@ tools. With no global Code Mode setting, automatic per-model activation applies.
 Choosing an executor in Labs preserves activation. When writing an object in
 config, include `enabled: "auto"` to retain automatic activation.
 
+An AOT standalone selects the `embedded-aot`
+[runtime execution profile](/concepts/runtime-profiles). Its Node executor
+runs VM code interpreted and returns its normal results. A one-time performance
+notice recommends a JIT build for full speed. Builds that disable runtime code
+generation, including `--disallow-code-generation-from-strings=strict`, still
+report their runtime restriction with guidance. QuickJS remains a separate guest
+runtime with its own embedded WASM and worker qualification; OpenClaw does not
+select it automatically.
+
 ## Choose an executor
 
 | Executor         | Intended use                           | Execution                                                                | Suspended state                      |

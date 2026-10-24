@@ -437,6 +437,11 @@ export async function createHarness(
       },
     ),
     requestDestroy: (requestedEnvironmentId) => environments.destroy(requestedEnvironmentId),
+    reclaim: async (requestedEnvironmentId) => {
+      const ownerEpoch = environments.get(requestedEnvironmentId)?.ownerEpoch;
+      await environments.stopTunnel(requestedEnvironmentId, ownerEpoch);
+      return environments.destroy(requestedEnvironmentId);
+    },
     reconcileOnce: vi.fn(async () => {
       log.push("environment:reconcile");
     }),

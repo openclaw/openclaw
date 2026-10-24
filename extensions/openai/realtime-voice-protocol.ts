@@ -8,7 +8,6 @@ import type {
 import {
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   realtimeVoiceAudioDurationMs,
-  toOpenAICompatibleRealtimeAudioFormat,
 } from "openclaw/plugin-sdk/realtime-voice-provider";
 import type { OpenAIRealtimeHost } from "./realtime-host.js";
 import {
@@ -74,6 +73,8 @@ export abstract class OpenAIRealtimeProtocol {
 
   protected standaloneSpeechEventId: string | null = null;
 
+  protected azureRealtimeApi?: "ga" | "preview";
+
   private readonly audioFormat: RealtimeVoiceAudioFormat;
 
   constructor(
@@ -112,45 +113,41 @@ export abstract class OpenAIRealtimeProtocol {
   }
 
   protected sendSessionUpdate(): void {
-    if (this.usesAzureDeploymentRealtimeApi()) {
-      this.sendEvent(
-        this.usesAzurePreviewRealtimeApi()
-          ? this.buildAzurePreviewSessionUpdate()
-          : this.buildAzureDeploymentSessionUpdate(),
-      );
+    if (this.azureRealtimeApi === "preview") {
+      this.sendEvent(this.buildAzurePreviewSessionUpdate());
       return;
     }
 
     const cfg = this.config;
-    this.sendEvent({
-      type: "session.update" as const,
-      session:
-        cfg.gaSessionPolicy ??
-        buildOpenAIRealtimeGaSessionPolicy({
-          audioFormat: this.audioFormat,
-          autoRespondToAudio: cfg.autoRespondToAudio,
-          instructions: cfg.instructions,
-          interruptResponseOnInputAudio: cfg.interruptResponseOnInputAudio,
-          language: cfg.language,
-          inputTranscriptionModel: cfg.inputTranscriptionModel,
-          model: cfg.model ?? OPENAI_REALTIME_DEFAULT_MODEL,
-          noiseReduction: null,
-          prefixPaddingMs: cfg.prefixPaddingMs,
-          reasoningEffort: cfg.reasoningEffort,
-          silenceDurationMs: cfg.silenceDurationMs,
-          tools: normalizeOpenAIRealtimeTools(cfg.tools, this.runtime.warn),
-          vadThreshold: cfg.vadThreshold,
-          voice: cfg.voice ?? "alloy",
-        }),
-    });
-  }
-
-  protected usesAzureDeploymentRealtimeApi(): boolean {
-    return Boolean(this.config.azureEndpoint && this.config.azureDeployment);
-  }
-
-  protected usesAzurePreviewRealtimeApi(): boolean {
-    return this.usesAzureDeploymentRealtimeApi() && Boolean(this.config.azureApiVersion);
+    const session =
+      cfg.gaSessionPolicy ??
+      buildOpenAIRealtimeGaSessionPolicy({
+        audioFormat: this.audioFormat,
+        autoRespondToAudio: cfg.autoRespondToAudio,
+        azure: this.azureRealtimeApi === "ga",
+        instructions: cfg.instructions,
+        interruptResponseOnInputAudio: cfg.interruptResponseOnInputAudio,
+        language: cfg.language,
+        inputTranscriptionModel: cfg.inputTranscriptionModel,
+        model: cfg.model ?? OPENAI_REALTIME_DEFAULT_MODEL,
+        noiseReduction: null,
+        prefixPaddingMs: cfg.prefixPaddingMs,
+        reasoningEffort: cfg.reasoningEffort,
+        silenceDurationMs: cfg.silenceDurationMs,
+        tools: normalizeOpenAIRealtimeTools(
+          cfg.tools,
+          this.runtime.warn,
+          this.azureRealtimeApi ? AZURE_OPENAI_REALTIME_TOOL_NAME_MAX_LENGTH : undefined,
+        ),
+        vadThreshold: cfg.vadThreshold,
+        voice: cfg.voice ?? "alloy",
+      });
+    if (this.azureRealtimeApi === "ga") {
+      const { model: _model, reasoning: _reasoning, ...azureSession } = session;
+      this.sendEvent({ type: "session.update", session: azureSession });
+      return;
+    }
+    this.sendEvent({ type: "session.update", session });
   }
 
   protected buildAzurePreviewSessionUpdate() {
@@ -180,52 +177,18 @@ export abstract class OpenAIRealtimeProtocol {
     };
   }
 
-  protected buildAzureDeploymentSessionUpdate() {
-    const cfg = this.config;
-    const format = toOpenAICompatibleRealtimeAudioFormat(this.audioFormat);
-    const tools = normalizeOpenAIRealtimeTools(
-      cfg.tools,
-      this.runtime.warn,
-      AZURE_OPENAI_REALTIME_TOOL_NAME_MAX_LENGTH,
-    );
-    return {
-      type: "session.update" as const,
-      session: {
-        type: "realtime" as const,
-        ...(cfg.instructions !== undefined ? { instructions: cfg.instructions } : {}),
-        output_modalities: ["audio"],
-        audio: {
-          input: {
-            format,
-            noise_reduction: null,
-            transcription: {
-              model: cfg.inputTranscriptionModel ?? "whisper-1",
-              ...(cfg.language ? { language: cfg.language } : {}),
-            },
-            turn_detection: buildOpenAIRealtimeTurnDetectionConfig({
-              ...cfg,
-              includeInterruptResponse: false,
-            }),
-          },
-          output: { format, voice: cfg.voice ?? "alloy" },
-        },
-        ...(tools ? { tools, tool_choice: "auto" } : {}),
-      },
-    };
-  }
-
   protected sendAutoResponseSessionUpdate(createResponse: boolean): void {
-    const azureDeployment = this.usesAzureDeploymentRealtimeApi();
     const turnDetection = buildOpenAIRealtimeTurnDetectionConfig({
       ...this.config,
       createResponse,
-      includeInterruptResponse: !azureDeployment,
+      includeInterruptResponse: !this.azureRealtimeApi,
     });
     this.sendEvent({
       type: "session.update",
-      session: this.usesAzurePreviewRealtimeApi()
-        ? { turn_detection: turnDetection }
-        : { type: "realtime", audio: { input: { turn_detection: turnDetection } } },
+      session:
+        this.azureRealtimeApi === "preview"
+          ? { turn_detection: turnDetection }
+          : { type: "realtime", audio: { input: { turn_detection: turnDetection } } },
     });
   }
 

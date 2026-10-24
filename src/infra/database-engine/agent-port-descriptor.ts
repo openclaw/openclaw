@@ -7,9 +7,11 @@ import {
 } from "../../../packages/memory-host-sdk/src/host/memory-search-schema.js";
 import { readTranscriptPayload } from "../../config/sessions/transcript-payload.js";
 import { deriveTranscriptPredicateFields } from "../../config/sessions/transcript-predicate-fields.js";
+import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/openclaw-agent-db-additive-columns.js";
 import {
   AGENT_MEMORY_REVISION_SCHEMA_VERSION,
   AGENT_VECTOR_DECODER_SCHEMA_VERSION,
+  AGENT_VECTOR_SEARCH_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "../../state/openclaw-agent-db-contract.js";
 import { agentEngineSchema, openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
@@ -34,6 +36,7 @@ import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js"
 import { agentTranscriptSearchSchema } from "../../state/openclaw-agent-search-schema.js";
 import { withLegacyAgentPostgresTrajectoryStorage } from "../../state/openclaw-agent-trajectory-storage-migration.js";
 import { withLegacyAgentPostgresWriteLayout } from "../../state/openclaw-agent-write-layout-migration.js";
+import { ensureColumn } from "../../state/openclaw-state-db-schema-helpers.js";
 import metadata from "../../state/postgres-schema.generated/agent-port.json" with { type: "json" };
 import { agentPostgresRuntime } from "../../state/postgres-schema.generated/agent-runtime.js";
 import { agentSearchPostgresRuntime } from "../../state/postgres-schema.generated/agent-search-runtime.js";
@@ -55,7 +58,12 @@ import {
 } from "./agent-port-projections.js";
 import { withDatabaseEngineSelection } from "./context.js";
 import type { SearchSchema } from "./contract.js";
-import { DatabasePortDataError, type PortDescriptor, type PortTable } from "./port-descriptor.js";
+import {
+  DatabasePortDataError,
+  pendingSqliteColumns,
+  type PortDescriptor,
+  type PortTable,
+} from "./port-descriptor.js";
 import { pgSearchName, postgresSearchSql } from "./postgres-search-schema.js";
 import { resolveDatabaseFamilyEngines } from "./registry.js";
 
@@ -119,6 +127,7 @@ const agentSourceSearchPostData: NonNullable<PortDescriptor["postgresSourcePostD
           namespace,
           shared,
           row!.metadata.version >= AGENT_VECTOR_DECODER_SCHEMA_VERSION ? 2 : 1,
+          row!.metadata.version >= AGENT_VECTOR_SEARCH_SCHEMA_VERSION ? 2 : 1,
         );
         shared.vector ||= Object.keys(schema.vector ?? {}).length > 0;
         return sql;
@@ -137,12 +146,12 @@ export async function loadAgentPortDescriptor(
     if (backup?.version === sourceVersion && backup.id === "agent") {
       return backup;
     }
-    // Schema 30 appends trajectory columns; 31 removes revision triggers; 32 changes the decoder.
+    // Schema 30 appends columns; 31–33 change only PostgreSQL search or triggers.
     // Pin the remaining shared layout so future DDL gets its own descriptor.
     if (
       backup ||
-      OPENCLAW_AGENT_SCHEMA_VERSION !== 32 ||
-      ![27, 28, 29, 30, 31].includes(sourceVersion)
+      OPENCLAW_AGENT_SCHEMA_VERSION !== 33 ||
+      ![27, 28, 29, 30, 31, 32].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing agent PostgreSQL backup descriptor for version ${sourceVersion}`,
@@ -314,7 +323,7 @@ export async function loadAgentPortDescriptor(
           needsIndexRepair ||
           Boolean(hasRetiredUsagePartitions) ||
           hasPendingCurrentVersionAgentDatabaseMigration(db),
-        pendingColumns: {},
+        pendingColumns: pendingSqliteColumns(db, FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS),
       };
     },
     async migrateSqliteSource(file, _version, assertCurrent) {
@@ -336,6 +345,13 @@ export async function loadAgentPortDescriptor(
             file,
             async () => {
               ensureOpenClawAgentDatabaseSchema(db, { agentId, register: false });
+              for (const {
+                tableName,
+                columnName,
+                dataType,
+              } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
+                ensureColumn(db, tableName, `${columnName} ${dataType}`);
+              }
               // Retired partitions are rebuilt from retained transcripts; their NUL keys cannot port.
               executeSqliteQuerySync(
                 db,

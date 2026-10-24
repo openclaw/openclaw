@@ -63,7 +63,7 @@ type PreparationOverrides = Partial<Omit<PreparationInput, "attempt" | "runParam
   sourceReplyDeliveryMode?: "message_tool_only";
 };
 
-function preparationInput(input: PreparationOverrides): PreparationInput {
+export function createTerminalPreparationInput(input: PreparationOverrides): PreparationInput {
   const { admittedRunContext, sourceReplyDeliveryMode, runParams, ...overrides } = input;
   return {
     runParams: {
@@ -96,5 +96,5 @@ function preparationInput(input: PreparationOverrides): PreparationInput {
 
 export async function prepareAttempt(input: PreparationOverrides) {
   const { prepareEmbeddedRunTerminal } = await import("./terminal-preparation.js");
-  return prepareEmbeddedRunTerminal(preparationInput(input));
+  return prepareEmbeddedRunTerminal(createTerminalPreparationInput(input));
 }

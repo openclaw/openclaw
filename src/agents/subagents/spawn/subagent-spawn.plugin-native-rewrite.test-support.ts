@@ -30,11 +30,11 @@ import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
 } from "../swarm/swarm-code-mode.js";
-import { enqueueSwarmRun } from "../swarm/swarm-scheduler.js";
 import { visibleResult } from "./subagent-spawn.fixtures.test-support.js";
 import {
   createSpawnBoundaryParent,
   createSpawnOperatorSource,
+  holdSpawnCapacity,
   recordSpawnBoundaryFinal,
   type NativePluginSpawnTestOptions,
 } from "./subagent-spawn.production-boundary.test-support.js";
@@ -80,19 +80,11 @@ export function nativeRequestSource(
 }
 
 export async function holdNativeCapacity(bound: BoundParent, runId: string) {
-  const started = createDeferred();
   const { parentSessionKey, parentRunId } = bound;
-  enqueueSwarmRun({
-    groupId: JSON.stringify(["main", parentSessionKey, `swarm:${parentSessionKey}:${parentRunId}`]),
+  await holdSpawnCapacity(
+    JSON.stringify(["main", parentSessionKey, `swarm:${parentSessionKey}:${parentRunId}`]),
     runId,
-    maxConcurrent: 1,
-    activeRunIds: [],
-    start: async () => {
-      started.resolve();
-    },
-    onStartFailure: () => true,
-  });
-  await started.promise;
+  );
 }
 
 export function nativeReplyFixture(

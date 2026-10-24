@@ -30,6 +30,17 @@ describe("cleanSchemaForGemini", () => {
       { type: "string", description: "nullable field" },
     ],
     [
+      "selects the first non-null type from a mixed type array",
+      { type: ["null", "string", "number"], description: "table cell", default: "" },
+      { type: "string", description: "table cell", default: "" },
+    ],
+    [
+      "omits type when a type array contains only null",
+      { type: ["null"], description: "empty choice" },
+      { description: "empty choice" },
+    ],
+    ["omits an empty type array", { type: [], title: "Empty" }, { title: "Empty" }],
+    [
       "stringifies an integer const before type without changing the schema type",
       { const: 42, type: "integer" },
       { enum: ["42"], type: "integer" },

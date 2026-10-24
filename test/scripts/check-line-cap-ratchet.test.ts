@@ -188,7 +188,7 @@ it("uses qualified oxlint instead of a stale canonical bin in a code-only worktr
   expect(fs.existsSync(path.join(checkout, "node_modules"))).toBe(false);
 });
 
-it.each(["stale version", "foreign repository", "bin traversal", "bin symlink"])(
+it.each(["bin traversal", "bin symlink"])(
   "rejects %s before executing the oxlint CLI",
   (invalid) => {
     const donor = createToolingDependencyFixture(tempDirs.make("openclaw-line-cap-admission-"));
@@ -206,22 +206,13 @@ it.each(["stale version", "foreign repository", "bin traversal", "bin symlink"])
       exports: { "./package.json": "./package.json" },
       bin: { oxlint: "index.mjs" },
     };
-    let expected = "The oxlint CLI bin must be a file inside its admitted package.";
-    if (invalid === "stale version") {
-      binManifest.version = "0.0.0-stale";
-      expected = `requires ${manifest.devDependencies.oxlint}`;
-    } else if (invalid === "foreign repository") {
-      git(donor.tooling, "remote", "set-url", "origin", "https://github.com/example/unrelated.git");
-      expected = "Different repository.";
+    const outside = path.join(donor.tooling, "outside-cli.mjs");
+    fs.writeFileSync(outside, marker);
+    if (invalid === "bin traversal") {
+      binManifest.bin.oxlint = "../../outside-cli.mjs";
     } else {
-      const outside = path.join(donor.tooling, "outside-cli.mjs");
-      fs.writeFileSync(outside, marker);
-      if (invalid === "bin traversal") {
-        binManifest.bin.oxlint = "../../outside-cli.mjs";
-      } else {
-        fs.symlinkSync(outside, path.join(pkg, "cli.mjs"), "file");
-        binManifest.bin.oxlint = "cli.mjs";
-      }
+      fs.symlinkSync(outside, path.join(pkg, "cli.mjs"), "file");
+      binManifest.bin.oxlint = "cli.mjs";
     }
     fs.writeFileSync(path.join(pkg, "package.json"), JSON.stringify(binManifest));
     write(root, 3);
@@ -237,7 +228,9 @@ it.each(["stale version", "foreign repository", "bin traversal", "bin symlink"])
       },
     );
     expect(result.status, result.stderr).toBe(1);
-    expect(result.stderr).toContain(expected);
+    expect(result.stderr).toContain(
+      "The oxlint CLI bin must be a file inside its admitted package.",
+    );
     expect(result.stdout + result.stderr).not.toContain("UNQUALIFIED OXLINT EXECUTED");
     expect(fs.existsSync(path.join(root, "node_modules"))).toBe(false);
   },

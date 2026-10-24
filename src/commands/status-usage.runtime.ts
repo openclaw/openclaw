@@ -17,39 +17,6 @@ import {
 } from "../status/codex-synthetic-usage.js";
 import { resolveStatusGatewayProbeTimeoutMs } from "./status.gateway-probe-budget.js";
 
-async function shouldUseConfiguredCodexSyntheticUsage(params: {
-  config: OpenClawConfig;
-  agentDir: string;
-  agentId?: string;
-}): Promise<boolean> {
-  const configuredDefault = resolveDefaultModelForAgent({
-    cfg: params.config,
-    agentId: params.agentId,
-    allowPluginNormalization: false,
-  });
-  const policy = resolveAgentHarnessPolicy({
-    config: params.config,
-    agentId: params.agentId,
-    provider: configuredDefault.provider,
-    modelId: configuredDefault.model,
-  });
-  if (
-    !shouldUseCodexSyntheticUsageForRuntime({
-      provider: configuredDefault.provider,
-      effectiveHarness: policy.runtime,
-    })
-  ) {
-    return false;
-  }
-  const authLabel = await resolveModelAuthLabelAsync({
-    provider: configuredDefault.provider,
-    cfg: params.config,
-    agentDir: params.agentDir,
-    includeExternalProfiles: false,
-  });
-  return resolveUsageCredentialType(authLabel) !== "api_key";
-}
-
 export type StatusUsageSummaryOptions = {
   config: OpenClawConfig;
   timeoutMs?: number;
@@ -83,13 +50,33 @@ export async function resolveStatusUsageSummary(params: StatusUsageSummaryOption
     config: params.config,
     agentDir,
   });
+  const config = params.config;
+  const configuredDefault = resolveDefaultModelForAgent({
+    cfg: config,
+    agentId: resolvedAgentId,
+    allowPluginNormalization: false,
+  });
+  const policy = resolveAgentHarnessPolicy({
+    config,
+    agentId: resolvedAgentId,
+    provider: configuredDefault.provider,
+    modelId: configuredDefault.model,
+  });
   if (
-    !(await shouldUseConfiguredCodexSyntheticUsage({
-      config: params.config,
-      agentDir,
-      agentId: resolvedAgentId,
-    }))
+    !shouldUseCodexSyntheticUsageForRuntime({
+      provider: configuredDefault.provider,
+      effectiveHarness: policy.runtime,
+    })
   ) {
+    return usage;
+  }
+  const authLabel = await resolveModelAuthLabelAsync({
+    provider: configuredDefault.provider,
+    cfg: config,
+    agentDir,
+    includeExternalProfiles: false,
+  });
+  if (resolveUsageCredentialType(authLabel) === "api_key") {
     return usage;
   }
   const codexUsage = await loadProviderUsageSummary({

@@ -2,8 +2,8 @@
 import { afterAll, afterEach, describe, expect, it, vi, beforeEach } from "vitest";
 import type { ClawdbotConfig } from "../runtime-api.js";
 import {
+  expectFeishuCardButtonRow,
   expectFirstSentCardUsesFillWidthOnly,
-  expectSentCardHasP2pAction,
 } from "./card-test-helpers.js";
 import { maybeHandleFeishuQuickActionMenu } from "./card-ux-launcher.js";
 
@@ -47,21 +47,13 @@ describe("feishu quick-action launcher", () => {
     expect(sendArgs?.cfg).toBe(cfg);
     expect(sendArgs?.to).toBe("user:u123");
     expect(sendArgs?.accountId).toBe("main");
-    expectSentCardHasP2pAction(sendCardFeishuMock);
     expectFirstSentCardUsesFillWidthOnly(sendCardFeishuMock);
-    expect(sendArgs?.card).toMatchObject({
-      body: {
-        elements: expect.arrayContaining([
-          {
-            tag: "action",
-            actions: expect.arrayContaining([
-              expect.objectContaining({
-                value: expect.objectContaining({ c: { u: "u123", e: 600_100, t: "p2p" } }),
-              }),
-            ]),
-          },
-        ]),
-      },
-    });
+    const buttons = expectFeishuCardButtonRow(sendArgs?.card);
+    expect(buttons).toHaveLength(3);
+    expect(buttons.map((button) => button.value)).toEqual([
+      expect.objectContaining({ q: "/help", c: { u: "u123", e: 600_100, t: "p2p" } }),
+      expect.objectContaining({ m: expect.objectContaining({ command: "/new" }) }),
+      expect.objectContaining({ m: expect.objectContaining({ command: "/reset" }) }),
+    ]);
   });
 });

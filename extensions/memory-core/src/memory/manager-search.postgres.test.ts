@@ -117,7 +117,13 @@ function createFixture(
     database = openEngineStore({
       anchor,
       input: { connection: dsn, schemaPrefix: "memory_search_test" },
-      schema: { id: "memory_search", version: 1, sqlite: "", postgres: schema },
+      schema: {
+        id: "memory_search",
+        version: 1,
+        sqlite: "",
+        postgres: schema,
+        postgresVectorSearchVersion: 2,
+      },
       openSqlite: () => {
         throw new Error("Unexpected SQLite memory search fixture");
       },
@@ -270,7 +276,16 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
   );
 
   it("applies model, source and candidate eligibility before exact nearest limit", async () => {
-    const nearest = await regular.vector(vectorQuery({ limit: 1 }));
+    const queried = vi.spyOn(regular.pg(), "query");
+    let nearest;
+    try {
+      nearest = await regular.vector(vectorQuery({ limit: 1 }));
+      expect(queried).toHaveBeenCalledTimes(1);
+      // A separately bound ORDER BY expression makes PostgreSQL evaluate cosine twice per row.
+      expect(queried.mock.calls[0]![0].match(/<=>/g)).toHaveLength(1);
+    } finally {
+      queried.mockRestore();
+    }
     expect(nearest.rows.map((row) => row.path)).toEqual(["memory/semantic.md"]);
     expect(nearest.rows[0]!.score).toBeCloseTo(0.8, 6);
     const alias = await regular.vector(
@@ -278,17 +293,40 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
     );
     expect(alias.rows.map((row) => row.path)).toEqual(["memory/alias.md"]);
     expect(alias.rows[0]!.score).toBe(1);
-    const id = admitted(() =>
-      String(
-        regular
+    const scoped = admitted(() => createFixture(root, "candidate-eligibility", connection!));
+    try {
+      const candidateIds = admitted(() => {
+        expect(scoped.ensureVector()).toMatchObject({ ok: true });
+        scoped.publish("negative", "all negative", [-1, -1, -1]);
+        scoped.publish("zero", "no cosine direction", [0, 0, 0]);
+        scoped.publish("orthogonal", "orthogonal", [0, 1, 0]);
+        scoped.publish("outside", "excluded perfect match", [-1, 0, 0]);
+        return scoped
           .pg()
-          .prepare("SELECT id FROM memory_index_chunks WHERE path = ?")
-          .get("memory/orthogonal.md")!.id,
-      ),
-    );
-    const candidate = await regular.vector(vectorQuery({ limit: 1, candidateIds: [id] }));
-    expect(candidate.rows.map((row) => row.path)).toEqual(["memory/orthogonal.md"]);
-    expect(candidate.rows[0]!.score).toBe(0);
+          .prepare("SELECT id FROM memory_index_chunks WHERE path != ? ORDER BY id")
+          .all("memory/outside.md")
+          .map((row) => String(row.id));
+      });
+      const captured = vi.spyOn(scoped.pg(), "query");
+      try {
+        const candidate = await scoped.vector(
+          vectorQuery({ limit: 3, queryVec: [-1, 0, 0], candidateIds }),
+        );
+        expect(candidate.rows.map((row) => row.path)).toEqual([
+          "memory/negative.md",
+          "memory/orthogonal.md",
+        ]);
+        expect(candidate.rows[0]!.score).toBeCloseTo(1 / Math.sqrt(3), 6);
+        expect(candidate.rows[1]!.score).toBe(0);
+        expect(captured).toHaveBeenCalledTimes(1);
+        // Even a small scope can choose a full scan; eligibility must not read every vector.
+        expect(captured.mock.calls[0]![0]).not.toMatch(/\bvector_norm\s*\(/i);
+      } finally {
+        captured.mockRestore();
+      }
+    } finally {
+      admitted(() => scoped.close());
+    }
     expect((await regular.vector(vectorQuery({ candidateIds: [] }))).rows).toEqual([]);
   });
 
@@ -343,8 +381,7 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
     expect(keyword.body.error).toBeUndefined();
     expect(keyword.path.error).toBeUndefined();
     expect(keyword.body.rows.map((row) => row.path)).toEqual(["memory/lexical.md"]);
-    expect(keyword.body.rows[0]!.textScore).toBeGreaterThan(0.6);
-    expect(keyword.body.rows[0]!.textScore).toBeLessThan(0.75);
+    expect(keyword.body.rows[0]!.textScore).toBeCloseTo(0.965688529, 6);
     const vector = await regular.vector();
     const merged = await mergeHybridResults({
       vector: vector.rows.map((row) => Object.assign({}, row, { vectorScore: row.score })),
@@ -359,7 +396,7 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
       "memory/semantic.md",
       "memory/orthogonal.md",
     ]);
-    expect(merged[0]!.score).toBeCloseTo(0.62, 6);
+    expect(merged[0]!.score).toBeCloseTo(0.709706559, 6);
     expect(merged[1]!.score).toBeCloseTo(0.56, 6);
     const exact = await regular.keyword(keywordQuery("semantic"));
     expect(exact.path.rows).toMatchObject([
@@ -367,14 +404,52 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
     ]);
   });
 
+  it("keeps a rare fallback hit ahead of vector neighbors with weak lexical evidence", async () => {
+    const fixture = admitted(() => createFixture(root, "rare-hybrid", connection!));
+    try {
+      admitted(() => {
+        fixture.ensureVector();
+        fixture.publish("rare-target", "rareanchor", [-0.04, Math.sqrt(1 - 0.04 ** 2), 0]);
+        fixture.publish("vector-neighbor", "unrelated", [0.1, Math.sqrt(1 - 0.1 ** 2), 0]);
+      });
+      const keyword = await fixture.keyword(keywordQuery("rareanchor absentword", { limit: 200 }));
+      expect(keyword.body.rows.map((row) => row.path)).toEqual(["memory/rare-target.md"]);
+      const vector = await fixture.vector(vectorQuery({ limit: 200 }));
+      expect(vector.rows.find((row) => row.path === "memory/rare-target.md")!.score).toBeLessThan(
+        0,
+      );
+      const merged = await mergeHybridResults({
+        vector: vector.rows.map((row) => Object.assign({}, row, { vectorScore: row.score })),
+        keyword: keyword.body.rows,
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        mmr: { enabled: true, lambda: 0.7 },
+        temporalDecay: { enabled: false, halfLifeDays: 30 },
+      });
+      expect(merged[0]!.path).toBe("memory/rare-target.md");
+    } finally {
+      admitted(() => fixture.close());
+    }
+  });
+
   it.each([
     { query: "cafe", trips: 1, body: ["memory/lexical.md"], paths: [] },
     { query: "semantic", trips: 1, body: [], paths: ["memory/semantic.md"] },
-    { query: "cafe absentword", trips: 2, body: ["memory/lexical.md"], paths: [] },
-    { query: "absentword", trips: 2, body: [], paths: [] },
+    { query: "cafe absentword", trips: 1, body: ["memory/lexical.md"], paths: [] },
+    { query: "absentword", trips: 1, body: [], paths: [] },
+    {
+      query: "cafe absentword",
+      pathQuery: "semantic",
+      trips: 1,
+      body: [],
+      paths: ["memory/semantic.md"],
+    },
     { query: "cafe", trips: 0, body: [], paths: [], disabled: true },
   ])("bounds keyword round trips for $query (disabled=$disabled)", async (testCase) => {
     const query = keywordQuery(testCase.query);
+    if (testCase.pathQuery) {
+      query.path.query = testCase.pathQuery;
+    }
     if (testCase.disabled) {
       query.body.limit = 0;
       query.path.limit = 0;
@@ -389,6 +464,89 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
       expect(capture).toHaveBeenCalledTimes(testCase.trips);
     } finally {
       capture.mockRestore();
+    }
+  });
+
+  it("ranks each body match once and projects only retained keyword snippets", async () => {
+    const fixture = admitted(() => createFixture(root, "rank-work", connection!));
+    const db = fixture.pg();
+    try {
+      admitted(() => {
+        for (let index = 0; index < 12; index++) {
+          fixture.publish(`item-${index}`, `rankprobe ${"launch ".repeat(1 + (index % 3))}`, []);
+        }
+        db.exec(`
+          CREATE FUNCTION pg_temp.pglive_rank(tsvector, tsquery, integer) RETURNS real
+          LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE COST 1 AS $$
+          BEGIN RETURN pg_catalog.ts_rank($1, $2, $3); END $$;
+          CREATE FUNCTION pg_temp.pglive_prefix(text, integer) RETURNS text
+          LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE COST 1 AS $$
+          BEGIN RETURN pg_catalog.left($1, $2); END $$;
+        `);
+      });
+      const allCalls: number[] = [];
+      const snippetCalls: number[] = [];
+      for (const queryText of ["rankprobe launch", "rankprobe absentword"]) {
+        const query = keywordQuery(queryText, { limit: 3 });
+        const observed = admitted(() =>
+          db.runTransaction(() => {
+            db.exec("SET LOCAL track_functions = 'all'");
+            const countCalls = (name: "pglive_rank" | "pglive_prefix") =>
+              Number(
+                db
+                  .prepare(`
+              SELECT coalesce(sum(calls), 0) AS calls FROM pg_stat_xact_user_functions
+              WHERE funcname = ?
+            `)
+                  .get(name)?.calls ?? 0,
+              );
+            const before = countCalls("pglive_rank");
+            const beforeSnippets = countCalls("pglive_prefix");
+            const execute = db.query.bind(db);
+            const capture = vi.spyOn(db, "query").mockImplementation((statement, bindings) => {
+              return execute(
+                statement
+                  .replaceAll("ts_rank(", "pg_temp.pglive_rank(")
+                  .replaceAll("left(", "pg_temp.pglive_prefix("),
+                bindings,
+              );
+            });
+            try {
+              const pending = fixture.keyword(query);
+              return {
+                pending,
+                calls: countCalls("pglive_rank") - before,
+                snippets: countCalls("pglive_prefix") - beforeSnippets,
+              };
+            } finally {
+              capture.mockRestore();
+            }
+          }),
+        );
+        const result = await observed.pending;
+        expect(result.body.error).toBeUndefined();
+        expect(result.body.rows).toHaveLength(3);
+        const terms =
+          queryText === "rankprobe launch" ? "rankprobe & launch" : "rankprobe | absentword";
+        const expected = admitted(() =>
+          db
+            .prepare(`
+          SELECT id, ts_rank(openclaw_search, to_tsquery('simple', ?), 0) /
+            (ts_rank(openclaw_search, to_tsquery('simple', ?), 0) + 0.0027) AS score
+          FROM memory_index_chunks
+          WHERE openclaw_search @@ to_tsquery('simple', ?)
+          ORDER BY score DESC, id LIMIT 3
+        `)
+            .all(terms, terms, terms),
+        );
+        expect(result.body.rows.map(({ id, score }) => ({ id, score }))).toEqual(expected);
+        allCalls.push(observed.calls);
+        snippetCalls.push(observed.snippets);
+      }
+      expect(allCalls).toEqual([12, 12]);
+      expect(snippetCalls).toEqual([3, 3]);
+    } finally {
+      admitted(() => fixture.close());
     }
   });
 
@@ -414,8 +572,8 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
       expect(result.body.rows).toMatchObject([
         {
           path: "body-hit.md",
-          score: expect.closeTo(2 / 3, 6),
-          textScore: expect.closeTo(2 / 3, 6),
+          score: expect.closeTo(0.965688529, 6),
+          textScore: expect.closeTo(0.965688529, 6),
         },
       ]);
       expect(result.path.rows.map((row) => [row.path, row.exactPathSpecificity])).toEqual([
@@ -425,15 +583,15 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
       ]);
       expect(result.path.rows).toMatchObject([
         {
-          score: expect.closeTo(0.5, 6),
-          pathScore: expect.closeTo(0.5, 6),
+          score: expect.closeTo(0.957475433, 6),
+          pathScore: expect.closeTo(0.957475433, 6),
           textScore: 0,
           hasBodyMatch: false,
         },
         { score: 0, pathScore: 0, textScore: 0, hasBodyMatch: false },
         {
-          score: expect.closeTo(0.5, 6),
-          pathScore: expect.closeTo(0.5, 6),
+          score: expect.closeTo(0.957475433, 6),
+          pathScore: expect.closeTo(0.957475433, 6),
           textScore: 0,
           hasBodyMatch: false,
         },

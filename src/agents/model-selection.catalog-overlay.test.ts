@@ -11,6 +11,7 @@ import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinkin
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { isSmallModel } from "../shared/model-param-b.js";
 import { makeModel } from "./embedded-agent-runner/model.test-harness.js";
+import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import {
   projectModelCatalogEntryForRoute,
   createConfiguredModelCatalogOverridesResolver,
@@ -107,6 +108,48 @@ it.each([undefined, 4_000_000_000])(
     }
   },
 );
+
+it("keeps a catalog family only where the configured route serves the declared model", () => {
+  const captured = {
+    ...capturedRoute,
+    provider: "route-fixture",
+    id: "compact-chat",
+    name: "Compact Chat",
+    family: "meta",
+  };
+  const familyFor = (route: Partial<ModelDefinitionConfig>) =>
+    buildConfiguredModelCatalog({
+      cfg: modelConfig([{ ...makeModel("compact-chat"), ...route }]),
+      catalog: [captured],
+      manifestPlugins: [],
+    })[0]?.family;
+  expect(familyFor({})).toBe("meta");
+  expect(familyFor({ baseUrl: `${capturedRoute.baseUrl}/` })).toBe("meta");
+  // Another endpoint or wire API may serve a different model under the same id.
+  expect(familyFor({ baseUrl: configuredEndpoint })).toBeUndefined();
+  expect(familyFor({ api: "openai-completions" })).toBeUndefined();
+
+  // An overlay that moves the row to another route drops the old route's family.
+  expect(overlayCatalogMetadata(captured, { ...captured, family: undefined }).family).toBe("meta");
+  expect(
+    overlayCatalogMetadata(captured, {
+      ...captured,
+      family: undefined,
+      baseUrl: configuredEndpoint,
+    }).family,
+  ).toBeUndefined();
+  expect(
+    overlayCatalogMetadata(captured, { ...captured, baseUrl: configuredEndpoint, family: "zai" })
+      .family,
+  ).toBe("zai");
+
+  // A managed route projection keeps the model identity, family included.
+  const cfg = modelConfig([makeModel("compact-chat")]);
+  const { entry, runtimeEntry } = project(cfg, captured, [captured], {
+    baseUrl: "https://different.example/v1",
+  });
+  expect([entry.family, runtimeEntry.family]).toEqual(["meta", "meta"]);
+});
 
 it.each<OverlayCase>([
   [

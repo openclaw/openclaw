@@ -101,6 +101,19 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
     });
   }
 
+  protected resolveConfiguredFallbackProvider() {
+    const currentProviderId = resolveFallbackCurrentProviderId({
+      provider: this.provider,
+      lifecycle: this.providerLifecycle,
+    });
+    const fallbackRequest = resolveMemoryFallbackProviderRequest({
+      cfg: this.cfg,
+      settings: this.settings,
+      currentProviderId,
+    });
+    return { currentProviderId, fallbackRequest };
+  }
+
   private createSyncProgress(
     onProgress: (update: MemorySyncProgressUpdate) => void,
   ): MemorySyncProgressState {
@@ -498,15 +511,7 @@ export abstract class MemoryManagerSyncOps extends MemoryManagerReindexOps {
   }
 
   private async activateFallbackProviderOnce(reason: string): Promise<boolean> {
-    const currentProviderId = resolveFallbackCurrentProviderId({
-      provider: this.provider,
-      lifecycle: this.providerLifecycle,
-    });
-    const fallbackRequest = resolveMemoryFallbackProviderRequest({
-      cfg: this.cfg,
-      settings: this.settings,
-      currentProviderId,
-    });
+    const { currentProviderId, fallbackRequest } = this.resolveConfiguredFallbackProvider();
     if (!fallbackRequest || !currentProviderId) {
       return false;
     }

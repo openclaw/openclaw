@@ -26,7 +26,6 @@ import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx"
 import type { ReplyConnectorElements } from "./chat-reply-connector.tsx";
 import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import type { SubagentActivityProps } from "./chat-subagent-activity.tsx";
 import { syncToolDisclosureOverflow } from "./chat-tool-card-chrome.tsx";
 import { BrowserTabPreviews } from "./chat-tool-cards.solid.tsx";
 import type { BrowserTabPreview } from "./chat-tool-cards.ts";
@@ -44,6 +43,7 @@ export type StreamGroupOptions = MessageRenderOptions & {
   resolveReplyPreview?: ReplyPreviewLookup;
   branding?: ThemeBranding;
   bubbleMode?: boolean;
+  bubbleActivityActive?: boolean;
   firstBubbleKey?: string | null;
   onReply?: (target: ChatReplyTarget) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
@@ -54,7 +54,6 @@ export type StreamGroupOptions = MessageRenderOptions & {
   waitingApproval?: boolean;
   waitingSubagents?: ChatSubagentWait;
   runningSubagents?: number;
-  subagentActivity?: SubagentActivityProps;
   onOpenSubagents?: () => void;
   runOutputTokens?: number | null;
   questionPrompts?: ReadonlyMap<string, QuestionPrompt>;
@@ -135,6 +134,7 @@ function NonstreamPart(props: {
           part={part()}
           options={{
             bubbleMode: props.options.bubbleMode,
+            bubbleActivityActive: props.options.bubbleActivityActive,
             mascot: props.options.branding?.mascot,
             workingIndicator: props.options.branding?.workingIndicator,
             workingPhrases: props.options.branding?.workingPhrases,
@@ -142,7 +142,6 @@ function NonstreamPart(props: {
             waitingSubagents:
               part().waitingOn === "subagents" ? props.options.waitingSubagents : undefined,
             runningSubagents: props.options.runningSubagents,
-            subagentActivity: props.options.subagentActivity,
             onOpenSubagents: props.options.onOpenSubagents,
             startupLabel: props.options.startupLabel,
             retryAt: props.options.retryAt,

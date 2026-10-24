@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { buildAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
+import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../../agents/restart-recovery-prompt.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { buildRequesterSettleWakeIdentity } from "../../agents/subagents/registry/subagent-requester-settle-identity.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
@@ -96,6 +97,7 @@ describe("requester-settle processing survives later user turns", () => {
         assertCompletionCurrent: () => {},
         settleWakeReplay: { sourceSessionKeys: [sourceSessionKey], assertCurrent: () => {} },
         getAbortStopReason: () => "rpc",
+        sessionEntry: loadSessionEntry(scope()) ?? undefined,
         request,
         inputProvenance: {
           kind: "inter_session",
@@ -321,9 +323,13 @@ describe("requester-settle processing survives later user turns", () => {
 
   it("retains legitimate unconsumed interrupted input instead of inferring processing completion", async () => {
     const original = await prepare();
+    expect(original.runtimeContextFragments).toBeUndefined();
     await release(original);
     rotateAgentEventLifecycleGeneration();
     const resumed = await prepare();
+    expect(resumed.runtimeContextFragments).toEqual([
+      { kind: "runtime-instruction", text: RESTART_RECOVERY_INTERRUPTION_NOTE },
+    ]);
     expect(completion(resumed)).toBeUndefined();
     expect(await resumed.recorder!.persistApproved()).toMatchObject({ appended: true });
     await complete(resumed);
@@ -339,6 +345,15 @@ describe("requester-settle processing survives later user turns", () => {
     const original = await prepare();
     await original.recorder!.persistApproved();
     await release(original);
+    rotateAgentEventLifecycleGeneration();
+    const resumed = await prepare();
+    expect(resumed.runtimeContextFragments).toEqual([
+      { kind: "runtime-instruction", text: RESTART_RECOVERY_INTERRUPTION_NOTE },
+    ]);
+    expect(resumed.message).toBe(message);
+    expectNoReconciliation(resumed);
+    expect(await resumed.recorder!.persistApproved()).toMatchObject({ appended: false });
+    await release(resumed);
     const manager = await SessionManager.openAsync(scope(), fixture.sessionsDir());
     await appendNewerTurn(manager, "newer:user", "Newer request");
     const before = await loadTranscriptEvents(scope());

@@ -1,11 +1,65 @@
 import {
   asFiniteNumber,
-  isFutureDateTimestampMs,
   resolveNonNegativeIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import type { ChannelAccountSnapshot, ChannelId } from "../channels/plugins/types.public.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeOptionalAccountId } from "../routing/account-id.js";
+import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
+import { normalizeAccountId } from "../routing/session-key.js";
 
 type ChannelHealthSnapshot = Omit<ChannelAccountSnapshot, "accountId">;
+
+type HealthMonitorConfig = {
+  healthMonitor?: {
+    enabled?: boolean;
+  };
+};
+
+type ChannelHealthMonitorConfig = HealthMonitorConfig & {
+  accounts?: Record<string, HealthMonitorConfig>;
+};
+
+function resolveAccountHealthMonitorOverride(
+  channelConfig: ChannelHealthMonitorConfig | undefined,
+  channelId: ChannelId,
+  accountId: string,
+): boolean | undefined {
+  if (!channelConfig?.accounts) {
+    return undefined;
+  }
+  const direct = resolveChannelAccountEntry(channelConfig.accounts, accountId, channelId);
+  if (typeof direct?.healthMonitor?.enabled === "boolean") {
+    return direct.healthMonitor.enabled;
+  }
+  const normalizedAccountId = normalizeOptionalAccountId(accountId);
+  if (!normalizedAccountId) {
+    return undefined;
+  }
+  const match = resolveChannelAccountEntry(
+    channelConfig.accounts,
+    normalizedAccountId,
+    channelId,
+    normalizeAccountId,
+  );
+  if (typeof match?.healthMonitor?.enabled !== "boolean") {
+    return undefined;
+  }
+  return match.healthMonitor.enabled;
+}
+
+export function resolveChannelHealthMonitorEnabled(
+  cfg: OpenClawConfig,
+  channelId: ChannelId,
+  accountId: string,
+): boolean {
+  // SAFETY: Open-world plugin fields are optional; enabled values are checked as booleans.
+  const channelConfig = cfg.channels?.[channelId] as ChannelHealthMonitorConfig | undefined;
+  const accountOverride = resolveAccountHealthMonitorOverride(channelConfig, channelId, accountId);
+  const channelOverride = channelConfig?.healthMonitor?.enabled;
+
+  return accountOverride ?? (typeof channelOverride === "boolean" ? channelOverride : true);
+}
 
 export type ChannelHealthEvaluation = {
   healthy: boolean;
@@ -40,14 +94,6 @@ export function resolveChannelHealthState(
   return !evaluation.healthy && !(snapshot.lifecycle === "blocked" && snapshot.healthState)
     ? evaluation.reason
     : snapshot.healthState;
-}
-
-function resolveObservedChannelTimestamp(value: unknown, now: number): number | null {
-  return typeof value === "number" &&
-    Number.isFinite(value) &&
-    !isFutureDateTimestampMs(value, { nowMs: now })
-    ? value
-    : null;
 }
 
 const BUSY_ACTIVITY_STALE_THRESHOLD_MS = 25 * 60_000;
@@ -85,13 +131,11 @@ export function evaluateChannelHealth(
     return { healthy: true, reason: "unmanaged" };
   }
   const lastStartAt = asFiniteNumber(snapshot.lastStartAt) ?? null;
-  const currentLifecycleStarted =
-    lastStartAt !== null && !isFutureDateTimestampMs(lastStartAt, { nowMs: policy.now });
   // Trust recorded starting/recovering only inside connect grace. Without a timestamp or after
   // the window, no progress is indistinguishable from a hang, so inference keeps restart authority.
   if (
     (snapshot.lifecycle === "starting" || snapshot.lifecycle === "recovering") &&
-    currentLifecycleStarted &&
+    lastStartAt !== null &&
     policy.now - lastStartAt < policy.channelConnectGraceMs
   ) {
     return { healthy: true, reason: "startup-connect-grace" };
@@ -101,15 +145,9 @@ export function evaluateChannelHealth(
   }
   const activeRuns = resolveNonNegativeIntegerOption(snapshot.activeRuns, 0);
   const isBusy = snapshot.busy === true || activeRuns > 0;
-  const lastRunActivityAt = resolveObservedChannelTimestamp(snapshot.lastRunActivityAt, policy.now);
-  const activeRunStartedAt = resolveObservedChannelTimestamp(
-    snapshot.activeRunStartedAt,
-    policy.now,
-  );
-  const lastTransportActivityAt = resolveObservedChannelTimestamp(
-    snapshot.lastTransportActivityAt,
-    policy.now,
-  );
+  const lastRunActivityAt = asFiniteNumber(snapshot.lastRunActivityAt) ?? null;
+  const activeRunStartedAt = asFiniteNumber(snapshot.activeRunStartedAt) ?? null;
+  const lastTransportActivityAt = asFiniteNumber(snapshot.lastTransportActivityAt) ?? null;
   const busyStateInitializedForLifecycle =
     lastStartAt == null || (lastRunActivityAt != null && lastRunActivityAt >= lastStartAt);
 
@@ -131,7 +169,7 @@ export function evaluateChannelHealth(
     }
     return { healthy: false, reason: "stuck" };
   }
-  if (snapshot.lifecycle === undefined && currentLifecycleStarted) {
+  if (snapshot.lifecycle === undefined && lastStartAt !== null) {
     const upDuration = policy.now - lastStartAt;
     if (upDuration < policy.channelConnectGraceMs) {
       return { healthy: true, reason: "startup-connect-grace" };
@@ -140,7 +178,7 @@ export function evaluateChannelHealth(
   if (snapshot.connected === false) {
     const lastDisconnectAt =
       snapshot.lastDisconnect && typeof snapshot.lastDisconnect !== "string"
-        ? resolveObservedChannelTimestamp(snapshot.lastDisconnect.at, policy.now)
+        ? (asFiniteNumber(snapshot.lastDisconnect.at) ?? null)
         : null;
     // A disconnect is current only when its producer recorded it inside this
     // account lifecycle; patch-merged timestamps from prior runs grant no grace.
@@ -159,7 +197,7 @@ export function evaluateChannelHealth(
   const shouldCheckStaleSocket = snapshot.connected === true && lastTransportActivityAt != null;
   if (shouldCheckStaleSocket) {
     if (lastStartAt != null && lastTransportActivityAt < lastStartAt) {
-      if (currentLifecycleStarted && policy.now - lastStartAt <= policy.staleEventThresholdMs) {
+      if (policy.now - lastStartAt <= policy.staleEventThresholdMs) {
         return { healthy: true, reason: "healthy" };
       }
       return { healthy: false, reason: "stale-socket" };

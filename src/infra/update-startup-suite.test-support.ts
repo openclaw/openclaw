@@ -4,6 +4,21 @@ import type { GatewayActiveWorkInspectors } from "./gateway-active-work.js";
 import type { UpdateRunRecord } from "./update-run-record.js";
 import type { UpdateRunResult } from "./update-run-result.js";
 
+export type PersistedUpdateCheckState = {
+  lastCheckedAt?: string;
+  lastCheckedChannel?: "stable" | "extended-stable" | "beta" | "dev";
+  lastNotifiedVersion?: string;
+  lastNotifiedTag?: string;
+  lastAvailableVersion?: string;
+  lastAvailableTag?: string;
+  autoInstallId?: string;
+  autoFirstSeenVersion?: string;
+  autoFirstSeenTag?: string;
+  autoFirstSeenAt?: string;
+  autoLastAttemptVersion?: string;
+  autoLastAttemptAt?: string;
+};
+
 export function pauseAt<T>(
   entered: ReturnType<typeof createDeferred<void>>,
   result: ReturnType<typeof createDeferred<T>>,

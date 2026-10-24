@@ -1,9 +1,7 @@
-import { execFile } from "node:child_process";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { promisify } from "node:util";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -22,13 +20,13 @@ import * as allocation from "./allocation.js";
 import { captureWorktreeMutationHeartbeat } from "./allocation.test-support.js";
 import * as capacity from "./capacity.js";
 import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
+import { git } from "./git-fixture.test-support.js";
 import { readPendingWorktrees } from "./pending-slots.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
 import { abortWorktreeRemoval, claimWorktreeRemoval } from "./run-lease.js";
 import { ManagedWorktreeService } from "./service.js";
 import { useManagedWorktreeTestRepository } from "./service.test-support.js";
 
-const execFileAsync = promisify(execFile);
 const GiB = 1024 ** 3;
 
 function isWorktreeAdd(argv: readonly string[]): boolean {
@@ -50,10 +48,6 @@ describe("ManagedWorktreeService capacity", () => {
   let env: NodeJS.ProcessEnv;
   let service: ManagedWorktreeService;
   let availableBytes: number;
-
-  async function git(cwd: string, ...args: string[]) {
-    return (await execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf8" })).stdout.trim();
-  }
 
   beforeEach(async () => {
     useInProcessWorktreeCapacityTransport();

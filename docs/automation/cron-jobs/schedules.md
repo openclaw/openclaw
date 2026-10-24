@@ -112,7 +112,7 @@ and [Owner delivery](/automation/cron-jobs/delivery#owner-delivery-and-direct-me
 
 A stream schedule keeps an operator-authored argv command running under the Gateway and fires the job from its stdout and stderr lines. Stream schedules are event-driven, never time-due, and are available by default.
 
-The agent-facing `automations` tool requires the creator turn to expose `exec` for the stream’s execution location. With `ask: "always"`, creating a stream asks the user to approve that specific persistent watcher. The question identifies the command and execution location, describes output behavior and delivery, and explains that the watcher continues after the conversation and automatically restarts after interruptions and Gateway restarts until disabled or deleted. Approval authorizes that saved watcher, not other commands or additional watchers.
+The agent-facing `automations` tool requires the creator turn to expose `exec` for the stream’s execution location. With `ask: "always"`, creating a stream asks the user to approve that specific persistent watcher. The question identifies the command and execution location, describes output behavior and delivery, and explains that the watcher continues after the conversation and automatically restarts after interruptions and Gateway restarts until disabled or deleted. Approval authorizes that saved watcher, not other commands or additional watchers. Time spent awaiting approval does not require another approval for the same proposal.
 
 ```json
 {

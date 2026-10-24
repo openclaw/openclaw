@@ -17,6 +17,7 @@ import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
+import { gatewayConnect, gatewayProfile } from "../server/client-fixtures.test-support.js";
 import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import {
   seedHistorySession as seedSession,
@@ -47,19 +48,8 @@ function createPersonalMetadataFixture() {
   const authProfileId = connectChatMetadataAccount(owner.id);
   const client: NonNullable<GatewayRequestHandlerOptions["client"]> & { connId: string } = {
     connId: "metadata-owner-connection",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: ["operator.read"],
-    },
-    authenticatedUserProfile: {
-      profileId: owner.id,
-      displayName: owner.displayName,
-      hasAvatar: false,
-      updatedAt: owner.updatedAt,
-    },
+    connect: gatewayConnect(["operator.read"]),
+    authenticatedUserProfile: gatewayProfile(owner.id, owner.displayName, owner.updatedAt),
   };
   const config = {
     gateway: {
@@ -218,6 +208,32 @@ it.each(["chat.history", "chat.startup"] as const)(
       });
     }),
 );
+
+it("chat.history reports the session agent's own verboseDefault", () =>
+  withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async (state) => {
+    const cfg = {
+      agents: {
+        defaults: { verboseDefault: "off" },
+        entries: { main: {}, ops: { verboseDefault: "full" } },
+      },
+    } satisfies OpenClawConfig;
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
+    const client = { connect: { scopes: ["operator.admin"] } } as never;
+    for (const [agentId, expected] of [
+      ["ops", "full"],
+      ["main", "off"],
+    ] as const) {
+      const scope = { agentId, sessionKey: `agent:${agentId}:main`, sessionId: `${agentId}-main` };
+      await sessions.upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const payload = expectSuccess(
+        await requestHistory("chat.history", { sessionKey: scope.sessionKey }, context, client),
+      );
+      expect(payload.verboseLevel).toBe(expected);
+      expect(payload.sessionInfo).toMatchObject({ verboseLevel: expected });
+    }
+  }));
 
 it.each(["chat.history", "chat.startup"] as const)(
   "%s projects unbound canonical ACP metadata without host ACP reads",

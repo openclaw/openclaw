@@ -11,6 +11,7 @@ import type { SessionEntry, SessionGoal } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { gatewayRequest } from "../request-frame.test-support.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import * as sessionAuthorization from "../session-sharing-authorization-async.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
@@ -120,12 +121,7 @@ async function invoke(
     logGateway: { warn: vi.fn() },
   } as unknown as GatewayRequestContext;
   const handlerOptions: GatewayRequestHandlerOptions = {
-    req: {
-      type: "req",
-      id: "goal-rpc",
-      method: options.method ?? "sessions.goal.update",
-      params: request,
-    },
+    req: gatewayRequest("goal-rpc", options.method ?? "sessions.goal.update", request),
     respond,
     context,
     client: options.client ?? client(),

@@ -8,6 +8,7 @@ import {
   LINK_READER_PANEL_TOGGLE_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { createApplicationGatewaySnapshot } from "../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
@@ -31,23 +32,17 @@ afterEach(() => {
 });
 
 function setup(shouldOpenExternally?: () => boolean) {
-  const snapshot: ApplicationGatewaySnapshot = {
+  const snapshot: ApplicationGatewaySnapshot = createApplicationGatewaySnapshot({
     phase: "connected",
     client: createTestGatewayClient(vi.fn()),
     hello: gatewayHelloForMethods(["forge.item"], ["operator.read"]),
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    assistantAgentId: null,
-    sessionKey: "",
-    lastError: null,
-    lastErrorCode: null,
     pluginCapabilities: {
       ok: true,
       descriptors: [],
       methods: ["forge.item"],
       controlUiLinkReaders: [reader],
     },
-  };
+  });
   const router = startLinkReaderRouting(() => snapshot, { shouldOpenExternally });
   onTestFinished(router.dispose);
   const accept = vi.fn((event: Event) => event.preventDefault());

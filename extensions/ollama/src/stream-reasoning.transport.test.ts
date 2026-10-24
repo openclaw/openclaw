@@ -1,6 +1,7 @@
 import type { AssistantMessageEvent, Model } from "openclaw/plugin-sdk/llm";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createModel } from "../model.test-support.js";
 
 const { guardedFetch } = vi.hoisted(() => ({
   guardedFetch: vi.fn<typeof fetchWithSsrFGuard>(),
@@ -16,16 +17,10 @@ import { createOllamaStreamFn } from "./stream.runtime.js";
 afterEach(() => guardedFetch.mockReset());
 
 const baseModel: Model = {
+  ...createModel("qwen3:4b", "Qwen3 4B", { reasoning: true, contextWindow: 32768 }),
   api: "ollama",
   provider: "ollama",
   baseUrl: "http://localhost:11434",
-  id: "qwen3:4b",
-  name: "Qwen3 4B",
-  reasoning: true,
-  input: ["text"],
-  contextWindow: 32768,
-  maxTokens: 8192,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 
 describe("native Ollama direct completion reasoning", () => {
