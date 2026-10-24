@@ -37,6 +37,7 @@ import { isOutOfTurnHistoryEntry } from "../../sessions/session-manager-codec.js
 import { sessionManagerOpenTranscriptCohort } from "../../sessions/session-manager-core.js";
 import { wrapToolDefinition } from "../../sessions/tools/tool-definition-wrapper.js";
 import { resolveToolSearchCatalogTool } from "../../tool-search.js";
+import { resolveAttemptTranscriptPolicy } from "../../transcript-policy.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
 import { buildEmbeddedExtensionFactories } from "../extensions.js";
 import { log } from "../logger.js";
@@ -45,7 +46,6 @@ import { recordRuntimeContextProjection } from "../session-prompt-state.js";
 import { resolveEmbeddedAgentApiKey } from "../stream-resolution.js";
 import { prepareEmbeddedAttemptClientTools } from "./attempt-client-tools.js";
 import { createAttemptCompactionThinkingResolver } from "./attempt-compaction-thinking.js";
-import { resolveAttemptTranscriptPolicy } from "./attempt-history.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import type { LlmBoundaryOptions } from "./attempt-llm-boundary.types.js";
 import {
