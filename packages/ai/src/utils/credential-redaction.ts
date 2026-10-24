@@ -313,7 +313,11 @@ export function projectDiagnosticValue(
       descriptors = snapshot;
     }
     const field = (key: string): unknown =>
-      descriptors ? descriptors[key]?.value : Object.hasOwn(value, key) ? Reflect.get(value, key) : undefined;
+      descriptors
+        ? descriptors[key]?.value
+        : Object.hasOwn(value, key)
+          ? Reflect.get(value, key)
+          : undefined;
     state.changed ||= keys.length > maxKeys;
     seen.add(value);
     const out = (Array.isArray(value) ? [] : {}) as Record<string, unknown>;
