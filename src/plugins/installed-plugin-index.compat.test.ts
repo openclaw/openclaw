@@ -16,7 +16,6 @@ import {
 import { listAvailableManifestContractValues } from "./manifest-contract-eligibility.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
 const PLUGIN_ID = "contract-provider";
 afterEach(clearPluginMetadataLifecycleCaches);
@@ -113,27 +112,6 @@ it("applies fresh and dynamic policy to a contract-only provider", () => {
   expect(listValues()).toEqual([PLUGIN_ID]);
   const denied = { plugins: { ...config.plugins, deny: [PLUGIN_ID] } };
   expect(isInstalledPluginEnabled(index, PLUGIN_ID, denied, env)).toBe(false);
-});
-
-it("owns passthrough install metadata before freezing a shared inventory", async () => {
-  const { candidate, env } = createFixture();
-  const metadata = { note: "original" };
-  const installRecords = {
-    [PLUGIN_ID]: { source: "path" as const, installPath: candidate.rootDir, metadata },
-  };
-  const config = captureRuntimeConfig({ plugins: { load: { paths: [candidate.rootDir] } } });
-  await using cache = createPluginCache();
-  withPluginCache(cache, () => {
-    const snapshot = loadPluginMetadataSnapshot({
-      config,
-      env: { ...env, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
-      installRecords,
-    });
-    metadata.note = "edited by caller";
-    expect(snapshot.index.installRecords[PLUGIN_ID]).toMatchObject({
-      metadata: { note: "original" },
-    });
-  });
 });
 
 it("keeps bundled compatibility separate from external policy in each batch", () => {

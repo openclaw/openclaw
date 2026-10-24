@@ -21,6 +21,7 @@ import { SessionOwnerChip } from "../../../components/solid/session-owner-chip.t
 import { StrokeIcon } from "../../../components/solid/stroke-icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { createChatSessionPermissionMenuItem } from "./chat-session-sharing-menu.tsx";
 import {
   type ChatSessionSharingProps,
   VISIBILITY_LABEL_KEYS,
@@ -29,7 +30,6 @@ import {
   ChatSessionSharingModeIcon,
   ChatSessionSharingError,
   projectChatSessionSharingRoster,
-  createChatSessionPermissionMenuItem,
 } from "./chat-session-sharing-shared.tsx";
 import type { ChatSessionSharingContentProps } from "./chat-session-sharing.solid.tsx";
 

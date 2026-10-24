@@ -92,13 +92,15 @@ type WorkspaceIdentityResolution = {
   missingAliasKeys: string[];
 };
 
-function readWorkspaceAliasRows(
-  database: WorkspaceStateDatabaseHandle,
-  aliases: readonly WorkspaceStateIdentity[],
-  kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(database.db),
-) {
-  return executeSqliteQuerySync(
-    database.db,
+export function resolveWorkspaceIdentityFromDatabase(params: {
+  workspaceDir: string;
+  database: WorkspaceStateDatabaseHandle;
+}): WorkspaceIdentityResolution {
+  const aliases = resolveWorkspaceStateAliases(params.workspaceDir);
+  const canonicalIdentity = aliases.at(-1)!;
+  const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(params.database.db);
+  const rows = executeSqliteQuerySync(
+    params.database.db,
     kysely
       .selectFrom("workspace_path_aliases")
       .selectAll()
@@ -108,15 +110,6 @@ function readWorkspaceAliasRows(
         aliases.map((alias) => alias.workspaceKey),
       ),
   ).rows;
-}
-
-export function resolveWorkspaceIdentityFromDatabase(params: {
-  workspaceDir: string;
-  database: WorkspaceStateDatabaseHandle;
-}): WorkspaceIdentityResolution {
-  const aliases = resolveWorkspaceStateAliases(params.workspaceDir);
-  const canonicalIdentity = aliases.at(-1)!;
-  const rows = readWorkspaceAliasRows(params.database, aliases);
   const aliasesByKey = new Map(aliases.map((alias) => [alias.workspaceKey, alias]));
   let storedIdentity: WorkspaceStateIdentity | undefined;
   for (const row of rows) {
@@ -164,7 +157,17 @@ export function registerWorkspaceStateAliasIdentitiesInTransaction(params: {
   assertCanonicalIntegerTimestamp(params.updatedAtMs, "path alias update");
   const kysely = getNodeSqliteKysely<WorkspaceStateDatabase>(params.database.db);
   for (const aliases of chunkItems(params.aliases, 64)) {
-    const existingRows = readWorkspaceAliasRows(params.database, aliases, kysely);
+    const existingRows = executeSqliteQuerySync(
+      params.database.db,
+      kysely
+        .selectFrom("workspace_path_aliases")
+        .selectAll()
+        .where(
+          "alias_key",
+          "in",
+          aliases.map((alias) => alias.workspaceKey),
+        ),
+    ).rows;
     const existingByKey = new Map(existingRows.map((row) => [row.alias_key, row]));
     const missing: typeof existingRows = [];
     for (const alias of aliases) {
