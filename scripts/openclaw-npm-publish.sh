@@ -103,4 +103,35 @@ if [[ "${GITHUB_ACTIONS:-}" == "true" || -n "${WORKFLOW_SHA:-}" ]]; then
     node "${tooling_root}/scripts/npm-preflight-tooling-identity.mjs" --verify-publication-authority
 fi
 
-"${publish_cmd[@]}"
+publish_stderr="$(mktemp)"
+trap 'rm -f "${publish_stderr}"' EXIT
+if "${publish_cmd[@]}" 2> >(tee "${publish_stderr}" >&2); then
+  publish_status=0
+else
+  publish_status=$?
+fi
+wait
+
+if [[ "${publish_status}" -eq 0 ]]; then
+  exit 0
+fi
+
+if grep -Fq "Cannot publish over previously staged version" "${publish_stderr}"; then
+  echo "npm retained this exact version as staged or completed; publication completion is uncertain." >&2
+  if registry_observation="$(
+    npm view "openclaw@${package_version}" version dist.integrity --json --prefer-online 2>&1
+  )"; then
+    echo "Exact-version registry observation: published" >&2
+    printf '%s\n' "${registry_observation}" >&2
+  else
+    echo "Exact-version registry observation: staged or not yet publicly readable" >&2
+    printf '%s\n' "${registry_observation}" >&2
+  fi
+  echo "Do not rerun npm publish. Verify and recover the existing version with:" >&2
+  printf 'OPENCLAW_NPM_EXPECTED_WORKFLOW_REF=%q OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA=%q node --import tsx scripts/openclaw-npm-postpublish-verify.ts %q\n' \
+    "${GITHUB_REF:-refs/tags/release-publish/<tooling-sha12>-<epoch>}" \
+    "${WORKFLOW_SHA:-<tooling-sha>}" \
+    "${package_version}" >&2
+fi
+
+exit "${publish_status}"

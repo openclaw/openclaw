@@ -28,6 +28,31 @@ function makePackageTarball(root: string, packageJson?: string): string {
   return tarball;
 }
 
+function makeStagedNpm(root: string): string {
+  const callsPath = path.join(root, "npm-calls.jsonl");
+  const npmPath = path.join(root, "npm");
+  writeFileSync(
+    npmPath,
+    [
+      "#!/usr/bin/env node",
+      'const fs = require("node:fs");',
+      "fs.appendFileSync(process.env.NPM_CALLS, `${JSON.stringify(process.argv.slice(2))}\\n`);",
+      'if (process.argv[2] === "publish") {',
+      '  console.error("npm error code E409");',
+      '  console.error("npm error Cannot publish over previously staged version");',
+      "  process.exit(Number(process.env.NPM_PUBLISH_EXIT || 1));",
+      "}",
+      'if (process.env.NPM_VIEW_FAIL === "1") {',
+      '  console.error("npm error code E404");',
+      "  process.exit(1);",
+      "}",
+      'console.log(JSON.stringify({ version: process.env.PACKAGE_VERSION, "dist.integrity": "sha512-fixture" }));',
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  return callsPath;
+}
+
 describe("openclaw npm publish wrapper", () => {
   it("rejects missing publish mode before resolving release metadata", () => {
     const result = runPublishWrapper([]);
@@ -87,5 +112,67 @@ describe("openclaw npm publish wrapper", () => {
 
     expect(result.status).toBe(2);
     expect(result.stderr).toContain(expectedError);
+  });
+
+  it("observes and explains a previously staged npm version without republishing", () => {
+    const tempRoot = tempDirs.make("openclaw-npm-publish-");
+    const callsPath = makeStagedNpm(tempRoot);
+    const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version as string;
+    const result = runPublishWrapper(["--publish"], {
+      NPM_CALLS: callsPath,
+      NPM_PUBLISH_EXIT: "42",
+      OPENCLAW_NPM_PUBLISH_TAG: "beta",
+      PACKAGE_VERSION: packageVersion,
+      PATH: `${tempRoot}:${process.env.PATH}`,
+    });
+
+    expect(result.status).toBe(42);
+    expect(result.stderr).toContain("Cannot publish over previously staged version");
+    expect(result.stderr).toContain("npm retained this exact version as staged or completed");
+    expect(result.stderr).toContain("Exact-version registry observation: published");
+    expect(result.stderr).toContain("Do not rerun npm publish");
+    expect(result.stderr).toContain(`scripts/openclaw-npm-postpublish-verify.ts ${packageVersion}`);
+    expect(readFileSync(callsPath, "utf8").trim().split("\n").map(JSON.parse)).toEqual([
+      ["publish", "--access", "public", "--tag", "beta", "--provenance"],
+      [
+        "view",
+        `openclaw@${packageVersion}`,
+        "version",
+        "dist.integrity",
+        "--json",
+        "--prefer-online",
+      ],
+    ]);
+  });
+
+  it("preserves staged-version recovery guidance while the registry is unreadable", () => {
+    const tempRoot = tempDirs.make("openclaw-npm-publish-");
+    const callsPath = makeStagedNpm(tempRoot);
+    const packageVersion = JSON.parse(readFileSync("package.json", "utf8")).version as string;
+    const result = runPublishWrapper(["--publish"], {
+      NPM_CALLS: callsPath,
+      NPM_VIEW_FAIL: "1",
+      OPENCLAW_NPM_PUBLISH_TAG: "beta",
+      PACKAGE_VERSION: packageVersion,
+      PATH: `${tempRoot}:${process.env.PATH}`,
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Exact-version registry observation: staged or not yet publicly readable",
+    );
+    expect(result.stderr).toContain("npm error code E404");
+    expect(result.stderr).toContain("Do not rerun npm publish");
+    expect(readFileSync(callsPath, "utf8").trim().split("\n").map(JSON.parse)).toEqual([
+      ["publish", "--access", "public", "--tag", "beta", "--provenance"],
+      [
+        "view",
+        `openclaw@${packageVersion}`,
+        "version",
+        "dist.integrity",
+        "--json",
+        "--prefer-online",
+      ],
+    ]);
   });
 });

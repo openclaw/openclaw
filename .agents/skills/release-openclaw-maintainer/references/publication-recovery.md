@@ -59,6 +59,13 @@ Registry propagation may briefly return E404 after a successful npm child.
 Use bounded `--prefer-online` reads and preserve the verified tarball/integrity
 metadata. For an already-published version, run:
 
+If `npm publish` returns E409 with `Cannot publish over previously staged
+version`, treat that exact version as staged or completed, not absent. The
+publish wrapper performs a read-only exact-version `npm view`, preserves the
+failed exit, and prints the verifier command below. Do not rerun `npm publish`,
+even when the registry read is still 404; wait for propagation and reconcile
+the original publisher before using the printed recovery command.
+
 ```bash
 OPENCLAW_NPM_EXPECTED_WORKFLOW_REF=refs/tags/release-publish/<tooling-sha12>-<epoch> \
 OPENCLAW_NPM_EXPECTED_WORKFLOW_SHA=<tooling-sha> \
