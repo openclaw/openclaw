@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -7,6 +9,10 @@ import type { OpenClawPluginApi } from "./api.js";
 import plugin from "./index.js";
 import { registerWorkboardGatewayMethods } from "./runtime-api.js";
 import { WorkboardStore } from "./src/store.js";
+import {
+  WORKBOARD_CARD_TOOL_NAMES,
+  WORKBOARD_SESSIONS_BOARD_TOOL_NAMES,
+} from "./src/workspace-access.js";
 
 const workerModuleUrl = new URL("./src/sqlite-store.worker.ts", import.meta.url);
 const runtimeSource = fileURLToPath(new URL("./index.ts", import.meta.url));
@@ -180,3 +186,49 @@ it.each(["internal", "injected"] as const)(
       });
     }),
 );
+
+it("opens the store only when a discovered tool runs", () =>
+  withStateDirEnv("workboard-tool-discovery-", async ({ stateDir }) => {
+    const databasePath = path.join(stateDir, "plugins", "workboard", "workboard.sqlite");
+    const discover = () => {
+      const captured = createCapturedPluginRegistration({
+        id: plugin.id,
+        registrationMode: "tool-discovery",
+      });
+      const factories: Parameters<OpenClawPluginApi["registerTool"]>[0][] = [];
+      plugin.register({
+        ...captured.api,
+        runtimeSource,
+        registerTool: (factory) => factories.push(factory),
+      });
+      const tools = factories.flatMap(
+        (factory) =>
+          (typeof factory === "function"
+            ? factory({})
+            : "create" in factory
+              ? factory.create({ assertInvocationCurrent: () => {} })
+              : factory) ?? [],
+      );
+      const release = async () => {
+        for (const lifecycle of captured.runtimeLifecycles) {
+          await lifecycle.dispose?.();
+        }
+      };
+      return { tools, release };
+    };
+
+    // Doctor lint registers, reads tool schemas, and releases without running a tool.
+    const inspected = discover();
+    expect(inspected.tools.map((tool) => tool.name).toSorted()).toEqual(
+      [...WORKBOARD_CARD_TOOL_NAMES, ...WORKBOARD_SESSIONS_BOARD_TOOL_NAMES].toSorted(),
+    );
+    await inspected.release();
+    expect(existsSync(databasePath)).toBe(false);
+
+    // Standalone tool serving still runs tools against the durable store.
+    const served = discover();
+    const list = served.tools.find((tool) => tool.name === "workboard_list")!;
+    await expect(list.execute("call-1", {})).resolves.toMatchObject({ details: { cards: [] } });
+    await served.release();
+    expect(existsSync(databasePath)).toBe(true);
+  }));

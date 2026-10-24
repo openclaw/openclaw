@@ -106,8 +106,10 @@ export default definePluginEntry({
     if (api.registrationMode === "cli-metadata") {
       return;
     }
+    // Tool discovery (doctor lint, standalone tool serving) must not create a store until a tool runs.
     const store = WorkboardStore.openSqlite(
       resolveWorkboardSqliteWorkerModuleUrl(api.runtimeSource),
+      { lazy: api.registrationMode === "tool-discovery" },
     );
     const resourceServices: Array<{ stop(): void | Promise<void> }> = [];
     registerWorkboardStoreLifecycle(api, store, async () => {
