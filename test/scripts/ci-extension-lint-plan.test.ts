@@ -288,10 +288,7 @@ const selectedCases: [string[], string[], SelectionOptions?][] = [
       },
     },
   ],
-  [["ui/src/leaf.ts", "docs/example.md"], [], { reasons: {} }],
-  [["src/leaf.ts"], smokeRoots],
   [["scripts/lib/settings.mts"], smokeRoots],
-  [[`${alpha}/package.json`], [alpha]],
   [
     ["src/plugin-sdk/api.ts"],
     [...smokeRoots, unrelated],

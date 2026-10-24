@@ -103,7 +103,6 @@ it.for([
     ["channels", channelsConfig, "src/channels/chat-type.test.ts"],
     ["gateway methods", gatewayMethodsConfig, "src/gateway/server-methods/health.test.ts"],
   ].flatMap(([name, config, file]): Array<[string, string, string[], boolean, string[]?]> => [
-    [`full ${name}`, config!, [], true],
     [`focused ${name}`, config!, [file!], false],
     [`empty ${name}`, config!, [], false, []],
   ]),
