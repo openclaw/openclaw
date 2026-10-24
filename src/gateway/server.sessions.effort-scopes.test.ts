@@ -1,4 +1,5 @@
 import { expect, test } from "vitest";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { rpcReq, writeSessionStore } from "./test-helpers.js";
 import {
@@ -25,15 +26,7 @@ test("write-scoped operators change and reset effort in an existing session", as
           baseUrl: "https://openai.invalid/v1",
           agentRuntime: { id: "openclaw" },
           models: [
-            {
-              id: "gpt-test-a",
-              name: "A",
-              reasoning: true,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 32768,
-              maxTokens: 2048,
-            },
+            modelDefinition("gpt-test-a", { name: "A", contextWindow: 32768, maxTokens: 2048 }),
           ],
         },
       },
