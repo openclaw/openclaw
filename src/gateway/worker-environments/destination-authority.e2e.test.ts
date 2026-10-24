@@ -38,7 +38,6 @@ import { reserveTestPortListener } from "../../test-utils/port-claims.js";
 import { parseNodeWorkerEnvironmentStopInput } from "../../worker/node-supervisor-protocol.js";
 import { parseNodeWorkerWorkspaceExecInput } from "../../worker/node-workspace-protocol.js";
 import { createGatewayWorkerPlacementRuntime } from "../server-worker-placement-startup.js";
-import * as materialization from "../session-repository-materialization.js";
 import { hashWorkerCredential } from "./credential.js";
 import { bindDeviceWorkerAvailability } from "./device-provider.js";
 import { createNodeWorkerTunnelManager } from "./node-worker-tunnel.js";
@@ -605,10 +604,11 @@ process.stdin.pipe(child.stdin);
                     expect(activateDuringDestroy).toBe(false);
                     expect(config.cloudWorkers?.requiredProfile).toBe("development");
                   }
-                  if (latePolicy) {
-                    expect(readPlacement()).toMatchObject({ state: "reclaimed", turnClaim: null });
-                  } else if (mode === "accepted-allowed") {
-                    expect(readPlacement()).toMatchObject({ state: "local", turnClaim: null });
+                  if (latePolicy || mode === "accepted-allowed") {
+                    expect(readPlacement()).toMatchObject({
+                      state: latePolicy ? "reclaimed" : "local",
+                      turnClaim: null,
+                    });
                   }
                   expect(await loadTranscriptEvents(identity)).not.toEqual(
                     expect.arrayContaining([
@@ -631,9 +631,6 @@ process.stdin.pipe(child.stdin);
                     expectedGeneration: begun.placement.generation,
                   });
                   await environments.destroy(active.environmentId);
-                  const observedMaterialization = vi
-                    .spyOn(materialization, "materializeSessionRepositoryWorkspaceOnGateway")
-                    .mockClear();
                   const entered = createDeferred();
                   const release = createDeferred();
                   const held = withOpenClawStateLease(
@@ -681,16 +678,6 @@ process.stdin.pipe(child.stdin);
                     await recovering;
                     observation.mockRestore();
                   }
-                  if (mode !== "allowed") {
-                    const currentCall = observedMaterialization.mock.calls.findIndex(
-                      ([params]) => params.sessionId === identity.sessionId,
-                    );
-                    expect(currentCall).toBeGreaterThanOrEqual(0);
-                    await expect(
-                      observedMaterialization.mock.results[currentCall]?.value,
-                    ).rejects.toThrow("required worker profile policy");
-                  }
-                  observedMaterialization.mockRestore();
                   if (mode === "allowed") {
                     expect(readPlacement()?.state).toBe("local");
                     const worktree = await expectWorktree();
@@ -698,11 +685,9 @@ process.stdin.pipe(child.stdin);
                     expect(await git(worktree.path, ["rev-parse", "HEAD"])).toBe(baseCommit);
                   } else {
                     expect(readPlacement()?.state).toBe("reconciling");
-                    if (mode === "policy-activated") {
-                      expect(
-                        (await placements.getPlacementMoveAsync(identity.sessionId))?.lastError,
-                      ).toContain("required worker profile policy");
-                    }
+                    expect(
+                      (await placements.getPlacementMoveAsync(identity.sessionId))?.lastError,
+                    ).toContain("required worker profile policy");
                   }
                 }
                 if (mode !== "allowed" && !latePolicy && mode !== "accepted-allowed") {
