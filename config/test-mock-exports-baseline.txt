@@ -6963,7 +6963,6 @@
 ["test/cron-message-read.integration.test.ts","../src/agents/node-exec-availability.js","71ec8ee2c185e6b5049a3d16551c604ca81707e8473f8c24a2420035f245d7ca",1]
 ["test/e2e/qa-lab/media/audio-proxy-and-limit-handling.e2e.test.ts","../../../../src/plugins/capability-provider-runtime.js","eac8d0653652e80e92c27be198331e89ee11385dea75c0e10ff9d2214dca111b",1]
 ["test/e2e/qa-lab/media/media-audio-selection.e2e.test.ts","../../../../src/plugins/capability-provider-runtime.js","eac8d0653652e80e92c27be198331e89ee11385dea75c0e10ff9d2214dca111b",1]
-["test/e2e/qa-lab/media/vision-routing-core.e2e.test.ts","../../../../src/media-understanding/image-runtime.js","b1349d5298322c5f1cf2a28f00a8ae32df810f3bee599bcaf44c5775e2921e87",1]
 ["test/e2e/qa-lab/media/vision-routing-core.e2e.test.ts","../../../../src/plugins/capability-provider-runtime.js","eac8d0653652e80e92c27be198331e89ee11385dea75c0e10ff9d2214dca111b",1]
 ["test/e2e/qa-lab/runtime/paired-node-worker-wire-fixture.test.ts","../../../../src/infra/device-identity.js","dc8beade6f74b7256908688c0d5acb88db3dd4a78c34fe1e975c48d09b4ed82d",1]
 ["test/e2e/qa-lab/runtime/paired-node-worker-wire-fixture.test.ts","../../../../src/node-host/invoke.js","224fff7b6a6a62edff94927317267d4d50cd2f266075d0f97af613a65475326b",1]

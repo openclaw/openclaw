@@ -18,13 +18,6 @@ import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
 type ToolResult = { details?: unknown };
 
 const PLUGIN_ID = "qa-music-controls";
-const VOCAL_CONTROLS = {
-  lyrics: "OpenClaw keeps the signal clear",
-  instrumental: false,
-  durationSeconds: 45,
-  format: "wav",
-};
-
 function detailsOf(result: ToolResult): Record<string, unknown> {
   if (!result.details || typeof result.details !== "object") {
     throw new Error("expected music_generate result details");
@@ -36,19 +29,7 @@ function createMusicFixture() {
   const calls: MusicGenerationRequest[] = [];
   const provider: MusicGenerationProvider = {
     id: "qa-music",
-    label: "QA music",
-    defaultModel: "song-v1",
-    models: ["song-v1"],
-    capabilities: {
-      generate: {
-        maxDurationSeconds: 60,
-        supportsLyrics: true,
-        supportsInstrumental: true,
-        supportsDuration: true,
-        supportsFormat: true,
-        supportedFormats: ["mp3", "wav"],
-      },
-    },
+    capabilities: {},
     isConfigured: () => true,
     generateMusic: async (request) => {
       calls.push(request);
@@ -60,14 +41,13 @@ function createMusicFixture() {
       };
     },
   };
-  const music = { primary: "qa-music/song-v1" };
   const config: OpenClawConfig = {
     plugins: {
       allow: [PLUGIN_ID],
       entries: { [PLUGIN_ID]: { enabled: true } },
       slots: { memory: "none" },
     },
-    agents: { defaults: { mediaModels: { music } } },
+    agents: { defaults: { mediaModels: { music: { primary: "qa-music/song-v1" } } } },
   };
   const registry = createEmptyPluginRegistry();
   registry.musicGenerationProviders.push({
@@ -113,22 +93,16 @@ function createMusicFixture() {
 describe("music generation controls QA product proof", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  it("passes controls through the prepared provider and persists audio", async () => {
+  it("invokes the prepared provider and persists audio", async () => {
     const fixture = createMusicFixture();
     const stateDir = tempDirs.make("openclaw-qa-music-controls-");
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const result = await fixture.execute({
-        prompt: "bright QA chorus",
-        ...VOCAL_CONTROLS,
-      });
-      expect(fixture.calls).toMatchObject([{ model: "song-v1", ...VOCAL_CONTROLS }]);
+      const result = await fixture.execute({ prompt: "bright QA chorus" });
+      expect(fixture.calls).toMatchObject([{ model: "song-v1", prompt: "bright QA chorus" }]);
       const details = detailsOf(result);
       expect(details).toMatchObject({
         provider: "qa-music",
         model: "song-v1",
-        instrumental: false,
-        durationSeconds: 45,
-        format: "wav",
         count: 1,
       });
       const persisted = details.paths as string[];

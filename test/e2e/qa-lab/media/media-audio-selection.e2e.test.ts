@@ -14,12 +14,6 @@ vi.mock("../../../../src/plugins/capability-provider-runtime.js", () => ({
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function writeAudioFixture(dir: string, name: string): Promise<string> {
-  const filePath = path.join(dir, name);
-  await fs.writeFile(filePath, Buffer.alloc(MIN_AUDIO_FILE_BYTES + 1, 0x11));
-  return filePath;
-}
-
 async function writePortableTranscriber(dir: string) {
   const markerPath = path.join(dir, "cli-ran.txt");
   const scriptPath = path.join(dir, "qa-transcriber.cjs");
@@ -39,7 +33,8 @@ process.stdout.write(\`cli transcript:\${path.basename(mediaPath)}\\n\`);
 describe("QA media audio selection product proof", () => {
   it("falls through from a failed provider to an actual temporary CLI executable", async () => {
     const dir = tempDirs.make("openclaw-qa-media-audio-fallback-");
-    const audioPath = await writeAudioFixture(dir, "fallback.wav");
+    const audioPath = path.join(dir, "fallback.wav");
+    await fs.writeFile(audioPath, Buffer.alloc(MIN_AUDIO_FILE_BYTES + 1, 0x11));
     const executable = await writePortableTranscriber(dir);
     const providerAttempts: string[] = [];
     const ctx: MsgContext = {
