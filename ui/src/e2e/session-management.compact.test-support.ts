@@ -76,8 +76,6 @@ export const pollText = (locator: Locator) => expect.poll(() => locator.textCont
 export const pollValue = (locator: Locator) => expect.poll(() => locator.inputValue());
 export const pollAttribute = (locator: Locator, name: string) =>
   expect.poll(() => locator.getAttribute(name));
-export const pollCount = (locator: Locator, options?: { timeout: number }) =>
-  expect.poll(() => locator.count(), options);
 export async function expectNoRequests(gateway: Gateway, ...methods: string[]) {
   for (const method of methods) {
     expect(await gateway.getRequests(method)).toEqual([]);
