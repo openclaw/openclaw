@@ -13,7 +13,7 @@ let userTimeFormatter:
   | { timeZone: string; format: ResolvedTimeFormat; formatter: Intl.DateTimeFormat }
   | undefined;
 
-/** Resolve a valid IANA timezone from config, host preferences, or UTC. */
+/** Resolve a valid IANA timezone from config or the host. */
 export function resolveUserTimezone(configured?: string): string {
   const trimmed = configured?.trim();
   if (trimmed) {
@@ -22,8 +22,7 @@ export function resolveUserTimezone(configured?: string): string {
       return trimmed;
     } catch {}
   }
-  const host = Intl.DateTimeFormat().resolvedOptions().timeZone;
-  return host?.trim() || "UTC";
+  return Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
 
 /** Resolve 12/24-hour display preference, detecting the host for `auto`. */
@@ -60,10 +59,7 @@ export function formatDateStamp(nowMs: number, timeZone: string): string {
   const year = parts.find((part) => part.type === "year")?.value;
   const month = parts.find((part) => part.type === "month")?.value;
   const day = parts.find((part) => part.type === "day")?.value;
-  if (year && month && day) {
-    return `${year}-${month}-${day}`;
-  }
-  return date.toISOString().slice(0, 10);
+  return `${year}-${month}-${day}`;
 }
 
 /** Build current turn context using the configured timezone or the canonical host fallback. */
@@ -168,13 +164,9 @@ function detectSystemTimeFormat(): boolean {
     // Missing OS preferences and failed probes use the portable Intl fallback.
   }
 
-  try {
-    // Read the declared cycle; localized hour digits need not contain ASCII "13".
-    const formatter = new Intl.DateTimeFormat(undefined, { hour: "numeric" });
-    return formatter.resolvedOptions().hour12 === false;
-  } catch {
-    return false;
-  }
+  // Read the declared cycle; localized hour digits need not contain ASCII "13".
+  const formatter = new Intl.DateTimeFormat(undefined, { hour: "numeric" });
+  return formatter.resolvedOptions().hour12 === false;
 }
 
 function ordinalSuffix(day: number): string {
@@ -223,7 +215,7 @@ export function formatUserTime(
     const suffix = ordinalSuffix(dayNum);
     const timePart = use24Hour
       ? `${map.hour}:${map.minute}`
-      : `${map.hour}:${map.minute} ${map.dayPeriod ?? ""}`.trim();
+      : `${map.hour}:${map.minute} ${map.dayPeriod}`;
     return `${map.weekday}, ${map.month} ${dayNum}${suffix}, ${map.year} - ${timePart}`;
   } catch {
     return undefined;

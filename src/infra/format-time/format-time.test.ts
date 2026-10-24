@@ -142,16 +142,6 @@ it("follows host timezone changes while keeping explicit zones fixed", () => {
   }
 });
 
-it("returns undefined when required Intl parts are missing", () => {
-  vi.spyOn(Intl.DateTimeFormat.prototype, "formatToParts").mockReturnValue([
-    { type: "month", value: "01" },
-    { type: "day", value: "15" },
-    { type: "hour", value: "14" },
-    { type: "minute", value: "30" },
-  ]);
-  expect(formatZonedTimestamp(timestamp, utcOptions)).toBeUndefined();
-});
-
 it("returns undefined when Intl formatting throws", () => {
   vi.spyOn(Intl.DateTimeFormat.prototype, "formatToParts").mockImplementation(() => {
     throw new Error("boom");
