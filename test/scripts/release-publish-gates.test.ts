@@ -5,6 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import {
   evaluateReleaseBootstrapGate,
   evaluateReleasePublishGates,
+  evaluateStableRollbackDrill,
 } from "../../scripts/lib/release-publish-gates.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { expectGate } from "./release-publish.test-support.js";
@@ -144,6 +145,35 @@ it("rejects bootstrap approval for another package version", () => {
     packageVersion: "2026.9.4",
   });
   expect(gate.status).toBe("FAIL");
+});
+
+it("warns before rollback drill evidence reaches the 90-day limit", () => {
+  const gates = evaluateStableRollbackDrill({
+    rollbackDrillId: "rollback-drill-2026-q2",
+    rollbackDrillDate: "2026-06-01",
+    nowMs: Date.parse("2026-08-18T00:00:00Z"),
+  });
+
+  expect(gates).toContainEqual({
+    id: "stable-closeout.rollback-drill-date",
+    status: "WARN",
+    message:
+      "Rollback drill expires on 2026-08-30; run the private rollback drill before stable closeout.",
+    remediation:
+      "Run the private rollback drill and record its UTC date in RELEASE_ROLLBACK_DRILL_DATE or supply rollback_drill_date to stable closeout.",
+  });
+});
+
+it("does not warn while rollback drill evidence has at least 14 days remaining", () => {
+  const gates = evaluateStableRollbackDrill({
+    rollbackDrillId: "rollback-drill-2026-q2",
+    rollbackDrillDate: "2026-06-01",
+    nowMs: Date.parse("2026-08-16T00:00:00Z"),
+  });
+
+  expect(gates.find((gate) => gate.id === "stable-closeout.rollback-drill-date")?.status).toBe(
+    "PASS",
+  );
 });
 
 it.each([false, true])(
