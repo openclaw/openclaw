@@ -46,7 +46,7 @@ struct BrowserControlSettingTests {
 
     @Test func `overlapping clicks persist and show the newest choice`() async throws {
         let config = RevisionedConfig(enabled: true)
-        try await self.withConfig(config) {
+        try await self.withConfig(SelectedGateway(config)) {
             let setting = BrowserControlSetting()
             await setting.load()
             config.holdWrites = true
@@ -72,7 +72,7 @@ struct BrowserControlSettingTests {
 
     @Test func `a read in flight when the user clicks does not undo the click`() async throws {
         let config = RevisionedConfig(enabled: true)
-        try await self.withConfig(config) {
+        try await self.withConfig(SelectedGateway(config)) {
             let setting = BrowserControlSetting()
             config.holdReads = true
             // A connection-mode reload has read the pre-click value but not published it yet.
@@ -89,13 +89,56 @@ struct BrowserControlSettingTests {
         }
     }
 
-    private func withConfig(_ config: RevisionedConfig, _ body: () async throws -> Void) async throws {
+    @Test func `a click queued on one Gateway is never written to its replacement`() async throws {
+        let gatewayA = RevisionedConfig(enabled: true)
+        let gatewayB = RevisionedConfig(enabled: false)
+        let selected = SelectedGateway(gatewayA)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        // The config path is part of a document's source, so changing it retires Gateway A.
+        let env = ["OPENCLAW_CONFIG_PATH": directory.appendingPathComponent("a.json").path]
+        try await self.withConfig(selected, env: env) {
+            let setting = BrowserControlSetting()
+            await setting.load()
+            gatewayA.holdWrites = true
+            setting.toggle()
+            try await self.waitUntil { gatewayA.held.count == 1 }
+            setting.toggle()
+
+            // Select Gateway B while A's save is still in flight, with the second click queued.
+            setenv("OPENCLAW_CONFIG_PATH", directory.appendingPathComponent("b.json").path, 1)
+            selected.config = gatewayB
+            gatewayA.release()
+
+            try await self.waitUntil { !setting.enabled }
+            for _ in 0..<50 {
+                await Task.yield()
+            }
+            #expect(gatewayB.revision == 0)
+            #expect(!gatewayB.enabled)
+            #expect(!setting.enabled)
+        }
+    }
+
+    @MainActor
+    final class SelectedGateway {
+        var config: RevisionedConfig
+
+        init(_ config: RevisionedConfig) {
+            self.config = config
+        }
+    }
+
+    private func withConfig(
+        _ selected: SelectedGateway,
+        env: [String: String?] = [:],
+        _ body: () async throws -> Void) async throws
+    {
         // ConfigStore overrides are process-wide; hold the shared lease as ConfigStoreTests does.
-        try await TestIsolation.withIsolatedState {
+        try await TestIsolation.withIsolatedState(env: env) {
             await ConfigStore._testSetOverrides(.init(
                 isRemoteMode: { true },
-                loadRemote: { await config.read() },
-                saveRemote: { try await config.write($0) }))
+                loadRemote: { await selected.config.read() },
+                saveRemote: { try await selected.config.write($0) }))
             do {
                 try await body()
             } catch {

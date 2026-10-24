@@ -344,10 +344,21 @@ final class BrowserControlSetting {
 
     private func save() async {
         defer { self.isSaving = false }
+        // Queued clicks belong to the Gateway they were made on; replay them only while
+        // the document this save started from is still the selected source.
+        var source: ConfigStore.Document?
         var intent: Int
         repeat {
             var config = await ConfigStore.load()
             intent = self.intent
+            if let origin = source, !origin.isCurrent {
+                // A replacement Gateway shows its own value and never receives them.
+                // Clicks after this reload start the next pass on the new source.
+                source = nil
+                await self.load()
+                continue
+            }
+            source = source ?? config
             var browser = config.root["browser"] as? [String: Any] ?? [:]
             browser["enabled"] = self.enabled
             config.root["browser"] = browser
