@@ -75,6 +75,7 @@ vi.mock("../../state/user-profile-list.js", () => ({
     };
     await state.profileReady?.();
     return {
+      readCurrentRevision: readCurrentProfile,
       readCurrentProfile,
       emailBindingIds: [],
       readCurrentFacts: () => ({

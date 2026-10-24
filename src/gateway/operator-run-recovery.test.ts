@@ -21,10 +21,8 @@ import { buildRestartRecoveryExpectedState } from "../config/sessions/session-tr
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { issueDeviceBootstrapToken } from "../infra/device-bootstrap.js";
-import { persistDevicePairingStoreState } from "../infra/device-pairing-store.js";
 import { ensureDeviceToken, rotateDeviceToken } from "../infra/device-pairing-tokens.js";
 import { getPairedDevice, updatePairedDeviceMetadata } from "../infra/device-pairing.js";
-import type { PairedDevice } from "../infra/device-pairing.types.js";
 import { isMissingPathError } from "../infra/errors.js";
 import type { PluginGatewayAccessPolicy } from "../plugins/gateway-access-policy.types.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -40,7 +38,10 @@ import {
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { changeCanonicalUserChannelIdentity } from "../state/user-channel-identity-operations.js";
+import { fenceUserProfileMutationAuthority } from "../state/user-profile-events.js";
+import * as profileReader from "../state/user-profile-list.js";
 import { setCanonicalUserProfileDisplayName } from "../state/user-profile-writes.js";
 import {
   linkEmail,
@@ -68,7 +69,11 @@ import {
   restoreGatewayOperatorSource,
   restoreGatewayQueuedOperatorRecovery,
 } from "./operator-run-recovery.js";
-import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
+import {
+  createOperatorRecoveryFixture,
+  pairedOperator,
+  persistDevices,
+} from "./operator-run-recovery.test-support.js";
 import {
   captureOperatorToolGatewayContinuationContext,
   withOperatorToolGatewayAuthority,
@@ -82,25 +87,6 @@ import {
 
 function modelRef(model: string) {
   return { provider: "fixture", model };
-}
-
-function pairedOperator(): PairedDevice {
-  return {
-    deviceId: "recovery-device",
-    publicKey: "fixture-public-key",
-    roles: ["operator"],
-    approvedScopes: ["operator.admin"],
-    tokens: {
-      operator: {
-        token: "fixture-device-token",
-        role: "operator",
-        scopes: ["operator.admin"],
-        createdAtMs: 1,
-      },
-    },
-    createdAtMs: 1,
-    approvedAtMs: 1,
-  };
 }
 
 function recoveryFixture(
@@ -171,15 +157,72 @@ async function restoreFixture(fixture: RecoveryFixture) {
   return { ...source, [Symbol.dispose]: source.release };
 }
 
-function persistDevices(stateDir: string, devices: PairedDevice[], mode: "paired" | "both") {
-  persistDevicePairingStoreState(
-    { pendingById: {}, pairedByDeviceId: Object.fromEntries(devices.map((d) => [d.deviceId, d])) },
-    stateDir,
-    mode,
-  );
-}
-
 describe("restart recovery authenticated operator source", () => {
+  it.each(["pending", "uncertain"] as const)(
+    "refuses cached profile facts while their mutation is %s",
+    (outcome) =>
+      withRecovery(async (fixture, _stateDir, profile) => {
+        using restored = await restoreFixture(fixture);
+        expectCurrent(restored.authority);
+        const mutation = fenceUserProfileMutationAuthority(
+          captureOpenClawStateWorkerContext({}).admission,
+          { profiles: [profile.id], identities: [], channels: [] },
+        );
+        try {
+          if (outcome === "uncertain") {
+            mutation.settle(false);
+          }
+          expectRevoked(restored.authority);
+        } finally {
+          mutation.settle(true);
+        }
+      }),
+  );
+
+  it("retains profile facts until their owner revision changes without retaining revoked bindings", () =>
+    withRecovery(async (fixture, _stateDir, profile) => {
+      const prepare = profileReader.prepareUserProfileIdentity;
+      const reads = vi.fn();
+      const preparation = vi
+        .spyOn(profileReader, "prepareUserProfileIdentity")
+        .mockImplementation(async (...args) => {
+          const identity = await prepare(...args);
+          const read = identity.readCurrentFacts;
+          vi.spyOn(identity, "readCurrentFacts").mockImplementation((...inputs) => {
+            reads();
+            return read(...inputs);
+          });
+          return identity;
+        });
+      try {
+        using restored = await restoreFixture(fixture);
+        expect(reads).toHaveBeenCalledTimes(1);
+        reads.mockClear();
+        for (let i = 0; i < 10; i++) {
+          restored.authority.assertCurrent();
+          restored.assertPolicyCurrent();
+        }
+        const other = ensureProfileForEmail("other@example.test");
+        expectCurrent(restored.authority);
+        expect(reads).not.toHaveBeenCalled();
+
+        await setCanonicalUserProfileDisplayName(profile.id, "Updated display");
+        expectCurrent(restored.authority);
+        expect(reads).toHaveBeenCalledTimes(1);
+        reads.mockClear();
+        linkEmail("additional@example.test", profile.id);
+        expectCurrent(restored.authority);
+        expect(reads).toHaveBeenCalledTimes(1);
+
+        linkEmail("recovery@example.test", other.id);
+        expectRevoked(restored.authority);
+        linkEmail("recovery@example.test", profile.id);
+        expectRevoked(restored.authority);
+      } finally {
+        preparation.mockRestore();
+      }
+    }));
+
   it("retains the validated auth policy across checks and rejects a changed grant", () =>
     withRecovery(async (fixture) => {
       const email = "recovery@example.test";

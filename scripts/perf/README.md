@@ -3529,6 +3529,57 @@ Gateway turn separately. The recovery scenario prepares profile-database access
 outside capture and measures only the warm resident owner. This probe does not
 include other access policies, contextual-ingress callbacks, or transport allocation.
 
+Use `--timing-only` for an untraced CPU/time pass without allocation sampling.
+Keep its CPU results separate from the default allocation pass. Timing mode
+reports observed GC count, total, maximum, and p95/p99 per kind, filtered to the
+synchronous workload window; every percentile includes its collection count.
+It does not report promotion or event-loop delay. Allocation mode does not
+report GC acceptance statistics.
+
+For a separate recovery owner count pass, generate the same source observer used
+by the Gateway driver and load it before the probe. The output reports exact
+`assertPolicy`, `readCurrentFacts`, profile-owner `assertCurrent` (including
+revision reads), and GitHub fact projections under `host.counts`, with instrumented
+sites under `host.installed`.
+These counts exclude warmup and do not provide timing or allocation evidence.
+
+```sh
+node --import ./scripts/tsx.mjs --input-type=module -e \
+  'import { writeGatewayAuthorityCountsPreload } from "./scripts/lib/gateway-bench-runtime.ts"; writeGatewayAuthorityCountsPreload("/path/to/authority-counts-preload.mjs");'
+node --import /path/to/authority-counts-preload.mjs --import ./scripts/tsx.mjs \
+  scripts/perf/operator-authority-measure.ts --scenario recovery-source \
+  --counts-only --iterations 20000 --warmup 5000 --output /path/to/counts.json
+```
+
+To count actual restarted operator runs, use the existing crash/restart workload:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/post-restart-burst-measure.ts \
+  --state-dir /path/to/new-team-shape --entry src/entry.ts --authority-counts \
+  --port 41688 --mock-port 41689 --clients 1 --runs 1 --seconds 300 --poll-ms 10000
+```
+
+The observer runs only in the restarted Gateway, beginning at preload before
+recovery, without the transcript driver's caller-stack collection. A recovery
+arrival matches the exact original current-cohort user message anywhere in the
+request history because recovery appends a continuation message. Activity recap
+and session-observer requests are excluded even if they quote that marker.
+Arrivals count unique cohort indexes, not every provider request or completed turn. The existing private IPC snapshot stops counting after its usual
+window (capped at 120 seconds), extended in count mode until all expected recovery
+arrivals appear, bounded by `--seconds` since restart. Allow enough time for cold
+startup within that deadline. `recoveryAuthority` records actual start/finish
+wall timestamps, raw counts, installed sites, and primary recovery arrivals at
+that snapshot. Divide recovery policy counts by these arrivals; they are not
+completed-turn counts. The driver refuses a count result without every expected
+recovery arrival and a nonzero recovery-policy count. This pass includes startup
+and polling work and cannot supply acceptance timing. Run the same workload
+without `--authority-counts` using `--entry dist/entry.js` for built Gateway proof.
+Source count runs also accept `--authority-source-preload <overlay.mjs>` before
+the count observer. Its SHA-256 is recorded alongside the overlay's optional
+`globalThis[Symbol.for("openclaw.benchmark.sourceOverlay")]` attestation. Use the
+same loader and source module set on both sides and verify every expected module
+was applied in the restarted Gateway PID.
+
 For real turn counts, add `--operator-access-policy` to the existing streaming
 driver's `chat.send --stress-tools` scenario. A small isolated fixture is enough
 to exercise this path before the larger deployment-shaped comparison:
@@ -3576,7 +3627,10 @@ intersections, and stable-stringify call sites in the auth-policy and tool-overr
 owners. A generated benchmark-only source loader inserts counters; it does not
 alter the checkout or add production hooks. Each round records `host.counts` and
 `host.installed` under `operatorAccessPolicy`: the latter names every instrumented
-site, including zero-call sites. Divide counts by the completed turn count. These
+site, including zero-call sites. Recovery-policy assertions and profile fact/revision
+reads are included when those owners execute. Ordinary new chat turns do not
+prove restart recovery: require nonzero recovery counters before reporting them
+as recovery work. Divide counts by the completed turn count. These
 are nested invocations, not distinct permission decisions, and the named closures
 do not include every anonymous callback. The mode rejects allocation, CPU, GC,
 and diagnostics profiling; its timing is not acceptance evidence.

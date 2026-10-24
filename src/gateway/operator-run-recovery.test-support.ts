@@ -19,6 +19,33 @@ import { restoreGatewayRunRecovery } from "./operator-run-recovery.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createOperatorClient } from "./server-plugin-in-process-dispatch.test-support.js";
 
+export function pairedOperator(): PairedDevice {
+  return {
+    deviceId: "recovery-device",
+    publicKey: "fixture-public-key",
+    roles: ["operator"],
+    approvedScopes: ["operator.admin"],
+    tokens: {
+      operator: {
+        token: "fixture-device-token",
+        role: "operator",
+        scopes: ["operator.admin"],
+        createdAtMs: 1,
+      },
+    },
+    createdAtMs: 1,
+    approvedAtMs: 1,
+  };
+}
+
+export function persistDevices(stateDir: string, devices: PairedDevice[], mode: "paired" | "both") {
+  persistDevicePairingStoreState(
+    { pendingById: {}, pairedByDeviceId: Object.fromEntries(devices.map((d) => [d.deviceId, d])) },
+    stateDir,
+    mode,
+  );
+}
+
 export async function createOperatorRecoveryFixture(params: {
   stateDir: string;
   context: GatewayRequestContext;

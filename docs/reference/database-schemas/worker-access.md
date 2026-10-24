@@ -13,6 +13,12 @@ awaits operations, retains owner-published facts, and checks current authority
 before effects. Moving a query to a worker is not enough: reuse those facts and
 batch related work so ordinary requests do not repeat database calls.
 
+Recovered operator runs retain validated profile facts until the bound catalog's
+profile row changes. Each policy check still verifies the original catalog's
+lifetime, mutation settlement, canonical identity, and required email bindings,
+including after access-policy callbacks. An unchanged row avoids rebuilding the
+same facts; pending or uncertain mutations and retired owners still refuse use.
+
 Transcript reads capture scalar anchor and turn-admission fields before yielding,
 including whether an optional idempotency key is present. These private copies
 keep later caller mutations out of the read. Message payloads retain separate
