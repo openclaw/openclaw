@@ -163,7 +163,7 @@ export const healthHandlers: GatewayRequestHandlers = {
         undefined,
         { cached: true },
       );
-      if (shouldScheduleBackgroundHealthRefresh(refreshHealthSnapshot, now)) {
+      if (shouldScheduleBackgroundHealthRefresh(refreshHealthSnapshot, now, cached.ts)) {
         void refreshHealthSnapshot({ probe: false, includeSensitive }).catch((err: unknown) =>
           logHealth.error(`background health refresh failed: ${formatError(err)}`),
         );

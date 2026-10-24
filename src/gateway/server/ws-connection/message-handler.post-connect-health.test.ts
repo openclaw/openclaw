@@ -91,7 +91,7 @@ const {
       scope: "per-sender",
     },
   })),
-  getHealthCacheMock: vi.fn(() => null),
+  getHealthCacheMock: vi.fn<() => HealthSummary | null>(() => null),
   getHealthVersionMock: vi.fn(() => 1),
   loadConfigMock: vi.fn(() => ({
     gateway: {
@@ -984,12 +984,23 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
   });
 
   it.each(["connect", "cached health"] as const)(
-    "shares the background health cadence after %s without delaying explicit health",
+    "reuses fresh collected health after %s without delaying explicit health",
     async (first) => {
       let now = Date.now();
       const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
       const cached = createHealthSummary();
       cached.ts = now;
+      const liveEventLoop = {
+        degraded: true,
+        degradedSinceMs: 0,
+        reasons: ["cpu"],
+        intervalMs: 1_100,
+        delayP99Ms: 115,
+        delayMaxMs: 115,
+        utilization: 0.302,
+        cpuCoreRatio: 2.202,
+      } satisfies NonNullable<HealthSummary["eventLoop"]>;
+      getHealthCacheMock.mockReturnValue(cached);
       const refreshHealthSnapshot = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(
         async () => cached,
       );
@@ -1020,12 +1031,16 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
           context: {
             getHealthCache: () => snapshot,
             getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+            getEventLoopHealth: () => liveEventLoop,
             refreshHealthSnapshot,
             logHealth: createLogger(),
           },
           respond,
         } as never);
         expect(respond.mock.calls[0]?.[0]).toBe(true);
+        if (!probe && snapshot === cached) {
+          expect(respond.mock.calls[0]?.[1].eventLoop).toBe(liveEventLoop);
+        }
       };
       try {
         if (first === "connect") {
@@ -1036,26 +1051,27 @@ describe("attachGatewayWsMessageHandler post-connect health refresh", () => {
           await connect();
         }
         await connect();
-        expect(refreshHealthSnapshot).toHaveBeenCalledTimes(1);
+        expect(refreshHealthSnapshot).not.toHaveBeenCalled();
 
         await health(true);
         await health(false, null);
         await health(false, { ...cached, ts: now - HEALTH_REFRESH_INTERVAL_MS });
-        expect(refreshHealthSnapshot).toHaveBeenCalledTimes(4);
-        expect(refreshHealthSnapshot).toHaveBeenNthCalledWith(2, {
+        expect(refreshHealthSnapshot).toHaveBeenCalledTimes(3);
+        expect(refreshHealthSnapshot).toHaveBeenNthCalledWith(1, {
           probe: true,
           includeSensitive: false,
         });
 
         now += HEALTH_REFRESH_INTERVAL_MS;
         await connect();
-        expect(refreshHealthSnapshot).toHaveBeenCalledTimes(5);
+        expect(refreshHealthSnapshot).toHaveBeenCalledTimes(4);
         const otherOwner = vi.fn<GatewayRequestContext["refreshHealthSnapshot"]>(
           async () => cached,
         );
         await connect(otherOwner);
         expect(otherOwner).toHaveBeenCalledOnce();
       } finally {
+        getHealthCacheMock.mockReturnValue(null);
         clock.mockRestore();
       }
     },
