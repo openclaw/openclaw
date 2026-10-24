@@ -27,7 +27,7 @@ function profileHandler<P>(
   return async ({ req, client, signal, context, respond, hasCurrentClientAuthority }) => {
     const params = req.params === undefined ? {} : req.params;
     if (!validate(params)) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, invalidParamsMessage));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, invalidParamsMessage);
       return;
     }
     const lifetime = AbortSignal.any(
@@ -63,13 +63,10 @@ function profileHandler<P>(
 export const diagnosticsHandlers: GatewayRequestHandlers = {
   "diagnostics.capabilities": ({ params, respond }) => {
     if (params !== undefined && (!isRecord(params) || Object.keys(params).length !== 0)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "diagnostics.capabilities accepts only empty params",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "diagnostics.capabilities accepts only empty params",
       );
       return;
     }

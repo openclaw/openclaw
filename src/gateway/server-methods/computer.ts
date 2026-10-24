@@ -1,12 +1,11 @@
 import {
   ErrorCodes,
-  errorShape,
   validateComputerInvokeParams,
   validateComputerStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { computerRunOwner } from "../desktop/computer-owner.js";
 import { hasCurrentPersonalGatewaySource } from "./gateway-personal-caller.js";
-import { respondUnavailableOnThrow } from "./response.js";
+import { respondError, respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -93,11 +92,7 @@ export const computerHandlers: GatewayRequestHandlers = {
     }
     const service = context.gatewayComputerService;
     if (!service) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "Gateway computer is unavailable"),
-      );
+      respondError(respond, ErrorCodes.UNAVAILABLE, "Gateway computer is unavailable");
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {

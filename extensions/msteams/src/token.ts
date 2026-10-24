@@ -106,8 +106,6 @@ export async function resolveDelegatedAccessToken(params: {
   try {
     return await task;
   } finally {
-    if (active.get(key) === task) {
-      active.delete(key);
-    }
+    active.delete(key);
   }
 }

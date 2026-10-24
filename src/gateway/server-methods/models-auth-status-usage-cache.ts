@@ -27,7 +27,6 @@ type ProviderUsageCacheIdentity = {
   agentDir: string;
   configRef: OpenClawConfig;
   credentialKey: string;
-  providerKey: string;
 };
 
 type ProviderUsageCacheEntry = ProviderUsageCacheIdentity & {
@@ -130,6 +129,7 @@ function retainLastGoodOnTimeout(
 function scheduleProviderUsageRefresh(
   params: ProviderUsageCacheIdentity & {
     agentId: string;
+    providerKey: string;
     authStore?: AuthProfileStore;
     providerIds: UsageProviderId[];
     previous?: ProviderUsageCacheEntry;
@@ -141,8 +141,7 @@ function scheduleProviderUsageRefresh(
   if (
     active?.agentDir === params.agentDir &&
     active.configRef === params.configRef &&
-    active.credentialKey === params.credentialKey &&
-    active.providerKey === params.providerKey
+    active.credentialKey === params.credentialKey
   ) {
     return active.promise;
   }
@@ -162,7 +161,6 @@ function scheduleProviderUsageRefresh(
             agentDir: params.agentDir,
             configRef: params.configRef,
             credentialKey: params.credentialKey,
-            providerKey: params.providerKey,
             refreshedAt: Date.now(),
             summary: usage,
             usageByProvider: mapProviderUsage(usage, params.previous?.usageByProvider),
@@ -189,7 +187,6 @@ function scheduleProviderUsageRefresh(
     agentDir: params.agentDir,
     configRef: params.configRef,
     credentialKey: params.credentialKey,
-    providerKey: params.providerKey,
     promise,
   };
   agentEntries(usageRefreshByAgentId, params.agentId).set(params.providerKey, refresh);
