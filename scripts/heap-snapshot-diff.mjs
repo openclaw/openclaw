@@ -257,7 +257,11 @@ function readGraph(file, safeLabels = null, stringLimit = 1024, scriptAllowlist 
             codeData.edgeTags.set(index, value);
           }
           if (codeNameIds.has(index)) {
-            const normalized = value.split(/[?#]/u, 1)[0];
+            // Node 26.12 labels Scripts by bare name; newer V8 prefixes "system / Script".
+            const label = value.startsWith("system / Script")
+              ? value.slice("system / Script".length).replace(/^ \/ /u, "")
+              : value;
+            const normalized = label.split(/[?#]/u, 1)[0];
             const complete = normalized.length > 0 && value.length < stringLimit;
             codeData.identities.set(index, {
               identityHash: complete

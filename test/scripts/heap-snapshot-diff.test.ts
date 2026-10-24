@@ -602,3 +602,33 @@ it("attributes compiled scripts without exposing unreviewed names or double-coun
     truncated.topScripts.every((row: { identityHash: string | null }) => row.identityHash === null),
   ).toBe(true);
 });
+
+it("matches decorated V8 Script labels and keeps unnamed scripts separate", () => {
+  const script = (id: number, name: string): FixtureNode => [
+    id,
+    name,
+    10,
+    [
+      [3, 5, "source"],
+      [3, 6, "name"],
+    ],
+    "code",
+  ];
+  const data = snapshot([
+    [1, "root", 0, refs(1, 2, 3, 4)],
+    script(3, "system / Script / /product/b.mjs?one"),
+    script(5, "system / Script / /product/b.mjs#two"),
+    script(7, "system / Script"),
+    script(9, "system / Script"),
+    [11, "secret source contents", 20, [], "string"],
+    [13, "script name", 10, [], "string"],
+  ]);
+  const result = run([data], ["--code-by-script"], [], ["/product/b.mjs"]).codeByScript;
+  expect(result.scriptCount).toBe(4);
+  expect(result.duplicateScripts).toEqual([
+    expect.objectContaining({ name: "/product/b.mjs", instanceCount: 2 }),
+  ]);
+  expect(
+    result.topScripts.filter((row: { identityHash: string | null }) => row.identityHash === null),
+  ).toHaveLength(2);
+});
