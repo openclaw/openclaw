@@ -212,7 +212,8 @@ export function createSessionRowMaterializer(owner: {
           const row =
             current &&
             owner.acquireEntry(
-              databaseFacts
+              databaseFacts &&
+                (current.hasBoard !== databaseFacts.hasBoard || current.unresolvedDatabaseFacts)
                 ? {
                     ...current,
                     hasBoard: databaseFacts.hasBoard,

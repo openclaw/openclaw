@@ -14,6 +14,7 @@ import { createSessionProjectionDrain, yieldSessionListWork } from "./session-pr
 import * as rowMembership from "./session-row-membership-read.js";
 import { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import type { readPreparedSessionRows } from "./session-row-prepared-read.js";
+import { createSessionRowEntryAcquirer } from "./session-row-projection-acquisition.js";
 import * as rowRelations from "./session-row-projection-ancestors.js";
 import {
   createSessionRowProjectionArchive,
@@ -198,22 +199,20 @@ export async function createSessionRowProjection(params: records.ProjectionOptio
     // Index updates are synchronous; publish only after the accepted row is installed.
     revisions.replace(previous, row);
   }
-  function acquireEntry(row: records.Row, storedEntry: records.Row["storedEntry"]) {
-    if (storedEntry?.archivedAt !== undefined) {
-      inOwnerContext(() => metadata.prepare(epoch, cfg, matching, put, referenced));
-    }
-    return records.acquireSessionRowEntry({
-      row,
-      storedEntry,
-      cfg,
-      context: metadata.current,
-      referenced,
-      remove,
-      put,
-      markRelated,
-      archive,
-    });
-  }
+  const acquireEntry = createSessionRowEntryAcquirer({
+    rows,
+    prepare(storedEntry) {
+      if (storedEntry?.archivedAt !== undefined) {
+        inOwnerContext(() => metadata.prepare(epoch, cfg, matching, put, referenced));
+      }
+      return { cfg, context: metadata.current };
+    },
+    referenced,
+    remove,
+    put,
+    markRelated,
+    archive,
+  });
   const matching = (query: records.Query, kind = "key") =>
     rowScope.selectMatchingSessionRows({ rows, indexes, scope }, query, kind);
   const assertActive = () => {

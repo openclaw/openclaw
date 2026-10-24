@@ -651,6 +651,9 @@ export function acquireSessionRowEntry(params: {
     !Object.is(storedEntry.updatedAt, row.storedEntry?.updatedAt) ||
     !isDeepStrictEqual(storedEntry, row.storedEntry) ||
     entryChanged;
+  if (!changed && row.sharingEntry === row.storedEntry && !row.entryAcquisitionPending) {
+    return row;
+  }
   // Archive custody can retain new stored metadata before its lineage is acquired.
   const includeChildren =
     changesSessionRowDependents(row.storedEntry, storedEntry) ||
