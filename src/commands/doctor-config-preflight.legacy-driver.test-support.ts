@@ -394,31 +394,21 @@ export function registerLegacyHeartbeatDriverTests() {
           },
         },
         async (state) => {
+          const heartbeat = {
+            every: repair ? "17m" : "30m",
+            target: "none",
+            prompt: "Check the synthetic migration fixture.",
+            activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
+            ...(repair ? { model: "openai/gpt-5.6-luna", directPolicy: "block" } : {}),
+          };
+          const main = { id: "main", default: true, workspace: state.workspaceDir };
           await state.writeConfig({
             meta: { lastTouchedVersion: version },
             plugins: { enabled: false },
             agents: {
-              ...(explicitConfig
-                ? {
-                    defaults: {
-                      heartbeat: {
-                        every: repair ? "17m" : "30m",
-                        ...(repair ? { model: "openai/gpt-5.6-luna" } : {}),
-                        target: "none",
-                        ...(repair ? { directPolicy: "block" } : {}),
-                        prompt: "Check the synthetic migration fixture.",
-                        activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
-                      },
-                    },
-                  }
-                : {}),
+              ...(explicitConfig ? { defaults: { heartbeat } } : {}),
               ...(repair
-                ? {
-                    list: [
-                      { id: "main", default: true, workspace: state.workspaceDir },
-                      { id: "second" },
-                    ],
-                  }
+                ? { list: [main, { id: "second" }] }
                 : { entries: { main: { workspace: state.workspaceDir } } }),
             },
             gateway: { mode: "local", auth: { mode: "none" } },
@@ -491,35 +481,31 @@ export function registerLegacyHeartbeatDriverTests() {
           } else {
             expect(fs.readFileSync(`${state.configPath}.bak`, "utf8")).toBe(original);
           }
-          {
-            const [rows] = queryAgent(databasePath, ["SELECT job_json FROM cron_jobs"]);
-            const jobs = rows!.map((row) => JSON.parse(String(row.job_json)));
-            expect(jobs).toContainEqual(
-              expect.objectContaining({
-                agentId: "main",
-                schedule: expect.objectContaining({
-                  kind: "every",
-                  everyMs: explicitConfig && repair ? 1_020_000 : 1_800_000,
-                }),
-                payload: expect.objectContaining({ kind: "agentTurn" }),
-                ...(!explicitConfig || repair ? { id: "published-monitor" } : {}),
-                ...(explicitConfig
-                  ? {
-                      payload: expect.objectContaining({
-                        kind: "agentTurn",
-                        message: "Check the synthetic migration fixture.",
-                        ...(repair ? { model: "openai/gpt-5.6-luna" } : {}),
-                      }),
-                      delivery: expect.objectContaining({
-                        mode: "none",
-                        ...(repair ? { directPolicy: "block" } : {}),
-                      }),
-                      activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
-                    }
-                  : {}),
-              }),
-            );
-          }
+          const [rows] = queryAgent(databasePath, ["SELECT job_json FROM cron_jobs"]);
+          const jobs = rows!.map((row) => JSON.parse(String(row.job_json)));
+          const expectedJob = {
+            agentId: "main",
+            schedule: expect.objectContaining({
+              kind: "every",
+              everyMs: explicitConfig && repair ? 1_020_000 : 1_800_000,
+            }),
+            payload: expect.objectContaining({
+              kind: "agentTurn",
+              ...(explicitConfig ? { message: "Check the synthetic migration fixture." } : {}),
+              ...(explicitConfig && repair ? { model: "openai/gpt-5.6-luna" } : {}),
+            }),
+            ...(!explicitConfig || repair ? { id: "published-monitor" } : {}),
+            ...(explicitConfig
+              ? {
+                  delivery: expect.objectContaining({
+                    mode: "none",
+                    ...(repair ? { directPolicy: "block" } : {}),
+                  }),
+                  activeHours: { start: "09:00", end: "17:00", timezone: "UTC" },
+                }
+              : {}),
+          };
+          expect(jobs).toContainEqual(expect.objectContaining(expectedJob));
           const databaseBackups = fs
             .readdirSync(path.dirname(databasePath))
             .filter(
@@ -529,12 +515,12 @@ export function registerLegacyHeartbeatDriverTests() {
             );
           expect(databaseBackups.length).toBeGreaterThan(0);
           for (const name of databaseBackups) {
-            const [integrity, jobs] = queryAgent(path.join(path.dirname(databasePath), name), [
-              "PRAGMA integrity_check",
-              jobsQuery,
-            ]);
+            const [integrity, backedUpJobs] = queryAgent(
+              path.join(path.dirname(databasePath), name),
+              ["PRAGMA integrity_check", jobsQuery],
+            );
             expect(integrity).toEqual([{ integrity_check: "ok" }]);
-            expect(jobs).toEqual(originalJobs);
+            expect(backedUpJobs).toEqual(originalJobs);
           }
         },
       );

@@ -1,4 +1,3 @@
-// Doctor session transcript tests cover transcript inspection and repair guidance.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -109,6 +108,10 @@ function expectOrder(...calls: OrderedMock[]) {
   }
 }
 
+function expectParams(mock: unknown, params: object) {
+  expect(mock).toHaveBeenCalledWith(expect.objectContaining(params));
+}
+
 const preparedPostSessionPluginMigration: PreparedPostSessionPluginMigration = {
   step: {
     id: "plugin-doctor-post-session-state",
@@ -197,15 +200,13 @@ describe("doctor session transcript repair", () => {
       expect.objectContaining({ allAgents: true, mode: "import" }),
       maintenanceAuthority,
     );
-    expect(migrateLegacyMainSessionKeys).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: "doctor-fix" }),
-    );
+    expectParams(migrateLegacyMainSessionKeys, { mode: "doctor-fix" });
     for (const writer of [
       repairLegacySessionWorktreeWorkspaces,
       repairReservedIncognitoSessionKeys,
       repairCanonicalSessionResolvedSkills,
     ]) {
-      expect(writer).toHaveBeenCalledWith(expect.objectContaining({ apply: true }));
+      expectParams(writer, { apply: true });
     }
     expectOrder(repairCanonicalSessionKeys, repairLegacySessionWorktreeWorkspaces);
     expectOrder(
@@ -216,11 +217,9 @@ describe("doctor session transcript repair", () => {
       repairReservedIncognitoSessionKeys,
     );
     expectOrder(repairCanonicalSessionDeliveryStates, runPostSessionPluginDoctorStateRepairs);
-    expect(runPostSessionPluginDoctorStateRepairs).toHaveBeenCalledWith(
-      expect.objectContaining({
-        maintenanceAuthority,
-      }),
-    );
+    expectParams(runPostSessionPluginDoctorStateRepairs, {
+      maintenanceAuthority,
+    });
     expectNote("Legacy entries: 1");
     expectNote("Archived 2 legacy transcript artifact(s).");
   });
@@ -237,15 +236,9 @@ describe("doctor session transcript repair", () => {
       outcomes: [{ kind: "divergent-canonical", canonicalKey: "agent:ops:main" }],
       warnings: ["source changed; retry openclaw doctor --fix"],
     });
-    const cfg = { agents: { entries: { ops: {} } } };
-    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
-    await noteSessionTranscriptHealth({ cfg, env, shouldRepair: true });
-    expect(repairCanonicalSessionKeys).toHaveBeenCalledWith(
-      expect.objectContaining({ apply: true }),
-    );
-    expect(repairLegacySessionWorktreeWorkspaces).toHaveBeenCalledWith(
-      expect.objectContaining({ apply: false }),
-    );
+    await repair({ cfg: { agents: { entries: { ops: {} } } } });
+    expectParams(repairCanonicalSessionKeys, { apply: true });
+    expectParams(repairLegacySessionWorktreeWorkspaces, { apply: false });
   });
 
   it("explains how to shrink SQLite files after removing persisted runtime skills", async () => {
@@ -317,16 +310,10 @@ describe("doctor session transcript repair", () => {
       { allAgents: true, cfg, env, mode: "dry-run", integrityCheck: "quick" },
       undefined,
     );
-    expect(migrateLegacyMainSessionKeys).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: "detect" }),
-    );
-    expect(repairLegacySessionWorktreeWorkspaces).toHaveBeenCalledWith(
-      expect.objectContaining({ apply: false }),
-    );
+    expectParams(migrateLegacyMainSessionKeys, { mode: "detect" });
+    expectParams(repairLegacySessionWorktreeWorkspaces, { apply: false });
     expect(withDoctorSqliteMaintenanceLock).not.toHaveBeenCalled();
-    expect(runPostSessionPluginDoctorStateRepairs).toHaveBeenCalledWith(
-      expect.objectContaining({ maintenanceAuthority: undefined }),
-    );
+    expectParams(runPostSessionPluginDoctorStateRepairs, { maintenanceAuthority: undefined });
     expectNote(
       'Inspect with "openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents".',
     );
@@ -351,9 +338,7 @@ describe("doctor session transcript repair", () => {
     const report = sessionSqliteReport();
     runDoctorSessionSqlite.mockResolvedValueOnce(report);
     hasRetainedDoctorSessionSources.mockReturnValueOnce(true);
-    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
-
-    await noteSessionTranscriptHealth({ cfg: {}, env, shouldRepair: true });
+    await repair();
 
     expect(hasRetainedDoctorSessionSources).toHaveBeenCalledWith(report);
     const call = runPostSessionPluginDoctorStateRepairs.mock.calls[0]?.[0] as {
@@ -411,43 +396,29 @@ describe("doctor session transcript repair", () => {
     expect(receipts).toEqual([first, replay]);
   });
 
-  it("records a refused post-session receipt when the writer fails", async () => {
-    runPostSessionPluginDoctorStateRepairs.mockRejectedValueOnce(new Error("writer failed"));
+  it.each([
+    { code: "step-threw", shouldRepair: true },
+    { code: "repair-not-authorized", shouldRepair: false },
+  ])("records only a refused receipt for $code", async ({ code, shouldRepair }) => {
+    if (shouldRepair) {
+      runPostSessionPluginDoctorStateRepairs.mockRejectedValueOnce(new Error("writer failed"));
+    }
     const receipts: unknown[] = [];
-
     const receipt = await repair({
+      shouldRepair,
       postSessionPluginMigration: preparedPostSessionPluginMigration,
       onStepReceipt: (entry) => receipts.push(entry),
     });
-
+    if (!shouldRepair) {
+      expect(runPostSessionPluginDoctorStateRepairs).not.toHaveBeenCalled();
+    }
     expect(receipt).toMatchObject({
       id: "plugin-doctor-post-session-state",
       outcome: "refused",
       changes: [],
-      refusal: { code: "step-threw" },
+      refusal: { code },
     });
     expect(receipts).toEqual([receipt]);
-    expect(receipts).not.toContainEqual(expect.objectContaining({ outcome: "completed" }));
-  });
-
-  it("closes the planned post-session step when repair is not authorized", async () => {
-    const receipts: unknown[] = [];
-
-    const receipt = await repair({
-      shouldRepair: false,
-      postSessionPluginMigration: preparedPostSessionPluginMigration,
-      onStepReceipt: (entry) => receipts.push(entry),
-    });
-
-    expect(runPostSessionPluginDoctorStateRepairs).not.toHaveBeenCalled();
-    expect(receipt).toMatchObject({
-      id: "plugin-doctor-post-session-state",
-      outcome: "refused",
-      changes: [],
-      refusal: { code: "repair-not-authorized" },
-    });
-    expect(receipts).toEqual([receipt]);
-    expect(receipts).not.toContainEqual(expect.objectContaining({ outcome: "completed" }));
   });
 
   it("skips a not-required post-session step before checking repair authorization", async () => {
@@ -489,18 +460,15 @@ describe("doctor session transcript repair", () => {
       Object.assign(new Error("function not implemented"), { code: "ENOSYS" }),
     );
 
-    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
     withDoctorSqliteMaintenanceLock.mockRejectedValueOnce(
       new DoctorSqliteMaintenanceLockUnavailableError("session SQLite import", cause),
     );
 
-    await expect(repair({ env })).resolves.toBeUndefined();
+    await expect(repair()).resolves.toBeUndefined();
 
     expect(runDoctorSessionSqlite).not.toHaveBeenCalled();
     expectNote(cause.message);
-    if (cause.cause) {
-      expectNote("ENOSYS");
-    }
+    expectNote("ENOSYS");
     expectNote('run "openclaw doctor --fix" for session-store maintenance');
   });
 
@@ -523,8 +491,5 @@ describe("doctor session transcript repair", () => {
         refusal: expect.objectContaining({ code: "blocked-by-session-repair-failure" }),
       }),
     ]);
-    expect(receipts).not.toContainEqual(
-      expect.objectContaining({ outcome: expect.stringMatching(/completed|skipped|warning/) }),
-    );
   });
 });

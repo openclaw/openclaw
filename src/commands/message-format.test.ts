@@ -1,4 +1,3 @@
-// Tests for CLI message text formatting helpers (renderMessageList, formatMessageCliText).
 import { describe, expect, it, vi } from "vitest";
 import type { MessageActionResult } from "../infra/outbound/message-action-contracts.js";
 import { formatMessageCliText } from "./message-format.js";
@@ -76,6 +75,15 @@ function render(result: MessageActionResult, options?: Parameters<typeof formatM
   return formatMessageCliText(result, options).join("\n");
 }
 
+function expectText(output: string, included: string[], excluded: string[] = []) {
+  for (const text of included) {
+    expect(output).toContain(text);
+  }
+  for (const text of excluded) {
+    expect(output).not.toContain(text);
+  }
+}
+
 describe("formatMessageCliText displayLimit", () => {
   it("keeps a whitespace-only primary message instead of selecting its fallback", () => {
     const result = readResultPayload({
@@ -84,25 +92,6 @@ describe("formatMessageCliText displayLimit", () => {
     const output = render(result);
     expect(output).toContain("message-id");
     expect(output).not.toContain("Wrong fallback");
-  });
-
-  it("renders the message inside a Slack pin envelope", () => {
-    const message = { ts: "1712345678.123456", user: "message-author", text: "Pinned checklist" };
-    const result = {
-      ...pinsResultPayload({
-        pins: [
-          { type: "message", created_by: "pinning-user", message },
-          { message: { text: "Outside display limit" } },
-        ],
-      }),
-      channel: "slack" as const,
-    };
-    const output = render(result, { displayLimit: 1 });
-    for (const value of Object.values(message)) {
-      expect(output).toContain(value);
-    }
-    expect(output).not.toContain("pinning-user");
-    expect(output).not.toContain("Outside display limit");
   });
 
   it.each(["discord", "slack"] as const)(
@@ -118,19 +107,6 @@ describe("formatMessageCliText displayLimit", () => {
   it("renders an empty Slack pin list", () => {
     const result = { ...pinsResultPayload({ pins: [] }), channel: "slack" as const };
     expect(formatMessageCliText(result)).toEqual(["Pinned messages", "No pins."]);
-  });
-
-  it("honors displayLimit for list-pins", () => {
-    const pins = Array.from({ length: 40 }, (_, i) =>
-      msg(`pin-${i}`, `2026-01-01T00:00:0${i % 10}.000Z`, `user-${i}`, `pin-text-${i}`),
-    );
-
-    const result = pinsResultPayload({ pins });
-    const out = render(result, { displayLimit: 15 });
-
-    expect(out).toContain("pin-text-0");
-    expect(out).toContain("pin-text-14");
-    expect(out).not.toContain("pin-text-15");
   });
 
   it("defaults to 50 reaction rows", () => {
@@ -168,13 +144,22 @@ describe("formatMessageCliText message terminal safety", () => {
     {
       surface: "nested Slack pins",
       result: {
-        ...pinsResultPayload({ pins: [{ message: slackMessage }] }),
+        ...pinsResultPayload({
+          pins: [
+            { created_by: "pinning-user", message: slackMessage },
+            { message: { text: "Outside display limit" } },
+          ],
+        }),
         channel: "slack" as const,
       },
       id: "1712345678.123456",
     },
     { surface: "Matrix read", result: readResultPayload({ messages: [message] }), id: "message-1" },
-    { surface: "Matrix pins", result: pinsResultPayload({ pins: [message] }), id: "message-1" },
+    {
+      surface: "Matrix pins",
+      result: pinsResultPayload({ pins: [message, { text: "Outside display limit" }] }),
+      id: "message-1",
+    },
     {
       surface: "Discord search",
       result: searchResultPayload({ results: { messages: [[message]] } }),
@@ -183,14 +168,12 @@ describe("formatMessageCliText message terminal safety", () => {
   ])("renders $surface as terminal-safe text without mutating the payload", ({ result, id }) => {
     const original = structuredClone(result.payload);
 
-    const output = render(result);
+    const output = render(result, { displayLimit: 1 });
 
-    expect(output).toContain("release checklist");
-    expect(output).toContain("alice");
-    expect(output).toContain(id);
-    expect(output).toContain("1712345678.123456");
+    expectText(output, ["release checklist", "alice", id, "1712345678.123456"]);
     expect(output.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
     expect(output).not.toContain("52;c;QQ==");
+    expectText(output, [], ["pinning-user", "Outside display limit"]);
     expect(result.payload).toEqual(original);
   });
 });
@@ -205,11 +188,11 @@ describe("formatMessageCliText reaction labels", () => {
     const payload = structuredClone(result.payload);
     const output = render(result);
     expect(result.payload).toEqual(payload);
-    expect(output).not.toContain("\u001b[2J");
-    expect(output).toContain(":party_parrot:🦞\\nline");
-    expect(output).not.toContain("unused-");
-    expect(output).toContain("alice");
-    expect(output).toContain("bob\\tother");
+    expectText(
+      output,
+      [":party_parrot:🦞\\nline", "alice", "bob\\tother"],
+      ["\u001b[2J", "unused-"],
+    );
     expect(output.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
   });
 });
@@ -238,50 +221,31 @@ describe("renderPaginationHint", () => {
 
 describe("formatMessageCliText send results", () => {
   it.each([
-    {
-      via: "direct",
-      channel: "alpha",
-      result: undefined,
-      expected: "✅ Sent via Alpha. Message ID: unknown",
-    },
-    {
-      via: "gateway",
-      channel: "",
-      result: undefined,
-      expected: "✅ Sent via gateway. Message ID: unknown",
-    },
-    {
-      via: "direct",
-      channel: "alpha",
-      result: {
+    ["direct", "alpha", undefined, "✅ Sent via Alpha. Message ID: unknown"],
+    ["gateway", "", undefined, "✅ Sent via gateway. Message ID: unknown"],
+    [
+      "direct",
+      "alpha",
+      {
         channel: "alpha",
         messageId: "m\u001b[2J1",
         target: { kind: "chat", id: "c\u001b[31m1\u001b[0m" },
       },
-      expected: "✅ Sent via Alpha. Message ID: m1 (chat c1)",
-    },
-    {
-      via: "gateway",
-      channel: "directchat",
-      result: { messageId: "\u001b]8;;https://example.invalid\u0007m1\u001b]8;;\u0007" },
-      expected: "✅ Sent via gateway (directchat). Message ID: m1",
-    },
-  ] as const)(
-    "formats core $via send results for '$channel'",
-    ({ via, channel, result, expected }) => {
-      expect(
-        formatMessageCliText(
-          sendResult(
-            { channel, to: "c1", via, mediaUrl: null, result },
-            {
-              channel: "alpha",
-              to: "c1",
-            },
-          ),
-        ),
-      ).toEqual([expected]);
-    },
-  );
+      "✅ Sent via Alpha. Message ID: m1 (chat c1)",
+    ],
+    [
+      "gateway",
+      "directchat",
+      { messageId: "\u001b]8;;https://example.invalid\u0007m1\u001b]8;;\u0007" },
+      "✅ Sent via gateway (directchat). Message ID: m1",
+    ],
+  ] as const)("formats core %s send results for '%s'", (via, channel, result, expected) => {
+    const delivery = sendResult(
+      { channel, to: "c1", via, mediaUrl: null, result },
+      { channel: "alpha", to: "c1" },
+    );
+    expect(formatMessageCliText(delivery)).toEqual([expected]);
+  });
 
   it("prefers and trims a direct plugin payload message ID", () => {
     const result = sendResult(undefined, {
@@ -333,7 +297,7 @@ it("preserves generic object primitive summaries", () => {
   );
 
   const output = render(result);
-  for (const expected of [
+  expectText(output, [
     "null",
     "2 items",
     "object",
@@ -343,9 +307,7 @@ it("preserves generic object primitive summaries", () => {
     "keep",
     "-3",
     "false",
-  ]) {
-    expect(output).toContain(expected);
-  }
+  ]);
 });
 
 it("reports a rejected poll without claiming success", () => {
@@ -429,13 +391,18 @@ it("reports aggregate failure while preserving every target row", () => {
 
   const output = render(result);
 
-  expect(output).toContain("Broadcast failed (51/53 succeeded, 2 failed)");
-  expect(output).not.toContain("Broadcast complete");
-  expect(output).toContain("room-ok-50");
-  expect(output).toContain("room-suppressed");
-  expect(output).toContain("room-partial");
-  expect(output).toContain("Broadcast send suppressed");
-  expect(output).toContain("second payload failed");
+  expectText(
+    output,
+    [
+      "Broadcast failed (51/53 succeeded, 2 failed)",
+      "room-ok-50",
+      "room-suppressed",
+      "room-partial",
+      "Broadcast send suppressed",
+      "second payload failed",
+    ],
+    ["Broadcast complete"],
+  );
 });
 
 describe("formatMessageCliText delivery and action terminal safety", () => {
