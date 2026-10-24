@@ -63,24 +63,15 @@ function verifyPluginRun(mode: (typeof modes)[number][0]) {
     "bin/gh",
     `#!/bin/sh
 set -eu
-test "$1" = api
-case "$2" in
-  repos/openclaw/openclaw/actions/runs/123) fixture="$PLUGIN_RUN_FIXTURE" ;;
-  repos/openclaw/openclaw/actions/workflows/247919831) fixture="$PLUGIN_WORKFLOW_FIXTURE" ;;
-  *) echo "Unexpected GitHub API endpoint: $2" >&2; exit 1 ;;
+case "$*" in
+  'api repos/openclaw/openclaw/actions/runs/123') cat "$PLUGIN_RUN_FIXTURE" ;;
+  'api repos/openclaw/openclaw/actions/workflows/247919831 --jq .name') echo 'Plugin NPM Release' ;;
+  *) echo "Unexpected GitHub API call: $*" >&2; exit 1 ;;
 esac
-shift 2
-if [ "$#" -eq 0 ]; then
-  cat "$fixture"
-else
-  test "$1" = --jq
-  jq -r "$2" "$fixture"
-fi
 `,
     0o755,
   );
   const runTitle = `Plugin NPM Release [extended-stable] ${sourceSha}`;
-  const workflowFile = write("workflow.json", { name: "Plugin NPM Release" });
   const runFile = write("run.json", {
     // Real REST runs expose their dynamic title in both fields, not the workflow name.
     name: runTitle,
@@ -109,7 +100,6 @@ fi
       ...process.env,
       PATH: `${join(root, "bin")}:${process.env.PATH}`,
       PLUGIN_RUN_FIXTURE: runFile,
-      PLUGIN_WORKFLOW_FIXTURE: workflowFile,
       PLUGIN_NPM_RUN_ID: "123",
       GITHUB_REPOSITORY: "openclaw/openclaw",
       RELEASE_NPM_DIST_TAG: "extended-stable",
