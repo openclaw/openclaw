@@ -171,7 +171,8 @@ export class PluginRegistryInspectionResources {
   }
 
   wrapAdoptedValue<T>(value: T): T {
-    if (this.#release) {
+    // Borrowers can still need adopted values before physical cleanup finishes.
+    if (!this.retire) {
       throw new Error("Plugin inspection resources have been released");
     }
     return this.#adoptedInvocations ? this.#adoptedInvocations.wrap(value) : value;

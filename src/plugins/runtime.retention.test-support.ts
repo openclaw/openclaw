@@ -333,7 +333,8 @@ switch (process.argv[2]) {
     ];
     for (const generation of [...generations, ...retained]) {
       await generation.resources.release().catch(() => {});
-      assert.throws(() => generation.resources.wrapAdoptedValue({}), /have been released/);
+      const value = {};
+      assert.equal(generation.resources.wrapAdoptedValue(value), value);
       await collect();
       assert.ok(
         generation.references.every((reference) => reference.deref() !== undefined),
@@ -353,6 +354,7 @@ switch (process.argv[2]) {
     }
     await collect(...generations.flatMap(({ references }) => references));
     for (const [index, generation] of generations.entries()) {
+      assert.throws(() => generation.resources.wrapAdoptedValue({}), /have been released/);
       for (const [field, reference] of generation.references.entries()) {
         assert.ok(!reference.deref(), `Released inspection ${index} retained resource ${field}`);
       }
