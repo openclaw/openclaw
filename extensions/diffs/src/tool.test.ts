@@ -266,6 +266,24 @@ describe("diffs tool", () => {
     });
   });
 
+  it("preserves trailing patch whitespace in the viewer payload", async () => {
+    const result = await createTool().execute("patch-whitespace", {
+      patch: "--- a/sample.txt\n+++ b/sample.txt\n@@ -1 +1 @@\n-old\n+new  \n",
+      mode: "view",
+    });
+    const html = await readViewerHtml(store, result);
+    const match = html.match(
+      /<script type="application\/json" data-openclaw-diff-payload>([\s\S]*?)<\/script>/,
+    );
+    const payload = requireRecord(
+      JSON.parse(requireString(match?.[1], "viewer payload")),
+      "viewer payload",
+    );
+    const fileDiff = requireRecord(payload.fileDiff, "file diff");
+    expect(fileDiff.additionLines).toEqual(["new  \n"]);
+    expect(fileDiff.deletionLines).toEqual(["old\n"]);
+  });
+
   it("prefers explicit tool params over configured defaults", async () => {
     const screenshotter = createScreenshotter("png", ({ html, image }) => {
       expect(html).toContain("../../assets/viewer.js");
