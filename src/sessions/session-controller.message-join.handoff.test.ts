@@ -12,7 +12,7 @@ import { createSteerParams } from "../auto-reply/reply/agent-runner-steer-adopti
 import { withMessageInjectionAdmission } from "../auto-reply/reply/message-injection-authority.js";
 import { getFollowupQueueDepth } from "../auto-reply/reply/queue.js";
 import { clearFollowupQueue } from "../auto-reply/reply/queue/state.js";
-import { prepareReplyToolAuthority } from "../auto-reply/reply/reply-tool-authority.js";
+import { prepareReplyRunToolAuthority } from "../auto-reply/reply/reply-tool-authority.js";
 import {
   createQueueTestRun,
   toolAuthorityOverlay,
@@ -196,7 +196,7 @@ it.each([
           throw new Error("Expected real handoff operation");
         }
         await operation.bindToolAuthoritySnapshotAsync(
-          prepareReplyToolAuthority({ ...incumbent, executionSelection: frozenSelection }),
+          prepareReplyRunToolAuthority(incumbent, entry),
         );
         const fingerprint = await operation.bindToolAuthorityRouteAsync(incumbent.run);
         const sink = vi.fn();
@@ -292,13 +292,13 @@ it.each([
         const prepare = () =>
           prepareReplyMessageContinuation({
             target,
+            delivery,
             assertCurrent: () => incomingAuthority.assertCurrent(),
             input: {
               kind: "continuation",
               caller,
               config,
               executionSelection: frozenSelection,
-              delivery,
               selectedRoute: { provider: attempt.provider, model: attempt.modelId },
               fallbackAvailability: { kind: "none_configured", source: "inherited" },
             },

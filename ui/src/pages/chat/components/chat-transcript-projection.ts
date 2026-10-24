@@ -136,8 +136,13 @@ export function projectChatTranscript(
         : undefined,
   } satisfies Parameters<typeof buildCachedChatItems>[0];
   const chatItems = buildCachedChatItems(chatItemsInput);
-  const { workingIndicator, activityRunId, activityGroupKey, runOutputTokens } =
-    projectTranscriptActivity(chatItems, props);
+  const {
+    workingIndicator,
+    activityRunId,
+    activityGroupKey,
+    runningActivityGroupKey,
+    runOutputTokens,
+  } = projectTranscriptActivity(chatItems, props);
   syncToolCardExpansionState(
     props.sessionKey,
     chatItems,
@@ -290,9 +295,18 @@ export function projectChatTranscript(
     showAssistantAvatar: avatarPlacement === "gutter",
     bubbleMode: props.chatBubbleMode === true && !searchFiltering,
   } satisfies StreamGroupOptions;
+  // Only one bubble owns live animation; actionable waits and child work take precedence.
+  const bubbleActivityGroupKey =
+    props.showToolCalls &&
+    !props.waitingApproval &&
+    props.retryAt === undefined &&
+    !subagents.activity.length
+      ? runningActivityGroupKey
+      : undefined;
   const streamGroupOptions = {
     ...sharedMessageRenderOptions,
     branding: props.branding,
+    bubbleActivityActive: bubbleActivityGroupKey !== undefined,
     assistant: assistantIdentity,
     startupLabel: props.startupLabel,
     retryAt: props.retryAt,
@@ -327,6 +341,7 @@ export function projectChatTranscript(
       showToolCalls: props.showToolCalls,
       activityRunId,
       activityGroupKey,
+      bubbleActivityGroupKey,
       isToolMessageExpanded: (messageId: string) => expandedToolCards.get(messageId),
       onToggleToolMessageExpanded: toggleToolCardExpanded,
       isUserMessageExpanded: (messageId: string) => expandedUserMessages.get(messageId) ?? false,
@@ -379,7 +394,12 @@ export function projectChatTranscript(
   };
   // Only the working indicator shows live usage and subagent status, so rows
   // without one keep memoizing across usage and child-roster patches.
-  const workingUsageKey = JSON.stringify([runOutputTokens, subagents.statusKey, presented]);
+  const workingUsageKey = JSON.stringify([
+    runOutputTokens,
+    subagents.statusKey,
+    presented,
+    bubbleActivityGroupKey,
+  ]);
   const liveStatusSignature = (item: ChatRenderItem): string => {
     if (item.kind === "stream-run") {
       return item.parts.some((part) => part.kind === "reading-indicator") ? workingUsageKey : "";

@@ -6,11 +6,16 @@ import {
   captureDeliveryQueueStateContext,
   type DeliveryQueueStateContext,
 } from "../infra/delivery-queue-state-context.js";
+import type { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import { hasRestartSentinel } from "../infra/restart-sentinel.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginRegistry } from "../plugins/registry.js";
 import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import type { PluginServiceCronHost } from "../plugins/service-cron.js";
+import type { PluginServicesHandle } from "../plugins/services.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../process/gateway-work-admission.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import type { GatewayPluginEventBroadcastFn } from "./server-broadcast-types.js";
 import { isChannelStartupSuppressedByEnvironment } from "./server-sidecar-startup-mode.js";
 import { waitForAcpRuntimeBackendReady } from "./server-startup-acp.js";
 import {
@@ -18,17 +23,13 @@ import {
   publishConfiguredModelRuntimeSnapshots,
 } from "./server-startup-model-runtime.js";
 import type { GatewayStartupOutcomeRecorder } from "./server-startup-outcomes.js";
-import {
-  startGatewayPluginServices,
-  type GatewayPluginServicesStartup,
-} from "./server-startup-plugin-services.js";
 import { scheduleRestartSentinelWakeAfterReady } from "./server-startup-restart-sentinel.js";
 import {
   scheduleGatewayGenerationTimer,
   schedulePostReadySidecarTask,
   type GatewayPostReadySidecarHandle,
 } from "./server-startup-sidecar-scheduler.js";
-import { measureStartup } from "./server-startup-trace.js";
+import { measureStartup, type GatewayStartupTrace } from "./server-startup-trace.js";
 
 type Awaitable<T> = T | Promise<T>;
 
@@ -46,31 +47,39 @@ async function hasGatewayStartupInternalHookListeners(): Promise<boolean> {
 }
 
 /** Start post-ready sidecars such as channels, hooks, plugin services, and cleanup tasks. */
-export async function startGatewaySidecars(
-  params: GatewayPluginServicesStartup & {
-    restartSentinelContext?: DeliveryQueueStateContext;
-    getModelRuntimeConfig?: () => OpenClawConfig;
-    pluginMetadataSnapshot?: PluginMetadataSnapshot;
-    deps: CliDeps;
-    startChannels: () => Promise<void>;
-    waitForMainSessionOrphans?: () => Promise<void>;
-    trackStartupWork: <T>(run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
-    shouldStartChannels?: () => boolean;
-    refreshChatMetadata?: () => Promise<void>;
-    onChannelsStarted?: () => Awaitable<void>;
-    onPostReadySidecars: (...sidecars: GatewayPostReadySidecarHandle[]) => void;
-    shouldCreatePostReadySidecars?: () => boolean;
-    logHooks: {
-      info: (msg: string) => void;
-      warn: (msg: string) => void;
-      error: (msg: string) => void;
-    };
-    logChannels: { info: (msg: string) => void; error: (msg: string) => void };
-    startupOutcomes?: GatewayStartupOutcomeRecorder;
-    internalHookSelection?: InternalHookSelection;
-    waitForPostReadyWork?: () => Promise<void>;
-  },
-) {
+export async function startGatewaySidecars(params: {
+  scheduler: GatewayScheduler;
+  cfg: OpenClawConfig;
+  pluginRegistry: PluginRegistry;
+  defaultWorkspaceDir: string;
+  getCronService?: () => PluginServiceCronHost | null | undefined;
+  onPluginServices?: (services: PluginServicesHandle | null) => void;
+  shouldStartPluginServices?: () => boolean;
+  broadcastPluginEvent?: GatewayPluginEventBroadcastFn;
+  startupTrace?: GatewayStartupTrace;
+  log: { warn: (message: string) => void };
+  restartSentinelContext?: DeliveryQueueStateContext;
+  getModelRuntimeConfig?: () => OpenClawConfig;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  deps: CliDeps;
+  startChannels: () => Promise<void>;
+  waitForMainSessionOrphans?: () => Promise<void>;
+  trackStartupWork: <T>(run: (signal: AbortSignal) => Promise<T>) => Promise<T>;
+  shouldStartChannels?: () => boolean;
+  refreshChatMetadata?: () => Promise<void>;
+  onChannelsStarted?: () => Awaitable<void>;
+  onPostReadySidecars: (...sidecars: GatewayPostReadySidecarHandle[]) => void;
+  shouldCreatePostReadySidecars?: () => boolean;
+  logHooks: {
+    info: (msg: string) => void;
+    warn: (msg: string) => void;
+    error: (msg: string) => void;
+  };
+  logChannels: { info: (msg: string) => void; error: (msg: string) => void };
+  startupOutcomes?: GatewayStartupOutcomeRecorder;
+  internalHookSelection?: InternalHookSelection;
+  waitForPostReadyWork?: () => Promise<void>;
+}) {
   const restartSentinelContext =
     params.restartSentinelContext ?? captureDeliveryQueueStateContext();
   const postReadySidecars: GatewayPostReadySidecarHandle[] = [];
@@ -206,7 +215,27 @@ export async function startGatewaySidecars(
     )
     .catch((err: unknown) => params.logChannels.error(`channel startup failed: ${String(err)}`));
 
-  await startGatewayPluginServices(params);
+  // The startup producer is joined on shutdown; services publish their own cleanup handle.
+  await measureStartup(params.startupTrace, "sidecars.plugin-services", async () => {
+    try {
+      const { startPluginServices } = await import("../plugins/services.js");
+      if (params.shouldStartPluginServices?.() === false) {
+        return;
+      }
+      await startPluginServices({
+        registry: params.pluginRegistry,
+        config: params.cfg,
+        workspaceDir: params.defaultWorkspaceDir,
+        startupTrace: params.startupTrace,
+        broadcastPluginEvent: params.broadcastPluginEvent,
+        getCronService: params.getCronService,
+        scheduler: params.scheduler,
+        onHandle: params.onPluginServices,
+      });
+    } catch (err) {
+      params.log.warn(`plugin services failed to start: ${String(err)}`);
+    }
+  });
   const shouldDispatchGatewayStartupInternalHook =
     internalHooksConfigured || (await hasGatewayStartupInternalHookListeners());
   if (params.shouldCreatePostReadySidecars?.() === false) {

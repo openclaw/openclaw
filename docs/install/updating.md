@@ -47,6 +47,13 @@ stopped backup and identify the changed file. This repair must
 be present in the runtime performing the snapshot, including the candidate worker
 when the installed updater delegates capture to it.
 
+Candidate Doctor also accepts an empty WAL index appearing or disappearing
+between an older updater's capture and migration admission, provided the database
+identity and committed contents still match and the index contains no write
+evidence. This preserves the installed updater's original fingerprint format.
+Changed committed data or write evidence still refuses migration and automatic
+restoration. The candidate must contain this repair.
+
 Update snapshots and database backups accept a database whose only integrity
 findings are `malformed inverted index` reports on canonical, schema-validated
 agent FTS tables. A Node upgrade that changes SQLite tokenization (for example,
@@ -66,6 +73,13 @@ On macOS, reinstall and uninstall reconcile the launchd registration by service
 label even if its plist was deleted. Reinstall warns when the previous definition
 is missing; an existing plist and its private environment files remain backed up
 for rollback if activation fails.
+
+When an updater stops a macOS LaunchAgent, it waits for both launchd's process
+and the verified serving Gateway child to exit before continuing. An unloaded
+job or a closed listener does not prove that the child has released its agent
+databases. Pending process cleanup produces a warning and shares the existing
+bounded stop deadline; other processes using the state still receive Doctor's
+maintenance refusal. The updater performing the stop must contain this fix.
 
 Candidate state workers drop advisory progress when stderr is temporarily full.
 Dropped writes do not consume the legacy progress budget, so reporting resumes

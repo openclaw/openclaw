@@ -55,11 +55,13 @@ export function isCliRuntimeProvider(
   provider: string,
   params: { config?: OpenClawConfig } = {},
 ): boolean {
-  const normalized = normalizeProviderId(provider);
-  return listCliRuntimeProviderIds({
-    config: params.config,
-    includeSetupRegistry: params.config !== undefined,
-  }).includes(normalized);
+  return (
+    resolveCliRuntimeCanonicalProvider({
+      runtime: provider,
+      config: params.config,
+      includeSetupRegistry: params.config !== undefined,
+    }) !== undefined
+  );
 }
 
 export function isCliRuntimeAlias(runtime: string | undefined): boolean {

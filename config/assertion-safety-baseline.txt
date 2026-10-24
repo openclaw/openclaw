@@ -2190,7 +2190,6 @@ src/plugins/provider-thinking-active.ts	1
 src/plugins/public-surface-loader.ts	2
 src/plugins/registry-registrars-host.ts	1
 src/plugins/registry-registrars-operations.ts	2
-src/plugins/registry-registrars-tools-hooks.ts	1
 src/plugins/registry-runtime-binding.ts	1
 src/plugins/registry.ts	1
 src/plugins/runtime-channel-state.ts	1

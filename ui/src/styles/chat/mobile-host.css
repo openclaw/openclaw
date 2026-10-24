@@ -371,7 +371,17 @@
     [data-details-page="versions"],
     [data-details-page="publication"]
   )
-  > .chat-mobile-details-page__body {
+  > .chat-mobile-details-page__body:not(
+    :has(
+      > :is(
+          .chat-outputs--mobile,
+          .chat-session-versions-mobile--empty,
+          .chat-pr-mobile--empty,
+          .task-progress-details--mobile
+        )
+        > openclaw-panel-empty-state
+    )
+  ) {
   padding: var(--mobile-content-inset) var(--mobile-content-inset) 24px;
   scroll-padding-block: 12px 24px;
 }
