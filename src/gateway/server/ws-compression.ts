@@ -114,6 +114,11 @@ function sharedZlib(open: () => NativeZlibStream) {
 const inflateShared = sharedZlib(() => createInflateRaw());
 const deflateShared = new Map<number, ReturnType<typeof sharedZlib>>();
 const deflatedSegments = new WeakMap<Uint8Array, Map<number, Buffer>>();
+// Broadcast frames own immutable bytes; release every window with the frame.
+const deflatedFrames = new WeakMap<
+  SerializedGatewayFrame,
+  Map<number, Buffer | SerializedGatewayFrame>
+>();
 
 /** Register immutable worker output, including its sync-flush trailer. */
 export function registerDeflatedSegment(bytes: Uint8Array, deflated: Uint8Array): void {
@@ -234,6 +239,15 @@ export function installGatewayDeflateCodec(socket: WebSocket):
     if (frame.byteLength < GATEWAY_PER_MESSAGE_DEFLATE.threshold) {
       return undefined;
     }
+    const frameWindows =
+      frame instanceof SerializedGatewayFrame
+        ? getOrCreateWeakOwnerMap(deflatedFrames, frame)
+        : undefined;
+    const prepared = frameWindows?.get(windowBits);
+    if (prepared) {
+      return prepared;
+    }
+    let result: Buffer | SerializedGatewayFrame;
     const segments = frame instanceof SerializedGatewayFrame ? frame.segments : undefined;
     if (segments?.some((bytes) => bytes.byteLength >= GATEWAY_PER_MESSAGE_DEFLATE.threshold)) {
       const pieces: Buffer[] = [];
@@ -269,12 +283,15 @@ export function installGatewayDeflateCodec(socket: WebSocket):
       // Independent raw streams concatenate at sync-flush boundaries; keep interior trailers.
       const last = pieces.length - 1;
       pieces[last] = pieces[last]!.subarray(0, -TRAILER.length);
-      return new SerializedGatewayFrame(pieces);
+      result = new SerializedGatewayFrame(pieces);
+    } else {
+      // Z_SYNC_FLUSH ends with the empty block that permessage-deflate strips.
+      result = compressPiece(
+        frame instanceof SerializedGatewayFrame ? frame.toBuffer() : frame,
+      ).subarray(0, -TRAILER.length);
     }
-    // Z_SYNC_FLUSH ends with the empty block that permessage-deflate strips.
-    return compressPiece(
-      frame instanceof SerializedGatewayFrame ? frame.toBuffer() : frame,
-    ).subarray(0, -TRAILER.length);
+    frameWindows?.set(windowBits, result);
+    return result;
   };
   return {
     acceptsDeflatedSegments: windowBits === zlibConstants.Z_DEFAULT_WINDOWBITS,

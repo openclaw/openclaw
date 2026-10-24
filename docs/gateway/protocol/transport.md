@@ -58,7 +58,9 @@ that supervise the Gateway as a child process, see
   inflates and deflates synchronously instead of through background zlib
   streams, so request bursts reach handler scheduling together, as uncompressed
   frames do. Large shared payloads are compressed once and reused across
-  recipients; worker-produced history is compressed off the Gateway thread.
+  recipients; identical immutable broadcast frames also reuse their compressed
+  envelopes within the same negotiated window size. Worker-produced history is
+  compressed off the Gateway thread.
   Peers that do not offer the extension are unaffected. Payload limits apply to
   the inflated size.
 

@@ -258,3 +258,36 @@ it.each(["small", "large"])("owns and reuses %s compressed segments per window",
   }
   expect(retained.get(10)).not.toBe(retained.get(15));
 });
+
+it.each([512, 4096])(
+  "reuses immutable broadcast frames across negotiated windows (%i-byte segments)",
+  async (size) => {
+    const payload = JSON.stringify({ text: "shared broadcast é🦞 ".repeat(200) });
+    const bytes = Buffer.from(payload);
+    const segments: Buffer[] = [];
+    for (let offset = 0; offset < bytes.length; offset += size) {
+      segments.push(bytes.subarray(offset, offset + size));
+    }
+    const frame = new SerializedGatewayFrame(segments);
+    const retained = new Map<number, Buffer | SerializedGatewayFrame>();
+    // Interleaved windows must neither evict each other nor share invalid back-references.
+    for (const windowBits of [15, 10, 15, 10]) {
+      const { peer, socket, request } = await connect({ serverMaxWindowBits: windowBits });
+      const codec = installGatewayDeflateCodec(socket)!;
+      const compressed = codec.compress(frame)!;
+      const previous = retained.get(windowBits);
+      if (previous) {
+        expect(compressed).toBe(previous);
+      } else {
+        retained.set(windowBits, compressed);
+      }
+      const transport = createGatewayWebSocketTransport(socket, request.socket, codec);
+      const received = once(peer, "message");
+      transport.send(frame, { binary: false });
+      const [data, binary] = await received;
+      expect(binary).toBe(false);
+      expect(data.toString()).toBe(payload);
+    }
+    expect(retained.get(10)).not.toBe(retained.get(15));
+  },
+);
