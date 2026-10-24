@@ -23,7 +23,7 @@ import {
   registerInternalHook,
   setInternalHooksEnabled,
 } from "./internal-hooks.js";
-import { prepareInternalHooks } from "./loader.js";
+import { prepareInternalHooks, smokeLoadHookHandler } from "./loader.js";
 import type { OpenClawHookMetadata } from "./types.js";
 import { loadWorkspaceHookEntries } from "./workspace.js";
 
@@ -128,6 +128,43 @@ describe("loader", () => {
       const count = await commitPreparedHooks(cfg);
       expect(count).toBe(0);
     }
+  });
+
+  it("smokeLoadHookHandler reports loadOk for a valid handler export", async () => {
+    const hookDir = writeDiscoveredHook("smoke-ok");
+    const result = await smokeLoadHookHandler({
+      handlerPath: path.join(hookDir, "handler.js"),
+      baseDir: hookDir,
+      source: "openclaw-managed",
+    });
+    expect(result).toMatchObject({ loadOk: true, exportName: "default" });
+    expect(result.error).toBeUndefined();
+    expect(hasInternalHookListeners("command", "new")).toBe(false);
+  });
+
+  it("smokeLoadHookHandler reports loadOk=false for a bad export without registering", async () => {
+    const hookDir = writeDiscoveredHook("smoke-bad", {
+      handlerCode: "export const notAHandler = 1;\n",
+    });
+    const result = await smokeLoadHookHandler({
+      handlerPath: path.join(hookDir, "handler.js"),
+      baseDir: hookDir,
+      source: "openclaw-managed",
+    });
+    expect(result.loadOk).toBe(false);
+    expect(result.error).toMatch(/Handler 'default' is not a function/);
+    expect(hasInternalHookListeners("command", "new")).toBe(false);
+  });
+
+  it("smokeLoadHookHandler reports loadOk=false when the handler file is missing", async () => {
+    const hookDir = writeDiscoveredHook("smoke-missing");
+    const result = await smokeLoadHookHandler({
+      handlerPath: path.join(hookDir, "missing-handler.js"),
+      baseDir: hookDir,
+      source: "openclaw-managed",
+    });
+    expect(result.loadOk).toBe(false);
+    expect(result.error).toBeTruthy();
   });
 
   it("registers unknown event keys anyway (advisory warning, not a load failure)", async () => {

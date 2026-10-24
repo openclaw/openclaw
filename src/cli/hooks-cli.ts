@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Command } from "commander";
 import {
@@ -19,12 +20,19 @@ import {
 import { captureRuntimeConfigAsyncReader, transformConfigFile } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  parseHookFrontmatter,
+  resolveHookKey,
+  resolveHookManifestMetadata,
+} from "../hooks/frontmatter.js";
+import {
   buildWorkspaceHookStatus,
   type HookStatusEntry,
   type HookStatusReport,
 } from "../hooks/hooks-status.js";
+import { smokeLoadHookHandler } from "../hooks/loader.js";
 import { resolveHookEntries } from "../hooks/policy.js";
-import { loadWorkspaceHookEntries } from "../hooks/workspace.js";
+import type { HookSource } from "../hooks/types.js";
+import { loadWorkspaceHookEntries, prepareWorkspaceHookEntries } from "../hooks/workspace.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { loadGatewayStartupPluginPlanWithMetadata } from "../plugins/channel-plugin-ids.js";
 import { withPluginDiagnosticsReport } from "../plugins/status.js";
@@ -412,6 +420,223 @@ async function runOneShotHooksCliAction(
   requestExitAfterOneShotOutput(defaultRuntime, exitCode);
 }
 
+const HOOK_SOURCES: ReadonlySet<string> = new Set([
+  "openclaw-bundled",
+  "openclaw-managed",
+  "openclaw-workspace",
+  "openclaw-plugin",
+]);
+
+function resolveHookHandlerExportName(filePath: string): string {
+  try {
+    const content = fs.readFileSync(filePath, "utf8");
+    const frontmatter = parseHookFrontmatter(content);
+    return resolveHookManifestMetadata(frontmatter)?.export?.trim() || "default";
+  } catch {
+    return "default";
+  }
+}
+
+function asHookSource(source: string): HookSource {
+  if (HOOK_SOURCES.has(source)) {
+    return source as HookSource;
+  }
+  // Discovery always sets a known source; fall back so smoke-load still runs.
+  return "openclaw-workspace";
+}
+
+type HooksTestOptions = HooksReportOptions & {
+  event?: string;
+};
+
+type HooksTestResult = {
+  name: string;
+  hookKey: string;
+  loadOk: boolean;
+  eligible: boolean;
+  enabledByConfig: boolean;
+  events: string[];
+  unknownEvents: string[];
+  source: string;
+  pluginId?: string;
+  handlerPath: string;
+  exportName: string;
+  unsupported?: boolean;
+  error?: string;
+  eventMatch?: { event: string; matched: boolean };
+};
+
+function formatHooksTest(result: HooksTestResult, opts: HooksTestOptions): string {
+  if (opts.json) {
+    return JSON.stringify(result, null, 2);
+  }
+  const title = sanitizeTerminalText(result.name);
+  if (result.unsupported) {
+    return [
+      theme.warn(`⚠ ${title} — unsupported`),
+      theme.muted(
+        `  Plugin-managed hooks cannot be smoke-loaded here; test via the owning plugin (${sanitizeTerminalText(result.pluginId ?? "unknown")}).`,
+      ),
+    ].join("\n");
+  }
+  const status = result.loadOk
+    ? theme.success(`✓ ${title} — loadOk`)
+    : theme.error(`✗ ${title} — load failed`);
+  const lines = [status];
+  if (result.events.length > 0) {
+    lines.push(
+      `${theme.muted("  Events:")} ${sanitizeTerminalText(result.events.join(", "))}`,
+    );
+  }
+  if (result.unknownEvents.length > 0) {
+    lines.push(
+      theme.warn(
+        `  ⚠ Unknown events: ${sanitizeTerminalText(result.unknownEvents.join(", "))}`,
+      ),
+    );
+  }
+  lines.push(
+    `${theme.muted("  Handler:")} ${sanitizeTerminalText(shortenHomePath(result.handlerPath))}`,
+  );
+  lines.push(`${theme.muted("  Export:")} ${sanitizeTerminalText(result.exportName)}`);
+  if (result.eventMatch) {
+    lines.push(
+      result.eventMatch.matched
+        ? theme.success(
+            `  Event ${sanitizeTerminalText(result.eventMatch.event)}: matched`,
+          )
+        : theme.warn(
+            `  Event ${sanitizeTerminalText(result.eventMatch.event)}: not in declared set`,
+          ),
+    );
+  }
+  if (result.error) {
+    lines.push(`${theme.muted("  Error:")} ${sanitizeTerminalText(result.error)}`);
+  }
+  return lines.join("\n");
+}
+
+async function runHooksTest(
+  hookName: string,
+  opts: HooksTestOptions,
+): Promise<{ output: string; exitCode: number }> {
+  const config = await captureRuntimeConfigAsyncReader({ skipPluginValidation: true })();
+  const target = resolveHooksReportTarget(config, opts.agent);
+  // Local discovery only — smoke-load needs on-disk handler paths and must not require Gateway.
+  const report = await withHooksReport(config, target, (status) => status);
+  const hook = resolveHookSelection(report, hookName);
+  if (!hook) {
+    if (opts.json) {
+      const failure = formatCliJsonFailure(`Hook "${hookName}" not found.`);
+      return {
+        output: JSON.stringify({ ...failure, hook: hookName, loadOk: false }, null, 2),
+        exitCode: 1,
+      };
+    }
+    return {
+      output: `Hook "${sanitizeTerminalText(hookName)}" not found. Run \`${formatCliCommand("openclaw hooks list")}\` to see available hooks.`,
+      exitCode: 1,
+    };
+  }
+
+  const requestedEvent = opts.event?.trim();
+  if (opts.event !== undefined && !requestedEvent) {
+    throw new Error("--event must not be blank");
+  }
+  const eventMatch = requestedEvent
+    ? { event: requestedEvent, matched: hook.events.includes(requestedEvent) }
+    : undefined;
+
+  if (hook.managedByPlugin) {
+    const result: HooksTestResult = {
+      name: hook.name,
+      hookKey: hook.hookKey,
+      loadOk: false,
+      eligible: hook.loadable,
+      enabledByConfig: hook.enabledByConfig,
+      events: hook.events,
+      unknownEvents: hook.unknownEvents,
+      source: hook.source,
+      pluginId: hook.pluginId,
+      handlerPath: hook.handlerPath,
+      exportName: resolveHookHandlerExportName(hook.filePath),
+      unsupported: true,
+      error: `Hook "${hook.name}" is managed by plugin "${hook.pluginId ?? "unknown"}"; smoke-load is unsupported. Test via the owning plugin.`,
+      eventMatch,
+    };
+    return { output: formatHooksTest(result, opts), exitCode: 1 };
+  }
+
+  // Re-resolve with Gateway-style precedence that retains invalid winning sources, so a
+  // managed/workspace HOOK.md without a readable handler cannot fall through to a bundled twin.
+  const discovery = prepareWorkspaceHookEntries(target.workspaceDir, {
+    config,
+    preserveMissingHandlers: true,
+  });
+  const winningSource = discovery.sources.find((candidate) => {
+    if (candidate.hook.name === hook.name || candidate.hook.name === hookName) {
+      return true;
+    }
+    const key = resolveHookKey(candidate.hook.name, { metadata: candidate.metadata });
+    return key === hook.hookKey || key === hookName;
+  });
+  const matched = discovery.entries.find((entry) => entry.hook.name === hook.name);
+  // Present in precedence sources but absent from executable entries => missing/invalid handler.
+  if (winningSource && !matched) {
+    const result: HooksTestResult = {
+      name: hook.name,
+      hookKey: hook.hookKey,
+      loadOk: false,
+      eligible: false,
+      enabledByConfig: hook.enabledByConfig,
+      events: hook.events,
+      unknownEvents: hook.unknownEvents,
+      source: winningSource.hook.source,
+      pluginId: winningSource.hook.pluginId,
+      handlerPath: "",
+      exportName: resolveHookHandlerExportName(winningSource.filePath),
+      error: `Hook "${hook.name}" has no readable handler at ${winningSource.filePath}`,
+      eventMatch,
+    };
+    return { output: formatHooksTest(result, opts), exitCode: 1 };
+  }
+  const smokeTarget = matched
+    ? {
+        ...hook,
+        source: matched.hook.source,
+        pluginId: matched.hook.pluginId,
+        filePath: matched.hook.filePath,
+        baseDir: matched.hook.baseDir,
+        handlerPath: matched.hook.handlerPath,
+        hookKey: resolveHookKey(matched.hook.name, matched),
+      }
+    : hook;
+
+  const exportName = resolveHookHandlerExportName(smokeTarget.filePath);
+  const smoke = await smokeLoadHookHandler({
+    handlerPath: smokeTarget.handlerPath,
+    baseDir: smokeTarget.baseDir,
+    source: asHookSource(smokeTarget.source),
+    exportName,
+  });
+  const result: HooksTestResult = {
+    name: smokeTarget.name,
+    hookKey: smokeTarget.hookKey,
+    loadOk: smoke.loadOk,
+    eligible: smokeTarget.loadable,
+    enabledByConfig: smokeTarget.enabledByConfig,
+    events: smokeTarget.events,
+    unknownEvents: smokeTarget.unknownEvents,
+    source: smokeTarget.source,
+    pluginId: smokeTarget.pluginId,
+    handlerPath: smoke.handlerPath,
+    exportName: smoke.exportName,
+    error: smoke.error,
+    eventMatch,
+  };
+  return { output: formatHooksTest(result, opts), exitCode: smoke.loadOk ? 0 : 1 };
+}
+
 export function registerHooksCli(program: Command): void {
   const hooks = program
     .command("hooks")
@@ -429,7 +654,7 @@ export function registerHooksCli(program: Command): void {
     if (
       parentAgent &&
       actionCommand !== hooks &&
-      !new Set(["list", "info", "check", "enable", "disable"]).has(actionCommand.name())
+      !new Set(["list", "info", "check", "test", "enable", "disable"]).has(actionCommand.name())
     ) {
       throw new Error(
         `openclaw hooks ${actionCommand.name()} does not support --agent; the option only selects an owner for read-only hook reports.`,
@@ -488,6 +713,30 @@ export function registerHooksCli(program: Command): void {
     .option("--agent <id>", "Agent id to inspect")
     .option("--json", "Output as JSON", false)
     .action(reportAction(formatHooksCheck));
+
+  hooks
+    .command("test <name>")
+    .description("Smoke-load a hook handler without enabling it")
+    .option("--agent <id>", "Agent id to inspect")
+    .option("--json", "Output as JSON", false)
+    .option(
+      "--event <eventName>",
+      "Report whether the event is in the hook's declared set (does not invoke the handler)",
+    )
+    .action(async (name: string, opts: HooksTestOptions, command: Command) =>
+      runOneShotHooksCliAction(async () => {
+        const json = hasJsonOutput(opts);
+        const result = await runHooksTest(name, {
+          ...opts,
+          agent: resolveOptionFromCommand<string>(command, "agent"),
+          json,
+        });
+        writeHooksOutput(result.output, json);
+        return result.exitCode;
+      }, "root"),
+    );
+
+
 
   for (const enabled of [true, false]) {
     hooks

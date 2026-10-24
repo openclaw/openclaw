@@ -126,6 +126,35 @@ array and a `notEligible` array of `{ name, blockedReason?, missing }` objects.
 A successful report exits with code 0 even when hooks are not ready. For an
 automated eligibility gate, inspect the JSON counts rather than treating the
 exit code as an all-hooks-ready result. This still does not test actual loading.
+Use [`hooks test`](#test-hook-load) for a local handler smoke-load.
+
+## Test hook load
+
+```bash
+openclaw hooks test <name> [--agent <id>] [--json] [--event <eventName>]
+```
+
+Smoke-loads the hook handler module (same boundary checks and export shape as
+Gateway load) **without** enabling it, writing config, registering handlers, or
+requiring a running Gateway. Does not invoke the handler against a live session.
+
+Only test **trusted** hooks. Importing the module evaluates top-level code with
+the CLI process's permissions (filesystem/network side effects are possible even
+when the export check later fails). A trusted-local warning is emitted on stderr
+before the import for workspace/managed sources.
+
+JSON includes `loadOk`, `eligible`, `enabledByConfig`, `events`,
+`unknownEvents`, `handlerPath`, `exportName`, and optional `error`. When
+`--event` is set, `eventMatch: { event, matched }` reports whether that event is
+in the declared set (match-only; the handler is not called).
+
+Exit code is `0` when `loadOk` is true. Missing hooks, bad exports, missing
+handler files, and plugin-managed hooks exit non-zero. Plugin-managed hooks set
+`unsupported: true` and point you at the owning plugin instead of importing
+remote code.
+
+Eligibility from `hooks check` can still look fine when the module would fail at
+event time; `hooks test` closes that gap.
 
 ## Enable a hook
 
@@ -141,8 +170,8 @@ matches fail without writing.
 
 Enable fails for a missing hook, a plugin-managed hook, or unmet runtime
 requirements. It can enable a currently disabled workspace hook. This does not
-prove a valid module export or event subscription. Inspect `info` and the
-Gateway logs too.
+prove a valid module export or event subscription. Prefer `hooks test` before
+enable, and inspect `info` plus Gateway logs too.
 
 The entry is **global**, even with `--agent`: it applies wherever that key is
 discovered. Adding named entries can narrow a previously open-ended directory
@@ -287,8 +316,9 @@ rotation. The hook does not rotate them.
 
 Report commands support `--json`. Success JSON goes directly to stdout. Failures
 use the standard [CLI JSON failure envelope](/cli#json-failures), and missing
-hook info also includes the requested `hook` name. Reports do not execute a hook
-as a test.
+hook info also includes the requested `hook` name. Report commands (`list`,
+`info`, `check`) do not load or execute a hook. Use `hooks test` for a local
+handler smoke-load without enabling the hook.
 
 The hidden `hooks relay` command is reserved for generated native harness
 integration. It is not an internal-hook testing or manual event-trigger command.
