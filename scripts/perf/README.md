@@ -4952,53 +4952,69 @@ tail includes its sample count. This simulation establishes persistence-path
 blocking behavior; it does not claim production throughput or macOS browser
 cookie-import latency.
 
-## Cron, board, and subscription read attribution
+## Cron delivery read comparisons
 
-`local-state-reads-measure.ts` starts an isolated Gateway on 5,000 synthetic
-sessions and 6,000 settled runs, with 40 disabled announce/last automations and
-three HTML board widgets. The scheduler remains enabled so cron reads use the
-same resident snapshot as a running Gateway. It measures compact and full
-`cron.list`, `board.get`, `sessions.messages.subscribe`, and an empty Inbox control.
+Use `transcript-broadcast-measure.ts --scenario cron.list` for full cron reads.
+`cron-delivery-gateway-entry.ts` supplies only a frozen delivery owner; the
+canonical harness owns workload validation, warmup, diagnostics, synchronization,
+and cleanup. Both baseline and candidate use this same entry and source
+installation. No production timing hooks or additional dependency installs are
+needed.
+
+Generate fresh fixtures sequentially for each side and pair:
 
 ```sh
-node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
-  scripts/perf/local-state-reads-measure.ts \
-  --state-dir /path/to/new-synthetic-state --output /path/to/result.json \
-  --port 41615 --operations 1000 --trace-log /path/to/capture.log \
-  > /path/to/capture.log 2>&1
+node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts \
+  --state-dir "$STATE" --sessions 5000 --runs 6000 --settled-runs \
+  --approvals 0 --projects 0 --transcript-mib 0 \
+  --cron 40 --cron-announce-last --seed 967 --now "$FIXTURE_EPOCH" \
+  --port "$PORT"
 ```
 
-The report separates RPC admission/handler/dispatch timing, cron queue and
-execution, board FIFO wait and worker round trip, subscription phases, and cron
-fallback session-read counts. These are inclusive wall times, not handler CPU
-self time. CPU includes the Gateway, its workers, and the in-process WebSocket
-client. GC and promotion cover the main isolate; every tail reports its sample
-count. Cold observations are separate from warm measurements. No foreground
-model traffic is generated, so this attributes local read work without claiming
-to reproduce production load or its event-loop stalls.
+Enable `cron.enabled` in each generated `openclaw.json` before launching, keeping
+all 40 jobs disabled. This exercises the resident scheduler snapshot rather than
+forcing a cron-store reload on every call. Keep ordinary maintenance enabled.
+Freeze each side's owner from its exact revision into its own fixture:
 
-The default rapid workload includes the public one-second `cron.list` response
-cache. To measure repeated full-list cache misses through the same public RPC,
-use `--scenario cron.full --operations 200 --interval-ms 1100`. The driver waits
-before every measured request, allowing the response to expire without changing
-cache policy or request identity. Confirm actual misses using the fallback-read
-counts; a 40-job page requires 40 baseline reads or one deduplicated read per
-uncached request. With 200 requests, p95 qualifies for comparison and p99 remains
-context. The report records `intervalMs`. RPC latency excludes each wait, while
-elapsed time, CPU, GC, promotion, and event-loop metrics cover the entire paced
-observation window, including ordinary idle/background work. This accelerated
-single-viewer cadence measures expiry behavior, not a claimed production rate.
+```sh
+git show "$OWNER_REVISION:src/cron/isolated-agent/delivery-target-context.ts" \
+  > "$STATE/cron-delivery-owner.ts"
+```
 
-`--scenario cron.full` selects one flow; `--owner-dir` selects baseline source
-files at their repository-relative paths. For concurrent pairs, use separate
-state, HOME, OPENCLAW_HOME, TMPDIR, and ports, plus a shared `--barrier-dir` and
-`--side baseline|candidate`. Each scenario writes `<scenario>.<side>.ready` after
-preparation, then waits for `<scenario>.start` containing a future epoch in
-milliseconds. Prepare sequentially on the host's preparation CPUs, acquire one
-quiet slot, assign interleaved measurement CPUs, and release both sides together.
-Swap sides in the second pair and use the shared production guard. Apply the
-campaign's paired-mean, absolute-delta, GC-pause, and minimum-sample rules; a
-five-operation attribution run is diagnostic context, not a latency-tail verdict.
+Use identical owner revisions for A/A controls. The entry requires the generated
+fixture and owner file, replaces only the canonical delivery-owner module, and
+prints `CRON_OWNER_SOURCE` with the SHA-256 of the source actually loaded. The
+pair controller must verify this marker against the prepared file after warmup;
+a Gateway that exits without loading the owner fails the run. Record the shared
+source revision, owner revision, owner hash, and controller/harness hashes.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir "$STATE" --entry scripts/perf/cron-delivery-gateway-entry.ts \
+  --scenario cron.list --clients 1 --runs 1 --rpc-concurrency 1 \
+  --operations 200 --warmup-operations 40 --rpc-interval-ms 1100 --rounds 1 \
+  --port "$PORT" --mock-port "$MOCK_PORT" --diagnostics \
+  --start-file "$PAIR_START_FILE" --revision "$SOURCE_REVISION"
+```
+
+After both sides print `PHASE warmed` and their owner hashes match, atomically
+publish a common start epoch at least five seconds ahead. This also expires the
+last warmup response. Pacing is start-to-start between requests, with no delay
+before the first or after the last request. The public one-second response cache
+therefore expires without changing cache policy or request identity. The harness
+validates all 40 disabled jobs and their announce/last delivery previews. With
+200 requests, p95 qualifies for comparison and p99 remains context. CPU, natural
+GC, and event-loop observations cover the entire paced window, including idle
+and maintenance work; RPC latency measures request-to-response time.
+
+The driver prints `RESULT` with its result path under the fixture. Validate the
+completed count and `naturalGc.timingGateEligible`, retain GC counts and maxima,
+and compare reported runtime, process age, heap spaces, actual capture times,
+and CPU affinity. Repeat promotion measurements separately by adding
+`--trace-gc`; their timing is attribution only. Follow
+[Calibrating paired GC measurements](#calibrating-paired-gc-measurements) for
+matched A/A controls, fixed workloads, synchronized starts, and inconclusive
+results. Preserve every valid observation and the campaign's declared rules.
 
 ## Managed attachment cleanup
 
