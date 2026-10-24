@@ -3,7 +3,20 @@ import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
 /** Capture and live rows share the same avatar suppression and attribution rules. */
-export function sidebarSessionOwnerPresentation(host: SessionListHost, row: SidebarRecentSession) {
+export function sidebarSessionOwnerPresentation(
+  host: Pick<
+    SessionListHost,
+    | "sessionsStatusFilter"
+    | "sessionOwnershipVisibility"
+    | "sessionData"
+    | "sessionsGrouping"
+    | "sessionDataContext"
+    | "sessionInvolvingMeFilterActive"
+    | "sessionOwnerFilterId"
+    | "sidebarAgentsMode"
+  >,
+  row: SidebarRecentSession,
+) {
   const attribution: "archived" | "owned" | "created" =
     host.sessionsStatusFilter === "archived"
       ? "archived"

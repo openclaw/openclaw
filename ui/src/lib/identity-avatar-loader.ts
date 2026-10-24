@@ -210,7 +210,7 @@ export function restoreIdentityAvatarSnapshot(images: readonly IdentityAvatarSna
       continue;
     }
     const data = /^data:([^;,]+);base64,([a-z\d+/]*={0,2})$/iu.exec(image.dataUrl);
-    if (!data || !isAvatarImageMimeType(data[1])) {
+    if (!data?.[1] || data[2] === undefined || !isAvatarImageMimeType(data[1])) {
       continue;
     }
     try {
