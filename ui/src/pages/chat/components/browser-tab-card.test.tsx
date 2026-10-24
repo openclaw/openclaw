@@ -33,7 +33,7 @@ const cards = new Map<
   }
 >();
 
-function drawGroup(host: HTMLElement, props: ActivityProps, context?: ApplicationContext) {
+async function drawGroup(host: HTMLElement, props: ActivityProps, context?: ApplicationContext) {
   const view = activityGroups.get(host);
   if (view) {
     view.update(props);
@@ -54,6 +54,7 @@ function drawGroup(host: HTMLElement, props: ActivityProps, context?: Applicatio
       ),
     );
   }
+  await waitForSolid(() => expect(host.querySelector("openclaw-browser-tab-card")).not.toBeNull());
 }
 
 function updateCard(element: HTMLElement, patch: Partial<CardProps>) {
@@ -198,7 +199,7 @@ async function drawActivity(
     timestamp: 1,
     messages: messageEntries(messages),
   };
-  drawGroup(
+  await drawGroup(
     host,
     {
       groups: [group],
@@ -741,7 +742,7 @@ describe("browser tab card", () => {
       timestamp: 1,
       messages: messageEntries(messages),
     };
-    drawGroup(host, {
+    await drawGroup(host, {
       groups: [group],
       options: { showReasoning: false },
       presentation: "standalone",
@@ -757,7 +758,7 @@ describe("browser tab card", () => {
     ),
   )(
     "preserves ambiguous URL prefixes ($length units, history: $history)",
-    ({ length, history }) => {
+    async ({ length, history }) => {
       const prefix = "https://example.com/blog?value=".padEnd(length, "x");
       const messages = ["first", "second"].map((targetId) => {
         const url =
@@ -783,7 +784,7 @@ describe("browser tab card", () => {
         messages: messageEntries(messages),
       };
       const host = container();
-      drawGroup(host, {
+      await drawGroup(host, {
         groups: [group],
         options: { showReasoning: false },
         presentation: "standalone",

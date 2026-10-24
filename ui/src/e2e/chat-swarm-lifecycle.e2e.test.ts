@@ -175,7 +175,7 @@ suite.define(() => {
         await page.reload();
         await pane.getByText("Now look at the next change.", { exact: true }).waitFor();
         // Opening the turn disclosure mounts its nested raw tool disclosure.
-        await pane.locator('.chat-work-group .chat-activity-group__summary').click();
+        await pane.locator(".chat-work-group .chat-activity-group__summary").click();
         const closedGroups = pane.locator(
           '.chat-activity-group:not(.chat-work-group) > .chat-activity-group__summary[aria-expanded="false"]',
         );
