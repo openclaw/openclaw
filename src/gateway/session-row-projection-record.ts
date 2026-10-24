@@ -609,16 +609,20 @@ export function readSessionRowLineage(
   context: SessionListRowContext,
   referenced?: (reference: string) => Row | undefined,
 ) {
-  const entry = projectGatewaySessionEntry(
+  const projected = projectGatewaySessionEntry(
     cfg,
     storedEntry,
     (key) =>
       selectSessionRowParent(cfg, key, row.agentId, row.storeTarget.storePath, referenced).key,
   );
+  const entry = row.entry && isDeepStrictEqual(row.entry, projected) ? row.entry : projected;
+  const parents = readSessionRowParents(row, storedEntry, cfg, context, referenced);
+  const selection =
+    entry === row.entry ? row.selection : readSessionListSelectionFacts(row.key, entry);
   return {
     entry,
-    parents: readSessionRowParents(row, storedEntry, cfg, context, referenced),
-    selection: readSessionListSelectionFacts(row.key, entry),
+    parents: isDeepStrictEqual(row.parents, parents) ? row.parents : parents,
+    selection: isDeepStrictEqual(row.selection, selection) ? row.selection : selection,
   };
 }
 
@@ -639,15 +643,11 @@ export function acquireSessionRowEntry(params: {
     return undefined;
   }
   const lineage = readSessionRowLineage(row, storedEntry, cfg, context, params.referenced);
-  const entryChanged = !isDeepStrictEqual(lineage.entry, row.entry);
-  // Selection and profile indexes retain entry identity until its metadata changes.
-  if (!entryChanged && row.entry) {
-    lineage.entry = row.entry;
-  }
+  const entryChanged = lineage.entry !== row.entry;
   const { entry, parents } = lineage;
   // Equal timestamps still need the full metadata comparison.
   const changed =
-    !isDeepStrictEqual(row.parents, parents) ||
+    row.parents !== parents ||
     !Object.is(storedEntry.updatedAt, row.storedEntry?.updatedAt) ||
     !isDeepStrictEqual(storedEntry, row.storedEntry) ||
     entryChanged;

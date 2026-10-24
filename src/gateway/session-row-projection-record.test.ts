@@ -3,9 +3,11 @@ import { expect, it, vi } from "vitest";
 import { projectGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { filterSessionEntries } from "./session-list-filters.js";
 import { createSessionRowEntryAcquirer } from "./session-row-projection-acquisition.js";
 import * as records from "./session-row-projection-record.js";
 import { createSessionRowProjectionRevisions } from "./session-row-projection-revisions.js";
+import * as display from "./session-utils-display.js";
 import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
 
 const cfg = { agents: { entries: { main: {} } } };
@@ -24,6 +26,64 @@ const target = {
   agentId: "main",
   storeTarget: { agentId: "main", storePath: "/synthetic/sessions.sqlite" },
 };
+
+it("reuses search fields across equal reads and timestamp changes, but refreshes changed search facts", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const context = buildSessionListRowMetadataContext({ now: 1 });
+    let row: records.Row = { ...records.create(target, original), entry: original };
+    const rebuild = vi.spyOn(display, "resolveGatewaySessionKind");
+    const search = (query: string) =>
+      filterSessionEntries({
+        cfg,
+        opts: { search: query },
+        now: 1,
+        entries: () => [[row.key, row.entry!]],
+        getTarget: () => records.selectionRow(row),
+        configuredAgentIds: new Set(["main"]),
+        getRowContext: () => context,
+        involvementKeys: () => new Set(),
+      }).entries.map(([key]) => key);
+    const acquire = (entry: SessionEntry) => {
+      row = records.acquireSessionRowEntry({
+        row,
+        storedEntry: structuredClone(entry),
+        cfg,
+        context,
+        remove: noop,
+        put: noop,
+        markRelated: noop,
+        archive,
+      })!;
+    };
+    try {
+      expect(search("Synthetic session")).toEqual([target.key]);
+      const selection = row.selection;
+      const parents = row.parents;
+      acquire(original);
+      expect(search("Synthetic session")).toEqual([target.key]);
+      acquire({ ...original, updatedAt: original.updatedAt + 1 });
+      expect(search("Synthetic session")).toEqual([target.key]);
+      expect(row.selection).toBe(selection);
+      expect(row.parents).toBe(parents);
+      expect(rebuild).toHaveBeenCalledOnce();
+
+      for (const [fields, query] of [
+        [{ label: "Renamed session" }, "Renamed session"],
+        [{ label: undefined, displayName: "New display title" }, "New display title"],
+        [{ modelProvider: "synthetic", model: "new-model" }, "synthetic/new-model"],
+      ] satisfies [Partial<SessionEntry>, string][]) {
+        const previousSelection = row.selection;
+        acquire({ ...row.entry!, ...fields });
+        expect(search(query)).toEqual([target.key]);
+        expect(row.selection).not.toBe(previousSelection);
+        expect(row.parents).toBe(parents);
+      }
+      expect(rebuild).toHaveBeenCalledTimes(4);
+    } finally {
+      rebuild.mockRestore();
+    }
+  });
+});
 
 it("keeps accepted facts and sharing revisions when database reads return equal entries", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {

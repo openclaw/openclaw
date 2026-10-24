@@ -18,10 +18,40 @@ export function readSessionListSelectionFacts(
     category?: string;
     heartbeatIsolatedBaseSessionKey?: string;
     createdSurface?: "plugin-dock";
-  } & Omit<Parameters<typeof isSystemCreatedSessionRow>[0], "key" | "classification">,
+  } & Omit<Parameters<typeof isSystemCreatedSessionRow>[0], "key" | "classification"> &
+    Partial<
+      Pick<
+        SessionEntry,
+        | "autoLabel"
+        | "topicName"
+        | "groupChannel"
+        | "space"
+        | "delivery"
+        | "chatType"
+        | "modelProvider"
+        | "model"
+      >
+    >,
 ) {
   const parsed = parseAgentSessionKey(key);
   return {
+    // Search memoization shares this identity, independently of activity timestamps.
+    searchSource: [
+      entry?.sessionId,
+      entry?.label,
+      entry?.subject,
+      entry?.category,
+      entry?.displayName,
+      entry?.autoLabel,
+      entry?.topicName,
+      entry?.groupChannel,
+      entry?.space,
+      entry?.delivery,
+      entry?.chatType,
+      entry?.spawnedBy,
+      entry?.modelProvider,
+      entry?.model,
+    ],
     agentId: parsed ? normalizeAgentId(parsed.agentId) : undefined,
     isCronRun: isCronRunSessionKey(key),
     isCron: isCronSessionDisplayKey(key),
