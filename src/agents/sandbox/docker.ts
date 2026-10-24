@@ -231,15 +231,18 @@ async function ensureSandboxContainerLifecycle(
     existingRegistryEntry?.runtimeState === "pending";
   const state = await containerState(engine, containerName, { strict: needsSetupReservation });
   let containerId = "";
+  let readOnlyRoot = false;
   if (state.exists) {
     const identity = await execContainer(
       engine,
-      ["inspect", "--format", "{{.Id}}", containerName],
+      ["inspect", "--format", "{{.Id}} {{.HostConfig.ReadonlyRootfs}}", containerName],
       {
         signal: AbortSignal.timeout(5_000),
       },
     );
-    containerId = identity.stdout.trim();
+    const [id, rootReadOnly] = identity.stdout.trim().split(/\s+/u);
+    containerId = id ?? "";
+    readOnlyRoot = rootReadOnly === "true";
     if (!/^[a-f0-9]{64}$/u.test(containerId)) {
       throw new Error("Container inspect did not return an immutable container ID.");
     }
@@ -276,17 +279,13 @@ async function ensureSandboxContainerLifecycle(
         if (
           mounts === "protected-mounts-added" &&
           !persistent &&
+          readOnlyRoot &&
           typeof lastUsedAtMs === "number" &&
           lastUsedAtMs < performance.timeOrigin
         ) {
           // A deploy can add protected overlays before the first resumed turn.
-          // Keep writable layers and all recorded exec custody for explicit recovery.
-          const root = await execContainer(
-            engine,
-            ["inspect", "--format", "{{.HostConfig.ReadonlyRootfs}}", containerId],
-            { signal: AbortSignal.timeout(5_000) },
-          );
-          isHot = root.stdout.trim() !== "true";
+          // The existing replacement path retains host-backed workspace bytes.
+          isHot = false;
         }
         params.assertCurrent?.();
         if (isHot) {
@@ -295,9 +294,7 @@ async function ensureSandboxContainerLifecycle(
             scope: params.cfg.scope,
             sessionKey: params.scopeKey,
             mountsChanged: mounts !== "match",
-            ...(params.requireCurrentConfig !== undefined
-              ? { requireCurrentConfig: params.requireCurrentConfig }
-              : {}),
+            requireCurrentConfig: params.requireCurrentConfig,
           });
         }
       }

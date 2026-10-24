@@ -114,8 +114,8 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     if (format === "{{.Id}}") {
       return result(0, "c".repeat(64));
     }
-    if (format === "{{.HostConfig.ReadonlyRootfs}}") {
-      return result(0, String(spawnState.readOnlyRoot));
+    if (format === "{{.Id}} {{.HostConfig.ReadonlyRootfs}}") {
+      return result(0, `${"c".repeat(64)} ${spawnState.readOnlyRoot}`);
     }
     if (args[1] === "-f" && format?.includes('index .Config.Labels "openclaw.configHash"')) {
       return spawnState.containerExists ? result(0, `${spawnState.labelHash}\n`) : missing();

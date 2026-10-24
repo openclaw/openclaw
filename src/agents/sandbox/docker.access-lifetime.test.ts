@@ -117,6 +117,9 @@ vi.mock("./container-engine.js", () => ({
           ? result("", 125, "engine connection refused")
           : result(fixture.inspect(container, fixture.terminalState === "paused"));
       }
+      if (args[2] === "{{.Id}} {{.HostConfig.ReadonlyRootfs}}") {
+        return result(`${container.id} true`);
+      }
       return result(
         args[2] === "{{.Id}}"
           ? container.id
