@@ -333,30 +333,37 @@ process.stdout.write(JSON.stringify({
     },
   );
 
-  it.for([
-    ["merge-output.log", "empty"],
-    ["merge-output.log", "symlink"],
-    ["merge-output.11111111-1111-4111-8111-111111111111.log", "populated"],
-  ] as const)(
-    "preserves registered %s captures (%s) during dry-run and actual GC",
-    async ([captureName, shape], { f }) => {
-      const dir = await f.add(910001, shape, true, captureName);
+  it.for(["merge-output.log", "merge-output.11111111-1111-4111-8111-111111111111.log"])(
+    "preserves registered captures during dry-run and actual GC for %s",
+    async (captureName, { f }) => {
+      const protectedDirs: string[] = [];
+      for (const [index, shape] of (["empty", "populated", "symlink"] as const).entries()) {
+        protectedDirs.push(await f.add(910001 + index, shape, true, captureName));
+      }
       const eligible = await f.add(910009);
-      const before = evidence(dir, captureName);
+      const before = protectedDirs.map((dir) => evidence(dir, captureName));
       const unchanged = await preserve(f.branches, f.worktrees);
       const dry = await f.run(["gc_pr_worktrees true"]);
       expect(dry.status, dry.output).toBe(0);
       expect.soft(dry.output).toContain("would remove .worktrees/pr-910009");
-      expect.soft(dry.output).not.toContain("would remove .worktrees/pr-910001");
+      for (const pr of [910001, 910002, 910003]) {
+        expect.soft(dry.output).not.toContain(`would remove .worktrees/pr-${pr}`);
+      }
       await unchanged();
       const actual = await f.run(["gc_pr_worktrees false"]);
       expect(actual.status, actual.output).toBe(0);
       // Check the original path first: moving evidence to Trash also violates recovery.
-      expect(evidence(dir, captureName)).toEqual(before);
-      expect.soft(actual.output).not.toContain("removed .worktrees/pr-910001");
-      expect.soft(await f.worktrees()).toContain(`worktree ${dir}\n`);
-      for (const branch of ["temp/pr-910001", "pr-910001", "pr-910001-prep"]) {
-        expect.soft(await f.branches()).toContain(`refs/heads/${branch} ${f.head}`);
+      for (const [index, dir] of protectedDirs.entries()) {
+        expect(evidence(dir, captureName)).toEqual(before[index]);
+        expect.soft(actual.output).not.toContain(`removed .worktrees/pr-${910001 + index}`);
+        expect.soft(await f.worktrees()).toContain(`worktree ${dir}\n`);
+        for (const branch of [
+          `temp/pr-${910001 + index}`,
+          `pr-${910001 + index}`,
+          `pr-${910001 + index}-prep`,
+        ]) {
+          expect.soft(await f.branches()).toContain(`refs/heads/${branch} ${f.head}`);
+        }
       }
       expect(actual.output).toContain("reconcile the earlier request manually");
       expect(existsSync(eligible)).toBe(false);
@@ -400,7 +407,7 @@ process.stdout.write(JSON.stringify({
     },
   );
 
-  it.for(["wrong-pr", "local-tree", "orphan"])(
+  it.for(["corrupt", "symbolic", "wrong-pr", "unretained", "local-tree", "orphan"])(
     "refuses GC with %s outcome",
     async (fault, { f }) => {
       const dir = await f.add(910001, "populated", fault !== "orphan");
@@ -417,9 +424,24 @@ process.stdout.write(JSON.stringify({
         f.head,
         localHead,
       );
+      if (fault === "corrupt") {
+        await f.git(["update-ref", ref, await f.git(["hash-object", "-w", "--stdin"], "bad")]);
+      }
+      if (fault === "symbolic") {
+        await f.git(["update-ref", "refs/fixture/retained", await f.git(["rev-parse", ref])]);
+        await f.git(["symbolic-ref", ref, "refs/fixture/retained"]);
+      }
       if (fault === "wrong-pr") {
         const other = await f.record(910002);
         await f.git(["update-ref", ref, await f.git(["rev-parse", other])]);
+      }
+      if (fault === "unretained") {
+        const tree = await f.git(["rev-parse", `${ref}^{tree}`]);
+        await f.git([
+          "update-ref",
+          ref,
+          await f.git(["commit-tree", tree], "Unretained fixture\n"),
+        ]);
       }
       const unchanged = await preserve(() => evidence(dir), f.branches, f.outcomes);
       const result = await f.run(["gc_pr_worktrees false"]);

@@ -145,25 +145,10 @@ function metadataResponse(artifact: Uint8Array) {
   });
 }
 
-type Stage = "detail" | "publisher" | "metadata" | "download";
-function registryFetch(
-  artifact: Uint8Array,
-  override?: (stage: Stage, init?: RequestInit) => Response | undefined,
-) {
-  return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+function registryFetch(artifact: Uint8Array) {
+  return vi.fn(async (input: string | URL | Request) => {
     const url = String(input);
-    const stage = url.endsWith("/artifact/download")
-      ? "download"
-      : url.endsWith("/artifact")
-        ? "metadata"
-        : url.endsWith("/trusted-publisher")
-          ? "publisher"
-          : "detail";
-    const response = override?.(stage, init);
-    if (response) {
-      return response;
-    }
-    if (stage === "publisher") {
+    if (url.endsWith("/trusted-publisher")) {
       return Response.json({
         trustedPublisher: {
           provider: "github-actions",
@@ -173,15 +158,33 @@ function registryFetch(
         },
       });
     }
-    if (stage === "download") {
+    if (url.endsWith("/artifact/download")) {
       return artifactResponse(artifact);
     }
-    if (stage === "metadata") {
+    if (url.endsWith("/artifact")) {
       return metadataResponse(artifact);
     }
     return Response.json({ package: { tags: { beta: "2026.7.1-beta.3" } } });
   });
 }
+
+it("verifies exact artifact bytes without claiming the publication authentication", async () => {
+  const fetchImpl = registryFetch(bytes);
+  const evidence = await verifyPackage(fetchImpl);
+
+  expect(evidence).toMatchObject({
+    schemaVersion: 1,
+    verificationMode: "artifact-postpublish",
+    publicationAuthentication: "not-verified",
+    expectedArtifact: identity(bytes),
+    package: {
+      packageName: "@openclaw/meta",
+      registrySha256: identity(bytes).sha256,
+      registrySize: bytes.byteLength,
+    },
+  });
+  expect(fetchImpl).toHaveBeenCalledTimes(4);
+});
 
 it("rejects ambiguous or symlinked normal OIDC artifacts before registry access", async () => {
   const fetchImpl = registryFetch(bytes);
@@ -230,6 +233,7 @@ it.each([
     () => Response.json({ trustedPublisher: { provider: "other" } }),
     "provider mismatch",
   ],
+  ["conflicting bytes", "download", () => artifactResponse(wrongBytes), digestMismatch],
   ["conflicting metadata", "metadata", () => metadataResponse(wrongBytes), digestMismatch],
   [
     "conflicting header",
@@ -245,30 +249,42 @@ it.each([
 ] as const)(
   "does not retry %s before a later valid response",
   async (_label, stage, failure, message) => {
+    const healthy = registryFetch(bytes);
     let failed = false;
-    const fetchImpl = registryFetch(bytes, (current) => {
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      const url = String(input);
+      const current = url.endsWith("/artifact/download")
+        ? "download"
+        : url.endsWith("/artifact")
+          ? "metadata"
+          : url.endsWith("/trusted-publisher")
+            ? "publisher"
+            : "detail";
       if (!failed && current === stage) {
         failed = true;
         return failure(bytes);
       }
-      return undefined;
+      return healthy(input);
     });
     const sleep = vi.fn(async () => {});
     await expect(verifyPackage(fetchImpl, { attempts: 3, sleep })).rejects.toThrow(message);
     expect(sleep).not.toHaveBeenCalled();
+    // Metadata validation follows the artifact download.
+    expect(fetchImpl).toHaveBeenCalledTimes(stage === "detail" ? 1 : stage === "publisher" ? 2 : 4);
   },
 );
 
 it("recovers a transient reset without publishing", async () => {
+  const healthy = registryFetch(bytes);
   let failed = false;
-  const fetchImpl = registryFetch(bytes, () => {
+  const fetchImpl = vi.fn(async (input: string | URL | Request) => {
     if (!failed) {
       failed = true;
       throw new TypeError("fetch failed", {
         cause: Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
       });
     }
-    return undefined;
+    return healthy(input);
   });
   const sleep = vi.fn(async () => {});
   await expect(
@@ -279,6 +295,11 @@ it("recovers a transient reset without publishing", async () => {
     ),
   ).resolves.toMatchObject({ packages: [{ registrySha256: identity(bytes).sha256 }] });
   expect(sleep).toHaveBeenCalledExactlyOnceWith(1);
+  expect(
+    fetchImpl.mock.calls.every(([input]) =>
+      String(input).startsWith("https://clawhub.example/api/v1/packages/"),
+    ),
+  ).toBe(true);
 });
 
 it("stops rather than retrying before an excessive server delay", async () => {
@@ -293,23 +314,35 @@ it("stops rather than retrying before an excessive server delay", async () => {
 
 it("keeps the attempt timeout active through a stalled body", async () => {
   let artifactCalls = 0;
-  const fetchImpl = registryFetch(bytes, (stage, init) => {
-    if (stage === "download") {
-      artifactCalls += 1;
-      if (artifactCalls === 1) {
-        return new Response(
-          new ReadableStream<Uint8Array>({
-            start(controller) {
-              init?.signal?.addEventListener("abort", () => controller.error(init.signal?.reason), {
-                once: true,
-              });
-            },
-          }),
-        );
+  const fetchImpl = vi.fn(
+    async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+      const url = String(input);
+      if (url.endsWith("/artifact")) {
+        return metadataResponse(bytes);
       }
-    }
-    return undefined;
-  });
+      if (url.endsWith("/artifact/download")) {
+        artifactCalls += 1;
+        if (artifactCalls === 1) {
+          return new Response(
+            new ReadableStream<Uint8Array>({
+              start(controller) {
+                init?.signal?.addEventListener(
+                  "abort",
+                  () => controller.error(init.signal?.reason),
+                  { once: true },
+                );
+              },
+            }),
+          );
+        }
+        return artifactResponse(bytes);
+      }
+      if (!url.includes("/artifact")) {
+        return Response.json({ package: { tags: { beta: "2026.7.1-beta.3" } } });
+      }
+      throw new Error(`unexpected URL ${url}`);
+    },
+  );
 
   await expect(
     verifyManifest(fetchImpl, {}, { attempts: 2, timeoutMs: 10 }),
@@ -338,28 +371,38 @@ it("cancels retryable response bodies and never sleeps after the final attempt",
 });
 
 it.each([
-  ["HTTP", "detail", 0, "returned HTTP 403"],
-  ["metadata", "metadata", 1048576, "exceeded 1048576 bytes"],
-  ["artifact", "download", 136314880, "exceeded 136314880 bytes"],
-] as const)("fails immediately on permanent %s errors", async (kind, stage, limit, error) => {
-  const sleep = vi.fn(async () => {});
-  const fetchImpl = registryFetch(bytes, (current) => {
-    if (kind === "HTTP") {
-      return new Response("denied", { status: 403 });
+  ["HTTP", "", 0, "returned HTTP 403", 1],
+  ["metadata", "/artifact", 1048576, "exceeded 1048576 bytes", 2],
+  ["artifact", "/artifact/download", 136314880, "exceeded 136314880 bytes", undefined],
+] as const)(
+  "fails immediately on permanent %s errors",
+  async (kind, endpoint, limit, error, calls) => {
+    const sleep = vi.fn(async () => {});
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      if (kind === "HTTP") {
+        return new Response("denied", { status: 403 });
+      }
+      const url = String(input);
+      if (url.endsWith(endpoint)) {
+        return new Response(kind === "metadata" ? "{}" : null, {
+          headers: { "content-length": String(limit + 1) },
+        });
+      }
+      if (url.endsWith("/artifact")) {
+        return metadataResponse(bytes);
+      }
+      return Response.json({ package: { tags: { beta: "2026.7.1-beta.3" } } });
+    });
+    await expect(verifyManifest(fetchImpl, {}, { attempts: 3, sleep })).rejects.toThrow(error);
+    if (calls !== undefined) {
+      expect(fetchImpl).toHaveBeenCalledTimes(calls);
     }
-    if (current === stage) {
-      return new Response(kind === "metadata" ? "{}" : null, {
-        headers: { "content-length": String(limit + 1) },
-      });
-    }
-    return undefined;
-  });
-  await expect(verifyManifest(fetchImpl, {}, { attempts: 3, sleep })).rejects.toThrow(error);
-  expect(sleep).not.toHaveBeenCalled();
-});
+    expect(sleep).not.toHaveBeenCalled();
+  },
+);
 
 it.each([
-  ...[undefined, "1junk"].map(
+  ...[undefined, "0", "1junk", "1.5", "1e2"].map(
     (terminalRunAttempt) =>
       [{ terminalRunAttempt }, "terminalRunAttempt must be an integer"] as const,
   ),

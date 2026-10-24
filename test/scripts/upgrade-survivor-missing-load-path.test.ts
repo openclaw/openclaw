@@ -3,8 +3,10 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
+import { publishDiagnostics } from "../../scripts/e2e/lib/upgrade-survivor/diagnostics.mjs";
 import { resolveDockerE2ePlan } from "../../scripts/lib/docker-e2e-plan.mts";
 import { parseUpgradeSurvivorScenarios } from "../../scripts/lib/upgrade-survivor-policy.mjs";
+import { redactSensitiveText } from "../../src/logging/redact.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
@@ -24,6 +26,8 @@ const candidateRegistry = "https://candidate.example.invalid";
 it.each<[string, string[] | null, string?, string[]?]>([
   ["2026.9.3", ["2026.9.3-missing-load-path"]],
   ["2026.7.1", null],
+  ["2026.7.1-2", null],
+  ["2026.7.2-beta.4", null],
   ["2026.7.2-beta.5", ["2026.7.2-beta.5-missing-load-path"]],
   ["latest", ["latest-missing-load-path"]],
   [
@@ -31,8 +35,15 @@ it.each<[string, string[] | null, string?, string[]?]>([
     ["2026.7.1", "2026.9.3", "2026.9.3-missing-load-path"],
     "base missing-load-path",
   ],
+  ["2026.7.1", null, "base missing-load-path"],
   ["2026.7.1", ["onboard"], undefined, ["onboard"]],
   ["2026.7.1", ["2026.7.1"], "base missing-load-path", ["published-upgrade-survivor-2026.7.1"]],
+  [
+    "2026.7.1 2026.9.3",
+    ["2026.7.1"],
+    "base missing-load-path",
+    ["published-upgrade-survivor-2026.7.1"],
+  ],
 ])("plans missing-path admission for %s (%s, %s, %s)", (baselines, rows, scenarios, selected) => {
   const plan = () =>
     resolveDockerE2ePlan({
@@ -71,6 +82,7 @@ it.each<[string, string[] | null, string?, string[]?]>([
 it.skipIf(process.platform === "win32").each([
   { baseline: "2026.7.1", scenario: "base", supported: false },
   { baseline: "2026.7.1", scenario: "missing-load-path", supported: false },
+  { baseline: "2026.9.3", scenario: "base", supported: true },
   { baseline: "2026.9.3", scenario: "missing-load-path", supported: true },
 ])(
   "protects config during missing-path admission: $baseline/$scenario",
@@ -135,7 +147,7 @@ printf 'applicability:%s seeded:%s\\n' "\${missing_load_path_applicability:-}" "
   },
 );
 
-it("dispatches missing-path stages with a compiled fixture", () => {
+it.each(["source", "compiled"])("dispatches missing-path stages with the %s fixture", (loading) => {
   const root = tempDirs.make("openclaw-missing-load-path-dispatch-");
   const configPath = path.join(root, "openclaw.json");
   const paths = readUpgradeSurvivorPaths(root, {
@@ -160,10 +172,14 @@ it("dispatches missing-path stages with a compiled fixture", () => {
   run("seed");
   expect(existsSync(path.join(pluginRoot, "openclaw.plugin.json"))).toBe(true);
   const seededConfig = readFileSync(configPath, "utf8");
-  const compiledRoot = path.join(root, "compiled-plugin");
-  mkdirSync(compiledRoot);
-  const entry = path.join(compiledRoot, "index.mjs");
-  copyFileSync(path.join(pluginRoot, "index.mjs"), entry);
+  let entry = path.join(pluginRoot, "index.mjs");
+  if (loading === "compiled") {
+    const compiledRoot = path.join(root, "compiled-plugin");
+    mkdirSync(compiledRoot);
+    const compiledEntry = path.join(compiledRoot, "index.mjs");
+    copyFileSync(entry, compiledEntry);
+    entry = compiledEntry;
+  }
   execFileSync(
     resolveTestNodeExecPath(),
     [
@@ -173,15 +189,17 @@ it("dispatches missing-path stages with a compiled fixture", () => {
     ],
     { env },
   );
-  const receiptPath = path.join(artifactRoot, "missing-load-path", "baseline-registration.json");
-  const receipt = readFileSync(receiptPath);
-  writeJson(receiptPath, { registrationToken: "previous-fixture" });
-  expect(() => run("unavailable")).toThrow(
-    "The published baseline did not load the configured fixture plugin",
-  );
-  expect(existsSync(pluginRoot)).toBe(true);
-  expect(readFileSync(configPath, "utf8")).toBe(seededConfig);
-  writeFileSync(receiptPath, receipt);
+  if (loading === "compiled") {
+    const receiptPath = path.join(artifactRoot, "missing-load-path", "baseline-registration.json");
+    const receipt = readFileSync(receiptPath);
+    writeJson(receiptPath, { registrationToken: "previous-fixture" });
+    expect(() => run("unavailable")).toThrow(
+      "The published baseline did not load the configured fixture plugin",
+    );
+    expect(existsSync(pluginRoot)).toBe(true);
+    expect(readFileSync(configPath, "utf8")).toBe(seededConfig);
+    writeFileSync(receiptPath, receipt);
+  }
 
   expect(run("unavailable")).toContain("Removed loaded baseline plugin source before update:");
   expect(existsSync(pluginRoot)).toBe(false);
@@ -429,10 +447,18 @@ printf 'baseline-complete\\n'
       10_000,
     );
     expect(captured.status, captured.stderr).toBe(0);
-    expect(
-      readJson(path.join(artifactRoot, "diagnostics/raw.json")).logs[
-        "missing-load-path/startup-readiness.log"
-      ],
-    ).toContain('{"body":{"ready":true},"status":200}');
+    const published = path.join(root, "published");
+    publishDiagnostics(artifactRoot, published, redactSensitiveText);
+    const report = readJson(path.join(published, "failure.json"));
+    expect(Object.values(report.logs).join("\n")).toContain('{"body":{"ready":true},"status":200}');
+    expect(JSON.stringify(report)).not.toContain("sk-SyntheticStartupTraceSecret1234567890");
+    if (mode === "live-refusal") {
+      expect(report.logs["missing-load-path/baseline-gateway.log"]).toContain(
+        "startup trace: runtime.plugins.complete",
+      );
+    }
+    expect(report.omissions["missing-load-path/baseline-gateway.log"]).toContain(
+      mode === "timeout" ? "input exceeds cap" : "truncated at a complete line",
+    );
   }
 });

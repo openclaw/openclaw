@@ -29,12 +29,12 @@ import {
 import { withinTest } from "../helpers/promise.js";
 import { withRuntimePreload } from "../helpers/runtime-preload.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { fixtureReadyBeforeSettlement } from "./run-process.test-support.js";
 
-const pendingChildren = new Set<Promise<unknown>>();
+const pendingChildCompletions = new Set<Promise<unknown>>();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    await Promise.allSettled(pendingChildren);
+    // Timed-out bodies can still be joining installers and deleting worktrees in finally.
+    await Promise.allSettled(pendingChildCompletions);
     cleanup();
   }),
 );
@@ -55,9 +55,6 @@ function commit(repo: string, message: string): string {
   git(repo, ["commit", "--no-gpg-sign", "--quiet", "-m", message]);
   return git(repo, ["rev-parse", "HEAD"]).trim();
 }
-
-const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
-const worktrees = (repo: string) => git(repo, ["worktree", "list", "--porcelain"]);
 
 function makeFixture(name: string) {
   const repo = tempDirs.make(`plugin-sdk-${name}-repo-`);
@@ -136,8 +133,10 @@ function startCli(repo: string, base: string, env: NodeJS.ProcessEnv) {
       state.closed = true;
       resolveClose(code);
     });
-  }).finally(() => pendingChildren.delete(close));
-  pendingChildren.add(close);
+  }).finally(() => {
+    pendingChildCompletions.delete(close);
+  });
+  pendingChildCompletions.add(close);
   return Object.assign(state, { child, close });
 }
 
@@ -159,6 +158,22 @@ fixtureReceiptSocket.end();
 `,
   );
   return `'${process.execPath.replace(/'/gu, `'\\''`)}' '${receiptPath.replace(/'/gu, `'\\''`)}'`;
+}
+
+async function installBeforeSettlement(
+  marker: string,
+  close: PromiseLike<unknown>,
+  label = "Plugin SDK API diff child",
+): Promise<void> {
+  // The fixture writes its marker before reporting; socket delivery may follow CLI close.
+  await Promise.race([
+    receipts.waitFor(marker, "ready"),
+    Promise.resolve(close).then(() => {
+      if (!existsSync(marker)) {
+        throw new Error(`timed out waiting for ${label}`);
+      }
+    }),
+  ]);
 }
 
 it("finishes every revision install before starting declaration rendering", async ({ signal }) => {
@@ -183,6 +198,7 @@ if mkdir "$PNPM_MARKER" 2>/dev/null; then
   exit 0
 fi
 : > "$PNPM_BLOCKED"
+${writeInstallReceipt(binDir)} "$PNPM_BLOCKED"
 while [ ! -e "$PNPM_RELEASE" ]; do sleep 0.05; done
 `,
   );
@@ -232,6 +248,10 @@ if (process.argv.includes("--render-root")) {
 
   let exitCode: number | null = null;
   try {
+    await withinTest(
+      installBeforeSettlement(blockedMarker, close, "second revision install"),
+      signal,
+    );
     exitCode = await withinTest(close, signal);
   } finally {
     writeFileSync(releaseMarker, "release\n");
@@ -239,6 +259,13 @@ if (process.argv.includes("--render-root")) {
       child.kill();
     }
     await close;
+  }
+  const progressLines = tracked.stderr.trim().split("\n");
+  expect(progressLines).toHaveLength(8);
+  for (const line of progressLines) {
+    expect(line).toMatch(
+      /^\[plugin-sdk-api-diff\] [a-f0-9]{40} (install|render) (started|completed in \d+ms)$/,
+    );
   }
   expect(exitCode).toBe(0);
   expect(existsSync(blockedMarker)).toBe(true);
@@ -263,7 +290,7 @@ it.each([
     writeFileSync(join(repo, "README.md"), "uncommitted\n");
     const status = git(repo, ["status", "--porcelain"]);
     writePnpm(binDir, '#!/bin/sh\n: > "$PNPM_MARKER"\nexit 97\n');
-    const initialWorktrees = worktrees(repo);
+    const worktrees = git(repo, ["worktree", "list", "--porcelain"]);
     const jsonPath = join(binDir, "diff.json");
     const evidencePath = join(binDir, "evidence.json");
     const summaryPath = join(binDir, "summary.md");
@@ -287,14 +314,20 @@ it.each([
 
     if (identical) {
       expect(child.status, child.stderr).toBe(0);
-      expect(decode(readJson(jsonPath))).toEqual(emptyDiff);
-      expect(decode(readJson(evidencePath))).toMatchObject({
+      expect(decode(JSON.parse(readFileSync(jsonPath, "utf8")))).toEqual(emptyDiff);
+      expect(decode(JSON.parse(readFileSync(evidencePath, "utf8")))).toEqual({
+        schema: "openclaw.plugin-sdk-api-release-evidence/v1",
+        status: "checked",
         baseRef: "same-commit",
         baseSha: headSha,
         headSha,
+        hasChanges: false,
+        digest: emptyDiff.digest,
         diff: emptyDiff,
         workflowSha: headSha,
       });
+      expect(child.stdout).toContain("No Plugin SDK API changes.");
+      expect(child.stdout).toContain("Acknowledgement digest: `ff7b090f`");
       expect(readFileSync(summaryPath, "utf8")).toBe(child.stdout);
     } else {
       expect(child.status).toBe(1);
@@ -306,7 +339,7 @@ it.each([
     }
     expect(existsSync(join(binDir, "installs"))).toBe(false);
     expect(git(repo, ["status", "--porcelain"])).toBe(status);
-    expect(worktrees(repo)).toBe(initialWorktrees);
+    expect(git(repo, ["worktree", "list", "--porcelain"])).toBe(worktrees);
   },
   35_000,
 );
@@ -337,7 +370,7 @@ it("interrupts a running child and removes its registered worktree", async ({ si
   const { child, close } = tracked;
 
   try {
-    await withinTest(fixtureReadyBeforeSettlement(receipts, pnpmMarker, close), signal);
+    await withinTest(installBeforeSettlement(pnpmMarker, close), signal);
     expect(tracked.closed, tracked.stderr).toBe(false);
     const revisionRoot = git(repo, ["worktree", "list", "--porcelain", "-z"])
       .split("\0")
@@ -392,7 +425,7 @@ it.each([
     writeFileSync(source, "export type Fixture = uncommitted;\n");
     symlinkSync(resolve("node_modules"), join(repo, "node_modules"), "dir");
     writePnpm(binDir, '#!/bin/sh\nprintf "%s\\n" "$PWD" >> "$PNPM_MARKER"\n');
-    const initialWorktrees = worktrees(repo);
+    const worktrees = git(repo, ["worktree", "list", "--porcelain"]);
     const child = runCli(repo, runnerTemp, binDir, {
       "bases-json": JSON.stringify(bases),
       head: "HEAD",
@@ -412,8 +445,9 @@ it.each([
         : [latestSha, ...(bases.beta === "v2026.8.1-beta.1" ? [betaSha] : []), headSha]
       ).toSorted(),
     );
-    const bundle = readJson(evidencePath);
-    const reports = expandDiffs(readJson(jsonPath));
+    const bundle = JSON.parse(readFileSync(evidencePath, "utf8"));
+    expect(decode(bundle).schema).toBe("openclaw.plugin-sdk-api-release-evidence-set/v2");
+    const reports = expandDiffs(JSON.parse(readFileSync(jsonPath, "utf8")));
     for (const [selector, ref] of Object.entries(bases)) {
       const evidence = selectEvidence({ evidence: bundle, npmDistTag: selector });
       expect(reports[selector]).toEqual(evidence.diff);
@@ -439,7 +473,7 @@ it.each([
       }
     }
     expect(readFileSync(source, "utf8")).toBe("export type Fixture = uncommitted;\n");
-    expect(worktrees(repo)).toBe(initialWorktrees);
+    expect(git(repo, ["worktree", "list", "--porcelain"])).toBe(worktrees);
   },
   35_000,
 );

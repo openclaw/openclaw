@@ -21,6 +21,7 @@ import { fixtureGit } from "./release-publish.test-support.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const version = "2026.9.5";
 const repo = "openclaw/openclaw";
+const api = (endpoint: string) => ["api", `repos/${repo}/${endpoint}`, "--method", "GET"];
 const sha256 = (bytes: string | Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 afterEach(() => {
@@ -31,6 +32,8 @@ afterEach(() => {
 describe("protected tooling tag resolution", () => {
   const toolingSha = "a".repeat(40);
   const prefix = "release-publish/aaaaaaaaaaaa-";
+  const compare = [...api(`compare/${toolingSha}...main`), "--jq", ".status"];
+  const inventory = api(`git/matching-refs/tags/${prefix}`);
   const ref = (suffix: string, type = "commit", sha = toolingSha) => ({
     ref: `refs/tags/${prefix}${suffix}`,
     object: { type, sha },
@@ -45,7 +48,7 @@ describe("protected tooling tag resolution", () => {
     return runGh;
   };
 
-  it.each(["ahead", "diverged"])(
+  it.each(["ahead", "identical", "behind", "diverged"])(
     "qualifies %s main ancestry before selecting the newest lightweight tag",
     (ancestry) => {
       const runGh = scriptedGh(
@@ -64,9 +67,10 @@ describe("protected tooling tag resolution", () => {
       const ensure = () => ensureReleasePublishToolingTag({ runGh, repo, toolingSha });
       if (["behind", "diverged"].includes(ancestry)) {
         expect(ensure).toThrow(`Tooling SHA ${toolingSha} is not reachable from trusted main.`);
-        expect(runGh).toHaveBeenCalledTimes(1);
+        expect(runGh.mock.calls.map(([args]) => args)).toEqual([compare]);
       } else {
         expect(ensure()).toEqual({ tag: `${prefix}10`, created: false });
+        expect(runGh.mock.calls.map(([args]) => args)).toEqual([compare, inventory]);
       }
     },
   );
@@ -88,15 +92,20 @@ describe("protected tooling tag resolution", () => {
       } else {
         expect(ensure).toThrow(`Protected tooling tag ${tag} does not resolve to ${toolingSha}.`);
       }
-      expect(runGh).toHaveBeenCalledWith([
-        "api",
-        `repos/${repo}/git/refs`,
-        "--method",
-        "POST",
-        "-f",
-        `ref=refs/tags/${tag}`,
-        "-f",
-        `sha=${toolingSha}`,
+      expect(runGh.mock.calls.map(([args]) => args)).toEqual([
+        compare,
+        inventory,
+        [
+          "api",
+          `repos/${repo}/git/refs`,
+          "--method",
+          "POST",
+          "-f",
+          `ref=refs/tags/${tag}`,
+          "-f",
+          `sha=${toolingSha}`,
+        ],
+        api(`git/ref/tags/${tag}`),
       ]);
     },
   );
@@ -110,7 +119,7 @@ describe("protected tooling tag resolution", () => {
     expect(() => ensureReleasePublishToolingTag({ runGh, repo, toolingSha })).toThrow(
       "Invalid protected tooling tag inventory.",
     );
-    expect(runGh).toHaveBeenCalledTimes(2);
+    expect(runGh.mock.calls.map(([args]) => args)).toEqual([compare, inventory]);
   });
 });
 
@@ -174,6 +183,7 @@ describe("publish preflight optional Telegram evidence", () => {
     [{ head_branch: "main", conclusion: "success" }, "PASS"],
     [{ head_branch: workflowRef, conclusion: "success" }, "PASS"],
     [{ head_branch: "main", conclusion: "failure" }, "WARN"],
+    [{ head_branch: workflowRef, conclusion: "cancelled" }, "WARN"],
     [{ name: "CI" }, "FAIL"],
     [{ event: "push" }, "FAIL"],
     [{ head_branch: "release-publish/bbbbbbbbbbbb-123" }, "FAIL"],
@@ -186,6 +196,7 @@ describe("publish preflight optional Telegram evidence", () => {
         ? { remediation: expect.stringContaining("omit the optional npm_telegram_run_id") }
         : {}),
     });
+    expect(runGh.mock.calls).toEqual([[api("actions/runs/123")]]);
   });
 
   it("does not query an invalid run id and reports an unavailable valid run", () => {

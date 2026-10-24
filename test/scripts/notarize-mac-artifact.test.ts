@@ -65,8 +65,10 @@ it("records the accepted notarization id before stapling", () => {
   const fixture = notarizationFixture();
   const app = path.join(path.dirname(fixture.artifact), "OpenClaw.app");
   fs.mkdirSync(app);
-  expectSuccess(fixture.run(false, app));
+  const result = expectSuccess(fixture.run(false, app));
   expectAccepted(fixture.result);
+  expect(result.stdout).toContain(submissionId);
+  expect(result.stdout).toContain("Notarization complete");
 });
 
 const readJson = (file: string) => JSON.parse(fs.readFileSync(file, "utf8"));
@@ -220,7 +222,7 @@ it("exhausts the wait budget with an actionable resume command and resumes the s
   expect(fixture.calls("wait")).toHaveLength(3);
 });
 
-it.each(["recent matching history", "old", "failed submit with id"])(
+it.each(["recent matching history", "old", "different name", "failed submit with id"])(
   "recovers submission with %s",
   (scenario) => {
     const fixture = notarizationFixture();
@@ -232,7 +234,11 @@ it.each(["recent matching history", "old", "failed submit with id"])(
       createdDate: new Date((1800000000 - age) * 1000).toISOString(),
     });
     const otherEntry = historyEntry(
-      matching ? `${"a".repeat(64)}-OpenClaw.zip` : fixture.uploadName,
+      matching
+        ? `${"a".repeat(64)}-OpenClaw.zip`
+        : scenario === "old"
+          ? fixture.uploadName
+          : "Other.zip",
       scenario === "old" ? 600 : 0,
     );
     fixture.configure({
@@ -375,19 +381,26 @@ with zipfile.ZipFile(sys.argv[1], "w") as archive:
 
 it("seals publication artifacts and retires only after completion while preserving the workflow envelope", () => {
   const fixture = recoveryFixture();
-  for (const name of [
-    "workflow-release.json",
-    "sparkle-tools.zip",
-    "app-submission.json",
-    "app.dmg",
-    "dmg-submission.json",
-  ]) {
-    fs.writeFileSync(path.join(fixture.root, name), "fixture");
+  for (const [name, content] of Object.entries({
+    "workflow-release.json": JSON.stringify({ runId: "123" }),
+    "sparkle-tools.zip": "signing tools",
+    "app-submission.json": JSON.stringify({ submissionId: "apple-id" }),
+    "app.dmg": "signed dmg",
+    "dmg-submission.json": JSON.stringify({ submissionId: "dmg-id" }),
+  })) {
+    fs.writeFileSync(path.join(fixture.root, name), content);
   }
   expect(fixture.run("seal").status).toBe(0);
   const verified = expectSuccess(fixture.run("verify", sourceSha, version));
   const manifest = JSON.parse(verified.stdout);
-  expect(manifest).toMatchObject({ schemaVersion: 1, skipDmg: false, skipDsym: false });
+  expect(manifest).toMatchObject({
+    schemaVersion: 1,
+    sourceSha,
+    version,
+    build: "202609011",
+    skipDmg: false,
+    skipDsym: false,
+  });
   expect(Object.keys(manifest.files).toSorted()).toEqual([
     "app-submission.json",
     "app.dmg",
@@ -427,31 +440,40 @@ it.each(["incomplete", "changed after completion"])(
     );
     expect(fs.readFileSync(fixture.manifest, "utf8")).toBe(manifest);
     expect(fs.readFileSync(fixture.archive)).toEqual(artifact);
+    if (scenario !== "incomplete") {
+      expect(fs.readFileSync(fixture.archive, "utf8")).toBe("changed after completion");
+    }
   },
 );
 
-it.each(["source mismatch", "version mismatch", "manifest symlink", "traversal", "escaping-link"])(
-  "rejects %s before restoring artifacts",
-  (scenario) => {
-    const unsafeArchive = scenario === "traversal" || scenario === "escaping-link";
-    const fixture = recoveryFixture(unsafeArchive ? scenario : "valid");
-    let source = sourceSha;
-    let releaseVersion = version;
-    if (scenario === "source mismatch") {
-      source = "b".repeat(40);
-    } else if (scenario === "version mismatch") {
-      releaseVersion = "2026.8.3";
-    } else if (scenario === "manifest symlink") {
-      const link = path.join(fixture.root, "manifest-link.json");
-      fs.symlinkSync(fixture.manifest, link);
-      fs.renameSync(link, fixture.manifest);
-    }
-    const rejected = fixture.run("verify", source, releaseVersion);
-    expect(rejected.status).not.toBe(0);
-    expect(rejected.stderr).toContain("macOS notarization recovery:");
-    if (unsafeArchive) {
-      expect(rejected.stderr).toMatch(/unsafe path|symlink escapes/u);
-    }
-    expect(rejected.stdout).toBe("");
-  },
-);
+it.each([
+  "artifact tamper",
+  "source mismatch",
+  "version mismatch",
+  "manifest symlink",
+  "traversal",
+  "escaping-link",
+])("rejects %s before restoring artifacts", (scenario) => {
+  const unsafeArchive = scenario === "traversal" || scenario === "escaping-link";
+  const fixture = recoveryFixture(unsafeArchive ? scenario : "valid");
+  let source = sourceSha;
+  let releaseVersion = version;
+  if (scenario === "artifact tamper") {
+    fs.writeFileSync(fixture.archive, "different artifact");
+  } else if (scenario === "source mismatch") {
+    source = "b".repeat(40);
+  } else if (scenario === "version mismatch") {
+    releaseVersion = "2026.8.3";
+  } else if (scenario === "manifest symlink") {
+    const link = path.join(fixture.root, "manifest-link.json");
+    fs.symlinkSync(fixture.manifest, link);
+    fs.renameSync(link, fixture.manifest);
+  }
+  const rejected = fixture.run("verify", source, releaseVersion);
+  expect(rejected.status).not.toBe(0);
+  expect(rejected.stderr).toContain("macOS notarization recovery:");
+  if (unsafeArchive) {
+    expect(rejected.stderr).toMatch(/unsafe path|symlink escapes/u);
+  }
+  expect(rejected.stdout).toBe("");
+});
