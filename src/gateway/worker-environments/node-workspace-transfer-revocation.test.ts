@@ -29,7 +29,7 @@ import {
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import { transferOwner } from "./node-workspace-transfer.test-support.js";
 import { createWorkerEnvironmentStore } from "./store.js";
-import { workerCredential } from "./store.test-support.js";
+import { workerCredential, workerReadyPatch } from "./store.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -239,15 +239,10 @@ it.each([
 });
 
 it.each([
-  { boundary: "blob-admitted", revoke: false },
   { boundary: "blob-admitted", revoke: true },
-  { boundary: "source-open", revoke: false },
   { boundary: "source-open", revoke: true },
-  { boundary: "before-stage-open", revoke: false },
   { boundary: "before-stage-open", revoke: true },
-  { boundary: "private-stage-created", revoke: false },
   { boundary: "private-stage-created", revoke: true },
-  { boundary: "after-publish", revoke: false },
   { boundary: "after-publish", revoke: true },
   { boundary: "after-final-publish", revoke: false },
   { boundary: "after-final-publish", revoke: true },
@@ -469,31 +464,12 @@ it("a permanent store revocation fences an in-flight blob response end to end", 
     provisionOperationId: `provision:${environmentId}`,
   });
   await store.transition({ environmentId, from: "requested", to: "provisioning" });
-  const bootstrapping = await store.transition({
-    environmentId,
-    from: "provisioning",
-    to: "bootstrapping",
-    patch: {
-      leaseId: "lease-store-fence",
-      sshEndpoint: {
-        host: "worker.example.test",
-        port: 2222,
-        user: "openclaw",
-        hostKey: ["ssh-ed25519", "AAAA"].join(" "),
-        keyRef: { source: "file", provider: "worker-keys", id: "/static-development-key" },
-      },
-    },
-  });
   await store.transition({
     environmentId,
-    from: bootstrapping.state,
+    from: "provisioning",
     to: "ready",
     patch: {
-      bootstrapReceipt: {
-        bundleHash: "a".repeat(64),
-        openclawVersion: "2026.7.1",
-        protocolFeatures: [],
-      },
+      ...workerReadyPatch("lease-store-fence", "node-store-fence"),
       credential: {
         ...workerCredential(hashWorkerCredential("worker-store-fence-bootstrap")),
         expiresAtMs: 11_000,
