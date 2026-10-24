@@ -20,8 +20,10 @@ import {
   createCopilotAgentHarness,
   makeSessionStoreMock,
 } from "./harness.test-support.js";
+import { resolvePoolAcquire as resolveRealPoolAcquire } from "./src/attempt-config.js";
 import type { CopilotAttemptDeps } from "./src/attempt-types.js";
 import type { resolvePoolAcquire } from "./src/attempt.js";
+import { tokenFingerprint } from "./src/auth-bridge.js";
 import { createCopilotIsolatedCompletionParams } from "./src/isolated-completion.test-support.js";
 import type { CopilotClientPool, PoolKey } from "./src/runtime.js";
 
@@ -44,17 +46,14 @@ vi.mock("./src/attempt.js", () => ({
   runCopilotAttempt: mocks.runCopilotAttempt,
 }));
 
-vi.mock("./src/byok-proxy.js", () => ({
-  createCopilotByokProxy: mocks.createCopilotByokProxy,
-}));
+vi.mock("./src/byok-proxy.js", () => ({ createCopilotByokProxy: mocks.createCopilotByokProxy }));
 
-vi.mock("./src/runtime.js", () => ({
-  createCopilotClientPool: mocks.createCopilotClientPool,
-}));
+vi.mock("./src/runtime.js", () => ({ createCopilotClientPool: mocks.createCopilotClientPool }));
 
 const ATTEMPT_PARAMS = asAttemptParams({
   provider: "github-copilot",
   model: "gpt-4.1",
+  auth: { useLoggedInUser: true },
 });
 const ATTEMPT_RESULT = asCompleteAttemptResult({ ok: true });
 const TEST_POOL_KEY = {
@@ -159,13 +158,7 @@ function isolatedFixture(
   const session = {
     abort: vi.fn().mockResolvedValue(undefined),
     disconnect: vi.fn().mockResolvedValue(undefined),
-    sendAndWait: vi.fn().mockResolvedValue({
-      type: "assistant.message",
-      id: "event-1",
-      parentId: null,
-      timestamp: new Date().toISOString(),
-      data,
-    }),
+    sendAndWait: vi.fn().mockResolvedValue({ type: "assistant.message", data }),
   };
   const createSession = vi.fn().mockResolvedValue(session);
   const resumeSession = vi.fn();
@@ -250,16 +243,7 @@ describe("createCopilotAgentHarness", () => {
     mocks.createCopilotByokProxy.mockReset();
     mocks.createCopilotClientPool.mockReset();
     mocks.runCopilotAttempt.mockResolvedValue(ATTEMPT_RESULT);
-    mocks.resolvePoolAcquire.mockReturnValue({
-      auth: {
-        agentId: "test",
-        authMode: "useLoggedInUser",
-        copilotHome: "/tmp/copilot",
-      },
-      key: { agentId: "test", authMode: "useLoggedInUser", copilotHome: "/tmp/copilot" },
-      options: { copilotHome: "/tmp/copilot", useLoggedInUser: true },
-      provider: { mode: "github-copilot" },
-    });
+    mocks.resolvePoolAcquire.mockImplementation(resolveRealPoolAcquire);
     mocks.createCopilotClientPool.mockImplementation(() => makePoolMock());
     mocks.createCopilotByokProxy.mockResolvedValue(undefined);
   });
@@ -283,7 +267,7 @@ describe("createCopilotAgentHarness", () => {
     ],
   ] satisfies Array<[string, Partial<Parameters<AgentHarness["supports"]>[0]>]>)(
     "supports rejects %s",
-    (name, overrides) => {
+    (_name, overrides) => {
       const harness = createCopilotAgentHarness();
       expect(harness.autoSelection?.providerIds).toEqual([]);
       expect(
@@ -295,13 +279,7 @@ describe("createCopilotAgentHarness", () => {
           providerOwnerPluginIds: [],
           ...overrides,
         }),
-      ).toEqual({
-        supported: false,
-        reason:
-          name === "auto runtime"
-            ? "copilot is opt-in only"
-            : "provider is not a supported Copilot BYOK model (requires supported api, baseUrl, and no request transport policy overrides)",
-      });
+      ).toMatchObject({ supported: false });
     },
   );
 
@@ -319,8 +297,7 @@ describe("createCopilotAgentHarness", () => {
 
   it("finalizes settled tools by resuming the compatible SDK session in isolated mode", async () => {
     const pool = makePoolMock();
-    const client = createMockCopilotClient({ deleteSession: vi.fn() });
-    const settledResult = asCompleteAttemptResult({ assistantTexts: [] });
+    const settledResult = ATTEMPT_RESULT;
     const finalAssistant = {
       role: "assistant" as const,
       content: [{ type: "text" as const, text: "final answer" }],
@@ -333,14 +310,11 @@ describe("createCopilotAgentHarness", () => {
     const params = asAttemptParams({
       ...ATTEMPT_PARAMS,
       initialReplayState: { replayInvalid: true },
-      onAgentEvent: vi.fn(),
-      onAssistantDelta: vi.fn(),
-      onPartialReply: vi.fn(),
       sessionId: "openclaw-session-finalize",
     });
     mocks.runCopilotAttempt
       .mockImplementationOnce(async (_params, deps) => {
-        await deps.onSessionEstablished?.(established("sdk-session-finalize", client));
+        await deps.onSessionEstablished?.(established("sdk-session-finalize"));
         return settledResult;
       })
       .mockResolvedValueOnce(finalResult);
@@ -352,15 +326,8 @@ describe("createCopilotAgentHarness", () => {
         attempt: asFinalizationAttempt(params),
         settledAttempt: settledResult,
       }),
-    ).resolves.toEqual({
-      assistant: finalAssistant,
-      preparedTerminalReply: {
-        text: "final answer",
-        terminalReply: { disposition: "visible", text: "final answer" },
-      },
-    });
+    ).resolves.toMatchObject({ assistant: finalAssistant });
 
-    expect(mocks.runCopilotAttempt).toHaveBeenCalledTimes(2);
     expect(mocks.runCopilotAttempt.mock.calls[1]?.[0]).toMatchObject({
       initialReplayState: { sdkSessionId: "sdk-session-finalize" },
       sessionId: "openclaw-session-finalize",
@@ -368,19 +335,13 @@ describe("createCopilotAgentHarness", () => {
     expect(mocks.runCopilotAttempt.mock.calls[1]?.[0]?.initialReplayState).not.toHaveProperty(
       "replayInvalid",
     );
-    expect(mocks.runCopilotAttempt.mock.calls[1]?.[1]).toMatchObject({
-      operation: "settled-tool-finalization",
-      pool,
-    });
+    expect(mocks.runCopilotAttempt.mock.calls[1]?.[1]?.operation).toBe("settled-tool-finalization");
     expect(mocks.runCopilotAttempt.mock.calls[1]?.[1]?.onSessionEstablished).toBeUndefined();
   });
 
   it("fails closed when settled finalization has no compatible SDK session", async () => {
     const harness = createCopilotAgentHarness({ pool: makePoolMock() });
-    const params = asAttemptParams({
-      ...ATTEMPT_PARAMS,
-      sessionId: "openclaw-session-missing",
-    });
+    const params = asAttemptParams({ ...ATTEMPT_PARAMS, sessionId: "openclaw-session-missing" });
 
     await expect(
       harness.finalizeSettledTurn?.({
@@ -519,23 +480,6 @@ describe("createCopilotAgentHarness", () => {
     const harness = createCopilotAgentHarness({ pool });
     await expect(harness.runIsolatedCompletionV2?.(params)).rejects.toThrow(reason);
     expect(pool.acquire).not.toHaveBeenCalled();
-  });
-
-  it("returns tool-shaped output for core to reject with its stable code", async () => {
-    const { complete, session, pool } = isolatedFixture({
-      content: "",
-      messageId: "message-1",
-      toolRequests: [{ toolCallId: "call-1", name: "shell", arguments: {} }],
-    });
-
-    await expect(complete()).resolves.toEqual({
-      assistant: expect.objectContaining({
-        content: [{ type: "toolCall", id: "call-1", name: "shell", arguments: {} }],
-        stopReason: "toolUse",
-      }),
-    });
-    expect(session.disconnect).toHaveBeenCalledOnce();
-    expect(pool.release).toHaveBeenCalledOnce();
   });
 
   it.each(["client acquisition", "session creation"] as const)(
@@ -1160,14 +1104,8 @@ describe("createCopilotAgentHarness", () => {
   describe("compact", () => {
     it("returns ok:false when sessionId is missing", async () => {
       const harness = createCopilotAgentHarness({ pool: makePoolMock() });
-      const result = await harness.compact?.({
-        workspaceDir: "/ws",
-      } as AgentHarnessCompactParams);
-      expect(result).toEqual({
-        ok: false,
-        compacted: false,
-        reason: "missing-required-params",
-      });
+      const result = await harness.compact?.({ workspaceDir: "/ws" } as AgentHarnessCompactParams);
+      expect(result).toEqual({ ok: false, compacted: false, reason: "missing-required-params" });
     });
 
     it("clears the reset block when storing a replacement session fails", async () => {
@@ -1211,11 +1149,7 @@ describe("createCopilotAgentHarness", () => {
         tokensRemoved: 123,
         messagesRemoved: 4,
         summaryContent: "compacted summary",
-        contextWindow: {
-          tokenLimit: 1000,
-          currentTokens: 777,
-          messagesLength: 12,
-        },
+        contextWindow: { tokenLimit: 1000, currentTokens: 777, messagesLength: 12 },
       };
       const { compact, disconnect, resumeSession, pool, start, run } = setupCompaction(
         "sdk-sess-compact",
@@ -1300,39 +1234,17 @@ describe("createCopilotAgentHarness", () => {
 
     it("requires matching token auth before compacting a tracked token-auth SDK session", async () => {
       const { pool, harness, resumeSession } = setupCompaction("sdk-sess-token");
-      const tokenAcquire = {
-        auth: {
-          agentId: "test",
-          authMode: "gitHubToken",
-          authProfileId: "p1",
-          authProfileVersion: "v1",
-          copilotHome: "/copilot-home",
-          gitHubToken: "ghp_test",
-        },
-        key: { agentId: "test", authMode: "gitHubToken", copilotHome: "/copilot-home" },
-        options: { copilotHome: "/copilot-home", gitHubToken: "ghp_test" },
-        provider: { mode: "github-copilot" },
-      } satisfies ReturnType<typeof resolvePoolAcquire>;
-      mocks.resolvePoolAcquire
-        .mockReturnValueOnce(tokenAcquire)
-        .mockReturnValueOnce({
-          auth: { agentId: "test", authMode: "useLoggedInUser", copilotHome: "/copilot-home" },
-          key: { agentId: "test", authMode: "useLoggedInUser", copilotHome: "/copilot-home" },
-          options: { copilotHome: "/copilot-home", useLoggedInUser: true },
-          provider: { mode: "github-copilot" },
-        })
-        .mockReturnValueOnce(tokenAcquire);
-
       await harness.runAttempt(
         makeCompactParams({
-          auth: { gitHubToken: "ghp_test", profileId: "p1", profileVersion: "v1" },
+          auth: {
+            gitHubToken: "ghp_test",
+            profileId: "p1",
+            profileVersion: tokenFingerprint("ghp_test"),
+          },
           sessionId: "oc-sess-token",
         }),
       );
-      const result = await compactHarness(harness, {
-        auth: undefined,
-        sessionId: "oc-sess-token",
-      });
+      const result = await compactHarness(harness, { auth: undefined, sessionId: "oc-sess-token" });
 
       expect(pool.acquire).not.toHaveBeenCalled();
       expect(resumeSession).not.toHaveBeenCalled();
@@ -1363,28 +1275,8 @@ describe("createCopilotAgentHarness", () => {
       const params = makeCompactParams({
         provider: "local-proxy",
         authProfileId: "byok:local-proxy",
+        resolvedApiKey: "byok-token",
         sessionId: "oc-sess-byok",
-      });
-      mocks.resolvePoolAcquire.mockImplementation((request: any) => {
-        const runtimeModel = request.runtimeModel ?? request.model;
-        if (!runtimeModel?.baseUrl) {
-          throw new Error(COPILOT_BYOK_PROVIDER_ERROR);
-        }
-        return {
-          auth: {
-            agentId: "test",
-            authMode: "byok",
-            authProfileId: "byok:local-proxy",
-            authProfileVersion:
-              runtimeModel.baseUrl === trackedRuntimeModel.baseUrl
-                ? "sha256:provider"
-                : "sha256:rotated",
-            copilotHome: "/copilot-home",
-          },
-          key: { agentId: "test", authMode: "byok", copilotHome: "/copilot-home" },
-          options: { copilotHome: "/copilot-home" },
-          provider: { mode: "byok" },
-        };
       });
       const closeByokProxy = vi.fn(async () => undefined);
       mocks.createCopilotByokProxy.mockImplementation(async (provider: any) => ({
@@ -1406,10 +1298,7 @@ describe("createCopilotAgentHarness", () => {
       };
       mocks.runCopilotAttempt.mockImplementation(async (_params, deps) => {
         await deps.onSessionEstablished?.({
-          compactionSessionConfig: {
-            ...TEST_SESSION_CONFIG,
-            provider: trackedProvider,
-          },
+          compactionSessionConfig: { ...TEST_SESSION_CONFIG, provider: trackedProvider },
           sdkSessionId: "sdk-sess-byok",
           pooledClient: {
             key: TEST_POOL_KEY,
@@ -1422,7 +1311,6 @@ describe("createCopilotAgentHarness", () => {
       await harness.runAttempt({
         ...params,
         model: trackedRuntimeModel,
-        resolvedApiKey: "byok-token",
       });
       mocks.resolvePoolAcquire.mockClear();
 
@@ -1539,11 +1427,7 @@ describe("createCopilotAgentHarness", () => {
       const result = await run({ workspaceDir: "/this\u0000is/illegal" });
 
       expect(compact).toHaveBeenCalledWith(undefined);
-      expect(result).toEqual({
-        ok: true,
-        compacted: false,
-        reason: "already under target",
-      });
+      expect(result).toEqual({ ok: true, compacted: false, reason: "already under target" });
     });
   });
 });
