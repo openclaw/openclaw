@@ -383,7 +383,12 @@ async function seedRestoredRequesters(
           const requesterSessionKey = `agent:main:${requesterName}`;
           const requesterTurnRunId = `yielded-${runId}`;
           const childSessionKey = `agent:main:subagent:gateway-restored-settle-${index}`;
-          const storePath = await writeChildSession(stateDir, requesterSessionKey, requesterName);
+          const storePath = await writeChildSession(
+            stateDir,
+            requesterSessionKey,
+            requesterName,
+            options.tombstoned ? `tombstoned-requester-lifecycle-${index}` : undefined,
+          );
           if (options.yieldedFence) {
             await replaceSessionEntry(
               { storePath, sessionKey: requesterSessionKey },
