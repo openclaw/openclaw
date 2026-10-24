@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { withTestTimeout } from "../../../../test/helpers/promise.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import { parseOpenAIChatGptResponsesSse } from "./openai-chatgpt-responses-protocol.js";
 
@@ -9,6 +8,20 @@ const serializedCompletedEvent = JSON.stringify(completedEvent);
 const multilineDataLines = JSON.stringify(completedEvent, null, 2)
   .split("\n")
   .map((line) => `data: ${line}`);
+
+async function settleWithin<T>(promise: Promise<T>, label: string, ms = 250): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} did not settle`)), ms);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 describe("ChatGPT Responses SSE frame boundaries", () => {
   it("parses multiline mixed line endings SSE frame boundaries", async () => {
@@ -42,11 +55,7 @@ describe("ChatGPT Responses SSE frame boundaries", () => {
     let receivedEvent = false;
 
     try {
-      const result = await withTestTimeout(
-        iterator.next(),
-        1_000,
-        "open-response frame did not settle",
-      );
+      const result = await settleWithin(iterator.next(), "open-response frame", 1_000);
       receivedEvent = true;
 
       expect(result).toEqual({ done: false, value: completedEvent });
@@ -92,14 +101,12 @@ describe("ChatGPT Responses SSE frame boundaries", () => {
     });
     const iterator = parse(body);
 
-    await expect(
-      withTestTimeout(iterator.next(), 250, "first response event did not settle"),
-    ).resolves.toEqual({
+    await expect(settleWithin(iterator.next(), "first response event")).resolves.toEqual({
       done: false,
       value: completedEvent,
     });
     await expect(
-      withTestTimeout(iterator.return(undefined), 250, "terminal iterator cleanup did not settle"),
+      settleWithin(iterator.return(undefined), "terminal iterator cleanup"),
     ).resolves.toEqual({ done: true, value: undefined });
     expect(cancelStarted).toBe(true);
 

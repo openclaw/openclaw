@@ -1,7 +1,6 @@
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { assert, describe, expect, it } from "vitest";
-import { withTestTimeout } from "../../../../test/helpers/promise.js";
 import { createBoundedMistralFetcher, streamMistral } from "./mistral.js";
 import { makeProviderModel } from "./provider-model.test-support.js";
 import { serializeSse } from "./provider-stream.test-support.js";
@@ -22,6 +21,20 @@ async function withServer<T>(handler: http.RequestListener, run: (url: string) =
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
+  }
+}
+
+async function settleWithin<T>(promise: Promise<T>, label: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`${label} did not settle`)), 250);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -83,7 +96,7 @@ describe("Mistral bounded-stream-read direct (synthetic ReadableStream)", () => 
     assert(reader, "bounded Mistral response did not expose a body reader");
 
     await expect(
-      withTestTimeout(reader.cancel("done"), 250, "wrapped response cancel did not settle"),
+      settleWithin(reader.cancel("done"), "wrapped response cancel"),
     ).resolves.toBeUndefined();
     expect(cancelStarted).toBe(true);
     reader.releaseLock();
