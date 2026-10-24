@@ -1,6 +1,7 @@
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { createDeferred as deferred } from "openclaw/plugin-sdk/extension-shared";
+import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { type WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import { monitorSlackRelaySource } from "./relay-source.js";
@@ -44,7 +45,7 @@ it.each([true, false])(
           JSON.stringify({ type: "hello", slack_identity: { username: "Relay identity" } }),
         );
       } else {
-        socket.on("message", (data) => ack.resolve(JSON.parse(data.toString())));
+        socket.on("message", (data) => ack.resolve(JSON.parse(rawDataToString(data))));
         socket.send(
           JSON.stringify({
             type: "slack_event",
@@ -72,7 +73,7 @@ it.each([true, false])(
           recovering.resolve(status);
         }
       },
-    }).catch((error) => {
+    }).catch((error: unknown) => {
       if (!controller.signal.aborted) {
         throw error;
       }
@@ -116,7 +117,9 @@ it.each([true, false])(
       for (const socket of server.clients) {
         socket.terminate();
       }
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => {
+        server.close(() => resolve());
+      });
     }
   },
 );
