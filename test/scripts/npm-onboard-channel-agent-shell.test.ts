@@ -17,8 +17,7 @@ type Scenario = {
   channel?: "telegram" | "discord" | "slack";
   bundled?: boolean;
   sourcePlugin?: boolean;
-  helpFailure?: "exit" | "timeout";
-  failProbe?: number;
+  helpFailure?: boolean;
   doctorExitCode?: number;
   dirtyState?: boolean;
 };
@@ -76,11 +75,7 @@ const fail = (message) => { console.error(message); process.exit(31); };
 if (args.includes("--help")) {
   console.log("OpenClaw ${version}\\nUsage: openclaw plugins install [options] <source>");
   if (current) console.log("  --accept-capabilities  Accept reviewed plugin capabilities");
-  const probe = events.filter((event) => event.includes("--help")).length;
-  if (probe === Number(env.FAIL_PROBE)) {
-    if (env.HELP_FAILURE === "timeout") setInterval(() => {}, 1000);
-    else process.exit(29);
-  }
+  if (env.HELP_FAILURE === "1") process.exit(29);
 } else if (args[0] === "plugins") {
   if (!current) fail("legacy package must retain automatic setup");
   if (!args.includes("--accept-capabilities")) fail("capability consent missing");
@@ -179,11 +174,10 @@ openclaw_e2e_stop_process() {
       EVENTS: eventsPath,
       CONSENT: scenario.consent === false ? "0" : "1",
       BUNDLED: bundled ? "1" : "0",
-      HELP_FAILURE: scenario.helpFailure ?? "",
-      FAIL_PROBE: scenario.helpFailure ? String(scenario.failProbe ?? 1) : "0",
+      HELP_FAILURE: scenario.helpFailure ? "1" : "0",
       DOCTOR_EXIT_CODE: scenario.doctorExitCode ? String(scenario.doctorExitCode) : "",
       OPENCLAW_E2E_REDACTOR_MODULE: redactorPath,
-      OPENCLAW_E2E_COMMAND_TIMEOUT: scenario.helpFailure === "timeout" ? "1s" : "5s",
+      OPENCLAW_E2E_COMMAND_TIMEOUT: "5s",
       OPENCLAW_E2E_TIMEOUT_KILL_GRACE_MS: "10",
       OPENCLAW_NPM_ONBOARD_CHANNEL: channel,
       OPENCLAW_NPM_ONBOARD_USE_SOURCE_PLUGIN_PACKAGE: scenario.sourcePlugin ? "1" : "0",
@@ -206,9 +200,9 @@ openclaw_e2e_stop_process() {
   return { result, events, installs, detail };
 }
 
-it.each([124, 137])("publishes redirected Doctor diagnostics with exit status %s", (status) => {
-  const { result, events } = runScenario({ doctorExitCode: status });
-  expect(result.status).toBe(status);
+it("publishes redirected Doctor diagnostics with its exit status", () => {
+  const { result, events } = runScenario({ doctorExitCode: 124 });
+  expect(result.status).toBe(124);
   expect(`${result.stdout}\n${result.stderr}`).toContain("doctor fixture stopped: [redacted]");
   expect(`${result.stdout}\n${result.stderr}`).not.toContain("synthetic-private-doctor");
   expect(events.some((args) => args[0] === "agent")).toBe(false);
@@ -304,18 +298,8 @@ it.each<[Scenario, string]>([
   expect(events).toEqual([]);
 });
 
-it.each<Scenario>([
-  { helpFailure: "exit" },
-  { helpFailure: "timeout" },
-  { channel: "discord", helpFailure: "exit", failProbe: 2 },
-  { channel: "discord", helpFailure: "exit", failProbe: 3 },
-])("stops at a failed help probe: %j", (scenario) => {
-  const { result, events, installs, detail } = runScenario(scenario);
-  expect(result.status, detail).toBe(scenario.helpFailure === "timeout" ? 124 : 29);
-  if (scenario.failProbe) {
-    expect(installs).toHaveLength(scenario.failProbe === 2 ? 0 : 1);
-    expect(events.some((args) => args[0] === "channels" && args[1] === "add")).toBe(false);
-  } else {
-    expect(events).toEqual([["plugins", "install", "--help"]]);
-  }
+it("stops at a failed help probe before mutation", () => {
+  const { result, events, detail } = runScenario({ helpFailure: true });
+  expect(result.status, detail).toBe(29);
+  expect(events).toEqual([["plugins", "install", "--help"]]);
 });

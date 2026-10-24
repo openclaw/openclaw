@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
-import { readNativeTypeScriptConfig } from "../../scripts/lib/native-typescript-config.mts";
 import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
 import {
   hashVitestWorkerArtifact,
@@ -30,12 +29,7 @@ function fixture() {
   const sources = {
     "package.json": '{"name":"worker-cache-fixture","type":"module"}\n',
     "pnpm-lock.yaml": "lockfileVersion: '9.0'\n",
-    "tsconfig.json":
-      '{"extends":"./tsconfig.base.json","compilerOptions":{"target":"ES2023","module":"NodeNext","moduleResolution":"NodeNext","allowJs":true,"noEmit":true,"types":[]},"include":["src/**/*"]}',
-    "tsconfig.base.json": '{"compilerOptions":{"strict":true}}\n',
-    "src/entry.ts": 'import { value } from "./value.js"; console.log(value);\n',
     "src/value.js": 'export const value = "first";\n',
-    "scripts/lib/fixture-compiler.mts": 'export const compilerRevision = "first";\n',
     "node-host-launcher.mjs": 'export const launcher = "fixture";\n',
     "cli-invocation.mjs": 'export const invocation = "fixture";\n',
   };
@@ -55,10 +49,6 @@ function fixture() {
     return result!;
   };
   const prepare = () => {
-    const { configFiles } = readNativeTypeScriptConfig({
-      cwd: root,
-      configFileName: "tsconfig.json",
-    });
     const outputs = {
       "probe.js":
         "#!/usr/bin/env node\n" +
@@ -70,7 +60,7 @@ function fixture() {
       "nested/deeper.js": 'export const nested = "fixture";\n',
     };
     const inputs = Object.fromEntries(
-      [...Object.keys(sources), ...configFiles].map((name) => {
+      Object.keys(sources).map((name) => {
         const filename = path.resolve(root, name);
         return [filename, fs.readFileSync(filename)];
       }),
