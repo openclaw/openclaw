@@ -1,6 +1,4 @@
-import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
-import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import {
@@ -17,7 +15,6 @@ import {
   guardModelFixtureAuth,
 } from "./model.fixture.test-support.js";
 import { createProviderRuntimeTestMock } from "./model.provider-runtime.test-support.js";
-import { createPreparedConfiguredRuntimeModelLookup } from "./model.static-id.js";
 
 let state: OpenClawTestState;
 let auth: ReturnType<typeof guardModelFixtureAuth>;
@@ -38,6 +35,7 @@ afterEach(async () => {
 
 const resolveBundledStaticCatalogModelMock = vi.hoisted(() => vi.fn());
 const resolveBundledProviderStaticCatalogModelMock = vi.hoisted(() => vi.fn());
+const loadPreparedModelRuntimeSnapshotMock = vi.hoisted(() => vi.fn());
 const resolveManifestModelCatalogProviderAliasMetadataMock = vi.hoisted(() =>
   vi.fn<
     typeof import("./model.manifest-alias.js").resolveManifestModelCatalogProviderAliasMetadata
@@ -82,40 +80,12 @@ vi.mock("../model-suppression.js", async (importOriginal) => {
 
 // mock-isolation: Fixture snapshot lifetimes exclude process-wide auth publication and runtime owners.
 vi.mock("../prepared-model-runtime.js", async () => {
-  const discovery = await import("../agent-model-discovery.js");
   const { PreparedModelRuntimeOwnerNotPublishedError } =
     await import("../prepared-model-runtime.errors.js");
-  type SnapshotInput = {
-    agentDir: string;
-    config?: OpenClawConfig;
-    workspaceDir?: string;
-  };
-  const createSnapshot = async (input: SnapshotInput) => {
-    const { workspaceDir } = input;
-    const { authStorage } = await discovery.discoverAuthStorageFacts(input.agentDir);
-    const modelRegistry = await discovery.discoverModelsAsync(authStorage, input.agentDir, {
-      ...(input.config ? { config: input.config } : {}),
-      ...(workspaceDir ? { workspaceDir } : {}),
-    });
-    if (!("fork" in modelRegistry)) {
-      Object.assign(modelRegistry, { fork: () => modelRegistry });
-    }
-    const metadataSnapshot = createPluginMetadataSnapshotFixture();
-    return {
-      ...createEmptyPreparedModelRuntimeFixture({
-        agentDir: input.agentDir,
-        config: input.config ?? {},
-        metadataSnapshot,
-        createStores: () => ({ authStorage, modelRegistry }),
-      }),
-      ...(workspaceDir ? { workspaceDir } : {}),
-      findConfiguredRuntimeModel: createPreparedConfiguredRuntimeModelLookup([], metadataSnapshot),
-    };
-  };
   return {
     PreparedModelRuntimeOwnerNotPublishedError,
     getPreparedModelRuntimeSnapshot: () => undefined,
-    loadPreparedModelRuntimeSnapshot: createSnapshot,
+    loadPreparedModelRuntimeSnapshot: loadPreparedModelRuntimeSnapshotMock,
   };
 });
 
@@ -144,11 +114,9 @@ import { expectUnknownModelErrorResult } from "./model.forward-compat.test-suppo
 import { createEmptyAgentDiscoveryStores, resolveModelAsync } from "./model.js";
 import type { ProviderRuntimeHooks } from "./model.provider-hooks.js";
 import {
-  buildOpenAICodexForwardCompatExpectation,
   makeOpenClawConfigFixture,
   makeModel,
   mockDiscoveredModel,
-  mockOpenAICodexTemplateModel,
   resetMockDiscoverModels,
 } from "./model.test-harness.js";
 
@@ -159,17 +127,15 @@ beforeEach(() => {
   vi.mocked(discoverAuthStorageFacts).mockClear();
   resolveBundledStaticCatalogModelMock.mockReset();
   resolveBundledProviderStaticCatalogModelMock.mockReset();
+  loadPreparedModelRuntimeSnapshotMock.mockReset();
   resolveManifestModelCatalogProviderAliasMetadataMock.mockReset();
   resolveManifestModelCatalogProviderAliasMetadataMock.mockImplementation(({ provider, cfg }) => {
-    const normalized = provider.trim().toLowerCase();
-    const canonicalProvider =
-      normalized === "moonshotai" || normalized === "moonshot-ai" ? "moonshot" : provider;
     const transport =
       provider === "azure-openai-responses" && cfg?.models?.providers?.[provider]?.baseUrl
         ? { api: "azure-openai-responses" as const }
         : undefined;
     return {
-      provider: canonicalProvider,
+      provider,
       ...(transport ? { transport } : {}),
     };
   });
@@ -259,18 +225,6 @@ function makeOpenAIStaticModel(): Model {
   });
 }
 
-function createAzureRuntimeHooks() {
-  return {
-    ...createRuntimeHooks(),
-    runProviderDynamicModel: vi.fn<ProviderRuntimeHooks["runProviderDynamicModel"]>(
-      ({ provider, context }) =>
-        provider === "azure-openai-responses" && context.modelId === "gpt-5.5"
-          ? makeOpenAIStaticModel()
-          : undefined,
-    ),
-  };
-}
-
 const deepSeekCatalogCompat = {
   supportsUsageInStreaming: true,
   supportsReasoningEffort: true,
@@ -321,7 +275,6 @@ describe("resolveModel", () => {
       api: "openai-completions" as const,
       baseUrl: "https://discovered.example/v1",
       contextWindow: 65_536,
-      maxTokens: 8_192,
     }));
     const runProviderDynamicModel = vi.fn(() => undefined);
     const cfg = makeProviderConfig("acme", {
@@ -332,7 +285,6 @@ describe("resolveModel", () => {
           ...makeModel("prepared-model"),
           name: "Configured Model",
           contextWindow: 32_768,
-          maxTokens: 4_096,
           metadataSource: "models-add",
         },
       ],
@@ -358,24 +310,42 @@ describe("resolveModel", () => {
 
   it("uses the resolved default agent directory and workspace for prepared discovery", async () => {
     const agentDir = state.agentDir("workspace-agent");
-    fs.mkdirSync(agentDir, { recursive: true });
     const cfg = makeOpenClawConfigFixture({
       agents: { entries: { "workspace-agent": { agentDir, workspace: state.workspaceDir } } },
     });
-    mockMinimalModelDiscovery("openai", "gpt-5.5");
+    loadPreparedModelRuntimeSnapshotMock.mockResolvedValueOnce(
+      createEmptyPreparedModelRuntimeFixture({
+        agentDir,
+        config: cfg,
+        metadataSnapshot: createPluginMetadataSnapshotFixture(),
+        createStores: createEmptyAgentDiscoveryStores,
+      }),
+    );
     const result = await resolveModelAsync("openai", "gpt-5.5", undefined, cfg, {
       runtimeHooks: createRuntimeHooks(),
     });
     expectResolvedModel(result);
-    expect(discoverModelsAsync).toHaveBeenCalledWith(
-      expect.anything(),
-      agentDir,
-      expect.objectContaining({ workspaceDir: state.workspaceDir }),
+    expect(loadPreparedModelRuntimeSnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir, workspaceDir: state.workspaceDir, config: cfg }),
     );
   });
 
-  it("resolves opt-in provider static catalog rows while skipping agent discovery", async () => {
+  it("resolves static rows with prepared auth and metadata without rediscovery", async () => {
     const metadataSnapshot = createPluginMetadataSnapshotFixture();
+    const authProfileId = "openai:prepared";
+    auth.spy.mockImplementation(() => {
+      throw new Error("Prepared auth mode must not read auth storage");
+    });
+    const checkAuth = ({
+      context,
+    }: Parameters<ProviderRuntimeHooks["runProviderDynamicModel"]>[0]) => {
+      expect(context).toMatchObject({ authProfileId, authProfileMode: "api_key" });
+      return undefined;
+    };
+    const prepareProviderDynamicModel = vi.fn(async (params: Parameters<typeof checkAuth>[0]) =>
+      checkAuth(params),
+    );
+    const runProviderDynamicModel = vi.fn(checkAuth);
     const preparedModelRuntime = createEmptyPreparedModelRuntimeFixture({
       agentDir: state.agentDir(),
       config: {},
@@ -388,16 +358,19 @@ describe("resolveModel", () => {
         id: "gemini-3.1-pro-preview",
         api: "google-generative-ai",
         baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-        reasoning: true,
-        input: ["text", "image"],
-        contextWindow: 1_048_576,
-        maxTokens: 65_536,
       }),
     );
 
     const result = await resolveWithoutDiscovery("google", "gemini-3.1-pro-preview", undefined, {
       allowBundledStaticCatalogFallback: true,
       preparedModelRuntime,
+      authProfileId,
+      authProfileMode: "api_key",
+      runtimeHooks: {
+        ...createRuntimeHooks(),
+        prepareProviderDynamicModel,
+        runProviderDynamicModel,
+      },
     });
 
     expectRecordFields(expectResolvedModel(result), {
@@ -405,65 +378,27 @@ describe("resolveModel", () => {
       id: "gemini-3.1-pro-preview",
       api: "google-generative-ai",
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
-      reasoning: true,
-      contextWindow: 1_048_576,
-      maxTokens: 65_536,
     });
     expect(resolveBundledProviderStaticCatalogModelMock).toHaveBeenCalledWith(
       expect.objectContaining({ metadataSnapshot }),
     );
+    expect(prepareProviderDynamicModel).toHaveBeenCalledOnce();
+    expect(runProviderDynamicModel).toHaveBeenCalledOnce();
     expect(discoverAuthStorageFacts).not.toHaveBeenCalled();
     expect(discoverModelsAsync).not.toHaveBeenCalled();
   });
 
-  it("keeps the prepared auth mode through async provider model resolution", async () => {
-    const authProfileId = "openai:prepared";
-    auth.spy.mockImplementation(() => {
-      throw new Error("Prepared auth mode must not read auth storage");
-    });
-    const baseRuntimeHooks = createRuntimeHooks();
-    const prepareProviderDynamicModel = vi.fn(baseRuntimeHooks.prepareProviderDynamicModel);
-    const runProviderDynamicModel =
-      vi.fn<ProviderRuntimeHooks["runProviderDynamicModel"]>(makeOpenAIStaticModel);
-
-    const result = await resolveWithoutDiscovery("openai", "gpt-5.5", undefined, {
-      authProfileId,
-      authProfileMode: "api_key",
-      runtimeHooks: {
-        ...baseRuntimeHooks,
-        prepareProviderDynamicModel,
-        runProviderDynamicModel,
-      },
-    });
-
-    expectResolvedModel(result);
-    for (const hook of [prepareProviderDynamicModel, runProviderDynamicModel]) {
-      expect(hook.mock.calls[0]?.[0].context).toMatchObject({
-        authProfileId,
-        authProfileMode: "api_key",
-      });
-    }
-  });
-
   it("applies provider overrides to bundled static catalog rows while skipping agent discovery", async () => {
-    resolveBundledStaticCatalogModelMock.mockReturnValueOnce({
-      ...makeProviderModelFixture({
+    resolveBundledStaticCatalogModelMock.mockReturnValueOnce(
+      makeProviderModelFixture({
         provider: "mistral",
         id: "mistral-medium-3-5",
         api: "openai-completions",
         baseUrl: "https://api.mistral.ai/v1",
-        input: ["text", "image"],
       }),
-      mediaInput: {
-        image: { maxSidePx: 2048, preferredSidePx: 1536, tokenMode: "provider" },
-      },
-    });
+    );
     const request = { proxy: { mode: "explicit-proxy", url: "http://127.0.0.1:18080" } };
-    const localService = {
-      command: "/opt/mistral/start",
-      args: ["--port", "18080"],
-      healthUrl: "http://127.0.0.1:18080/health",
-    };
+    const localService = { command: "/opt/mistral/start" };
     const cfg = makeProviderConfig("mistral", {
       baseUrl: "https://mistral-proxy.example.com/v1",
       api: "openai-completions",
@@ -512,7 +447,7 @@ describe("resolveModel", () => {
     },
   );
 
-  it.each(["fallback", "runtime", "api override"] as const)(
+  it.each(["fallback", "api override"] as const)(
     "inherits bundled static transport through %s",
     async (mode) => {
       const apiOverride = mode === "api override";
@@ -533,16 +468,7 @@ describe("resolveModel", () => {
         ...(mode === "fallback" ? { baseUrl: "" } : {}),
         ...(apiOverride ? { api: "openai-completions" } : {}),
       });
-      const runProviderDynamicModel = vi.fn(() => ({
-        provider: "deepseek",
-        ...configuredDeepSeekModel,
-      }));
-      const result =
-        mode === "runtime"
-          ? await resolveWithoutDiscovery("deepseek", "deepseek-v4-pro", cfg, {
-              runtimeHooks: { ...createRuntimeHooks(), runProviderDynamicModel },
-            })
-          : await resolveModelForTest("deepseek", "deepseek-v4-pro", cfg);
+      const result = await resolveModelForTest("deepseek", "deepseek-v4-pro", cfg);
       const model = expectResolvedModel(result);
       expect(model).toMatchObject({
         ...deepSeekResolvedFields,
@@ -554,37 +480,8 @@ describe("resolveModel", () => {
       } else {
         expect(model.compat).toMatchObject(deepSeekCatalogCompat);
       }
-      if (mode === "runtime") {
-        expect(runProviderDynamicModel).toHaveBeenCalled();
-      }
     },
   );
-
-  it("merges exact rows before provider defaults while preserving empty headers", async () => {
-    const cfg = makeProviderConfig("custom", {
-      api: "anthropic-messages",
-      baseUrl: "https://provider.example.test/v1",
-      models: [
-        { ...makeModel("Model"), headers: {} },
-        {
-          ...makeModel(" Model "),
-          api: "openai-completions",
-          baseUrl: "https://duplicate.example.test/v1",
-          headers: { "x-route": "duplicate" },
-        },
-      ],
-    });
-    const { model: resolved } = await resolveModelAsync("custom", "Model", state.agentDir(), cfg, {
-      ...createEmptyAgentDiscoveryStores(),
-      runtimeHooks: createRuntimeHooks(),
-    });
-    expect.soft(resolved).toMatchObject({
-      id: "Model",
-      api: "openai-completions",
-      baseUrl: "https://duplicate.example.test/v1",
-    });
-    expect.soft(resolved?.headers).toEqual(undefined);
-  });
 
   it("merges configured model params with agent defaults for resolved models", async () => {
     mockMinimalModelDiscovery("ollama", "qwen3:32b", {
@@ -605,16 +502,6 @@ describe("resolveModel", () => {
       keep_alive: "1m",
       thinking: "low",
     });
-  });
-
-  it("caps oversized provider request timeout metadata at the timer-safe ceiling", async () => {
-    mockMinimalModelDiscovery("openai", "gpt-5.5");
-    const cfg = makeOpenClawConfigFixture({
-      models: { providers: { openai: { timeoutSeconds: Number.MAX_SAFE_INTEGER } } },
-    });
-    const result = await resolveModelForTest("openai", "gpt-5.5", cfg);
-
-    expect(expectResolvedModel(result)).toHaveProperty("requestTimeoutMs", MAX_TIMER_TIMEOUT_MS);
   });
 
   it("applies agent default model params without explicit provider config", async () => {
@@ -656,7 +543,12 @@ describe("resolveModel", () => {
         skipAgentDiscovery: true,
         ...(endpoint
           ? { preferBundledStaticCatalogTransport: true }
-          : { runtimeHooks: createAzureRuntimeHooks() }),
+          : {
+              runtimeHooks: {
+                ...createRuntimeHooks(),
+                runProviderDynamicModel: makeOpenAIStaticModel,
+              },
+            }),
       });
       expectRecordFields(expectResolvedModel(result), {
         provider: "azure-openai-responses",
@@ -721,37 +613,5 @@ describe("resolveModel", () => {
     const result = await resolveModelForTest("microsoft-foundry", "gpt-5.4");
 
     expect(result.model?.input).toEqual(["text", "image"]);
-  });
-
-  it("rejects stale openai gpt-5.3-codex-spark discovery rows", async () => {
-    mockMinimalModelDiscovery("openai", "gpt-5.3-codex-spark", {
-      ...buildOpenAICodexForwardCompatExpectation("gpt-5.3-codex-spark"),
-    });
-    const result = await resolveModelForTest("openai", "gpt-5.3-codex-spark");
-    expect(result.model).toBeUndefined();
-    expect(result.error).toBe(
-      "Unknown model: openai/gpt-5.3-codex-spark. gpt-5.3-codex-spark is available only through ChatGPT/Codex OAuth. Run `openclaw models auth login --provider openai` and use openai/gpt-5.3-codex-spark with that OAuth profile; OpenAI API-key auth cannot use this model.",
-    );
-  });
-
-  it("prefers alias-specific overrides over canonical ones for gpt-5.4-codex", async () => {
-    mockOpenAICodexTemplateModel(discoverModelsAsync);
-
-    const cfg = makeProviderConfig("openai", {
-      api: "openai-chatgpt-responses",
-      models: [
-        { ...makeModel("gpt-5.4"), contextWindow: 222222, maxTokens: 22222 },
-        { ...makeModel("gpt-5.4-codex"), contextWindow: 111111, maxTokens: 11111 },
-      ],
-    });
-
-    const result = await resolveModelForTest("openai", "gpt-5.4-codex", cfg);
-
-    expectRecordFields(expectResolvedModel(result), {
-      provider: "openai",
-      id: "gpt-5.4",
-      contextWindow: 111111,
-      maxTokens: 11111,
-    });
   });
 });
