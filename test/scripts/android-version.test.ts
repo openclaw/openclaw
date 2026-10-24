@@ -45,7 +45,9 @@ describe("Android versioning", () => {
     expect(() => parseVersionSyncArgs(["--revision"])).toThrow("Unknown argument: --revision");
     expect(
       parseVersionSyncArgs(["--revision", "1"], { allowAppStoreRevision: true }),
-    ).toMatchObject({ appStoreRevision: "1" });
+    ).toMatchObject({
+      appStoreRevision: "1",
+    });
   });
 
   it.each<[string, string, string | undefined]>([
@@ -83,20 +85,14 @@ describe("Android versioning", () => {
     },
   );
 
-  it("rejects changelogs without exact-version or Unreleased notes", () => {
-    expect(() =>
-      renderAndroidReleaseNotes(
-        { canonicalVersion: "2026.6.2" },
-        "# OpenClaw Android Changelog\n\n## 2026.6.1\n\nOld notes.\n",
-      ),
-    ).toThrow("Unable to find Android changelog notes for 2026.6.2");
+  it("rejects changelogs without exact-version or nonempty Unreleased notes", () => {
+    const changelog = "## Unreleased\n\n## 2026.6.1\n\nOld notes.\n";
+    expect(extractChangelogSection(changelog, "Unreleased")).toBeNull();
+    expect(() => renderAndroidReleaseNotes({ canonicalVersion: "2026.6.2" }, changelog)).toThrow(
+      "Unable to find Android changelog notes for 2026.6.2",
+    );
   });
 
-  it("treats empty changelog sections as absent", () => {
-    expect(
-      extractChangelogSection("## Unreleased\n\n\n## 2026.6.2\n\nNotes.\n", "Unreleased"),
-    ).toBeNull();
-  });
   it("checks only pinned metadata even when the Gateway has different release notes", () => {
     const rootDir = writeAndroidFixture({
       packageVersion: "2026.9.2",
@@ -104,14 +100,12 @@ describe("Android versioning", () => {
       releaseNotes: "APK notes.\n",
     });
     syncAndroidVersioning({ rootDir });
-    const properties = fs.readFileSync(
-      resolveAndroidVersion(rootDir).versionPropertiesPath,
-      "utf8",
-    );
+    const { versionPropertiesPath, releaseNotesPath } = resolveAndroidVersion(rootDir);
+    const properties = fs.readFileSync(versionPropertiesPath, "utf8");
     expect(properties).toContain("OPENCLAW_ANDROID_VERSION_NAME=2026.6.2");
     expect(properties).toContain("OPENCLAW_ANDROID_VERSION_CODE=2026060201");
     expect(syncAndroidVersioning({ mode: "check", rootDir }).updatedPaths).toEqual([]);
-    fs.writeFileSync(resolveAndroidVersion(rootDir).releaseNotesPath, "Store notes.\n");
+    fs.writeFileSync(releaseNotesPath, "Store notes.\n");
     expect(() => syncAndroidVersioning({ mode: "check", rootDir })).toThrow(
       "Android release notes is stale",
     );

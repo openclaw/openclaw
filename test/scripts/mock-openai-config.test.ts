@@ -8,6 +8,8 @@ const agentModel = (params: Record<string, unknown> = {}) => ({
   agentRuntime: { id: "openclaw" },
   params: { ...params, transport: "sse", openaiWsWarmup: false },
 });
+const modelRef = "openai/gpt-5.5";
+const defaults = { model: { primary: modelRef }, models: { [modelRef]: agentModel() } };
 
 it("parses strict TCP port values", () => {
   expect(parseMockOpenAiPort("18080")).toBe(18080);
@@ -45,7 +47,7 @@ it.each([undefined, "openai/fixture-utility"])(
     applyMockOpenAiModelConfig(cfg, {
       includeImageDefaults: true,
       mockPort: "18181",
-      modelRef: "openai/gpt-5.5",
+      modelRef,
       utilityModelRef,
     });
 
@@ -70,24 +72,18 @@ it.each([undefined, "openai/fixture-utility"])(
         image: { primary: "openai/gpt-image-1", timeoutMs: 30_000 },
         video: { primary: "example/video" },
       },
-      model: { primary: "openai/gpt-5.5" },
       models: {
         "openai/gpt-5.4": { params: { preserved: true } },
-        "openai/gpt-5.5": agentModel(),
       },
     });
     expect(cfg.agents.defaults).not.toHaveProperty("imageGenerationModel");
     expect(cfg.agents.entries["release-agent"]).toMatchObject({
-      model: { primary: "openai/gpt-5.5" },
       workspace: "/tmp/release-agent",
-      models: { "openai/gpt-5.5": agentModel({ existing: true }) },
+      models: { [modelRef]: agentModel({ existing: true }) },
     });
     expect(cfg).toHaveProperty("plugins", { enabled: true });
     for (const agent of [cfg.agents.defaults, ...Object.values(cfg.agents.entries)]) {
-      expect(agent).toMatchObject({
-        model: { primary: "openai/gpt-5.5" },
-        models: { "openai/gpt-5.5": agentModel() },
-      });
+      expect(agent).toMatchObject(defaults);
       if (utilityModelRef) {
         expect(agent).toMatchObject({
           utilityModel: utilityModelRef,

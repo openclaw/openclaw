@@ -43,24 +43,18 @@ it("parses exact tooling and selected plugin repair inputs", () => {
 });
 
 it("rejects invalid selectors, publication booleans, and retired bypasses", () => {
+  const rejects = (args: string[], error?: string) => expect(() => parse(args)).toThrow(error);
   const selectorError = "--tag and exactly one of --workflow-ref or --workflow-sha are required.";
-  const cases: { flags: string[]; error?: string }[] = [
-    { flags: [], error: selectorError },
-    { flags: ["--workflow-ref", "main", "--workflow-sha", "a".repeat(40)], error: selectorError },
-    ...["a".repeat(12), "A".repeat(40), "g".repeat(40)].map((sha) => ({
-      flags: ["--workflow-sha", sha],
-      error: "--workflow-sha must be a lowercase 40-character commit SHA.",
-    })),
-    ...["--stable-soak-waiver", "--lane-waiver"].map((flag) => ({
-      flags: ["--workflow-ref", "main", flag, "2026.9.5 approved"],
-    })),
-    ...["TRUE", "0"].map((value) => ({
-      flags: ["--workflow-ref", "main", "--publish-openclaw-npm", value],
-      error: "must be true or false",
-    })),
-  ];
-  for (const { flags: args, error } of cases) {
-    expect(() => parse(args)).toThrow(error);
+  rejects([], selectorError);
+  rejects(["--workflow-ref", "main", "--workflow-sha", "a".repeat(40)], selectorError);
+  for (const sha of ["a".repeat(12), "A".repeat(40), "g".repeat(40)]) {
+    rejects(["--workflow-sha", sha], "--workflow-sha must be a lowercase 40-character commit SHA.");
+  }
+  for (const flag of ["--stable-soak-waiver", "--lane-waiver"]) {
+    rejects(["--workflow-ref", "main", flag, "2026.9.5 approved"]);
+  }
+  for (const value of ["TRUE", "0"]) {
+    rejects(["--workflow-ref", "main", "--publish-openclaw-npm", value], "must be true or false");
   }
 });
 

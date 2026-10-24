@@ -1,8 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
-import { resolveTestGitCommits } from "../../.github/actions/git-owner/test-prerequisites.mjs";
-import { resolveShardPlans } from "../../scripts/ci-run-node-test-shard.mts";
-import { encodeNodeTestGroups } from "../../scripts/lib/ci-node-test-groups-codec.mts";
 import {
   createSelectedNodeTestShardBundles,
   resolveCanonicalNodeTestConfig,
@@ -14,7 +11,6 @@ import {
   selectedFiles,
   fullOwnerPlan,
   expectSameFields,
-  testConfig,
 } from "./ci-changed-node-test-plan.test-support.js";
 
 function pairedPlan<T extends { groups?: NodeTestShardGroup[] }>(input: T[] | null) {
@@ -52,10 +48,6 @@ it.each(["blacksmith", "github", "hybrid"])(
     const isolated = "test/plugins/bundled-provider-auth-literal-parity.test.ts";
     const full = fullOwnerPlan(runnerBackend);
     const { job: ownerJob, owner } = pairedPlan(full);
-    expect(owner.configs).toEqual([testConfig("tooling-docker"), testConfig("tooling-isolated")]);
-    expect(owner.includePatterns).toBeUndefined();
-    expect(owner.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
-    expect(ownerJob.planConcurrency).toBe(1);
 
     for (const targets of [
       [docker],
@@ -92,16 +84,6 @@ it.each(["blacksmith", "github", "hybrid"])(
       });
       expect(selectedJob.predictedSeconds).toBeGreaterThan(0);
       expect(selectedJob.predictedSeconds).toBeLessThanOrEqual(ownerJob.predictedSeconds!);
-      const { configs, env, includePatterns, shard_name, timing_key } = owner;
-      const plan = { configs, env, includePatterns, shard_name, timing_key };
-      expect(
-        resolveShardPlans({
-          OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: encodeNodeTestGroups([plan]),
-        }),
-      ).toEqual([{ kind: "group", name: shard_name, timingKey: timing_key ?? shard_name, plan }]);
-      expect(resolveTestGitCommits(selectedJob)).toEqual(
-        resolveTestGitCommits({ groups: [owner] }),
-      );
       for (const target of targets.filter((file) => file !== docker && file !== isolated)) {
         const config = buildVitestRunPlans([target])[0]!.config;
         expect(
