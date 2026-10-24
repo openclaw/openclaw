@@ -161,11 +161,17 @@ export function scheduleGatewayRequestStart(
       request.method === "chat.history" ||
       request.method === "board.get" ||
       request.method === "sessions.resolve" ||
+      request.method === "sessions.describe" ||
       request.method === "sessions.list" ||
+      request.method === "users.list" ||
+      request.method === "agents.list" ||
+      request.method === "agent.identity.get" ||
+      request.method === "plugins.controlUi.list" ||
       request.method === "cron.list" ||
       request.method === "push.web.vapidPublicKey" ||
       request.method === "sessions.github.options" ||
       request.method === "workboard.cards.list" ||
+      request.method === "workboard.boards.list" ||
       request.method === "github.preview" ||
       request.method === "gateway.suspend.status" ||
       request.method === "update.status";

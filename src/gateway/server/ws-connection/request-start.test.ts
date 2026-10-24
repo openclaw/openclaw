@@ -162,6 +162,32 @@ describe("Gateway request start fairness", () => {
     expect(starts.at(-1)).toBe("snapshot");
   });
 
+  it.each([
+    "sessions.describe",
+    "users.list",
+    "agents.list",
+    "agent.identity.get",
+    "plugins.controlUi.list",
+    "workboard.boards.list",
+  ])("starts %s past a parked snapshot without admitting connection mutations", async (method) => {
+    const { held, start } = holdPreparations();
+    await start();
+    const starts: string[] = [];
+    const requests = [
+      { method: "sessions.subscribe", params: { limit: 100 } },
+      { method: "chat.send" },
+      { method },
+      { method: "sessions.patch" },
+    ].map((request) =>
+      requestStart(100, request, "viewer").then(() => starts.push(request.method)),
+    );
+    await nextTurn();
+    expect(starts).toEqual([method]);
+    held[0]!.resolve();
+    await Promise.all(requests);
+    expect(starts).toEqual([method, "sessions.subscribe", "chat.send", "sessions.patch"]);
+  });
+
   it("keeps a parked catalog read from blocking later connection work", async () => {
     const { held, start } = holdPreparations();
     await start();

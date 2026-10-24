@@ -184,8 +184,10 @@ Event-only `sessions.subscribe` calls do not reserve preparation slots. A waitin
 `models.list` read still needs a preparation slot, but does not block later
 requests on its connection. Snapshot and approval subscriptions keep their
 ordering barrier for later mutations and unsubscribe requests.
-`chat.history`, `sessions.list`, `sessions.resolve`, and `board.get` reads can pass waiting preparations, as can
-ordinary requests on other connections. Other starts preserve FIFO order within
+Independent reads such as `chat.history`, `sessions.list`, `sessions.resolve`,
+`sessions.describe`, `board.get`, `users.list`, `agents.list`, `agent.identity.get`,
+`plugins.controlUi.list`, and `workboard.boards.list` can pass waiting preparations,
+as can ordinary requests on other connections. Other starts preserve FIFO order within
 each connection, including subscriptions and their later unsubscribe requests.
 WebSocket handshakes bypass the request queue, so reconnecting tabs cannot start
 an unbounded replay wave ahead of other clients' handshakes.
