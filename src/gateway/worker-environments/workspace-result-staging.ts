@@ -176,6 +176,7 @@ async function stageWorkerWorkspaceResult(
     assertCurrent?: () => void;
     gitHistory?: WorkerWorkspaceGitHistory;
     gitPackPath?: string;
+    parentCommit?: string;
   },
 ): Promise<string> {
   const root = await ensureWorkerWorkspaceResultRepository(params.root, params.assertCurrent);

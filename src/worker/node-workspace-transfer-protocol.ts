@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
+import { WorkerWorkspaceGitHistorySchema } from "../gateway/worker-environments/workspace-result-inventory.js";
 import { NODE_WORKSPACE_RESULT_VERSION } from "../infra/node-runner-inventory.js";
 import { workerProtocolObject } from "./protocol-record.js";
 
@@ -30,6 +31,7 @@ const git = (args) => cp.spawnSync("git", ["-C", root, ...args], {encoding:"utf8
   // A rewritten worker can have pruned the dispatch commit; it cannot be adopted.
   if (ancestry.status !== 0 && ancestry.status !== 1 && ancestry.status !== 128) throw new Error("Worker Git ancestry is unavailable");
   const descendsFromBase = ancestry.status === 0;
+  let unavailableReason;
   if (descendsFromBase && headCommit !== baseCommit) {
     const child = cp.spawn("git", ["-C", root, "pack-objects", "--revs", "--stdout"], {stdio:["pipe","pipe","pipe"]});
     let bytes = 0;
@@ -49,10 +51,10 @@ const git = (args) => cp.spawnSync("git", ["-C", root, ...args], {encoding:"utf8
       child.kill("SIGKILL");
       await exit.catch(() => {});
       fs.rmSync(packPath, {force:true});
-      throw error;
+      unavailableReason = String(error.message).slice(0, 512);
     }
   }
-  process.stdout.write(JSON.stringify({baseCommit, headCommit, descendsFromBase}));
+  process.stdout.write(JSON.stringify({baseCommit, headCommit, descendsFromBase, unavailableReason}));
 })().catch(error => { console.error(error.message); process.exitCode = 1; });
 `;
 
@@ -130,11 +132,13 @@ export const NodeWorkerWorkspaceTransferInputSchema = z.union([
     attachments: z.literal(true).optional(),
     /** Restore only the checkpoint delta onto its independently cloned Git base. */
     checkpointBaseManifestRef: ManifestRef.optional(),
+    checkpointGitHistory: WorkerWorkspaceGitHistorySchema.optional(),
   }).refine(
     (value) =>
       (value.seedKey === undefined || value.attachments === undefined) &&
       (value.checkpointBaseManifestRef === undefined ||
-        (value.attachments === undefined && value.seedKey === undefined)),
+        (value.attachments === undefined && value.seedKey === undefined)) &&
+      (value.checkpointGitHistory === undefined || value.checkpointBaseManifestRef !== undefined),
   ),
   workerProtocolObject({
     direction: z.literal("upload"),

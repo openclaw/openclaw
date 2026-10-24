@@ -1,6 +1,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { applyEmbeddedAttemptToolsAllow } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
+import { canonicalizeSessionEntry } from "../agents/sessions/session-manager-persistence-entry.js";
 import { readToolAllowlistIntersection } from "../agents/tool-policy.js";
 import { normalizeTranscriptJsonValue } from "../config/sessions/transcript-json.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -544,62 +545,143 @@ describe("before_prompt_build dispatch", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  it.each([0, 1, 2])(
-    "scans owned payloads only in the detached clone with %i handlers",
-    async (handlers) => {
-      const message = {
-        role: "user",
-        content: [{ type: "text", text: "caller history" }],
-      };
-      normalizeTranscriptJsonValue(message, "");
-      const owned = new Set<object>([message.content, message.content[0]!]);
-      const ownKeys = vi.spyOn(Reflect, "ownKeys");
-      const clone = vi.spyOn(globalThis, "structuredClone");
-      const received: unknown[] = [];
-      try {
-        for (const hookName of ["before_prompt_build", "agent_turn_prepare"] as const) {
-          const runner = createHookRunner(
-            createMockPluginRegistry(
-              Array.from({ length: handlers }, (_, index) => ({
-                hookName,
-                handler: (value: unknown) => {
-                  const event = value as { messages: (typeof message)[] };
-                  const block = event.messages[0]!.content[0]!;
-                  expect(block.text).toBe(index === 0 ? "caller history" : "handler mutation");
-                  block.text = "handler mutation";
-                  received.push(event);
-                },
-              })),
-            ),
+  it.each([0, 1, 2])("never deep-clones owned payloads with %i handlers", async (handlers) => {
+    const message = {
+      role: "toolResult" as const,
+      toolCallId: "call-1",
+      toolName: "synthetic",
+      isError: false,
+      timestamp: 0,
+      content: [{ type: "text" as const, text: "caller history" }],
+      details: { private: "storage only" },
+      __openclaw: { upstreamUserText: "storage prompt", retained: "visible" },
+    };
+    const entry = canonicalizeSessionEntry({
+      type: "message",
+      id: "entry-1",
+      parentId: null,
+      timestamp: "2026-01-01T00:00:00.000Z",
+      message: structuredClone(message),
+    });
+    normalizeTranscriptJsonValue(message, "");
+    const messages = [message, entry.message];
+    const owned = new Set<object>(messages.flatMap((item) => [item.content, item.content[0]!]));
+    const ownKeys = vi.spyOn(Reflect, "ownKeys");
+    const clone = vi.spyOn(globalThis, "structuredClone");
+    const received: unknown[] = [];
+    try {
+      for (const hookName of ["before_prompt_build", "agent_turn_prepare"] as const) {
+        const runner = createHookRunner(
+          createMockPluginRegistry(
+            Array.from({ length: handlers }, () => ({
+              hookName,
+              handler: (value: unknown) => {
+                const event = value as { messages: (typeof message)[] };
+                for (const [index, source] of messages.entries()) {
+                  const projected = event.messages[index]!;
+                  expect(projected.content).toBe(source.content);
+                  expect(() => {
+                    projected.content[0]!.text = "forbidden mutation";
+                  }).toThrow(TypeError);
+                  expect(projected).not.toHaveProperty("details");
+                  expect(projected["__openclaw"]).toEqual({ retained: "visible" });
+                  projected.toolName = "local tool name";
+                }
+                received.push(event);
+                return { prependContext: "returned context" };
+              },
+            })),
+          ),
+          { catchErrors: false },
+        );
+        for (let turn = 0; turn < 2; turn++) {
+          ownKeys.mockClear();
+          clone.mockClear();
+          const event = { prompt: "test", messages, queuedInjections: [] };
+          const result =
+            hookName === "before_prompt_build"
+              ? await runner.runBeforePromptBuild(event, {})
+              : await runner.runAgentTurnPrepare(event, {});
+          expect(result?.prependContext).toBe(
+            handlers ? Array(handlers).fill("returned context").join("\n\n") : undefined,
           );
-          for (let turn = 0; turn < 2; turn++) {
-            ownKeys.mockClear();
-            clone.mockClear();
-            const event = { prompt: "test", messages: [message], queuedInjections: [] };
-            if (hookName === "before_prompt_build") {
-              await runner.runBeforePromptBuild(event, {});
-            } else {
-              await runner.runAgentTurnPrepare(event, {});
+          expect(clone).toHaveBeenCalledTimes(handlers ? 1 : 0);
+          expect(ownKeys.mock.calls.filter(([value]) => owned.has(value))).toHaveLength(0);
+          for (const [input] of clone.mock.calls) {
+            const snapshot = input as typeof event;
+            for (const [index, source] of messages.entries()) {
+              expect(snapshot.messages[index]!.content).not.toBe(source.content);
             }
-            expect(clone).toHaveBeenCalledTimes(handlers ? 1 : 0);
-            expect(ownKeys.mock.calls.filter(([value]) => owned.has(value))).toHaveLength(0);
-            // Detached content still gets the complete post-clone scan.
-            if (handlers) {
-              const snapshot = clone.mock.results[0]!.value as typeof event;
-              expect(
-                ownKeys.mock.calls.some(([value]) => value === snapshot.messages[0]!.content[0]),
-              ).toBe(true);
-            }
-            expect(message.content[0]!.text).toBe("caller history");
+          }
+          for (const source of messages) {
+            expect(source.content[0]!.text).toBe("caller history");
+            expect(source.toolName).toBe("synthetic");
+            expect(source["__openclaw"].retained).toBe("visible");
           }
         }
-        if (handlers) {
-          expect(received[0]).not.toBe(received[handlers]);
-        }
-      } finally {
-        ownKeys.mockRestore();
-        clone.mockRestore();
       }
+      if (handlers) {
+        expect(received[0]).not.toBe(received[handlers]);
+      }
+    } finally {
+      ownKeys.mockRestore();
+      clone.mockRestore();
+    }
+  });
+
+  it.each(["before_prompt_build", "agent_turn_prepare"] as const)(
+    "%s isolates array, envelope, and non-owned edits across dispatches",
+    async (hookName) => {
+      const message = { role: "user", content: [{ type: "text", text: "history" }] };
+      normalizeTranscriptJsonValue(message, "");
+      const unowned = { content: Object.freeze([{ text: "unowned" }]) };
+      const event = { prompt: "test", messages: [message, unowned], queuedInjections: [] };
+      const snapshots: unknown[] = [];
+      const runner = createHookRunner(
+        createMockPluginRegistry([
+          {
+            hookName,
+            handler: (value: unknown) => {
+              const input = value as typeof event;
+              snapshots.push(input);
+              expect(input.messages).toEqual(event.messages);
+              const first = input.messages[0] as typeof message;
+              first.role = "assistant";
+              first.content = [{ type: "text", text: "local replacement" }];
+              const second = input.messages[1] as typeof unowned;
+              second.content[0]!.text = "local unowned mutation";
+              input.messages.push({ content: [] });
+            },
+          },
+          {
+            hookName,
+            handler: (value: unknown) => {
+              const input = value as typeof event;
+              expect(input).toBe(snapshots.at(-1));
+              expect(input.messages).toHaveLength(3);
+              expect(input.messages[0]).toMatchObject({
+                role: "assistant",
+                content: [{ text: "local replacement" }],
+              });
+              expect(input.messages[1]).toMatchObject({
+                content: [{ text: "local unowned mutation" }],
+              });
+            },
+          },
+        ]),
+        { catchErrors: false },
+      );
+      for (let turn = 0; turn < 2; turn++) {
+        if (hookName === "before_prompt_build") {
+          await runner.runBeforePromptBuild(event, {});
+        } else {
+          await runner.runAgentTurnPrepare(event, {});
+        }
+        expect(event.messages).toHaveLength(2);
+        expect(message).toEqual({ role: "user", content: [{ type: "text", text: "history" }] });
+        expect(unowned.content[0]!.text).toBe("unowned");
+      }
+      expect(snapshots[0]).not.toBe(snapshots[1]);
     },
   );
 

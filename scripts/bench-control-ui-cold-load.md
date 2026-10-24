@@ -1,10 +1,91 @@
 # Team-scale Control UI cold-load benchmark
 
+## Media load, remount, and disposal
+
+`bench-control-ui-media.ts` compares **already-built** base and head bundles with
+96 synthetic transcript messages (16 repeated 1600×900 PNGs, eight repeated link
+hosts) and the existing 120-person avatar fixture. It never builds or contacts a
+real Gateway. Each pair gets fresh browser contexts, alternates AB/BA order, and
+runs both localhost and 100 ms RTT / 10 Mbps profiles by default:
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-media.ts \
+  --bundle-dir /absolute/base/control-ui \
+  --compare-bundle-dir /absolute/head/control-ui \
+  --pairs 10 --output /absolute/proof/media
+```
+
+The initial viewport is settled while media is held. Releasing those requests
+measures media-induced CLS separately from scrolling. Each measured phase allows
+intersection admission frames, then waits for all admitted media HTTP requests
+and visible loading images/favicons across two settled frame checks; unadmitted
+off-screen placeholders do not block. The runner then scrolls the
+transcript and online roster, remounts the first/last rows, and removes the native
+`openclaw-app` host to exercise production disconnection while preserving the
+document for lifetime measurement. Settings parks chat and cannot prove disposal.
+A document nonce assertion rejects any reload as invalid disposal evidence.
+Per-sample JSON records request counts by full URL (including revision, ticket,
+and size queries), method, kind and opaque auth-context identity; credentials are
+never recorded. Cumulative before/stable/scroll/disposal snapshots and separate
+boot/steady duplicate counts distinguish request ownership from bootstrap work.
+Duration metrics use Chrome’s `threadTicks` clock to measure thread CPU time,
+excluding time descheduled by other work on the host. Wall-clock load/scroll
+timings remain separate.
+
+It also records CLS source rectangles and media attribution, object URL
+creation/revocation and remaining DOM consumers, CDP script/task/layout/style
+duration, and JS heap before scrolling and after forced GC immediately before
+and after host disconnection, including unreferenced favicon blob URLs. The
+first pair includes pending and loaded screenshots for each bundle/profile.
+`summary.json` retains every sample, load
+average, bundle identity, and median/p95 load/scroll timings.
+
+Acceptance is zero CLS in the fixed media viewport, at most one fetch per unique
+media resource and kind, and no live object URLs owned only by disposed markdown
+consumers. Review retained URLs against their actual owner: a documented shared
+page-lifetime cache is distinct from a disposed consumer leak. Timing needs ten
+pairs with median regression ≤5% and p95 not worse. On a loaded host, repeat with
+the same base directory supplied as both bundles for an A/A control, then use
+20 interleaved pairs and CDP CPU plus structural counters if wall timing is noisy.
+
+Use a separate `--trace --pairs 1` run for decode/paint attribution; tracing adds
+overhead and must not be mixed with the untraced timing samples. The trace and
+named-event duration sums are retained per sample. CDP JS heap excludes native
+decoded-image/GPU memory. The mock RPC transport has no RTT; static HTTP uses CDP
+throttling and routed media uses equivalent explicit delay because Playwright
+fulfillment bypasses it. Routing disables the HTTP cache, so duplicate counts
+measure application request reuse rather than disk-cache behavior. These are
+renderer/media results, not real-Gateway throughput or process-memory results.
+
 Run from a prepared checkout with its package dependencies and Playwright Chromium:
 
 ```sh
 node --import tsx scripts/bench-control-ui-cold-load.ts
 ```
+
+For cold readiness comparisons, use `--gateway-http` with already-built bundles.
+It serves documents and assets through the production Gateway HTTP handler,
+including route preload hints and negotiated compression sidecars:
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-cold-load.ts \
+  --gateway-http --bundle-dir /absolute/base/control-ui \
+  --compare-bundle-dir /absolute/head/control-ui --runs 20 \
+  --first-load --cold-http-cache --untraced --thread-cpu-time --critical-path \
+  --face chat --critical-path-route sessions --critical-path-route settings \
+  --critical-path-route cron --output /absolute/proof/readiness
+```
+
+Twenty runs alternate ten base/head pairs. Supply a second copy of the base
+bundle for an A/A control. `--boot-route new` measures the New Session composer.
+Browser storage and HTTP caches are cleared between samples; Gateway asset
+caches stay warm for each immutable bundle. Each bundle's index is read before
+sampling to initialize the shared file reader outside the first timed reload.
+The WebSocket/bootstrap fixtures
+remain synthetic, so this measures the production HTTP and renderer paths,
+not Gateway RPC or provider latency. The default Vite preview server does not
+activate Gateway route preload hints or serve the shipped compression sidecars;
+retain that mode for renderer diagnostics rather than network-readiness claims.
 
 This opt-in benchmark builds the production Control UI into a fresh artifact directory,
 warms a signed-in synthetic dashboard visit, and measures three reloads. It never

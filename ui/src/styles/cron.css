@@ -10,7 +10,7 @@
 
 /* Popover menus (row actions, filters) must escape the group surface;
    .settings-group clips overflow by default. */
-.cron-page .settings-group:has(.cron-table),
+.cron-page .settings-group:has(> .cron-table),
 .cron-page .settings-group:has(.cron-runs) {
   overflow: visible;
 }

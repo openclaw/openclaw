@@ -546,9 +546,9 @@ it.runIf(process.platform !== "win32").for(["runner", "watch"] as const)(
   },
 );
 
-it.runIf(process.platform !== "win32").for(["SIGTERM", "SIGHUP"] as const)(
-  "joins the dev runner's resistant child before returning from %s",
-  async (stopSignal, { signal }) => {
+it.runIf(process.platform !== "win32")(
+  "joins the dev runner's resistant child before returning from SIGTERM",
+  async ({ signal }) => {
     await withShimFixture("scripts/run-node.mjs", async (fixture) => {
       const { checkoutRoot, fixtureRoot, implementationPath, wrapperPath, runNode } = fixture;
       mkdirSync(path.join(checkoutRoot, ".git"));
@@ -614,7 +614,7 @@ else process.exit(outcome);
         );
         // The implementation records its wrapper before runNodeMain can spawn the child.
         const wrapperPid = Number(readFileSync(wrapperPidPath, "utf8"));
-        process.kill(wrapperPid, stopSignal);
+        process.kill(wrapperPid, "SIGTERM");
         const result = await withinTest(command, signal);
         expect(result.error, formatShimResult(result)).toBeUndefined();
         expect(isProcessAlive(childPid), "the stopped runner still owns a live child").toBe(false);

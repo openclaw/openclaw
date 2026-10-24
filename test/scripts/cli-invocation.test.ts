@@ -8,14 +8,36 @@ import {
   readStandaloneRuntimeManifestForRoot,
   resolveOpenClawCliInvocation,
   resolveOpenClawCliRespawn,
+  runtimeHasSourceLoader,
 } from "../../cli-invocation.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-afterEach(() => vi.unstubAllGlobals());
+const parentExecArgv = process.execArgv;
+afterEach(() => {
+  process.execArgv = parentExecArgv;
+  vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
+});
 const execPath = "/synthetic/node";
 const entryPath = "/synthetic/openclaw.mjs";
 const execArgv = ["--import", "synthetic-loader"];
+
+it.each([
+  ["native source execution", undefined, undefined, [], false],
+  ["loose source loader", undefined, undefined, execArgv, true],
+  ["embedded executable", "file:///synthetic/runtime/", undefined, execArgv, false],
+  ["standalone runtime executing a disk script", "file:///synthetic/runtime/", "1", execArgv, true],
+] as const)(
+  "identifies source-loader capability for %s",
+  (_label, root, bunBeBun, argv, expected) => {
+    vi.stubGlobal("__openclawStandaloneRootUrl", root);
+    vi.stubEnv("BUN_BE_BUN", bunBeBun);
+    vi.stubEnv("NODE_OPTIONS", "");
+    process.execArgv = [...argv];
+    expect(runtimeHasSourceLoader()).toBe(expected);
+  },
+);
 
 function expectInvocation(
   options: Parameters<typeof resolveOpenClawCliInvocation>[0] & { args: string[] },

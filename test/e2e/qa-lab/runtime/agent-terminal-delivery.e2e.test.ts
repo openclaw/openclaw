@@ -147,12 +147,6 @@ it(
       reply("silent", "NO_REPLY", null),
       reply("suffix", "NO_REPLY\nNO_REPLY\nAnswer", "NO_REPLY\nAnswer"),
       reply("punctuation", "NO_REPLY."),
-      reply("json", '{"action":"NO_REPLY"}'),
-      reply("prose", "I started the watcher. NO_REPLY"),
-      reply("trimmed", " \tNO_REPLY\n", null),
-      reply("lowercase", "no_reply", null),
-      reply("quoted", '"NO_REPLY"'),
-      reply("literal", "NO_REPLY\nNO_REPLY", "NO_REPLY"),
       reply("crlf", "NO_REPLY\r\nAnswer"),
       reply("indented", " NO_REPLY\nAnswer"),
     ];

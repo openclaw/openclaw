@@ -202,13 +202,15 @@ suite.define(() => {
           message: { role: "assistant", content: [{ type: "text", text }] },
         });
       await emitDelta("Preparing.");
+      const assistantText = page.locator(".chat-group.assistant .chat-text");
+      await assistantText.getByText("Preparing.", { exact: true }).waitFor();
       const activity = await page.evaluateHandle((eventName) => {
         const observation = { changes: 0 };
         document.addEventListener(eventName, () => observation.changes++);
         return observation;
       }, CHAT_RUN_ACTIVITY_CHANGED_EVENT);
       await emitDelta("Preparing. Checking.");
-      await page.getByText("Preparing. Checking.", { exact: true }).waitFor();
+      await assistantText.getByText("Preparing. Checking.", { exact: true }).waitFor();
       expect(await activity.evaluate((observation) => observation.changes)).toBe(0);
     }));
 

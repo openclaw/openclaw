@@ -332,7 +332,6 @@ export function createPendingUsageRouteData(
       agentId: null,
     },
     result: null,
-    costSummary: null,
     loadedAtMs: null,
     error: null,
   };

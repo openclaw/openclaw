@@ -2165,6 +2165,12 @@ const env = {
   OPENCLAW_SYSTEMD_UNIT: `openclaw-gateway-team-shape-${port}`,
   ...(values["prep-trace"] ? { OPENCLAW_LOG_LEVEL: "trace" } : {}),
   ...(idleScenario ? { OPENCLAW_BENCH_FIRST_TEXT: "1" } : {}),
+  ...(process.env.OPENCLAW_BENCH_RETAIN_TOOL_CONTEXT === "1"
+    ? { OPENCLAW_BENCH_RETAIN_TOOL_CONTEXT: "1" }
+    : {}),
+  ...(process.env.OPENCLAW_BENCH_TOOL_EXECUTION_SOURCE
+    ? { OPENCLAW_BENCH_TOOL_EXECUTION_SOURCE: process.env.OPENCLAW_BENCH_TOOL_EXECUTION_SOURCE }
+    : {}),
   ...(values["broadcast-timing"] ? { OPENCLAW_BENCH_BROADCAST_TIMING: "1" } : {}),
   ...(process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1"
     ? { OPENCLAW_BENCH_WORKER_ATTRIBUTION: "1" }

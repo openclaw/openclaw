@@ -5,10 +5,6 @@ import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import {
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-} from "../../packages/gateway-protocol/src/schema/worker-admission.js";
-import {
   getRuntimeConfig,
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
@@ -32,6 +28,7 @@ import {
   REQUEST,
   seedActivePlacement,
 } from "./worker-environments/placement-dispatch-test-fixtures.js";
+import { WORKER_PROTOCOL_FEATURES } from "./worker-environments/placement-lifecycle.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { createWorkerSessionPlacementGate } from "./worker-environments/placement-worker-gate.js";
 import * as support from "./worker-environments/service.test-support.js";
@@ -228,10 +225,7 @@ async function createRecoveryFixture(workspacePath: string) {
       },
     ]);
   }
-  const protocolFeatures = [
-    WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-    WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  ];
+  const protocolFeatures = [...WORKER_PROTOCOL_FEATURES];
   support.testState.prepareInstallation = async () => ({
     ...support.BUNDLE_ARTIFACT,
     protocolFeatures,

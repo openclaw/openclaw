@@ -17,6 +17,8 @@ describe("public Control UI previews", () => {
     const root = tempDirs.make("openclaw-social-preview-");
     const cardBytes = fs.readFileSync(path.resolve("ui/public/apple-touch-icon.png"));
     fs.writeFileSync(path.join(root, "social-card.png"), cardBytes);
+    const videoBytes = Buffer.from("synthetic-public-video");
+    fs.writeFileSync(path.join(root, "social-preview-v1.mp4"), videoBytes);
     const rootState: ControlUiRootState = { kind: "resolved", path: root };
     const {
       listener: server,
@@ -52,6 +54,15 @@ describe("public Control UI previews", () => {
       expect(html).toContain('<meta property="og:title" content="OpenClaw dashboard">');
       expect(html).toContain(`content="https://gateway.example.test${basePath}/share/card.png"`);
       expect(html).toContain(`href="${basePath}/dashboard/example/private-name"`);
+      expect(html).toContain(
+        `<meta property="og:video" content="https://gateway.example.test${basePath}/share/preview-v1.mp4">`,
+      );
+      expect(html).toContain('<meta property="og:video:type" content="video/mp4">');
+      expect(html).toContain('<meta name="twitter:card" content="summary_large_image">');
+      expect(html).toContain('<meta name="twitter:image"');
+      expect(html).toContain('<video controls playsinline preload="none"');
+      expect(html).not.toMatch(/autoplay|twitter:player/);
+      expect(response.headers.get("content-security-policy")).toContain("media-src 'self'");
       expect(html).not.toMatch(/secret-value|private-draft|<script|openclaw-app/);
       expect(response.headers.get("content-security-policy")).toContain("default-src 'none'");
       expect(response.headers.get("referrer-policy")).toBe("no-referrer");
@@ -66,6 +77,10 @@ describe("public Control UI previews", () => {
       const png = Buffer.from(await card.arrayBuffer());
       expect(png.subarray(0, 8)).toEqual(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]));
       expect(png).toEqual(cardBytes);
+      const video = await fetch(`${origin}/share/preview-v1.mp4`);
+      expectPublic(video);
+      expect(video.headers.get("content-type")).toBe("video/mp4");
+      expect(Buffer.from(await video.arrayBuffer())).toEqual(videoBytes);
       const catalog = await fetch(
         `${origin}/share/chat/example?catalog=example&host=dev%3Amac&thread=a%22%3E%3Cscript%3E&token=secret-value`,
       );
@@ -97,6 +112,9 @@ describe("public Control UI previews", () => {
         ["/share/card.png", { headers: { "accept-encoding": "identity;q=0, *;q=0" } }, 406],
         [route, { method: "POST" }, 404],
         ["/share/card.png", { method: "POST" }, 404],
+        ["/share/preview-v1.mp4", { method: "HEAD" }, 200],
+        ["/share/preview-v1.mp4", { method: "POST" }, 404],
+        ["/share/preview-v2.mp4", {}, 404],
         ["/share/session?token=invalid", {}, 404],
         ["/share/session/media?token=invalid", {}, 404],
         ["/share/session/card.png?token=invalid", {}, 200],

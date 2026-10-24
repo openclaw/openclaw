@@ -430,6 +430,73 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
     }
   });
 
+  it("does not recompute normalized body scores while ordering retained keyword hits", async () => {
+    const fixture = admitted(() => createFixture(root, "rank-work", connection!));
+    const db = fixture.pg();
+    try {
+      admitted(() => {
+        for (let index = 0; index < 12; index++) {
+          fixture.publish(`item-${index}`, `rankprobe ${"launch ".repeat(1 + (index % 3))}`, []);
+        }
+        db.exec(`
+          CREATE FUNCTION pg_temp.pglive_rank(tsvector, tsquery, integer) RETURNS real
+          LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE COST 1 AS $$
+          BEGIN RETURN pg_catalog.ts_rank_cd($1, $2, $3); END $$;
+        `);
+      });
+      const allCalls: number[] = [];
+      for (const queryText of ["rankprobe launch", "rankprobe absentword"]) {
+        const query = keywordQuery(queryText, { limit: 3 });
+        const observed = admitted(() =>
+          db.runTransaction(() => {
+            db.exec("SET LOCAL track_functions = 'all'");
+            const countRankCalls = () =>
+              Number(
+                db
+                  .prepare(`
+              SELECT calls FROM pg_stat_xact_user_functions
+              WHERE funcid = 'pg_temp.pglive_rank(tsvector,tsquery,integer)'::regprocedure
+            `)
+                  .get()?.calls ?? 0,
+              );
+            const before = countRankCalls();
+            const execute = db.query.bind(db);
+            const capture = vi.spyOn(db, "query").mockImplementation((statement, bindings) => {
+              return execute(statement.replaceAll("ts_rank_cd(", "pg_temp.pglive_rank("), bindings);
+            });
+            try {
+              const pending = fixture.keyword(query);
+              return { pending, calls: countRankCalls() - before };
+            } finally {
+              capture.mockRestore();
+            }
+          }),
+        );
+        const result = await observed.pending;
+        expect(result.body.error).toBeUndefined();
+        expect(result.body.rows).toHaveLength(3);
+        const terms =
+          queryText === "rankprobe launch" ? "rankprobe & launch" : "rankprobe | absentword";
+        const expected = admitted(() =>
+          db
+            .prepare(`
+          SELECT id, ts_rank_cd(openclaw_search, to_tsquery('simple', ?), 0) /
+            (ts_rank_cd(openclaw_search, to_tsquery('simple', ?), 0) + 0.1) AS score
+          FROM memory_index_chunks
+          WHERE openclaw_search @@ to_tsquery('simple', ?)
+          ORDER BY score DESC, id LIMIT 3
+        `)
+            .all(terms, terms, terms),
+        );
+        expect(result.body.rows.map(({ id, score }) => ({ id, score }))).toEqual(expected);
+        allCalls.push(observed.calls);
+      }
+      expect(allCalls).toEqual([24, 24]);
+    } finally {
+      admitted(() => fixture.close());
+    }
+  });
+
   it("retains each keyword branch's ranking and limit before combining paths", async () => {
     const fixture = admitted(() => createFixture(root, "branch-limits", connection!));
     try {

@@ -2087,6 +2087,20 @@ timestamps and unprofiled paired runs for acceptance comparisons. Set the idle
 duration beyond the lifecycle's eviction window. Fixtures and all output stay
 inside the supplied synthetic state directory.
 
+To reproduce tool-context retention, set `OPENCLAW_BENCH_RETAIN_TOOL_CONTEXT=1`
+for this source-only scenario. The benchmark loader retains one
+`AsyncLocalStorage.snapshot()` per concrete tool invocation, modeling a socket or
+timer that outlives the call. `BENCH_RETAINED_TOOL_CONTEXTS` lines in the Gateway
+log report the cumulative capture count. No Agent or SessionManager is captured
+directly. Keep this instrumentation identical on both sides and require matching
+turn and context counts. Settled managers should collect while the contexts
+remain reachable, and reopened sessions must preserve their history digest.
+For a same-checkout baseline, set `OPENCLAW_BENCH_TOOL_EXECUTION_SOURCE` to a saved
+`packages/agent-core/src/agent-loop-tool-execution.ts`; the loader substitutes
+only that owner's source and keeps its canonical import identity. Record both
+source hashes. These forced-GC counts and snapshots prove owner retention, not
+untraced latency, promotion, or GC performance.
+
 For a steady memory soak with real tool execution and attached viewers, use:
 
 ```sh

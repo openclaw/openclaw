@@ -219,7 +219,6 @@ async function mountUsagePage(
       agentId: null,
     },
     result,
-    costSummary: null,
     loadedAtMs: Date.now(),
     error: null,
   };

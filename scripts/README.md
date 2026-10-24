@@ -99,6 +99,81 @@ for review. These are report-only measurements, not timing gates. Wall time is
 automation-to-assertion time, not INP. Keep failed attempts alongside successful
 captures and compare only runs with the same fixture, viewport, and collection mode.
 
+## Control UI request waterfalls
+
+The production-bundle cold-load harness can record usable-screen readiness,
+Gateway request/reply times, exact duplicate method/parameter sets, overlapping
+identical requests, resource timing, and renderer CPU counters. It reuses the
+team-scale synthetic Gateway; these are renderer/mock measurements, not real
+Gateway server timings.
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-cold-load.ts \
+  --bundle-dir <built-control-ui> --first-load --runs 1 --face chat --untraced \
+  --critical-path --session-switch --thread-cpu-time --latency-ms 0 --frame-gap-ms 0 \
+  --output <proof-dir>
+```
+
+Use `--boot-route new` without `--session-switch` for New Session. The default
+first-navigation order is Sessions, Settings (Appearance), Cron, Agents. Repeat
+`--critical-path-route <name>` to select an order or isolate a single destination.
+The harness reloads and settles the boot document before each destination, so
+earlier pages cannot warm a later page's domain owner. With `--first-load`, it
+first unloads to `about:blank`, clears all measured-origin storage and the browser
+HTTP cache over its existing CDP session, and clears session storage on an empty
+same-origin preparation document. That document seeds only the existing mock's
+build identity; no application code runs there. These resets also run before
+each sample. Cold here means fresh application owners, persistent application
+storage, and HTTP cache; the Chromium process, V8 code caches, and OS caches remain
+warm. Navigation starts after authoritative boot RPCs settle. The harness uses
+existing navigation links and the Settings keyboard shortcut; opening the Pages
+catalog is preparation outside the measured navigation interval. Each record has
+its own document time origin.
+
+For ten serial interleaved cold pairs in one process, add
+`--compare-bundle-dir <candidate-control-ui> --runs 20`. Two or three bundle slots
+are supported and every cycle must be complete. Use a second independent copy of
+the baseline bundle as the comparison for an A/A control. The synthetic server,
+fixture, and init scripts are shared; each measured document's owners and storage
+are reset. `--gateway-url` remains restricted to one first-load sample without
+bundle comparison, so real server-cache lifecycle remains externally controlled.
+`--warm-reload` cannot be combined with `--first-load`; the existing persisted
+warm-snapshot comparison path remains separate.
+
+For the 100 ms RTT / 10 Mbps profile, replace `--latency-ms 0` with
+`--latency-ms 100 --network-latency-ms 100 --download-kbps 10000` and add
+`--cold-http-cache`. HTTP/CDP throttling does not affect the synthetic WebSocket,
+so critical-path mode also applies the explicit RPC reply floor and serializes
+received frame bytes at the selected download rate. HTTP and WebSocket traffic
+use separate simulated pipes. The floor includes no real server work, and
+serialized Gateway events may add their own fixture delay.
+
+`run-1.critical-path.json` records document-clock start/readiness/capture times,
+RPCs (including requests already in flight at interaction start), duplicate
+groups, resource timings, and task/script/layout/style CPU milliseconds.
+It also records compilation, DevTools command, other-task, and total thread CPU
+counters when Chromium exposes them. Add `--cpu-profile` to save each selected
+destination's `run-1.<route>.cpuprofile` and `run-1.<route>.trace.json` for attribution.
+Profile base and candidate in separate invocations; bundle comparison accepts
+only unprofiled runs.
+Readiness is the first animation frame with visible transcript and enabled
+composer (Chat), enabled composer (New Session), populated usable inventory
+(Sessions/Cron/Agents), or visible Appearance controls and Settings search.
+The record continues through 750 ms of RPC idle to retain secondary work; that
+drain contributes to CPU totals but never to the readiness time. Use
+`--thread-cpu-time` to exclude renderer descheduling from those totals on a loaded
+host. These are
+renderer-frame readiness measurements, not INP or proof that pixels reached a
+physical display. Each destination also saves a synthetic screenshot.
+
+Run ten serial interleaved base/head pairs per profile with identical fixture
+options and report median, p95, min/max, RPC counts, and duplicate groups. Record
+an A/A control on a loaded host; if that control exceeds the timing acceptance
+band, use twenty interleaved pairs' CPU counters and structural request counts
+for attribution. Keep traced/profiling captures separate from untraced timing
+runs, and inspect request/chunk initiation against owner code before claiming
+a causal waterfall: adjacent timestamps alone do not establish a dependency.
+
 ## Control UI development benchmark
 
 Measure CLI-to-listening readiness without a browser or source edits:
