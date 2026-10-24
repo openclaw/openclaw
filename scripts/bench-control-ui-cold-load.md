@@ -101,6 +101,22 @@ Keep profiling and the optional warm-reload probes out of this timing run.
 Console progress contains readiness and host load; full RPC and resource records
 are serialized to `summary.json` after all runs, outside the preview-server workload.
 
+Add `--thread-cpu-time` to measure consumed renderer CPU with CDP's `threadTicks`
+time domain, including in `--untraced` runs. Each result's `threadCpu` records
+`scriptMs`, `taskMs`, `layoutMs`, `styleMs`, and whole-thread `threadMs` from just
+before reload through settlement (and any requested `--capture-ms` extension).
+These are CPU deltas rather than elapsed wall time; later live, streaming, and
+session-switch phases retain the same selected time domain. Default runs keep
+CDP's `timeTicks` domain.
+
+On a noisy host, run an A/A control before interpreting candidate differences.
+First copy the baseline bundle to a separate directory (`cp -R <base> <control>`):
+the runner temporarily swaps comparison bundles, so both slots cannot use the same
+path. Run `--bundle-dir <base> --compare-bundle-dir <control> --runs 20 --untraced
+--thread-cpu-time`. Then replace the comparison bundle with the candidate, keeping
+the same fixture and options. Compare CPU deltas alongside readiness and structural
+counts; thread CPU does not measure compositor presentation or server work.
+
 `pnpm ui:check-performance --module-attribution --dist <build>` ranks the top
 30 emitted JavaScript modules in each route's preload graph. Add `--json` for all
 modules and mapping coverage. It gzips source-mapped generated ranges independently,
@@ -183,6 +199,15 @@ causal. Compare total steady-state render counts and renders per second as well.
 Wall-clock durations and frame coalescing vary on a loaded host. The benchmark's
 static RPC responses are not authority for live title/run-state correctness; use
 focused browser contracts with updated authoritative mock responses for that proof.
+
+`--selector-stats` adds ranked Chromium selector snapshots to boot captures in
+`run-N.selectors.json`, with stylesheet identities, elapsed microseconds, match
+attempts, matches, and fast rejects. It requires tracing. The warm interaction
+runner (`scripts/bench-control-ui-interactions.ts`) accepts the same flag, plus
+`--theme light|dark` and `--thread-cpu-time` for thread CPU duration
+metrics on a loaded host. Selector instrumentation adds substantial overhead;
+use separate untraced interleaved runs for timing comparisons. Empty Chromium
+selector snapshots represent no matching work and are omitted from the ranking.
 
 Each invocation keeps its exact Git head and dirty-tree inventory, raw Chrome trace,
 CPU profile, settled screenshot, and JSON summary in a fresh timestamped directory.

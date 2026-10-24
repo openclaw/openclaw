@@ -98,6 +98,8 @@ export type EmbeddingProviderCreateResult = {
 /** Adapter contract registered by core or plugin embedding providers. */
 export type EmbeddingProviderAdapter = {
   id: string;
+  /** Alternate lookup ids; creation and index identity retain the canonical id. */
+  aliases?: readonly string[];
   defaultModel?: string;
   transport?: "local" | "remote";
   authProviderId?: string;

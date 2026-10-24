@@ -155,98 +155,104 @@ it("reuses complete accounting facts and reloads them after a transcript write",
   });
 });
 
-it("reuses artifact summaries without payload reads and invalidates after transcript writes", async () => {
-  await withHistory(async ({ target, database }) => {
-    const owner = new OpenClawAgentDatabaseReadOnlyScope();
-    const transcript = target.transcript;
-    const message = (title: string, role = "assistant") => ({
-      role,
-      content: [{ type: "file", title, data: "aGVsbG8=", mimeType: "text/plain" }],
-    });
-    const read = async (assistantOnly = false) => {
-      const result = await owner.run(target.database, () =>
-        readSessionHistoryRequest(
-          {
-            kind: "artifacts",
-            params: {
-              target: transcript,
-              query: {
-                kind: "list",
-                sessionKey: transcript.sessionKey,
-                includeDownloadData: false,
-                ...(assistantOnly ? { messageRole: "assistant" as const } : {}),
+it.each([
+  { source: { data: "aGVsbG8=" }, mode: "bytes" },
+  { source: { url: "https://example.com/result.txt", sizeBytes: 5 }, mode: "url" },
+])(
+  "reuses $mode artifact summaries without download payloads and invalidates after transcript writes",
+  async ({ source, mode }) => {
+    await withHistory(async ({ target, database }) => {
+      const owner = new OpenClawAgentDatabaseReadOnlyScope();
+      const transcript = target.transcript;
+      const message = (title: string, role = "assistant") => ({
+        role,
+        content: [{ type: "file", title, ...source, mimeType: "text/plain" }],
+      });
+      const read = async (assistantOnly = false, includeDownloadData = false) => {
+        const result = await owner.run(target.database, () =>
+          readSessionHistoryRequest(
+            {
+              kind: "artifacts",
+              params: {
+                target: transcript,
+                query: {
+                  kind: "list",
+                  sessionKey: transcript.sessionKey,
+                  includeDownloadData,
+                  ...(assistantOnly ? { messageRole: "assistant" as const } : {}),
+                },
               },
             },
-          },
-          target,
-        ),
-      );
-      if (result.kind !== "artifacts" || result.result.kind !== "list") {
-        throw new Error("expected artifact list");
-      }
-      return result.result.artifacts;
-    };
-    const replace = async (title: string) => {
-      await replaceTranscriptEvents(transcript, [
-        { type: "session", version: 3, id: transcript.sessionId },
-        messageEvent("artifact", message(title)),
-      ]);
-      await waitForSessionTranscriptProjection(transcript);
-    };
-    const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
-    const payloadReads: string[] = [];
-    // oxlint-disable-next-line typescript/unbound-method -- Forward with the native statement receiver.
-    const iterate = prototype.iterate;
-    const observer = vi.spyOn(prototype, "iterate").mockImplementation(function (
-      this: StatementSync,
-      ...args
-    ) {
-      if (
-        this.sourceSQL.includes("event_json") &&
-        this.sourceSQL.includes("session_transcript_active_events")
+            target,
+          ),
+        );
+        if (result.kind !== "artifacts" || result.result.kind !== "list") {
+          throw new Error("expected artifact list");
+        }
+        return result.result.artifacts;
+      };
+      const replace = async (title: string) => {
+        await replaceTranscriptEvents(transcript, [
+          { type: "session", version: 3, id: transcript.sessionId },
+          messageEvent("artifact", message(title)),
+        ]);
+        await waitForSessionTranscriptProjection(transcript);
+      };
+      const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
+      const payloadReads: string[] = [];
+      // oxlint-disable-next-line typescript/unbound-method -- Forward with the native statement receiver.
+      const iterate = prototype.iterate;
+      const observer = vi.spyOn(prototype, "iterate").mockImplementation(function (
+        this: StatementSync,
+        ...args
       ) {
-        payloadReads.push(this.sourceSQL);
-      }
-      return iterate.apply(this, args);
-    });
-    try {
-      await replace("first.txt");
-      // Cold canonical admission uses a publication scope, which cannot populate derived caches.
-      await owner.run(target.database, () =>
-        createReadonlySessionHistoryReader(target).readSessionMessageCountAsync(transcript),
-      );
-      const first = await read();
-      expect(first).toMatchObject([
-        { title: "first.txt", sizeBytes: 5, download: { mode: "bytes" } },
-      ]);
-      expect(first[0]).not.toHaveProperty("data");
-      expect(payloadReads.length).toBeGreaterThan(0);
-      payloadReads.length = 0;
-      expect(await read()).toEqual(first);
-      expect(payloadReads).toEqual([]);
-
-      await appendTranscriptMessage(transcript, {
-        eventId: "upload",
-        parentId: "artifact",
-        message: message("uploaded.txt", "user"),
+        if (
+          this.sourceSQL.includes("event_json") &&
+          this.sourceSQL.includes("session_transcript_active_events")
+        ) {
+          payloadReads.push(this.sourceSQL);
+        }
+        return iterate.apply(this, args);
       });
-      await waitForSessionTranscriptProjection(transcript);
-      expect((await read()).map((a) => a.title)).toEqual(["first.txt", "uploaded.txt"]);
-      expect((await read(true)).map((a) => a.title)).toEqual(["first.txt"]);
-      await replace("replacement.txt");
-      expect((await read()).map((a) => a.title)).toEqual(["replacement.txt"]);
-      await replace("same-length-rewrite.txt");
-      expect((await read()).map((a) => a.title)).toEqual(["same-length-rewrite.txt"]);
-      await replaceTranscriptEvents(transcript, [
-        { type: "session", version: 3, id: transcript.sessionId },
-      ]);
-      expect(await read()).toEqual([]);
-    } finally {
-      observer.mockRestore();
-      owner.close();
-    }
-  });
-});
+      try {
+        await replace("first.txt");
+        // Cold canonical admission uses a publication scope, which cannot populate derived caches.
+        await owner.run(target.database, () =>
+          createReadonlySessionHistoryReader(target).readSessionMessageCountAsync(transcript),
+        );
+        const first = await read();
+        expect(first).toMatchObject([{ title: "first.txt", sizeBytes: 5, download: { mode } }]);
+        expect(first[0]).not.toHaveProperty("data");
+        expect(first[0]).not.toHaveProperty("url");
+        expect(payloadReads.length).toBeGreaterThan(0);
+        payloadReads.length = 0;
+        expect(await read()).toEqual(first);
+        expect(payloadReads).toEqual([]);
+        expect((await read(false, true))[0]).toMatchObject(source);
+
+        await appendTranscriptMessage(transcript, {
+          eventId: "upload",
+          parentId: "artifact",
+          message: message("uploaded.txt", "user"),
+        });
+        await waitForSessionTranscriptProjection(transcript);
+        expect((await read()).map((a) => a.title)).toEqual(["first.txt", "uploaded.txt"]);
+        expect((await read(true)).map((a) => a.title)).toEqual(["first.txt"]);
+        await replace("replacement.txt");
+        expect((await read()).map((a) => a.title)).toEqual(["replacement.txt"]);
+        await replace("same-length-rewrite.txt");
+        expect((await read()).map((a) => a.title)).toEqual(["same-length-rewrite.txt"]);
+        await replaceTranscriptEvents(transcript, [
+          { type: "session", version: 3, id: transcript.sessionId },
+        ]);
+        expect(await read()).toEqual([]);
+      } finally {
+        observer.mockRestore();
+        owner.close();
+      }
+    });
+  },
+);
 
 it.each(["cold", "warm", "policy", "receipt"] as const)(
   "keeps canonical admission and history materialization on one retained snapshot (%s)",

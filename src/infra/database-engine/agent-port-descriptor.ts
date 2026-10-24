@@ -11,6 +11,7 @@ import { FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS } from "../../state/opencla
 import {
   AGENT_MEMORY_REVISION_SCHEMA_VERSION,
   AGENT_VECTOR_DECODER_SCHEMA_VERSION,
+  AGENT_VECTOR_SEARCH_SCHEMA_VERSION,
   OPENCLAW_AGENT_SCHEMA_VERSION,
 } from "../../state/openclaw-agent-db-contract.js";
 import { agentEngineSchema, openAgentEngineStore } from "../../state/openclaw-agent-db-engine.js";
@@ -126,6 +127,7 @@ const agentSourceSearchPostData: NonNullable<PortDescriptor["postgresSourcePostD
           namespace,
           shared,
           row!.metadata.version >= AGENT_VECTOR_DECODER_SCHEMA_VERSION ? 2 : 1,
+          row!.metadata.version >= AGENT_VECTOR_SEARCH_SCHEMA_VERSION ? 2 : 1,
         );
         shared.vector ||= Object.keys(schema.vector ?? {}).length > 0;
         return sql;
@@ -144,12 +146,12 @@ export async function loadAgentPortDescriptor(
     if (backup?.version === sourceVersion && backup.id === "agent") {
       return backup;
     }
-    // Schema 30 appends trajectory columns; 31 removes revision triggers; 32 changes the decoder.
+    // Schema 30 appends columns; 31–33 change only PostgreSQL search or triggers.
     // Pin the remaining shared layout so future DDL gets its own descriptor.
     if (
       backup ||
-      OPENCLAW_AGENT_SCHEMA_VERSION !== 32 ||
-      ![27, 28, 29, 30, 31].includes(sourceVersion)
+      OPENCLAW_AGENT_SCHEMA_VERSION !== 33 ||
+      ![27, 28, 29, 30, 31, 32].includes(sourceVersion)
     ) {
       throw new DatabasePortDataError(
         `Missing agent PostgreSQL backup descriptor for version ${sourceVersion}`,

@@ -228,6 +228,7 @@ describe.skipIf(!connection)("PostgreSQL vector decoder migration", () => {
         ...agentEngineSchema,
         version: 31,
         postgresVectorDecoderVersion: 1,
+        postgresVectorSearchVersion: 1,
       };
       let db = open(predecessor);
       const namespace = getPostgresPhysicalFacts(db)!.namespace;
@@ -260,11 +261,12 @@ describe.skipIf(!connection)("PostgreSQL vector decoder migration", () => {
         });
         // Storage policy is not sealed; reset it before reopening against generated DDL.
         db.exec("ALTER TABLE memory_index_chunks ALTER COLUMN embedding SET STORAGE EXTENDED");
+        // v33 backfills derived bits; canonical tuple identities and vector bytes remain stable.
         const retained = () =>
           db
             .prepare(`SELECT c.xmin::text AS chunk_xmin, c.ctid::text AS chunk_ctid,
-          encode(c.embedding, 'hex') AS canonical, v.xmin::text AS vector_xmin,
-          v.ctid::text AS vector_ctid, encode(public.vector_send(v.embedding), 'hex') AS projection
+          encode(c.embedding, 'hex') AS canonical,
+          encode(public.vector_send(v.embedding), 'hex') AS projection
           FROM memory_index_chunks c JOIN memory_index_chunks_vec v USING(id)`)
             .all();
         const before = retained();

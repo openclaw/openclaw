@@ -129,7 +129,10 @@ export function prepareStandaloneWasm({ resources, outputRoot, parse }) {
     fs.writeFileSync(path.join(directory, name), bytes);
     imports.push(`import ${JSON.stringify(`./wasm/${name}`)};`);
   }
-  const registrationPath = path.join(outputRoot, "standalone-wasm.mjs");
-  fs.writeFileSync(registrationPath, imports.join("\n") + "\n");
+  const registration = imports.join("\n") + "\n";
+  // Importing entries are fingerprinted; their paths must capture every WASM byte change.
+  const registrationSha256 = createHash("sha256").update(registration).digest("hex");
+  const registrationPath = path.join(outputRoot, `standalone-wasm-${registrationSha256}.mjs`);
+  fs.writeFileSync(registrationPath, registration);
   return { assets, registrationPath };
 }

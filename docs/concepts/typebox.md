@@ -88,8 +88,8 @@ Connect (first message):
   "id": "c1",
   "method": "connect",
   "params": {
-    "minProtocol": 5,
-    "maxProtocol": 5,
+    "minProtocol": 3,
+    "maxProtocol": 4,
     "client": {
       "id": "openclaw-macos",
       "displayName": "macos",
@@ -111,7 +111,7 @@ Hello-ok response:
   "ok": true,
   "payload": {
     "type": "hello-ok",
-    "protocol": 5,
+    "protocol": 4,
     "server": { "version": "dev", "connId": "ws-1" },
     "features": { "methods": ["health"], "events": ["tick"] },
     "snapshot": {
@@ -158,8 +158,8 @@ ws.on("open", () => {
       id: "c1",
       method: "connect",
       params: {
-        minProtocol: 5,
-        maxProtocol: 5,
+        minProtocol: 4,
+        maxProtocol: 4,
         client: {
           id: "cli",
           displayName: "example",
@@ -264,7 +264,7 @@ The published JSON Schema's `oneOf` frame order is a separate contract: `req`, `
 
 ## Versioning and compatibility
 
-- `PROTOCOL_VERSION` lives in `packages/gateway-protocol/src/version.ts` (current value: `5`).
+- `PROTOCOL_VERSION` lives in `packages/gateway-protocol/src/version.ts` (current value: `4`).
 - Clients send `minProtocol` and `maxProtocol`; the server rejects ranges that do not include its current protocol.
 - The Swift models keep unknown frame types to avoid breaking older clients.
 

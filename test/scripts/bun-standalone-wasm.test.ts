@@ -5,6 +5,7 @@ import { parse } from "acorn";
 import { afterEach, describe, expect, it } from "vitest";
 import { createStandaloneNativeAdapter } from "../../scripts/lib/bun-standalone-native.mjs";
 import { planStandaloneRuntime } from "../../scripts/lib/bun-standalone-sidecar.mjs";
+import { standaloneModuleGraphSha256 } from "../../scripts/lib/bun-standalone-support.mjs";
 import { prepareStandaloneWasm } from "../../scripts/lib/bun-standalone-wasm.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -44,6 +45,26 @@ function importedModules(registrationPath: string) {
 }
 
 describe("standalone WebAssembly registration", () => {
+  it("changes the module graph fingerprint when registered WASM bytes change", () => {
+    const { outputRoot, write } = fixture();
+    const source = write("dist/quickjs.wasm", moduleBytes);
+    const resources = [{ source, destination: "dist/quickjs.wasm" }];
+    const entry = path.join(outputRoot, "entry.js");
+    const fingerprint = () => {
+      const { registrationPath } = prepareStandaloneWasm({ resources, outputRoot, parse });
+      if (!registrationPath) {
+        throw new Error("missing WASM registration");
+      }
+      fs.writeFileSync(entry, `import ${JSON.stringify(registrationPath)};\n`);
+      return standaloneModuleGraphSha256(outputRoot, [entry]);
+    };
+    const before = fingerprint();
+    const changedBytes = Buffer.from(moduleBytes);
+    changedBytes[changedBytes.length - 2] = 43;
+    fs.writeFileSync(source, changedBytes);
+    expect(fingerprint()).not.toBe(before);
+  });
+
   it("imports the retained engine and .so extension once by exact byte identity", async () => {
     const { runtime, outputRoot, write } = fixture();
     write("dist/extensions/code-mode-quickjs/assets/quickjs.wasm", moduleBytes);

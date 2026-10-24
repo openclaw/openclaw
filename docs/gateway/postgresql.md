@@ -729,8 +729,17 @@ durably.
 
 Full text uses PostgreSQL's `simple` plus `unaccent` configuration and native
 ranking. Trigram mode performs literal contains matching with native similarity
-ranking. Semantic retrieval uses exact cosine distance through pgvector; it does
-not create an approximate-nearest-neighbor index.
+ranking. Memory vector search is approximate: a stored binary sketch provides a
+fast Hamming-distance prefilter, followed by exact float32 cosine reranking
+through pgvector. Model, source and exclusion filters apply before preselection;
+small candidate-ID scopes use exact search. This recall-tuned behavior is on by
+default with no extra configuration option. SQLite memory vector search stays
+exact, so semantic neighbors need not match across engines.
+
+Semantic memory requires pgvector 0.7 or newer. The agent schema migration
+backfills the generated sketches without building an HNSW index; ordinary writes
+maintain them automatically. Canonical embeddings, zero-vector eligibility and
+the result shape are unchanged, and backup/port operations rebuild the sketches.
 
 Scores and tokenization are engine-local. Expect different ordering from SQLite
 BM25, particularly for punctuation, compound words, and Unicode. Hybrid retrieval

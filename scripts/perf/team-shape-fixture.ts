@@ -25,6 +25,7 @@ export function parseTeamShapeOptions(argv: string[]) {
       cron: { type: "string" },
       "cron-announce-last": { type: "boolean" },
       projects: { type: "string" },
+      "local-placements": { type: "string" },
       seed: { type: "string" },
       now: { type: "string" },
       "transcript-mib": { type: "string" },
@@ -79,6 +80,10 @@ export function parseTeamShapeOptions(argv: string[]) {
     throw new Error("Long transcripts plus --transcript-mib must fit within 1 GiB");
   }
   const projects = integer("projects", 12);
+  const localPlacements = integer("local-placements", 0);
+  if (localPlacements > sessions) {
+    throw new Error("--local-placements must not exceed --sessions");
+  }
   const worktreeFiles = integer("worktree-files", 0);
   const worktreeFileBytes = integer("worktree-file-bytes", 0);
   if (worktreeFiles * worktreeFileBytes > 256 * 1024 ** 2) {
@@ -105,6 +110,7 @@ export function parseTeamShapeOptions(argv: string[]) {
     sessions,
     retainedRuns,
     settledRuns: values["settled-runs"] ?? false,
+    localPlacements,
     approvals: integer("approvals", 200),
     cronJobs,
     cronAnnounceLast,
@@ -228,6 +234,7 @@ async function main() {
     console.log(`Usage: node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts --state-dir <new-dir> [options]
   --sessions 5000 --runs 6000 --approvals 200 --cron 100 --projects 12
   --settled-runs           Keep run history terminal and delivered, without a subagent recovery backlog.
+  --local-placements 0    Retain local placement rows for startup orphan-workspace discovery.
   --cron-announce-last     Seed disabled isolated cron jobs with announce/last delivery.
   --seed 967 --now <epoch-ms> --transcript-mib 64
   --long-transcript-entries 0 --long-transcript-sessions 4

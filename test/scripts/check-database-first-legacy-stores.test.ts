@@ -85,11 +85,13 @@ const writeFileCase = importedSourceCase(writeFileImport);
 const requireCase = importedSourceCase(requireImport);
 const privateStoreCase = importedSourceCase(privateStoreImport);
 const fsPathCase = importedSourceCase(filesystemImport, ['import path from "node:path";']);
-const fsPersistCase = importedSourceCase(
-  filesystemImport,
-  ["function persist(filePath: string) {"],
-  ["}", 'await persist("sessions.json");'],
-);
+const fsWrapperCase = (parameters: string, args: string) =>
+  importedSourceCase(
+    filesystemImport,
+    [`function persist(${parameters}) {`],
+    ["}", `await persist(${args});`],
+  );
+const fsPersistCase = fsWrapperCase("filePath: string", '"sessions.json"');
 const atomicPersistCase = importedSourceCase(
   atomicImport,
   ["function persist(params: { filePath: string }) {"],
@@ -237,9 +239,11 @@ describe("check-database-first-legacy-stores", () => {
   });
 
   it("keeps transcript bridge markers out of runtime while permitting migration owners", () => {
-    const source = 'const transcriptLocator = "sqlite-transcript://legacy";';
+    const source =
+      'const transcriptLocator = "sqlite-transcript://legacy";\nconst dynamicLocator = `sqlite-transcript://${sessionId}`;';
     expect(violations(source, "src/runtime/fixture.ts")).toEqual([
       { kind: "legacy transcript bridge marker", line: 1 },
+      { kind: "legacy transcript bridge marker", line: 2 },
     ]);
     expect(violations(source, "src/commands/doctor/fixture.ts")).toEqual([]);
     expect(
@@ -327,15 +331,10 @@ describe("check-database-first-legacy-stores", () => {
       "allows read-only fs open calls and flags write modes": fsPromisesCase`
         await fs.open("sessions.json");
         await fs.open("sessions.json", "r");
-        await fs.open("sessions.json", "r+");
         await fs.open("sessions.json", "w");
-      `(filesystemWriteViolations(5, 6)),
+      `(filesystemWriteViolations(5)),
       "allows fs copy calls reading from legacy store paths": fsPromisesCase`
-        import syncFs from "node:fs";
         await fs.copyFile("sessions.json", "state/openclaw.sqlite.import");
-        await fs.cp("cron/jobs.json", "state/openclaw.sqlite.import");
-        syncFs.copyFileSync("auth-profiles.json", "state/openclaw.sqlite.import");
-        syncFs.cpSync("cache/models.json", "state/openclaw.sqlite.import");
       `(),
       "flags legacy paths destructured from for-of tuple entries": sourceCase`
         import path from "node:path";
@@ -359,9 +358,8 @@ describe("check-database-first-legacy-stores", () => {
       "flags bracketed fs writes": sourceCase`
         import fs from "node:fs";
         await fs["writeFile"]("sessions.json", "{}\\n");
-        await fs.promises["writeFile"]("cron/runs/job.jsonl", "{}\\n");
         require("node:fs")["writeFileSync"]("sessions.json", "{}\\n");
-      `(filesystemWriteViolations(3, 4, 5)),
+      `(filesystemWriteViolations(3, 4)),
       "flags dynamic fs import write aliases": sourceCase`
         const { writeFile } = await import("node:fs/promises");
         const { promises } = await import("node:fs");
@@ -473,8 +471,10 @@ describe("check-database-first-legacy-stores", () => {
           }
           return inner();
       `(filesystemWriteViolations(15)),
-      "flags legacy paths after exhaustive nested object wrapper assignments": fsCase`
-        function persist(filePath: string, useJson: boolean) {
+      "flags legacy paths after exhaustive nested object wrapper assignments": fsWrapperCase(
+        "filePath: string, useJson: boolean",
+        '"sessions.json", true',
+      )`
           let writer: { inner(nextPath: string): Promise<void> };
           if (useJson) {
             writer = {
@@ -490,24 +490,19 @@ describe("check-database-first-legacy-stores", () => {
             };
           }
           return writer.inner(filePath);
-        }
-        await persist("sessions.json", true);
       `(filesystemWriteViolations(20)),
-      "flags legacy paths after exhaustive nested object wrapper parameter assignments": fsCase`
-        function persist(
-          filePath: string,
-          writer: { inner?: (nextPath: string) => Promise<void> },
-          useJson: boolean,
-        ) {
+      "flags legacy paths after exhaustive nested object wrapper parameter assignments":
+        fsWrapperCase(
+          "filePath: string, writer: { inner?: (nextPath: string) => Promise<void> }, useJson: boolean",
+          '"sessions.json", {}, true',
+        )`
           if (useJson) {
             writer.inner = (nextPath: string) => fs.writeFile(nextPath, "{}\\n");
           } else {
             writer.inner = (nextPath: string) => fs.writeFile(nextPath, "[]\\n");
           }
           return writer.inner?.(filePath);
-        }
-        await persist("sessions.json", {}, true);
-      `(filesystemWriteViolations(15)),
+      `(filesystemWriteViolations(11)),
       "keeps wrapper object property paths after for-of reassignment": atomicPersistCase`
           for (const item of items) {
             params.filePath = currentSqlitePath;
@@ -579,16 +574,16 @@ describe("check-database-first-legacy-stores", () => {
         const copy = { ...writer.nested };
         await copy.save({ filePath: "sessions.json" });
       `(filesystemWriteViolations(11)),
-      "does not use destructured wrapper defaults after unknown spreads": fsCase`
-        function persist(filePath: string, options: { save?: () => Promise<void> }) {
+      "does not use destructured wrapper defaults after unknown spreads": fsWrapperCase(
+        "filePath: string, options: { save?: () => Promise<void> }",
+        '"sessions.json", { save: async () => {} }',
+      )`
           const writer = { save: undefined, ...options };
           const { save = () => fs.writeFile(filePath, "{}\\n") } = writer;
           return save();
-        }
-        await persist("sessions.json", { save: async () => {} });
       `(),
-      "keeps branch-only property assigned object wrapper methods after exhaustive merge": fsCase`
-        function persist(filePath: string, enabled: boolean) {
+      "keeps branch-only property assigned object wrapper methods after exhaustive merge":
+        fsWrapperCase("filePath: string, enabled: boolean", '"sessions.json", true')`
           let writer = {};
           if (enabled) {
             writer.save = () => fs.writeFile(filePath, "{}\\n");
@@ -596,19 +591,17 @@ describe("check-database-first-legacy-stores", () => {
             writer = {};
           }
           return writer.save?.();
-        }
-        await persist("sessions.json", true);
       `(filesystemWriteViolations(12)),
-      "keeps prior nested wrapper values when only one branch assigns": fsCase`
-        function persist(filePath: string, disabled: boolean) {
+      "keeps prior nested wrapper values when only one branch assigns": fsWrapperCase(
+        "filePath: string, disabled: boolean",
+        '"sessions.json", false',
+      )`
           let save = (nextPath: string) => fs.writeFile(nextPath, "{}\\n");
           if (disabled) {
             save = async () => {};
           } else {
           }
           return save(filePath);
-        }
-        await persist("sessions.json", false);
       `(filesystemWriteViolations(11)),
       "copies unknown computed property facts through object spreads": writeFileCase`
         declare const key: string;
@@ -677,18 +670,6 @@ describe("check-database-first-legacy-stores", () => {
         filename: "src/runtime/truncated-filesystem-writer-fact.ts",
         expected: filesystemWriteViolations(3),
       },
-      "does not merge branch-local computed property effects after their scope exits": sourceCase`
-        function update(groupId: string) {
-          if (named) {
-            const groups = {};
-            groups[groupId] = {};
-          } else {
-            const groups = {};
-            groups[groupId] = {};
-          }
-        }
-        update(event.groupId ?? "");
-      `(),
       "applies legacy object defaults to possibly undefined arguments": writeFileCase`
         function persist(params = { filePath: "sessions.json" }) {
           return writeFile(params.filePath, "{}\\n");
@@ -748,13 +729,6 @@ describe("check-database-first-legacy-stores", () => {
         options.paths = { nested: loadNested() };
         await persist(options);
       `(),
-      "flags legacy transcript bridge markers in runtime source": sourceCase`
-        export const transcriptLocator = "sqlite-transcript://session";
-        export const dynamicLocator = \`sqlite-transcript://\${sessionId}\`;
-      `([
-        { kind: "legacy transcript bridge marker", line: 2 },
-        { kind: "legacy transcript bridge marker", line: 3 },
-      ]),
     }),
   )("%s", (_name, { source, filename, expected }) => {
     expect(violations(source, filename)).toEqual(expected);

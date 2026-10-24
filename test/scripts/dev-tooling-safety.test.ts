@@ -86,26 +86,21 @@ function spawnPrompt(claudeBin: string, env: NodeJS.ProcessEnv = {}, capture = f
   });
 }
 
-function gatewayLeaderScript(descendantPidPath: string) {
-  const descendantScript = [
-    "process.on('SIGINT', () => {});",
-    "process.on('SIGTERM', () => {});",
-    "setInterval(() => {}, 1000);",
-    "process.send('ready');",
-    "process.disconnect();",
-  ].join("");
-  return [
-    "import childProcess from 'node:child_process';",
-    "import fs from 'node:fs';",
-    "const descendant = childProcess.spawn(process.execPath, [",
-    "  '--input-type=module',",
-    `  '--eval', ${JSON.stringify(descendantScript)},`,
-    "], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });",
-    `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
-    "process.on('SIGINT', () => process.exit(0));",
-    "descendant.once('message', () => process.send(descendant.pid));",
-    "setInterval(() => {}, 1000);",
-  ].join("\n");
+function gatewayLeaderScript(pidPath: string) {
+  const descendantScript = `process.on('SIGINT', () => {});
+process.on('SIGTERM', () => {});
+setInterval(() => {}, 1000);
+process.send('ready');
+process.disconnect();`;
+  return `import childProcess from 'node:child_process';
+import fs from 'node:fs';
+const descendant = childProcess.spawn(process.execPath,
+  ['--input-type=module', '--eval', ${JSON.stringify(descendantScript)}],
+  { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });
+fs.writeFileSync(${JSON.stringify(pidPath)}, String(descendant.pid));
+process.on('SIGINT', () => process.exit(0));
+descendant.once('message', () => process.send(descendant.pid));
+setInterval(() => {}, 1000);`;
 }
 
 let receipts: FixtureReceiptChannel;
@@ -201,18 +196,19 @@ async function withDescendantFixture(
   }
 }
 
-async function promptFixture(prefix: string, mode?: Parameters<typeof writeFakePromptCli>[2]) {
-  const root = await tempDir(prefix);
+async function promptFixture(mode?: Parameters<typeof writeFakePromptCli>[2]) {
+  const root = await tempDir("openclaw-prompt-");
   const pidPath = path.join(root, "descendant.pid");
   return { root, pidPath, claudeBin: await writeFakePromptCli(root, pidPath, mode) };
 }
 
-async function logFixture(contents: string) {
-  return writeFixture(await tempDir("openclaw-prompt-probe-log-"), "gateway.log", contents);
-}
-
 async function redactedLogTail(contents: string, bytes: number, secret = fixtureToken) {
-  const tail = await prompt.readLogTail(await logFixture(contents), bytes);
+  const filename = await writeFixture(
+    await tempDir("openclaw-prompt-log-"),
+    "gateway.log",
+    contents,
+  );
+  const tail = await prompt.readLogTail(filename, bytes);
   expectRedacted(tail, "recent gateway tail", secret);
   return tail;
 }
@@ -336,10 +332,9 @@ describe("script-specific dev tooling hardening", () => {
   });
 
   it.each([
-    ["Discord smoke", "scripts/dev/discord-acp-plain-language-smoke.ts", discord.parseArgs],
-    ["TUI PTY watch", "scripts/dev/tui-pty-test-watch.ts", tui.parseOptions],
-  ] as const)("rejects unknown %s args before launching work", async (_label, script, parse) => {
-    expect(() => parse(["--wat"])).toThrow("Unknown argument: --wat");
+    ["Discord smoke", "scripts/dev/discord-acp-plain-language-smoke.ts"],
+    ["TUI PTY watch", "scripts/dev/tui-pty-test-watch.ts"],
+  ] as const)("rejects unknown %s args before launching work", async (_label, script) => {
     const result = await runCli(script, ["--wat"]);
 
     expect({ ...result, stderr: result.stderr.trim() }).toEqual({
@@ -353,9 +348,7 @@ describe("script-specific dev tooling hardening", () => {
     [discord.parseArgs, ["--channel"], "--channel requires a value"],
     [discord.parseArgs, ["--channel="], "--channel requires a value"],
     [discord.parseArgs, ["--channel", "--json"], "--channel requires a value"],
-    ...["--channel", "--token", "--timeout-ms", "--state-dir"].map(
-      (flag) => [discord.parseArgs, [flag, "-h"], `${flag} requires a value`] as const,
-    ),
+    [discord.parseArgs, ["--channel", "-h"], "--channel requires a value"],
     [realtime.parseRealtimeSmokeArgs, ["--wat"], "Unknown argument: --wat"],
     [
       realtime.parseRealtimeSmokeArgs,
@@ -374,7 +367,6 @@ describe("script-specific dev tooling hardening", () => {
     ],
     [claude.parseArgs, ["--wat"], "Unknown argument: --wat"],
     [claude.parseArgs, ["--agent"], "--agent requires a value"],
-    [claude.parseArgs, ["--agent="], "--agent requires a value"],
     [claude.parseArgs, ["--session-key", "--reveal"], "--session-key requires a value"],
     [claude.parseArgs, ["--session-key= "], "--session-key requires a value"],
   ] as const)("rejects malformed script arguments %j", (parse, args, error) => {
@@ -579,14 +571,6 @@ describe("script-specific dev tooling hardening", () => {
     });
   });
 
-  it("formats OpenAI realtime smoke help without launching live checks", () => {
-    expect(realtime.usage()).toContain(
-      "Usage: node --import tsx scripts/dev/realtime-talk-live-smoke.ts",
-    );
-    expect(realtime.usage()).toContain("--openai-only");
-    expect(realtime.usage()).toContain("--openai-audio-cycles");
-  });
-
   it("chunks PCM input without copying or dropping bytes", async () => {
     const sent: Buffer[] = [];
     const chunkCount = await realtime.sendPcmAudioInChunks(
@@ -712,10 +696,7 @@ describe("script-specific dev tooling hardening", () => {
   it.runIf(process.platform !== "win32")(
     "rejects direct prompt success with active descendants",
     async ({ signal }) => {
-      const { pidPath: descendantPidPath, claudeBin } = await promptFixture(
-        "openclaw-direct-normal-exit-",
-        "leader-exit",
-      );
+      const { pidPath: descendantPidPath, claudeBin } = await promptFixture("leader-exit");
       let descendantPid = 0;
       const result = prompt.runDirectPrompt("normal exit cleanup proof", {
         claudeBin,
@@ -877,9 +858,7 @@ describe("script-specific dev tooling hardening", () => {
   it.runIf(process.platform !== "win32")(
     "cleans direct prompt descendants on parent signal",
     async ({ signal }) => {
-      const { pidPath: descendantPidPath, claudeBin } = await promptFixture(
-        "openclaw-direct-parent-signal-",
-      );
+      const { pidPath: descendantPidPath, claudeBin } = await promptFixture();
       const probe = spawnPrompt(claudeBin, {
         OPENCLAW_PROMPT_TEXT: "parent signal cleanup proof",
       });

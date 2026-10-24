@@ -166,6 +166,7 @@ export type AuthenticatedGatewayConnect = {
   resolvedAuth: ResolvedGatewayAuth;
   minProtocol: number;
   maxProtocol: number;
+  usesLegacyNodeProtocol: boolean;
   role: GatewayRole;
   scopes: string[];
   hasRequestedScopes: boolean;
