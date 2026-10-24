@@ -124,10 +124,22 @@ export function clonePromptHookEvent<T extends { messages: unknown[] }>(
       if (prototype !== Object.prototype && prototype !== null) {
         continue;
       }
+      const original = event.messages[index];
+      const ownedMessage =
+        original && typeof original === "object" && isOwnedTranscriptPayload(original)
+          ? original
+          : undefined;
       const envelope: Record<string, unknown> = { ...message };
       for (const key of Object.keys(envelope)) {
         const value = envelope[key];
-        if (value && typeof value === "object" && isOwnedTranscriptPayload(value)) {
+        // Entry normalization owns the whole message. Projection can replace metadata,
+        // so only unchanged fields inherit that owner's deep-freeze guarantee.
+        if (
+          value &&
+          typeof value === "object" &&
+          ((ownedMessage && Reflect.get(ownedMessage, key) === value) ||
+            isOwnedTranscriptPayload(value))
+        ) {
           shared.push({ index, key, value });
           envelope[key] = undefined;
         }
