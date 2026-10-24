@@ -3,8 +3,8 @@ import {
   getStandaloneRuntimeBuild,
   type StandaloneBuildInfo,
 } from "../../cli-invocation.mjs";
+import { parseNodeOptionsEnvVar } from "../../node-runtime-env.mjs";
 import type { DiagnosticProfileOutcome } from "../logging/diagnostic-profile.js";
-import { parseNodeOptionsEnvVar } from "./node-options.js";
 
 type Capability = {
   state: "available" | "unavailable" | "unknown";
