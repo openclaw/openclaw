@@ -4,6 +4,7 @@ import { buffer, text } from "node:stream/consumers";
 import { setImmediate } from "node:timers/promises";
 import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
+import { listenOnLoopback } from "../../../../../test-support/hanging-loopback-server.js";
 import { buildRoomKeyBackupUnavailableFaultRule } from "../scenarios/scenario-runtime-e2ee-room.js";
 import { startMatrixQaFaultProxy } from "./fault-proxy.js";
 import { normalizeMatrixQaRoute } from "./recording-proxy-internals.js";
@@ -39,14 +40,9 @@ async function startTargetServer(params?: {
       res.destroy(error instanceof Error ? error : new Error(String(error))),
     );
   });
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("target server did not bind to a TCP port");
-  }
+  const port = await listenOnLoopback(server);
   const handle = {
-    baseUrl: `http://127.0.0.1:${address.port}`,
+    baseUrl: `http://127.0.0.1:${port}`,
     close: () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));

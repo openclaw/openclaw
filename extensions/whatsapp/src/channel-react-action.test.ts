@@ -89,6 +89,14 @@ vi.mock("./channel-react-action.runtime.js", async () => {
   };
 });
 
+function whatsAppToolContext(currentChannelId: string, currentMessageId: string | number) {
+  return {
+    currentChannelId,
+    currentChannelProvider: "whatsapp",
+    currentMessageId,
+  };
+}
+
 describe("whatsapp react action messageId resolution", () => {
   const baseCfg = {
     channels: { whatsapp: { actions: { reactions: true }, allowFrom: ["*"] } },
@@ -258,11 +266,7 @@ describe("whatsapp react action messageId resolution", () => {
       accountId: "default",
       mediaLocalRoots: ["/tmp"],
       mediaReadFile,
-      toolContext: {
-        currentChannelId: "whatsapp:+1555",
-        currentChannelProvider: "whatsapp",
-        currentMessageId: "ctx-msg-42",
-      },
+      toolContext: whatsAppToolContext("whatsapp:+1555", "ctx-msg-42"),
     });
 
     expect(hoisted.resolveAuthorizedWhatsAppOutboundTarget).toHaveBeenCalledWith({
@@ -466,11 +470,7 @@ describe("whatsapp react action messageId resolution", () => {
       params: { emoji: "❤️" },
       cfg: baseCfg,
       accountId: "default",
-      toolContext: {
-        currentChannelId: "whatsapp:+1555",
-        currentChannelProvider: "whatsapp",
-        currentMessageId: "ctx-msg-42",
-      },
+      toolContext: whatsAppToolContext("whatsapp:+1555", "ctx-msg-42"),
     });
     expectReactionForwarded({
       emoji: "❤️",
@@ -483,11 +483,7 @@ describe("whatsapp react action messageId resolution", () => {
       params: { emoji: "🎉", to: "+1555" },
       cfg: baseCfg,
       accountId: "default",
-      toolContext: {
-        currentChannelId: "whatsapp:+1555",
-        currentChannelProvider: "whatsapp",
-        currentMessageId: 12345,
-      },
+      toolContext: whatsAppToolContext("whatsapp:+1555", 12345),
     });
     expectReactionForwarded({
       messageId: "12345",
@@ -513,11 +509,7 @@ describe("whatsapp react action messageId resolution", () => {
       cfg: baseCfg,
       accountId: "default",
       requesterSenderId: "123@lid",
-      toolContext: {
-        currentChannelId: "whatsapp:12345@g.us",
-        currentChannelProvider: "whatsapp",
-        currentMessageId: "ctx-msg-42",
-      },
+      toolContext: whatsAppToolContext("whatsapp:12345@g.us", "ctx-msg-42"),
     });
     expectReactionForwarded({
       chatJid: "12345@g.us",
@@ -532,11 +524,7 @@ describe("whatsapp react action messageId resolution", () => {
       cfg: baseCfg,
       accountId: "default",
       requesterSenderId: "123@lid",
-      toolContext: {
-        currentChannelId: "whatsapp:+1555",
-        currentChannelProvider: "whatsapp",
-        currentMessageId: "ctx-msg-42",
-      },
+      toolContext: whatsAppToolContext("whatsapp:+1555", "ctx-msg-42"),
     });
     expectReactionForwarded({});
   });
@@ -552,11 +540,7 @@ describe("whatsapp react action messageId resolution", () => {
       cfg: baseCfg,
       accountId: "default",
       requesterSenderId: "123@lid",
-      toolContext: {
-        currentChannelId: "whatsapp:12345@g.us",
-        currentChannelProvider: "whatsapp",
-        currentMessageId: "ctx-msg-42",
-      },
+      toolContext: whatsAppToolContext("whatsapp:12345@g.us", "ctx-msg-42"),
     });
     expectReactionForwarded({
       chatJid: "12345@g.us",
@@ -571,11 +555,7 @@ describe("whatsapp react action messageId resolution", () => {
       cfg: baseCfg,
       accountId: "default",
       requesterSenderId: "123@lid",
-      toolContext: {
-        currentChannelId: "whatsapp:12345@g.us",
-        currentChannelProvider: "whatsapp",
-        currentMessageId: "ctx-msg-42",
-      },
+      toolContext: whatsAppToolContext("whatsapp:12345@g.us", "ctx-msg-42"),
     }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(Error);
     expect((err as Error).name).toBe("ToolInputError");
@@ -589,11 +569,7 @@ describe("whatsapp react action messageId resolution", () => {
       cfg: baseCfg,
       accountId: "default",
       requesterSenderId: "123@lid",
-      toolContext: {
-        currentChannelId: "whatsapp:12345@g.us",
-        currentChannelProvider: "whatsapp",
-        currentMessageId: "ctx-msg-42",
-      },
+      toolContext: whatsAppToolContext("whatsapp:12345@g.us", "ctx-msg-42"),
     });
     expectReactionForwarded({
       chatJid: "12345@g.us",

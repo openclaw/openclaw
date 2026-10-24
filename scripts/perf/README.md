@@ -1,5 +1,42 @@
 # Team-shaped synthetic state
 
+## Device pairing publication
+
+`device-pairing-publication-measure.ts` seeds 64 synthetic paired nodes, then
+invalidates and rebuilds the shared node snapshot through the real pairing reader
+and SQLite worker. This forces publication misses without repeated database
+writes. It verifies exact device contents, snapshot reuse, and nested freezing
+before and after measurement. It measures the reader/publication boundary, not
+Gateway RPC latency or a production publication rate.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs \
+  scripts/perf/device-pairing-publication-measure.ts \
+  --mode timing --state-dir /path/to/new-state --operations 4000 --devices 64 \
+  --output /path/to/timing.json
+```
+
+Use separate fresh processes for `--mode allocation` (sampling includes collected
+objects) and `--mode promotion`. Promotion additionally requires
+`--trace-gc-nvp --gc-log /path/to/trace.log` with stdout redirected to that log.
+Timing and allocation reject GC trace flags. The report hashes the selected
+publication source and fixture, reports main-thread and process CPU per
+publication, latency and event-loop tails with sample counts, and per-kind GC
+totals, tails, and maximum pauses. Allocation reports bytes attributed to
+`inspectPlainData`; promotion is bounded to the measured main-isolate window.
+The default 200 publications/minute is an explicit allocation projection.
+
+For concurrent pairs, prepare separate state directories, pass distinct
+`--warm-ready-file` and `--ready-file` paths, and common `--warm-start-file` and
+`--start-file` paths. After both sides are ready, atomically publish a future epoch
+in milliseconds into the corresponding start file. `--publication-source` selects
+a saved sibling copy of the publication owner for same-tree comparisons. Use the
+shared quiet-slot lock and guard, counterbalance launch order, and swap the
+interleaved CPU sets per pair. Run at least four identical-source A/A pairs of the
+same mode before interpreting adverse GC, promotion, or pause results. Keep
+maintenance enabled; apply the campaign's paired absolute-delta and sample-count
+rules. Traced timing and allocation-profile timing are not acceptance evidence.
+
 ## Update database generations
 
 Run `node --import ./scripts/tsx.mjs scripts/perf/update-doctor-generation-measure.ts
@@ -3037,6 +3074,36 @@ submission counts include work before the diagnostics exporter starts; queue
 metrics do not. Record the kind breakdown and verify memory catch-up actually
 ran before attributing an improvement to it. Use a fresh fixture for each revision.
 
+## Publication transport spawn attribution
+
+`publication-spawn-measure.ts` measures the real `runPublicationCommand` transport
+against a tiny synthetic Git repository, with 200 synthetic environment entries.
+It warms 100 commands, then runs a fixed mix of `rev-parse`, `config`, `ls-files`,
+and `show` reads, checking every result. This isolates transport costs; it does
+not replace a Gateway publication-flow measurement.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/publication-spawn-measure.ts \
+  --state-dir /path/to/new-synthetic-state --operations 2000 --output timing.json
+```
+
+Use `--transport-owner` with a baseline sibling of
+`src/gateway/github-publication-git-transport.ts` to compare the same source tree.
+Supply a sibling for each side so both register the same resolver hook.
+Both sides must use identical fixed work counts (at least 1,000 operations), fresh
+state directories, and a shared `--start-at` epoch in milliseconds. Hold the quiet
+slot lock and guard, then swap interleaved CPU placements for the second pair.
+Untraced output includes main-thread and process CPU per operation, operation
+latency, synchronous native-spawn time, event-loop sample counts/tails, and
+per-kind GC counts, total time, percentiles, and maxima. `--allocation` is a
+separate sampled-allocation pass including collected objects; compare it only
+against the same mode. No forced GC or pause trimming occurs. Apply the campaign's
+absolute-delta and sample-count rules, and collect matched identical-source
+controls before interpreting adverse GC results.
+Use `--cpu-profile` separately from `--allocation` to capture the measured operation
+window in `publication-spawn.cpuprofile` under the state directory; its profiled
+timings are attribution evidence, not untraced comparison gates.
+
 ## Checkout diff command fan-out
 
 `checkout-diff-measure.ts` exercises the production Git worker or its read-cache
@@ -3615,6 +3682,8 @@ Supported scenarios:
 | Scenario               | One measured operation                                                                                                         |
 | ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `sessions.list`        | One compact sidebar page RPC, `archived=all`, `--limit` rows                                                                   |
+| `status`               | One admin status RPC with channel summary disabled; verifies session counts and recent rows                                    |
+| `health`               | One admin health RPC with `probe: true`; verifies session counts and recent rows                                               |
 | `sessions.describe`    | One detailed parent-row RPC, including the harness's synthetic children                                                        |
 | `sessions.patch`       | One title, expiring status-note, or model-selection mutation on a retained fixture session                                     |
 | `sessions.cleanup`     | One cleanup RPC in warning mode, including current subagent preservation and commit compatibility checks                       |
@@ -4913,3 +4982,51 @@ and launch order in the second pair. Compare allocation and CPU per fixed batch,
 apply the campaign's absolute-delta and sample-count rules, and use matched A/A
 controls before rejecting on noisy GC, promotion, or maximum pauses. A p99 needs
 1,000 samples, a p95 needs 200, and major-GC tails need 50 collections per side.
+
+## PTY session cleanup scans
+
+On Linux, `node scripts/perf/pty-session-scan-measure.mjs <kill-tree.ts> live 100`
+measures the real termination owner against a prepared synthetic session with a
+child in a separate job-control group. Use `exited` for the same session after
+verified teardown. An optional final epoch-millisecond argument synchronizes
+measurement after warmup. Compare unchanged and candidate owner files under the
+shared quiet-slot guard, with concurrent starts and swapped interleaved CPUs.
+
+The probe counts `ps` calls and returned bytes, checks every signal target, and
+reports main-thread CPU, synchronous call latency, natural GC events/maxima, and
+event-loop tails with counts. It suppresses signals during repeated scans to
+retain identical fixtures, then restores real signals and verifies both processes
+exit. Child-process CPU is excluded. This is owner-boundary evidence, not a full
+Gateway benchmark; 100 calls cannot qualify latency p95/p99 as gates. Apply the
+campaign's absolute-delta rules and matched A/A controls before attributing GC
+or pause regressions. Accept reduced process-table transfer/parse work with
+unchanged descendant cleanup and no material CPU or latency regression.
+
+## Catalog worker retained revisions
+
+`catalog-worker-retention-measure.ts` sends synthetic catalogs through the real
+catalog worker pool, prepares 20 workspace contexts, then replaces every context
+with a second remote catalog revision. Each revision contains 5,000 synthetic
+model rows. Every request must return the configured fixture model. The shared
+worker observer forces collection after the first workspace and each complete
+revision; these are retention samples, not latency or GC-throughput measurements.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/catalog-worker-retention-measure.ts \
+  --output /path/to/new-fixture --workspaces 20 --models 5000
+```
+
+Use fresh output directories and five alternating baseline/candidate runs. For
+source comparisons without another checkout, pass `--owner-dir` on both sides:
+its directory mirrors `src/agents/prepared-model-catalog.worker.ts` from the
+selected revision. Both sides use the same source substitution hook. JSON lines
+report successful request count, fixture size, post-GC worker heap and external
+bytes, runtime, and substituted modules. `--snapshot` captures the final synthetic
+worker after collection; use only on a host approved for snapshots.
+
+The fixture isolates remote catalog retention from plugin execution and network
+discovery. It is not a full Gateway or production heap estimate: source-runtime
+loads include TypeScript tooling. Workspace/source/revision correctness and
+retirement are covered by the catalog worker heap integration test. Analyze
+snapshots with the [retention runbook](heap-retention-runbook.md); preserve the
+campaign's host, disk, and production-safety restrictions.

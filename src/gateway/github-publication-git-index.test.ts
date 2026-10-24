@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandBuffered } from "../process/exec.js";
 import {
   createOpenClawTestState,
@@ -17,6 +17,7 @@ import {
   captureGitHubPublicationWorkspaceSnapshot,
   githubPublicationPushArgs,
   githubPublicationUpdateRefArgs,
+  runPublicationCommand,
 } from "./github-publication-git-transport.js";
 
 let testState: OpenClawTestState;
@@ -147,6 +148,49 @@ async function interruptAcceptedUpdate() {
 }
 
 describe("GitHub publication index update", () => {
+  it("inherits the admitted environment while preserving explicit overrides and deletions", async () => {
+    vi.stubEnv("OPENCLAW_PUBLICATION_INHERITED", "before-admission");
+    vi.stubEnv("OPENCLAW_PUBLICATION_OVERRIDE", "inherited");
+    vi.stubEnv("OPENCLAW_PUBLICATION_REMOVED", "inherited");
+    const keys = [
+      "OPENCLAW_PUBLICATION_INHERITED",
+      "OPENCLAW_PUBLICATION_OVERRIDE",
+      "OPENCLAW_PUBLICATION_REMOVED",
+      "GIT_NO_REPLACE_OBJECTS",
+      "OPENCLAW_CLI",
+    ];
+    try {
+      for (const env of [
+        undefined,
+        { OPENCLAW_PUBLICATION_OVERRIDE: "explicit", OPENCLAW_PUBLICATION_REMOVED: undefined },
+      ]) {
+        const result = await runPublicationCommand(
+          [
+            process.execPath,
+            "-e",
+            `console.log(JSON.stringify(${JSON.stringify(keys)}.map(key => process.env[key] ?? null)))`,
+          ],
+          {
+            env,
+            beforeRun: () => {
+              process.env.OPENCLAW_PUBLICATION_INHERITED = "admitted";
+            },
+          },
+        );
+        expect(result.code).toBe(0);
+        expect(JSON.parse(result.stdout.toString("utf8"))).toEqual([
+          "admitted",
+          env ? "explicit" : "inherited",
+          env ? null : "inherited",
+          "1",
+          "1",
+        ]);
+      }
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it.each(["reset", "created"] as const)(
     "pins a conditional push when the remote branch was %s after admission",
     async (change) => {

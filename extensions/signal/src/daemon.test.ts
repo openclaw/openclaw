@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { assertSignalDaemonEndpointAvailable, spawnSignalDaemon } from "./daemon.js";
 
 const spawnMock = vi.hoisted(() => vi.fn());
@@ -92,20 +93,13 @@ describe("spawnSignalDaemon", () => {
   });
   it("rejects an occupied managed endpoint with actionable port guidance", async () => {
     const listener = createServer();
-    await new Promise<void>((resolve, reject) => {
-      listener.once("error", reject);
-      listener.listen(0, "127.0.0.1", resolve);
-    });
-    const address = listener.address();
-    if (!address || typeof address === "string") {
-      throw new Error("Expected a TCP listener address");
-    }
+    const port = await listenOnLoopback(listener);
 
     try {
       await expect(
-        assertSignalDaemonEndpointAvailable({ httpHost: "127.0.0.1", httpPort: address.port }),
+        assertSignalDaemonEndpointAvailable({ httpHost: "127.0.0.1", httpPort: port }),
       ).rejects.toThrow(
-        `Signal managed native endpoint 127.0.0.1:${address.port} is unavailable: Port ${address.port} is already in use. Stop the conflicting service, configure this Signal account with a different transport.httpPort, or use external-native for an intentionally operator-managed daemon.`,
+        `Signal managed native endpoint 127.0.0.1:${port} is unavailable: Port ${port} is already in use. Stop the conflicting service, configure this Signal account with a different transport.httpPort, or use external-native for an intentionally operator-managed daemon.`,
       );
       expect(listener.listening).toBe(true);
     } finally {

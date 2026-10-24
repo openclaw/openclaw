@@ -133,7 +133,7 @@ describe("iMessage approval poll durable ingress", () => {
     });
   });
 
-  function arrangeNotification(createdAt = new Date().toISOString()) {
+  function arrangeRpcNotification(createMessage: () => unknown) {
     let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
     createIMessageRpcClientMock.mockImplementation(async (params) => {
       onNotification = params?.onNotification;
@@ -143,22 +143,7 @@ describe("iMessage approval poll durable ingress", () => {
           onNotification?.({
             method: "message",
             params: {
-              message: {
-                id: 42,
-                guid: "approval-poll-vote-guid",
-                chat_id: 7,
-                chat_guid: "iMessage;-;redacted-peer",
-                chat_identifier: "redacted-peer",
-                sender: "redacted-peer",
-                is_from_me: false,
-                is_group: false,
-                created_at: createdAt,
-                poll: {
-                  kind: "vote",
-                  original_guid: "approval-poll-guid",
-                  vote: { option_id: "approve-once" },
-                },
-              },
+              message: createMessage(),
             },
           });
           await ingressHarness.done;
@@ -168,36 +153,39 @@ describe("iMessage approval poll durable ingress", () => {
     });
   }
 
+  function arrangeNotification(createdAt = new Date().toISOString()) {
+    arrangeRpcNotification(() => ({
+      id: 42,
+      guid: "approval-poll-vote-guid",
+      chat_id: 7,
+      chat_guid: "iMessage;-;redacted-peer",
+      chat_identifier: "redacted-peer",
+      sender: "redacted-peer",
+      is_from_me: false,
+      is_group: false,
+      created_at: createdAt,
+      poll: {
+        kind: "vote",
+        original_guid: "approval-poll-guid",
+        vote: { option_id: "approve-once" },
+      },
+    }));
+  }
+
   function arrangeApprovalCommandNotification() {
-    let onNotification: ((message: { method: string; params: unknown }) => void) | undefined;
-    createIMessageRpcClientMock.mockImplementation(async (params) => {
-      onNotification = params?.onNotification;
-      return {
-        request: vi.fn(async () => ({ subscription: 1 })),
-        waitForClose: vi.fn(async () => {
-          onNotification?.({
-            method: "message",
-            params: {
-              message: {
-                id: 43,
-                guid: "approval-command-guid",
-                chat_id: 7,
-                chat_guid: "iMessage;-;redacted-peer",
-                chat_identifier: "redacted-peer",
-                sender: "redacted-peer",
-                destination_caller_id: "redacted-agent",
-                is_from_me: false,
-                is_group: false,
-                created_at: new Date().toISOString(),
-                text: "/approve reject exec-1",
-              },
-            },
-          });
-          await ingressHarness.done;
-        }),
-        stop: vi.fn(async () => {}),
-      } as never;
-    });
+    arrangeRpcNotification(() => ({
+      id: 43,
+      guid: "approval-command-guid",
+      chat_id: 7,
+      chat_guid: "iMessage;-;redacted-peer",
+      chat_identifier: "redacted-peer",
+      sender: "redacted-peer",
+      destination_caller_id: "redacted-agent",
+      is_from_me: false,
+      is_group: false,
+      created_at: new Date().toISOString(),
+      text: "/approve reject exec-1",
+    }));
   }
 
   it("completes a handled approval vote instead of abandoning it for replay", async () => {
