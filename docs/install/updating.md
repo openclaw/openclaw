@@ -67,6 +67,13 @@ label even if its plist was deleted. Reinstall warns when the previous definitio
 is missing; an existing plist and its private environment files remain backed up
 for rollback if activation fails.
 
+When an updater stops a macOS LaunchAgent, it waits for both launchd's process
+and the verified serving Gateway child to exit before continuing. An unloaded
+job or a closed listener does not prove that the child has released its agent
+databases. Pending process cleanup produces a warning and shares the existing
+bounded stop deadline; other processes using the state still receive Doctor's
+maintenance refusal. The updater performing the stop must contain this fix.
+
 Candidate state workers drop advisory progress when stderr is temporarily full.
 Dropped writes do not consume the legacy progress budget, so reporting resumes
 when the pipe becomes writable. The worker must contain this repair; it does not
