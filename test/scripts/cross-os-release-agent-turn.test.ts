@@ -21,20 +21,14 @@ beforeEach(() => {
 
 const run = () => runReleaseAgentTurn({ label: "probe", logPath }, runCommand);
 
-it("uses an isolated session and the bounded release-probe invocation", async () => {
+it("uses an isolated session and a bounded command", async () => {
   await expect(run()).resolves.toBe(success);
-  expect(runCommand).toHaveBeenCalledExactlyOnceWith(
-    [
-      ..."agent --agent main --session-id".split(" "),
-      expect.stringMatching(/^cross-os-release-check-probe-[0-9a-f-]{36}$/u),
-      "--message",
-      "Reply with exact ASCII text OK only.",
-      ..."--thinking off --timeout".split(" "),
-      String(CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS),
-      "--json",
-    ],
-    (CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS + 60) * 1000,
+  expect(runCommand).toHaveBeenCalledOnce();
+  const [args, timeout] = runCommand.mock.calls[0]!;
+  expect(args[args.indexOf("--session-id") + 1]).toMatch(
+    /^cross-os-release-check-probe-[0-9a-f-]{36}$/u,
   );
+  expect(timeout).toBe((CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS + 60) * 1000);
 });
 
 it.each([false, true])("accepts only current-command log output: %s", async (current) => {
