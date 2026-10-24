@@ -31,22 +31,20 @@ function createAgentDir(): string {
   return agentDir;
 }
 
-function generatedCatalog(provider: string, apiKey = "persisted-test-key"): string {
+function catalog(provider: string, definition: unknown): string {
   return `${JSON.stringify(
-    {
-      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-      providers: {
-        [provider]: {
-          api: "openai-completions",
-          baseUrl: `https://${provider}.example/v1`,
-          apiKey,
-          models: [{ id: `${provider}-model`, name: `${provider} model` }],
-        },
-      },
-    },
+    { generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY, providers: { [provider]: definition } },
     null,
     2,
   )}\n`;
+}
+function generatedCatalog(provider: string, apiKey = "persisted-test-key"): string {
+  return catalog(provider, {
+    api: "openai-completions",
+    baseUrl: `https://${provider}.example/v1`,
+    apiKey,
+    models: [{ id: `${provider}-model`, name: `${provider} model` }],
+  });
 }
 
 function writeLegacyCatalog(agentDir: string, pluginId: string, contents: string): string {
@@ -98,22 +96,18 @@ function readCatalogCacheRow(
   value_json: string;
   updated_at: number;
 } {
-  const database = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"), {
+  using database = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"), {
     readOnly: true,
   });
-  try {
-    const row = database
-      .prepare("SELECT value_json, updated_at FROM cache_entries WHERE scope = ? AND key = ?")
-      .get("plugin-model-catalog-v1", pluginId) as
-      | { value_json: string; updated_at: number }
-      | undefined;
-    if (!row) {
-      throw new Error(`Missing generated catalog cache row for ${pluginId}`);
-    }
-    return row;
-  } finally {
-    database.close();
+  const row = database
+    .prepare("SELECT value_json, updated_at FROM cache_entries WHERE scope = ? AND key = ?")
+    .get("plugin-model-catalog-v1", pluginId) as
+    | { value_json: string; updated_at: number }
+    | undefined;
+  if (!row) {
+    throw new Error(`Missing generated catalog cache row for ${pluginId}`);
   }
+  return row;
 }
 
 beforeEach(() => {
@@ -135,15 +129,10 @@ describe("doctor generated plugin model catalog migration", () => {
     const agentDir = createAgentDir();
     const validSibling = generatedCatalog("anthropic");
     await seedCatalogs(agentDir, { zai: generatedCatalog("zai"), anthropic: validSibling });
-    const malformed = JSON.stringify({
-      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-      providers: {
-        zai: {
-          apiKey: "preserved-provider-test-key",
-          baseUrl: "https://zai.example/v1",
-          models: [{ id: "missing-api" }, { id: "valid-api", api: "openai-completions" }],
-        },
-      },
+    const malformed = catalog("zai", {
+      apiKey: "preserved-provider-test-key",
+      baseUrl: "https://zai.example/v1",
+      models: [{ id: "missing-api" }, { id: "valid-api", api: "openai-completions" }],
     });
     overwriteCatalog(agentDir, "zai", malformed);
     const before = loadPersistedPluginModelCatalogsReadOnly(agentDir);
@@ -187,10 +176,7 @@ describe("doctor generated plugin model catalog migration", () => {
       apiKey: "preserved-provider-test-key",
       models: [partial, ...unchanged],
     };
-    const retained = JSON.stringify({
-      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-      providers: { ollama: provider },
-    });
+    const retained = catalog("ollama", provider);
     overwriteCatalog(agentDir, "ollama", retained);
     const before = readCatalogCacheRow(agentDir, "ollama");
     const sibling = readCatalogCacheRow(agentDir, "anthropic");
@@ -233,15 +219,10 @@ describe("doctor generated plugin model catalog migration", () => {
     const agentDir = createAgentDir();
     const refreshed = generatedCatalog("nvidia", "concurrently-refreshed-provider-test-key");
     await seedCatalogs(agentDir, { nvidia: refreshed });
-    const malformed = JSON.stringify({
-      generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-      providers: {
-        nvidia: {
-          baseUrl: "https://integrate.api.nvidia.com/v1",
-          apiKey: "NVIDIA_API_KEY",
-          models: [{ id: "meta-llama/llama-3.3-70b-instruct" }],
-        },
-      },
+    const malformed = catalog("nvidia", {
+      baseUrl: "https://integrate.api.nvidia.com/v1",
+      apiKey: "NVIDIA_API_KEY",
+      models: [{ id: "meta-llama/llama-3.3-70b-instruct" }],
     });
     const { db: database } = openOpenClawAgentDatabase({
       agentId: resolveAuthProfileDatabaseOwnerId(agentDir),
@@ -285,39 +266,33 @@ describe("doctor generated plugin model catalog migration", () => {
     const agentDir = createAgentDir();
     const contents = generatedCatalog("zai", "interrupted-released-provider-test-key");
     await seedCatalogs(agentDir, { zai: contents });
-    const database = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
-    try {
+    {
+      using database = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"));
       database
         .prepare(
           "INSERT INTO cache_entries (scope, key, value_json, blob, expires_at, updated_at) VALUES (?, ?, ?, NULL, NULL, ?)",
         )
         .run("plugin-model-catalog-migration-v1", "zai", contents, Date.now());
-    } finally {
-      database.close();
     }
 
     await maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir], false));
     expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
       { pluginId: "zai", contents },
     ]);
-    const verified = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"), {
+    using verified = new DatabaseSync(path.join(agentDir, "openclaw-agent.sqlite"), {
       readOnly: true,
     });
-    try {
-      expect(
-        verified
-          .prepare("SELECT value_json FROM cache_entries WHERE scope = ?")
-          .all("plugin-model-catalog-migration-v1"),
-      ).toEqual([{ value_json: contents }]);
-      await maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir]));
-      expect(
-        verified
-          .prepare("SELECT value_json FROM cache_entries WHERE scope = ?")
-          .all("plugin-model-catalog-migration-v1"),
-      ).toEqual([]);
-    } finally {
-      verified.close();
-    }
+    expect(
+      verified
+        .prepare("SELECT value_json FROM cache_entries WHERE scope = ?")
+        .all("plugin-model-catalog-migration-v1"),
+    ).toEqual([{ value_json: contents }]);
+    await maybeMigrateLegacyPluginModelCatalogs(migrationParams([agentDir]));
+    expect(
+      verified
+        .prepare("SELECT value_json FROM cache_entries WHERE scope = ?")
+        .all("plugin-model-catalog-migration-v1"),
+    ).toEqual([]);
   });
 
   it("imports a malformed shipped sidecar and preserves its credential", async () => {
@@ -436,21 +411,11 @@ describe.each(["JSON", "JSONC"])(
       models: [
         {
           id: "claude-opus-5",
-          name: "Claude Opus 5",
-          reasoning: true,
-          input: ["text", "image"],
           cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
-          contextWindow: 1000000,
-          maxTokens: 128000,
         },
         {
           id: "claude-haiku-4-5",
-          name: "Claude Haiku 4.5",
-          reasoning: true,
-          input: ["text", "image"],
           cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 200000,
-          maxTokens: 64000,
         },
       ],
     };
@@ -458,14 +423,7 @@ describe.each(["JSON", "JSONC"])(
     async function seedAgent(rootProviders: Record<string, unknown>) {
       const agentDir = createAgentDir();
       await seedCatalogs(agentDir, {
-        anthropic: `${JSON.stringify(
-          {
-            generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
-            providers: { anthropic: anthropicBlock },
-          },
-          null,
-          2,
-        )}\n`,
+        anthropic: catalog("anthropic", anthropicBlock),
       });
       const json = JSON.stringify({ providers: rootProviders }, null, 2);
       const rootRaw =

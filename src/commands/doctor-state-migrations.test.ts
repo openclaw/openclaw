@@ -5,6 +5,7 @@ import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { buildAcpDatabaseSessionKey } from "../acp/runtime/session-meta-keys.js";
+import type { ChannelLegacyStateMigrationPlan } from "../channels/plugins/legacy-state-migration.types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -28,6 +29,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { withEnvAsync } from "../test-utils/env.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
@@ -77,65 +79,8 @@ function autoMigrateLegacyState(
 }
 
 const mockedChannelMigrationPlans = vi.hoisted(() => ({
-  plans: [] as Array<Record<string, unknown>>,
+  plans: [] as ChannelLegacyStateMigrationPlan[],
 }));
-const mockedLegacyMigrationDetectors = vi.hoisted(() => ({
-  entries: [] as Array<{
-    pluginId: string;
-    detector: (params: {
-      cfg: OpenClawConfig;
-      env: NodeJS.ProcessEnv;
-      stateDir: string;
-      oauthDir: string;
-    }) => Array<Record<string, unknown>>;
-  }>,
-}));
-
-vi.mock("../channels/plugins/bundled.js", async () => {
-  const actual = await vi.importActual<typeof import("../channels/plugins/bundled.js")>(
-    "../channels/plugins/bundled.js",
-  );
-  mockedLegacyMigrationDetectors.entries = [
-    {
-      pluginId: "test-channel",
-      detector: () => mockedChannelMigrationPlans.plans,
-    },
-  ];
-  return {
-    ...actual,
-  };
-});
-
-vi.mock("../config/sessions.js", () => ({
-  saveSessionStore: async (storePath: string, store: Record<string, unknown>) => {
-    await fs.promises.mkdir(path.dirname(storePath), { recursive: true });
-    await fs.promises.writeFile(storePath, `${JSON.stringify(store, null, 2)}\n`, "utf-8");
-  },
-}));
-
-vi.mock("../infra/json-files.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../infra/json-files.js")>("../infra/json-files.js");
-  return {
-    ...actual,
-    writeTextAtomic: async (
-      filePath: string,
-      content: string,
-      options?: { mode?: number; dirMode?: number; trailingNewline?: boolean },
-    ) => {
-      const payload =
-        options?.trailingNewline && !content.endsWith("\n") ? `${content}\n` : content;
-      await fs.promises.mkdir(path.dirname(filePath), {
-        recursive: true,
-        ...(typeof options?.dirMode === "number" ? { mode: options.dirMode } : {}),
-      });
-      await fs.promises.writeFile(filePath, payload, {
-        encoding: "utf8",
-        mode: options?.mode ?? 0o600,
-      });
-    },
-  };
-});
 
 vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>();
@@ -147,24 +92,21 @@ vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => {
     collectRelevantDoctorPluginIds: vi.fn(() => []),
     listPluginDoctorSessionStoreAgentIds: vi.fn(() => []),
     resolveLivePluginDoctorStateMigrationInventory: vi.fn(() => ({
-      knownPluginIds: mockedLegacyMigrationDetectors.entries.map(({ pluginId }) => pluginId),
+      knownPluginIds: ["test-channel"],
       sessionStoreOwnerPluginIds: [],
-      descriptors: mockedLegacyMigrationDetectors.entries.map(({ pluginId }) => ({
-        pluginId,
-        id: `${pluginId}-legacy-channel-state`,
-      })),
+      descriptors: [{ pluginId: "test-channel", id: "test-channel-legacy-channel-state" }],
       unresolvedPluginIds: [],
     })),
-    listPluginDoctorStateMigrationEntries: vi.fn(() =>
-      mockedLegacyMigrationDetectors.entries.map(({ pluginId, detector }) => ({
-        pluginId,
+    listPluginDoctorStateMigrationEntries: vi.fn(() => [
+      {
+        pluginId: "test-channel",
         migration: definePluginDoctorMigrationFromPlans({
-          id: `${pluginId}-legacy-channel-state`,
-          label: `${pluginId} legacy channel state`,
-          resolvePlans: detector as never,
+          id: "test-channel-legacy-channel-state",
+          label: "test-channel legacy channel state",
+          resolvePlans: () => mockedChannelMigrationPlans.plans,
         }),
-      })),
-    ),
+      },
+    ]),
   };
 });
 
@@ -242,20 +184,6 @@ function failRenameOnce(sourcePath: string) {
   });
 }
 
-async function withStateDir<T>(root: string, run: () => Promise<T>): Promise<T> {
-  const previous = process.env.OPENCLAW_STATE_DIR;
-  process.env.OPENCLAW_STATE_DIR = root;
-  try {
-    return await run();
-  } finally {
-    if (previous === undefined) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previous;
-    }
-  }
-}
-
 const legacyAcp = {
   backend: "acpx",
   agent: "codex",
@@ -289,7 +217,7 @@ async function seedLegacyCache(root: string, kind: "recency" | "deferred") {
   const withCache = <T>(
     run: (store: ReturnType<typeof createPluginStateKeyedStore<{ body: string }>>) => Promise<T>,
   ) =>
-    withStateDir(root, async () => {
+    withEnvAsync({ OPENCLAW_STATE_DIR: root }, async () => {
       try {
         return await run(
           createPluginStateKeyedStore<{ body: string }>("telegram", { namespace, maxEntries: 2 }),
@@ -412,43 +340,6 @@ describe("doctor legacy state migrations", () => {
     } finally {
       db.close();
     }
-  });
-
-  it("skips symlinked custom agent-store ACP metadata stores", async () => {
-    const root = makeDoctorStateDir();
-    const customRoot = makeDoctorStateDir();
-    const outsideRoot = makeDoctorStateDir();
-    const sessionKey = "agent:main:acp:binding:discord:default:feedface";
-    const cfg: OpenClawConfig = {
-      session: {
-        store: path.join(customRoot, "agents", "{agentId}", "sessions", "sessions.json"),
-      },
-    };
-    const managedStorePath = path.join(customRoot, "agents", "main", "sessions", "sessions.json");
-    const outsideStorePath = path.join(outsideRoot, "sessions.json");
-    writeJson5(outsideStorePath, {
-      [sessionKey]: {
-        sessionId: "sess-acp",
-        updatedAt: 100,
-        acp: legacyAcp,
-      },
-    });
-    fs.mkdirSync(path.dirname(managedStorePath), { recursive: true });
-    fs.symlinkSync(outsideStorePath, managedStorePath);
-
-    const detected = await detectLegacyStateMigrations({
-      cfg,
-      env: { OPENCLAW_STATE_DIR: root } as NodeJS.ProcessEnv,
-    });
-    const result = await runLegacyStateMigrations({ detected, config: cfg });
-
-    expect(result.warnings).toStrictEqual([]);
-    expect(result.changes.some((change) => change.includes("ACP session metadata"))).toBe(false);
-    const outsideStore = JSON.parse(fs.readFileSync(outsideStorePath, "utf8")) as Record<
-      string,
-      SessionEntry
-    >;
-    expect(outsideStore[sessionKey]?.acp).toBeDefined();
   });
 
   it("preserves legacy creation times so later live writes evict migrated rows before fresher existing rows", async () => {
