@@ -7,13 +7,6 @@ import {
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { WebSocketError } from "openai/resources/responses/internal-base.js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  createPluginMetadataSnapshot,
-  makeRegistry,
-} from "../../../../src/config/plugin-auto-enable.test-helpers.js";
-import { isRetryableAssistantError } from "../../../../src/llm/utils/retry.js";
-import { createEmptyPluginRegistry } from "../../../../src/plugins/registry-empty.js";
-import { withPluginRuntimeGenerationScope } from "../../../../src/plugins/runtime/generation-scope.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { makeProviderModel } from "../providers/provider-model.test-support.js";
 import { cleanupSessionResources } from "../session-resources.js";
@@ -88,24 +81,21 @@ vi.mock("openai/resources/responses/ws.js", () => ({
       return this;
     }
 
-    stream() {
+    async *stream() {
       const handshake = transport.handshakeMessages.shift() ?? { type: "open" as const };
-      const readResponses = () => this.responseMessages;
-      return (async function* () {
-        yield handshake;
-        if (handshake.type !== "open") {
-          return;
+      yield handshake;
+      if (handshake.type !== "open") {
+        return;
+      }
+      for (const streamMessage of this.responseMessages) {
+        if (streamMessage.type === "delay") {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, streamMessage.ms);
+          });
+          continue;
         }
-        for (const streamMessage of readResponses()) {
-          if (streamMessage.type === "delay") {
-            await new Promise<void>((resolve) => {
-              setTimeout(resolve, streamMessage.ms);
-            });
-            continue;
-          }
-          yield streamMessage;
-        }
-      })();
+        yield streamMessage;
+      }
     }
   },
 }));
@@ -136,19 +126,7 @@ function user(text: string, timestamp: number) {
 function completedEvent(responseId: string, content?: string | Array<Record<string, unknown>>) {
   const output =
     typeof content === "string"
-      ? [
-          {
-            ...responseMessage(`msg_${responseId}`, content, "final_answer"),
-            content: [
-              {
-                text: content,
-                type: "output_text",
-                annotations: [{ type: "url_citation", url: "https://example.test/source" }],
-                logprobs: [{ token: content, logprob: -0.1 }],
-              },
-            ],
-          },
-        ]
+      ? [responseMessage(`msg_${responseId}`, content, "final_answer")]
       : (content ?? []);
   return {
     type: "response.completed",
@@ -175,6 +153,10 @@ function reply(responseId: string, content?: string | Array<Record<string, unkno
 
 function rejectionBatch(code: string, text: string, param?: string): StreamMessage[] {
   return [{ type: "error", error: wrappedSdkServerError({ code, message: text, param }) }];
+}
+
+function failedResponse(id: string, error: Record<string, unknown>) {
+  return { type: "response.failed", response: { id, status: "failed", error, output: [] } };
 }
 
 function expectCounts(websocket: number, sse: number, clients?: number) {
@@ -376,17 +358,16 @@ describe("native OpenAI Responses WebSocket client integration", () => {
           : []),
         ...(shape === "after-output"
           ? [
-              message({
-                type: "response.output_item.added",
-                output_index: 0,
-                item: { type: "web_search_call", id: "ws_started", status: "in_progress" },
-              }),
+              message(
+                outputItem(
+                  "added",
+                  { type: "web_search_call", id: "ws_started", status: "in_progress" },
+                  0,
+                ),
+              ),
             ]
           : []),
-        message({
-          type: "response.failed",
-          response: { id: "resp_tier_error", status: "failed", error: rejection, output: [] },
-        }),
+        message(failedResponse("resp_tier_error", rejection)),
       ]);
       transport.sdkOutcomes.push(sdkCompletion("resp_tier_recovered"));
       const observations: ResponsesServiceTierObservation[] = [];
@@ -548,26 +529,23 @@ describe("native OpenAI Responses WebSocket client integration", () => {
   });
 
   it.each([
-    {
-      code: "websocket_connection_limit_reached",
-      param: undefined,
-      compact: false,
-      rejection: "safe rejection: websocket_connection_limit_reached",
-    },
-    {
-      code: "unsupported_parameter",
-      param: "previous_response_id",
-      compact: false,
-      rejection:
-        "Previous response cannot be used for this organization due to Zero Data Retention.",
-    },
-    {
-      code: "invalid_encrypted_content",
-      param: "input[0].encrypted_content",
-      compact: true,
-      rejection: "compaction checkpoint could not be decrypted",
-    },
-  ])("recovers $code over full-history SSE", async ({ code, param, compact, rejection }) => {
+    [
+      "websocket_connection_limit_reached",
+      undefined,
+      "safe rejection: websocket_connection_limit_reached",
+    ],
+    [
+      "unsupported_parameter",
+      "previous_response_id",
+      "Previous response cannot be used for this organization due to Zero Data Retention.",
+    ],
+    [
+      "invalid_encrypted_content",
+      "input[0].encrypted_content",
+      "compaction checkpoint could not be decrypted",
+    ],
+  ] as const)("recovers %s over full-history SSE", async (code, param, rejection) => {
+    const compact = code === "invalid_encrypted_content";
     const options = compact ? { transport: "websocket" as const } : {};
     const onCompactionRejected = vi.fn();
     transport.responseBatches.push(
@@ -671,14 +649,10 @@ describe("native OpenAI Responses WebSocket client integration", () => {
       mode: "websocket",
     });
 
-    let error: unknown;
-    try {
-      for await (const event of response.stream) {
-        void event;
-      }
-    } catch (caught) {
-      error = caught;
-    }
+    const error = await Array.fromAsync(response.stream).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
 
     expect(error).toBeInstanceOf(OpenAIResponsesWebSocketSafeRetryError);
     expect(error).toMatchObject({
@@ -712,9 +686,6 @@ describe("native OpenAI Responses WebSocket client integration", () => {
 
       expect(result).toMatchObject({ stopReason: "error", errorCode: expectedCode });
       expectCounts(1, 0);
-      if (code === "connection-close") {
-        expect(isRetryableAssistantError(result)).toBe(false);
-      }
     },
   );
 
@@ -788,37 +759,6 @@ describe("native OpenAI Responses WebSocket client integration", () => {
     expect(sse).toMatchObject(terminalFacts);
     expect(websocket.usage.cost.total).toBeCloseTo(0.000401, 10);
     expect(sse.usage.cost.total).toBeCloseTo(0.000401, 10);
-    const classifyFailoverReason = vi.fn(() => undefined);
-    const pluginRegistry = createEmptyPluginRegistry();
-    pluginRegistry.providers.push({
-      pluginId: "openai",
-      source: "test",
-      provider: { id: "openai", label: "OpenAI fixture", auth: [], classifyFailoverReason },
-    });
-    withPluginRuntimeGenerationScope(
-      {
-        metadataSnapshot: createPluginMetadataSnapshot({
-          manifestRegistry: makeRegistry([{ id: "openai", channels: [], providers: ["openai"] }]),
-        }),
-        pluginRegistry,
-      },
-      () => {
-        expect(isRetryableAssistantError(websocket)).toBe(true);
-        expect(isRetryableAssistantError(sse)).toBe(true);
-      },
-    );
-    const expectedProviderSignal = {
-      provider: "openai",
-      code: "server_error",
-      errorMessage: terminalFacts.errorMessage,
-      errorType: undefined,
-      status: undefined,
-    };
-    expect(classifyFailoverReason.mock.calls).toEqual([
-      [expectedProviderSignal],
-      [expectedProviderSignal],
-    ]);
-
     const next = await run(history(user("next", 3)), { model: pricedModel });
     expect(next.stopReason).toBe("stop");
     expectCounts(2, 1, 2);

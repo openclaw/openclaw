@@ -10,6 +10,7 @@ import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-
 import { useSessionStoreTempDirs } from "../../../../src/test-utils/session-state-cleanup.js";
 import { createDeferred, withTestTimeout } from "../../../../test/helpers/promise.js";
 import { Agent } from "../../../agent-core/src/agent.js";
+import type { AgentTool } from "../../../agent-core/src/types.js";
 import type { SdkResponse } from "./openai-responses-sdk.test-support.js";
 
 const sseState = vi.hoisted(() => ({
@@ -75,14 +76,27 @@ function functionTool(name: string) {
   return { name, description: name, parameters: Type.Object({}) };
 }
 
-const asyncCall = {
+const lookupCall = {
   type: "function_call",
   id: "fc_lookup",
   call_id: "call_lookup",
   name: "lookup",
   arguments: "{}",
   status: "completed",
-  async: true,
+};
+const asyncCall = { ...lookupCall, async: true };
+const store = (payload: Record<string, unknown>) => ({ ...payload, store: true });
+const noStore = (payload: Record<string, unknown>) => ({ ...payload, store: false });
+const configuration = (effort: string) => ({ type: "configuration_update", reasoning: { effort } });
+const wireUser = (text: string) => ({
+  type: "message",
+  role: "user",
+  content: [{ type: "input_text", text }],
+});
+const lookupOutput = {
+  type: "function_call_output",
+  call_id: "call_lookup",
+  output: "lookup result",
 };
 
 function userMessage(text: string, timestamp: number) {
@@ -149,6 +163,23 @@ function sdkEvents(...events: Array<Record<string, unknown>>): SdkResponse {
   };
 }
 
+function toolEvents(call = lookupCall, responseId = "resp_call") {
+  const completed = completedEvent(responseId, "");
+  return sdkEvents(
+    { type: "response.output_item.added", output_index: 0, item: { ...call, arguments: "" } },
+    { type: "response.output_item.done", output_index: 0, item: call },
+    { ...completed, response: { ...completed.response, output: [call] } },
+  );
+}
+
+function queueAnswers(count = 3) {
+  for (let index = 0; index < count; index++) {
+    sseState.outcomes.push(
+      sdkCompletion(`resp_${index + 1}`, `${["first", "second", "third"][index]} answer`),
+    );
+  }
+}
+
 const unoptedCustomEndpointModel = {
   ...model,
   provider: "omniroute",
@@ -160,13 +191,13 @@ async function run(
   options: {
     sessionId?: string;
     cacheRetention?: "none" | "short";
-    onPayload: (payload: Record<string, unknown>) => Record<string, unknown>;
+    onPayload?: (payload: Record<string, unknown>) => Record<string, unknown>;
     signal?: AbortSignal;
     reasoningEffort?: "low" | "medium" | "high";
     transport?: "sse" | "websocket-cached";
     asyncToolExecution?: boolean;
     openclawCodeModeToolSurface?: boolean;
-  },
+  } = {},
   requestModel: Model = model,
 ): Promise<AssistantMessage> {
   const stream = await createOpenAIResponsesTransportStreamFn()(requestModel, context, {
@@ -177,10 +208,50 @@ async function run(
     reasoningEffort: options.reasoningEffort ?? "low",
     asyncToolExecution: options.asyncToolExecution,
     openclawCodeModeToolSurface: options.openclawCodeModeToolSurface,
-    onPayload: options.onPayload,
+    onPayload: options.onPayload ?? store,
     signal: options.signal,
   } as never);
   return stream.result();
+}
+
+async function firstTwoTurns(
+  options: Parameters<typeof run>[1] = {},
+  requestModel: Model = model,
+  secondOptions: Parameters<typeof run>[1] = { ...options, reasoningEffort: "high" },
+) {
+  const messages: Context["messages"] = [userMessage("first question", 1)];
+  const first = await run({ messages }, options, requestModel);
+  messages.push(first, userMessage("second question", 2));
+  const second = await run({ messages }, secondOptions, requestModel);
+  messages.push(second, userMessage("third question", 3));
+  return { messages, first, second };
+}
+
+function toolAgent(execute: AgentTool["execute"], collector: string) {
+  return new Agent({
+    initialState: {
+      model: astra,
+      thinkingLevel: "low",
+      tools: [
+        { ...functionTool("lookup"), label: "lookup", execute },
+        { ...functionTool(collector), label: collector, async: false, execute: vi.fn() },
+      ],
+    },
+    streamFn: createOpenAIResponsesTransportStreamFn(),
+    getApiKey: () => "test-key",
+    sessionId: collector === "sessions_yield" ? "async-agent" : "sync-agent",
+    transport: "sse",
+  });
+}
+
+function expectToolResult(agent: Agent) {
+  expect(sseState.requests).toHaveLength(2);
+  const replay = sseState.requests[1]?.input as Array<{ type: string }>;
+  expect(replay.filter((item) => item.type === "function_call_output")).toEqual([lookupOutput]);
+  expect(agent.state.messages.at(-1)).toMatchObject({
+    role: "assistant",
+    content: [expect.objectContaining({ text: "used lookup result" })],
+  });
 }
 
 describe("native OpenAI Responses SSE continuation", () => {
@@ -227,21 +298,17 @@ describe("native OpenAI Responses SSE continuation", () => {
   it.each(["short"] as const)(
     "continues stateful SSE turns with %s retention and matching affinity",
     async (cacheRetention) => {
-      sseState.outcomes.push(
-        sdkCompletion("resp_1", "first answer"),
-        sdkCompletion("resp_2", "second answer"),
-      );
+      queueAnswers(2);
       const firstUser = userMessage("first question", 1);
-      const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
       const requestModel = { ...model, compat: { sendSessionIdHeader: true } };
       const first = await run(
         { messages: [firstUser], tools: [] },
-        { onPayload, cacheRetention },
+        { cacheRetention },
         requestModel,
       );
       const second = await run(
         { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
-        { onPayload, cacheRetention },
+        { cacheRetention },
         requestModel,
       );
 
@@ -256,28 +323,13 @@ describe("native OpenAI Responses SSE continuation", () => {
       ]);
       expect(sseState.requests[1]).toMatchObject({
         previous_response_id: "resp_1",
-        input: [
-          {
-            type: "message",
-            role: "user",
-            content: [{ type: "input_text", text: "second question" }],
-          },
-        ],
+        input: [wireUser("second question")],
       });
     },
   );
 
   it("continues after a hosted web search answer with sources through effort and tool turns", async () => {
     const search = completedEvent("resp_search", "searched answer");
-    const toolCall = {
-      type: "function_call",
-      id: "fc_lookup",
-      call_id: "call_lookup",
-      name: "lookup",
-      arguments: "{}",
-      status: "completed",
-    };
-    const toolTurn = completedEvent("resp_tool", "");
     sseState.outcomes.push(
       sdkEvents({
         ...search,
@@ -294,21 +346,12 @@ describe("native OpenAI Responses SSE continuation", () => {
           ],
         },
       }),
-      sdkEvents(
-        {
-          type: "response.output_item.added",
-          output_index: 0,
-          item: { ...toolCall, arguments: "" },
-        },
-        { type: "response.output_item.done", output_index: 0, item: toolCall },
-        { ...toolTurn, response: { ...toolTurn.response, output: [toolCall] } },
-      ),
+      toolEvents(lookupCall, "resp_tool"),
       sdkCompletion("resp_final", "used lookup result"),
     );
-    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
     const tools = [functionTool("lookup")];
     const messages: Context["messages"] = [userMessage("first question", 1)];
-    const first = await run({ messages, tools }, { onPayload }, astra);
+    const first = await run({ messages, tools }, {}, astra);
     // Sources reach the visible reply; the server keeps only the provider prose.
     expect(first.content).toContainEqual(
       expect.objectContaining({
@@ -317,7 +360,7 @@ describe("native OpenAI Responses SSE continuation", () => {
       }),
     );
     messages.push(first, userMessage("second question", 2));
-    const second = await run({ messages, tools }, { onPayload, reasoningEffort: "high" }, astra);
+    const second = await run({ messages, tools }, { reasoningEffort: "high" }, astra);
     expect(second.stopReason).toBe("toolUse");
     const call = second.content.find((block) => block.type === "toolCall");
     if (call?.type !== "toolCall") {
@@ -331,46 +374,25 @@ describe("native OpenAI Responses SSE continuation", () => {
       isError: false,
       timestamp: 3,
     });
-    const third = await run({ messages, tools }, { onPayload, reasoningEffort: "high" }, astra);
+    const third = await run({ messages, tools }, { reasoningEffort: "high" }, astra);
 
     expect(third.stopReason).toBe("stop");
     expect(sseState.requests[1]).toMatchObject({
       previous_response_id: "resp_search",
       reasoning: { effort: "low" },
-      input: [
-        { type: "configuration_update", reasoning: { effort: "high" } },
-        {
-          type: "message",
-          role: "user",
-          content: [{ type: "input_text", text: "second question" }],
-        },
-      ],
+      input: [configuration("high"), wireUser("second question")],
     });
     expect(sseState.requests[2]).toMatchObject({
       previous_response_id: "resp_tool",
       reasoning: { effort: "low" },
-      input: [{ type: "function_call_output", call_id: "call_lookup", output: "lookup result" }],
+      input: [lookupOutput],
     });
     expect(sseState.requests[2]?.input).toHaveLength(1);
   });
 
   it("never engages for a custom endpoint without the explicit opt-in, even with store:true forced (the host carries no trust signal on its own)", async () => {
-    sseState.outcomes.push(
-      sdkCompletion("resp_1", "first answer"),
-      sdkCompletion("resp_2", "second answer"),
-    );
-    const firstUser = userMessage("first question", 1);
-    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
-    const first = await run(
-      { messages: [firstUser], tools: [] },
-      { onPayload },
-      unoptedCustomEndpointModel,
-    );
-    await run(
-      { messages: [firstUser, first, userMessage("second question", 2)], tools: [] },
-      { onPayload },
-      unoptedCustomEndpointModel,
-    );
+    queueAnswers(2);
+    await firstTwoTurns({}, unoptedCustomEndpointModel, {});
 
     expect(sseState.requests[1]).not.toHaveProperty("previous_response_id");
     expect(sseState.requests[1]?.input).toHaveLength(3);
@@ -380,18 +402,9 @@ describe("native OpenAI Responses SSE continuation", () => {
     "preserves effort controls through $transport $reset and transcript reload",
     async ({ transport }) => {
       vi.useFakeTimers();
-      sseState.outcomes.push(
-        sdkCompletion("resp_1", "first answer"),
-        sdkCompletion("resp_2", "second answer"),
-        sdkCompletion("resp_3", "third answer"),
-      );
-      const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: false });
-      const options = { onPayload, transport };
-      const messages: Context["messages"] = [userMessage("first question", 1)];
-      const first = await run({ messages }, options, astra);
-      messages.push(first, userMessage("second question", 2));
-      const second = await run({ messages }, { ...options, reasoningEffort: "high" }, astra);
-      messages.push(second, userMessage("third question", 3));
+      queueAnswers();
+      const options = { onPayload: noStore, transport };
+      const { messages, first, second } = await firstTwoTurns(options, astra);
       vi.advanceTimersByTime(5 * 60 * 1000 + 1);
       const serialized = JSON.stringify(messages);
       const third = await run(
@@ -404,18 +417,17 @@ describe("native OpenAI Responses SSE continuation", () => {
         "stop",
         "stop",
       ]);
-      const configuration = { type: "configuration_update", reasoning: { effort: "high" } };
       expect(sseState.requests[1]).toMatchObject({ reasoning: { effort: "low" } });
-      expect(sseState.requests[1]?.input).toContainEqual(configuration);
+      expect(sseState.requests[1]?.input).toContainEqual(configuration("high"));
       expect(sseState.requests[2]).toMatchObject({
         reasoning: { effort: "low", summary: "auto" },
         input: [
           { role: "user", content: [{ text: "first question" }] },
           { role: "assistant", content: [{ text: "first answer" }] },
-          configuration,
+          configuration("high"),
           { role: "user", content: [{ text: "second question" }] },
           { role: "assistant", content: [{ text: "second answer" }] },
-          { type: "configuration_update", reasoning: { effort: "medium" } },
+          configuration("medium"),
           { role: "user", content: [{ text: "third question" }] },
         ],
       });
@@ -436,19 +448,10 @@ describe("native OpenAI Responses SSE continuation", () => {
       sdkCompletion("resp_warm", "third answer"),
       sdkCompletion("resp_reloaded", "third answer"),
     );
-    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: false });
-    const messages: Context["messages"] = [userMessage("first question", 1)];
-    messages.push(await run({ messages }, { onPayload }, astra), userMessage("second question", 2));
-    messages.push(
-      await run({ messages }, { onPayload, reasoningEffort: "high" }, astra),
-      userMessage("third question", 3),
-    );
-    expect(sseState.requests[1]?.input).toContainEqual({
-      type: "configuration_update",
-      reasoning: { effort: "high" },
-    });
+    const { messages } = await firstTwoTurns({ onPayload: noStore }, astra);
+    expect(sseState.requests[1]?.input).toContainEqual(configuration("high"));
     const options = {
-      onPayload,
+      onPayload: noStore,
       reasoningEffort: "medium" as const,
       sessionId: "session-1",
     };
@@ -460,10 +463,10 @@ describe("native OpenAI Responses SSE continuation", () => {
     expect(expectedRequest?.input).toEqual([
       expect.objectContaining({ role: "user" }),
       expect.objectContaining({ role: "assistant" }),
-      { type: "configuration_update", reasoning: { effort: "high" } },
+      configuration("high"),
       expect.objectContaining({ role: "user" }),
       expect.objectContaining({ role: "assistant" }),
-      { type: "configuration_update", reasoning: { effort: "medium" } },
+      configuration("medium"),
       expect.objectContaining({ role: "user" }),
     ]);
     const dir = sessionDirs.make();
@@ -501,21 +504,9 @@ describe("native OpenAI Responses SSE continuation", () => {
     "edited history",
     "request settings",
   ])("resets durable effort controls after %s changes", async (change) => {
-    sseState.outcomes.push(
-      sdkCompletion("resp_1", "first answer"),
-      sdkCompletion("resp_2", "second answer"),
-      sdkCompletion("resp_3", "third answer"),
-    );
-    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: false });
-    let messages: Context["messages"] = [userMessage("first question", 1)];
-    const first = await run({ messages }, { onPayload }, astra);
-    messages.push(first, userMessage("second question", 2));
-    const second = await run({ messages }, { onPayload, reasoningEffort: "high" }, astra);
-    messages.push(second, userMessage("third question", 3));
-    expect(sseState.requests[1]?.input).toContainEqual({
-      type: "configuration_update",
-      reasoning: { effort: "high" },
-    });
+    queueAnswers();
+    let { messages } = await firstTwoTurns({ onPayload: noStore }, astra);
+    expect(sseState.requests[1]?.input).toContainEqual(configuration("high"));
     cleanupSessionResources();
     if (change === "compacted history") {
       messages = [userMessage("compacted summary", 0), ...messages.slice(3)];
@@ -528,7 +519,7 @@ describe("native OpenAI Responses SSE continuation", () => {
       {
         reasoningEffort: "medium",
         onPayload: (payload) => ({
-          ...onPayload(payload),
+          ...noStore(payload),
           ...(change === "mode" ? { reasoning: { effort: "medium", mode: "pro" } } : {}),
           ...(change === "server compaction"
             ? { context_management: [{ type: "compaction", compact_threshold: 1000 }] }
@@ -580,25 +571,7 @@ describe("native OpenAI Responses SSE continuation", () => {
       },
       sdkUncitedCompletion("resp_final", "used lookup result"),
     );
-    const agent = new Agent({
-      initialState: {
-        model: astra,
-        thinkingLevel: "low",
-        tools: [
-          { ...functionTool("lookup"), label: "lookup", execute },
-          {
-            ...functionTool("sessions_yield"),
-            label: "sessions_yield",
-            async: false,
-            execute: vi.fn(),
-          },
-        ],
-      },
-      streamFn: createOpenAIResponsesTransportStreamFn(),
-      getApiKey: () => "test-key",
-      sessionId: "async-agent",
-      transport: "sse",
-    });
+    const agent = toolAgent(execute, "sessions_yield");
     const prompt = agent.prompt("Start a lookup and explain something independent.");
     try {
       await withTestTimeout(
@@ -614,21 +587,9 @@ describe("native OpenAI Responses SSE continuation", () => {
       ]);
       releaseTool.resolve();
       await prompt;
-      expect(sseState.requests).toHaveLength(2);
       expect(execute).toHaveBeenCalledTimes(1);
-      const replay = sseState.requests[1]?.input as Array<{
-        type: string;
-        call_id?: string;
-        output?: string;
-      }>;
-      expect(replay.filter((item) => item.type === "function_call_output")).toEqual([
-        { type: "function_call_output", call_id: "call_lookup", output: "lookup result" },
-      ]);
-      expect(agent.state.messages.at(-1)).toMatchObject({
-        role: "assistant",
-        stopReason: "stop",
-        content: [expect.objectContaining({ text: "used lookup result" })],
-      });
+      expectToolResult(agent);
+      expect(agent.state.messages.at(-1)).toMatchObject({ stopReason: "stop" });
     } finally {
       releaseTool.resolve();
       agent.abort();
@@ -641,51 +602,14 @@ describe("native OpenAI Responses SSE continuation", () => {
       content: [{ type: "text" as const, text: "lookup result" }],
       details: {},
     }));
-    const call = {
-      type: "function_call",
-      id: "fc_lookup",
-      call_id: "call_lookup",
-      name: "lookup",
-      arguments: "{}",
-      status: "completed",
-    };
-    const completed = completedEvent("resp_call", "");
-    sseState.outcomes.push(
-      sdkEvents(
-        { type: "response.output_item.added", output_index: 0, item: { ...call, arguments: "" } },
-        { type: "response.output_item.done", output_index: 0, item: call },
-        { ...completed, response: { ...completed.response, output: [call] } },
-      ),
-      sdkUncitedCompletion("resp_final", "used lookup result"),
-    );
+    sseState.outcomes.push(toolEvents(), sdkUncitedCompletion("resp_final", "used lookup result"));
     // plugins is synchronous but cannot collect async results (cron surfaces lack sessions_yield).
-    const agent = new Agent({
-      initialState: {
-        model: astra,
-        thinkingLevel: "low",
-        tools: [
-          { ...functionTool("lookup"), label: "lookup", execute },
-          { ...functionTool("plugins"), label: "plugins", async: false, execute: vi.fn() },
-        ],
-      },
-      streamFn: createOpenAIResponsesTransportStreamFn(),
-      getApiKey: () => "test-key",
-      sessionId: "sync-agent",
-      transport: "sse",
-    });
+    const agent = toolAgent(execute, "plugins");
     await agent.prompt("Look it up and report.");
     expect(sseState.requests[0]?.tools).not.toContainEqual(
       expect.objectContaining({ async: true }),
     );
-    expect(sseState.requests).toHaveLength(2);
-    const replay = sseState.requests[1]?.input as Array<{ type: string }>;
-    expect(replay.filter((item) => item.type === "function_call_output")).toEqual([
-      { type: "function_call_output", call_id: "call_lookup", output: "lookup result" },
-    ]);
-    expect(agent.state.messages.at(-1)).toMatchObject({
-      role: "assistant",
-      content: [expect.objectContaining({ text: "used lookup result" })],
-    });
+    expectToolResult(agent);
   });
 
   it.each([
@@ -700,18 +624,7 @@ describe("native OpenAI Responses SSE continuation", () => {
   ])(
     "gates async advertisement and normalized calls for $name",
     async ({ requestModel, enabled, codeMode, multiAgent, expected }) => {
-      const completed = completedEvent("resp_call", "");
-      sseState.outcomes.push(
-        sdkEvents(
-          {
-            type: "response.output_item.added",
-            output_index: 0,
-            item: { ...asyncCall, arguments: "" },
-          },
-          { type: "response.output_item.done", output_index: 0, item: asyncCall },
-          { ...completed, response: { ...completed.response, output: [asyncCall] } },
-        ),
-      );
+      sseState.outcomes.push(toolEvents(asyncCall));
       const result = await run(
         { messages: [userMessage("call", 1)], tools: [functionTool("exec"), functionTool("wait")] },
         {
@@ -772,22 +685,9 @@ describe("native OpenAI Responses SSE continuation", () => {
         sdkCompletion("resp_2", "second answer"),
         sdkCompletion("resp_3", "third answer"),
       );
-      const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
-      const firstUser = userMessage("first question", 1);
-      const first = await run({ messages: [firstUser], tools: [] }, { onPayload });
-      const secondContext = {
-        messages: [firstUser, first, userMessage("second question", 2)],
-        tools: [],
-      };
-      const second = await run(secondContext, { onPayload });
+      const { messages, second } = await firstTwoTurns({}, model, {});
       expect(second.stopReason).toBe("stop");
-      await run(
-        {
-          messages: [...secondContext.messages, second, userMessage("third question", 3)],
-          tools: [],
-        },
-        { onPayload },
-      );
+      await run({ messages });
 
       expect(sseState.requests).toHaveLength(4);
       expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
@@ -808,7 +708,6 @@ describe("native OpenAI Responses SSE continuation", () => {
       sdkCompletion("resp_2", "second answer"),
       sdkCompletion("resp_3", "third answer"),
     );
-    const stateful = (payload: Record<string, unknown>) => ({ ...payload, store: true });
     const withCompaction = (payload: Record<string, unknown>) => ({
       ...payload,
       store: true,
@@ -817,20 +716,8 @@ describe("native OpenAI Responses SSE continuation", () => {
         { type: "compaction", encrypted_content: "opaque" },
       ],
     });
-    const firstUser = userMessage("first question", 1);
-    const first = await run({ messages: [firstUser], tools: [] }, { onPayload: stateful });
-    const secondContext = {
-      messages: [firstUser, first, userMessage("second question", 2)],
-      tools: [],
-    };
-    const second = await run(secondContext, { onPayload: withCompaction });
-    await run(
-      {
-        messages: [...secondContext.messages, second, userMessage("third question", 3)],
-        tools: [],
-      },
-      { onPayload: stateful },
-    );
+    const { messages } = await firstTwoTurns({}, model, { onPayload: withCompaction });
+    await run({ messages });
 
     expect(sseState.requests[1]).toMatchObject({ previous_response_id: "resp_1" });
     expect(JSON.stringify(sseState.requests[1]?.input)).toContain('"compaction"');
@@ -870,17 +757,15 @@ describe("native OpenAI Responses SSE continuation", () => {
       });
     }
     sseState.outcomes.push(sdkCompletion("resp_next", "next answer"));
-    const onPayload = (payload: Record<string, unknown>) => ({ ...payload, store: true });
     const sessionId = `session-${failure}`;
     await run(
       { messages: [userMessage("first", 1)], tools: [] },
       {
-        onPayload,
         sessionId,
         signal: failure === "abort" ? controller.signal : undefined,
       },
     );
-    await run({ messages: [userMessage("next", 2)], tools: [] }, { onPayload, sessionId });
+    await run({ messages: [userMessage("next", 2)], tools: [] }, { sessionId });
 
     expect(sseState.requests[1]).not.toHaveProperty("previous_response_id");
   });
