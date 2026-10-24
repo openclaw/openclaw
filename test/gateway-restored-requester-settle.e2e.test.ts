@@ -50,6 +50,8 @@ const PROBE_MARKER = "restored wake ordering probe";
 const RESTORED_WAKE_MARKER = "Every subagent in this batch has now settled";
 const TOMBSTONED_CHILD_RESULT = "The retained child found exactly seven synthetic records.";
 const TOMBSTONED_RECOVERY_CYCLE = "tombstoned-requester-cycle";
+// Resume leaves the retained cohort to the 60s production sweep, then Gateway/model admission.
+const POST_RESUME_SETTLEMENT_TIMEOUT_MS = 60_000 + 30_000;
 
 type HeldModelServer = Awaited<ReturnType<typeof startHeldModelServer>>;
 
@@ -170,7 +172,7 @@ describe("Gateway restored requester settlement", () => {
         modelServer.release(0);
         await vi.waitFor(
           () => expect(modelServer.countRequestsContaining(RESTORED_WAKE_MARKER)).toBe(1),
-          { timeout: 30_000 },
+          { timeout: POST_RESUME_SETTLEMENT_TIMEOUT_MS },
         );
         expect(modelServer.requestCount()).toBe(2);
         expect(modelServer.countRequestsContaining(TOMBSTONED_CHILD_RESULT)).toBe(1);
