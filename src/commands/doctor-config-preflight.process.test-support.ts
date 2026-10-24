@@ -125,6 +125,7 @@ export function createSourceRuntime(root: string): string {
     "cli-root-options.mjs",
     "gateway-run-argv.mjs",
     "gateway-shutdown-budget.mjs",
+    "standalone-runtime-profile.mjs",
     "worker-heap-flag.mjs",
     "package.json",
     "tsconfig.json",
