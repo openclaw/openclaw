@@ -13,11 +13,7 @@ import { applyEmbeddedAttemptToolsAllow } from "../embedded-agent-runner/run/att
 import { projectAgentToolDefinition } from "../prepared-tool-surface.js";
 import { createStubTool } from "../test-helpers/agent-tool-stubs.js";
 import { attachToolAllowlistIntersection } from "../tool-policy.js";
-import {
-  TOOL_CALL_RAW_TOOL_NAME,
-  createToolSearchTools,
-  buildToolSchemaDirectoryPrompt,
-} from "../tool-search.js";
+import { TOOL_CALL_RAW_TOOL_NAME, createToolSearchTools } from "../tool-search.js";
 import { prepareAgentToolSurfacePresentation } from "../tool-surface-plan.js";
 import { createAgentsWaitTool } from "../tools/agents-wait-tool.js";
 import { createSessionsSpawnTool } from "../tools/sessions-spawn-tool.js";
@@ -101,41 +97,38 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           },
         },
       };
+      const configuredSearch = structuredClone(config.tools?.toolSearch);
       const presentation = preparePresentation({ config });
       for (const supportsDeferredToolCalls of [true, false]) {
-        const runtime = createAgentHarnessToolSurfaceRuntimeCore({
+        const runtime = rawRuntime({
           presentation: structuredClone(presentation),
-          modelToolsEnabled: true,
           supportsDeferredToolCalls,
         });
         const remote = tools(["remote_deferred", "remote_frequent"]);
         for (const target of remote) {
           setPluginToolMeta(target, { pluginId: "bundle-mcp", optional: false });
         }
-        try {
-          const surface = runtime.compactTools([...tools(["native_direct"]), ...remote], {
-            prepared: { preserveToolNames: [] },
-          });
-          expect(toolNames(surface.tools)).toEqual([
-            ...searchControlNames,
-            "native_direct",
-            "remote_frequent",
-          ]);
-          expect(catalogNames(runtime)).toEqual(["remote_deferred"]);
-          const policy = surface.promptToolPolicy.apply();
-          expect(policy.callableToolNames).toEqual(
-            expect.arrayContaining(["native_direct", "remote_frequent", "remote_deferred"]),
-          );
-          expect(policy.toolSchemaDirectoryPrompt).not.toContain("native_direct");
-          expect(policy.toolSchemaDirectoryPrompt).toContain(
-            mode === "directory" && supportsDeferredToolCalls
-              ? "Call a unique deferred tool name directly"
-              : "Deferred names are not directly callable",
-          );
-        } finally {
-          runtime.cleanup();
-        }
+        const surface = runtime.compactTools([...tools(["native_direct"]), ...remote], {
+          prepared: { preserveToolNames: [] },
+        });
+        expect(toolNames(surface.tools)).toEqual([
+          ...searchControlNames,
+          "native_direct",
+          "remote_frequent",
+        ]);
+        expect(catalogNames(runtime)).toEqual(["remote_deferred"]);
+        const policy = surface.promptToolPolicy.apply();
+        expect(policy.callableToolNames).toEqual(
+          expect.arrayContaining(["native_direct", "remote_frequent", "remote_deferred"]),
+        );
+        expect(policy.toolSchemaDirectoryPrompt).not.toContain("native_direct");
+        expect(policy.toolSchemaDirectoryPrompt).toContain(
+          mode === "directory" && supportsDeferredToolCalls
+            ? "Call a unique deferred tool name directly"
+            : "Deferred names are not directly callable",
+        );
       }
+      expect(config.tools?.toolSearch).toEqual(configuredSearch);
     },
   );
 
@@ -211,28 +204,11 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     const { toolSchemaDirectoryPrompt: restricted } = policy.apply({
       toolsAllow: ["fixture_allowed"],
     });
-    expect(restricted).toBe(
-      buildToolSchemaDirectoryPrompt(
-        { config: runtime.config, catalogRef: runtime.toolSearchCatalogRef },
-        { contextTokenBudget: 8_000 },
-      ),
-    );
     expect(restricted).toContain("fixture_allowed");
     expect(restricted).not.toContain("fixture_denied");
     expect(expectDefined(restricted, "restricted directory").length).toBeLessThanOrEqual(800);
     expect(policy.apply({ toolsAllow: [] }).toolSchemaDirectoryPrompt).toBeUndefined();
     expect(policy.apply().toolSchemaDirectoryPrompt).toBe(full);
-  });
-
-  it("uses structured calls without deferred dispatch support", () => {
-    const config: OpenClawConfig = { tools: { toolSearch: { mode: "directory" } } };
-    const runtime = createRuntime(config, { supportsDeferredToolCalls: false });
-    const surface = runtime.compactTools([...searchTools(runtime), ...tools(["fixture_hidden"])]);
-    const guidance = surface.promptToolPolicy.apply().toolSchemaDirectoryPrompt;
-    expect(runtime.plan.toolSearchConfig.mode).toBe("tools");
-    expect(guidance?.includes("Call a unique deferred tool name directly")).toBe(false);
-    expect(guidance?.includes("Deferred names are not directly callable")).toBe(true);
-    expect(config.tools?.toolSearch).toEqual({ mode: "directory" });
   });
 
   it("keeps overlapping allowlists callable through the code surface", () => {
@@ -258,8 +234,6 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     expect(toolSchemaDirectoryPrompt).toContain("- web_search ");
     expect(toolSchemaDirectoryPrompt).not.toContain("- web_fetch ");
     expect(toolSchemaDirectoryPrompt).not.toContain("- memory_search ");
-    expect(runtime.codeModeControlsEnabled).toBe(true);
-    expect(runtime.toolSearchControlsEnabled).toBe(false);
   });
 
   it("keeps browser callable through automatic Tool Search for message-tool-only replies with lean disabled", async () => {

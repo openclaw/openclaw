@@ -72,18 +72,13 @@ function decodeForm(
   result: StructuredInputCompileResult,
   answers: Record<string, string[]>,
 ): Record<string, unknown> | string {
-  const plan = requireForm(result);
-  const entries: Array<[string, unknown]> = [];
-  for (const field of plan.fields) {
-    const decoded = field.decode(answers[field.question.id] ?? []);
-    if (decoded.kind === "invalid") {
-      return decoded.message;
-    }
-    if (decoded.kind === "present") {
-      entries.push(...decoded.entries);
-    }
-  }
-  return Object.fromEntries(entries);
+  const decoded = requireForm(result).fields.map((field) =>
+    field.decode(answers[field.question.id] ?? []),
+  );
+  return (
+    decoded.find((field) => field.kind === "invalid")?.message ??
+    Object.fromEntries(decoded.flatMap((field) => (field.kind === "present" ? field.entries : [])))
+  );
 }
 
 describe("structured input compiler", () => {
