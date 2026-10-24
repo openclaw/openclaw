@@ -608,16 +608,7 @@ it.each(["stop", "reset"])(
       writing.resolve();
       await releaseWrite.promise;
     });
-    const saving = invoke(
-      "sessions.files.set",
-      {
-        sessionKey,
-        path: "changed.txt",
-        content: "saved\n",
-        expectedHash: hashContent("before\n"),
-      },
-      context,
-    );
+    const saving = files.request("set", edit());
     await writing.promise;
     let mutationEntered = false;
     let contentAtMutation: string | undefined;

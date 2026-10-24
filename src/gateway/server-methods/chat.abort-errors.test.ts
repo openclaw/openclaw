@@ -80,6 +80,24 @@ import { sessionMutationHandlers } from "./sessions-mutations.js";
 const fixture = useChatAbortRegistryFixture();
 afterEach(() => vi.restoreAllMocks());
 
+function queueDispatches(groupId: string, capacity: string, queuedBad = true) {
+  const badDispatch = vi.fn(async () => {});
+  const healthyDispatch = vi.fn(async () => {});
+  const survivorDispatch = vi.fn(async () => {});
+  for (const [runId, start] of [
+    ...(queuedBad ? [["bad", badDispatch] as const] : []),
+    ["healthy", healthyDispatch],
+    ["survivor", survivorDispatch],
+  ] as const) {
+    fixture.queueRun({ groupId, runId, activeRunIds: [capacity], start });
+  }
+  return { badDispatch, healthyDispatch, survivorDispatch };
+}
+
+async function expectKilled(sessionKey: string) {
+  expect((await getSubagentRunByChildSessionKey(sessionKey))?.endedReason).toBe("subagent-killed");
+}
+
 async function corruptChildDatabase(storePath: string, sessionKey: string) {
   const database = listOpenClawAgentDatabasesForTest().find(
     (item) => item.agentId === "broken" && isPathInside(fixture.stateDir, item.path),
@@ -128,21 +146,10 @@ it.each(["exact", "session cascade", "typed stop", "channel stop", "embedded sto
       });
     }
     await corruptChildDatabase(badStore, badKey);
-    const badDispatch = vi.fn(async () => {});
-    const healthyDispatch = vi.fn(async () => {});
-    const survivorDispatch = vi.fn(async () => {});
-    for (const [runId, start] of [
-      ["bad", badDispatch],
-      ["healthy", healthyDispatch],
-      ["survivor", survivorDispatch],
-    ] as const) {
-      fixture.queueRun({
-        groupId: "errors",
-        runId,
-        activeRunIds: ["capacity"],
-        start,
-      });
-    }
+    const { badDispatch, healthyDispatch, survivorDispatch } = queueDispatches(
+      "errors",
+      "capacity",
+    );
     const cfg = getRuntimeConfig();
     const parent = createActiveRun(sessionKey, {
       runId: "parent",
@@ -240,9 +247,7 @@ it.each(["exact", "session cascade", "typed stop", "channel stop", "embedded sto
           formatAbortReplyText(result.stoppedSubagents, undefined, result.failedSubagents),
         ).toContain("Cancellation was incomplete for 2 sub-agents");
       }
-      expect(await getSubagentRunByChildSessionKey(healthyKey)).toMatchObject({
-        endedReason: "subagent-killed",
-      });
+      await expectKilled(healthyKey);
       expect(healthyDispatch).not.toHaveBeenCalled();
       expect((await getSubagentRunByChildSessionKey(badKey))?.killIntent).toBeUndefined();
       await vi.waitFor(() => expect(badDispatch).toHaveBeenCalledOnce());
@@ -280,21 +285,11 @@ it.each([
     }
     const badStore = path.join(fixture.stateDir, "agents/broken/sessions/sessions.json");
     await corruptChildDatabase(badStore, badKey);
-    const badDispatch = vi.fn(async () => {});
-    const healthyDispatch = vi.fn(async () => {});
-    const survivorDispatch = vi.fn(async () => {});
-    for (const [runId, start] of [
-      ...(queued ? [["bad", badDispatch] as const] : []),
-      ["healthy", healthyDispatch],
-      ["survivor", survivorDispatch],
-    ] as const) {
-      fixture.queueRun({
-        groupId: "admin-errors",
-        runId,
-        activeRunIds: ["parent"],
-        start,
-      });
-    }
+    const { badDispatch, healthyDispatch, survivorDispatch } = queueDispatches(
+      "admin-errors",
+      "parent",
+      queued,
+    );
     const parentAbort = vi.fn(() => {
       expect(releaseSwarmRun("parent")).toBe(true);
       clearActiveEmbeddedRun("parent-session", parentHandle, sessionKey);
@@ -362,12 +357,8 @@ it.each([
         result = await killSubagentRunAdmin({ cfg, sessionKey });
       }
       expect(parentAbort, JSON.stringify(result)).toHaveBeenCalledOnce();
-      expect((await getSubagentRunByChildSessionKey(sessionKey))?.endedReason).toBe(
-        "subagent-killed",
-      );
-      expect((await getSubagentRunByChildSessionKey(healthyKey))?.endedReason).toBe(
-        "subagent-killed",
-      );
+      await expectKilled(sessionKey);
+      await expectKilled(healthyKey);
       expect(healthyDispatch).not.toHaveBeenCalled();
       expect(badAbort).not.toHaveBeenCalled();
       expect((await getSubagentRunByChildSessionKey(badKey))?.killIntent).toBeUndefined();
@@ -554,9 +545,7 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
       );
       expect(parent.input.abortSignal.aborted).toBe(true);
       expect(rpcSourceTesting.has("parent")).toBe(false);
-      expect((await getSubagentRunByChildSessionKey(childKey))?.endedReason).toBe(
-        "subagent-killed",
-      );
+      await expectKilled(childKey);
       // Explicit reset drains children, including native /new. Keep the original
       // abort pending on its marker publication, not on work the reset must stop.
       clearActiveEmbeddedRun("incarnation-child", childHandle, childKey);
@@ -618,9 +607,7 @@ it.for(["cascade native new", "RPC reset", "RPC delete"])(
       release.resolve();
       const response = await abort;
       expect(response).toHaveBeenCalledWith(true, expect.objectContaining({ aborted: true }));
-      expect((await getSubagentRunByChildSessionKey(childKey))?.endedReason).toBe(
-        "subagent-killed",
-      );
+      await expectKilled(childKey);
       expect(
         await loadTranscriptEvents(scope),
         "old partial must not cross the committed lifecycle boundary",
