@@ -243,7 +243,14 @@ if (values.child) {
     assert(gateway);
     const child = gateway;
     return await new Promise<BenchReply>((resolve, reject) => {
-      const timeout = setTimeout(() => finish(new Error(`Benchmark ${action} timed out`)), 180000);
+      const timeoutMs =
+        action === "ready" && values["start-at"]
+          ? Math.max(180000, integer(values["start-at"], "--start-at") - Date.now())
+          : 180000;
+      const timeout = setTimeout(
+        () => finish(new Error(`Benchmark ${action} timed out`)),
+        timeoutMs,
+      );
       function finish(value: BenchReply | Error) {
         clearTimeout(timeout);
         child.off("message", onMessage);

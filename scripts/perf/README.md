@@ -796,7 +796,9 @@ snapshots remain unchanged. The child counts eligible row notifications, samples
 all main-isolate allocations (including collected objects), and captures GC.
 Default runs omit V8 GC tracing; collect promotion separately with `--trace-gc`
 and compare it only with another traced run. Use `--warmup-ms 65000` to declare
-an additional fixed warmup before synchronized measurement. Controller and
+an additional fixed warmup before synchronized measurement. A future `--start-at`
+also extends the startup-ready wait beyond its default 180 seconds when needed;
+setup and warmup must still finish before that declared start. Controller and
 socket-driver allocation is excluded. Notify RPC
 latency reports the mutation round trip; notify settlement latency continues
 through the native subscription owner's idle barrier. Settlement is an upper
