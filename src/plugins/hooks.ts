@@ -608,7 +608,7 @@ export function createHookRunner(
       (hookName === "before_prompt_build" || hookName === "agent_turn_prepare") &&
       "messages" in event &&
       Array.isArray(event.messages)
-        ? clonePromptHookEvent(hookName, event)
+        ? clonePromptHookEvent(hookName, { ...event, messages: event.messages })
         : event;
 
     logger?.debug?.(`[hooks] running ${hookName} (${selectedHooks.length} handlers, sequential)`);
