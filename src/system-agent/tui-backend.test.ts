@@ -37,18 +37,8 @@ vi.mock("../plugins/providers.js", async (importOriginal) => {
   const original = await importOriginal<typeof import("../plugins/providers.js")>();
   return {
     ...original,
-    // The verified-inference helper installs exact synthetic owner records; keep every
-    // selected fixture owner available without consulting the host plugin inventory.
-    resolveActivatableProviderOwnerPluginIds: vi.fn(
-      (params: Parameters<typeof original.resolveActivatableProviderOwnerPluginIds>[0]) => [
-        ...params.pluginIds,
-      ],
-    ),
-    resolveBundledProviderCompatPluginIds: vi.fn(
-      (params: Parameters<typeof original.resolveBundledProviderCompatPluginIds>[0]) => [
-        ...(params.onlyPluginIds ?? []),
-      ],
-    ),
+    // The verified-inference helper replaces the registry snapshot with exact synthetic
+    // records, so pass-through safety resolvers cannot consult the host plugin inventory.
     resolveOwningPluginIdsForModelRefs: vi.fn(() => []),
     resolveOwningPluginIdsForProviderRef: vi.fn(() => []),
   };
