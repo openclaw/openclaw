@@ -269,14 +269,27 @@ describe("existing-session browser routes", () => {
       .mockResolvedValueOnce(true);
   });
 
-  it("forwards an empty select value to Chrome MCP", async () => {
-    const value = "";
-    const response = await invoke("act", { kind: "select", ref: "select-1", values: [value] });
-
-    expect(response.statusCode).toBe(200);
-    expect(mcp.selectChromeMcpOption).toHaveBeenCalledWith(
-      expect.objectContaining({ targetId: "7", uid: "select-1", value }),
+  it.each([
+    [
+      { kind: "select", ref: "select-1", values: [""] },
+      mcp.selectChromeMcpOption,
+      { uid: "select-1", value: "" },
+    ],
+    [
+      { kind: "clickCoords", x: 25, y: "32", doubleClick: true },
+      mcp.clickChromeMcpCoords,
+      { x: 25, y: 32, doubleClick: true },
+    ],
+  ] as const)("forwards normalized input %j to Chrome MCP", async (body, executor, params) => {
+    expectResponseContaining(await invoke("act", body), successfulTab);
+    expect(executor).toHaveBeenCalledWith(
+      expect.objectContaining({ ...existingTarget, ...params }),
     );
+    if (body.kind === "clickCoords") {
+      const coords = requireRecord(executor.mock.calls[0]?.[0], "click params");
+      expect(coords.button).toBeUndefined();
+      expect(coords.delayMs).toBeUndefined();
+    }
   });
 
   it("preserves screenshot cancellation when label cleanup fails", async () => {
@@ -420,18 +433,25 @@ describe("existing-session browser routes", () => {
   });
 
   it("keeps ref semantics for labeled existing-session screenshots", async () => {
-    const response = await invoke("screenshot", {
-      labels: true,
-      ref: "btn-1",
-      type: "jpeg",
-      timeoutMs: 4321,
-    });
-
+    const response = await invoke(
+      "screenshot",
+      {
+        labels: true,
+        ref: "btn-1",
+        type: "jpeg",
+        timeoutMs: 4321,
+      },
+      { policy: DEFAULT_SSRF_POLICY },
+    );
     expectResponseContaining(response, { ok: true, labels: true });
     expect(snapshotMock).not.toHaveBeenCalled();
     expect(screenshotMock).toHaveBeenCalledWith(
       expect.objectContaining({ uid: "btn-1", format: "jpeg", timeoutMs: 4321 }),
     );
+    expect(checkNavigation).toHaveBeenCalledWith({
+      url: publicUrl,
+      ssrfPolicy: DEFAULT_SSRF_POLICY,
+    });
   });
 
   it("routes close through profile selection state with exact call options", async () => {
@@ -481,20 +501,6 @@ describe("existing-session browser routes", () => {
         ssrfPolicy: policy,
       });
     }
-  });
-
-  it("checks existing-session screenshot URL when SSRF policy is configured", async () => {
-    const response = await invoke(
-      "screenshot",
-      { ref: "btn-1", type: "jpeg" },
-      { policy: { allowPrivateNetwork: false } },
-    );
-
-    expect(response.statusCode).toBe(200);
-    expect(navigation.assertBrowserNavigationResultAllowed).toHaveBeenCalledWith({
-      url: "https://example.com",
-      ssrfPolicy: { allowPrivateNetwork: false },
-    });
   });
 
   it("rejects selector-based element screenshots for existing-session profiles", async () => {
@@ -571,26 +577,6 @@ describe("existing-session browser routes", () => {
     const reason = new Error("caller cancelled");
     ctrl.abort(reason);
     expect(clickParams.signal).toMatchObject({ aborted: true, reason });
-  });
-
-  it("supports coordinate clicks for existing-session profiles", async () => {
-    const response = await invoke("act", {
-      kind: "clickCoords",
-      x: 25,
-      y: "32",
-      doubleClick: true,
-    });
-
-    expectResponseContaining(response, { ok: true, targetId: "7", url: "https://example.com" });
-    const coords = requireRecord(mcp.clickChromeMcpCoords.mock.calls[0]?.[0], "click params");
-    expect(coords).toMatchObject({
-      ...existingTarget,
-      x: 25,
-      y: 32,
-      doubleClick: true,
-    });
-    expect(coords.button).toBeUndefined();
-    expect(coords.delayMs).toBeUndefined();
   });
 
   it.each([{ button: "right" }, { delayMs: 5 }])(
@@ -939,8 +925,7 @@ describe("existing-session interaction navigation guard", () => {
 
       const response = await runAction(body);
 
-      expect(response.statusCode).toBe(200);
-      expect(response.body).toMatchObject({
+      expectResponseContaining(response, {
         ok: true,
         targetId: routeState.tab.targetId,
         url: routeState.tab.url,
