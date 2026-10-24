@@ -489,6 +489,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         agentsList: state.agentsList,
         hello: state.hello,
       },
+      operatorAuth: state.hello?.auth ?? null,
       providerUsage: {
         basePath: state.basePath,
         modelAuthStatusResult: state.modelAuthStatusResult,
