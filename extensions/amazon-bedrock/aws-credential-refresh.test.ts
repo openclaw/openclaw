@@ -6,6 +6,7 @@ import { BedrockRuntimeClient } from "@aws-sdk/client-bedrock-runtime";
 import { defaultProvider } from "@aws-sdk/credential-provider-node";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { bedrockModel } from "./bedrock.test-support.js";
 import { loadBedrockControlPlaneSdk } from "./control-plane.js";
 import { createBedrockEmbeddingProvider } from "./embedding-provider.js";
 import { streamSimpleBedrock } from "./stream.runtime.js";
@@ -164,18 +165,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-const model = {
-  api: "bedrock-converse-stream" as const,
-  provider: "amazon-bedrock",
-  id: "amazon.nova-micro-v1:0",
-  name: "Nova Micro",
-  baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-  reasoning: false,
-  input: ["text" as const],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  contextWindow: 128000,
-  maxTokens: 4096,
-};
+const model = bedrockModel({ reasoning: false });
 
 describe("Bedrock shared credential rotation", () => {
   it.each(["stream", "discovery"] as const)(
