@@ -73,7 +73,7 @@ it.each([
     "blacksmith-testbox",
     "openclaw",
   ]);
-  expect(args).toEqual(expect.arrayContaining(expected));
+  expect(args).toEqual(expect.arrayContaining([...expected]));
 });
 
 it("rejects injected worker controls before remote dispatch", () => {

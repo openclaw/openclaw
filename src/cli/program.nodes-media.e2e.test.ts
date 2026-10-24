@@ -162,11 +162,9 @@ describe("cli program (nodes media)", () => {
       const paths = getFirstRuntimeLogLine().trim().split("\n");
       expect(paths).toHaveLength(snap ? 2 : 1);
       if (snap) {
-        expect(
-          nodeInvokeCalls()
-            .map((call) => call.commandParams.facing)
-            .toSorted(),
-        ).toEqual(["back", "front"]);
+        const facings = nodeInvokeCalls().map((call) => call.commandParams.facing);
+        expect(facings).toHaveLength(2);
+        expect(facings).toEqual(expect.arrayContaining(["back", "front"]));
       }
       const pattern = snap
         ? /openclaw-camera-snap-(front|back)-.*\.jpg$/

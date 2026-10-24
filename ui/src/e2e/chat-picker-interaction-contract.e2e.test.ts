@@ -23,7 +23,7 @@ suite.define(() => {
         sessionKey: session.key,
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
-      const pane = page.locator(paneSelector);
+      const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
       const menu = pane.locator(".chat-controls__permission-menu");
       const trigger = pane.locator('[data-chat-permission-select="true"]');
       await trigger.click();
