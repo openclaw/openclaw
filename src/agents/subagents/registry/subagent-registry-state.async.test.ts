@@ -2,7 +2,6 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { readSqliteUserVersion } from "../../../infra/sqlite-user-version.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
-import { createDeferredCore } from "../../../shared/deferred.js";
 import { createOpenClawDatabaseMaintenanceScope } from "../../../state/openclaw-state-db-async-lifecycle.js";
 import * as databaseCache from "../../../state/openclaw-state-db-cache.js";
 import * as stateReads from "../../../state/openclaw-state-db-readonly.js";
@@ -33,6 +32,7 @@ import {
   withSubagentRunReadSnapshot as withSnapshot,
   prepareSubagentRunsSnapshotForRunIds as prepareSelected,
 } from "./subagent-registry-state.js";
+import { holdFirstCompactRead } from "./subagent-registry-state.read.test-support.js";
 import * as store from "./subagent-registry.store.sqlite.js";
 
 let state: OpenClawTestState;
@@ -106,52 +106,6 @@ it.each(["maintenance", "schema"] as const)(
     expect(snapshotIdentity()).toBe(identity);
   },
 );
-
-function holdFirstCompactRead(
-  command = "subagents.sessionList",
-  scopeKind?: "session",
-  failure?: Error,
-) {
-  const entered = createDeferredCore();
-  const release = createDeferredCore();
-  const execute = stateReads.executeExistingOpenClawStateRead;
-  let held = false;
-  const read = vi
-    .spyOn(stateReads, "executeExistingOpenClawStateRead")
-    .mockImplementation(async (...args) => {
-      const result = await execute(...args);
-      if (
-        args[1].type === command &&
-        !held &&
-        (scopeKind === undefined ||
-          (args[1].type === "subagents.runs" && args[1].scope.kind === scopeKind))
-      ) {
-        held = true;
-        entered.resolve();
-        await release.promise;
-        if (failure) {
-          throw failure;
-        }
-      }
-      return result;
-    });
-  return {
-    entered: entered.promise,
-    release: release.resolve,
-    read,
-    async during<T>(reading: Promise<T>, change: () => void) {
-      try {
-        await entered.promise;
-        change();
-        release.resolve();
-        return await reading;
-      } finally {
-        release.resolve();
-        await reading.catch(() => {});
-      }
-    },
-  };
-}
 
 it("hydrates latest controlled payloads with requester descendant topology", async () => {
   const requesterSessionKey = "agent:main:parent";

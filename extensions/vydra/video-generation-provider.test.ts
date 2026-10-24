@@ -1,5 +1,6 @@
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { expectExplicitVideoGenerationCapabilities } from "openclaw/plugin-sdk/provider-test-contracts";
+import { jsonResponse } from "openclaw/plugin-sdk/test-env";
 import { installPinnedHostnameTestHooks } from "openclaw/plugin-sdk/test-media-understanding";
 import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import * as vydra from "./provider-test-helpers.js";
@@ -11,8 +12,8 @@ describe("vydra video-generation provider", () => {
   const completed = (jobId: string, videoUrl: string) => ({ jobId, status: "completed", videoUrl });
   const stubJob = (jobId: string, videoUrl: string, data: string, mime = "video/mp4") =>
     vydra.stubFetch(
-      vydra.jsonResponse({ jobId, status: "processing" }),
-      vydra.jsonResponse(completed(jobId, videoUrl)),
+      jsonResponse({ jobId, status: "processing" }),
+      jsonResponse(completed(jobId, videoUrl)),
       vydra.binaryResponse(data, mime),
     );
   beforeEach(vydra.stubVydraApiKey);

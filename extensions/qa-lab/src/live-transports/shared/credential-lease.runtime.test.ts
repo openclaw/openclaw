@@ -1,5 +1,5 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { withServer } from "openclaw/plugin-sdk/test-env";
+import { jsonResponse, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   acquireQaCredentialLease,
@@ -85,13 +85,6 @@ function startHeartbeat(heartbeat: () => Promise<void>) {
     kind: "telegram",
     heartbeatIntervalMs: 50,
     heartbeat,
-  });
-}
-
-function jsonResponse(payload: unknown, status = 200) {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: { "content-type": "application/json" },
   });
 }
 

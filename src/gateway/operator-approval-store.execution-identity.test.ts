@@ -18,6 +18,7 @@ import {
   getOperatorApprovalDetailed as getOlderOperatorApproval,
   resolveOperatorApproval as resolveOlderOperatorApproval,
 } from "./operator-approval-store.older-reader.test-support.js";
+import { createOperatorApproval } from "./operator-approval-store.test-support.js";
 
 type NewOperatorApproval = Parameters<typeof insertOperatorApproval>[0]["approval"];
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -31,35 +32,11 @@ function approval(
   id: string,
   token?: NewOperatorApproval["executionIdentityToken"],
 ): NewOperatorApproval {
-  return {
-    id,
-    kind: "exec",
-    presentation: {
-      kind: "exec",
-      commandText: `echo ${id}`,
-      commandPreview: `echo ${id}`,
-      warningText: null,
-      host: "gateway",
-      nodeId: null,
-      agentId: "main",
-      allowedDecisions: ["allow-once", "allow-always", "deny"],
-    },
-    requester: { deviceId: "request-device", clientId: "request-client", deviceTokenAuth: true },
+  return createOperatorApproval(id, {
     reviewerDeviceIds: ["reviewer"],
-    source: {
-      agentId: "main",
-      sessionKey: "agent:main:child",
-      sessionId: "session-1",
-      runId: "run-1",
-      toolCallId: "tool-call-1",
-      toolName: "exec",
-    },
     audienceSessionKeys: ["agent:main:child"],
-    runtimeEpoch: "runtime-a",
-    createdAtMs: 1_000,
-    expiresAtMs: 10_000,
     ...(token ? { executionIdentityToken: token } : {}),
-  };
+  });
 }
 
 const token = (runId = "run-1"): NonNullable<NewOperatorApproval["executionIdentityToken"]> => ({

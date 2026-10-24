@@ -464,8 +464,9 @@ export function sanitizeChatHistoryMessage(
   const entry = { ...(prepared as Record<string, unknown>) };
   let changed = prepared !== message;
   let truncated = false;
-  if ("providerReplay" in entry) {
+  if ("providerReplay" in entry || "openclawResponsesInputReplay" in entry) {
     delete entry.providerReplay;
+    delete entry.openclawResponsesInputReplay;
     changed = true;
   }
   const openClawMeta = readRecord(entry["__openclaw"]);

@@ -40,9 +40,10 @@ import { subagentRuns } from "./subagent-registry-memory.js";
 import { buildScopedSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
-import type {
-  GatewayRequest,
-  SessionStoreEntry,
+import {
+  createExternalRequesterSessionEntry,
+  type GatewayRequest,
+  type SessionStoreEntry,
 } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
 import {
@@ -237,16 +238,7 @@ describe("requester settle wake product flow", () => {
     emptyGatedAgentReply = false;
     sendMessageMock.mockClear();
     sessionStore = {
-      [MAIN_REQUESTER_SESSION_KEY]: {
-        sessionId: "sess-main",
-        updatedAt: 1,
-        delivery: {
-          kind: "external",
-          route: { channel: "discord", accountId: "default", target: { to: "user-1" } },
-          context: { channel: "discord", to: "user-1", accountId: "default" },
-          origin: { provider: "discord", to: "user-1", accountId: "default" },
-        },
-      },
+      [MAIN_REQUESTER_SESSION_KEY]: createExternalRequesterSessionEntry(),
     };
     await replaceSessionEntry(
       { storePath: sessionStorePath, sessionKey: MAIN_REQUESTER_SESSION_KEY },

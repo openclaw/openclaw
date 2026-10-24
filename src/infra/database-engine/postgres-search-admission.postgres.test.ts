@@ -5,12 +5,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { isPostgresSqlConnection, type PostgresSqlConnection } from "../sql-connection.js";
-import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { admitStoreSearch } from "./adapters.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { DatabaseSearchCapabilityUnavailableError } from "./capability-unavailable.js";
 import type { StoreSchema } from "./contract.js";
-import { openEngineStore, readEngineAnchor } from "./open.js";
+import { openPostgresEngineTestStore } from "./engine-store.test-support.js";
+import { readEngineAnchor } from "./open.js";
 import {
   admitPostgresSearch,
   assertPostgresSearchAdmitted,
@@ -54,17 +54,12 @@ function fixture(
     };
     let db: PostgresSqlConnection | undefined;
     try {
-      const opened = openEngineStore({
+      const opened = openPostgresEngineTestStore({
         anchor,
         schema,
         input: { connection: dsn, schemaPrefix: "r6" },
         openSqlite: () => {
           throw new Error("Unexpected SQLite bootstrap");
-        },
-        prepareAnchor: () => {},
-        inspectSqlite: () => {
-          admitSqliteSchema(anchor);
-          return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(anchor)) };
         },
       });
       if (!isPostgresSqlConnection(opened)) {

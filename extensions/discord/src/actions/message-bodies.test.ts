@@ -4,6 +4,7 @@ import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-co
 import type { DiscordConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { discordMessageActions } from "../channel-actions.js";
 import { sendPollDiscord } from "../send.outbound.js";
 import { handleDiscordMessageAction } from "./handle-action.js";
@@ -86,14 +87,8 @@ beforeAll(async () => {
       }
     })();
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("HTTP fixture did not bind a TCP port");
-  }
-  baseUrl = `http://127.0.0.1:${address.port}`;
+  const port = await listenOnLoopback(server);
+  baseUrl = `http://127.0.0.1:${port}`;
   vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
     const url = new URL(input instanceof Request ? input.url : input);
     if (url.origin !== baseUrl) {

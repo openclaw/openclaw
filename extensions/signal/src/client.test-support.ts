@@ -1,8 +1,8 @@
-import { once } from "node:events";
 import http from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
 import { afterEach, expect, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 
 export function useSignalHttpServer() {
   const servers: http.Server[] = [];
@@ -27,13 +27,8 @@ export function useSignalHttpServer() {
     });
     servers.push(server);
     server.on("clientError", () => {});
-    server.listen(0, "127.0.0.1");
-    await once(server, "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected TCP address");
-    }
-    return `http://127.0.0.1:${address.port}`;
+    const port = await listenOnLoopback(server);
+    return `http://127.0.0.1:${port}`;
   };
 }
 

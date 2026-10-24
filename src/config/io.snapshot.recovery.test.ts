@@ -19,6 +19,7 @@ import {
   readConfigHealthStateFromStore,
 } from "./io.health-state.js";
 import * as healthOwner from "./io.health-state.js";
+import { createRecoveryConfigEnv } from "./io.observe-recovery.test-support.js";
 import { observeConfigSnapshotSync } from "./io.observe.js";
 import { normalizeConfigIoDeps } from "./io.read-helpers.js";
 import type { ConfigIoFactoryOptions } from "./io.types.js";
@@ -79,14 +80,7 @@ function fixture(
   });
   fs.writeFileSync(configPath, original);
   fs.writeFileSync(`${configPath}.bak`, backup);
-  const env = {
-    HOME: root,
-    USERPROFILE: root,
-    OPENCLAW_CONFIG_PATH: configPath,
-    OPENCLAW_STATE_DIR: root,
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    VITEST: "true",
-  };
+  const env = createRecoveryConfigEnv(root, configPath, root);
   const databasePath = openOpenClawStateDatabase({ env }).path;
   closeOpenClawStateDatabaseForTest();
   const io = createConfigIO({

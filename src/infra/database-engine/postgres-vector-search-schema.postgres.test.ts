@@ -7,11 +7,10 @@ import { AGENT_VECTOR_SEARCH_POSTGRES_SQL } from "../../state/openclaw-agent-vec
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { PostgresSyncConnection } from "../postgres-sync/connection.js";
 import { publishSqliteDatabaseSchemaChange } from "../sqlite-database-admission.js";
-import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { admitStoreSearch } from "./adapters.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import type { SearchSchema, StoreSchema } from "./contract.js";
-import { openEngineStore, readEngineAnchor } from "./open.js";
+import { openPostgresEngineTestStore } from "./engine-store.test-support.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -84,18 +83,13 @@ describe.skipIf(!connection)("PostgreSQL binary vector schema", () => {
           }
         };
         const open = (schema: StoreSchema, existingVersion = false) => {
-          const db = openEngineStore({
+          const db = openPostgresEngineTestStore({
             anchor,
             schema,
             existingVersion,
             input: { connection: connection!, schemaPrefix: "binary_vector_test" },
             openSqlite() {
               throw new Error("Expected PostgreSQL");
-            },
-            prepareAnchor() {},
-            inspectSqlite() {
-              admitSqliteSchema(anchor);
-              return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(anchor)) };
             },
           });
           if (!(db instanceof PostgresSyncConnection)) {
@@ -278,17 +272,12 @@ describe.skipIf(!connection)("PostgreSQL binary vector schema", () => {
         path.join(dirs.make("pg-vector-empty-"), "anchor.sqlite"),
       );
       const open = (schema: StoreSchema) =>
-        openEngineStore({
+        openPostgresEngineTestStore({
           anchor,
           schema,
           input: { connection: connection!, schemaPrefix: "binary_vector_empty_test" },
           openSqlite() {
             throw new Error("Expected PostgreSQL");
-          },
-          prepareAnchor() {},
-          inspectSqlite() {
-            admitSqliteSchema(anchor);
-            return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(anchor)) };
           },
         });
       const original = open(source);

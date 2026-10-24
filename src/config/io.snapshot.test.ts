@@ -12,6 +12,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { createConfigIoContext } from "./io.context.js";
 import { createConfigIO } from "./io.factory.js";
 import { createConfigReadError } from "./io.invalid-config.js";
+import { createRecoveryConfigEnv } from "./io.observe-recovery.test-support.js";
 import { readBestEffortConfigSnapshot } from "./io.runtime.js";
 import {
   readConfigFileSnapshotFromContext as readSnapshot,
@@ -43,14 +44,7 @@ function fixture(
   return createConfigIoContext({
     pluginValidation: options.pluginValidation,
     configPath,
-    env: {
-      HOME: root,
-      USERPROFILE: root,
-      OPENCLAW_CONFIG_PATH: configPath,
-      OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-      OPENCLAW_STATE_DIR: path.join(root, "state"),
-      VITEST: "true",
-    },
+    env: createRecoveryConfigEnv(root, configPath, path.join(root, "state")),
     homedir: () => root,
     observe: false,
   });

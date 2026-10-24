@@ -20,6 +20,7 @@ vi.mock("node:crypto", async (importOriginal) => ({
   randomUUID: cryptoMocks.randomUUID,
 }));
 
+import { createStdin, type TestStdin } from "./audio-backend.test-support.js";
 import { createMeetingNodeHost, type MeetingNodeHostOptions } from "./node-host.js";
 
 const TEST_UUID = "00000000-0000-4000-8000-000000000001";
@@ -40,32 +41,6 @@ const PREPARED_AUDIO = {
 };
 const FIRST_AUDIO = Buffer.from([1, 2, 3]);
 const FINAL_AUDIO = Buffer.from([4, 5, 6]);
-
-type TestStdin = EventEmitter & {
-  accept: (error?: Error) => void;
-  write: ReturnType<typeof vi.fn>;
-};
-
-function createStdin(writeResult: boolean): TestStdin {
-  const stdin = new EventEmitter() as TestStdin;
-  const callbacks: Array<(error?: Error | null) => void> = [];
-  stdin.write = vi.fn((_audio: Buffer, callback?: (error?: Error | null) => void) => {
-    if (callback) {
-      if (writeResult) {
-        queueMicrotask(() => callback());
-      } else {
-        callbacks.push(callback);
-      }
-    }
-    return writeResult;
-  });
-  stdin.accept = (error) => {
-    for (const callback of callbacks.splice(0)) {
-      callback(error);
-    }
-  };
-  return stdin;
-}
 
 function createProcess(params: {
   stdin?: TestStdin | null;

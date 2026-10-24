@@ -18,17 +18,13 @@ it.each([
 
   await expect(
     createGeminiEmbeddingProvider({
-      config: {
-        models: {
-          providers: {
-            google: {
-              baseUrl: "http://127.0.0.1:19575/v1beta",
-              models: [],
-              ...(source === "provider" ? { headers } : {}),
-            },
-          },
+      config: createModelProviderConfig({
+        google: {
+          baseUrl: "http://127.0.0.1:19575/v1beta",
+          models: [],
+          ...(source === "provider" ? { headers } : {}),
         },
-      },
+      }),
       provider: "gemini",
       model: "gemini-embedding-001",
       fallback: "none",
@@ -43,6 +39,7 @@ it.each([
 import { once } from "node:events";
 import { createServer, type IncomingHttpHeaders } from "node:http";
 import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
+import { createModelProviderConfig } from "../test-support/model-provider-config.test-support.js";
 
 it("keeps an empty remote override from inheriting Google's billing header", async () => {
   const claim = await acquireTestPortBlock({ offsets: [0] });
@@ -58,17 +55,13 @@ it("keeps an empty remote override from inheriting Google's billing header", asy
     await once(server, "listening");
     const baseUrl = `http://127.0.0.1:${claim.port}/v1beta`;
     const { provider } = await createGeminiEmbeddingProvider({
-      config: {
-        models: {
-          providers: {
-            google: {
-              baseUrl,
-              headers: { "x-goog-user-project": "provider-project" },
-              models: [],
-            },
-          },
+      config: createModelProviderConfig({
+        google: {
+          baseUrl,
+          headers: { "x-goog-user-project": "provider-project" },
+          models: [],
         },
-      },
+      }),
       provider: "gemini",
       model: "gemini-embedding-001",
       fallback: "none",
