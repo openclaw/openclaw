@@ -2439,7 +2439,7 @@
     "@types/ws": "8.18.2",
     "@vitest/browser-playwright": "5.0.5",
     "@vitest/coverage-v8": "5.0.5",
-    "acpx": "0.19.6",
+    "acpx": "0.21.0",
     "apache-arrow": "21.2.0",
     "baileys": "7.0.0-rc14",
     "ipaddr.js": "2.5.0",

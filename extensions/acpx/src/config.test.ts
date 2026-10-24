@@ -53,6 +53,31 @@ it.each([
   expect(() => resolve(config)).toThrow(error);
 });
 
+it("passes agent process env lists through and leaves them unset by default", () => {
+  const resolved = resolve();
+  expect(resolved.agentProcessEnvAllow).toBeUndefined();
+  expect(resolved.agentProcessEnvBlock).toBeUndefined();
+  expect(
+    resolve({ agentProcessEnvAllow: [], agentProcessEnvBlock: ["OPENCLAW_GATEWAY_TOKEN"] }),
+  ).toMatchObject({
+    agentProcessEnvAllow: [],
+    agentProcessEnvBlock: ["OPENCLAW_GATEWAY_TOKEN"],
+  });
+});
+
+it.each([
+  ["agentProcessEnvBlock", "OPENCLAW_GATEWAY_TOKEN"],
+  ["agentProcessEnvBlock", [""]],
+  ["agentProcessEnvBlock", ["NAME=value"]],
+  ["agentProcessEnvAllow", [" PATH"]],
+  ["agentProcessEnvAllow", ["NUL\u0000NAME"]],
+  ["agentProcessEnvAllow", [42]],
+] as const)("rejects invalid %s %j", (key, value) => {
+  expect(() => resolve({ [key]: value })).toThrow(
+    `${key} must be an array of environment variable names`,
+  );
+});
+
 it("injects the built-in plugin-tools MCP server only when explicitly enabled", () => {
   const distEntry = path.resolve("dist/mcp/plugin-tools-serve.js");
   expect(resolve({ pluginToolsMcpBridge: true }).mcpServers["openclaw-plugin-tools"]).toEqual({
