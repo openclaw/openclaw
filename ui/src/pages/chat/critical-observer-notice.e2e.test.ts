@@ -1,9 +1,6 @@
 import { expect, it } from "vitest";
 import { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
-import {
-  activateSelfRemovingControl,
-  waitForPatch,
-} from "../../e2e/session-management.test-support.ts";
+import * as ui from "../../e2e/session-management.compact.test-support.ts";
 import { seedStorage } from "../../e2e/sidebar-assertions.test-support.ts";
 import { controlUiSessionUrl, installMockGateway } from "../../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../../test-helpers/control-ui-session-fixtures.ts";
@@ -36,8 +33,7 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, selectedSessionKey));
         await page.getByText(conversation).waitFor();
         const currentUrl = page.url();
-        const session = (key: string) =>
-          page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+        const session = ui.sessionRows(page);
         const row = session(backgroundSessionKey);
         await row.waitFor({ state: "visible" });
         await gateway.waitForRequest("sessions.messages.subscribe", {
@@ -51,13 +47,12 @@ suite.define(() => {
           if (!host) {
             throw new Error("Shared toast host is unavailable");
           }
-          const observer = new MutationObserver(() => {
+          new MutationObserver(() => {
             const message = host.querySelector(".app-toast__message")?.textContent;
             if (message) {
               messages.push(message);
             }
-          });
-          observer.observe(host, { childList: true, subtree: true, characterData: true });
+          }).observe(host, { childList: true, subtree: true, characterData: true });
           return messages;
         });
 
@@ -82,24 +77,14 @@ suite.define(() => {
         };
 
         await emit("stuck", 1, "Needs repair");
-        expect(await page.locator(".app-toast").count()).toBe(0);
         await emit("waiting-on-user", 2, "Needs a decision");
         expect(await page.locator(".app-toast").count()).toBe(0);
         expect(await observerNotices.jsonValue()).toEqual([]);
         expect(page.url()).toBe(currentUrl);
 
         const archiveRow = session(archived.key);
-        const waitArchived = (value: boolean) =>
-          waitForPatch(
-            gateway,
-            (params) => params.key === archived.key && params.archived === value,
-          );
-        await archiveRow.hover();
-        await archiveRow.click({ button: "right" });
-        await activateSelfRemovingControl(
-          page.getByRole("menuitem", { name: "Archive session", exact: true }),
-        );
-        await waitArchived(true);
+        await ui.archiveSession(page, archiveRow, "sidebar");
+        await ui.sessionPatch(gateway, archived.key, { archived: true });
         const toast = page.locator(".app-toast");
         const undo = toast.getByRole("button", { name: "Undo", exact: true });
         await undo.waitFor({ state: "visible" });
@@ -107,7 +92,7 @@ suite.define(() => {
         await emit("stuck", 3, "Still needs repair");
         expect(await toast.textContent()).toContain("Session archived");
         await undo.click();
-        await waitArchived(false);
+        await ui.sessionPatch(gateway, archived.key, { archived: false });
         await archiveRow.waitFor({ state: "visible" });
         expect(page.url()).toBe(currentUrl);
       },
