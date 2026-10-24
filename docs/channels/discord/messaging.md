@@ -52,7 +52,7 @@ Messages in the same channel continue reaching the [reply queue](/concepts/queue
     - `batched`: attaches it only when the inbound event was a debounced batch of multiple messages — useful when you want native replies mainly for ambiguous bursty chats, not every single-message turn
 
     Message IDs are surfaced in context/history so agents can target specific messages. Replies to bot messages, including automation alerts, retain the referenced text as untrusted context when context visibility allows it. The bot's own inbound events are still ignored, and referenced self-authored media is not downloaded again.
-    Chunked persona delivery receipts retain the reply target selected for each chunk.
+    Native replies in bound threads use the bot identity and require the bot to have permission to send there. Ordinary bound-thread messages without a native reply retain the webhook persona. Chunked native reply receipts retain the reply target selected for each chunk.
 
   </Accordion>
 
