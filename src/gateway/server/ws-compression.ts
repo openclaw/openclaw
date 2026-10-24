@@ -112,13 +112,14 @@ function sharedZlib(open: () => NativeZlibStream) {
 }
 
 const inflateShared = sharedZlib(() => createInflateRaw());
-const deflateShared = new Map<number, ReturnType<typeof sharedZlib>>();
-const deflatedSegments = new WeakMap<Uint8Array, Map<number, Buffer>>();
-// Broadcast frames own immutable bytes; release every window with the frame.
-const deflatedFrames = new WeakMap<
-  SerializedGatewayFrame,
-  Map<number, Buffer | SerializedGatewayFrame>
+const deflateShared = new Map<
+  number,
+  {
+    deflate: ReturnType<typeof sharedZlib>;
+    frames: WeakMap<SerializedGatewayFrame, Buffer | SerializedGatewayFrame>;
+  }
 >();
+const deflatedSegments = new WeakMap<Uint8Array, Map<number, Buffer>>();
 
 /** Register immutable worker output, including its sync-flush trailer. */
 export function registerDeflatedSegment(bytes: Uint8Array, deflated: Uint8Array): void {
@@ -224,14 +225,17 @@ export function installGatewayDeflateCodec(socket: WebSocket):
       ? codec.params.server_max_window_bits
       : zlibConstants.Z_DEFAULT_WINDOWBITS;
   const deflateOptions = { finishFlush: Z_SYNC_FLUSH, level: DEFLATE_LEVEL, windowBits };
-  let deflate = deflateShared.get(windowBits);
-  if (!deflate) {
-    deflate = sharedZlib(() => createDeflateRaw(deflateOptions));
-    deflateShared.set(windowBits, deflate);
+  let shared = deflateShared.get(windowBits);
+  if (!shared) {
+    shared = {
+      deflate: sharedZlib(() => createDeflateRaw(deflateOptions)),
+      frames: new WeakMap(),
+    };
+    deflateShared.set(windowBits, shared);
   }
   const compressPiece = (bytes: Uint8Array): Buffer => {
     const input = Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    return deflate(input, kMaxLength) ?? deflateRawSync(input, deflateOptions);
+    return shared.deflate(input, kMaxLength) ?? deflateRawSync(input, deflateOptions);
   };
   const compress = (
     frame: Buffer | SerializedGatewayFrame,
@@ -239,11 +243,7 @@ export function installGatewayDeflateCodec(socket: WebSocket):
     if (frame.byteLength < GATEWAY_PER_MESSAGE_DEFLATE.threshold) {
       return undefined;
     }
-    const frameWindows =
-      frame instanceof SerializedGatewayFrame
-        ? getOrCreateWeakOwnerMap(deflatedFrames, frame)
-        : undefined;
-    const prepared = frameWindows?.get(windowBits);
+    const prepared = frame instanceof SerializedGatewayFrame ? shared.frames.get(frame) : undefined;
     if (prepared) {
       return prepared;
     }
@@ -290,7 +290,10 @@ export function installGatewayDeflateCodec(socket: WebSocket):
         frame instanceof SerializedGatewayFrame ? frame.toBuffer() : frame,
       ).subarray(0, -TRAILER.length);
     }
-    frameWindows?.set(windowBits, result);
+    // Broadcast frames own immutable bytes; release derived output with the frame.
+    if (frame instanceof SerializedGatewayFrame) {
+      shared.frames.set(frame, result);
+    }
     return result;
   };
   return {
