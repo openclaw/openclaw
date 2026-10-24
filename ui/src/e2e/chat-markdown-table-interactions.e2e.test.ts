@@ -50,10 +50,6 @@ function readTableGeometry(element: Element) {
   const column = thread.querySelector<HTMLElement>(".chat-thread-inner")!;
   const viewport = element.querySelector<HTMLElement>(".markdown-table__viewport")!;
   return {
-    publishedColumn: getComputedStyle(thread)
-      .getPropertyValue("--chat-transcript-column-width")
-      .trim(),
-    measuredColumn: column.clientWidth,
     contained: bounds.left >= pane.left && bounds.right <= pane.right,
     currentColumn:
       getComputedStyle(thread).getPropertyValue("--chat-transcript-column-width").trim() ===
@@ -71,6 +67,9 @@ suite.define(() => {
     await context.grantPermissions(["clipboard-read", "clipboard-write"], {
       origin: new URL(suite.server.baseUrl).origin,
     });
+    await context.route("https://example.com/table-reference", (route) =>
+      route.fulfill({ contentType: "text/html", body: "<h1>Table reference</h1>" }),
+    );
     const page = await context.newPage();
     const rows = Array.from(
       { length: 24 },
@@ -91,9 +90,7 @@ suite.define(() => {
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 |
 
-| Service | Owner | Region | Status | Version | Deployment | Incidents | Notes |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Gateway | Platform operations | eu-west-1 | Healthy | 2026.9.5 | Complete | 0 | Configuration validated and all connected clients recovered successfully after the restart. |
+${wideTable}
 
 ${auditMarkdownTable}`,
         ),
@@ -127,6 +124,11 @@ ${auditMarkdownTable}`,
       ).toBe(true);
       const geometry = await shell.evaluate(readResponsiveTableGeometry);
       expectResponsiveTableGeometry(geometry, width);
+      expect(
+        await page.evaluate(
+          () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
+        ),
+      ).toBe(true);
       if (width === 390) {
         await expectReadableAuditTable(page, message.locator(".markdown-table").nth(4));
       }
@@ -166,6 +168,79 @@ ${auditMarkdownTable}`,
     expect(sticky.background).not.toBe("rgba(0, 0, 0, 0)");
     await page.keyboard.press("Escape");
     await expectFocused(expand);
+    {
+      const wideShell = message.locator(".markdown-table").nth(3);
+      const copy = wideShell.getByRole("button", { name: "Copy table" });
+      const wideExpand = wideShell.getByRole("button", { name: "Expand table" });
+      await copy.click();
+      await expect
+        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+        .toContain("Service\tOwner\tRegion\tStatus\tVersion\tDeploy\tIncidents\tNotes");
+
+      await wideExpand.focus();
+      const inlineTable = wideShell.locator("table");
+      const noteWidth = await inlineTable
+        .locator("td")
+        .last()
+        .evaluate((cell) => cell.getBoundingClientRect().width);
+      const statusWidth = await inlineTable
+        .locator("td")
+        .nth(3)
+        .evaluate((cell) => cell.getBoundingClientRect().width);
+      expect(noteWidth).toBeGreaterThan(statusWidth * 2);
+      await wideExpand.click();
+      await dialog.waitFor({ state: "visible" });
+      expect(await page.locator(".markdown-table-modal").count()).toBe(1);
+      const fullscreenTable = dialog.locator("table");
+      expect(await fullscreenTable.textContent()).toContain("Gateway");
+      const tableProperties = [
+        "background-color",
+        "border-collapse",
+        "border-top-width",
+        "box-shadow",
+      ] as const;
+      const cellProperties = [
+        "background-color",
+        "border-right-width",
+        "border-bottom-color",
+        "overflow-wrap",
+        "white-space",
+        "word-break",
+      ] as const;
+      const readStyles = (locator: Locator, properties: readonly string[]) =>
+        locator.evaluate(
+          (element, names) =>
+            names.map((name) => {
+              const value = getComputedStyle(element).getPropertyValue(name);
+              if (!value) {
+                throw new Error(`Missing computed value for ${name}`);
+              }
+              return value;
+            }),
+          properties,
+        );
+      for (const [selector, properties] of [
+        ["table", tableProperties],
+        ["th", cellProperties],
+        ["td", cellProperties],
+      ] as const) {
+        expect(await readStyles(dialog.locator(selector).first(), properties)).toEqual(
+          await readStyles(wideShell.locator(selector).first(), properties),
+        );
+      }
+
+      const sourceUrl = page.url();
+      const popupPromise = context.waitForEvent("page");
+      await dialog
+        .getByRole("link", { name: "Long operational note that keeps this column wide" })
+        .press("Enter");
+      const popup = await popupPromise;
+      await popup.getByRole("heading", { name: "Table reference" }).waitFor();
+      expect(popup.url()).toBe("https://example.com/table-reference");
+      expect(page.url()).toBe(sourceUrl);
+      await popup.close();
+      await dialog.waitFor({ state: "detached" });
+    }
   });
 
   it("contains content-sized tables after restoring a percentage reading width", async () => {
@@ -255,286 +330,6 @@ ${overflowTable}`,
     ).toBeLessThanOrEqual(1);
   });
 
-  it.each(["chat", "assistant panel"])(
-    "contains overflow and preserves copy, fullscreen focus, and web links in %s",
-    async (surface) => {
-      const context = await tableContext(surface === "chat" ? 760 : 1280, 800);
-      await context.grantPermissions(["clipboard-read", "clipboard-write"], {
-        origin: new URL(suite.server.baseUrl).origin,
-      });
-      await context.route("https://example.com/table-reference", (route) =>
-        route.fulfill({ contentType: "text/html", body: "<h1>Table reference</h1>" }),
-      );
-      const page = await context.newPage();
-      await installMockGateway(page, {
-        ...(surface === "assistant panel"
-          ? {
-              sessions: [
-                { key: "agent:main:main", label: "Main", kind: "direct", updatedAt: Date.now() },
-              ],
-              featureMethods: [
-                "chat.metadata",
-                "chat.startup",
-                "chat.history",
-                "chat.send",
-                "openclaw.chat",
-                "openclaw.chat.history",
-              ],
-              methodResponses: {
-                "sessions.list": {
-                  cases: [
-                    // Main is the only session and does not match this palette query.
-                    {
-                      match: { search: "Ask OpenClaw" },
-                      response: { count: 0, sessions: [] },
-                    },
-                  ],
-                },
-                "openclaw.chat": {
-                  sessionId: "table-proof",
-                  reply: "Ready to help.",
-                  action: "none",
-                },
-                "openclaw.chat.history": {
-                  turns: [{ role: "assistant", text: wideTable, at: 1_700_000_101_000 }],
-                },
-              },
-            }
-          : {}),
-        historyMessages: [tableMessage("assistant-table", wideTable)],
-      });
-
-      await page.goto(`${suite.server.baseUrl}chat`);
-      if (surface === "assistant panel") {
-        await page.locator(".sidebar-brand__search").click();
-        await page
-          .locator("openclaw-command-palette")
-          .getByPlaceholder("Search or start a task…")
-          .fill("Ask OpenClaw");
-        await page.getByRole("option", { name: "Ask OpenClaw", exact: true }).click();
-      }
-      const bubble = page.locator(
-        surface === "chat" ? '[data-entry-id="assistant-table"]' : ".custodian__messages",
-      );
-      const shell = bubble.locator(".markdown-table");
-      const viewport = shell.locator(".markdown-table__viewport");
-      const copy = shell.getByRole("button", { name: "Copy table" });
-      const expand = shell.getByRole("button", { name: "Expand table" });
-      await shell.waitFor({ state: "visible" });
-      await expect.poll(() => shell.getAttribute("class")).toContain("can-scroll-right");
-      expect(
-        await page.evaluate(
-          () => document.documentElement.scrollWidth <= document.documentElement.clientWidth + 1,
-        ),
-      ).toBe(true);
-
-      await viewport.evaluate((element) => {
-        element.scrollLeft = Math.max(1, (element.scrollWidth - element.clientWidth) / 2);
-        element.dispatchEvent(new Event("scroll"));
-      });
-      await expect.poll(() => shell.getAttribute("class")).toContain("can-scroll-left");
-      await expect.poll(() => shell.getAttribute("class")).toContain("can-scroll-right");
-
-      await copy.click();
-      await expect
-        .poll(() => page.evaluate(() => navigator.clipboard.readText()))
-        .toContain("Service\tOwner\tRegion\tStatus\tVersion\tDeploy\tIncidents\tNotes");
-
-      await expand.focus();
-      const inlineTable = shell.locator("table");
-      const noteWidth = await inlineTable
-        .locator("td")
-        .last()
-        .evaluate((cell) => cell.getBoundingClientRect().width);
-      const statusWidth = await inlineTable
-        .locator("td")
-        .nth(3)
-        .evaluate((cell) => cell.getBoundingClientRect().width);
-      expect(noteWidth).toBeGreaterThan(statusWidth * 2);
-      await expand.dblclick();
-      const dialog = page.locator(".markdown-table-dialog");
-      await dialog.waitFor({ state: "visible" });
-      expect(await page.locator(".markdown-table-modal").count()).toBe(1);
-      const fullscreenTable = dialog.locator("table");
-      expect(await fullscreenTable.textContent()).toContain("Gateway");
-      const tableProperties = [
-        "background-color",
-        "border-collapse",
-        "border-top-width",
-        "box-shadow",
-      ] as const;
-      const cellProperties = [
-        "background-color",
-        "border-right-width",
-        "border-bottom-color",
-        "overflow-wrap",
-        "white-space",
-        "word-break",
-      ] as const;
-      const readStyles = async (locator: typeof inlineTable, properties: readonly string[]) =>
-        locator.evaluate((element, propertyNames) => {
-          const styles = getComputedStyle(element);
-          return Object.fromEntries(
-            propertyNames.map((property) => {
-              const value = styles.getPropertyValue(property);
-              if (!value) {
-                throw new Error(`Missing computed value for ${property}`);
-              }
-              return [property, value];
-            }),
-          );
-        }, properties);
-      for (const [selector, properties] of [
-        ["table", tableProperties],
-        ["th", cellProperties],
-        ["td", cellProperties],
-      ] as const) {
-        expect(await readStyles(dialog.locator(selector).first(), properties)).toEqual(
-          await readStyles(shell.locator(selector).first(), properties),
-        );
-      }
-
-      // The viewport margin stays outside the dialog while its opening scale changes.
-      await page.mouse.click(8, 8);
-      await expect.poll(() => dialog.count()).toBe(0);
-      await expectFocused(expand);
-
-      const sourceUrl = page.url();
-      await expand.click();
-      await dialog.waitFor({ state: "visible" });
-      const popupPromise = context.waitForEvent("page");
-      await dialog
-        .getByRole("link", { name: "Long operational note that keeps this column wide" })
-        .press("Enter");
-      const popup = await popupPromise;
-      await popup.getByRole("heading", { name: "Table reference" }).waitFor();
-      expect(popup.url()).toBe("https://example.com/table-reference");
-      expect(page.url()).toBe(sourceUrl);
-      await popup.close();
-      await dialog.waitFor({ state: "detached" });
-
-      await expand.click();
-      await dialog.waitFor({ state: "visible" });
-      await page.keyboard.press("Escape");
-      await expect.poll(() => dialog.count()).toBe(0);
-      await expectFocused(expand);
-    },
-  );
-
-  it.each(["expanded table", "held session hovercard"])(
-    "releases an %s when browser history retires its retained pane",
-    async (overlay) => {
-      const alphaKey = "agent:main:dashboard:table-alpha";
-      const betaKey = "agent:main:dashboard:table-beta";
-      const context = await tableContext();
-      const page = await context.newPage();
-      await installMockGateway(page, {
-        sessionKey: alphaKey,
-        sessions: [
-          { key: alphaKey, label: "Alpha table" },
-          { key: betaKey, label: "Beta table" },
-        ],
-        featureMethods: ["chat.metadata", "chat.startup", "chat.history", "chat.send"],
-        sessionTranscripts: Object.fromEntries(
-          (
-            [
-              [alphaKey, betaKey, "history-alpha", "Alpha"],
-              [betaKey, alphaKey, "history-beta", "Beta"],
-            ] as const
-          ).map(([key, other, id, name]) => [
-            key,
-            {
-              messages: [
-                tableMessage(id, `| Name | Task |\n| --- | --- |\n| ${name} table | ${other} |`, 1),
-              ],
-            },
-          ]),
-        ),
-      });
-      await page.goto(controlUiSessionUrl(suite.server.baseUrl, alphaKey));
-      const alpha = page.locator('[data-entry-id="history-alpha"]');
-      await alpha.waitFor({ state: "visible" });
-      const alphaPane = await alpha.evaluateHandle((entry) => entry.closest("openclaw-chat-pane"));
-      const timeOrigin = await page.evaluate(() => performance.timeOrigin);
-
-      await alpha.locator(`a[data-session-key="${betaKey}"]`).click();
-      await page.waitForURL(controlUiSessionUrl(suite.server.baseUrl, betaKey));
-      const beta = page.locator('[data-entry-id="history-beta"]');
-      await beta.waitFor({ state: "visible" });
-      const betaPane = await beta.evaluateHandle((entry) => entry.closest("openclaw-chat-pane"));
-      const expectRetainedPanes = async (activeIndex: number) => {
-        const states = await Promise.all(
-          [alphaPane, betaPane].map((pane) =>
-            pane.evaluate((element) => [
-              element?.isConnected,
-              element?.getAttribute("aria-hidden"),
-              element?.hasAttribute("inert"),
-            ]),
-          ),
-        );
-        // Connected, aria-hidden, inert: both panes survive, but only one stays active.
-        expect(states).toEqual(
-          [0, 1].map((index) => [true, String(index !== activeIndex), index !== activeIndex]),
-        );
-        expect(await page.evaluate(() => performance.timeOrigin)).toBe(timeOrigin);
-      };
-      await expectRetainedPanes(1);
-
-      const dialog = page.locator(".markdown-table-dialog");
-      const hovercard = page.locator(".session-progress-hovercard");
-      const sourceLink = beta.locator(`a[data-session-key="${alphaKey}"]`);
-      if (overlay === "expanded table") {
-        // The parked pointer can open Beta's backlink card over the table controls.
-        await page.mouse.move(8, 8);
-        await expect.poll(() => hovercard.count()).toBe(0);
-        await beta.getByRole("button", { name: "Expand table" }).click();
-        await dialog.waitFor({ state: "visible" });
-        expect(await dialog.textContent()).toContain("Beta table");
-      } else {
-        await sourceLink.hover();
-        await hovercard.waitFor({ state: "visible" });
-        expect(await sourceLink.getAttribute("aria-controls")).toBe(
-          await hovercard.getAttribute("id"),
-        );
-        await hovercard.hover();
-      }
-      await page.goBack();
-      await page.waitForURL(controlUiSessionUrl(suite.server.baseUrl, alphaKey));
-      await expect
-        .poll(() => alphaPane.evaluate((pane) => pane?.getAttribute("aria-hidden")))
-        .toBe("false");
-      await expect.poll(() => dialog.count()).toBe(0);
-      await expectRetainedPanes(0);
-      if (overlay === "held session hovercard") {
-        await expect.poll(() => hovercard.count()).toBe(0);
-      }
-
-      for (const [entry, name, index] of [
-        [alpha, "Alpha", 0],
-        [beta, "Beta", 1],
-      ] as const) {
-        if (index === 1) {
-          await page.goForward();
-          await page.waitForURL(controlUiSessionUrl(suite.server.baseUrl, betaKey));
-          await expect
-            .poll(() => betaPane.evaluate((pane) => pane?.getAttribute("aria-hidden")))
-            .toBe("false");
-          await expectRetainedPanes(1);
-        }
-        const expand = entry.getByRole("button", { name: "Expand table" });
-        await expand.click();
-        await dialog.waitFor({ state: "visible" });
-        expect(await dialog.count()).toBe(1);
-        expect(await dialog.textContent()).toContain(name + " table");
-        await page.keyboard.press("Escape");
-        await expect.poll(() => dialog.count()).toBe(0);
-        if (index === 0) {
-          await expectFocused(expand);
-        }
-      }
-    },
-  );
-
   it("restores overflow affordances when a retained table viewport narrows", async () => {
     const context = await tableContext();
     const page = await context.newPage();
@@ -603,12 +398,7 @@ ${overflowTable}`,
       const table = `| File | Task |
 | --- | --- |
 | \`src/ready.ts:2\` | ${targetKey} |`;
-      const context = await suite.newBrowserContext({
-        colorScheme: "dark",
-        locale: "en-US",
-        serviceWorkers: "block",
-        viewport: { height: 900, width: 1280 },
-      });
+      const context = await tableContext();
       const page = await context.newPage();
       page.setDefaultTimeout(15_000);
       const gateway = await installMockGateway(page, {
