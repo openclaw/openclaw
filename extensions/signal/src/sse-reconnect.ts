@@ -2,7 +2,6 @@ import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-contrac
 import { channelBlockedPatch, channelReadyPatch } from "openclaw/plugin-sdk/gateway-runtime";
 import {
   computeBackoff,
-  logVerbose,
   sleepWithAbort,
   type BackoffPolicy,
   type RuntimeEnv,
@@ -77,6 +76,7 @@ export async function runSignalSseLoop({
       break;
     }
     let lastError: string | undefined;
+    let streamEvents = 0;
     try {
       await streamSignalEvents({
         baseUrl,
@@ -89,6 +89,7 @@ export async function runSignalSseLoop({
         },
         onEvent: async (event: SignalSseEvent) => {
           reconnectAttempts = 0;
+          streamEvents += 1;
           await onEvent(event);
         },
         logger: {
@@ -99,6 +100,11 @@ export async function runSignalSseLoop({
       if (abortSignal?.aborted) {
         return;
       }
+      // A healthy event stream stays open while idle; a clean close is a daemon or proxy fault.
+      lastError =
+        streamEvents === 0
+          ? "Signal daemon closed the event stream without sending any events. Check that the daemon is delivering received messages to its event stream, then watch for reconnects."
+          : `Signal daemon closed the event stream after ${streamEvents} event(s).`;
     } catch (err) {
       if (abortSignal?.aborted) {
         return;
@@ -115,11 +121,7 @@ export async function runSignalSseLoop({
     publishSignalRecovering(statusSink, lastError);
     reconnectAttempts += 1;
     const delayMs = computeBackoff(reconnectPolicy, reconnectAttempts);
-    if (lastError !== undefined) {
-      runtime.log?.(`Signal connection lost, reconnecting in ${delayMs / 1000}s...`);
-    } else {
-      logVerbose(`Signal stream ended, reconnecting in ${delayMs / 1000}s...`);
-    }
+    runtime.log?.(`Signal connection lost (${lastError}), reconnecting in ${delayMs / 1000}s...`);
     try {
       await sleepWithAbort(delayMs, abortSignal);
     } catch (sleepErr) {
