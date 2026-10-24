@@ -1,5 +1,4 @@
 // Exercises built-in session tools through the real in-process router and SQLite store.
-
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, afterEach, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsCreateResult } from "../../packages/gateway-protocol/src/index.js";
@@ -7,12 +6,12 @@ import { captureAgentHarnessCompletionCustody } from "../agents/agent-harness-co
 import { createAgentHarnessCompletionScope } from "../agents/agent-harness-completion-scope.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import * as modelRuntimeChoice from "../agents/model-runtime-choice.js";
+import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
 import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
-import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
 import {
   callAgentToolGatewayRequest,
   callInProcessGatewayTool,
@@ -78,7 +77,6 @@ import {
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
-import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 import { roleClient, sharingPolicyClient } from "./session-sharing.test-utils.js";
 
 // This authority fixture creates no browser tabs; lifecycle cleanup and tab
@@ -722,11 +720,12 @@ describe("built-in session tool role authority", () => {
         () =>
           withOperatorToolGatewayAuthority(
             {
-              authenticatedUserProfile: gatewayProfile(
-                owner.id,
-                owner.displayName,
-                owner.updatedAt,
-              ),
+              authenticatedUserProfile: {
+                profileId: owner.id,
+                displayName: owner.displayName,
+                hasAvatar: false,
+                updatedAt: owner.updatedAt,
+              },
               operatorRoleActor: { kind: "system" },
               scopes: ["operator.write"],
             },
