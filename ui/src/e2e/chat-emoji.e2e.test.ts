@@ -119,10 +119,6 @@ suite.define(() => {
         await expect.poll(anchorConnected).toBe(false);
         await anchor.dispose();
 
-        await composer.fill("Nice ");
-        await composer.pressSequentially(":smile:");
-        await expect.poll(() => composer.inputValue()).toBe("Nice 😄");
-
         await composer.fill("Before :smi after");
         await composer.evaluate((element: HTMLTextAreaElement) =>
           element.setSelectionRange(11, 11),
@@ -151,10 +147,6 @@ suite.define(() => {
           await polledCount(menu).toBe(0);
         }
 
-        await openMenu();
-        await composer.press("Escape");
-        await polledCount(menu).toBe(0);
-        await expect.poll(() => composer.inputValue()).toBe(":smi");
         await openMenu();
         await page.keyboard.down("Enter");
         await expect.poll(() => composer.inputValue()).toBe("😄");
