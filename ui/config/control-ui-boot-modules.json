@@ -667,7 +667,7 @@
   "ui/src/i18n/locales/en-model-controls.ts",
   "ui/src/i18n/locales/en-new-session-runtime.ts",
   "ui/src/i18n/locales/en-session-navigation.ts",
-  "ui/src/i18n/locales/en-session-organization.ts",
+  "ui/src/i18n/locales/en-session-organization-shared.ts",
   "ui/src/i18n/locales/en-session-placement.ts",
   "ui/src/i18n/locales/en-sidebar-attention.ts",
   "ui/src/i18n/locales/en.ts",
