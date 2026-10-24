@@ -609,7 +609,7 @@ it.each([false, true])(
   },
 );
 
-it("restores the Environment branch after publication even before stale diff facts refresh", async () => {
+it("keeps local Changes after publication and accepts a confirmed clean working tree", async () => {
   const branch = sessionBranch({ branch: "feature/published", additions: 7, deletions: 2 });
   const element = await mount({
     detailsWorkspace: { root: "/synthetic/project", label: "project", branch: branch.branch },
@@ -637,12 +637,58 @@ it("restores the Environment branch after publication even before stale diff fac
   });
   const environment = element.querySelector('[data-details-group="environment"]')!;
   expect(environment.textContent).toContain(branch.branch);
-  expect(environment.querySelector(".chat-pr__diff, .chat-pr__publication-actions")).toBeNull();
+  expect(environment.querySelector(".chat-pr__publication-actions")).toBeNull();
+  expect(environment.querySelector(".chat-pr__diff")?.textContent).toContain("+7");
+  expect(environment.querySelector(".chat-pr__diff")?.textContent).toContain("−2");
+  element.props = {
+    ...element.props!,
+    environment: {
+      uncommitted: { sessionKey: "agent:main:details", files: [], additions: 0, deletions: 0 },
+    },
+  };
+  await element.updateComplete;
+  expect(environment.querySelector(".chat-pr__diff")).toBeNull();
+  expect(environment.textContent).toContain(branch.branch);
   await waitForSolid(() =>
     expect(
       element.querySelector('[data-details-group="pull-requests"] a[href$="/pull/44"]'),
     ).not.toBeNull(),
   );
+});
+
+it("keeps unresolved publication recovery and a different unpublished branch available", async () => {
+  const failed = publication({
+    result: {
+      requestId: "failed",
+      status: "failed",
+      code: "unavailable",
+      message: "Publication failed.",
+      nextAction: "Check publication.",
+    },
+  });
+  const element = await mount({
+    detailsWorkspace: { root: "/synthetic/project", label: "project", branch: "feature/current" },
+    pullRequests: [pullRequest({ branch: "feature/current" })],
+    githubPublication: failed,
+  });
+  const environment = element.querySelector('[data-details-group="environment"]')!;
+  expect(environment.querySelector(".chat-pr__publication-actions")).toBeNull();
+  element.props = {
+    ...element.props!,
+    githubPublication: publication({
+      locked: true,
+    }),
+  };
+  await element.updateComplete;
+  expect(environment.querySelector(".chat-pr__create")?.textContent).toBe("Check publication");
+  element.props = {
+    ...element.props!,
+    githubPublication: failed,
+    pullRequestsBranch: sessionBranch({ branch: "feature/next", additions: 3 }),
+  };
+  await element.updateComplete;
+  expect(environment.querySelector(".chat-pr__create")?.textContent).toBe("Retry");
+  expect(environment.querySelector(".chat-pr__diff")?.textContent).toContain("+3");
 });
 
 it.each([false, true])(

@@ -111,7 +111,15 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
   const published = () => props.work?.publication?.result?.status === "published";
   const work = () => {
     const candidate = props.work;
-    if (!candidate || published()) {
+    // The Gateway omits branch facts when this checkout has a live PR. Keep
+    // uncertain attempts recoverable; a completed failure is not another publish offer.
+    if (
+      !candidate ||
+      published() ||
+      (!candidate.branch &&
+        !candidate.publication?.locked &&
+        candidate.pullRequests.some((pr) => pr.state === "open" || pr.state === "draft"))
+    ) {
       return undefined;
     }
     const publication = candidate.publication;
@@ -123,18 +131,11 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
   };
   const branchName = () => workspace()?.branch ?? work()?.branch?.branch;
   const diff = () => {
-    const result = published() ? undefined : (work()?.branch ?? changes());
+    const result = work()?.branch ?? changes();
     return result && hasEnvironmentTextChanges(result) ? result : undefined;
   };
   const hasContent = createMemo(() =>
-    Boolean(
-      machineMenu() ||
-      host() ||
-      branchName() ||
-      work() ||
-      session()?.worktree ||
-      (!published() && changes()),
-    ),
+    Boolean(machineMenu() || host() || branchName() || work() || session()?.worktree || changes()),
   );
   // Capture cache availability before the first asynchronous arrival.
   const [initiallyEmpty] = createSignal<boolean>((previous) => previous ?? !hasContent());
@@ -285,7 +286,7 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
                   <span>{t("chat.sessionDetails.worktree")}</span>
                 </div>
               </Show>
-              <Show when={!published() && !branchName() && !work() && changes()}>
+              <Show when={!branchName() && !work() && changes()}>
                 <div class="chat-details__row chat-environment__row">
                   <EnvironmentAction
                     presented={props.presented}
