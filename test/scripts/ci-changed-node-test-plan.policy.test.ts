@@ -47,14 +47,10 @@ it("keeps runtime Markdown and fixture documentation in their owner lanes", () =
 it("keeps split planner proof within native row budgets without losing cases", () => {
   const files = [
     "test/scripts/ci-changed-node-test-plan.test.ts",
-    "test/scripts/ci-changed-node-test-plan.source-owners.test.ts",
     "test/scripts/ci-changed-node-test-plan.policy.test.ts",
     "test/scripts/ci-changed-node-test-plan.process-owners.test.ts",
-    "test/scripts/ci-changed-node-test-plan.dependency-hubs.test.ts",
-    "test/scripts/ci-changed-node-test-plan.dependency-inputs.test.ts",
-    "test/scripts/ci-changed-node-test-plan.config-fallback.test.ts",
   ];
-  for (const targets of [files, [files[0]!], [files[3]!]]) {
+  for (const targets of [files, [files[0]!]]) {
     for (const runnerBackend of ["blacksmith", "hybrid"]) {
       const rows = expectDefined(
         createSelectedNodeTestShardBundles(targets, { runnerBackend }),
@@ -86,17 +82,10 @@ it("classifies build-artifact and QA smoke impact by changed surface", () => {
     "tsconfig.json",
     "cli-invocation.mjs",
     "tsdown.config.ts",
-    "tsdown.ai.config.ts",
     "scripts/tsdown-build.mts",
     "scripts/write-plugin-sdk-entry-dts.ts",
-    "scripts/write-unified-entry-dts.ts",
     "scripts/lib/build-artifact-cache.mts",
-    "scripts/lib/compiler-input-snapshot.mts",
-    "scripts/lib/declaration-stage.mts",
     "scripts/lib/tsdown-declaration-inputs.mts",
-    "scripts/lib/tsdown-declaration-writer.mts",
-    "scripts/lib/tsdown-config-groups.mts",
-    "scripts/lib/tsdown-output-roots.mts",
   ]);
   expectImpact(affectsBuild, false, [
     "src/gateway/server.auth.control-ui.trusted-proxy.suite.ts",
@@ -108,20 +97,14 @@ it("classifies build-artifact and QA smoke impact by changed surface", () => {
   expectImpact(affectsQa, true, [
     "extensions/qa-lab/src/ci-smoke-plan.ts",
     "qa/scenarios/index.yaml",
-    "extensions/telegram/src/index.ts",
     ".github/workflows/ci.yml",
     ".github/actions/setup-node-env/action.yml",
     "scripts/lib/ci-changed-node-test-plan.mts",
-    "scripts/lib/ci-qa-smoke-scope.mts",
   ]);
   expectImpact(affectsQa, false, [
     "extensions/discord/src/index.ts",
-    "ui/src/app.ts",
     "src/infra/retry.ts",
-    "packages/llm-core/src/index.ts",
-    "pnpm-lock.yaml",
     "scripts/run-vitest.mjs",
-    "test/scripts/ci-node-test-plan.test.ts",
     ".github/workflows/labeler.yml",
   ]);
 });

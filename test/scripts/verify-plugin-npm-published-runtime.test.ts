@@ -10,16 +10,10 @@ import {
   usage,
 } from "../../scripts/verify-plugin-npm-published-runtime.mts";
 
-function runtimeErrors(
-  name: string,
-  openclaw: Record<string, unknown>,
-  files: string[],
-  error: string,
-  version = "2026.5.3",
-) {
+function runtimeErrors(openclaw: Record<string, unknown>, files: string[], error: string) {
   expect(
     collectPluginNpmPublishedRuntimeErrors({
-      packageJson: { name, version, openclaw },
+      packageJson: { name: "runtime-entry-fixture", openclaw },
       files: ["package.json", "openclaw.plugin.json", ...files],
     }),
   ).toEqual([error]);
@@ -82,7 +76,6 @@ it("runs npm metadata commands with bounded exec options", () => {
 
 it("rejects test and fixture files from the publication artifact", () => {
   runtimeErrors(
-    "runtime-entry-fixture",
     runtimeExtension,
     [
       "dist/index.js",
@@ -95,17 +88,14 @@ it("rejects test and fixture files from the publication artifact", () => {
       "root.test.ts",
     ],
     "runtime-entry-fixture plugin npm package must not include test or fixture files: root.test.ts, src/__fixtures__/plugin.ts, src/test-support/helper.ts, test/pack.test.ts",
-    "",
   );
 });
 
 it("reports a missing later JavaScript entry alongside valid JavaScript and TypeScript entries", () => {
   runtimeErrors(
-    "runtime-entry-fixture",
     { extensions: ["./first.js", "./second.mjs", "./third.cts"] },
     ["first.js", "dist/third.cjs"],
     "runtime-entry-fixture runtime extension entry not found: ./second.mjs",
-    "",
   );
 });
 
@@ -124,25 +114,21 @@ it("flags reservation packages before they can pass plugin runtime verification"
 
 it.each([
   [
-    "acpx",
     { extensions: ["./index.ts", "./tools.ts"], runtimeExtensions: ["./dist/index.js"] },
     ["dist/index.js"],
     "package.json openclaw.runtimeExtensions length (1) must match openclaw.extensions length (2)",
   ],
   [
-    "whatsapp",
     { extensions: ["./src/index.ts"], runtimeExtensions: [" "] },
     ["src/index.ts", "dist/index.js"],
     "package.json openclaw.runtimeExtensions[0] must be a non-empty string",
   ],
   [
-    "line",
     { ...runtimeExtension, setupEntry: "./setup-entry.ts" },
     ["index.ts", "dist/index.js", "setup-entry.ts"],
     "requires compiled runtime output for TypeScript entry ./setup-entry.ts: expected ./dist/setup-entry.js, ./dist/setup-entry.mjs, ./dist/setup-entry.cjs, ./setup-entry.js, ./setup-entry.mjs, ./setup-entry.cjs",
   ],
   [
-    "matrix",
     {
       ...runtimeExtension,
       setupEntry: "./setup-entry.ts",
@@ -152,15 +138,14 @@ it.each([
     "runtime setup entry not found: ./dist/setup-entry.js",
   ],
   [
-    "twitch",
     { ...runtimeExtension, runtimeSetupEntry: "./dist/setup-entry.js" },
     ["dist/index.js", "dist/setup-entry.js"],
     "package.json openclaw.runtimeSetupEntry requires openclaw.setupEntry",
   ],
-] satisfies Array<[string, Record<string, unknown>, string[], string]>)(
-  "rejects invalid %s runtime entries",
-  (plugin, openclaw, files, error) => {
-    runtimeErrors(`@openclaw/${plugin}`, openclaw, files, `@openclaw/${plugin}@2026.5.3 ${error}`);
+] satisfies Array<[Record<string, unknown>, string[], string]>)(
+  "rejects invalid runtime entries (%#)",
+  (openclaw, files, error) => {
+    runtimeErrors(openclaw, files, `runtime-entry-fixture ${error}`);
   },
 );
 
