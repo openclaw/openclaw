@@ -5,7 +5,10 @@ import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveStateClientCredentialEnvironment } from "../infra/client-credential-paths.js";
 import { readClientCredentialFileIdentity } from "../infra/client-credential-receipt.js";
-import { capturePortClientCredentialBinding } from "../infra/client-credential-restore.js";
+import {
+  capturePortClientCredentialBinding,
+  ClientCredentialBindingMismatchError,
+} from "../infra/client-credential-restore.js";
 import { resolveDatabaseEngineInput } from "../infra/database-engine/config.js";
 import { withDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import {
@@ -20,6 +23,7 @@ import {
   privatePaths,
   readDatabasePortConfigSnapshot,
   refuse,
+  refuseClientCredentialBindingMismatch,
 } from "./doctor-database-port-context.js";
 
 export function assertLocalCredentialPortCompanion(
@@ -36,9 +40,24 @@ export function assertLocalCredentialPortCompanion(
     sharedFamily !== "state" ||
     readBackupEngine(file).engine !== "sqlite" ||
     !sourceFile ||
-    !env ||
-    !capturePortClientCredentialBinding({ env, sourcePath: sharedPath, sourceFile })
+    !env
   ) {
+    refuse(
+      ctx,
+      "unmatched local credentials",
+      "an admitted shared target and its bound local store",
+    );
+  }
+  let binding;
+  try {
+    binding = capturePortClientCredentialBinding({ env, sourcePath: sharedPath, sourceFile });
+  } catch (error) {
+    if (!(error instanceof ClientCredentialBindingMismatchError)) {
+      throw error;
+    }
+    refuseClientCredentialBindingMismatch(ctx);
+  }
+  if (!binding) {
     refuse(
       ctx,
       "unmatched local credentials",

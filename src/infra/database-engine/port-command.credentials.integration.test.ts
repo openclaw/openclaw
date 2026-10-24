@@ -303,7 +303,9 @@ describe.skipIf(!connection)("database port client credential continuity", () =>
           credentials.writeClientCredentialReceipt(owner.database, changed, "complete"),
         );
         owner.close();
-        await expect(doctorDatabasePort({ to: "postgres" })).rejects.toThrow("Database port");
+        await expect(doctorDatabasePort({ to: "postgres" })).rejects.toThrow(
+          /local credential receipt.*openclaw backup restore/u,
+        );
         expect(hash()).toBe(before);
         expect(readBackupEngine(shared)).toEqual({ engine: "sqlite" });
       }

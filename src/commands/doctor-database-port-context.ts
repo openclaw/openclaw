@@ -7,7 +7,10 @@ import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { readConfigFileSnapshotForWrite } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { resolveStateClientCredentialEnvironment } from "../infra/client-credential-paths.js";
-import { rebindPortedClientCredentials } from "../infra/client-credential-restore.js";
+import {
+  ClientCredentialBindingMismatchError,
+  rebindPortedClientCredentials,
+} from "../infra/client-credential-restore.js";
 import { DatabasePortError } from "../infra/database-engine/port-command.worker.js";
 import type { PortVerification } from "../infra/database-engine/port.worker.js";
 import {
@@ -124,6 +127,7 @@ export type Context = {
   };
   assertCurrent: () => void;
   signal?: AbortSignal;
+  gatewayStopped?: boolean;
   phase: string;
   target: string;
   directory: string;
@@ -132,8 +136,38 @@ export type Context = {
   prepared: [string, Awaited<ReturnType<typeof prepareVerifiedSqliteFile>>][];
 };
 export function refuse(ctx: Context, observed: string, required: string): never {
+  const manifestPath = databasePortManifestPath(ctx.stateDir);
+  const recovery =
+    ctx.manifest !== undefined || fs.existsSync(manifestPath)
+      ? `, or use --resume/--rollback with ${manifestPath}`
+      : "";
+  const advice = ctx.gatewayStopped
+    ? `correct this fact and retry${recovery}`
+    : `stop the Gateway first, then correct this fact and retry${recovery}`;
   throw new DatabasePortError(
-    `Database port ${ctx.phase}: ${ctx.target}; observed ${observed}; required ${required}. Stop the Gateway first; correct this fact and retry, or use --resume/--rollback with ${databasePortManifestPath(ctx.stateDir)}.`,
+    `Database port ${ctx.phase}: ${ctx.target}; observed ${observed}; required ${required}. ${advice[0]!.toUpperCase()}${advice.slice(1)}.`,
+  );
+}
+export function refuseClientCredentialBindingMismatch(ctx: Context): never {
+  refuse(
+    ctx,
+    "local credential receipt bound to a different shared database file",
+    "a receipt matching this shared database; restore the archive with openclaw backup restore",
+  );
+}
+export function databasePortFailure(ctx: Context, error: unknown): never {
+  if (error instanceof DatabasePortError) {
+    throw error;
+  }
+  if (error instanceof ClientCredentialBindingMismatchError) {
+    refuseClientCredentialBindingMismatch(ctx);
+  }
+  // Untrusted driver/config messages may contain a DSN or row payload.
+  const parsed = z.object({ code: z.string().regex(/^[A-Z0-9_]+$/) }).safeParse(error);
+  return refuse(
+    ctx,
+    parsed.success ? parsed.data.code : "validation or I/O failure",
+    "successful verified phase; preserve the recovery directory",
   );
 }
 export const digest = (value: unknown) =>

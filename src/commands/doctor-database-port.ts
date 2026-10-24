@@ -20,7 +20,6 @@ import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import {
   runDatabasePortTask,
   type DatabasePortInspection,
-  DatabasePortError,
 } from "../infra/database-engine/port-command.worker.js";
 import { postgresStoreNamespace } from "../infra/database-engine/postgres-schema.js";
 import {
@@ -51,6 +50,7 @@ import {
   capacity,
   configInputs,
   type Context,
+  databasePortFailure,
   digest,
   databasePortFamilySchema,
   type DatabasePortFamily,
@@ -649,6 +649,7 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
     if (hasActiveGatewayStateOwner(path.join(stateDir, "state", "openclaw.sqlite"))) {
       refuse(ctx, "hosted Gateway owner", "exclusive offline custody");
     }
+    ctx.gatewayStopped = true;
     const recoveryPath = options.resume ?? options.rollback;
     const recovery = recoveryPath
       ? {
@@ -698,15 +699,6 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
         : undefined;
     return memoryRebuilds ? { ...result, memoryRebuilds } : result;
   } catch (error) {
-    if (error instanceof DatabasePortError) {
-      throw error;
-    }
-    // Untrusted driver/config messages may contain a DSN or row payload.
-    const parsed = z.object({ code: z.string().regex(/^[A-Z0-9_]+$/) }).safeParse(error);
-    return refuse(
-      ctx,
-      parsed.success ? parsed.data.code : "validation or I/O failure",
-      "successful verified phase; preserve the recovery directory",
-    );
+    return databasePortFailure(ctx, error);
   }
 }

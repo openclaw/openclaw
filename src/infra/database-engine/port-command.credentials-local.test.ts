@@ -163,9 +163,20 @@ describe("database port local credential ownership", () => {
       );
       owner.close();
       const before = bytes(state, stores);
-      await expect(
-        doctorDatabasePort({ family: "state", to: "sqlite", dryRun: true }),
-      ).rejects.toThrow(stores[1]!.local);
+      const error = await doctorDatabasePort({
+        family: "state",
+        to: "sqlite",
+        dryRun: true,
+      }).catch((caught: unknown) => caught);
+      expect(error).toBeInstanceOf(Error);
+      const message = String(error);
+      expect(message).toContain(stores[1]!.local);
+      expect(message).toMatch(
+        /local credential receipt bound to a different shared database file.*openclaw backup restore/u,
+      );
+      expect(message).not.toMatch(
+        /validation or I\/O failure|--resume\/--rollback|Stop the Gateway first/u,
+      );
       expect(bytes(state, stores)).toEqual(before);
       expect(fs.existsSync(recovery.databasePortManifestPath(state.stateDir))).toBe(false);
     });

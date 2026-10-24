@@ -35,6 +35,15 @@ const portBindingSchema = z.strictObject({
   receipt: z.string(),
 });
 
+export class ClientCredentialBindingMismatchError extends Error {
+  readonly code = "CLIENT_CREDENTIAL_BINDING_MISMATCH";
+
+  constructor() {
+    super("Database port credentials do not match the captured shared database.");
+    this.name = "ClientCredentialBindingMismatchError";
+  }
+}
+
 function portSharedIdentity(snapshotPath: string, sharedPath: string) {
   using database = openNodeSqliteDatabase(snapshotPath, { readOnly: true, readBigInts: true });
   const anchor = readEngineAnchor(database)?.[0];
@@ -73,7 +82,7 @@ export function capturePortClientCredentialBinding(options: {
         stored.receipt.source.engine !== identity.engine ||
         stored.receipt.source.identity !== identity.identity))
   ) {
-    throw new Error("Database port credentials do not match the captured shared database.");
+    throw new ClientCredentialBindingMismatchError();
   }
   const localFile = readClientCredentialFileIdentity(owner.path);
   if (!localFile) {
