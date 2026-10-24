@@ -31,13 +31,29 @@ final class LiveMacDesktopAvailabilityPlatform: MacDesktopAvailabilityPlatform {
     }
 
     static func consoleState(users: [[String: Any]], uid: uid_t) -> MacDesktopAvailabilityCoordinator.State {
+        // A Screen Sharing session is logged in and unlocked without owning the physical console.
+        if uid != 0 {
+            let own = users.filter {
+                ($0["kCGSSessionUserIDKey"] as? NSNumber)?.uint32Value == uid
+            }
+            if own.count > 1 { return .unknown }
+            if let session = own.first {
+                return Self.sessionState(session)
+            }
+        }
         let console = users.filter { Self.boolean($0["kCGSSessionOnConsoleKey"]) == true }
-        guard console.count == 1, let user = console.first,
-              let consoleUID = user["kCGSSessionUserIDKey"] as? NSNumber,
-              let loggedIn = Self.boolean(user["kCGSessionLoginDoneKey"])
-        else { return .unknown }
-        guard loggedIn, consoleUID.uint32Value == uid, uid != 0 else { return .locked }
-        // IOConsoleUsers omits this flag for a fully logged-in, unlocked console.
+        guard console.count == 1, let user = console.first else { return .unknown }
+        guard let consoleUID = user["kCGSSessionUserIDKey"] as? NSNumber,
+              consoleUID.uint32Value == uid
+        else { return .locked }
+        return Self.sessionState(user)
+    }
+
+    /// Login and the lock flag decide availability. Console ownership is checked by the caller.
+    private static func sessionState(_ user: [String: Any]) -> MacDesktopAvailabilityCoordinator.State {
+        guard let loggedIn = Self.boolean(user["kCGSessionLoginDoneKey"]) else { return .unknown }
+        guard loggedIn else { return .locked }
+        // IOConsoleUsers omits this flag for a fully logged-in, unlocked session.
         guard let value = user["CGSSessionScreenIsLocked"] else { return .unlocked }
         guard let locked = Self.boolean(value) else { return .unknown }
         return locked ? .locked : .unlocked
