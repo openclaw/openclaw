@@ -3216,7 +3216,6 @@
       "ui/src/e2e/agent-page-scope.e2e.test.ts": 15,
       "ui/src/e2e/agent-select-avatar-timeout.e2e.test.ts": 4,
       "ui/src/e2e/agent-select-layout.e2e.test.ts": 4,
-      "ui/src/e2e/agent-selection-persistence.e2e.test.ts": 5,
       "ui/src/e2e/agent-switch-roster.e2e.test.ts": 5,
       "ui/src/e2e/app-chrome-interaction.e2e.test.ts": 10,
       "ui/src/e2e/appearance-accent-selection.e2e.test.ts": 1,
