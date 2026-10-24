@@ -725,6 +725,7 @@ test.each(["already retired", "caller retired"] as const)(
   },
 );
 
+// Explicit delete proceeds past owner repair. A retained close still keeps the row.
 test("session delete removes local ACP metadata when owner repair blocks backend cleanup", async () => {
   const { closeAcpRuntimeForSession } = await import("./session-reset-acp.js");
   const { storePath } = await seedActiveMainSession();
