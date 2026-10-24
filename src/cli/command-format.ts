@@ -4,7 +4,14 @@ const CLI_PREFIX_RE = /^(?:pnpm|npm|bunx|npx)\s+openclaw\b|^openclaw\b/;
 const CONTAINER_FLAG_RE = /(?:^|\s)--container(?:\s|=|$)/;
 const PROFILE_FLAG_RE = /(?:^|\s)--profile(?:\s|=|$)/;
 const DEV_FLAG_RE = /(?:^|\s)--dev(?:\s|$)/;
-const UPDATE_RE = /^(?:\s+--(?:dev|no-color|(?:profile|log-level)[=\s]+\S+))*\s+update(?:\s|$)/;
+// A flag value is one non-space token joined to its flag by `=` or whitespace.
+// Keep the two spellings separate: a combined `[=\s]+` class lets the value
+// matcher swallow the separator before the next ` --flag` chunk and consume that
+// chunk instead, so repeated chunks admit many equivalent splits and matching
+// degrades superlinearly. Neither branch below can cross whitespace, so each
+// chunk boundary is forced and matching stays linear.
+const UPDATE_RE =
+  /^(?:\s+--(?:dev|no-color|(?:profile|log-level)(?:=\S+|\s+\S+)))*\s+update(?:\s|$)/;
 const CONTAINER_HINT_RE = /^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$/;
 
 export function formatCliCommand(

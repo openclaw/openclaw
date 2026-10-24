@@ -12,6 +12,13 @@ import {
 // Recorded outputs from the pre-fix implementation (git HEAD before the boundary-leak fix)
 // over a deterministic corpus. Whole-text matching must keep every text under the old
 // 32,768-character slicing threshold byte-identical through each entry point.
+// Three rows were re-recorded:
+// - 221, every column: query-parameter name matching now collapses spelling variants, so
+//   this sample's `_secret`-suffixed name is recognized and its value is masked rather than
+//   passed through.
+// - 11, 97 and 221, the log-record column: masking a trailing assignment no longer runs past
+//   the message into the next field, so `"level":"info"` survives where the recording had
+//   `"***":"***"`.
 type Fixture = {
   samples: string[];
   outputs: [string, string, string][];
@@ -35,6 +42,21 @@ it("fixture is present and bounded by the old slicing threshold", () => {
   }
 });
 
+// A trailing `key=value` carried its mask past the message: in the serialized record the
+// value ran through the closing quote into the next field, and `"level":"info"` came back
+// as `"***":"***"`, losing the severity every log consumer reads. `token` and
+// `client_secret` reached that boundary before spelling variants did.
+it("keeps the following log field when masking a trailing assignment", () => {
+  for (const key of ["token", "client_secret", "jclient%5Fsecret"]) {
+    expect(
+      redactLogRecordForTransport({
+        message: `visit https://example.test/x?${key}=opaquevalue12345`,
+        level: "info",
+      }),
+    ).toStrictEqual({ message: `visit https://example.test/x?${key}=***`, level: "info" });
+  }
+});
+
 it("redacts short texts byte-identically to the pre-fix implementation", () => {
   for (let index = 0; index < fixture.samples.length; index++) {
     const sample = restoreSchemes(fixture.samples[index]!);
@@ -49,6 +71,10 @@ it("redacts short texts byte-identically to the pre-fix implementation", () => {
 
 it("preserves baseline bytes across secret families, near misses, and ordered compositions", () => {
   // Recorded from the untouched baseline named in the fixture, before prefilter changes.
+  // One case ("family/form first pair/wrapped") was re-recorded: `prefix_password` is now
+  // recognized as a credential name, so the assignment rules mask its value before the password
+  // family sees it, and the pairs after it stay readable instead of joining one hinted mask that
+  // kept the secret's first six characters.
   // The retired model-visible output was removed after verifying the original hashes.
   // Hash the remaining outputs together to keep the six-mode corpus small without
   // deriving expected values from the current implementation or storing masked duplicates.
