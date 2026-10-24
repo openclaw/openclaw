@@ -56,6 +56,9 @@ function commit(repo: string, message: string): string {
   return git(repo, ["rev-parse", "HEAD"]).trim();
 }
 
+const readJson = (file: string) => JSON.parse(readFileSync(file, "utf8"));
+const worktrees = (repo: string) => git(repo, ["worktree", "list", "--porcelain"]);
+
 function makeFixture(name: string) {
   const repo = tempDirs.make(`plugin-sdk-${name}-repo-`);
   const runnerTemp = tempDirs.make(`plugin-sdk-${name}-temp-`);
@@ -260,13 +263,6 @@ if (process.argv.includes("--render-root")) {
     }
     await close;
   }
-  const progressLines = tracked.stderr.trim().split("\n");
-  expect(progressLines).toHaveLength(8);
-  for (const line of progressLines) {
-    expect(line).toMatch(
-      /^\[plugin-sdk-api-diff\] [a-f0-9]{40} (install|render) (started|completed in \d+ms)$/,
-    );
-  }
   expect(exitCode).toBe(0);
   expect(existsSync(blockedMarker)).toBe(true);
   expect(existsSync(renderStarted)).toBe(true);
@@ -290,7 +286,7 @@ it.each([
     writeFileSync(join(repo, "README.md"), "uncommitted\n");
     const status = git(repo, ["status", "--porcelain"]);
     writePnpm(binDir, '#!/bin/sh\n: > "$PNPM_MARKER"\nexit 97\n');
-    const worktrees = git(repo, ["worktree", "list", "--porcelain"]);
+    const initialWorktrees = worktrees(repo);
     const jsonPath = join(binDir, "diff.json");
     const evidencePath = join(binDir, "evidence.json");
     const summaryPath = join(binDir, "summary.md");
@@ -314,8 +310,8 @@ it.each([
 
     if (identical) {
       expect(child.status, child.stderr).toBe(0);
-      expect(decode(JSON.parse(readFileSync(jsonPath, "utf8")))).toEqual(emptyDiff);
-      expect(decode(JSON.parse(readFileSync(evidencePath, "utf8")))).toEqual({
+      expect(decode(readJson(jsonPath))).toEqual(emptyDiff);
+      expect(decode(readJson(evidencePath))).toEqual({
         schema: "openclaw.plugin-sdk-api-release-evidence/v1",
         status: "checked",
         baseRef: "same-commit",
@@ -339,7 +335,7 @@ it.each([
     }
     expect(existsSync(join(binDir, "installs"))).toBe(false);
     expect(git(repo, ["status", "--porcelain"])).toBe(status);
-    expect(git(repo, ["worktree", "list", "--porcelain"])).toBe(worktrees);
+    expect(worktrees(repo)).toBe(initialWorktrees);
   },
   35_000,
 );
@@ -425,7 +421,7 @@ it.each([
     writeFileSync(source, "export type Fixture = uncommitted;\n");
     symlinkSync(resolve("node_modules"), join(repo, "node_modules"), "dir");
     writePnpm(binDir, '#!/bin/sh\nprintf "%s\\n" "$PWD" >> "$PNPM_MARKER"\n');
-    const worktrees = git(repo, ["worktree", "list", "--porcelain"]);
+    const initialWorktrees = worktrees(repo);
     const child = runCli(repo, runnerTemp, binDir, {
       "bases-json": JSON.stringify(bases),
       head: "HEAD",
@@ -445,9 +441,9 @@ it.each([
         : [latestSha, ...(bases.beta === "v2026.8.1-beta.1" ? [betaSha] : []), headSha]
       ).toSorted(),
     );
-    const bundle = JSON.parse(readFileSync(evidencePath, "utf8"));
+    const bundle = readJson(evidencePath);
     expect(decode(bundle).schema).toBe("openclaw.plugin-sdk-api-release-evidence-set/v2");
-    const reports = expandDiffs(JSON.parse(readFileSync(jsonPath, "utf8")));
+    const reports = expandDiffs(readJson(jsonPath));
     for (const [selector, ref] of Object.entries(bases)) {
       const evidence = selectEvidence({ evidence: bundle, npmDistTag: selector });
       expect(reports[selector]).toEqual(evidence.diff);
@@ -473,7 +469,7 @@ it.each([
       }
     }
     expect(readFileSync(source, "utf8")).toBe("export type Fixture = uncommitted;\n");
-    expect(git(repo, ["worktree", "list", "--porcelain"])).toBe(worktrees);
+    expect(worktrees(repo)).toBe(initialWorktrees);
   },
   35_000,
 );

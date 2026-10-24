@@ -16,6 +16,11 @@ const roots = useAutoCleanupTempDirTracker(afterEach);
 const tempRoot = (name: string) =>
   fs.realpathSync.native(roots.make(`native-declaration-${name}-`));
 const moduleOptions = { module: "NodeNext", moduleResolution: "NodeNext", target: "ES2023" };
+function writeFiles(root: string, files: Record<string, string>) {
+  for (const [file, text] of Object.entries(files)) {
+    writeNativeFixtureFile(root, file, text);
+  }
+}
 
 it("keeps test-only ambient augmentation out of declaration roots but in test graphs", () => {
   const root = fs.realpathSync.native(roots.make("native-declaration-production-roots-"));
@@ -57,9 +62,11 @@ it("keeps test-only ambient augmentation out of declaration roots but in test gr
   ]) {
     writeNativeFixtureFile(root, file, "export {};\n");
   }
-  writeNativeFixtureFile(root, productionAmbient, "declare const productionOrigin: string;");
-  writeNativeFixtureFile(root, testAmbient, 'import "./runtime.js";');
-  writeNativeFixtureFile(root, "src/config/sessions/runtime.ts", "export const value = 1;");
+  writeFiles(root, {
+    [productionAmbient]: "declare const productionOrigin: string;",
+    [testAmbient]: 'import "./runtime.js";',
+    "src/config/sessions/runtime.ts": "export const value = 1;",
+  });
   for (const file of [
     "packages/example/src/index.ts",
     "src/plugin-sdk/index.ts",
@@ -92,8 +99,7 @@ it("rechecks a previously missing declaration path after its parent becomes a sy
   const parent = path.join(root, "generated");
   const file = path.join(parent, "value.d.ts");
   fs.mkdirSync(root);
-  fs.mkdirSync(outside);
-  fs.writeFileSync(path.join(outside, "value.d.ts"), "export {};\n");
+  writeFiles(outside, { "value.d.ts": "export {};\n" });
   const boundary = createDeclarationInputBoundary(root);
   expect(boundary.assert(file)).toBe(file);
   expect(boundary.assert(file)).toBe(file);
@@ -111,11 +117,8 @@ it("rechecks a previously missing declaration path after its parent becomes a sy
 function createNativeFixture(root: string, declared = root) {
   fs.mkdirSync(root, { recursive: true });
   const native = materializeNativeCompiler(declared);
-  const write = (files: Record<string, string>, prefix = "") => {
-    for (const [file, text] of Object.entries(files)) {
-      writeNativeFixtureFile(root, prefix ? path.join(prefix, file) : file, text);
-    }
-  };
+  const write = (files: Record<string, string>, prefix = "") =>
+    writeFiles(path.join(root, prefix), files);
   const json = (file: string, value: unknown) => write({ [file]: JSON.stringify(value) });
   const expectInputs = (inputs: string[], ...files: string[]) =>
     expect(inputs).toEqual(expect.arrayContaining(files.map((file) => path.join(root, file))));
@@ -162,8 +165,7 @@ it.each([
     /TS4094: Property 'value' of exported anonymous class type/u,
   ],
 ] as const)("rejects %s diagnostic-mode %s errors", async (diagnostics, _kind, source, error) => {
-  const root = tempRoot("errors");
-  const fixture = createNativeFixture(root);
+  const fixture = createNativeFixture(tempRoot("errors"));
   fixture.write({ "src/index.ts": source });
   await expect(fixture.compile({ diagnostics, compilerOptions: { lib: ["es5"] } })).rejects.toThrow(
     error,
@@ -171,8 +173,7 @@ it.each([
 });
 
 it("emits identical inferred declarations and maps across fresh compiler processes", async () => {
-  const root = tempRoot("determinism");
-  const fixture = createNativeFixture(root);
+  const fixture = createNativeFixture(tempRoot("determinism"));
   const modules = Array.from({ length: 16 }, (_, index) => `result-${index}`);
   fixture.write({
     "src/index.ts": modules.map((name) => `export * from "./${name}.js";`).join("\n"),
@@ -208,10 +209,7 @@ it("bounds optional SDK relative imports and manifest probes to the checkout", a
       'declare const parentOnly: "ancestor";\n',
     "node_modules/synthetic-sdk/package.json":
       '{"name":"synthetic-sdk","type":"module","types":"internal/types.d.ts"}',
-  });
-  // SDKs union optional imports at multiple parent depths; a local hit does not
-  // prevent another operand from resolving an ancestor's installed declarations.
-  fixture.write({
+    // A local optional import must not admit another operand from an ancestor.
     "node_modules/synthetic-sdk/internal/types.d.ts": [
       "type NotAny<T> = [0] extends [1 & T] ? never : T;",
       "export type Options =",
@@ -365,16 +363,14 @@ it("preserves original nested config paths and explicit override precedence duri
   write({
     "node_modules/@types/widget-local/index.d.ts":
       'declare const widgetTypeOrigin: "widget-local";\n',
+    "src/entry.ts":
+      "export const local = widgetTypeOrigin;\nexport const fallback = rootTypeOrigin;\n",
   });
   fixture.write({
     "node_modules/@types/root-fallback/index.d.ts":
       'declare const rootTypeOrigin: "root-fallback";\n',
   });
   configure();
-  write({
-    "src/entry.ts":
-      "export const local = widgetTypeOrigin;\nexport const fallback = rootTypeOrigin;\n",
-  });
   const implicit = await emit();
   expect(implicit.declarations.get(entry)?.code).toContain('local: "widget-local"');
   expect(implicit.declarations.get(entry)?.code).toContain('fallback: "root-fallback"');

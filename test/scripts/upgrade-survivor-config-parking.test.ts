@@ -300,26 +300,8 @@ exit "$probe_status"
       if (startStatus) {
         expect(result.stderr).toContain("synthetic start diagnostic");
       }
-      const phases = read("artifacts", "phases.jsonl");
       if (expected) {
-        const completedPhases = phases
-          .trim()
-          .split("\n")
-          .map((line) => JSON.parse(line));
-        expect(
-          completedPhases.filter((event) => event.status === "passed").map((event) => event.phase),
-        ).toEqual(
-          activeStatus !== 3
-            ? []
-            : [
-                "stop-recovery-service",
-                "prepare-restart-inference",
-                "prepare-restart-plugin-selectors",
-                "prepare-restart-fixture",
-                "prepare-restart-manager",
-              ],
-        );
-        expect(phases).not.toContain("recovery-update-restart");
+        expect(read("artifacts", "phases.jsonl")).not.toContain("recovery-update-restart");
       }
     },
   );

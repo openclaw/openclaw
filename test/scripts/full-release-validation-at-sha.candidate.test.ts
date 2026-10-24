@@ -21,8 +21,23 @@ const frozenBaselines = {
 };
 const npmVersionsArgs = ["view", "openclaw", "versions", "--json", "--silent", "--prefer-online"];
 
-function dispatches(fixture: ReturnType<typeof createDispatchFixture>) {
+type DispatchFixture = ReturnType<typeof createDispatchFixture>;
+function dispatches(fixture: DispatchFixture) {
   return fixture.readCalls(fixture.ghCallsPath).filter(isWorkflowDispatch).map(ghApiEndpoint);
+}
+function expectNoWrites(fixture: DispatchFixture) {
+  expect(
+    fixture.readCalls(fixture.ghCallsPath).filter((args) => ghApiMethod(args) !== "GET"),
+  ).toEqual([]);
+}
+function expectReadOnly(fixture: DispatchFixture, before: Buffer, callsBefore: number) {
+  expect(readFileSync(fixture.requestPath())).toEqual(before);
+  expect(
+    fixture
+      .readCalls(fixture.ghCallsPath)
+      .slice(callsBefore)
+      .filter((args) => ghApiMethod(args) !== "GET"),
+  ).toEqual([]);
 }
 
 describe("candidate-owned full release dispatch entry point", () => {
@@ -40,7 +55,7 @@ describe("candidate-owned full release dispatch entry point", () => {
     ]);
     expectDispatchFailure(result, "Fresh publication qualification must use candidate-owned Q=C");
     expect(dispatches(f)).toEqual([]);
-    expect(f.readCalls(f.ghCallsPath).filter((args) => ghApiMethod(args) !== "GET")).toEqual([]);
+    expectNoWrites(f);
   });
 
   it("does not admit excluded candidate tests even when the lane input is explicit", () => {
@@ -98,8 +113,7 @@ describe("candidate-owned full release dispatch entry point", () => {
       expectDefined(sent.inputs.trusted_workflow_json, "dispatched envelope"),
     );
     expect(sent.ref).toBe(retained.request.workflowRef);
-    expect(retained.request.workflowSha).toBe(f.targetSha);
-    expect(retained.request.targetSha).toBe(f.targetSha);
+    expect(retained.request).toMatchObject({ workflowSha: f.targetSha, targetSha: f.targetSha });
     expect(retained.admission.workflowSha).toBe(f.workflowSha);
     expect(envelope.trustedWorkflow).toEqual({
       ref: sent.ref,
@@ -282,14 +296,15 @@ describe("candidate-owned full release dispatch entry point", () => {
       expectDispatchFailure(result, error);
       expect(result.stderr).not.toContain("unexpected gh call");
       expect(dispatches(f)).toEqual(expected);
-      expect(f.record().request.workflowSha).toBe(f.targetSha);
-      expect(f.record().request.targetSha).toBe(f.targetSha);
+      expect(f.record().request).toMatchObject({
+        workflowSha: f.targetSha,
+        targetSha: f.targetSha,
+      });
     },
   );
   it("retains publication and lane inputs in the envelope and reopens the same request read-only", () => {
     const fixture = createDispatchFixture({ candidateOwned: true });
-    const excluded: string[] = [];
-    const excludedJson = JSON.stringify(excluded, null, 1);
+    const excludedJson = JSON.stringify([], null, 1);
     const selection = JSON.stringify(publicationSelectionFixture(), null, 1);
     const result = fixture.run([
       "--workflow-sha",
@@ -314,7 +329,7 @@ describe("candidate-owned full release dispatch entry point", () => {
       validationPurpose: "publish",
       publicationSelection: JSON.parse(selection),
       laneInputs: {
-        extension_test_exclude_patterns_json: JSON.stringify(excluded),
+        extension_test_exclude_patterns_json: "[]",
         qualification_baselines_json: JSON.stringify(frozenBaselines),
       },
     });
@@ -341,7 +356,7 @@ describe("candidate-owned full release dispatch entry point", () => {
       true,
     );
     expect(reopened.status, reopened.stderr).toBe(0);
-    expect(readFileSync(fixture.requestPath())).toEqual(before);
+    expectReadOnly(fixture, before, callsBefore);
     const changedExclusion = fixture.run(
       [
         "--request-file",
@@ -352,86 +367,57 @@ describe("candidate-owned full release dispatch entry point", () => {
       true,
     );
     expectDispatchFailure(changedExclusion, "conflict with the retained request");
-    expect(readFileSync(fixture.requestPath())).toEqual(before);
-    expect(
-      fixture
-        .readCalls(fixture.ghCallsPath)
-        .slice(callsBefore)
-        .filter((args) => ghApiMethod(args) !== "GET"),
-    ).toEqual([]);
+    expectReadOnly(fixture, before, callsBefore);
     const mismatch = fixture.run(
       ["--request-file", fixture.requestPath(), "-f", "validation_purpose=diagnostic"],
       true,
     );
     expectDispatchFailure(mismatch, "conflict with the retained request");
-    expect(readFileSync(fixture.requestPath())).toEqual(before);
+    expectReadOnly(fixture, before, callsBefore);
   });
 
-  it("refuses publish qualification when a squash left the contribution record target unreachable", () => {
-    const fixture = createDispatchFixture({
-      candidateOwned: true,
-      unreachableContributionRecord: true,
-    });
-    try {
-      const result = fixture.run([
-        "--workflow-sha",
-        fixture.targetSha,
-        "-f",
-        "validation_purpose=publish",
-        "-f",
-        `publication_selection_json=${JSON.stringify({
-          route: "normal",
-          npmDistTag: "beta",
-          publishOpenclawNpm: true,
-          pluginPublishScope: "all-publishable",
-          plugins: [],
-        })}`,
-      ]);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        `Candidate ${fixture.targetSha} would fail the pnpm release:candidate changelog gates for v2026.8.1`,
-      );
-      expect(result.stderr).toMatch(
-        new RegExp(
-          `contribution record target [0-9a-f]{40} is not reachable from release tag ${fixture.targetSha}`,
-          "u",
-        ),
-      );
-      expect(
-        fixture.readCalls(fixture.ghCallsPath).filter((args) => ghApiMethod(args) !== "GET"),
-      ).toEqual([]);
-      expect(dispatches(fixture)).toEqual([]);
-    } finally {
-      fixture.cleanup();
-    }
-  });
-
-  it("refuses publish qualification when the candidate changelog thanks an internal handle", () => {
-    const fixture = createDispatchFixture({
-      candidateOwned: true,
-      releaseNotes: "- Fixes: keep replies threaded. Thanks @steipete.",
-    });
-    try {
-      const result = fixture.run([
-        "--workflow-sha",
-        fixture.targetSha,
-        "-f",
-        "validation_purpose=publish",
-        "-f",
-        `publication_selection_json=${JSON.stringify(publicationSelectionFixture())}`,
-      ]);
-      expectDispatchFailure(
-        result,
-        "Forbidden changelog thanks attribution (pnpm check:changelog-attributions): CHANGELOG.md:3 uses Thanks @steipete. Use verified human GitHub credits",
-      );
-      expect(
-        fixture.readCalls(fixture.ghCallsPath).filter((args) => ghApiMethod(args) !== "GET"),
-      ).toEqual([]);
-      expect(dispatches(fixture)).toEqual([]);
-    } finally {
-      fixture.cleanup();
-    }
-  });
+  it.each(["unreachable contribution", "internal thanks"])(
+    "refuses publish qualification for %s before remote mutation",
+    (reason) => {
+      const unreachable = reason === "unreachable contribution";
+      const fixture = createDispatchFixture({
+        candidateOwned: true,
+        ...(unreachable
+          ? { unreachableContributionRecord: true }
+          : { releaseNotes: "- Fixes: keep replies threaded. Thanks @steipete." }),
+      });
+      try {
+        const result = fixture.run([
+          "--workflow-sha",
+          fixture.targetSha,
+          "-f",
+          "validation_purpose=publish",
+          "-f",
+          `publication_selection_json=${JSON.stringify({
+            ...publicationSelectionFixture(),
+            npmDistTag: unreachable ? "beta" : "latest",
+          })}`,
+        ]);
+        expectDispatchFailure(
+          result,
+          unreachable
+            ? `Candidate ${fixture.targetSha} would fail the pnpm release:candidate changelog gates for v2026.8.1`
+            : "Forbidden changelog thanks attribution (pnpm check:changelog-attributions): CHANGELOG.md:3 uses Thanks @steipete. Use verified human GitHub credits",
+        );
+        if (unreachable) {
+          expect(result.stderr).toMatch(
+            new RegExp(
+              `contribution record target [0-9a-f]{40} is not reachable from release tag ${fixture.targetSha}`,
+              "u",
+            ),
+          );
+        }
+        expectNoWrites(fixture);
+      } finally {
+        fixture.cleanup();
+      }
+    },
+  );
 
   it("reopens the original selected-plugin spelling after dispatch canonicalizes order and duplicates", () => {
     const fixture = createDispatchFixture({ candidateOwned: true });
