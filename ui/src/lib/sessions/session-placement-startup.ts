@@ -15,7 +15,12 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isAwaitingGatewayFailure } from "../../lib/gateway-availability.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import {
+  CHAT_OUTBOX_RETRY_DEFAULT_MS,
+  retryableGatewayDelayMs,
+} from "../../pages/chat/chat-outbox-retry.ts";
+import {
   formatTerminalChatSendAckError,
+  isActiveLeafChangedError,
   isTerminalFailureChatSendAck,
   normalizeChatSendAck,
 } from "../../pages/chat/chat-send-ack.ts";
@@ -43,7 +48,7 @@ type SessionPlacementStartOutcome =
   | { status: "session-missing"; error: string }
   | { status: "send-not-started"; error: string; messageId: string }
   | { status: "send-definitive-rejected"; error: string; messageId: string }
-  | { status: "send-rejected"; error: string; messageId: string };
+  | { status: "send-rejected"; error: string; messageId: string; retryAfterMs: number };
 
 type PlacementReadResult =
   | { status: "read"; placement?: SessionPlacement; sessionId?: string }
@@ -51,14 +56,15 @@ type PlacementReadResult =
   | { status: "rejected"; error: string }
   | { status: "awaiting-gateway" }
   | { status: "unavailable" };
-type PlacementResolution =
+type PlacementResolution = (
   | { status: "active"; placement: SessionPlacement }
   | { status: "dispatch" }
   | { status: "cancelled" }
   | { status: "interrupted" }
   | { status: "cleanup-rejected"; error: string }
   | { status: "missing" }
-  | { status: "rejected"; placement?: SessionPlacement };
+  | { status: "rejected"; placement?: SessionPlacement }
+) & { sessionId?: string };
 const DISPATCH_RECONCILE_INTERVAL_MS = 250;
 const DISPATCH_RECONCILE_ATTEMPTS = 1_200;
 const PLACEMENT_LOOKUP_FAILURE_LIMIT = 4;
@@ -166,13 +172,17 @@ async function resolveActivePlacement(
     key: string;
     agentId: string;
     initial?: SessionPlacement;
+    sessionId?: string;
+    expectedSessionId?: string;
     mode: SessionPlacementStartMode;
     cleanupOnCancellation: () => boolean;
   },
   isCurrent: () => boolean,
 ): Promise<PlacementResolution> {
   const { client } = requests;
-  let next = params.initial ? ({ status: "read", placement: params.initial } as const) : undefined;
+  let next: PlacementReadResult | undefined = params.initial
+    ? { status: "read", placement: params.initial, sessionId: params.sessionId }
+    : undefined;
   let lookupFailures = 0;
   let emptyPlacements = 0;
   let placementPending = false;
@@ -211,6 +221,16 @@ async function resolveActivePlacement(
     }
     lookupFailures = 0;
     if (result.status === "read") {
+      if (
+        params.expectedSessionId &&
+        result.sessionId &&
+        params.expectedSessionId !== result.sessionId
+      ) {
+        return {
+          status: "cleanup-rejected",
+          error: "The conversation changed. Review this message before retrying.",
+        };
+      }
       const placement = result.placement;
       if (!placement) {
         emptyPlacements += 1;
@@ -226,7 +246,7 @@ async function resolveActivePlacement(
       if (!isCurrent()) {
         return cancelSessionPlacement(client, params, params.cleanupOnCancellation);
       } else if (placement?.state === "active") {
-        return { status: "active", placement };
+        return { status: "active", placement, sessionId: result.sessionId };
       } else if (
         params.mode === "retry" &&
         (!placement ||
@@ -235,7 +255,7 @@ async function resolveActivePlacement(
           placement.state === "failed")
       ) {
         // Explicit Retry may allocate again; the Gateway still owns failed-worker cleanup gates.
-        return { status: "dispatch" };
+        return { status: "dispatch", sessionId: result.sessionId };
       } else if (placement && !PENDING_PLACEMENT_STATES.has(placement.state)) {
         if (placement.state === "failed") {
           const cleanupError = await reclaimSessionPlacement(client, params);
@@ -329,6 +349,7 @@ export async function startSessionPlacementInitialTurn(
   requests: SessionPlacementRequests & { client: Pick<GatewayBrowserClient, "request"> },
   params: {
     key: string;
+    sessionId?: string;
     agentId: string;
     target: SessionPlacementTarget;
     message: string;
@@ -340,23 +361,36 @@ export async function startSessionPlacementInitialTurn(
     signal?: AbortSignal;
   },
   isCurrent: () => boolean,
-  beforeSend: () => boolean = () => true,
+  beforeSend: (sessionId: string) => boolean = () => true,
 ): Promise<SessionPlacementStartOutcome> {
   const { client } = requests;
   const message = params.message;
   const mentions = params.mentions;
   const cleanupOnCancellation = params.cleanupOnCancellation ?? (() => true);
-  const resolvePlacement = (mode: SessionPlacementStartMode, initial?: SessionPlacement) =>
+  const resolvePlacement = (
+    mode: SessionPlacementStartMode,
+    initial?: SessionPlacement,
+    sessionId?: string,
+  ) =>
     resolveActivePlacement(
       requests,
-      { key: params.key, agentId: params.agentId, mode, initial, cleanupOnCancellation },
+      {
+        key: params.key,
+        agentId: params.agentId,
+        mode,
+        initial,
+        sessionId,
+        expectedSessionId: params.sessionId,
+        cleanupOnCancellation,
+      },
       isCurrent,
     );
   let resolution: PlacementResolution = { status: "dispatch" };
   let dispatchError = "";
   const requiredTarget =
     params.target.kind === "profile" && params.target.required ? params.target : undefined;
-  if (requiredTarget) {
+  // An attempted send must reach duplicate admission even after its worker has settled.
+  if (params.mode !== "resend" && requiredTarget) {
     // A recovered draft carries intent, not authority. Revalidate the policy before
     // observing placement or admitting a Retry through the ordinary run owner.
     try {
@@ -377,21 +411,21 @@ export async function startSessionPlacementInitialTurn(
       return { status: "dispatch-rejected", error: formatUiError(error) };
     }
   }
-  if (params.mode !== "dispatch" || requiredTarget) {
+  if (params.mode !== "resend" && (params.mode !== "dispatch" || requiredTarget)) {
     resolution = await resolvePlacement(params.mode);
     if (resolution.status === "dispatch" && !isCurrent()) {
       return cancelSessionPlacement(client, params, cleanupOnCancellation);
     }
   }
   // Creation already starts mandatory placement. Explicit Retry of a stopped/failed
-  // required worker is admitted by sessions.send, never by the admin dispatch API.
-  if (!requiredTarget && resolution.status === "dispatch") {
+  // required worker is admitted by chat.send, never by the admin dispatch API.
+  if (params.mode !== "resend" && !requiredTarget && resolution.status === "dispatch") {
     try {
       const dispatched = await client.request<SessionsDispatchResult>(
         "sessions.dispatch",
         sessionPlacementDispatchParams(params),
       );
-      resolution = await resolvePlacement("recover", dispatched.placement);
+      resolution = await resolvePlacement("recover", dispatched.placement, dispatched.sessionId);
     } catch (error) {
       dispatchError = formatUiError(error);
       if (!cleanupOnCancellation() && !isCurrent()) {
@@ -429,25 +463,36 @@ export async function startSessionPlacementInitialTurn(
     return cancelSessionPlacement(client, params, cleanupOnCancellation);
   }
   const messageId = params.messageId ?? generateUUID();
+  const sessionId = params.sessionId ?? resolution.sessionId;
+  if (!sessionId) {
+    return {
+      status: "send-not-started",
+      messageId,
+      error: "Session identity is unavailable. Retry.",
+    };
+  }
   const rejectBeforeDelivery = async (
     error: string,
     status: "send-not-started" | "send-definitive-rejected",
   ): Promise<SessionPlacementStartOutcome> => {
-    const cleanupError = await reclaimSessionPlacement(client, params);
+    const cleanupError =
+      params.mode === "resend" ? undefined : await reclaimSessionPlacement(client, params);
     return {
       status,
       messageId,
       error: cleanupError ? `${error}; cleanup failed: ${cleanupError}` : error,
     };
   };
-  if (!beforeSend()) {
+  if (!beforeSend(sessionId)) {
     return rejectBeforeDelivery("placement recovery storage is unavailable", "send-not-started");
   }
   try {
     const sent = await client.request(
-      "sessions.send",
+      "chat.send",
       {
-        key: params.key,
+        sessionKey: params.key,
+        sessionId,
+        expectedLeafEntryId: null,
         agentId: params.agentId,
         message,
         ...(mentions?.length ? { mentions } : {}),
@@ -475,6 +520,10 @@ export async function startSessionPlacementInitialTurn(
       messageId,
     };
   } catch (error) {
+    if (isActiveLeafChangedError(error)) {
+      // A rejected physical binding cannot authorize reclaiming its replacement.
+      return { status: "send-definitive-rejected", messageId, error: formatUiError(error) };
+    }
     if (!isCurrent()) {
       return cancelSessionPlacement(client, params, cleanupOnCancellation, messageId);
     }
@@ -493,6 +542,7 @@ export async function startSessionPlacementInitialTurn(
     }
     return {
       status: "send-rejected",
+      retryAfterMs: retryableGatewayDelayMs(error) ?? CHAT_OUTBOX_RETRY_DEFAULT_MS,
       error: formatUiError(error),
       messageId,
     };

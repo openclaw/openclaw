@@ -1534,7 +1534,6 @@ console.log("relocated session card renders with bundled fonts");
     const {
       worker: workerConfig,
       receiver: receiverConfig,
-      "github-launcher": launcherConfig,
       "service-relay": relayConfig,
       "service-group-anchor": anchorConfig,
     } = workerConfigs;
@@ -1567,16 +1566,14 @@ console.log("relocated session card renders with bundled fonts");
       chunkFileNames: "worker/worker-chunk-[hash].mjs",
       assetFileNames: "worker/[name][extname]",
     });
-    for (const config of [receiverConfig, launcherConfig]) {
-      expect(config?.define).toBeUndefined();
-    }
+    expect(receiverConfig?.define).toBeUndefined();
     for (const config of [relayConfig, anchorConfig]) {
       expect(config?.define).toEqual({
         WORKER_DEPLOY_BUILD: "true",
         SEALED_RUNTIME_BUILD: "true",
       });
     }
-    for (const config of [receiverConfig, launcherConfig, relayConfig, anchorConfig]) {
+    for (const config of [receiverConfig, relayConfig, anchorConfig]) {
       expect(config?.alias).toBeUndefined();
       expect(config?.plugins).toBeUndefined();
       expect(config?.outputOptions).toEqual({ codeSplitting: false });

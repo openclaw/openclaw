@@ -311,6 +311,17 @@ applicable policy also requires fresh publication admission.
     Retained handles reject after their owner closes; no new SDK barrel export
     is needed.
 
+    `await api.runtime.gateway.appendAgentMessage({ sessionKey, agentId?, text, mentions?, idempotencyKey })`
+    adds one agent-authored message to an existing session without running the
+    model. Bundled or trusted official plugins can call it only while handling
+    an authenticated person's Gateway request, and only for a session that
+    person may write, such as their own session. The text is normalized like
+    typed chat input. `mentions` select `@label` spans; each mentioned person
+    gets the usual Inbox entry and involvement, with the caller named as the
+    sender, under the same rules as a typed mention. A retry with the same
+    `idempotencyKey` returns the original message with `replayed: true`
+    instead of writing another.
+
     `api.runtime.gateway.withSessionFacts(select, async (snapshot) => result)`
     selects immutable facts through the same session-list filtering owner,
     without pagination. Selection supports agent, archive, automation, activity,

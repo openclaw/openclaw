@@ -2,7 +2,9 @@
 // Kept import-free of chat-page modules so lifecycle and history layers
 // can consume ack types without forming import cycles.
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GatewayRequestError } from "../../api/gateway.ts";
 
 type ChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
 
@@ -12,6 +14,15 @@ export type ChatSendAck = {
   stopReason?: "restart";
   messageSeq?: number;
 };
+
+const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
+
+export function isActiveLeafChangedError(err: unknown): err is GatewayRequestError {
+  return (
+    err instanceof GatewayRequestError &&
+    asOptionalRecord(err.details)?.reason === ACTIVE_LEAF_CHANGED_ERROR_REASON
+  );
+}
 
 export function normalizeChatSendAckStatus(status: unknown): ChatSendAckStatus {
   return status === "in_flight" || status === "ok" || status === "timeout" || status === "error"

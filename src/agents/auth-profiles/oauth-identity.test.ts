@@ -10,7 +10,7 @@ import {
 import {
   isSafeToCopyOAuthRoutingScope,
   isSafeToCopyOAuthIdentity,
-  shouldMirrorRefreshedOAuthCredential,
+  resolveOAuthMirrorDecision,
 } from "./oauth-identity.js";
 import { createOAuthRefreshFence } from "./oauth-refresh-marker.js";
 import {
@@ -99,33 +99,31 @@ describe("isSafeToCopyOAuthIdentity fuzz", () => {
   });
 });
 
-describe("shouldMirrorRefreshedOAuthCredential", () => {
+describe("resolveOAuthMirrorDecision", () => {
   const refreshed = createOAuthRefreshCredential({ expires: 2_000, accountId: "acct-1" });
   const older = { ...refreshed, access: "old", refresh: "old-refresh", expires: 1_000 };
   const decide = (
-    existing: Parameters<typeof shouldMirrorRefreshedOAuthCredential>[0]["existing"],
+    existing: Parameters<typeof resolveOAuthMirrorDecision>[0]["existing"],
     incoming = refreshed,
-  ) => shouldMirrorRefreshedOAuthCredential({ existing, refreshed: incoming });
+  ) => resolveOAuthMirrorDecision({ existing, refreshed: incoming });
   it.each([
-    [undefined, true, "no-existing-credential"],
-    [older, true, "incoming-fresher"],
-    [createApiKeyCredential("openai", "operator-key"), false, "non-oauth-existing-credential"],
-    [{ ...older, provider: "anthropic" }, false, "provider-mismatch"],
-    [{ ...refreshed, expires: 3_000 }, false, "incoming-not-fresher"],
-  ] as const)("returns mirror decision %j -> %s/%s", (existing, shouldMirror, reason) => {
-    expect(decide(existing)).toEqual({ shouldMirror, reason });
+    [undefined, "mirror"],
+    [older, "mirror"],
+    [createApiKeyCredential("openai", "operator-key"), "keep"],
+    [{ ...older, provider: "anthropic" }, "keep"],
+    [{ ...refreshed, expires: 3_000 }, "incoming-not-fresher"],
+  ] as const)("returns mirror decision %j -> %s", (existing, decision) => {
+    expect(decide(existing)).toBe(decision);
   });
   it("rejects an out-of-range refreshed expiry", () => {
-    expect(decide(older, { ...refreshed, expires: MAX_DATE_TIMESTAMP_MS + 1 })).toEqual({
-      shouldMirror: false,
-      reason: "incoming-not-fresher",
-    });
+    expect(decide(older, { ...refreshed, expires: MAX_DATE_TIMESTAMP_MS + 1 })).toBe(
+      "incoming-not-fresher",
+    );
   });
   it("refuses removing the known-account identity", () => {
-    expect(decide(older, { ...refreshed, accountId: undefined })).toEqual({
-      shouldMirror: false,
-      reason: "identity-mismatch-or-regression",
-    });
+    expect(decide(older, { ...refreshed, accountId: undefined })).toBe(
+      "identity-mismatch-or-regression",
+    );
   });
 });
 
@@ -180,7 +178,7 @@ describe("OIDC registered identity", () => {
     expect(isSafeToAdoptMainStoreOAuthIdentity(claimed, incoming)).toBe(safe);
     expect(isSafeToAdoptBootstrapOAuthIdentity(claimed, incoming)).toBe(safe);
     expect(
-      shouldMirrorRefreshedOAuthCredential({ existing: claimed, refreshed: incoming }).shouldMirror,
+      resolveOAuthMirrorDecision({ existing: claimed, refreshed: incoming }) === "mirror",
     ).toBe(safe);
     expect(isSafeOAuthOwnerRefreshResult(claimed, incoming)).toBe(safe);
     expect(isSafeOAuthPostClaimSettlement(claimed, incoming)).toBe(safe);

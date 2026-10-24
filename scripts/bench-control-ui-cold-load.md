@@ -63,6 +63,30 @@ Run from a prepared checkout with its package dependencies and Playwright Chromi
 node --import tsx scripts/bench-control-ui-cold-load.ts
 ```
 
+For cold readiness comparisons, use `--gateway-http` with already-built bundles.
+It serves documents and assets through the production Gateway HTTP handler,
+including route preload hints and negotiated compression sidecars:
+
+```sh
+NODE_DISABLE_COMPILE_CACHE=1 node --import ./scripts/tsx.mjs scripts/bench-control-ui-cold-load.ts \
+  --gateway-http --bundle-dir /absolute/base/control-ui \
+  --compare-bundle-dir /absolute/head/control-ui --runs 20 \
+  --first-load --cold-http-cache --untraced --thread-cpu-time --critical-path \
+  --face chat --critical-path-route sessions --critical-path-route settings \
+  --critical-path-route cron --output /absolute/proof/readiness
+```
+
+Twenty runs alternate ten base/head pairs. Supply a second copy of the base
+bundle for an A/A control. `--boot-route new` measures the New Session composer.
+Browser storage and HTTP caches are cleared between samples; Gateway asset
+caches stay warm for each immutable bundle. Each bundle's index is read before
+sampling to initialize the shared file reader outside the first timed reload.
+The WebSocket/bootstrap fixtures
+remain synthetic, so this measures the production HTTP and renderer paths,
+not Gateway RPC or provider latency. The default Vite preview server does not
+activate Gateway route preload hints or serve the shipped compression sidecars;
+retain that mode for renderer diagnostics rather than network-readiness claims.
+
 This opt-in benchmark builds the production Control UI into a fresh artifact directory,
 warms a signed-in synthetic dashboard visit, and measures three reloads. It never
 connects to a real Gateway or account. The reusable inventory is

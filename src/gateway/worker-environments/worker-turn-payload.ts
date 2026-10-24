@@ -374,6 +374,7 @@ export async function finalizeWorkerTurnResult(
   params: Parameters<typeof reconcileWorkspaceAfterTurn>[0] & {
     turn: SessionPlacementTurnParams;
     processResult: WorkerTurnProcessResult;
+    assertInputAdmitted: () => void;
     modelRef: ReturnType<typeof assertSupportedTurn>;
     baseLeafId: string | null;
     promptContext: Awaited<ReturnType<typeof prepareWorkerTurnPrompt>>;
@@ -388,6 +389,8 @@ export async function finalizeWorkerTurnResult(
 ) {
   const { turn, placement, transcriptTarget, promptContext } = params;
   const runtimeResult = parseWorkerTurnProcessResult(params.processResult);
+  // Report launch failures before enforcing admission for transcript-backed results.
+  params.assertInputAdmitted();
   const workerTurnFailed = runtimeResult.status === "failed";
 
   // A terminal result settles under its pending-result owner, even after execution ends.

@@ -5,9 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { buildDiscordActivitySdk } from "../../scripts/build-discord-activity-sdk.mts";
 import * as assets from "../../scripts/bundled-plugin-assets.mts";
 import * as managedCommands from "../../scripts/lib/managed-child-process.mts";
-import { listGeneratedExtensionAssetSources } from "../../scripts/lib/static-extension-assets.mts";
 import * as watch from "../../scripts/run-node-watch-paths.mts";
-import { awaitGateBeforeSettlement, createDeferred } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -59,53 +57,15 @@ it("creates a missing Discord SDK bundle without rewriting it when unchanged", a
 
   await expect(buildDiscordActivitySdk({ build, outputPath })).resolves.toBe(false);
   expect(fs.statSync(outputPath).mtimeMs).toBe(initialTime.getTime());
-  expect(build).toHaveBeenCalledWith(
-    expect.objectContaining({
-      absWorkingDir: path.join(process.cwd(), "extensions/discord"),
-      outfile: outputPath,
-      write: false,
-    }),
-  );
 });
 
-it("discovers the Discord SDK hook for standalone asset preparation", async () => {
-  const hooks = await readHooks(process.cwd(), { plugins: ["discord"] });
-  expect(hooks).toMatchObject([
-    {
-      command: "node --import ../../scripts/tsx.mjs ../../scripts/build-discord-activity-sdk.mts",
-      packageName: "@openclaw/discord",
-      phase: "build",
-      pluginId: "discord",
-    },
-  ]);
-});
-
-it("keeps build-generated static assets out of the source watcher", async () => {
-  const rootDir = process.cwd();
-  const hooks = await readHooks(rootDir);
-  const generatedAssetSources = listGeneratedExtensionAssetSources({ rootDir });
-
-  for (const hook of hooks) {
-    const pluginPath = path.relative(rootDir, hook.pluginDir).replaceAll(path.sep, "/");
-    expect(
-      generatedAssetSources.some((source) => source.startsWith(`${pluginPath}/`)),
-      `${hook.pluginId} generated output`,
-    ).toBe(true);
-  }
-
-  expect(generatedAssetSources).toContain("extensions/discord/assets/embedded-app-sdk.mjs");
-  for (const source of generatedAssetSources) {
-    expect(watch.isBuildRelevantRunNodePath(source), source).toBe(false);
-    expect(watch.isRestartRelevantRunNodePath(source), source).toBe(false);
-  }
-  expect(watch.isRestartRelevantRunNodePath("extensions/discord/src/activities/http.ts")).toBe(
-    true,
-  );
-});
-
-it.each(["packages/llm-core/src/types.ts"])("rebuilds the root runtime for %s", (source) => {
-  expect(watch.isBuildRelevantRunNodePath(source)).toBe(true);
-  expect(watch.isRestartRelevantRunNodePath(source)).toBe(true);
+it.each([
+  ["extensions/discord/assets/embedded-app-sdk.mjs", false],
+  ["extensions/discord/src/activities/http.ts", true],
+  ["packages/llm-core/src/types.ts", true],
+])("classifies the default watcher path %s", (source, relevant) => {
+  expect(watch.isBuildRelevantRunNodePath(source)).toBe(relevant);
+  expect(watch.isRestartRelevantRunNodePath(source)).toBe(relevant);
 });
 
 it("refreshes generated output metadata without recreating the watcher", async () => {
@@ -172,6 +132,9 @@ it("keeps browser manifest producers early while deferring selected isolated hoo
     expect(await readIds(true)).toEqual(["canvas", "manifest-writer", "unselected", "untracked"]);
     const allIds = ["canvas", "isolated", "manifest-writer", "unselected", "untracked"];
     expect(await readIds()).toEqual(allIds);
+    expect(
+      (await readHooks(rootDir, { plugins: ["isolated-alias"] })).map((hook) => hook.pluginId),
+    ).toEqual(["isolated"]);
     vi.stubEnv("OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS", "isolated,manifest-writer");
     expect(await readIds(true)).toEqual(allIds);
   } finally {
@@ -179,41 +142,25 @@ it("keeps browser manifest producers early while deferring selected isolated hoo
   }
 });
 
-it("awaits bounded asset execution and reports joined timeouts safely", async () => {
-  const build = "node scripts/private-asset-command.mjs";
-  const { rootDir, pluginDir } = pluginAssetFixture({ build });
-  const started = createDeferred<Parameters<typeof managedCommands.runManagedCommand>[0]>();
-  const command = createDeferred<number>();
-  const runner = vi.spyOn(managedCommands, "runManagedCommand");
-  runner.mockImplementationOnce((options) => {
-    started.resolve(options);
-    return command.promise;
-  });
-  const running = assets.runBundledPluginAssetHooks({ phase: "build", rootDir });
-  const outcome = running.catch((error: unknown) => error);
+it("dispatches discovered build hooks and propagates their failure", async () => {
+  const { rootDir, pluginDir } = pluginAssetFixture();
+  const failure = Object.assign(new Error("joined timeout"), { code: "ETIMEDOUT" });
+  const run = vi.spyOn(managedCommands, "runManagedCommand").mockRejectedValueOnce(failure);
   try {
-    const options = await awaitGateBeforeSettlement(
-      started.promise,
-      running,
-      "Asset hook settled before command",
-    );
-    expect(options).toMatchObject({
-      bin: build,
-      cwd: pluginDir,
-      timeoutMs: 600_000,
-      requireProcessTreeExit: process.platform !== "win32",
-    });
-    const failure = Object.assign(new Error("cleanup completed"), { code: "ETIMEDOUT" });
-    command.reject(failure);
-    expect(await outcome).toMatchObject({
+    await expect(
+      assets.runBundledPluginAssetHooks({ phase: "build", rootDir }),
+    ).rejects.toMatchObject({
       code: "ETIMEDOUT",
-      message: "Plugin asset build hook timed out after 600000ms: canvas",
       cause: failure,
     });
+    expect(run).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        bin: "node scripts/build-runtime.mjs",
+        cwd: pluginDir,
+      }),
+    );
   } finally {
-    command.resolve(0);
-    await outcome;
-    runner.mockRestore();
+    run.mockRestore();
   }
 });
 

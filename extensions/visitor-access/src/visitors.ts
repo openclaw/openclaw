@@ -16,7 +16,6 @@ import {
   type ActiveVisitorInvitation,
   visitorIdentityKeys,
   type VisitorGrant,
-  type VisitorIdentity,
   type VisitorInvitationContext,
   type VisitorOnboardingCompareAndSet,
   type VisitorOnboardingUpdate,
@@ -132,8 +131,8 @@ export class VisitorAccessService {
   }
 
   /** Plugin-internal onboarding API; see README "Onboarding record". */
-  findActiveInvitation(identity: VisitorIdentity): ActiveVisitorInvitation | undefined {
-    const state = this.findActiveGrant(visitorIdentityKeys(identity));
+  findActiveInvitation(grantId: string): ActiveVisitorInvitation | undefined {
+    const state = this.findActiveGrant([...this.grants.keys()], grantId);
     return (
       state && {
         ...structuredClone(state.grant),
@@ -416,6 +415,10 @@ export class VisitorAccessService {
         (previous.expiresAt === null || previous.expiresAt > Date.now());
       const grantId = continuous ? grantIdSchema.parse(previous.grantId) : randomUUID();
       grant.grantId = grantId;
+      if (!continuous) {
+        // Welcome setup belongs to one grant; a new invitation after an ended one starts over.
+        grant.onboarding = { state: "pending", updatedAt: now };
+      }
       await this.registerGrant(
         grant,
         continuous

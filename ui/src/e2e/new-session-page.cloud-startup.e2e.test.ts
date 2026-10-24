@@ -96,41 +96,46 @@ suite.define(() => {
     });
   });
 
-  it("restores an unconfirmed cloud turn after reload and checks delivery without replay", async () => {
+  it("restores a pending cloud turn after reload and resends its original key", async () => {
     await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
       const sessionKey = "agent:cloud:reload-recovery";
+      const sessionId = "session-reload-recovery";
       const message = "resume this cloud task after reload";
       const gateway = await openCloudPage(page, {
-        "sessions.create": { key: sessionKey },
+        "sessions.create": { key: sessionKey, sessionId },
         "sessions.dispatch": {
+          sessionId,
           placement: { state: "active", generation: 1 },
         },
         "sessions.list": {
           count: 1,
           defaults: SESSION_LIST_DEFAULTS,
           path: "",
-          sessions: [{ key: sessionKey, kind: "direct", updatedAt: Date.now() }],
+          sessions: [{ key: sessionKey, sessionId, kind: "direct", updatedAt: Date.now() }],
           ts: Date.now(),
         },
         "chat.history": {
           messages: [],
-          sessionId: "session-reload-recovery",
-          sessionInfo: { hasActiveRun: false, key: sessionKey, status: "done" },
+          sessionId,
+          sessionInfo: { hasActiveRun: false, key: sessionKey, sessionId, status: "done" },
         },
       });
       await chooseCloud(page);
       await disableComposerStorage(page);
-      await gateway.deferNext("sessions.send");
+      await gateway.deferNext("chat.send");
       await page.locator(".new-session-page__message").fill(message);
       await pastePng(page.locator(".new-session-page__message"));
       await page.getByRole("button", { name: "Start session" }).click();
-      const firstSend = await gateway.waitForRequest("sessions.send");
+      const firstSend = await gateway.waitForRequest("chat.send");
       const messageId = (firstSend.params as { idempotencyKey: string }).idempotencyKey;
       expect(firstSend.params).toMatchObject({
+        sessionKey,
+        sessionId,
+        expectedLeafEntryId: null,
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
       });
       await waitForCommittedChatRoute(page);
-      await gateway.rejectDeferred("sessions.send", {
+      await gateway.rejectDeferred("chat.send", {
         code: "UNAVAILABLE",
         message: "send outcome unknown",
       });
@@ -142,7 +147,7 @@ suite.define(() => {
             sessionKey,
           ),
         )
-        .toMatchObject({ phase: "failed", error: expect.stringContaining("send outcome unknown") });
+        .toMatchObject({ phase: "reconnecting", initialTurn: { sendState: "waiting-reconnect" } });
       const recoveryRuntime = await holdModuleResponse(
         page,
         controlUiE2eBuiltModuleRequest("ui/src/app/session-placement-startup.runtime.ts"),
@@ -154,37 +159,23 @@ suite.define(() => {
           evaluateControlUiContext(page, (application) => application.gateway.snapshot.phase),
         )
         .toBe("connected");
-      expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+      await gateway.deferNext("chat.send");
       recoveryRuntime.release();
       await reload;
       await waitForCommittedChatRoute(page);
       expect(page.url()).toContain(controlUiSessionPath(sessionKey));
       const retainedTurn = page.locator(".chat-group.user", { hasText: message });
-      const followUpMessage = "Wait behind the unconfirmed initial turn";
-      const checkDelivery = page.getByRole("button", { name: "Check delivery", exact: true });
-      await checkDelivery.waitFor({ state: "visible" });
+      const followUpMessage = "Wait behind the pending initial turn";
+      const replay = await gateway.waitForRequest("chat.send");
+      expect(replay.params).toEqual(firstSend.params);
       await expectPastedPngImage(retainedTurn.locator("img.chat-message-image"));
       const followUp = page.locator(".agent-chat__composer-combobox textarea");
       await pollDisabled(followUp).toBe(false);
       await followUp.fill(followUpMessage);
       await followUp.press("Enter");
       await page.locator(".chat-queue__item", { hasText: followUpMessage }).waitFor();
-      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      const historyCount = (await gateway.getRequests("chat.history")).length;
-      await checkDelivery.click();
-      await expect
-        .poll(async () => (await gateway.getRequests("chat.history")).slice(historyCount))
-        .toContainEqual(
-          expect.objectContaining({
-            params: {
-              sessionKey,
-              toolResultMaxChars: 2_000,
-              limit: 1000,
-              inputRunIds: [messageId],
-            },
-          }),
-        );
-      await pollLocatorText(page.getByRole("alert")).toContain("No matching user message");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       await expectPastedPngImage(retainedTurn.locator("img.chat-message-image"));
       await gateway.setHistoryMessages([
         {
@@ -199,14 +190,14 @@ suite.define(() => {
           __openclaw: { idempotencyKey: `${messageId}:user` },
         },
       ]);
-      await checkDelivery.click();
-      await pollCount(checkDelivery).toBe(0);
+      await gateway.resolveDeferred("chat.send", { runId: messageId, status: "ok" });
       await pollCount(retainedTurn).toBe(1);
       await pollCount(retainedTurn.locator(".chat-send-status")).toBe(0);
-      expect(await gateway.waitForRequest("chat.send")).toMatchObject({
+      expect(await gateway.waitForRequest("chat.send", { after: 1 })).toMatchObject({
         params: { sessionKey, message: followUpMessage },
       });
-      await expectNoRequests(gateway, "sessions.create", "sessions.dispatch", "sessions.send");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(2);
+      await expectNoRequests(gateway, "sessions.create", "sessions.dispatch");
     });
   });
 
@@ -254,6 +245,7 @@ suite.define(() => {
           storageKey,
           JSON.stringify({
             sessionKey: "agent:cloud:offline-recovery",
+            sessionId: "session-offline-recovery",
             messageId: "message-offline-recovery",
             message: "restore after reconnect",
             target: { kind: "profile", profileId: "aws" },
@@ -265,8 +257,14 @@ suite.define(() => {
         );
       }, recoveryIdentity);
       await gateway.setOnline(true);
-      expect(await gateway.waitForRequest("chat.history")).toMatchObject({
-        params: { sessionKey: "agent:cloud:offline-recovery", limit: 1000 },
+      expect(await gateway.waitForRequest("chat.send")).toMatchObject({
+        params: {
+          sessionKey: "agent:cloud:offline-recovery",
+          sessionId: "session-offline-recovery",
+          expectedLeafEntryId: null,
+          message: "restore after reconnect",
+          idempotencyKey: "message-offline-recovery",
+        },
       });
       await expect
         .poll(() =>
@@ -277,7 +275,8 @@ suite.define(() => {
           ),
         )
         .toHaveLength(0);
-      await expectNoRequests(gateway, "sessions.send", "sessions.dispatch");
+      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      await expectNoRequests(gateway, "sessions.dispatch");
       await pollValue(page.locator(".new-session-page__message")).toBe("");
       await chooseCloud(page);
       await page.locator(".new-session-page__message").fill("start another cloud task");

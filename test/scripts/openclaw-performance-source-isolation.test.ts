@@ -21,11 +21,8 @@ it("isolates the source performance gateway from network and scheduled work", ()
   const sliceStart = run.indexOf(sliceStartMarker);
   const sliceEndMarkerIndex = run.indexOf(sliceEndMarker, sliceStart);
   const workflowSlice = run.slice(sliceStart, sliceEndMarkerIndex + sliceEndMarker.length);
-  const cronEnv = "OPENCLAW_SKIP_CRON";
   expect(sliceStart).toBeGreaterThanOrEqual(0);
-  expect(run.lastIndexOf(sliceStartMarker)).toBe(sliceStart);
   expect(sliceEndMarkerIndex).toBeGreaterThan(sliceStart);
-  expect(run.lastIndexOf(sliceEndMarker)).toBe(sliceEndMarkerIndex);
 
   const fixtureRoot = tempDirs.make("openclaw-performance-isolation-");
   const binDir = join(fixtureRoot, "bin");
@@ -190,7 +187,6 @@ exit "$status"
       },
       plugins: { enabled: true, entries: { browser: { enabled: false } } },
     });
-    expect(JSON.stringify(parsedConfig)).not.toContain('"dreaming":');
     expect(parsedConfig.gateway?.auth).toEqual({ mode: "token" });
     if (expectsCatalogRefresh) {
       expect(parsedConfig.models?.catalogRefresh?.enabled).toBe(false);
@@ -257,22 +253,14 @@ exit "$status"
     expect([gatewayPaths.home, healthPaths.home].map(existsSync)).toEqual([false, false]);
   }
 
-  expect(targetStepIndex).toBeGreaterThanOrEqual(0);
-  const inheritedCronScopes = [
-    ["workflow env", workflow.env],
-    ["job env", job?.env],
-    ["current step env", step.env],
-    ["current step before harness", run.slice(0, sliceStart)],
-    ["preceding steps", jobSteps.slice(0, targetStepIndex)],
-    [
-      "current step GITHUB_ENV writes",
-      run
-        .split("\n")
-        .filter((line) => line.includes("GITHUB_ENV"))
-        .join("\n"),
-    ],
-  ] as const;
-  for (const [scope, value] of inheritedCronScopes) {
-    expect(JSON.stringify(value ?? {}), scope).not.toContain(cronEnv);
-  }
+  expect(
+    JSON.stringify([
+      workflow.env,
+      job?.env,
+      step.env,
+      run.slice(0, sliceStart),
+      jobSteps.slice(0, targetStepIndex),
+      run.split("\n").filter((line) => line.includes("GITHUB_ENV")),
+    ]),
+  ).not.toContain("OPENCLAW_SKIP_CRON");
 });

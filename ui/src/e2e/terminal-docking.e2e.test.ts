@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -107,11 +106,8 @@ suite.define(() => {
           expect(
             await terminalCanvas(panel).evaluate((element, prior) => element === prior, original),
           ).toBe(true);
-        const digest = async () =>
-          createHash("sha256")
-            .update(await canvas.screenshot({ animations: "disabled" }))
-            .digest("hex");
-        const before = await digest();
+        const pixels = () => canvas.screenshot({ animations: "disabled" });
+        const before = await pixels();
         await dock(bottom, "right");
         await pane.getByText("exited (17)", { exact: true }).waitFor();
         await expectOriginalCanvas(embedded);
@@ -121,7 +117,7 @@ suite.define(() => {
         for (let cycle = 0; cycle < 2; cycle += 1) {
           await dock(pane, "bottom");
           await bottom.getByText("exited (17)", { exact: true }).waitFor();
-          expect(await digest()).toBe(before);
+          expect(await pixels()).toEqual(before);
           expect(await bottom.locator(".tabstrip-tab").count()).toBe(mixed ? 2 : 1);
           await dock(bottom, "right");
           await pane.getByText("exited (17)", { exact: true }).waitFor();
@@ -138,7 +134,7 @@ suite.define(() => {
           expect(await lastInputSession(gateway)).toBe(liveId);
           await bottom.locator(".tabstrip-tab.is-exited").click();
           await expectOriginalCanvas(bottom);
-          expect(await digest()).toBe(before);
+          expect(await pixels()).toEqual(before);
         }
         const attaches = await gateway.getRequests("terminal.attach");
         expect(attaches.filter((request) => inputSession(request) === sessionId)).toHaveLength(1);
