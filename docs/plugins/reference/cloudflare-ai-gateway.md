@@ -1,5 +1,5 @@
 ---
-summary: "Adds Cloudflare AI Gateway model provider support to OpenClaw."
+summary: "Adds Cloudflare AI Gateway, Cloudflare Workers AI model provider support to OpenClaw."
 read_when:
   - You are installing, configuring, or auditing the cloudflare-ai-gateway plugin
 title: "Cloudflare AI Gateway plugin reference"
@@ -10,7 +10,7 @@ Run `pnpm plugins:inventory:gen` to rebuild it. Hand-written text survives only
 between the openclaw-plugin-reference:manual-start and
 openclaw-plugin-reference:manual-end comment markers. -->
 
-Adds Cloudflare AI Gateway model provider support to OpenClaw.
+Adds Cloudflare AI Gateway, Cloudflare Workers AI model provider support to OpenClaw.
 
 ## Distribution
 
@@ -19,7 +19,8 @@ Adds Cloudflare AI Gateway model provider support to OpenClaw.
 
 ## Surface
 
-- Providers: `cloudflare-ai-gateway`
+- Providers: `cloudflare-ai-gateway`, `cloudflare-workers-ai`
+- Contracts: `decisionProviders`
 
 ## Related docs
 

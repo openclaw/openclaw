@@ -1,11 +1,92 @@
 {
   "id": "cloudflare-ai-gateway",
-  "categories": ["models"],
+  "categories": [
+    "models"
+  ],
   "activation": {
     "onStartup": false
   },
   "enabledByDefault": true,
-  "providers": ["cloudflare-ai-gateway"],
+  "providers": [
+    "cloudflare-ai-gateway",
+    "cloudflare-workers-ai"
+  ],
+  "contracts": {
+    "decisionProviders": [
+      "cloudflare-workers-ai"
+    ]
+  },
+  "modelCatalog": {
+    "providers": {
+      "cloudflare-workers-ai": {
+        "models": [
+          {
+            "id": "@cf/cloudflare/clef",
+            "name": "Cloudflare Clef",
+            "contextWindow": 65536,
+            "input": [
+              "text",
+              "image"
+            ],
+            "inference": {
+              "chat": false,
+              "decision": {
+                "protocol": "cloudflare-systemone",
+                "input": [
+                  "text",
+                  "image"
+                ],
+                "questions": {
+                  "boolean": {
+                    "probabilities": "boolean",
+                    "abstention": false
+                  },
+                  "choice": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 255
+                  },
+                  "score": {
+                    "probabilities": "categorical",
+                    "abstention": false,
+                    "minOptions": 2,
+                    "maxOptions": 10
+                  }
+                },
+                "confidence": "provider-specific",
+                "reasoning": {
+                  "modes": [
+                    "auto"
+                  ]
+                },
+                "limits": {
+                  "maxQuestions": 64,
+                  "image": {
+                    "maxBytes": 4194304,
+                    "mimeTypes": [
+                      "image/png",
+                      "image/jpeg",
+                      "image/webp"
+                    ],
+                    "remoteUrls": false
+                  }
+                },
+                "billing": {
+                  "unit": "tokens",
+                  "source": "provider-docs",
+                  "usdPerMillion": {
+                    "input": 0.24,
+                    "output": 0
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
   "modelPricing": {
     "providers": {
       "cloudflare-ai-gateway": {
@@ -25,7 +106,15 @@
     "providers": [
       {
         "id": "cloudflare-ai-gateway",
-        "envVars": ["CLOUDFLARE_AI_GATEWAY_API_KEY"]
+        "envVars": [
+          "CLOUDFLARE_AI_GATEWAY_API_KEY"
+        ]
+      },
+      {
+        "id": "cloudflare-workers-ai",
+        "envVars": [
+          "CLOUDFLARE_WORKERS_AI_API_TOKEN"
+        ]
       }
     ]
   },
@@ -43,6 +132,20 @@
       "cliFlag": "--cloudflare-ai-gateway-api-key",
       "cliOption": "--cloudflare-ai-gateway-api-key <key>",
       "cliDescription": "Cloudflare AI Gateway API key"
+    },
+    {
+      "provider": "cloudflare-workers-ai",
+      "method": "api-key",
+      "choiceId": "cloudflare-workers-ai-api-token",
+      "credentialOnly": true,
+      "choiceLabel": "Cloudflare Workers AI API token",
+      "groupId": "cloudflare-workers-ai",
+      "groupLabel": "Cloudflare Workers AI",
+      "groupHint": "Clef Decision model",
+      "optionKey": "cloudflareWorkersAiApiToken",
+      "cliFlag": "--cloudflare-workers-ai-api-token",
+      "cliOption": "--cloudflare-workers-ai-api-token <token>",
+      "cliDescription": "Cloudflare API token with Workers AI Read permission"
     }
   ],
   "configSchema": {

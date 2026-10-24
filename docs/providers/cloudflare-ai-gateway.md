@@ -83,6 +83,67 @@ openclaw onboard --non-interactive --accept-risk --skip-health \
   --cloudflare-ai-gateway-api-key "$CLOUDFLARE_AI_GATEWAY_API_KEY"
 ```
 
+## Clef Decision model
+
+The same plugin also owns `cloudflare-workers-ai`, a separate provider for
+[Cloudflare Clef](https://developers.cloudflare.com/workers-ai/models/clef/).
+This addition requires a development checkout containing the Decision V2
+contract; the previously published plugin does not include it.
+
+Use a **Cloudflare API token with Workers AI Read permission**. The Anthropic
+key in `CLOUDFLARE_AI_GATEWAY_API_KEY` and a Gateway-only authentication token
+are not Workers AI credentials. OpenClaw stores the new credential in
+`cloudflare-workers-ai:default` and recognizes `CLOUDFLARE_WORKERS_AI_API_TOKEN`.
+
+```bash
+openclaw models auth login --provider cloudflare-workers-ai --method api-key
+```
+
+The prompt collects the Cloudflare account ID and API token. It configures
+`https://api.cloudflare.com/client/v4/accounts/<account_id>/ai` and leaves your
+chat and utility defaults unchanged. Select Clef separately:
+
+```json5
+{
+  agents: {
+    defaults: { decisionModel: "cloudflare-workers-ai/@cf/cloudflare/clef" },
+  },
+}
+```
+
+Non-interactive setup reuses the existing Cloudflare account-ID flag, but uses
+the separate Workers AI token flag:
+
+```bash
+openclaw onboard --non-interactive --accept-risk --skip-health \
+  --mode local --auth-choice cloudflare-workers-ai-api-token \
+  --cloudflare-ai-gateway-account-id "your-account-id" \
+  --cloudflare-workers-ai-api-token "$CLOUDFLARE_WORKERS_AI_API_TOKEN"
+```
+
+An existing `models.providers.cloudflare-workers-ai.baseUrl` also satisfies
+the account-route requirement. Custom endpoints receive
+`/run/@cf/cloudflare/clef` after their path prefix. To route Workers AI through
+an AI Gateway, set `models.providers.cloudflare-workers-ai.headers` with
+`"cf-aig-gateway-id": "your-gateway-id"`. Existing Gateway credentials and
+headers are never copied across providers. Custom routes keep the native Decision
+contract but do not inherit Cloudflare's hosted pricing metadata.
+
+Use `decision_evaluate` with `contractVersion: 2`. Clef accepts text, JSON
+objects or arrays, or one inline PNG, JPEG, or WebP image. Each question needs
+instructions. Supported questions are Boolean, Choice with 2-255 options,
+and Score with 2-10 non-null rubric levels. A batch can contain up to 64
+questions, with IDs of 1-100 letters, digits, underscores, periods, or hyphens.
+Images must fit the host's 4 MiB decoded limit and Clef's 16-megapixel limit.
+Remote image URLs, video, sorting, tags, and bounding boxes are not supported.
+
+The adapter preserves native probabilities, fractional scores, confidence,
+and token usage. Omit reasoning or use `auto`. Authored generation or routing
+parameters are rejected rather than silently discarded. Standard provider
+auth, header, proxy, TLS, and private-network settings remain available.
+Evaluations transmit the supplied evidence to Cloudflare and incur Workers AI
+usage charges. There is no chat fallback or automatic credential substitution.
+
 ## Advanced configuration
 
 <AccordionGroup>
