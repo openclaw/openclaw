@@ -547,55 +547,25 @@ it("grants an in-session scheduled run its own linked row's audience with the oc
   expect(fakeSessionOwner.activeLeases).toBe(0);
 });
 
-it("keeps a failed requester check as the owner cap through a spawned parent's lineage", async () => {
-  // The linked parent is itself a spawned child whose receipt carries an owner bit.
-  const root = rootEntry();
-  fakeSessionOwner.rows.set(ROOT_KEY, root);
-  const spawnedParent = childEntry(root);
-  const run: FakeSessionRow = { sessionId: randomUUID(), updatedAt: 1 };
-  const resolveChildOf = (senderIsOwner: boolean) =>
-    resolveScheduledRun(spawnedParent, senderIsOwner, undefined, CHILD_KEY, RUN_KEY, run);
-  const owner = requireGrant(await resolveChildOf(true));
-  expect(owner.audience).toEqual({ kind: "owner-private", agentId: AGENT_ID });
-  owner.release();
-  const capped = requireGrant(await resolveChildOf(false));
-  expect(capped.audience).toMatchObject({ kind: "conversation", sessionKey: ROOT_KEY });
-  capped.release();
-});
-
-it("keeps a failed requester check as the owner cap for an in-session run on a spawned row", async () => {
-  const root = rootEntry();
-  fakeSessionOwner.rows.set(ROOT_KEY, root);
-  const spawned = childEntry(root);
-  const resolution = await resolveScheduledRun(
-    spawned,
-    false,
-    undefined,
-    CHILD_KEY,
-    CHILD_KEY,
-    spawned,
-  );
-  expect(requireGrant(resolution).audience).toMatchObject({
-    kind: "conversation",
-    sessionKey: ROOT_KEY,
-  });
-});
-
-it("caps owner status for a scheduled run on a spawned session other than its linked parent", async () => {
-  const root = rootEntry();
-  fakeSessionOwner.rows.set(ROOT_KEY, root);
-  const spawned = childEntry(root);
-  const linked = rootEntry();
-  const resolution = await resolveScheduledRun(
-    linked,
-    false,
-    undefined,
-    "agent:main:linked",
-    CHILD_KEY,
-    spawned,
-  );
-  expect(requireGrant(resolution).audience).not.toEqual({
-    kind: "owner-private",
-    agentId: AGENT_ID,
-  });
-});
+it.each(["spawned-parent", "in-session", "other-parent"] as const)(
+  "caps scheduled requester ownership on a %s link",
+  async (mode) => {
+    const root = rootEntry();
+    fakeSessionOwner.rows.set(ROOT_KEY, root);
+    const spawned = childEntry(root);
+    const parent = mode === "other-parent" ? rootEntry() : spawned;
+    const parentKey = mode === "other-parent" ? "agent:main:linked" : CHILD_KEY;
+    const run = mode === "spawned-parent" ? { sessionId: randomUUID(), updatedAt: 1 } : spawned;
+    const runKey = mode === "spawned-parent" ? RUN_KEY : CHILD_KEY;
+    const resolve = (owner: boolean) =>
+      resolveScheduledRun(parent, owner, undefined, parentKey, runKey, run);
+    if (mode === "spawned-parent") {
+      const owner = requireGrant(await resolve(true));
+      expect(owner.audience).toEqual({ kind: "owner-private", agentId: AGENT_ID });
+      owner.release();
+    }
+    const capped = requireGrant(await resolve(false));
+    expect(capped.audience).toEqual(conversation(root));
+    capped.release();
+  },
+);

@@ -2,7 +2,7 @@ import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
 import { ownPreparedPluginGeneration } from "../agents/prepared-model-runtime.plugin-lifetime.js";
 import { collectErrorGraphCandidates } from "../infra/errors.js";
@@ -49,6 +49,36 @@ function writeToolPlugin(params: Parameters<typeof writePlugin>[0] & { tool: str
   return plugin;
 }
 
+function writeResourceTool(params: { id: string; setup: string; cleanup: string; value: string }) {
+  const { id, setup, cleanup, value } = params;
+  return writeToolPlugin({
+    id,
+    tool: "probe",
+    body: `${setup}
+    module.exports = { id: ${JSON.stringify(id)}, register(api) {
+      api.lifecycle.onDispose(() => { ${cleanup} });
+      api.registerTool({ name: "probe", description: "Read a captured resource",
+        parameters: { type: "object", properties: {} },
+        async execute() { return { content: [{ type: "text", text: ${value} }] }; }
+      });
+    } };`,
+  });
+}
+
+function toolFor(registry: ReturnType<typeof loadOpenClawPlugins>) {
+  const tool = registry.tools[0]?.factory({});
+  if (!tool || Array.isArray(tool)) {
+    throw new Error("Expected a registered resource probe");
+  }
+  return tool;
+}
+
+async function expectToolText(tool: ReturnType<typeof toolFor>, call: string, text: string) {
+  await expect(tool.execute(call, {})).resolves.toMatchObject({
+    content: [{ type: "text", text }],
+  });
+}
+
 function pluginConfig(...plugins: ReturnType<typeof writePlugin>[]) {
   return {
     plugins: {
@@ -60,6 +90,7 @@ function pluginConfig(...plugins: ReturnType<typeof writePlugin>[]) {
 }
 
 afterEach(resetPluginLoaderTestStateForTest);
+beforeEach(useNoBundledPlugins);
 
 function loadPlugins(
   plugins: ReturnType<typeof writePlugin>[],
@@ -181,7 +212,6 @@ it.each([false, true])(
 it.each([true, false])(
   "keeps workflow admission through registration and retirement (activate: %s)",
   async (activate) => {
-    useNoBundledPlugins();
     const id = `registration-workflow-${activate}`;
     const observationFile = path.join(makePluginLoaderTempDir(), "observed.json");
     const plugin = writeToolPlugin({
@@ -234,7 +264,6 @@ it.each([true, false])(
 it.each([true, false])(
   "retires successful cached instances but preserves caller-owned handles (cache: %s)",
   async (cached) => {
-    useNoBundledPlugins();
     const event = `successful-cache-retirement-${cached}`;
     const before = process.listenerCount(event);
     const order: string[] = [];
@@ -288,41 +317,26 @@ it.each([true, false])(
 );
 
 it("preserves an adopted published instance across cache retirement", async () => {
-  useNoBundledPlugins();
   const event = "cache-active-adopted";
   const before = process.listenerCount(event);
-  const plugin = writeToolPlugin({
+  const plugin = writeResourceTool({
     id: "active-adopted",
-    tool: "active_probe",
-    body: `const listener = () => {}; process.on(${JSON.stringify(event)}, listener); module.exports = {
-      id: "active-adopted", register(api) {
-        api.lifecycle.onDispose(() => process.off(${JSON.stringify(event)}, listener));
-        api.registerTool({ name: "active_probe", description: "Read a captured helper",
-          parameters: { type: "object", properties: {} },
-          async execute() {
-            return { content: [{ type: "text", text: (await import("./lazy.mjs")).value }] };
-          }
-        });
-      }
-    };`,
+    setup: `const listener = () => {}; process.on(${JSON.stringify(event)}, listener);`,
+    cleanup: `process.off(${JSON.stringify(event)}, listener);`,
+    value: `(await import("./lazy.mjs")).value`,
   });
   const helper = path.join(plugin.dir, "lazy.mjs");
   writeFileSync(helper, 'export const value = "captured";');
   const cache = createPluginCache();
   const registry = withPluginCache(cache, () => loadPlugins([plugin], { cache: true }));
   try {
-    const tool = registry.tools[0]?.factory({});
-    if (!tool || Array.isArray(tool)) {
-      throw new Error("Expected the registered lazy-import probe");
-    }
+    const tool = toolFor(registry);
     setActivePluginRegistry(registry);
     setActivePluginRegistry({ ...registry, plugins: [...registry.plugins] });
     writeFileSync(helper, 'export const value = "edited after capture";');
     await retirePluginCache(cache);
     expect(process.listenerCount(event)).toBe(before + 1);
-    await expect(tool.execute("first-lazy-import", {})).resolves.toMatchObject({
-      content: [{ type: "text", text: "captured" }],
-    });
+    await expectToolText(tool, "first-lazy-import", "captured");
     await clearActivePluginRegistry();
     expect(process.listenerCount(event)).toBe(before);
     await expect(
@@ -335,23 +349,13 @@ it("preserves an adopted published instance across cache retirement", async () =
 });
 
 it("keeps a module-scope resource open for the republished instance after the old one retires", async () => {
-  useNoBundledPlugins();
   const id = "module-resource-republish";
   // Canonical external-plugin pattern: open a resource at import, close it in onDispose.
-  const plugin = writeToolPlugin({
+  const plugin = writeResourceTool({
     id,
-    tool: "resource_probe",
-    body: `const { DatabaseSync } = require("node:sqlite");
-      const db = new DatabaseSync(":memory:");
-      module.exports = { id: ${JSON.stringify(id)}, register(api) {
-        api.lifecycle.onDispose(() => { if (db.isOpen) db.close(); });
-        api.registerTool({ name: "resource_probe", description: "Query the module database",
-          parameters: { type: "object", properties: {} },
-          async execute() {
-            return { content: [{ type: "text", text: String(db.prepare("select 7 as v").get().v) }] };
-          }
-        });
-      } };`,
+    setup: `const { DatabaseSync } = require("node:sqlite"); const db = new DatabaseSync(":memory:");`,
+    cleanup: `if (db.isOpen) db.close();`,
+    value: `String(db.prepare("select 7 as v").get().v)`,
   });
   // A republish loads the unchanged plugin through a fresh inventory, then retires the old one.
   const load = (cache: PluginCache) => withPluginCache(cache, () => loadPlugins([plugin]));
@@ -360,15 +364,10 @@ it("keeps a module-scope resource open for the republished instance after the ol
   const previous = load(previousCache);
   const next = load(nextCache);
   try {
-    const tool = next.tools[0]?.factory({});
-    if (!tool || Array.isArray(tool)) {
-      throw new Error("Expected the registered resource probe");
-    }
+    const tool = toolFor(next);
     await disposePluginRegistryInstances(previous);
     await retirePluginCache(previousCache);
-    await expect(tool.execute("after-republish", {})).resolves.toMatchObject({
-      content: [{ type: "text", text: "7" }],
-    });
+    await expectToolText(tool, "after-republish", "7");
   } finally {
     await disposePluginRegistryInstances(previous);
     await disposePluginRegistryInstances(next);
@@ -405,10 +404,9 @@ it("preserves body and unexpected registry retirement failures with async dispos
   expect(cleanup).toHaveBeenCalledOnce();
 });
 
-it.each(["load", "register", "id-mismatch"] as const)(
-  "records plugin %s failure and cleans only registered native resources",
+it.each(["load", "register", "id-mismatch", "disabled-memory"] as const)(
+  "records plugin %s outcome and cleans only registered native resources",
   async (phase) => {
-    useNoBundledPlugins();
     const event = `plugin-failure-${phase}`;
     const previousListeners = process.listeners(event);
     const listenerCount = previousListeners.length;
@@ -421,6 +419,9 @@ it.each(["load", "register", "id-mismatch"] as const)(
         throw new Error("fixture failed");
       } };`,
       "id-mismatch": `${acquire} module.exports = { id: "wrong-owner", register() {} };`,
+      "disabled-memory": `${acquire} module.exports = { id: "failed-disabled-memory", kind: "memory", register() {
+        throw new Error("disabled plugin registered");
+      } };`,
     }[phase]!;
     const plugin = writePlugin({ id: `failed-${phase}`, body });
     const registry = loadPlugins([plugin]);
@@ -429,14 +430,23 @@ it.each(["load", "register", "id-mismatch"] as const)(
       .filter((listener) => !previousListeners.includes(listener));
     try {
       expect(registry.plugins).toEqual([
-        expect.objectContaining({
-          id: plugin.id,
-          status: "error",
-          failurePhase: phase === "load" || phase === "register" ? phase : "validation",
-          error: expect.stringContaining(
-            phase === "id-mismatch" ? "plugin id mismatch" : "fixture failed",
-          ),
-        }),
+        expect.objectContaining(
+          phase === "disabled-memory"
+            ? {
+                id: plugin.id,
+                enabled: false,
+                status: "disabled",
+                activationReason: expect.stringContaining("memory slot"),
+              }
+            : {
+                id: plugin.id,
+                status: "error",
+                failurePhase: phase === "load" || phase === "register" ? phase : "validation",
+                error: expect.stringContaining(
+                  phase === "id-mismatch" ? "plugin id mismatch" : "fixture failed",
+                ),
+              },
+        ),
       ]);
       if (phase === "register") {
         await vi.waitFor(() => expect(process.listenerCount(event)).toBe(listenerCount));
@@ -456,46 +466,7 @@ it.each(["load", "register", "id-mismatch"] as const)(
   },
 );
 
-it("records a disabled runtime-only memory plugin without promising native effect cleanup", async () => {
-  useNoBundledPlugins();
-  const event = "plugin-disabled-memory";
-  const previousListeners = process.listeners(event);
-  const before = previousListeners.length;
-  const plugin = writePlugin({
-    id: "runtime-memory",
-    body: `process.on(${JSON.stringify(event)}, () => {});
-      module.exports = { id: "runtime-memory", kind: "memory", register() {
-        throw new Error("disabled plugin registered");
-      } };`,
-  });
-  const registry = loadPlugins([plugin]);
-  const fixtureListeners = process
-    .listeners(event)
-    .filter((listener) => !previousListeners.includes(listener));
-  try {
-    expect(registry.plugins).toEqual([
-      expect.objectContaining({
-        id: plugin.id,
-        enabled: false,
-        status: "disabled",
-        activationReason: expect.stringContaining("memory slot"),
-      }),
-    ]);
-    await disposePluginRegistryInstances(registry);
-    expect(process.listenerCount(event)).toBe(before + 1);
-  } finally {
-    try {
-      await disposePluginRegistryInstances(registry);
-    } finally {
-      for (const listener of fixtureListeners) {
-        process.off(event, listener);
-      }
-    }
-  }
-});
-
 it("retires every unpublished instance when a nonactivating builder throws", async () => {
-  useNoBundledPlugins();
   const event = "plugin-abandoned-builder";
   const before = process.listenerCount(event);
   const plugins = [
@@ -508,20 +479,15 @@ it("retires every unpublished instance when a nonactivating builder throws", asy
     }),
     writePlugin({ id: "abandoned-z", body: 'throw new Error("later plugin failed");' }),
   ];
-  const cache = createPluginCache();
-  try {
-    expect(() =>
-      withPluginCache(cache, () => loadPlugins(plugins, { throwOnLoadError: true })),
-    ).toThrow("later plugin failed");
-    await retirePluginCache(cache);
-    expect(process.listenerCount(event)).toBe(before);
-  } finally {
-    await retirePluginCache(cache);
-  }
+  await using cache = createPluginCache();
+  expect(() =>
+    withPluginCache(cache, () => loadPlugins(plugins, { throwOnLoadError: true })),
+  ).toThrow("later plugin failed");
+  await retirePluginCache(cache);
+  expect(process.listenerCount(event)).toBe(before);
 });
 
 it("joins failed registration cleanup through cache retirement and preserves both failures", async () => {
-  useNoBundledPlugins();
   const event = "plugin-pending-rollback-cleanup";
   const entered = createDeferredCore();
   let release: (() => void) | undefined;
@@ -598,7 +564,6 @@ it.each([false, true])(
 );
 
 it("rejects deferred runtime loading after cache retirement completes", async () => {
-  useNoBundledPlugins();
   const event = "retired-loader";
   const count = process.listenerCount(event);
   const plugin = writePlugin({

@@ -37,11 +37,14 @@ import { createPluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginDefinition } from "./types.js";
 
 const repository = fileURLToPath(new URL("../..", import.meta.url));
-const loadHost = createPluginModuleLoader({
-  devSourceRoot: repository,
-  pluginSdkResolution: "src",
-});
+const loaderOptions = { devSourceRoot: repository, pluginSdkResolution: "src" as const };
+const loadHost = createPluginModuleLoader(loaderOptions);
 const memorySource = path.join(repository, "extensions/memory-core/index.ts");
+const pluginSource = {
+  origin: "bundled" as const,
+  source: memorySource,
+  rootDir: path.dirname(memorySource),
+};
 const openingTurn = new AsyncLocalStorage<string>();
 const logger = { info() {}, warn() {}, error() {}, debug() {} };
 const providerId = "background-reload-fixture";
@@ -53,8 +56,7 @@ function loadNativeHost(source: string): unknown {
   const loaded = tryNativeRequireModule(path.join(repository, source), {
     aliasMap: preparePluginLoaderAliases({
       modulePath: memorySource,
-      devSourceRoot: repository,
-      pluginSdkResolution: "src",
+      ...loaderOptions,
     }).resolveAlias,
   });
   assert(loaded.ok, `Expected native host module ${source}`);
@@ -127,7 +129,7 @@ async function openManager(
 function registryHost() {
   return createPluginRegistry({
     logger,
-    runtime: createLazyPluginRuntime({ devSourceRoot: repository, pluginSdkResolution: "src" }),
+    runtime: createLazyPluginRuntime(loaderOptions),
     activateGlobalSideEffects: false,
   });
 }
@@ -135,23 +137,14 @@ function registryHost() {
 function loadMemory(host: RegistryHost, config: OpenClawConfig) {
   const record = createPluginRecord({
     id: "memory-core",
-    origin: "bundled",
-    source: memorySource,
-    rootDir: path.dirname(memorySource),
+    ...pluginSource,
     kind: "memory",
     memorySlotSelected: true,
   });
   host.registry.plugins.push(record);
   const api = host.createApi(record, { config });
   const instance = getPluginInstance(record) as PluginInstance;
-  bindPluginInstanceModuleLoader({
-    instance,
-    origin: "bundled",
-    source: memorySource,
-    rootDir: path.dirname(memorySource),
-    devSourceRoot: repository,
-    pluginSdkResolution: "src",
-  });
+  bindPluginInstanceModuleLoader({ instance, ...pluginSource, ...loaderOptions });
   const module = instance.loadModule(memorySource) as { default: OpenClawPluginDefinition };
   assert(module.default.register);
   runPluginRegisterSyncInRegistry(module.default.register, api, host.registry, record.id);
@@ -223,6 +216,12 @@ function registerMemoryWorkspaceWatch(workspace: string, beforeRead?: () => Prom
   return { subscriptions, release, nextSubscription: () => nextSubscription.promise };
 }
 
+async function writeMemory(workspace: string, relativePath: string, text: string) {
+  const file = path.join(workspace, relativePath);
+  await fs.mkdir(path.dirname(file), { recursive: true });
+  await fs.writeFile(file, text);
+}
+
 it("retires live watchers and starts successor indexing without a search or turn", async ({
   signal,
 }) => {
@@ -271,9 +270,9 @@ it("retires live watchers and starts successor indexing without a search or turn
     await withinTest(successorWatching, signal);
     expect(subscriptions).toHaveLength(2);
     expect(subscriptions[1]!.signal.aborted).toBe(false);
-    await fs.mkdir(path.join(state.workspaceDir, "memory"), { recursive: true });
-    await fs.writeFile(
-      path.join(state.workspaceDir, "memory", "after-reload.md"),
+    await writeMemory(
+      state.workspaceDir,
+      "memory/after-reload.md",
       "Violet cranes nest beside the lagoon.",
     );
     subscriptions[0]!.notify();
@@ -332,9 +331,9 @@ it("restarts memory watchers after reload waits for active indexing past its sto
     const { manager } = await openManager(memory, config);
     await withinTest(initiallyWatching, signal);
     await manager.sync?.({ reason: "startup-settled" });
-    await fs.mkdir(path.join(state.workspaceDir, "memory"), { recursive: true });
-    await fs.writeFile(
-      path.join(state.workspaceDir, "memory", "held-indexing.md"),
+    await writeMemory(
+      state.workspaceDir,
+      "memory/held-indexing.md",
       "Violet cranes nest beside the lagoon.",
     );
     holdIndexing = true;
@@ -560,11 +559,7 @@ it.for([false, true])(
         const cfg = config(agentId, reason);
         publishConfig(cfg);
         const workspace = path.join(state.workspaceDir, agentId);
-        await fs.mkdir(workspace, { recursive: true });
-        await fs.writeFile(
-          path.join(workspace, "MEMORY.md"),
-          `Remember the violet ${reason} fact.`,
-        );
+        await writeMemory(workspace, "MEMORY.md", `Remember the violet ${reason} fact.`);
         let watchedWorkspace: ReturnType<typeof registerMemoryWorkspaceWatch> | undefined;
         if (reason === "watch") {
           watchedWorkspace = registerMemoryWorkspaceWatch(workspace);

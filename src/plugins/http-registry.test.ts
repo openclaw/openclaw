@@ -280,16 +280,49 @@ describe("registerPluginHttpRoute", () => {
   );
 
   it.each([
-    { pluginId: "other", source: "shared-route" },
-    { pluginId: "demo", source: "other-route" },
-  ])("rejects route reuse by $pluginId/$source", ({ pluginId, source }) => {
-    const { registry, register } = routeHarness(sharedRoute);
-    const firstHandler = vi.fn();
-    register({ handler: firstHandler });
-
-    expectDenied(register, { pluginId, source, reuseExistingSameOwner: true }, "reuse");
-    expectRoutes(registry, { handler: firstHandler });
-  });
+    ["reuse by other plugin", "demo", "shared-route", "other", "shared-route", "reuse", false],
+    ["reuse by other source", "demo", "shared-route", "demo", "other-route", "reuse", false],
+    ["source-less to sourced", "demo", undefined, "demo", "demo-webhook", "replacement", false],
+    ["sourced to source-less", "demo", "demo-webhook", "demo", undefined, "replacement", false],
+    ["different plugin", "demo-a", undefined, "demo-b", undefined, "replacement", false],
+    ["owned to anonymous", "demo-a", undefined, undefined, undefined, "replacement", false],
+    ["anonymous to owned", undefined, undefined, "demo-a", undefined, "replacement", false],
+    [
+      "static route source",
+      "demo",
+      "/plugins/demo/index.js",
+      "demo",
+      "dynamic-route",
+      "replacement",
+      true,
+    ],
+  ] as const)(
+    "rejects route ownership changes: %s",
+    (_name, oldId, oldSource, pluginId, source, kind, staticRoute) => {
+      const handler = vi.fn();
+      const existing = { pluginId: oldId, source: oldSource };
+      const registry = staticRoute
+        ? registerStaticRoute(createPluginRecord({ id: oldId, source: oldSource }), {
+            path: "/PLUGINS//SHARED/",
+            handler,
+          })
+        : createEmptyPluginRegistry();
+      const { register } = routeHarness({ ...sharedRoute, ...existing }, registry);
+      if (!staticRoute) {
+        register({ handler });
+      }
+      expectDenied(
+        register,
+        {
+          pluginId,
+          source,
+          ...(kind === "reuse" ? { reuseExistingSameOwner: true } : { replaceExisting: true }),
+        },
+        kind,
+      );
+      expectRoutes(registry, { handler, ...existing });
+    },
+  );
 
   it("finds a canonical exact alias behind an earlier prefix overlap", () => {
     const { registry, register } = routeHarness({ pluginId: "sms", source: "sms-exact" });
@@ -298,33 +331,6 @@ describe("registerPluginHttpRoute", () => {
     register({ path: "/webhooks/sms", replaceExisting: true });
 
     expect(registry.httpRoutes.map((route) => route.source)).toEqual(["prefix", "sms-exact"]);
-  });
-
-  it("rejects replacement when a distinct route source owns the same plugin path", () => {
-    const record = createPluginRecord({ id: "mattermost", source: "/plugins/mattermost/index.js" });
-    const slashHandler = vi.fn();
-    const registry = registerStaticRoute(record, {
-      path: "/Mattermost//Interactions/default/",
-      handler: slashHandler,
-    });
-
-    expectDenied(
-      registerHttp,
-      {
-        path: "/mattermost/interactions/default",
-        registry,
-        pluginId: "mattermost",
-        source: "mattermost-interactions",
-        replaceExisting: true,
-      },
-      "replacement",
-    );
-
-    expectRoutes(registry, {
-      handler: slashHandler,
-      pluginId: "mattermost",
-      source: "/plugins/mattermost/index.js",
-    });
   });
 
   it.each([false, true])("preserves shipped replacement (anonymous: %s)", (anonymous) => {
@@ -353,22 +359,6 @@ describe("registerPluginHttpRoute", () => {
     expectRoutes(registry, { handler: secondHandler });
     unregisterSecond();
     expect(registry.httpRoutes).toHaveLength(0);
-  });
-
-  it.each([
-    ["source-less to sourced", "demo", undefined, "demo", "demo-webhook"],
-    ["sourced to source-less", "demo", "demo-webhook", "demo", undefined],
-    ["different plugin", "demo-a", undefined, "demo-b", undefined],
-    ["owned to anonymous", "demo-a", undefined, undefined, undefined],
-    ["anonymous to owned", undefined, undefined, "demo-a", undefined],
-  ])("rejects %s replacement", (_name, oldId, oldSource, pluginId, source) => {
-    const { registry, register } = routeHarness({ path: "/plugins/demo" });
-    const existing = { pluginId: oldId, source: oldSource };
-    const existingHandler = vi.fn();
-    register({ handler: existingHandler, ...existing });
-
-    expectDenied(register, { pluginId, source, replaceExisting: true }, "replacement");
-    expectRoutes(registry, { handler: existingHandler, ...existing });
   });
 
   it("finds a mixed-auth overlap behind an earlier same-auth prefix", () => {

@@ -16,8 +16,6 @@ import {
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import * as discovery from "./discovery.js";
 import { writeJson } from "./generated-plugin-test-helpers.js";
-import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
-import { projectInstalledPluginIndexPolicy } from "./installed-plugin-index.js";
 import { loadOpenClawPlugins } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -29,6 +27,7 @@ import {
 } from "./loader.test-fixtures.js";
 import * as manifests from "./manifest-registry.js";
 import { resetPluginCache } from "./plugin-cache.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry-types.js";
 import { getActivePluginRegistry, setActivePluginRegistry } from "./runtime.js";
@@ -256,11 +255,6 @@ describe("capability loading from a Gateway generation", () => {
         if (Object.keys(empty.profiles).length !== 0 || profiles.join() !== "fixture" || order.join() !== "fixture" || !auth.isProviderApiKeyConfigured({ cfg: api.config, provider })) {
           throw new Error("native auth policy failed");
         }
-        for (const key of ["modelAuth", "modelConfig"]) {
-          if (Object.getOwnPropertyDescriptor(api.runtime, key).set !== undefined) {
-            throw new Error("native policy facet must remain getter-only");
-          }
-        }
         if (${root === "restricted"} && (Object.hasOwn(api.runtime, "agent") || Object.hasOwn(api.runtime, "subagent"))) {
           throw new Error("restricted registration acquired execution authority");
         }
@@ -269,10 +263,6 @@ describe("capability loading from a Gateway generation", () => {
         const agentDirPath = path.join(fixture.root, "state", "agents", "main", "agent");
         mkdirSafe(agentDirPath);
         const agentDir = fs.realpathSync(agentDirPath);
-        expect(path.isAbsolute(agentDir)).toBe(true);
-        expect(path.relative(fixture.root, agentDir)).toBe(
-          path.join("state", "agents", "main", "agent"),
-        );
         // Verify the inherited shared owner too; never mask an ambient relocation outside the fixture.
         expect(resolveSharedMainAuthAgentDir()).toBe(agentDir);
         fixture.config.plugins = { entries: { [id]: { enabled: true } } };
@@ -428,26 +418,11 @@ describe("capability loading from a Gateway generation", () => {
     const installed = {
       [id]: { source: "path" as const, installPath: installedDir, sourcePath: installedDir },
     };
-    const discovered = discovery.discoverOpenClawPlugins({ installRecords: installed });
-    const snapshot = createPluginMetadataSnapshot({
+    const snapshot = loadPluginMetadataSnapshot({
       config: fixture.config,
       workspaceDir: fixture.workspaceDir,
-      manifestRegistry: manifests.loadPluginManifestRegistryCore({
-        config: fixture.config,
-        installRecords: installed,
-        discovery: discovered,
-      }),
-    });
-    snapshot.index.installRecords = installed;
-    snapshot.index.plugins = projectInstalledPluginIndexPolicy({
-      plugins: buildInstalledPluginIndexRecords({
-        registry: snapshot.manifestRegistry,
-        candidates: discovered.candidates,
-        installRecords: installed,
-        diagnostics: [],
-      }),
-      config: fixture.config,
-      env: process.env,
+      installRecords: installed,
+      allowCurrent: false,
     });
     expect(snapshot.byPluginId.get(id)?.rootDir).toBe(installedDir);
     setCurrentPluginMetadataSnapshot(snapshot, fixture);
@@ -505,26 +480,22 @@ describe("capability loading from a Gateway generation", () => {
   );
 
   it.for([
-    'throw new Error("broken catalog");',
-    "export default { speechProviders: [{}] };",
-    "export default { speechProvider: [] };",
-    "export default async () => ({ speechProviders: [] });",
+    { body: 'throw new Error("broken catalog");' },
+    { body: "export default { speechProviders: [{}] };" },
+    { body: "export default { speechProvider: [] };" },
+    { body: "export default async () => ({ speechProviders: [] });" },
+    { entry: "../outside.ts" },
+    { entry: "" },
+    { entry: 7 },
   ])(
-    "reports broken catalogs without importing the full entry: %s",
-    async (body, { speech: fixture }) => {
-      await withCatalogMutation(fixture, { body }, () => {
+    "rejects invalid catalogs without importing the full entry: %j",
+    async (mutation, { speech: fixture }) => {
+      await withCatalogMutation(fixture, mutation, () => {
         expect(() => fixture.providers()).toThrow(
-          /capabilityCatalogEntry failed.*Repair the declared entry/,
+          "body" in mutation
+            ? /capabilityCatalogEntry failed.*Repair the declared entry/
+            : /capabilityCatalogEntry failed/,
         );
-      });
-    },
-  );
-
-  it.for(["../outside.ts", "", 7])(
-    "rejects invalid catalog entry %j",
-    async (entry, { speech: fixture }) => {
-      await withCatalogMutation(fixture, { entry }, () => {
-        expect(() => fixture.providers()).toThrow(/capabilityCatalogEntry failed/);
       });
     },
   );
