@@ -142,9 +142,12 @@ Status identifies the capture selector, source lease, checkpoint references, and
 
 A paused capture does not prevent source-lease cleanup, but enrollment on its uncertain source remains blocked until recovery clears the reservation.
 
-Gateway warm-image maintenance automatically reconciles uncertain captures after
-confirming that their source lease is absent or stopped. It matches the exact
-recorded lease ID in Crabbox's checkpoint catalog. If no checkpoint exists, it
+Gateway warm-image maintenance runs at startup and during the periodic worker
+environment sweep (every minute by default). It retries uncertain captures until
+their source lease is absent, stopped, released, or expired. Released and expired
+leases cannot start another checkpoint; lease teardown still owns physical resource
+cleanup. Maintenance matches the exact recorded lease ID in Crabbox's checkpoint
+catalog. If no checkpoint exists, it
 clears the capture reservation. If exactly one exists, it deletes that unvalidated
 checkpoint before clearing the reservation, and logs the outcome. It never adopts
 an interrupted capture's snapshot.

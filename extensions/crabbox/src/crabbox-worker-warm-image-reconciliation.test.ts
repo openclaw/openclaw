@@ -76,6 +76,38 @@ it.each([
   },
 );
 
+it.each(["released", "expired"])("retries reconciliation once the source is %s", async (state) => {
+  let sourceState = "running";
+  const s = scenario(({ argv }) => {
+    if (argv[1] === "inspect") {
+      return jsonResult({ id: leaseId, provider: "aws", state: sourceState });
+    }
+    if (argv[2] === "list") {
+      return jsonResult(checkpoints([candidates[0]!]));
+    }
+    if (argv[2] === "delete") {
+      expect(s.store.lookup("profile")?.operation?.type).toBe("capture");
+    }
+    return undefined;
+  });
+  const record = warmRecord({ operation: capture() });
+  s.store.register("profile", record);
+
+  await s.provider.maintain!(context());
+
+  expect(s.store.lookup("profile")).toEqual(record);
+  expect(s.checkpoints("list")).toHaveLength(0);
+  expect(s.checkpoints("delete")).toHaveLength(0);
+  expect(s.warn).toHaveBeenCalledOnce();
+
+  sourceState = state;
+  await s.provider.maintain!(context());
+
+  expect(s.store.lookup("profile")).toBeUndefined();
+  expect(s.checkpoints("delete").map((argv) => argv[3])).toEqual([candidates[0]]);
+  expect(s.warn).toHaveBeenCalledOnce();
+});
+
 it.each([
   "ambiguous",
   "lookup",
@@ -83,11 +115,15 @@ it.each([
   "identity",
   "alive",
   "deleting",
+  "failed",
+  "cleanup",
+  "archived",
   "inspection",
   "deletion",
   "unclaimed",
   "terminal",
 ] as const)("retains interrupted capture after %s failure", async (failure) => {
+  const unconfirmed = ["alive", "deleting", "failed", "cleanup", "archived"].includes(failure);
   const s = scenario(({ argv }) => {
     if (argv[1] === "inspect") {
       if (failure === "unclaimed" || failure === "terminal") {
@@ -99,8 +135,8 @@ it.each([
               : "DigitalOcean fixed lease is terminal",
         });
       }
-      return failure === "alive" || failure === "deleting"
-        ? jsonResult({ id: leaseId, state: failure === "alive" ? "running" : "deleting" })
+      return unconfirmed
+        ? jsonResult({ id: leaseId, state: failure === "alive" ? "running" : failure })
         : failure === "inspection"
           ? commandResult({ code: 7, stderr: "fixture inspection failed" })
           : absent();
@@ -147,7 +183,7 @@ it.each([
   expect(s.warn).toHaveBeenCalledOnce();
   expect(s.warn.mock.calls[0]?.[0]).toContain("--recover interrupted");
   expect(s.checkpoints("delete")).toHaveLength(failure === "deletion" ? 1 : 0);
-  if (["alive", "deleting", "inspection", "unclaimed", "terminal"].includes(failure)) {
+  if (unconfirmed || ["inspection", "unclaimed", "terminal"].includes(failure)) {
     expect(s.checkpoints("list")).toHaveLength(0);
   }
 });

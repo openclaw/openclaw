@@ -49,12 +49,18 @@ export async function reconcileCrabboxWarmImageCapture(
         requireConfirmedAbsence: true,
         timeoutMs: timeout(),
       });
-      // Non-runnable states such as deleting/failed do not prove the source stopped.
+      // Unlike NON_RUNNABLE_STATES cleanup handling, this only confirms no new capture can start.
       if (
         lease &&
-        !["stopped", "stopped_with_code", "terminated", "destroyed", "missing"].includes(
-          lease.state,
-        )
+        ![
+          "stopped",
+          "stopped_with_code",
+          "terminated",
+          "destroyed",
+          "missing",
+          "released",
+          "expired",
+        ].includes(lease.state)
       ) {
         throw new Error(
           `source lease ${capture.leaseId} is still alive or unconfirmed (${lease.state})`,
