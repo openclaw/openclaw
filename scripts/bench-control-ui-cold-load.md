@@ -109,8 +109,10 @@ These are CPU deltas rather than elapsed wall time; later live, streaming, and
 session-switch phases retain the same selected time domain. Default runs keep
 CDP's `timeTicks` domain.
 
-On a noisy host, run an A/A control before interpreting candidate differences:
-`--bundle-dir <base> --compare-bundle-dir <base> --runs 20 --untraced
+On a noisy host, run an A/A control before interpreting candidate differences.
+First copy the baseline bundle to a separate directory (`cp -R <base> <control>`):
+the runner temporarily swaps comparison bundles, so both slots cannot use the same
+path. Run `--bundle-dir <base> --compare-bundle-dir <control> --runs 20 --untraced
 --thread-cpu-time`. Then replace the comparison bundle with the candidate, keeping
 the same fixture and options. Compare CPU deltas alongside readiness and structural
 counts; thread CPU does not measure compositor presentation or server work.
