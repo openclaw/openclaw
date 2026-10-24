@@ -333,6 +333,10 @@ function runCleanup(repoDir: string) {
   ]);
 }
 
+function captureStatus(command: string) {
+  return ["set +e", command, "lock_status=$?", "set -e", 'printf "%s\\n" "$lock_status"'];
+}
+
 function expectCleanup(result: ReturnType<typeof runLockShell>, status: number) {
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(status);
   expect(result.stdout.includes("cleanup-completed")).toBe(status === 0);
@@ -515,13 +519,12 @@ function runLockShell(
 }
 
 function probeOperationLock(repoDir: string, command: "blocking" | "try" = "try") {
-  return runLockShell(repoDir, [
-    "set +e",
-    command === "try" ? "try_acquire_pr_operation_lock 42" : "acquire_pr_operation_lock 42",
-    "lock_status=$?",
-    "set -e",
-    'printf "%s\\n" "$lock_status"',
-  ]);
+  return runLockShell(
+    repoDir,
+    captureStatus(
+      command === "try" ? "try_acquire_pr_operation_lock 42" : "acquire_pr_operation_lock 42",
+    ),
+  );
 }
 
 function recoverOperationLock(repoDir: string, ownerOid: string, commands: string[] = []) {
@@ -880,24 +883,18 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expect(existsSync(held)).toBe(true);
       const ownerOid = refOid(repoDir);
       const wrongOid = gitOutput(repoDir, ["rev-parse", "HEAD"]).trim();
-      const unconfirmed = runLockShell(repoDir, [
-        "set +e",
-        `recover_pr_operation_lock 42 '${ownerOid}'`,
-        "recovery_status=$?",
-        "set -e",
-        'printf "%s\\n" "$recovery_status"',
-      ]);
+      const unconfirmed = runLockShell(
+        repoDir,
+        captureStatus(`recover_pr_operation_lock 42 '${ownerOid}'`),
+      );
       expect(unconfirmed.status).toBe(0);
       expect(unconfirmed.stdout.trim()).toBe("2");
       expect(unconfirmed.stderr).toContain("Recovery requires --confirmed-no-running-tools");
       expect(refOid(repoDir)).toBe(ownerOid);
-      const wrongOwner = runLockShell(repoDir, [
-        "set +e",
-        `recover_pr_operation_lock 42 '${wrongOid}' --confirmed-no-running-tools`,
-        "recovery_status=$?",
-        "set -e",
-        'printf "%s\\n" "$recovery_status"',
-      ]);
+      const wrongOwner = runLockShell(
+        repoDir,
+        captureStatus(`recover_pr_operation_lock 42 '${wrongOid}' --confirmed-no-running-tools`),
+      );
       expect(wrongOwner.status).toBe(0);
       expect(wrongOwner.stdout.trim()).toBe("1");
       expect(refOid(repoDir)).toBe(ownerOid);
@@ -1136,10 +1133,7 @@ exec ${shellQuote(mktemp)} "$@"
       const worktrees = [42, 43].map((pr) => {
         const path = join(repoDir, ".worktrees", "pr-" + pr);
         git("worktree", "add", "-q", "-b", "temp/pr-" + pr, path);
-        for (const branch of ["pr-" + pr, "pr-" + pr + "-prep"]) {
-          git("branch", branch);
-        }
-        return { pr, path, admin: git("-C", path, "rev-parse", "--absolute-git-dir") };
+        return path;
       });
       // The linked wrapper must remain selected after its own source directory is removed.
       const fixtureWorktreeScript = join(repoDir, "scripts/pr-lib/worktree.sh");
@@ -1208,15 +1202,11 @@ exec ${shellQuote(mktemp)} "$@"
       expect(result.error, output).toBeUndefined();
       expect(result.status, output).toBe(failure ? 1 : 0);
       expect(git("rev-parse", "HEAD")).toBe(canonicalHead);
-      for (const { pr, path, admin } of worktrees) {
+      // Branch/admin cleanup has dedicated cases below; this owns self-removal
+      // followed by exact-owner release from the canonical checkout.
+      for (const path of worktrees) {
         expect(existsSync(path), output).toBe(false);
-        expect(existsSync(admin), output).toBe(false);
-        expect(result.stdout).toContain("removed .worktrees/pr-" + pr);
-        for (const branch of ["temp/pr-" + pr, "pr-" + pr, "pr-" + pr + "-prep"]) {
-          expect(git("for-each-ref", "--format=%(refname)", "--", "refs/heads/" + branch)).toBe("");
-        }
       }
-      expect(git("worktree", "list", "--porcelain")).not.toContain(".worktrees/pr-");
       expect(readFileSync(lifecycle, "utf8")).toBe(
         "removed\nremoved\n" + (failure ? "" : "released\n"),
       );
@@ -1239,11 +1229,7 @@ exec ${shellQuote(mktemp)} "$@"
     const repoDir = createRepo();
     const result = runLockShell(repoDir, [
       "OPENCLAW_PR_LOCK_NOTIFY_FD=9",
-      "set +e",
-      "acquire_pr_operation_lock 42",
-      "lock_status=$?",
-      "set -e",
-      'printf "%s\\n" "$lock_status"',
+      ...captureStatus("acquire_pr_operation_lock 42"),
     ]);
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout.trim()).toBe("2");
@@ -1420,81 +1406,67 @@ exec ${shellQuote(mktemp)} "$@"
     expect(result.stderr).toContain("#124583");
     expect(existsSync(join(result.anchorDir!, "scripts/pr"))).toBe(true);
   }, 15_000);
-  it("retains a clean-exit lock when the leader completion marker is suppressed", async ({
-    signal,
-  }) => {
-    const repoDir = createRepo();
-    const holderPidFile = join(repoDir, "suppressed-completion-holder-pgid");
-    escapedPipeHolderPidFiles.add(holderPidFile);
-    const launcherScript = writeEscapedPipeHolderLauncher(repoDir, holderPidFile);
-    let holderPgid: number | undefined;
-    try {
-      const result = await runSupervisedOperation(
-        repoDir,
-        "suppressed-completion-operation.sh",
-        ["acquire_pr_operation_lock 42", "trap - EXIT", `node '${launcherScript}'`],
-        { signal, accelerateTimeouts: true },
-      );
-      holderPgid = requireProcessId(holderPidFile);
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
-      expect(processGroupExists(holderPgid)).toBe(true);
-      const ownerOid = refOid(repoDir);
-      expect(result.stderr).toContain("reason: notification pipe still open after drain deadline");
-      expect(result.stderr).toContain(
-        "scripts/pr operation lifetime did not drain (group=dead, pipe=open)",
-      );
-      expect(result.stderr).not.toContain("Warning:");
-      const blocked = probeOperationLock(repoDir);
-      expect(blocked.status, `${blocked.stdout}\n${blocked.stderr}`).toBe(0);
-      expect(blocked.stdout.trim()).toBe("2");
-      killProcessGroup(holderPgid, "SIGKILL");
-      await waitForProcessGroupExit(holderPgid!, signal);
-      recoverOperationLock(repoDir, ownerOid);
-    } finally {
-      await cleanupRecordedProcessGroup(holderPidFile, holderPgid);
-    }
-  }, 15_000);
-  it("retains a failed side-effects lock when an escaped child keeps the notification pipe open", async ({
-    signal,
-  }) => {
-    const repoDir = createRepo();
-    const nestedPidFile = join(repoDir, "pipe-holder-pgid");
-    escapedPipeHolderPidFiles.add(nestedPidFile);
-    const launcherScript = writeEscapedPipeHolderLauncher(repoDir, nestedPidFile);
-    let nestedPgid: number | undefined;
-    try {
-      const startedAt = Date.now();
-      const result = await runSupervisedOperation(
-        repoDir,
-        "pipe-holder-operation.sh",
-        [
-          "acquire_pr_operation_lock 42",
-          "begin_pr_operation_validation_phase",
-          "mark_pr_operation_side_effects_started",
-          // A forged phase notification cannot reopen the validation release window.
-          "notify_pr_operation_phase validation-started",
-          `node '${launcherScript}'`,
-          "exit 1",
-        ],
-        { signal, accelerateTimeouts: true },
-      );
-      const elapsed = Date.now() - startedAt;
-      nestedPgid = requireProcessId(nestedPidFile);
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
-      expect(elapsed).toBeLessThan(12_000);
-      expect(processGroupExists(nestedPgid)).toBe(true);
-      expect(result.stderr).toContain("operation lifetime did not drain");
-      const ownerOid = refOid(repoDir);
-      expect(result.stderr).toContain(
-        "reason: child exited with code 1; notification pipe still open after drain deadline",
-      );
-      killProcessGroup(nestedPgid, "SIGKILL");
-      await waitForProcessGroupExit(nestedPgid!, signal);
-      recoverOperationLock(repoDir, ownerOid);
-    } finally {
-      await cleanupRecordedProcessGroup(nestedPidFile, nestedPgid);
-    }
-  }, 15_000);
+  it.for([
+    {
+      phase: "suppressed leader completion",
+      commands: ["trap - EXIT"],
+      exit: "",
+      reason: "reason: notification pipe still open after drain deadline",
+    },
+    {
+      phase: "failed side effects",
+      commands: [
+        "begin_pr_operation_validation_phase",
+        "mark_pr_operation_side_effects_started",
+        // A forged phase notification cannot reopen the validation release window.
+        "notify_pr_operation_phase validation-started",
+      ],
+      exit: "exit 1",
+      reason: "reason: child exited with code 1; notification pipe still open after drain deadline",
+    },
+  ])(
+    "retains $phase while an escaped child holds the notification pipe",
+    async (row, { signal }) => {
+      const repoDir = createRepo();
+      const nestedPidFile = join(repoDir, "pipe-holder-pgid");
+      escapedPipeHolderPidFiles.add(nestedPidFile);
+      const launcherScript = writeEscapedPipeHolderLauncher(repoDir, nestedPidFile);
+      let nestedPgid: number | undefined;
+      try {
+        const startedAt = Date.now();
+        const result = await runSupervisedOperation(
+          repoDir,
+          "pipe-holder-operation.sh",
+          ["acquire_pr_operation_lock 42", ...row.commands, `node '${launcherScript}'`, row.exit],
+          { signal, accelerateTimeouts: true },
+        );
+        const elapsed = Date.now() - startedAt;
+        nestedPgid = requireProcessId(nestedPidFile);
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+        expect(processGroupExists(nestedPgid)).toBe(true);
+        expect(result.stderr).toContain("operation lifetime did not drain");
+        const ownerOid = refOid(repoDir);
+        expect(result.stderr).toContain(row.reason);
+        if (row.exit) {
+          expect(elapsed).toBeLessThan(12_000);
+        } else {
+          expect(result.stderr).toContain(
+            "scripts/pr operation lifetime did not drain (group=dead, pipe=open)",
+          );
+          expect(result.stderr).not.toContain("Warning:");
+          const blocked = probeOperationLock(repoDir);
+          expect(blocked.status, `${blocked.stdout}\n${blocked.stderr}`).toBe(0);
+          expect(blocked.stdout.trim()).toBe("2");
+        }
+        killProcessGroup(nestedPgid, "SIGKILL");
+        await waitForProcessGroupExit(nestedPgid!, signal);
+        recoverOperationLock(repoDir, ownerOid);
+      } finally {
+        await cleanupRecordedProcessGroup(nestedPidFile, nestedPgid);
+      }
+    },
+    15_000,
+  );
   it("retires a materialized anchor after forwarded SIGTERM while retaining the lock", async ({
     signal,
   }) => {
@@ -1676,6 +1648,13 @@ exec ${shellQuote(mktemp)} "$@"
       const probe = probeOperationLock(repoDir);
       expect(probe.status, `${probe.stdout}\n${probe.stderr}`).toBe(0);
       expect(probe.stdout.trim()).toBe("1");
+      const competingGc = runLockShell(repoDir, [
+        "pr_gh() { if [ \"$1 $2\" = 'repo view' ]; then printf 'openclaw/openclaw\\n'; else printf 'MERGED\\n'; fi; }",
+        "gc_pr_worktrees false",
+      ]);
+      expect(competingGc.status).toBe(0);
+      expect(competingGc.stdout).toContain("has an active scripts/pr operation");
+      expect(existsSync(join(repoDir, ".worktrees", "pr-42"))).toBe(true);
       controller.stdin!.end("continue\n");
       await withinTest(childCompletion(controller), signal);
       expect(controller.exitCode).toBe(0);
@@ -1879,25 +1858,6 @@ exec ${shellQuote(mktemp)} "$@"
         });
       }
     });
-  });
-  it("makes gc skip a PR while its operation lock is held", async ({ signal }) => {
-    const repoDir = createRepo();
-    mkdirSync(join(repoDir, ".worktrees", "pr-42"), { recursive: true });
-    const held = join(repoDir, "held");
-    const holder = spawnHolder(repoDir, held);
-    try {
-      await withinTest(holderReadiness.get(holder)!, signal);
-      expect(existsSync(held)).toBe(true);
-      const result = runLockShell(repoDir, [
-        "pr_gh() { if [ \"$1 $2\" = 'repo view' ]; then printf 'openclaw/openclaw\\n'; else printf 'MERGED\\n'; fi; }",
-        "gc_pr_worktrees false",
-      ]);
-      expect(result.status).toBe(0);
-      expect(result.stdout).toContain("has an active scripts/pr operation");
-      expect(existsSync(join(repoDir, ".worktrees", "pr-42"))).toBe(true);
-    } finally {
-      await cleanupChildren(holder);
-    }
   });
   it("makes gc skip an unreadable lock and report exact recovery", () => {
     const repoDir = createRepo();
