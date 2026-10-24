@@ -113,14 +113,14 @@ it("keeps removal denied through stale snapshots and accepts a confirmed rejoin"
 
 it("recovers silent presence without replaying pre-activation messages", async ({ signal }) => {
   fixture.setPresenceMode("silent");
-  fixture.sendMessage("pre-activation", Math.floor(Date.now() / 1000) - 60);
+  const preActivation = fixture.sendMessage("pre-activation", Math.floor(Date.now() / 1000) - 60);
   const runtime = createPluginRuntimeMock();
   runtime.state.openKeyedStore = (options) => createPluginStateKeyedStoreForTests("buzz", options);
   setBuzzRuntime(runtime);
   const handled: string[] = [];
   const delivered = new Map([
     ["before stall", createDeferred<void>()],
-    ["during reconnect", createDeferred<void>()],
+    ["after reconnect", createDeferred<void>()],
   ]);
   vi.mocked(runtime.channel.inbound.dispatch).mockImplementation(async (params) => {
     handled.push(String(params.ctxPayload.RawBody));
@@ -160,7 +160,6 @@ it("recovers silent presence without replaying pre-activation messages", async (
       }
       if (next.lifecycle === "recovering") {
         fixture.setPresenceMode("accept");
-        fixture.sendMessage("during reconnect");
       }
     },
   });
@@ -186,14 +185,27 @@ it("recovers silent presence without replaying pre-activation messages", async (
     fixture.sendMessage("before stall");
     await waitFor(delivered.get("before stall")!.promise);
     expect(handled).toContain("before stall");
+    const roomMessageFilters = () =>
+      fixture.requests
+        .flatMap((request) => request.filters)
+        .filter((filter) => filter.kinds?.includes(9) && filter["#h"]?.includes(fixture.roomId));
+    expect(roomMessageFilters()).toHaveLength(1);
+    const activationSince = roomMessageFilters()[0]?.since;
+    if (activationSince === undefined) {
+      throw new Error("Missing initial Buzz room activation timestamp");
+    }
+    expect(activationSince).toBeGreaterThan(preActivation.created_at);
     // Start the silent heartbeat only after the pre-stall message has completed.
     await withinTest(Promise.resolve(clock.wake()), signal);
     await waitFor(ready[1].promise);
-    await waitFor(delivered.get("during reconnect")!.promise);
+    fixture.sendMessage("after reconnect");
+    await waitFor(delivered.get("after reconnect")!.promise);
     expect(fixture.authenticatedSessions()).toBe(2);
     expect(states.filter((state) => state === "ready")).toHaveLength(2);
     expect(states).toContain("recovering");
-    expect(handled).toEqual(["before stall", "during reconnect"]);
+    expect(handled).toEqual(["before stall", "after reconnect"]);
+    expect(roomMessageFilters()).toHaveLength(2);
+    expect(roomMessageFilters()[1]?.since).toBe(activationSince);
     expect(
       fixture.received.filter((event) => event.content === "gateway socket reply"),
     ).toHaveLength(2);
