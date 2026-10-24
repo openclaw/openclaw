@@ -128,7 +128,6 @@ it.each(["allowed", "forbidden", "revoked"] as const)(
         }
       },
     });
-    let outcome: unknown;
     try {
       if (scenario === "revoked") {
         await awaitGateBeforeSettlement(
@@ -141,20 +140,16 @@ it.each(["allowed", "forbidden", "revoked"] as const)(
         gate.resolve();
       }
       if (scenario === "allowed") {
-        const result = await pending;
-        expect(result.text).toBe("Completed as synthetic-allowed-account");
-        outcome = { text: result.text, owner: result.owner };
+        await expect(pending).resolves.toMatchObject({
+          text: "Completed as synthetic-allowed-account",
+        });
       } else {
-        const error: unknown = await pending.then(
-          () => undefined,
-          (failure: unknown) => failure,
-        );
+        const error = await pending.catch((failure: unknown) => failure);
         expect(error).toBeInstanceOf(Error);
-        assert(error instanceof Error, "Expected rejection");
-        expect(error.message).toMatch(
-          scenario === "forbidden" ? /not configured/ : /authority revoked/,
+        expect(error).toHaveProperty(
+          "message",
+          expect.stringMatching(scenario === "forbidden" ? /not configured/ : /authority revoked/),
         );
-        outcome = { rejected: true, error: error.message };
       }
     } finally {
       gate.resolve();
@@ -166,33 +161,20 @@ it.each(["allowed", "forbidden", "revoked"] as const)(
       .filter(Boolean)
       .map((line) => JSON.parse(line));
     if (scenario === "allowed") {
-      const login = messages.find((message) => message.method === "account/login/start");
-      expect(login?.params).toMatchObject({
-        type: "chatgptAuthTokens",
-        accessToken: "synthetic-allowed-access",
-        chatgptAccountId: "synthetic-allowed-account",
-      });
-      expect(messages.filter((message) => message.method === "account/login/start")).toHaveLength(
-        1,
-      );
+      expect(messages.filter((message) => message.method === "account/login/start")).toEqual([
+        expect.objectContaining({
+          params: expect.objectContaining({
+            type: "chatgptAuthTokens",
+            accessToken: "synthetic-allowed-access",
+            chatgptAccountId: "synthetic-allowed-account",
+          }),
+        }),
+      ]);
       expect(messages.findIndex((message) => message.method === "turn/start")).toBeGreaterThan(
         messages.findIndex((message) => message.method === "account/login/start"),
       );
     } else {
       expect(messages).toEqual([]);
-    }
-    const proofDir = process.env.OPENCLAW_TEST_ADAPTER_PROOF_DIR;
-    if (proofDir) {
-      const sanitized = JSON.parse(
-        JSON.stringify(messages)
-          .replaceAll(root, "<isolated-state>")
-          .replaceAll("synthetic-allowed-access", "<synthetic-token:allowed>")
-          .replaceAll("synthetic-forbidden-access", "<synthetic-token:forbidden>"),
-      );
-      fs.writeFileSync(
-        path.join(proofDir, `${scenario}.json`),
-        JSON.stringify({ scenario, outcome, messages: sanitized }, null, 2) + "\n",
-      );
     }
   },
 );
