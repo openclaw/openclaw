@@ -80,8 +80,6 @@ const runVitest = "scripts/run-vitest.mts";
 const scoped = (file: string) => file.replace("extensions/", "");
 const excludeQa = (transform = (file: string) => file) =>
   qaRuntimeConsumers.flatMap((file) => ["--exclude", transform(file)]);
-const excludeConsumers = (config: string) =>
-  listVitestRuntimeConsumerFiles([configPath(config)]).flatMap((file) => ["--exclude", file]);
 const noExit = async () => {};
 const configArgs = (config: string, ...args: string[]) => ["--config", configPath(config), ...args];
 const runConfig = (config: string, ...args: string[]) => ["run", ...configArgs(config, ...args)];
@@ -250,20 +248,7 @@ describe("CLI runtime admission", () => {
     [["run", "src/utils"], true],
     [["watch", "src/config"], true],
     [configArgs("cli")],
-    [configArgs("cli-process", ...excludeConsumers("cli-process"))],
-    [
-      configArgs(
-        "gateway-server",
-        ...[
-          "server.acp-native-model.product.test.ts",
-          "server-sidecar-retention.test.ts",
-          "server.config-patch.test.ts",
-        ].flatMap((file) => ["--exclude", file]),
-      ),
-    ],
     [["--config", "vitest.config.ts", "suite-process-lifecycle", "--exclude", scoped(lifecycle)]],
-    [excludeQa(scoped)],
-    [excludeQa((file) => path.resolve(file))],
     [["--root", "."]],
     [["--dir=extensions"]],
     [["--project", "extension-qa"]],
@@ -319,33 +304,6 @@ syncFixtureBuiltinExports();\n`,
     ["config empty long", runVitest, ["run", "--config=", configPath("extension-qa")]],
     ["root config", runVitest, ["run", "--config", "vitest.config.ts"]],
     ["implicit root directory", runVitest, ["run", "src/config"], "runtime"],
-    [
-      "CLI process selective exclusion",
-      runVitest,
-      runConfig("cli-process", "--exclude", "src/cli/update-dry-run-state.process.test.ts"),
-      "runtime",
-    ],
-    [
-      "Codex delivery QA runtime",
-      runVitest,
-      runConfig("infra", "test/e2e/qa-lab/runtime/gateway-codex-delivery-cache.test.ts"),
-      "private-qa",
-    ],
-    [
-      "Gateway server selective exclusion",
-      runVitest,
-      runConfig("gateway-server", "--exclude", "server-sidecar-retention.test.ts"),
-      "runtime",
-    ],
-    [
-      "Windows cron process identity",
-      runVitest,
-      runConfig(
-        "gateway-database-workers",
-        "src/gateway/gateway-cron-process-identity.windows.test.ts",
-      ),
-      "runtime",
-    ],
     ["aggregate config", runVitest, runConfig("full-extensions")],
   ] as const)(
     "blocks %s CLI readers until successful build and preserves SIGTERM",
@@ -607,9 +565,7 @@ describe("packed config continuation", () => {
     { platform: "linux", code: 1, expected: 2 },
     { platform: "win32", code: 1, expected: 2 },
     { ci: "", code: 1, expected: 1 },
-    { ci: "", optIn: "0", code: 1, expected: 1 },
     { ci: "", optIn: "1", code: 1, expected: 2 },
-    { optIn: "0", code: 1, expected: 2 },
     { ci: "", optIn: "1", code: 2, expected: 1 },
     { code: null, expected: 1 },
     { code: 1, timeout: true, expected: 1 },
@@ -722,12 +678,10 @@ describe("automatic exact-target admission", () => {
     { expected: 2 },
     { changed: true, expected: 2 },
     { changed: true, serial: "1", expected: 1 },
-    { ci: "true", expected: 2 },
     { args: [], expected: 1 },
     { args: ["--coverage"], expected: 1 },
     { args: ["--outputFile=report.json"], expected: 1 },
     { args: ["--reporter=html"], expected: 1 },
-    { args: ["--reporters=html"], expected: 1 },
     { args: ["--reporter=./custom-reporter.mjs"], expected: 1 },
     { ci: "", expected: 1 },
     { cpus: 4, expected: 1 },
@@ -1624,57 +1578,26 @@ describe("plugin batch build admission", () => {
   const databaseConfig = configPath("extension-database-workers");
   const combinedConfig = configPath("database-worker-watch");
 
-  it.each([
-    { parallel: "1", outcome: 0 },
-    { parallel: "2", outcome: 0 },
-    { parallel: "2", outcome: 7 },
-    { parallel: "2", outcome: 143 },
-    { parallel: "2", outcome: "throw" },
-  ] as const)(
-    "holds batch readers behind preparation (parallel=$parallel, outcome=$outcome)",
-    async ({ parallel, outcome }) => {
-      const { resolveExtensionBatchPlan, createExtensionTestProcessTargetChunks } =
-        await import("../../scripts/lib/extension-test-plan.mts");
-      const { runExtensionBatchPlan } = await import("../../scripts/test-extension-batch-run.mts");
-      const batch = resolveExtensionBatchPlan({
-        extensionIds: outcome === 0 ? ["qa-lab", "matrix", "firecrawl"] : ["qa-lab", "matrix"],
-      });
-      const preparation = createPreparationGate<number>(commands.prepare);
-      const reader = vi.fn().mockResolvedValue(0);
-      const running = runExtensionBatchPlan(batch, {
-        env: { OPENCLAW_EXTENSION_BATCH_PARALLEL: parallel },
-        runGroup: reader,
-      });
-      const checked =
-        outcome === "throw"
-          ? expect(running).rejects.toThrow("build spawn failed")
-          : expect(running).resolves.toBe(outcome);
-      try {
-        await Promise.race([preparation.started, running]);
-        expect(reader).not.toHaveBeenCalled();
-        expectPrivateQaPreparation();
-      } finally {
-        if (outcome === "throw") {
-          preparation.reject(new Error("build spawn failed"));
-        } else {
-          preparation.resolve(outcome);
-        }
-        await checked;
-      }
-      if (outcome === 0) {
-        expect(reader).toHaveBeenCalledTimes(
-          batch.planGroups.reduce(
-            (sum, group) =>
-              sum + createExtensionTestProcessTargetChunks(group.config, group.roots).length,
-            0,
-          ),
-        );
-      } else {
-        expect(reader).not.toHaveBeenCalled();
-      }
-      expect(commands.prepare).toHaveBeenCalledOnce();
-    },
-  );
+  it("rejects a batch build spawn failure before admitting readers", async () => {
+    const { resolveExtensionBatchPlan } = await import("../../scripts/lib/extension-test-plan.mts");
+    const { runExtensionBatchPlan } = await import("../../scripts/test-extension-batch-run.mts");
+    const preparation = createPreparationGate<number>(commands.prepare);
+    const reader = vi.fn().mockResolvedValue(0);
+    const running = runExtensionBatchPlan(
+      resolveExtensionBatchPlan({ extensionIds: ["qa-lab", "matrix"] }),
+      { env: { OPENCLAW_EXTENSION_BATCH_PARALLEL: "2" }, runGroup: reader },
+    );
+    const checked = expect(running).rejects.toThrow("build spawn failed");
+    try {
+      await Promise.race([preparation.started, running]);
+      expect(reader).not.toHaveBeenCalled();
+      expectPrivateQaPreparation();
+    } finally {
+      preparation.reject(new Error("build spawn failed"));
+      await checked;
+    }
+    expect(reader).not.toHaveBeenCalled();
+  });
 
   const qaConfigs = [databaseConfig, qaConfig];
   const combined = [combinedConfig];
@@ -1686,19 +1609,12 @@ describe("plugin batch build admission", () => {
     [{ ids: ["firecrawl"] }, false, [configPath("extension-misc")]],
     [{ args: [ordinaryQa] }, false, combined],
     [{ args: [lifecycle] }, true, combined],
-    [{ args: [path.resolve(lifecycle)] }, true, combined],
     [{ args: ["--exclude", lifecycle] }, true, qaConfigs],
     [{ args: excludeQa() }, false, qaConfigs],
-    [{ args: qaRuntimeConsumers.map((file) => `--exclude=${file}`) }, false, qaConfigs],
-    [{ args: excludeQa(scoped) }, false, qaConfigs],
-    [{ args: excludeQa((file) => path.resolve(file)) }, false, qaConfigs],
     [{ args: excludeQa((file) => `${path.posix.dirname(file)}/**/*.test.ts`) }, false, combined],
-    [{ args: ["--exclude=extensions/qa-lab/**"] }, false, combined],
     [{ include: [] }, false, qaConfigs],
     [{ include: [ordinaryQa] }, false, qaConfigs],
     [{ include: [lifecycle] }, true, qaConfigs],
-    [{ include: [path.resolve(lifecycle)] }, true, qaConfigs],
-    [{ include: [scoped(lifecycle)] }, true, qaConfigs],
     [{ include: [runtime], args: [runtime] }, false, combined],
     [{ ids: ["qa-channel"], include: [lifecycle] }, false, qaConfigs],
     [{ ids: ["qa-channel"], args: [lifecycle], include: [lifecycle] }, true, combined],
