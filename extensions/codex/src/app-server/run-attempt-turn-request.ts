@@ -1,4 +1,5 @@
 import { embeddedAgentLog, formatErrorMessage } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { CodexAccessProgramUnavailableError } from "./access-program.js";
 import {
   interruptCodexTurnAndWaitBestEffort,
   retireUnsafeCodexTurnClientBestEffort,
@@ -19,10 +20,12 @@ import { resolveCodexExplicitSkillInputs } from "./explicit-skill-input.js";
 import { CODEX_INFERENCE_GENERATION_KEY } from "./inference-context.js";
 import { getCodexInferenceThread } from "./inference-routing.js";
 import { readCodexRuntimeModelId } from "./model-runtime.js";
+import { listAllCodexAppServerModels } from "./models.js";
 import { assertCodexTurnStartResponse } from "./protocol-validators.js";
-import type { CodexTurnStartResponse } from "./protocol.js";
+import type { CodexGetAccountResponse, CodexTurnStartResponse } from "./protocol.js";
 import { prepareCodexProviderReviewContinuation } from "./provider-review-continuation.js";
 import { readCodexRateLimitsRevision } from "./rate-limit-cache.js";
+import type { CodexAppServerScopedRequest } from "./request.js";
 import {
   emitCodexAppServerEvent,
   withCodexAppServerFastModeServiceTier,
@@ -131,11 +134,17 @@ export async function prepareCodexAttemptTurnRequest(
     const selectedThread = resourceState.thread;
     const { threadId, liveThreadOwnership, model, modelProvider } = selectedThread;
     const turnClient = resourceState.client;
+    let accessProgramIsCurrent: (() => boolean) | undefined;
     const nativeModel = usesSupervisionConnection
       ? requireCodexSupervisionModelSelection(selectedThread)
       : undefined;
     const assertTurnCurrent = () => {
       connection.assertCurrent();
+      if (accessProgramIsCurrent?.() === false) {
+        throw new Error(
+          "Codex account changed while preparing the access program. Retry the turn.",
+        );
+      }
       liveThreadOwnership?.assertCurrent();
       if (
         resourceState.client !== turnClient ||
@@ -187,6 +196,42 @@ export async function prepareCodexAttemptTurnRequest(
         (tool) => tool.name === "session_status",
       ),
     });
+    if (turnStartParams.cyberAccessProgram !== undefined) {
+      // This integration supports explicit programs only with ChatGPT auth.
+      // Upstream API-key forwarding uses a separate mode we do not support.
+      const account = await turnClient.request<CodexGetAccountResponse>(
+        "account/read",
+        { refreshToken: false },
+        { assertCurrent: assertTurnCurrent },
+      );
+      assertTurnCurrent();
+      if (account.account?.type !== "chatgpt") {
+        throw new CodexAccessProgramUnavailableError(
+          "Explicit Daybreak access in the Codex runtime requires ChatGPT subscription authentication. Use the OpenClaw runtime for Platform API-key access, or reset Access to the model default.",
+        );
+      }
+      if (turnStartParams.cyberAccessProgram !== "standard") {
+        const accountRevision = turnClient.getModelCatalogRevision();
+        accessProgramIsCurrent = () => turnClient.getModelCatalogRevision() === accountRevision;
+        const catalog = await listAllCodexAppServerModels({
+          request: <T>({ method, requestParams }: Parameters<CodexAppServerScopedRequest>[0]) =>
+            turnClient.request<T>(method, requestParams, { assertCurrent: assertTurnCurrent }),
+          includeHidden: true,
+        });
+        assertTurnCurrent();
+        const selectedModel = turnStartParams.model ?? model;
+        const advertised = catalog.models.find(
+          (entry) => entry.model === selectedModel || entry.id === selectedModel,
+        )?.availableAccessPrograms?.cyber;
+        const program =
+          turnStartParams.cyberAccessProgram === "daybreakBlue" ? "daybreak_blue" : "daybreak_red";
+        if (!advertised?.includes(program)) {
+          throw new CodexAccessProgramUnavailableError(
+            "This Daybreak program is not advertised for the current account and model. Reset Access to the model default or refresh account capabilities.",
+          );
+        }
+      }
+    }
     const serviceTier =
       fastMode === "ultrafast" ? selectedThread.preparedServiceTier : turnStartParams.serviceTier;
     assertTurnCurrent();

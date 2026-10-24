@@ -408,6 +408,12 @@ function* projectSessionPatchSteps(
     next.thinkingLevel = normalized;
   }
 
+  if (patch.cyberAccessProgram === null) {
+    delete next.cyberAccessProgram;
+  } else if (patch.cyberAccessProgram !== undefined) {
+    next.cyberAccessProgram = patch.cyberAccessProgram;
+  }
+
   const fastModeError = applyNormalizedPreference(
     "fastMode",
     normalizeFastMode,

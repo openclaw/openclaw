@@ -28,6 +28,7 @@ import { reconcileSessionHistory } from "../../lib/sessions/reconcile.ts";
 import {
   isUiSelectedGlobalSessionKey,
   parseAgentSessionKey,
+  createUiSessionRowMatcher,
 } from "../../lib/sessions/session-key.ts";
 import { isPersistedSessionRow } from "../../lib/sessions/session-row-reconcile.ts";
 import { refreshChatAvatar, resolveAgentIdForSession } from "./chat-avatar.ts";
@@ -616,6 +617,13 @@ export async function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOpti
       host.sessions.state.agentId !== refreshedAgentId &&
       (isUiSelectedGlobalSessionKey(host, refreshedSessionKey) ||
         isPersistedSessionRow(history.sessionInfo));
+    const matchesSession = createUiSessionRowMatcher(host, refreshedSessionKey);
+    // Reconciliation already projected the observed row into this pane. A bounded
+    // roster can omit it; retain that projection without overriding roster metadata.
+    const retainObserved =
+      !scopedHistory &&
+      selectedChatSessionRow(host) &&
+      !presentation.result?.sessions.some((row) => matchesSession(row.key, row.agentId));
     host.sessionsResult = scopedHistory
       ? reconcileSessionHistory(
           host.sessionsResultAgentId === refreshedAgentId ? host.sessionsResult : null,
@@ -632,8 +640,11 @@ export async function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOpti
             (host.sessionsResultAgentId === refreshedAgentId &&
               host.sessionsResult !== previousSessionsResult),
         )
-      : presentation.result;
-    host.sessionsResultAgentId = scopedHistory ? refreshedAgentId : presentation.agentId;
+      : retainObserved
+        ? host.sessionsResult
+        : presentation.result;
+    host.sessionsResultAgentId =
+      scopedHistory || retainObserved ? refreshedAgentId : presentation.agentId;
     // Defaults-only admission cannot update descriptor flags or run state from stale history.
     if (admitted === "defaults-only") {
       return;

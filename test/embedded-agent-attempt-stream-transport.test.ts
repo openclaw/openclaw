@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { configureAiTransportHost, getAiTransportHost } from "@openclaw/ai";
 import { isAnthropicOAuthApiKey } from "@openclaw/ai/internal/anthropic";
+import { createOpenAIResponsesTransportStreamFn } from "@openclaw/ai/transports";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -10,32 +11,35 @@ import {
   context as anthropicContext,
   anthropicEvents,
   createAnthropicResponse,
-} from "../../../../packages/ai/src/provider-transport-parity.test-support.js";
+} from "../packages/ai/src/provider-transport-parity.test-support.js";
 import {
   resolveProviderContext,
   type ProviderStreamOptions,
-} from "../../../../packages/ai/src/provider-types.js";
-import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
-import { createCodexNativeWebSearchWrapper } from "../../../llm/providers/stream-wrappers/openai.js";
-import { createAssistantMessageEventStream } from "../../../llm/utils/event-stream.js";
-import { attachRuntimePromptMediaFacts } from "../../../media/media-facts.js";
-import "../../ai-transport-runtime-host.js";
-import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
-import type { StreamFn } from "../../runtime/index.js";
-import {
-  castAgentMessage,
-  makeAgentAssistantMessage,
-} from "../../test-helpers/agent-message-fixtures.js";
+} from "../packages/ai/src/provider-types.js";
+import { createOperationalRunInstanceRef } from "../src/agents/admitted-run-context.js";
 import {
   testing as extraParamsTesting,
   type WrapProviderStreamFnParams,
-} from "../extra-params.test-support.js";
-import { prepareEmbeddedAttemptTransport } from "./attempt-stream-settle.js";
+} from "../src/agents/embedded-agent-runner/extra-params.test-support.js";
+import { createModelGenerationFixture } from "../src/agents/embedded-agent-runner/model.generation-scope.test-support.js";
+import { prepareEmbeddedAttemptTransport } from "../src/agents/embedded-agent-runner/run/attempt-stream-settle.js";
+import { setPreparedModelFullCatalogAuth } from "../src/agents/prepared-model-runtime-auth.js";
+import { createPreparedAccountCatalogAccess } from "../src/agents/prepared-model-runtime.catalog-auth.js";
+import type { StreamFn } from "../src/agents/runtime/index.js";
+import {
+  castAgentMessage,
+  makeAgentAssistantMessage,
+} from "../src/agents/test-helpers/agent-message-fixtures.js";
+import "../src/agents/ai-transport-runtime-host.js";
+import { bindStreamLlmRuntime } from "../src/llm/model-runtime-binding.js";
+import { createCodexNativeWebSearchWrapper } from "../src/llm/providers/stream-wrappers/openai.js";
+import { createAssistantMessageEventStream } from "../src/llm/utils/event-stream.js";
+import { attachRuntimePromptMediaFacts } from "../src/media/media-facts.js";
 
 const registerProviderStreamForModel = vi.hoisted(() => vi.fn());
 
-vi.mock("../../provider-stream.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../provider-stream.js")>()),
+vi.mock("../src/agents/provider-stream.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/agents/provider-stream.js")>()),
   registerProviderStreamForModel,
 }));
 
@@ -171,6 +175,162 @@ describe("prepareEmbeddedAttemptTransport", () => {
   afterEach(() => {
     extraParamsTesting.resetProviderRuntimeDepsForTest();
     registerProviderStreamForModel.mockReset();
+  });
+
+  it.each(
+    (["private", "shared"] as const).flatMap((source) =>
+      (["daybreak_blue", "daybreak_red"] as const).map((program) => ({ source, program })),
+    ),
+  )(
+    "sends $program from a $source API-key catalog and rejects revoked grants",
+    async ({ source, program }) => {
+      const { input, session } = createTransportFixture({ apiKey: "synthetic-key" });
+      const route = {
+        provider: "openai",
+        modelId: "synthetic-model",
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+        authRequirement: "api-key",
+        requestTransportOverrides: "none",
+      } as const;
+      const credential = { type: "api_key", provider: "openai", key: "synthetic-key" } as const;
+      const accountCatalog = createPreparedAccountCatalogAccess(() => true);
+      const outcome = {
+        provider: "openai",
+        profileId: "openai:a",
+        status: "ready" as const,
+        modelAccessPrograms: [
+          {
+            runtimeId: "openclaw",
+            ...route,
+            cyber: [program],
+          },
+        ],
+      };
+      if (source === "private") {
+        await accountCatalog.acquire({
+          profileId: "openai:a",
+          credential,
+          allowDiscovery: true,
+          load: async () => [outcome],
+        });
+      }
+      const generation = createModelGenerationFixture({
+        label: "access",
+        agentDir: "/agent",
+        workspaceDir: "/workspace",
+        config: {},
+      });
+      const snapshot = {
+        ...generation.preparedModelRuntime.modelCatalog,
+        providerOutcomes: [outcome],
+      };
+      setPreparedModelFullCatalogAuth(snapshot, {
+        authModes: {},
+        providerAuthLabels: new Map(),
+        authStore: { version: 1, profiles: { "openai:a": credential } },
+      });
+      Object.assign(input.attempt, {
+        provider: "openai",
+        modelId: "synthetic-model",
+        cyberAccessProgram: program,
+        streamParams: { serviceTier: "priority" },
+        model: { ...anthropicModel, ...route, id: route.modelId },
+        authProfileId: "openai:a",
+        authProfileStore: { version: 1, profiles: { "openai:a": credential } },
+        preparedModelRuntime: {
+          ...generation.preparedModelRuntime,
+          modelCatalog: snapshot,
+          accountCatalog,
+        },
+      });
+      input.providerThinkingLevel = "high";
+      input.attempt.runtimePlan!.auth.modelRoute = route;
+      const previousHost = getAiTransportHost();
+      const requests: Array<{ headers: Headers; payload: Record<string, unknown> }> = [];
+      configureAiTransportHost({
+        ...previousHost,
+        buildModelFetch: () => async (url, init) => {
+          const request = new Request(url, init);
+          requests.push({ headers: request.headers, payload: await request.json() });
+          const completed = {
+            type: "response.completed",
+            response: { id: "resp-cold", status: "completed", output: [] },
+          };
+          return new Response(`data: ${JSON.stringify(completed)}\n\n`, {
+            headers: { "content-type": "text/event-stream" },
+          });
+        },
+      });
+      const { buildOpenAIProvider } = await import("../extensions/openai/api.js");
+      const provider = buildOpenAIProvider();
+      extraParamsTesting.setProviderRuntimeDepsForTest({
+        wrapProviderStreamFn: ({ context }) => provider.wrapStreamFn?.(context),
+      });
+      registerProviderStreamForModel.mockReturnValue(createOpenAIResponsesTransportStreamFn());
+      // The Agent passes its selected thinking level as the stream reasoning option.
+      const send = async () =>
+        session.agent.streamFn(input.attempt.model, { messages: [] }, { reasoning: "high" });
+      try {
+        await prepareEmbeddedAttemptTransport(input);
+        const result = await (await send()).result();
+        expect(result.errorMessage).toBeUndefined();
+        expect(result.stopReason).toBe("stop");
+        expect(requests).toHaveLength(1);
+        expect(requests[0]?.headers.get("authorization")).toBe("Bearer synthetic-key");
+        expect(requests[0]?.payload).toMatchObject({
+          model: "synthetic-model",
+          access_programs: { cyber: program },
+          service_tier: "priority",
+          reasoning: { effort: "high" },
+        });
+        if (source === "shared") {
+          setPreparedModelFullCatalogAuth(snapshot, {
+            authModes: {},
+            providerAuthLabels: new Map(),
+            authStore: {
+              version: 1,
+              profiles: { "openai:a": { ...credential, key: "other-account" } },
+            },
+          });
+          await expect(send()).rejects.toThrow("not advertised");
+          setPreparedModelFullCatalogAuth(snapshot, {
+            authModes: {},
+            providerAuthLabels: new Map(),
+            authStore: { version: 1, profiles: { "openai:a": credential } },
+          });
+        }
+        await accountCatalog.acquire({
+          profileId: "openai:a",
+          credential,
+          allowDiscovery: true,
+          refresh: true,
+          load: async () => [],
+        });
+        await expect(send()).rejects.toThrow("not advertised");
+        await expect(prepareEmbeddedAttemptTransport(input)).rejects.toThrow("not advertised");
+        expect(requests).toHaveLength(1);
+      } finally {
+        configureAiTransportHost(previousHost);
+      }
+    },
+  );
+
+  it("rejects a stale saved Daybreak override before preparing any provider stream", async () => {
+    const { input, streamFn } = createTransportFixture();
+    input.attempt.provider = "openai";
+    input.attempt.model = {
+      ...input.attempt.model,
+      provider: "openai",
+      api: "openai-responses",
+      baseUrl: "https://api.openai.com/v1",
+    };
+    input.attempt.cyberAccessProgram = "daybreak_blue";
+    await expect(prepareEmbeddedAttemptTransport(input)).rejects.toThrow(
+      "not advertised for the current account",
+    );
+    expect(registerProviderStreamForModel).not.toHaveBeenCalled();
+    expect(streamFn).not.toHaveBeenCalled();
   });
 
   it("lets the provider select transport from the prepared auth flow", async () => {
@@ -325,7 +485,7 @@ describe("prepareEmbeddedAttemptTransport", () => {
   it.each([{ source: "resolved run", resolvedApiKey: "sk-ant-oat01-synthetic-run" }])(
     "gives provider wrappers the $source credential the Anthropic transport sends",
     async ({ resolvedApiKey }) => {
-      await import("../../ai-transport-runtime-host.js");
+      await import("../src/agents/ai-transport-runtime-host.js");
       const previousHost = getAiTransportHost();
       const requests: Array<{ headers: Headers; payload: Record<string, unknown> }> = [];
       configureAiTransportHost({

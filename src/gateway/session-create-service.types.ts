@@ -121,6 +121,7 @@ export type CreateGatewaySessionParams = {
   personalAccountDefaults?: ModelAccountConnectAction;
   contextWindow?: string;
   thinkingLevel?: string;
+  cyberAccessProgram?: SessionEntry["cyberAccessProgram"] | null;
   fastMode?: FastMode;
   /** Registry identity for a new session or a successfully recovered pending worktree. */
   projectId?: string;

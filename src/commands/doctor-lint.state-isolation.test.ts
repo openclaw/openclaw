@@ -492,7 +492,18 @@ describe("doctor lint state isolation", () => {
             const findings = JSON.parse(String(stdout.mock.calls.at(-1)?.[0])).findings;
             expect(isolated).toBe(true);
             expect(findings).toEqual(
-              exists ? [] : [expect.objectContaining({ severity: "warning", path: credentials })],
+              exists
+                ? []
+                : [
+                    {
+                      checkId: "core/doctor/state-integrity",
+                      severity: "warning",
+                      message: "OAuth dir is missing.",
+                      path: credentials,
+                      fixHint:
+                        "Run `openclaw doctor --fix` to create missing runtime state directories.",
+                    },
+                  ],
             );
             expect(fs.existsSync(credentials)).toBe(exists);
           } finally {

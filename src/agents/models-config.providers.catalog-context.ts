@@ -5,6 +5,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { captureProviderCatalogExpiries } from "../plugins/provider-catalog-expiry.js";
 import type {
   ProviderCatalogOutcome,
   ProviderCatalogResult,
@@ -212,6 +213,7 @@ export async function loadSelectedProviderAccountCatalog(params: {
   config: OpenClawConfig;
   agentDir: string;
   workspaceDir: string;
+  refresh?: boolean;
   isCurrent: () => boolean;
   assertCurrent: () => void;
   withCurrent?: CurrentReadAuthority["withCurrent"];
@@ -313,7 +315,11 @@ export async function loadSelectedProviderAccountCatalog(params: {
   await withCurrentReadAuthority(authority, () =>
     withGuardedFetchRequestAuthority(
       assertCurrent,
-      async () => runProviderCatalogWithTimeout(catalogRequest),
+      // Selected-account refresh must reach HTTP caches, not just re-run the hook.
+      async () =>
+        captureProviderCatalogExpiries(() => runProviderCatalogWithTimeout(catalogRequest), {
+          refresh: params.refresh,
+        }),
       params.beforeRequest,
     ),
   );

@@ -51,6 +51,7 @@ import {
 } from "../stream-resolution.js";
 import type { ProviderThinkLevel } from "../utils.js";
 import { joinWithRunLivenessDeadline, RUN_LIVENESS_JOIN_TIMEOUT_MS } from "./abortable.js";
+import { prepareEmbeddedAccessProgramGuard } from "./access-program.js";
 import {
   shouldWaitForCompletionRequiredAsyncTasks,
   waitForCompletionRequiredAsyncTasks,
@@ -406,12 +407,32 @@ export async function prepareEmbeddedAttemptTransport(input: {
     attempt.admittedRunContext,
     input.abortSignal,
   );
-  const assertRunCurrent = input.assertCronRootCurrent
-    ? () => {
-        assertAdmittedCurrent?.();
-        input.assertCronRootCurrent?.();
-      }
-    : assertAdmittedCurrent;
+  const runtime = attempt.preparedModelRuntime;
+  const profileId = attempt.authProfileId;
+  const credential = profileId ? attempt.authProfileStore?.profiles[profileId] : undefined;
+  const selectedCredential =
+    runtime &&
+    resolveSelectedModelCredential({
+      provider: attempt.model.provider,
+      profileId,
+      mode: credential?.type ?? attempt.runtimePlan?.auth.selectedAuthMode,
+    });
+  // Observation initializes the account entry; capture Access authority only after it exists.
+  const recordServiceTier =
+    runtime?.accountCatalog &&
+    selectedCredential &&
+    selectedCredential.source !== "harness" &&
+    selectedCredential.requirement === "api-key" &&
+    attempt.model.provider === "openai" &&
+    attempt.model.api === "openai-responses"
+      ? runtime.accountCatalog.prepareServiceTierObserver({ selectedCredential, credential })
+      : undefined;
+  const assertAccessCurrent = await prepareEmbeddedAccessProgramGuard(attempt);
+  const assertRunCurrent = () => {
+    assertAdmittedCurrent?.();
+    input.assertCronRootCurrent?.();
+    assertAccessCurrent?.();
+  };
   // Rebuild each turn from the session's original stream base so prior-turn
   // wrappers do not pin us to stale provider/API transport behavior.
   const defaultSessionStreamFn = resolveEmbeddedAgentBaseStreamFn({
@@ -421,9 +442,17 @@ export async function prepareEmbeddedAttemptTransport(input: {
     settingsManager: input.settingsManager,
     sessionTransport: session.agent.transport,
   });
+  if (attempt.cyberAccessProgram !== undefined && attempt.provider !== "openai") {
+    throw new Error(
+      "Explicit access programs are unsupported by this provider. Reset Access to the model default or select an OpenAI model.",
+    );
+  }
   const streamExtraParamsOverride = {
     ...attempt.streamParams,
     fastMode: attempt.fastMode,
+    ...(attempt.cyberAccessProgram !== undefined
+      ? { accessPrograms: { cyber: attempt.cyberAccessProgram } }
+      : {}),
     // Memory extraction must see the original history, not a provider summary.
     ...(attempt.trigger === "memory"
       ? { anthropicServerCompaction: false, responsesServerCompaction: false }
@@ -664,33 +693,12 @@ export async function prepareEmbeddedAttemptTransport(input: {
         : messages,
     );
   }
-  const runtime = attempt.preparedModelRuntime;
-  const profileId = attempt.authProfileId;
-  const credential = profileId ? attempt.authProfileStore?.profiles[profileId] : undefined;
-  const selectedCredential =
-    runtime &&
-    resolveSelectedModelCredential({
-      provider: attempt.model.provider,
-      profileId,
-      mode: credential?.type ?? attempt.runtimePlan?.auth.selectedAuthMode,
-    });
-  if (
-    runtime?.accountCatalog &&
-    selectedCredential &&
-    selectedCredential.source !== "harness" &&
-    selectedCredential.requirement === "api-key" &&
-    attempt.model.provider === "openai" &&
-    attempt.model.api === "openai-responses"
-  ) {
-    const record = runtime.accountCatalog.prepareServiceTierObserver({
-      selectedCredential,
-      credential,
-    });
+  if (recordServiceTier && selectedCredential && selectedCredential.source !== "harness") {
     session.agent.streamFn = createOpenAIServiceTierObservationWrapper(
       session.agent.streamFn,
       (model, observation) =>
         !input.abortSignal.aborted &&
-        record({
+        recordServiceTier({
           modelId: model.id,
           runtimeId: "openclaw",
           api: model.api,

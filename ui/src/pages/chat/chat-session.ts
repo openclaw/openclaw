@@ -1,7 +1,7 @@
 import type { AgentRuntimeRestrictionErrorDetails } from "../../../../packages/gateway-protocol/src/agent-runtime-restriction-error-details.js";
 import { normalizeThinkLevel } from "../../../../src/auto-reply/thinking.shared.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type { CyberAccessProgram, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
 import { resolvePreferredServerChatModelValue } from "../../lib/chat/model-ref.ts";
@@ -189,8 +189,8 @@ async function applyChatSetting(
   host: ChatModelSettingsHost,
   sessionKey: string,
   captured: ReturnType<typeof captureChatSettingsTarget>,
-  patch: Pick<SessionPatch, "thinkingLevel" | "fastMode" | "contextWindow">,
-  settingName: "thinking level" | "speed" | "context window",
+  patch: Pick<SessionPatch, "thinkingLevel" | "fastMode" | "contextWindow" | "cyberAccessProgram">,
+  settingName: "thinking level" | "speed" | "context window" | "access program",
 ): Promise<boolean> {
   const canDispatch = (receipt?: SessionPatchResult | null) =>
     (captured.isCurrent() || Boolean(captured.row(receipt))) &&
@@ -224,6 +224,7 @@ async function applyChatSetting(
 export function switchChatSetting(
   host: ChatModelSettingsHost,
   selection:
+    | { kind: "cyberAccessProgram"; value: CyberAccessProgram | null }
     | { kind: "fastMode"; value: "" | "on" | "off" | "auto" | "ultrafast" }
     | { kind: "thinkingLevel" | "contextWindow"; value: string },
   targetSessionKey = host.sessionKey,
@@ -232,6 +233,18 @@ export function switchChatSetting(
     return Promise.resolve(false);
   }
   const captured = captureChatSettingsTarget(host, targetSessionKey);
+  if (selection.kind === "cyberAccessProgram") {
+    if ((captured.settings.cyberAccessProgram ?? null) === selection.value) {
+      return Promise.resolve(true);
+    }
+    return applyChatSetting(
+      host,
+      targetSessionKey,
+      captured,
+      { cyberAccessProgram: selection.value },
+      "access program",
+    );
+  }
   if (selection.kind === "fastMode") {
     const next = normalizeChatFastModeInput(selection.value);
     if (captured.settings.fastMode === next) {

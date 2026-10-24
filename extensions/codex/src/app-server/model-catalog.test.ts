@@ -92,6 +92,36 @@ describe("Codex app-server model catalog", () => {
     owner = createCodexAppServerModelCatalog("codex");
   });
 
+  it.each(["chatgpt", "apiKey"])(
+    "publishes only explicit caller program metadata for %s discovery",
+    async (type) => {
+      rpc.request.mockResolvedValue({ account: { type }, requiresOpenaiAuth: true });
+      listModelsMock.mockResolvedValue({
+        models: [
+          {
+            ...opaqueCatalog().models[0]!,
+            availableAccessPrograms: { cyber: ["standard", "daybreak_blue"] },
+          },
+        ],
+      });
+      const result = await owner.load(catalogParams, undefined);
+      expect(result.outcomes?.[0]?.modelAccessPrograms).toEqual(
+        type === "chatgpt"
+          ? [
+              {
+                modelId: "synthetic-opaque",
+                runtimeId: "codex",
+                cyber: ["standard", "daybreak_blue"],
+              },
+            ]
+          : undefined,
+      );
+      expect(read()).toBeDefined();
+      rpc.epoch += 1;
+      expect(read()).toBeUndefined();
+    },
+  );
+
   it.each([
     {
       name: "unanswered account read",

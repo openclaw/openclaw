@@ -1671,7 +1671,6 @@
 ["src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts","./run/payloads.js","384cee36c1d106afc6daf3fa2388dbdc6be12c977f5cd18a1ad3297977ee6754",1]
 ["src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts","./tool-result-truncation.js","23583036b00aa90c5b3d13d63ae5f1931358203f54848a7f8146357d8480da46",1]
 ["src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts","../harness/selection.js","9334902975d16fa4d0eef7bd23120d060fb7733511a00ded20382ee3a4896333",1]
-["src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts","../runtime-plan/build.js","7a14a5acd4dd2ec1b30b3b536714f1a24cbd17be5b8ccb38f0133ac0dd1e0412",1]
 ["src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts","../subagents/registry/subagent-registry.js","7390295fc7fdba32061b6b2ab081782aec7dd3c40920b115be9ab0194852e594",1]
 ["src/agents/embedded-agent-runner/run.overflow-compaction.loop.test.ts","../tool-terminal-outcome.js","c77c696e882171140eeb8aed92e9c7850f99973857da39c8e24a0080513d29f7",1]
 ["src/agents/embedded-agent-runner/run.overflow-compaction.misc-owners.test.ts","../auth-profiles.js","7f2293609ac2a17a755cf15aa9ff53c63a01756b787f1e405515b7b76980c383",1]

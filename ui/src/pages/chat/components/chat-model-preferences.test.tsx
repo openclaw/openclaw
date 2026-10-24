@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
+import type { CyberAccessProgram } from "../../../api/types.ts";
 import { createSessionsListResult } from "../../../test-helpers/chat-model.ts";
 import { installModelPickerLayout } from "../../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
@@ -267,4 +268,40 @@ it("does not invent reasoning options for an offline non-reasoning model", async
     thinkingSession: selectedSession,
   });
   expect(view.container.querySelector("[data-chat-thinking-select]")).toBeNull();
+});
+
+it("never borrows access entitlement from another runtime or a retired catalog", async () => {
+  const model = {
+    id: "primary",
+    name: "primary",
+    provider: "example",
+    supportsFastMode: true,
+    agentRuntime: { id: "openclaw", source: "model" as const },
+    availableAccessPrograms: {
+      cyber: ["standard", "daybreak_blue"] satisfies CyberAccessProgram[],
+    },
+    runtimeChoices: [{ agentRuntime: { id: "codex", source: "model" as const } }],
+  };
+  const view = await controls({
+    modelCatalog: [model, { id: "other", name: "other", provider: "example" }],
+    selectedAgentRuntime: "codex",
+    requestedAccessProgram: "daybreak_red",
+    onAccessProgramSelect: vi.fn(),
+  });
+  const accessOptions = () =>
+    Array.from(
+      view.container.querySelectorAll<HTMLButtonElement>("[data-chat-access-option]"),
+      (option) => option.getAttribute("data-chat-access-option"),
+    );
+  expect(accessOptions()).toEqual([]);
+  view.update({ selectedAgentRuntime: "openclaw" });
+  expect(accessOptions()).toEqual(["standard", "daybreak_blue"]);
+  view.update({ modelCatalogState: { hasSnapshot: true, status: "loading", retired: true } });
+  expect(accessOptions()).toEqual([]);
+  const unknownModel = { ...model, availableAccessPrograms: undefined };
+  view.update({
+    modelCatalogState: { hasSnapshot: true, status: "ready" },
+    modelCatalog: [unknownModel],
+  });
+  expect(accessOptions()).toEqual([]);
 });

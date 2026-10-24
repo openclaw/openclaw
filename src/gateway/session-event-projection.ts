@@ -192,6 +192,7 @@ export function prepareSessionEventProjection(
         const projected: Record<string, unknown> = {
           ...base,
           session: plan.rows ? plan.rows.wire[0] : row,
+          cyberAccessProgram: row.cyberAccessProgram ?? null,
           fastMode: row.fastMode,
           effectiveFastMode: row.effectiveFastMode,
           ancestorSessions: plan.ancestor

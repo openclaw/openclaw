@@ -34,7 +34,7 @@ import {
   itemNotification,
 } from "./native-subagent-monitor.test-support.js";
 import { buildCodexAppServerConnectionFingerprint } from "./plugin-app-cache-key.js";
-import { isJsonObject, type JsonObject } from "./protocol.js";
+import { isJsonObject, type CodexGetAccountResponse, type JsonObject } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
   createParams,
@@ -168,16 +168,187 @@ describe("Codex native configuration", () => {
     },
   );
 
-  it.each(["denied", "revoked"] as const)(
-    "binds the actual harness retry model when its permission is %s",
+  it.each([
+    "allowed",
+    "missing-account",
+    "api-key-account",
+    "missing-capability",
+    "revoked-account",
+    "replaced-account",
+    "replaced-catalog",
+  ] as const)(
+    "checks explicit Blue access at the real native turn/start boundary (%s)",
+    async (outcome) => {
+      const params = createParams(path.join(tempDir, "access-boundary.jsonl"), tempDir, {
+        provider: "openai",
+      });
+      params.agentDir = path.join(tempDir, "agent");
+      params.authProfileId = "openai:access-boundary";
+      params.authProfileStore.profiles[params.authProfileId] = {
+        ...createCodexTestOAuthProfile("synthetic-access-account"),
+        expires: Date.now() + 60 * 60 * 1_000,
+      };
+      params.cyberAccessProgram = "daybreak_blue";
+      params.thinkLevel = "high";
+      params.fastMode = true;
+      setCodexTestToolFactory(params, () => []);
+      const previousToolsUnsupported = agentHarnessRuntimeMocks.forceModelToolsUnsupported;
+      agentHarnessRuntimeMocks.forceModelToolsUnsupported = true;
+      const native = threadStartResult("thread-access", { cwd: tempDir });
+      let account: CodexGetAccountResponse["account"] = {
+        type: "chatgpt",
+        email: "first-account@example.test",
+        planType: "team",
+      };
+      let catalogMutation: Promise<unknown> | undefined;
+      let accessAccountRead = false;
+      let prepared = false;
+      let revisionBeforeEffect: number | undefined;
+      const transport = nativeClient(resolveCodexAppServerHomeDir(params.agentDir), {
+        "config/read": () => ({ config: {}, origins: {}, layers: [] }),
+        "account/login/start": () => ({ type: "chatgptAuthTokens" }),
+        "account/read": () => {
+          // Startup can inspect the bridged account. Only the explicit Access
+          // check follows thread preparation, so these controls reach that owner.
+          if (prepared) {
+            accessAccountRead = true;
+            if (outcome === "missing-account") {
+              account = null;
+            } else if (outcome === "api-key-account") {
+              account = { type: "apiKey" };
+            }
+          }
+          return { account, requiresOpenaiAuth: true };
+        },
+        "model/list": () => ({
+          data: [
+            {
+              id: params.modelId,
+              model: params.modelId,
+              displayName: "Synthetic Access model",
+              description: "Synthetic Access model",
+              hidden: false,
+              isDefault: true,
+              defaultReasoningEffort: "medium",
+              supportedReasoningEfforts: [],
+              availableAccessPrograms: {
+                cyber:
+                  outcome === "missing-capability" ? ["standard"] : ["standard", "daybreakBlue"],
+              },
+            },
+          ],
+          nextCursor: null,
+        }),
+        "thread/start": () => {
+          prepared = true;
+          return native;
+        },
+        "thread/read": () => ({ thread: native.thread }),
+        "thread/backgroundTerminals/list": () => ({ data: [], nextCursor: null }),
+        "turn/start": () => turnStartResult("turn-access"),
+      });
+      // Only process startup and the daemon's external stdio I/O are fixtures.
+      // Keep the production client, catalog decoder, admission and physical writer.
+      vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(transport.client);
+      ownCodexInferenceClient(transport.client);
+      params.onAgentEvent = (event) => {
+        if (event.stream !== "codex_app_server.lifecycle" || event.data.phase !== "turn_starting") {
+          return;
+        }
+        // This observer runs after account/catalog preparation and immediately
+        // before turn/start enters its awaited native-policy admission.
+        revisionBeforeEffect = transport.client.getModelCatalogRevision();
+        if (outcome === "revoked-account" || outcome === "replaced-account") {
+          account =
+            outcome === "revoked-account"
+              ? null
+              : { type: "chatgpt", email: "replacement-account@example.test", planType: "plus" };
+          transport.send({
+            method: "account/updated",
+            params: {
+              authMode: outcome === "revoked-account" ? null : "chatgpt",
+              planType: outcome === "revoked-account" ? null : "plus",
+            },
+          });
+        } else if (outcome === "replaced-catalog") {
+          // A real config mutation invalidates the physical client's catalog
+          // generation before its synthetic daemon response is consumed.
+          catalogMutation = transport.client.request("config/value/write", {
+            keyPath: "model_catalog_json",
+            value: "synthetic-replacement-catalog.json",
+            mergeStrategy: "replace",
+          });
+        }
+      };
+      const abortController = new AbortController();
+      params.abortSignal = abortController.signal;
+      // Cold preparation is not part of this test's logical execution deadline.
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const run = runCodexAppServerAttempt(params);
+      try {
+        if (outcome === "allowed") {
+          await run.waitForTurnAccepted();
+          transport.send(
+            completedTurn("thread-access", {
+              id: "turn-access",
+              items: [{ type: "agentMessage", id: "answer", text: "Synthetic Blue reply" }],
+            }),
+          );
+          await expect(run).resolves.toMatchObject({ terminal: { kind: "ok" } });
+        } else {
+          await expect(run).rejects.toThrow(
+            outcome === "missing-account" || outcome === "api-key-account"
+              ? "requires ChatGPT subscription authentication"
+              : outcome === "missing-capability"
+                ? "not advertised for the current account and model"
+                : "Codex account changed while preparing the access program",
+          );
+        }
+        await catalogMutation;
+        expect(accessAccountRead).toBe(true);
+        const turns = transport.writes
+          .map((line) => JSON.parse(line) as { method: string; params: unknown })
+          .filter(({ method }) => method === "turn/start");
+        if (outcome === "allowed") {
+          expect(turns).toEqual([
+            {
+              id: expect.any(Number),
+              method: "turn/start",
+              params: expect.objectContaining({
+                model: "gpt-5.4-codex",
+                cyberAccessProgram: "daybreakBlue",
+                effort: "high",
+                serviceTier: "priority",
+              }),
+            },
+          ]);
+        } else {
+          expect(turns).toEqual([]);
+        }
+        const lateChange =
+          outcome === "revoked-account" ||
+          outcome === "replaced-account" ||
+          outcome === "replaced-catalog";
+        expect(revisionBeforeEffect !== undefined).toBe(outcome === "allowed" || lateChange);
+        if (lateChange) {
+          expect(transport.client.getModelCatalogRevision()).toBeGreaterThan(revisionBeforeEffect!);
+        }
+      } finally {
+        abortController.abort("test_cleanup");
+        await run.catch(() => undefined);
+        await transport.client.closeAndWait();
+        agentHarnessRuntimeMocks.forceModelToolsUnsupported = previousToolsUnsupported;
+      }
+    },
+  );
+
+  it.each(["allowed", "revoked"] as const)(
+    "retains live model authority during a same-model Access retry (%s)",
     async (permission) => {
       stubCodexInferenceTransportEnv();
       const catalogModel = "catalog-primary";
       const runtimeModel = "native-primary";
-      const allowedModels = new Set([
-        catalogModel,
-        ...(permission === "denied" ? [] : ["native-retry"]),
-      ]);
+      const allowedModels = new Set([catalogModel]);
       const { source: operatorSource, listeners: policyListeners } = mutableOperator(
         "restricted-retry-fixture",
         () => {
@@ -245,6 +416,22 @@ describe("Codex native configuration", () => {
             account: { type: "chatgpt", email: "synthetic@example.test", planType: "team" },
             requiresOpenaiAuth: true,
           }),
+          "model/list": () => ({
+            data: [
+              {
+                id: runtimeModel,
+                model: runtimeModel,
+                displayName: "Fixture",
+                description: "Fixture",
+                hidden: false,
+                isDefault: true,
+                defaultReasoningEffort: "medium",
+                supportedReasoningEfforts: [],
+                availableAccessPrograms: { cyber: ["standard", "daybreakBlue"] },
+              },
+            ],
+            nextCursor: null,
+          }),
           "thread/read": () => ({ thread: nativeResponse.thread }),
           "thread/start": startThread,
           "thread/resume": startThread,
@@ -278,7 +465,7 @@ describe("Codex native configuration", () => {
             command: process.execPath,
             args: ["app-server"],
             homeScope: "agent",
-            cyberFailover: { mode: "auto", model: "openai/native-retry" },
+            cyberFailover: { mode: "auto" },
           },
         },
       });
@@ -306,14 +493,16 @@ describe("Codex native configuration", () => {
         transport.send(completedTurn("thread-policy", { status: "failed", error }));
         const retried = await Promise.race([retryStarted.promise.then(() => true), settled]);
         if (permission === "revoked") {
-          allowedModels.delete("native-retry");
+          allowedModels.delete(catalogModel);
           for (const listener of policyListeners) {
             listener();
           }
         }
-        expect(allowedControl?.signal.aborted).toBe(false);
+        expect(allowedControl?.signal.aborted).toBe(permission === "revoked");
         expect(sourceControl?.signal?.aborted).toBe(false);
-        allowedControl?.assertCurrent();
+        if (permission === "allowed") {
+          allowedControl?.assertCurrent();
+        }
         sourceControl?.assertCurrent();
         if (retried) {
           transport.send(
@@ -323,10 +512,20 @@ describe("Codex native configuration", () => {
             }),
           );
         }
-        expect(turnModels).toEqual(
-          permission === "denied" ? [runtimeModel] : [runtimeModel, "native-retry"],
-        );
-        await expect(run).rejects.toThrow("operator role cannot use this model");
+        expect(retried).toBe(true);
+        expect(turnModels).toEqual([runtimeModel, runtimeModel]);
+        expect(
+          transport.requests
+            .filter(({ method }) => method === "turn/start")
+            .map(({ params: request }) =>
+              isJsonObject(request) ? request.cyberAccessProgram : undefined,
+            ),
+        ).toEqual([undefined, "daybreakBlue"]);
+        if (permission === "revoked") {
+          await expect(run).rejects.toThrow("operator role cannot use this model");
+        } else {
+          await expect(run).resolves.toMatchObject({ terminal: { kind: "ok" } });
+        }
         expect(params).toMatchObject({ modelId: catalogModel, model: { id: catalogModel } });
         const transcript = await readTranscriptMessagesByIdentity(params);
         expect(transcript.filter((message) => message.role === "user")).toHaveLength(1);

@@ -135,6 +135,7 @@ type CodexThreadConfigurationParams = JsonObject & {
   approvalPolicy?: CodexApprovalPolicy | null;
   approvalsReviewer?: CodexApprovalsReviewer | null;
   sandbox?: CodexSandboxMode | null;
+  cyberAccessProgram?: "standard" | "daybreakBlue" | "daybreakRed";
   serviceTier?: CodexServiceTier | null;
   developerInstructions?: string;
 };
@@ -457,6 +458,7 @@ export type CodexModel = {
   isDefault: boolean;
   inputModalities?: string[];
   serviceTiers?: { id: string; name: string; description: string }[];
+  availableAccessPrograms?: { cyber: Array<"standard" | "daybreakBlue" | "daybreakRed"> } | null;
   supportedReasoningEfforts: CodexReasoningEffortOption[];
   defaultReasoningEffort?: string | null;
   multiAgentVersion?: "disabled" | "v1" | "v2" | null;
