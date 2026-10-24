@@ -28,6 +28,7 @@ import {
   captureStateDatabaseAccess,
   GatewayStateOwnerContentionError,
   hasActiveGatewayStateOwner,
+  readLiveGatewayStateOwnerIdentity,
   resolveGatewayStateOwnerPath,
   tryAcquireGatewayStateOwner,
   tryBorrowGatewayStateOwner,
@@ -66,6 +67,56 @@ function expectExistence(present: boolean, ...paths: string[]) {
 }
 
 describe("Gateway state ownership", () => {
+  it.skipIf(process.platform === "win32")(
+    "observes admitted scopes without filesystem polling and rejects an ambiguous alias",
+    async () => {
+      await withTempDir("openclaw-owner-observation-", async (root) => {
+        const storage = path.join(root, "storage");
+        const alias = path.join(root, "alias");
+        fs.mkdirSync(storage);
+        fs.symlinkSync(storage, alias, "dir");
+        const databasePath = path.join(alias, "state", "openclaw.sqlite");
+        const canonicalPath = path.join(fs.realpathSync(storage), "state", "openclaw.sqlite");
+        const owner = gatewayOwner(databasePath, storage);
+        try {
+          const observation = readLiveGatewayStateOwnerIdentity(databasePath);
+          expect(observation).toMatchObject({ databasePath: canonicalPath, pid: process.pid });
+          const reads = [
+            vi.spyOn(fs.realpathSync, "native"),
+            vi.spyOn(fs, "readFileSync"),
+            vi.spyOn(fs, "statSync"),
+            vi.spyOn(fs, "lstatSync"),
+          ];
+          try {
+            expect(readLiveGatewayStateOwnerIdentity(databasePath)).toEqual(observation);
+            expect(readLiveGatewayStateOwnerIdentity(canonicalPath)).toEqual(observation);
+            expect(
+              readLiveGatewayStateOwnerIdentity(path.join(root, "other.sqlite")),
+            ).toBeUndefined();
+            for (const read of reads) {
+              expect(read).not.toHaveBeenCalled();
+            }
+          } finally {
+            for (const read of reads) {
+              read.mockRestore();
+            }
+          }
+          fs.unlinkSync(alias);
+          fs.mkdirSync(alias);
+          const replacement = gatewayOwner(databasePath, alias);
+          try {
+            expect(readLiveGatewayStateOwnerIdentity(databasePath)).toBeUndefined();
+            expect(readLiveGatewayStateOwnerIdentity(canonicalPath)).toEqual(observation);
+          } finally {
+            replacement.release();
+          }
+        } finally {
+          owner.release();
+        }
+      });
+    },
+  );
+
   it.skipIf(process.platform === "win32")(
     "acquires Gateway ownership on healthy state storage when system tmp is exhausted",
     async () => {
@@ -371,11 +422,16 @@ describe("Gateway state ownership", () => {
       const owner = gatewayOwner(databasePath, root);
       const original = fs.readFileSync(owner.path);
       try {
+        expect(readLiveGatewayStateOwnerIdentity(databasePath)).toMatchObject({
+          pid: process.pid,
+          role: "gateway",
+        });
         fs.writeFileSync(owner.path, "replacement");
         // The read assertion is the first to observe the replacement, so it records the loss.
         expect(() => assertStateDatabaseReadAllowed(databasePath)).toThrow(
           /lock removed\/replaced; restart the Gateway\.$/u,
         );
+        expect(readLiveGatewayStateOwnerIdentity(databasePath)).toBeUndefined();
       } finally {
         fs.writeFileSync(owner.path, original);
         owner.release();

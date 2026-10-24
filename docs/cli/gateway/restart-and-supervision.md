@@ -239,6 +239,40 @@ External supervisor implementations should also apply these acceptance rules:
 - If capability negotiation or handoff consumption refuses replacement, exit promptly with a nonzero status so the process manager's recovery policy can run. Do not remain alive without a Gateway child or listener.
 - Treat supervisor process liveness as distinct from replacement startup and channel readiness. Report success only after the new Gateway owns its listener and `/startupz` returns `status: "started"`; monitor `/readyz` separately for configured-channel health, while `/healthz` proves liveness only.
 
+### Observe the native state owner
+
+`system.info` includes `stateOwner` only while the serving process holds its
+registered native Gateway state owner. The observation contains the canonical
+`databasePath`, `ownerId`, role, PID, native `startTime`, and `processNamespace`.
+On Linux, the namespace includes the host, OS boot identity (`identity`), and PID
+namespace inode (`pidNsInode`). It does not adopt an old owner record from disk.
+Older runtimes omit this field; an unavailable `startTime` or `processNamespace`
+is `null`.
+
+The Gateway captures the canonical path and identity during acquisition.
+`system.info` reads these in-process facts; release or detected ownership loss
+omits the field. Admission and heartbeat checks continue to verify physical custody.
+
+```bash
+openclaw gateway call system.info --json
+openclaw gateway recover-lock --json
+```
+
+Recovery inspection includes `ownerRecords` for every present state owner,
+state/config lock, and SQLite Gateway lease. Each record identifies its `kind`
+and normalized `owner`; an undecodable file holder remains `null`. An
+uninspectable SQLite lease still fails inspection. The existing
+`holders`, `confirmation`, and explicit `--confirm <fingerprint>` flow remain
+available. Owner IDs are references, not authentication credentials.
+
+An external controller can bind a live observation to the exact workload it
+observes, then compare every recovery record against that binding. Missing,
+incomplete, or different identities require operator investigation. The controller
+must separately prove that the bound workload stopped before confirming recovery.
+A matching fingerprint, old heartbeat, or absent Pod does not establish death.
+Recovery still refuses verified live holders and changed records; this observation
+does not enable automatic reclamation.
+
 ### Gateway profiling
 
 - `OPENCLAW_GATEWAY_STARTUP_TRACE=1` logs phase timings during startup, including per-phase `eventLoopMax` delay and plugin lookup-table timings (installed-index, manifest registry, startup planning, owner-map work). The `process.bootstrap` breakdown includes earlier CLI imports, configuration, database admission, session inventory, and workspace readiness. Each bootstrap step records its process-relative `start`, duration, call count, and available fleet counts; repeated calls aggregate under one name. The `ready` trace repeats the step names and totals in `bootstrapSteps`. Nested steps overlap, so their durations should not be added together.

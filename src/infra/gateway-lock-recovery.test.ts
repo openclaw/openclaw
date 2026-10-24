@@ -44,11 +44,24 @@ function fixture() {
 
 describe("explicit Gateway lock recovery", () => {
   it("inspects without changing files and removes only the confirmed foreign owner", async () => {
-    const { env, lockPaths } = fixture();
+    const { env, databasePath, payload, lockPaths } = fixture();
     const before = lockPaths.map((pathname) => fs.statSync(pathname, { bigint: true }));
     const inspection = await inspectGatewayLockRecovery({ env });
     expect(inspection.holders).toHaveLength(3);
     expect(inspection.holders.join("\n")).toContain("stopped-foreign-container");
+    expect(inspection.ownerRecords).toEqual(
+      ["state-owner", "state-lock", "config-lock"].map((kind) => ({
+        kind,
+        owner: {
+          databasePath,
+          ownerId: payload.ownerId,
+          role: "sqlite-maintenance",
+          pid: process.pid,
+          startTime: payload.startTime ?? null,
+          processNamespace: payload.processNamespace,
+        },
+      })),
+    );
     expect(lockPaths.map((pathname) => fs.statSync(pathname, { bigint: true }).mtimeNs)).toEqual(
       before.map((stat) => stat.mtimeNs),
     );
@@ -147,11 +160,34 @@ describe("explicit Gateway lock recovery", () => {
       fs.unlinkSync(pathname);
     }
     const inspection = await inspectGatewayLockRecovery({ env });
+    expect(inspection.ownerRecords).toEqual([]);
     await expect(recoverGatewayLock({ confirmation: inspection.confirmation })).resolves.toEqual({
       recovered: false,
       removed: 0,
     });
     expect(lockPaths.every((pathname) => !fs.existsSync(pathname))).toBe(true);
+  });
+
+  it("preserves malformed and incomplete recorded identities for the recovery caller", async () => {
+    const { env, paths, payload } = fixture();
+    fs.writeFileSync(paths.ownerLockPath, "not a lock record");
+    fs.writeFileSync(
+      paths.stateLockPath,
+      JSON.stringify({
+        ...payload,
+        ownerId: undefined,
+        startTime: undefined,
+        processNamespace: null,
+      }),
+    );
+    const inspection = await inspectGatewayLockRecovery({ env });
+    expect(inspection.ownerRecords).toHaveLength(3);
+    expect(inspection.ownerRecords[0]).toEqual({ kind: "state-owner", owner: null });
+    expect(inspection.ownerRecords[1]).toMatchObject({
+      kind: "state-lock",
+      owner: { ownerId: null, startTime: null, processNamespace: null },
+    });
+    expect(inspection.holders).toHaveLength(3);
   });
 
   it("refuses a verified live local holder even with its confirmation", async () => {
@@ -196,6 +232,17 @@ describe("explicit Gateway lock recovery", () => {
     db.close();
     const inspection = await inspectGatewayLockRecovery({ env });
     expect(inspection.lease?.owner).toBe("old-gateway");
+    expect(inspection.ownerRecords.at(-1)).toEqual({
+      kind: "gateway-lease",
+      owner: {
+        databasePath,
+        ownerId: "old-gateway",
+        role: "gateway",
+        pid: process.pid,
+        startTime: payload.startTime ?? null,
+        processNamespace: payload.processNamespace,
+      },
+    });
     await recoverGatewayLock({ confirmation: inspection.confirmation });
     const verified = openNodeSqliteDatabase(databasePath, { readOnly: true });
     try {

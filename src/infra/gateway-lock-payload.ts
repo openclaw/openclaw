@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import { z } from "zod";
+import type { GatewayStateOwnerIdentity } from "../../packages/gateway-protocol/src/schema/system-info.js";
 import { safeParseJsonWithSchema } from "../utils/zod-parse.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
 import { createManagedHandoffBootIdentityReader } from "./update-managed-service-handoff-boot.js";
@@ -196,4 +197,22 @@ export function isGatewayMaintenanceParentStale(owner: LockPayload | null): bool
 
 export function parseGatewayLockPayload(raw: string): LockPayload | null {
   return safeParseJsonWithSchema(LockPayloadSchema, raw);
+}
+
+/** Shared projection for live custody and recorded holders; incomplete facts stay explicit. */
+export function projectGatewayStateOwnerIdentity(
+  databasePath: string,
+  payload: Pick<LockPayload, "ownerId" | "pid" | "role" | "startTime" | "processNamespace"> | null,
+): GatewayStateOwnerIdentity | null {
+  if (!payload || !Number.isSafeInteger(payload.pid) || payload.pid <= 0) {
+    return null;
+  }
+  return {
+    databasePath,
+    ownerId: payload.ownerId ?? null,
+    role: payload.role ?? "gateway",
+    pid: payload.pid,
+    startTime: typeof payload.startTime === "number" ? payload.startTime : null,
+    processNamespace: payload.processNamespace ?? null,
+  };
 }

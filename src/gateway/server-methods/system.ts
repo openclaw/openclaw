@@ -33,6 +33,7 @@ import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { publicKeyRawBase64UrlFromPem } from "../../infra/device-identity.js";
 import { tryReadDiskSpace } from "../../infra/disk-space.js";
+import { readLiveGatewayStateOwnerIdentity } from "../../infra/gateway-state-owner.js";
 import { setLegacyHeartbeatsEnabled } from "../../infra/heartbeat-compat.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
 import { readHostFreeMemoryBytes } from "../../infra/host-memory.js";
@@ -50,6 +51,7 @@ import {
 } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { acceptsPresenceDeltas, createPresenceReset } from "../presence-delivery.js";
 import { createPresenceRecipientProjection } from "../presence-projection.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
@@ -270,7 +272,9 @@ export const systemHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateSystemInfoParams, "system.info", respond)) {
       return;
     }
-    respond(true, await collectSystemInfo(context), undefined);
+    const info = await collectSystemInfo(context);
+    const stateOwner = readLiveGatewayStateOwnerIdentity(resolveOpenClawStateSqlitePath());
+    respond(true, { ...info, ...(stateOwner ? { stateOwner } : {}) }, undefined);
   },
   "system-event": async (options) => {
     const { params, respond, context, client } = options;
