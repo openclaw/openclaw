@@ -15,6 +15,7 @@ import {
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
+import { readGroupParticipationRun } from "./group-participation-run.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 import { resolveReplyAdmissionRunId, resolveReplySourceTurnId } from "./source-turn-id.js";
 
@@ -83,7 +84,7 @@ export function createReplyAgentRestartRecoveryController(
       replyOperation.result?.kind === "aborted" &&
       replyOperation.result.code === "aborted_for_restart",
     resolveDeliveryContext: (entry) =>
-      sessionKey
+      sessionKey && !readGroupParticipationRun(replyOperation)?.isObserving
         ? resolveReplyRunDeliveryContext({
             cfg,
             sessionCtx,

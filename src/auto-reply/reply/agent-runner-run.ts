@@ -60,6 +60,8 @@ import { runActiveReplySteer } from "./agent-runner-steer-adoption.js";
 import type { CompactionNoticePhase } from "./compaction-notice.js";
 import { createFollowupRunner } from "./followup-runner.js";
 import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
+import { recordGroupParticipationInput } from "./group-participation-inputs.js";
+import { readGroupParticipationRun } from "./group-participation-run.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import {
   completeFollowupRunLifecycle,
@@ -332,6 +334,7 @@ export async function runReplyAgent(
     });
 
     if (messageInjectionDisposition === "accepted") {
+      recordGroupParticipationInput(activeReplyOperation, followupRun, "steer");
       if (replyOperationRunState) {
         replyOperationRunState.admission = { status: "accepted", mode: "steer" };
       }
@@ -423,6 +426,7 @@ export async function runReplyAgent(
       // messages. Registering after enqueue closes the owner-clear race.
       const queuedOperationOwner =
         controllerInput.mailbox.owner.active ?? activeReplyOperation ?? providedReplyOperation;
+      recordGroupParticipationInput(queuedOperationOwner, followupRun);
       if (queuedOperationOwner) {
         scheduleFollowupDrainAfterReplyOperationClear({
           operation: queuedOperationOwner,
@@ -596,7 +600,7 @@ export async function runReplyAgent(
       clear: clearRestartRecoveryDeliveryClaim,
       prepareCompletionCleanup: prepareRestartClaimCleanup,
       isArmed: isRestartRecoveryArmed,
-    } = createReplyAgentRestartRecoveryController({
+    } = (turn.restartRecovery = createReplyAgentRestartRecoveryController({
       activeSessionStore,
       cfg,
       followupRun,
@@ -611,7 +615,7 @@ export async function runReplyAgent(
         activeSessionEntry = entry;
       },
       storePath,
-    });
+    }));
     try {
       if (turn.preflightError) {
         throw turn.preflightError;
@@ -667,6 +671,12 @@ export async function runReplyAgent(
         followupRun.replyOperationRunStates,
         replyOperation,
       );
+      if (readGroupParticipationRun(replyOperation)?.isObserving) {
+        if (!replyOperation.result) {
+          replyOperation.fail("run_failed", error);
+        }
+        return returnWithQueuedFollowupDrain(undefined);
+      }
       const result = await handleReplyAgentRunError(error, {
         resolveVisibleReplyDelivery,
         userTurnAccepted: followupRun.userTurnTranscriptRecorder?.hasPersisted() === true,

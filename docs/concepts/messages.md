@@ -231,6 +231,7 @@ The terminal producer prepares the reply once and records whether it is visible 
 Conversation policy still controls admission and default reply expectations:
 
 - Direct and accepted group/channel requests normally receive answers. An explicit token-only `NO_REPLY` can end either silently.
+- With Decision assistance enabled and a configured [Decision Model](/concepts/decision-models#group-participation), embedded harnesses assess unmentioned group requests before generation. Positive assessments run ordinary replies; negative assessments skip generation.
 - Mention and access gates still decide which messages reach the agent. `silentReply.group: "allow"` permits optional handling of unaddressed group requests; it is not needed to honor an explicit `NO_REPLY`.
 - [Ambient room events](/channels/ambient-room-events) can remain silent. In `message_tool` visible-reply mode, visible output uses `message(action=send)`. Private subagent completions record the parent's reviewed outcome internally.
 

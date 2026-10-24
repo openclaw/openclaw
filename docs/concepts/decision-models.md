@@ -40,6 +40,37 @@ with bounded recent conversation. The selected Decision provider receives that
 secondary evidence; see the [privacy and fallback contract](/concepts/experimental-features#conversational-tool-filtering).
 Explicit `decision_evaluate` remains independent of Labs.
 
+## Group participation
+
+With Decision assistance enabled, a configured `decisionModel` helps the agent
+distinguish invitations from opportunities to contribute in groups and channels
+with mention gating disabled.
+This behavior uses embedded harnesses, including the Codex harness. Generic CLI
+backends keep their existing reply behavior.
+These rules also apply after an upgrade when Decision assistance is already
+enabled: eligible groups can stay silent instead of replying to every admitted
+message.
+
+The Decision Model evaluates the conversation before reply generation. If it
+finds an invitation or a useful opportunity to contribute, the agent runs through
+the ordinary reply path with its existing permissions, tools, streaming, reply
+obligation, and delivery policy. Otherwise, the message is recorded without
+starting a primary agent run. There is no post-generation draft review or revision
+loop. New accepted input invalidates a pending assessment before it is applied.
+
+No additional participation setting is needed. Decision assistance is the Labs
+opt-in for current and future Decision Model features, including participation
+for installations where the flag is already enabled. If the Decision Model is
+unavailable, the turn uses ordinary reply behavior. Cancellation ends the turn.
+
+Evaluations include bounded recent group history and reply references, not a
+newly generated reply or its tool results. Hosted providers receive this evidence
+and charge for evaluations under their normal usage terms. The preflight has a
+maximum 30-second budget, bounded further by the turn timeout. Turning assistance
+off stops new evaluations and discards pending judgments, restoring ordinary
+reply behavior. Once generation is admitted, ordinary turn authority and
+cancellation govern execution and delivery.
+
 ## Choose a provider and model
 
 Configure the provider plugin before selecting its model:

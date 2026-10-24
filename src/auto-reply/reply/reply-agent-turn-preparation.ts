@@ -43,6 +43,7 @@ import {
 import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { isGoalContinuationCurrent, isSupportedWorkerGoalPlacement } from "./goal-continuation.js";
+import { prepareGroupParticipationRun } from "./group-participation-run.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import { getFollowupQueueDepth } from "./queue/enqueue.js";
 import {
@@ -499,93 +500,117 @@ export async function prepareReplyAgentTurn<TConfigured>(
       turn.releaseSourceAdmission = releaseSourceAdmission;
       const preflightEntry = session.current();
       try {
-        await params.signalRunStart?.();
-        const resolvedVerboseLevel =
-          normalizeVerboseLevel(
-            turn.queued.run.verboseLevelOverride ??
-              activeEntry?.verboseLevel ??
-              turn.queued.run.verboseLevel,
-          ) ?? "off";
-        const preparation = {
-          cfg: config,
-          followupRun: turn.queued,
-          promptForEstimate: turn.queued.prompt,
-          defaultModel: params.defaults.defaultModel,
-          sessionEntry: activeEntry,
-          sessionStore,
+        const participation = await prepareGroupParticipationRun({
+          run: () => turn.queued,
+          operation,
           sessionKey: replySessionKey,
           storePath: params.defaults.storePath,
-          opts: { ...params.defaults.opts, runId: turn.runId },
-          resolvedVerboseLevel,
-          runtimePolicySessionKey: turn.queued.run.runtimePolicySessionKey,
-          onCompactionNotice: notifyPreflightCompaction,
-        };
-        const preflightAdmission = readPendingUserTurnTranscriptAdmission(
-          preparation.followupRun.userTurnTranscriptRecorder,
-        );
-        const trace = params.trace;
-        const tracePhase = <T>(phase: string, runPhase: () => Promise<T>) =>
-          trace ? trace(phase, runPhase) : runPhase();
-        try {
-          activeEntry = await tracePhase("reply.preflight_compaction", () =>
-            runSessionCompactionIfNeeded({
-              ...preparation,
-              replyOperation: operation,
-              pendingUserEntryId: preflightAdmission?.entryId,
-              abortSignal: operation.abortSignal,
-              // Compaction decides whether work is needed, then replans from the
-              // checkpoint result. A queued source must not bypass this memory write.
-              beforeCompaction: async (entry) => {
-                const flushed = await tracePhase("reply.memory_flush", () =>
-                  runMemoryFlushIfNeeded({
-                    ...preparation,
-                    preflightAdmission,
-                    replyOperation: operation,
-                    abortSignal: operation.abortSignal,
-                    sessionEntry: entry,
-                  }),
-                );
-                session.publish(flushed.sessionEntry);
-                operation.abortSignal.throwIfAborted();
-                if (flushed.outcome === "exhausted") {
-                  await preparation.onCompactionNotice?.("memory_flush_degraded");
-                }
-                return flushed.sessionEntry;
-              },
-              onCompactionStart: () => operation.setPhase("preflight_compacting"),
-              onSessionIdChanged: (sessionId) => operation.updateSessionId(sessionId),
-            }),
-          );
-        } catch (error) {
-          const recorder = preparation.followupRun.userTurnTranscriptRecorder;
-          if (recorder && buildPreflightCompactionFailureText(formatErrorMessage(error)) !== null) {
-            try {
-              // Keep approved input after failed maintenance without claiming a recovery turn.
-              await recorder.persistApproved({
-                expectedSessionId: operation.sessionId,
-                beforeFreshMessageCommit: () => {
-                  operation.abortSignal.throwIfAborted();
-                  preparation.followupRun.operatorAuthority?.assertCurrent();
-                  if (operation.lifecycleGeneration) {
-                    assertAgentRunLifecycleGenerationCurrent(operation.lifecycleGeneration);
-                  }
-                },
-              });
-            } catch (persistError) {
-              logVerbose(
-                `user turn not kept after failed preflight: ${formatErrorMessage(persistError)}`,
-              );
+          sessionEntry: activeEntry,
+          onOrdinaryBehavior: async () => {
+            const recovery = turn.restartRecovery;
+            if (!recovery) {
+              throw new Error("Group participation has no reply recovery owner");
             }
+            const userTurnAdmission = await recovery.admitUserTurn(
+              turn.queued.userTurnTranscriptRecorder,
+            );
+            if (userTurnAdmission === "duplicate-source") {
+              throw new Error("The group source no longer owns its reply");
+            }
+          },
+        });
+        if (!participation?.isObserving) {
+          await params.signalRunStart?.();
+          const resolvedVerboseLevel =
+            normalizeVerboseLevel(
+              turn.queued.run.verboseLevelOverride ??
+                activeEntry?.verboseLevel ??
+                turn.queued.run.verboseLevel,
+            ) ?? "off";
+          const preparation = {
+            cfg: config,
+            followupRun: turn.queued,
+            promptForEstimate: turn.queued.prompt,
+            defaultModel: params.defaults.defaultModel,
+            sessionEntry: activeEntry,
+            sessionStore,
+            sessionKey: replySessionKey,
+            storePath: params.defaults.storePath,
+            opts: { ...params.defaults.opts, runId: turn.runId },
+            resolvedVerboseLevel,
+            runtimePolicySessionKey: turn.queued.run.runtimePolicySessionKey,
+            onCompactionNotice: notifyPreflightCompaction,
+          };
+          const preflightAdmission = readPendingUserTurnTranscriptAdmission(
+            preparation.followupRun.userTurnTranscriptRecorder,
+          );
+          const trace = params.trace;
+          const tracePhase = <T>(phase: string, runPhase: () => Promise<T>) =>
+            trace ? trace(phase, runPhase) : runPhase();
+          try {
+            activeEntry = await tracePhase("reply.preflight_compaction", () =>
+              runSessionCompactionIfNeeded({
+                ...preparation,
+                replyOperation: operation,
+                pendingUserEntryId: preflightAdmission?.entryId,
+                abortSignal: operation.abortSignal,
+                // Compaction decides whether work is needed, then replans from the
+                // checkpoint result. A queued source must not bypass this memory write.
+                beforeCompaction: async (entry) => {
+                  const flushed = await tracePhase("reply.memory_flush", () =>
+                    runMemoryFlushIfNeeded({
+                      ...preparation,
+                      preflightAdmission,
+                      replyOperation: operation,
+                      abortSignal: operation.abortSignal,
+                      sessionEntry: entry,
+                    }),
+                  );
+                  session.publish(flushed.sessionEntry);
+                  operation.abortSignal.throwIfAborted();
+                  if (flushed.outcome === "exhausted") {
+                    await preparation.onCompactionNotice?.("memory_flush_degraded");
+                  }
+                  return flushed.sessionEntry;
+                },
+                onCompactionStart: () => operation.setPhase("preflight_compacting"),
+                onSessionIdChanged: (sessionId) => operation.updateSessionId(sessionId),
+              }),
+            );
+          } catch (error) {
+            const recorder = preparation.followupRun.userTurnTranscriptRecorder;
+            if (
+              recorder &&
+              buildPreflightCompactionFailureText(formatErrorMessage(error)) !== null
+            ) {
+              try {
+                // Keep approved input after failed maintenance without claiming a recovery turn.
+                await recorder.persistApproved({
+                  expectedSessionId: operation.sessionId,
+                  beforeFreshMessageCommit: () => {
+                    operation.abortSignal.throwIfAborted();
+                    preparation.followupRun.operatorAuthority?.assertCurrent();
+                    if (operation.lifecycleGeneration) {
+                      assertAgentRunLifecycleGenerationCurrent(operation.lifecycleGeneration);
+                    }
+                  },
+                });
+              } catch (persistError) {
+                logVerbose(
+                  `user turn not kept after failed preflight: ${formatErrorMessage(persistError)}`,
+                );
+              }
+            }
+            throw error;
           }
-          throw error;
+          if (activeEntry) {
+            session.publish(activeEntry);
+            activeEntry = session.current() ?? activeEntry;
+          }
+          const generationRotated = refreshTurnSessionState(activeEntry, preflightEntry);
+          turn.preflightCompactionApplied =
+            generationRotated || (activeEntry?.compactionCount ?? 0) > previousCompactionCount;
         }
-        if (activeEntry) {
-          session.publish(activeEntry);
-          activeEntry = session.current() ?? activeEntry;
-        }
-        const generationRotated = refreshTurnSessionState(activeEntry, preflightEntry);
-        turn.preflightCompactionApplied =
-          generationRotated || (activeEntry?.compactionCount ?? 0) > previousCompactionCount;
       } catch (error) {
         const failureEntry = session.current();
         if (failureEntry) {

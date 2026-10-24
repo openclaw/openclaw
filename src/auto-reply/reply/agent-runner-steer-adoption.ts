@@ -35,6 +35,7 @@ import {
   type RunReplyAgentParams,
 } from "./agent-runner-core.js";
 import { resolveModelFallbackOptions } from "./agent-runner-run-params.js";
+import { recordGroupParticipationInput } from "./group-participation-inputs.js";
 import {
   admitFollowupRunLifecycle,
   reserveSteerCandidate,
@@ -146,6 +147,7 @@ export async function runActiveReplySteer(
   if (!parked) {
     return "handled";
   }
+  recordGroupParticipationInput(activeReplyOperation, followupRun);
   const mailbox = expectDefined(followupRun.controllerInput, "Parked steer source").mailbox;
   const owner = mailbox.owner.active;
   if (owner) {
@@ -458,6 +460,7 @@ export async function runActiveReplySteer(
         `queue: active session ${steerSessionId} adoption finalizer failed: ${formatErrorMessage(finalization.adoptionError)}`,
       );
     }
+    recordGroupParticipationInput(activeReplyOperation, followupRun, "steer");
     await refreshReplyOperationTyping(activeReplyOperation, {
       startIfIdle: typingSignals.shouldStartImmediately,
     });

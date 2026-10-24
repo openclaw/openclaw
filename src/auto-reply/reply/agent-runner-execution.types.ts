@@ -93,6 +93,7 @@ export type AgentTurnExecutionResult = {
   runId: string;
   outcome:
     | SettledAgentTurn
+    | { kind: "observed"; compaction?: never }
     | AbortedAgentTurn
     | {
         kind: "rejected";

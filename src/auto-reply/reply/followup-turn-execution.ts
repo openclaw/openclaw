@@ -8,6 +8,7 @@ import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain
 import { settleProgressVisibilityCallbackResult } from "../../channels/progress-visibility.js";
 import { sessionPersonalProfileId } from "../../config/sessions/session-entry-provenance.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
 import { captureReplyOperationSessionReader } from "../../sessions/session-controller.state.js";
 import { withCurrentUserTurnInput } from "../../sessions/user-turn-transcript-runtime-context.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
@@ -23,6 +24,7 @@ import { resolveFollowupCurrentMessageId } from "./agent-runner-utils.js";
 import { resolveTurnCommentaryProgressOwner } from "./commentary-progress-owner.js";
 import { requiresDurableToolResultDelivery } from "./dispatch-from-config.payloads.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
+import { readGroupParticipationRun } from "./group-participation-run.js";
 import { drainPendingToolTasks } from "./pending-tool-task-drain.js";
 import { admitFollowupRunLifecycle } from "./queue/lifecycle.js";
 import type { AdmittedFollowupTurn, FollowupRunnerParams } from "./reply-agent-turn-preparation.js";
@@ -89,7 +91,10 @@ export async function executeFollowupTurn(params: {
   const terminalReplyExpectation = resolveFollowupReplyExpectation(turn.queued, turn.config);
   turn.queued.run.terminalReplyExpectation = terminalReplyExpectation;
   const roomEvent = turn.queued.currentInboundEventKind === "room_event";
-  const deliveryAllowed = () => turn.sendPolicy === "allow" && !roomEvent;
+  const deliveryAllowed = () =>
+    turn.sendPolicy === "allow" &&
+    !roomEvent &&
+    !readGroupParticipationRun(turn.operation)?.isObserving;
   const progressAllowed = () =>
     deliveryAllowed() &&
     (sourceOpts?.progressRequiresReply !== true ||
@@ -454,7 +459,11 @@ export async function executeFollowupTurn(params: {
             )
           : undefined;
       progressOpts.cronCreatorAuthorityCapability = capability;
-      const runWithInput = () => withCurrentUserTurnInput(recorder, execute);
+      const runWithInput = () =>
+        withBeforeAgentReplyObserver(
+          { shouldDispatch: () => !readGroupParticipationRun(turn.operation)?.isObserving },
+          () => withCurrentUserTurnInput(recorder, execute),
+        );
       execution = capability
         ? await runWithCronCreatorAuthorityCapability(
             capability,

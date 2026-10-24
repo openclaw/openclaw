@@ -8,11 +8,13 @@ import {
 import { createRuntimeConfigReader } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginEntryConfig } from "../config/types.plugins.js";
+import { withGuardedFetchRequestAuthority } from "../infra/net/fetch-request-authority.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { PluginProviderRegistration } from "../plugins/provider-plugin.types.js";
 import type { PluginRecord, PluginRegistry } from "../plugins/registry-types.js";
 import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createDecisionAdmission } from "./admission.js";
 import {
   decisionBatchV1ToV2,
   decisionBatchV2ToV1,
@@ -337,6 +339,10 @@ export class DecisionProviderHost {
     onPreparedBilling?: (facts: PreparedDecisionBilling) => void,
   ): Promise<Outcome> {
     options.signal.throwIfAborted();
+    const admitted = createDecisionAdmission(options.admit);
+    if (!admitted()) {
+      return this.unavailable("disabled");
+    }
     const instance = getPluginInstance(this.record);
     if (this.retired || this.reloadPause || !instance?.acceptingCalls || instance.owner?.revoked) {
       return this.unavailable("retiring");
@@ -371,6 +377,7 @@ export class DecisionProviderHost {
     const timer = setTimeout(() => controller.abort("decision-deadline"), budget);
     const { promise: done, resolve: settle } = createDeferredCore();
     this.pending.set(controller, { consumerId, done });
+    let dispatchRejection: Outcome | undefined;
     let observedInterruption: Outcome | undefined;
     let admissionError: { error: unknown } | undefined;
     const interrupted = (): Outcome | undefined => {
@@ -387,6 +394,14 @@ export class DecisionProviderHost {
         controller.signal.reason === "decision-provider-retired"
       ) {
         return this.unavailable("retiring");
+      }
+      // Consumer withdrawal is not a provider failure, even if transport cleanup
+      // settles after the deadline or translates the dispatch assertion error.
+      if (dispatchRejection) {
+        return dispatchRejection;
+      }
+      if (!admitted()) {
+        return this.unavailable("disabled");
       }
       if (
         controller.signal.reason === "decision-deadline" ||
@@ -423,6 +438,13 @@ export class DecisionProviderHost {
       }
       return undefined;
     };
+    const assertDispatch = () => {
+      const stopped = interrupted();
+      if (stopped) {
+        dispatchRejection = stopped;
+        throw new Error("Decision dispatch is no longer admitted.");
+      }
+    };
     try {
       // Await physical settlement. A callback that ignores abort keeps its native lease
       // and is fenced by normal failed-drain recovery, never detached as "disposed".
@@ -457,39 +479,40 @@ export class DecisionProviderHost {
       try {
         outcome = await instance.runInRegistry(
           registry,
-          async () => {
-            facts.dispatched = true;
-            if (provider.contractVersion === 1) {
-              return provider.evaluate(v1Batch!, {
-                model,
-                ...(options.agentId ? { agentId: options.agentId } : {}),
+          () =>
+            withGuardedFetchRequestAuthority(assertDispatch, async () => {
+              facts.dispatched = true;
+              if (provider.contractVersion === 1) {
+                return provider.evaluate(v1Batch!, {
+                  model,
+                  ...(options.agentId ? { agentId: options.agentId } : {}),
+                  signal,
+                  deadlineMonotonicMs,
+                  // Explicit callers may have no predicate; transports must still fence
+                  // host secret/config generations after asynchronous preparation.
+                  isAdmissible: admissible,
+                });
+              }
+              if (!this.registration) {
+                throw new DecisionContractError();
+              }
+              const { executePreparedDecision } = await import("../agents/decision-inference.js");
+              if (!admissible()) {
+                return { status: "unavailable" as const, reason: "unsupported-input" as const };
+              }
+              return executePreparedDecision({
+                provider,
+                registration: this.registration,
+                batch: v2Batch!,
+                modelId: model,
+                config,
+                options,
                 signal,
                 deadlineMonotonicMs,
-                // Explicit callers may have no predicate; transports must still fence
-                // host secret/config generations after asynchronous preparation.
                 isAdmissible: admissible,
+                onPreparedBilling,
               });
-            }
-            if (!this.registration) {
-              throw new DecisionContractError();
-            }
-            const { executePreparedDecision } = await import("../agents/decision-inference.js");
-            if (!admissible()) {
-              return { status: "unavailable" as const, reason: "unsupported-input" as const };
-            }
-            return executePreparedDecision({
-              provider,
-              registration: this.registration,
-              batch: v2Batch!,
-              modelId: model,
-              config,
-              options,
-              signal,
-              deadlineMonotonicMs,
-              isAdmissible: admissible,
-              onPreparedBilling,
-            });
-          },
+            }),
           // The provider callback's physical settlement is already tracked by
           // `done`. Do not make its lease await instance disposal: disposal
           // invokes host.stop(), which itself waits for `done`.

@@ -72,6 +72,7 @@ import { prepareReplySubagentContinuation } from "./agent-runner-subagent.js";
 import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
 import { shouldNotifyUserAboutCompaction } from "./compaction-notice.js";
 import { type CurrentTurnImages, resolveCurrentTurnImages } from "./current-turn-images.js";
+import { prepareGroupParticipationObservation } from "./group-participation-observe.js";
 import type { FollowupRun } from "./queue.js";
 import { resolveReplyFailureVisibility, type DirectBlockDelivery } from "./reply-delivery.js";
 import { createReplyMediaContext, type ReplyMediaContext } from "./reply-media-paths.js";
@@ -683,7 +684,16 @@ export async function executeAgentTurn(params: AgentTurnParams): Promise<AgentTu
   const runId = params.opts?.runId ?? crypto.randomUUID();
   const executionParams =
     params.opts?.runId === runId ? params : { ...params, opts: { ...params.opts, runId } };
-  return await runAgentTurnWithOutcome(executionParams, runId, () =>
-    executeAgentTurnOutcome(executionParams, runId),
-  );
+  return await runAgentTurnWithOutcome(executionParams, runId, async () => {
+    const participation = await prepareGroupParticipationObservation(executionParams);
+    const revision = participation?.snapshot?.revision;
+    if (
+      participation?.mode === "observe" &&
+      revision !== undefined &&
+      participation.isCurrent(revision)
+    ) {
+      return { runId, outcome: { kind: "observed" } };
+    }
+    return executeAgentTurnOutcome(executionParams, runId);
+  });
 }

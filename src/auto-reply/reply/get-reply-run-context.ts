@@ -1,9 +1,11 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
+import { isDecisionAssistanceEligible } from "../../agents/decision-assistance.js";
 import type { CurrentInboundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
 import { appendCurrentInboundContext } from "../../agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
 import { resolveRequestGitCoauthorPrompt } from "../../agents/git-coauthor-prompt.js";
+import { resolveAgentIdentity } from "../../agents/identity.js";
 import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
 import { buildPrAttributionPrompt, preparePrAttribution } from "../../agents/pr-attribution.js";
 import {
@@ -35,6 +37,7 @@ import {
   isTextSlashCommandTurn,
   resolveCommandTurnContext,
 } from "../command-turn-context.js";
+import { isExplicitCommandTurnContext } from "../command-turn-detection.js";
 import { resolveEnvelopeFormatOptions } from "../envelope.js";
 import { buildInboundMediaNoteProjection } from "../media-note.js";
 import { getRequesterProfile } from "../requester-profile.js";
@@ -185,6 +188,18 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const isFirstTurnInSession = isNewSession || !systemSent;
   const isGroupChat =
     promptSessionCtx.ChatType === "group" || promptSessionCtx.ChatType === "channel";
+  const groupParticipation =
+    isGroupChat &&
+    inboundEventKind !== "room_event" &&
+    promptSessionCtx.WasMentioned !== true &&
+    !isExplicitCommandTurnContext(promptSessionCtx, cfg) &&
+    (conversation.activation ?? defaultActivation) === "always" &&
+    isDecisionAssistanceEligible(cfg, agentId)
+      ? {
+          agentName: normalizeOptionalString(resolveAgentIdentity(cfg, agentId)?.name),
+          replyToText: sessionCtx.ReplyToBody,
+        }
+      : undefined;
   const { typingPolicy, suppressTyping } = resolveRunTypingPolicy({
     requestedPolicy: opts?.typingPolicy,
     suppressTyping: opts?.suppressTyping === true,
@@ -698,6 +713,7 @@ ${buildPrAttributionPrompt(
     buildPromptBodies,
     refreshInboundContextAfterAdmissionWait,
     terminalReplyExpectation,
+    groupParticipation,
   } as const;
 }
 

@@ -169,7 +169,8 @@ async function evaluateVersion(
     !Number.isFinite(options.timeoutMs) ||
     options.timeoutMs <= 0 ||
     !(options.signal instanceof AbortSignal) ||
-    (options.reasoning !== undefined && !["auto", "off", "on"].includes(options.reasoning))
+    (options.reasoning !== undefined && !["auto", "off", "on"].includes(options.reasoning)) ||
+    (options.admit !== undefined && typeof options.admit !== "function")
   ) {
     throw new DecisionContractError();
   }

@@ -160,6 +160,11 @@ Final payloads are assembled from assistant text (plus optional reasoning), inli
 - A confirmed final messaging-tool reply to the current source remains completion evidence across provider retries. Progress-only, failed, partial, dry-run, and other-destination sends do not satisfy that requirement. A newly accepted steered input needs its own answer.
 - A fallback tool error warning appears only when a run ends with a tool failure and would otherwise leave the user with no reply. This guard is not configurable; a user-facing reply, including one already delivered by a messaging tool, prevents the warning.
 
+Embedded harnesses with Decision assistance enabled and a configured
+[Decision Model](/concepts/decision-models#group-participation) assess unmentioned
+group inputs before generation. Positive assessments use the ordinary reply path;
+negative assessments record the input without starting an agent run.
+
 Admission sets the default reply expectation. External direct, group, and channel turns can explicitly finish with a token-only `NO_REPLY`, even when a reply was required. Subagents, private completions, Control UI chat, and other internal result-required sessions need a completed current-source final result; progress-only mirrors never satisfy that obligation. See [Silent replies](/concepts/messages#silent-replies).
 
 An empty final is not silence. When bounded recovery exhausts with only reasoning or empty output, OpenClaw records a failed outcome. An admitted user request receives one short system notice that no answer was returned, rather than a fabricated assistant answer in history. Background and internal turns record the failure without posting that notice to chat; existing classified failure and alert paths stay unchanged. This also applies when compaction occurs between retries. Whitespace and zero-width characters alone do not count as a visible answer.
