@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { redactSensitiveText } from "openclaw/plugin-sdk/logging-core";
 import {
   isRecord,
@@ -62,6 +63,8 @@ export type ParsedInspect = {
   sshUser?: string;
   state: string;
   tailscaleEnabled: boolean;
+  tailscaleReady?: boolean;
+  network?: string;
   lifetime?: CrabboxLeaseLifetime;
 };
 
@@ -87,6 +90,24 @@ export function parseInspectJson(stdout: string): ParsedInspect {
     throw new Error("Crabbox inspect returned invalid Tailscale state");
   }
   const tailscaleEnabled = value.tailscale !== undefined;
+  const meta = isRecord(value.tailscale) ? value.tailscale : undefined;
+  const ipv4 = typeof meta?.ipv4 === "string" ? meta.ipv4 : "";
+  const [first, second] = ipv4.split(".").map(Number);
+  // Retain admission facts only. Crabbox owns the generation-bound device receipt
+  // and authoritative QGA route; no SSH credentials or optional DNS target is adopted.
+  const tailscaleReady =
+    meta !== undefined &&
+    meta.enabled === true &&
+    meta.state === "ready" &&
+    (meta.error === undefined || meta.error === "") &&
+    isIP(ipv4) === 4 &&
+    first === 100 &&
+    second !== undefined &&
+    second >= 64 &&
+    second <= 127 &&
+    typeof meta.deviceID === "string" &&
+    meta.deviceID.length > 0 &&
+    !/[\s\0]/u.test(meta.deviceID);
   let awsInstanceProfileAttached: boolean | undefined;
   if (value.providerMetadata !== undefined) {
     if (!isRecord(value.providerMetadata)) {
@@ -105,6 +126,8 @@ export function parseInspectJson(stdout: string): ParsedInspect {
     id,
     state,
     tailscaleEnabled,
+    ...(meta ? { tailscaleReady } : {}),
+    ...(typeof value.network === "string" ? { network: value.network } : {}),
     ...(Object.keys(lifetime).length ? { lifetime } : {}),
     ...(failureError
       ? {

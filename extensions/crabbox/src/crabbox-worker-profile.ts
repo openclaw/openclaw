@@ -18,6 +18,7 @@ const PROFILE_KEYS = new Set([
   "class",
   "desktop",
   "idleTimeout",
+  "network",
   "provider",
   "setup",
   "setupEnv",
@@ -42,6 +43,8 @@ const DURATION_UNIT_NANOSECONDS: Readonly<Record<string, bigint>> = {
   ns: 1n,
 };
 
+export type CrabboxNetwork = "public" | "tailscale";
+
 type CrabboxProfile = {
   binary?: string;
   class?: string;
@@ -51,6 +54,7 @@ type CrabboxProfile = {
   idleTimeout: string;
   idleTimeoutMs: number;
   provider: string;
+  network: CrabboxNetwork;
   ttl: string;
   target: CrabboxOperatingSystem;
   setup?: string;
@@ -163,6 +167,10 @@ export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>):
   const provider = nonEmptyString(profile.provider)?.toLowerCase();
   const machineClass = nonEmptyString(profile.class);
   const target = parseCrabboxOperatingSystem(profile.target);
+  const network = profile.network === undefined ? "public" : profile.network;
+  if (network !== "public" && network !== "tailscale") {
+    throw new WorkerProviderError("Crabbox profile network must be public or tailscale");
+  }
   if (!provider) {
     throw new WorkerProviderError("Crabbox profile provider must be a non-empty string");
   }
@@ -204,7 +212,9 @@ export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>):
   if (warmImage !== undefined && typeof warmImage !== "boolean") {
     throw new WorkerProviderError("Crabbox profile warmImage must be a boolean");
   }
+  assertCrabboxPrivateProfile({ provider, target, network, warmImage, setupSecrets });
   return {
+    network,
     binary,
     class: machineClass,
     desktop,
@@ -222,6 +232,25 @@ export function parseCrabboxProfile(profile: Readonly<Record<string, unknown>>):
     target,
     warmImage,
   };
+}
+
+function assertCrabboxPrivateProfile(
+  profile: Pick<CrabboxProfile, "provider" | "target" | "network" | "warmImage" | "setupSecrets">,
+): void {
+  if (profile.network !== "tailscale") {
+    return;
+  }
+  if (profile.provider !== "proxmox" || profile.target !== "linux") {
+    throw new WorkerProviderError("Crabbox Tailscale profiles support only Proxmox Linux");
+  }
+  if (profile.warmImage) {
+    throw new WorkerProviderError(
+      "Crabbox Tailscale workers must use cold allocation, not warm images",
+    );
+  }
+  if (Object.keys(profile.setupSecrets ?? {}).length) {
+    throw new WorkerProviderError("Crabbox Tailscale workers do not support setup secrets");
+  }
 }
 
 /** Existing pre-egress leases retain inspection/release, never new setup or capture. */
@@ -288,6 +317,7 @@ export function resolveCrabboxWarmImageProfile(
   machineClass = profile.class,
   target = profile.target,
 ) {
+  assertCrabboxPrivateProfile({ ...profile, target });
   if (target === "windows/wsl2" && profile.desktop) {
     throw new WorkerProviderError(
       "Crabbox WSL2 does not support desktops; select native Windows for a desktop viewer",
@@ -297,7 +327,10 @@ export function resolveCrabboxWarmImageProfile(
     ...profile,
     class: machineClass,
     target,
-    warmImage: target === "linux" && (profile.warmImage ?? machineClass !== undefined),
+    warmImage:
+      profile.network !== "tailscale" &&
+      target === "linux" &&
+      (profile.warmImage ?? machineClass !== undefined),
   };
 }
 
@@ -363,7 +396,9 @@ export function supportsCrabboxProjectPreparation(
 
 export function resolveCrabboxPreparedIdleTimeoutMs(profile: WorkerProfile): number | undefined {
   const parsed = parseCrabboxProfile(profile);
-  return parsed.warmImage === false || parsed.target !== "linux" ? undefined : parsed.idleTimeoutMs;
+  return parsed.network === "tailscale" || parsed.warmImage === false || parsed.target !== "linux"
+    ? undefined
+    : parsed.idleTimeoutMs;
 }
 
 // Setup belongs to the configured target's interpreter, not the requested OS.
@@ -466,6 +501,10 @@ export function listCrabboxMachineOptions(
   return options;
 }
 
+export function buildCrabboxNetworkArgs(network: CrabboxNetwork = "public"): string[] {
+  return ["--network", network, network === "tailscale" ? "--tailscale" : "--tailscale=false"];
+}
+
 export function buildCrabboxAllocationArgs(
   profile: CrabboxProfile,
   leaseId: string,
@@ -474,9 +513,7 @@ export function buildCrabboxAllocationArgs(
   const args = [
     "--provider",
     profile.provider,
-    "--network",
-    "public",
-    "--tailscale=false",
+    ...buildCrabboxNetworkArgs(profile.network),
     ...(profile.class ? ["--class", profile.class] : []),
     ...(profile.target === "linux" ? ["--target", "linux"] : []),
     ...(profile.target === "windows/wsl2" ? ["--target", "windows", "--windows-mode", "wsl2"] : []),

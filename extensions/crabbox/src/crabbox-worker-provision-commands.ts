@@ -95,7 +95,7 @@ export async function inspectWithContext(
       "--provider",
       params.provider,
       "--network",
-      "public",
+      params.network ?? "public",
       "--id",
       params.id,
       ...(params.waitForReady
@@ -113,18 +113,23 @@ export async function inspectWithContext(
     let inspect: ParsedInspect;
     try {
       inspect = parseInspectJson(result.stdout);
+      if (inspect.id !== params.id) {
+        throw new Error("Crabbox inspect returned a different lease id");
+      }
       const notice = sanitizeCrabboxNotice(result.stderr);
       if (notice) {
         inspect.lifetime = { ...inspect.lifetime, policyNotice: notice };
       }
     } catch (error) {
-      throw new WorkerProviderError(
+      // A successful response without a valid private attestation must retire
+      // existing admission, unlike a failed command or transport observation.
+      const InspectError =
+        params.network === "tailscale" ? CrabboxWorkerNetworkPolicyError : WorkerProviderError;
+      throw new InspectError(
         error instanceof Error ? error.message : "Crabbox inspect returned invalid output",
       );
     }
-    if (inspect.id !== params.id) {
-      throw new WorkerProviderError("Crabbox inspect returned a different lease id");
-    }
+    assertWorkerNetworkPolicy({ inspect, provider: params.provider, network: params.network });
     return inspect;
   }
   // Ordinary callers accept lost-custody diagnostics; reconciliation requires
@@ -203,10 +208,33 @@ export async function runProvisionWarmup(
   throw error;
 }
 
-function assertProvisionSecurityPolicy(params: { inspect: ParsedInspect; provider: string }): void {
-  if (params.inspect.tailscaleEnabled) {
-    throw new WorkerProviderError("Crabbox cloud worker lease must not have Tailscale enabled");
+// Lifecycle callers must withdraw admission for definitive policy drift, not retain stale proof.
+export class CrabboxWorkerNetworkPolicyError extends WorkerProviderError {}
+
+function assertWorkerNetworkPolicy(
+  params: Pick<LeaseCommandContext, "provider" | "network"> & { inspect: ParsedInspect },
+): void {
+  if (params.network === "tailscale") {
+    if (
+      params.provider !== "proxmox" ||
+      params.inspect.network !== "tailscale" ||
+      !params.inspect.tailscaleReady
+    ) {
+      throw new CrabboxWorkerNetworkPolicyError(
+        "Crabbox private worker inspect must attest ready Tailscale metadata with a valid private IPv4 and device identity",
+      );
+    }
+  } else if (params.inspect.tailscaleEnabled || params.inspect.network === "tailscale") {
+    throw new CrabboxWorkerNetworkPolicyError(
+      "Crabbox cloud worker lease must not have Tailscale enabled",
+    );
   }
+}
+
+function assertAwsProvisionSecurityPolicy(params: {
+  inspect: ParsedInspect;
+  provider: string;
+}): void {
   const attached = params.inspect.awsInstanceProfileAttached;
   const pending = !params.inspect.ready && !isNonRunnableState(params.inspect.state);
   if (params.provider === "aws" && attached !== false && (attached || !pending)) {
@@ -242,8 +270,7 @@ export async function waitForProvisionReady(
   try {
     inspect = params.refresh ? await inspectAgain() : params.inspect;
     params.signal?.throwIfAborted();
-    // Reject forbidden state immediately; omitted AWS metadata is pending only until ready.
-    assertProvisionSecurityPolicy({ inspect, provider: params.provider });
+    assertAwsProvisionSecurityPolicy({ inspect, provider: params.provider });
     while (inspect.ready !== true && !isNonRunnableState(inspect.state)) {
       params.signal?.throwIfAborted();
       const remaining = remainingProvisionTimeout(params.deadline, CRABBOX_LIFECYCLE_TIMEOUT_MS);
@@ -254,7 +281,7 @@ export async function waitForProvisionReady(
       );
       params.signal?.throwIfAborted();
       inspect = await inspectAgain();
-      assertProvisionSecurityPolicy({ inspect, provider: params.provider });
+      assertAwsProvisionSecurityPolicy({ inspect, provider: params.provider });
     }
     if (isNonRunnableState(inspect.state)) {
       throw new WorkerProviderError(
