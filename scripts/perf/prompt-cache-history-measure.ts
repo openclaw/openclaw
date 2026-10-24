@@ -175,15 +175,21 @@ if (["cpu", "counts", "allocation"].includes(values.measure)) {
     hashes = 0;
     bytes = 0;
     const gc: Array<{ kind: number; ms: number }> = [];
+    let started = 0;
+    let finished = 0;
     const observer = new PerformanceObserver((list) => {
       for (const entry of list.getEntries()) {
+        // Forced collections before this loop may be delivered after registration.
+        if (entry.startTime < started || entry.startTime >= finished) {
+          continue;
+        }
         const detail = (entry as PerformanceEntry & { detail: { kind: number } }).detail;
         gc.push({ kind: detail.kind, ms: entry.duration });
       }
     });
     observer.observe({ entryTypes: ["gc"] });
     const cpu = process.cpuUsage();
-    const started = performance.now();
+    started = performance.now();
     for (let pass = 0; pass < passes; pass++) {
       const next = observe(workloads?.[pass] ?? messages, history);
       assert.ok(history.every((fingerprint, index) => fingerprint === next[index]));
@@ -192,7 +198,8 @@ if (["cpu", "counts", "allocation"].includes(values.measure)) {
         history = next;
       }
     }
-    const elapsedMs = performance.now() - started;
+    finished = performance.now();
+    const elapsedMs = finished - started;
     const used = process.cpuUsage(cpu);
     await setImmediate();
     await setImmediate();
