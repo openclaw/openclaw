@@ -374,136 +374,152 @@ export function createModelExecAutoReviewer(params: {
         : defaultExecAutoReviewer(input);
   }
   const agentId = params.agentId ?? resolveAmbientOwnerAgentId(cfg);
-  const modelRef = coerceToolModelConfig(params.reviewer?.model).primary;
+  const modelConfig = coerceToolModelConfig(params.reviewer?.model);
+  const modelRefs = [...new Set([modelConfig.primary, ...(modelConfig.fallbacks ?? [])])];
   const timeoutMs = resolveTimerTimeoutMs(
     params.reviewer?.timeoutMs,
     DEFAULT_EXEC_REVIEWER_TIMEOUT_MS,
     1_000,
   );
   return async (input) => {
-    let completionController: AbortController | undefined;
-    let callerFinished: Deferred | undefined;
-    try {
-      params.signal?.throwIfAborted();
-      const serializedInput = stringifyInput(input);
-      if (serializedInput.length > MAX_EXEC_REVIEWER_INPUT_CHARS) {
-        return deferReview(
-          "exec reviewer deferred because the request exceeds review input limits",
-        );
-      }
-      if (hasReviewerDirective(input)) {
-        const widget = "kind" in input;
-        return {
-          decision: widget ? "ask" : "deny",
-          risk: widget ? "medium" : "high",
-          rationale: widget
-            ? "exec reviewer deferred because the command contains reviewer-directed text"
-            : "exec reviewer denied the command because it contains reviewer-directed text",
-        };
-      }
-      completionController = new AbortController();
-      const signal = params.signal
-        ? AbortSignal.any([completionController.signal, params.signal])
-        : completionController.signal;
-      const preparedResult = createDeferredCore<Awaited<ReturnType<typeof prepareModel>>>();
-      const finished = createDeferredCore();
-      callerFinished = finished;
-      const work = new AsyncWorkScope();
-      const trackOwner = captureAsyncWorkTracker();
-      // The parent retains late preparation and transport tails after a caller timeout.
-      void trackOwner(async () => {
-        let acquired: Awaited<ReturnType<typeof prepareModel>> | undefined;
-        try {
-          acquired = await work.track(() =>
-            prepareModel({
-              cfg,
-              agentId,
-              modelRef,
-              allowMissingApiKeyModes: ["aws-sdk"],
-              signal,
-            }),
+    for (let modelIndex = 0; ; modelIndex += 1) {
+      const modelRef = modelRefs[modelIndex];
+      const hasFallback = modelIndex + 1 < modelRefs.length;
+      let completionController: AbortController | undefined;
+      let callerFinished: Deferred | undefined;
+      try {
+        params.signal?.throwIfAborted();
+        const serializedInput = stringifyInput(input);
+        if (serializedInput.length > MAX_EXEC_REVIEWER_INPUT_CHARS) {
+          return deferReview(
+            "exec reviewer deferred because the request exceeds review input limits",
           );
-          preparedResult.resolve(acquired);
-          await finished.promise;
-        } catch (error) {
-          preparedResult.reject(error);
-        } finally {
-          await work.drain();
-          if (acquired && !("error" in acquired)) {
-            await acquired[Symbol.asyncDispose]();
-          }
         }
-      }).catch((error: unknown) => preparedResult.reject(error));
-      const prepared = await raceWithReviewerTimeout(preparedResult.promise, {
-        timeoutMs,
-        signal: params.signal,
-        onTimeout: () => completionController?.abort(),
-      });
-      if (prepared === EXEC_REVIEWER_TIMEOUT) {
-        return deferReview(`exec reviewer timed out after ${timeoutMs}ms`);
-      }
-      if ("error" in prepared) {
-        return buildExecAutoReviewFailureDecision(
-          "exec reviewer model unavailable",
-          prepared.error,
-        );
-      }
-
-      const result = await raceWithReviewerTimeout(
-        work.track(() =>
-          complete({
-            model: prepared.model,
-            auth: prepared.auth,
-            cfg,
-            context: {
-              systemPrompt:
-                "kind" in input
-                  ? DEFAULT_WIDGET_REVIEWER_SYSTEM_PROMPT
-                  : DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT,
-              messages: [
-                {
-                  role: "user",
-                  content: buildReviewerUserPrompt(input, serializedInput),
-                  timestamp: Date.now(),
-                },
-              ],
-            },
-            options: {
-              maxTokens: resolveExecReviewerMaxTokens(prepared.model, params.reviewer?.thinking),
-              temperature: 0,
-              ...(params.reviewer?.thinking ? { reasoning: params.reviewer.thinking } : {}),
-              ...(params.reviewer?.fastMode !== undefined
-                ? { serviceTier: params.reviewer.fastMode ? "priority" : "default" }
-                : {}),
-              signal,
-            },
-          }),
-        ),
-        {
+        if (hasReviewerDirective(input)) {
+          const widget = "kind" in input;
+          return {
+            decision: widget ? "ask" : "deny",
+            risk: widget ? "medium" : "high",
+            rationale: widget
+              ? "exec reviewer deferred because the command contains reviewer-directed text"
+              : "exec reviewer denied the command because it contains reviewer-directed text",
+          };
+        }
+        completionController = new AbortController();
+        const signal = params.signal
+          ? AbortSignal.any([completionController.signal, params.signal])
+          : completionController.signal;
+        const preparedResult = createDeferredCore<Awaited<ReturnType<typeof prepareModel>>>();
+        const finished = createDeferredCore();
+        callerFinished = finished;
+        const work = new AsyncWorkScope();
+        const trackOwner = captureAsyncWorkTracker();
+        // The parent retains late preparation and transport tails after a caller timeout.
+        void trackOwner(async () => {
+          let acquired: Awaited<ReturnType<typeof prepareModel>> | undefined;
+          try {
+            acquired = await work.track(() =>
+              prepareModel({
+                cfg,
+                agentId,
+                modelRef,
+                allowMissingApiKeyModes: ["aws-sdk"],
+                signal,
+              }),
+            );
+            preparedResult.resolve(acquired);
+            await finished.promise;
+          } catch (error) {
+            preparedResult.reject(error);
+          } finally {
+            await work.drain();
+            if (acquired && !("error" in acquired)) {
+              await acquired[Symbol.asyncDispose]();
+            }
+          }
+        }).catch((error: unknown) => preparedResult.reject(error));
+        const prepared = await raceWithReviewerTimeout(preparedResult.promise, {
           timeoutMs,
           signal: params.signal,
           onTimeout: () => completionController?.abort(),
-        },
-      );
-      if (result === EXEC_REVIEWER_TIMEOUT) {
-        return deferReview(`exec reviewer timed out after ${timeoutMs}ms`);
-      }
-      const completionFailure = extractCompletionFailure(result);
-      if (completionFailure) {
-        return buildExecAutoReviewFailureDecision(
-          "exec reviewer completion failed",
-          completionFailure,
+        });
+        if (prepared === EXEC_REVIEWER_TIMEOUT) {
+          return deferReview(`exec reviewer timed out after ${timeoutMs}ms`);
+        }
+        if ("error" in prepared) {
+          if (hasFallback) {
+            continue;
+          }
+          return buildExecAutoReviewFailureDecision(
+            "exec reviewer model unavailable",
+            prepared.error,
+          );
+        }
+
+        const result = await raceWithReviewerTimeout(
+          work.track(() =>
+            complete({
+              model: prepared.model,
+              auth: prepared.auth,
+              cfg,
+              context: {
+                systemPrompt:
+                  "kind" in input
+                    ? DEFAULT_WIDGET_REVIEWER_SYSTEM_PROMPT
+                    : DEFAULT_EXEC_REVIEWER_SYSTEM_PROMPT,
+                messages: [
+                  {
+                    role: "user",
+                    content: buildReviewerUserPrompt(input, serializedInput),
+                    timestamp: Date.now(),
+                  },
+                ],
+              },
+              options: {
+                maxTokens: resolveExecReviewerMaxTokens(prepared.model, params.reviewer?.thinking),
+                temperature: 0,
+                ...(params.reviewer?.thinking ? { reasoning: params.reviewer.thinking } : {}),
+                ...(params.reviewer?.fastMode !== undefined
+                  ? { serviceTier: params.reviewer.fastMode ? "priority" : "default" }
+                  : {}),
+                signal,
+              },
+            }),
+          ),
+          {
+            timeoutMs,
+            signal: params.signal,
+            onTimeout: () => completionController?.abort(),
+          },
         );
+        if (result === EXEC_REVIEWER_TIMEOUT) {
+          return deferReview(`exec reviewer timed out after ${timeoutMs}ms`);
+        }
+        const completionFailure = extractCompletionFailure(result);
+        if (completionFailure) {
+          if (hasFallback && result.stopReason === "error") {
+            continue;
+          }
+          return buildExecAutoReviewFailureDecision(
+            "exec reviewer completion failed",
+            completionFailure,
+          );
+        }
+        return parseExecAutoReviewResponse(
+          collectTextContentBlocks(result.content).join("").trim(),
+        );
+      } catch (err) {
+        params.signal?.throwIfAborted();
+        if (completionController?.signal.aborted) {
+          return deferReview(`exec reviewer timed out after ${timeoutMs}ms`);
+        }
+        if (hasFallback) {
+          continue;
+        }
+        return buildExecAutoReviewFailureDecision("exec reviewer failed", err);
+      } finally {
+        callerFinished?.resolve();
       }
-      return parseExecAutoReviewResponse(collectTextContentBlocks(result.content).join("").trim());
-    } catch (err) {
-      params.signal?.throwIfAborted();
-      if (completionController?.signal.aborted) {
-        return deferReview(`exec reviewer timed out after ${timeoutMs}ms`);
-      }
-      return buildExecAutoReviewFailureDecision("exec reviewer failed", err);
-    } finally {
-      callerFinished?.resolve();
     }
   };
 }

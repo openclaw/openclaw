@@ -125,6 +125,87 @@ describe("parseExecAutoReviewResponse", () => {
 });
 
 describe("createModelExecAutoReviewer", () => {
+  it.each(["preparation", "completion", "throw"] as const)(
+    "tries configured reviewer fallbacks after a %s failure",
+    async (stage) => {
+      const prepare = vi.fn(async ({ modelRef }: { modelRef?: string }) => {
+        if (modelRef === "fixture/primary" && stage === "preparation") {
+          return { error: "primary unavailable" };
+        }
+        return preparedModel(modelRef);
+      });
+      const complete = vi.fn(async ({ model }: { model: { id: string } }) => {
+        if (model.id === "fixture/primary") {
+          if (stage === "throw") {
+            throw new Error("503 primary unavailable");
+          }
+          return { stopReason: "error", errorMessage: "503 primary unavailable", content: [] };
+        }
+        return response("deny", "high", "fallback verdict");
+      });
+      const reviewer = withCompletion(prepare, complete, {
+        cfg: {},
+        reviewer: {
+          model: {
+            primary: "fixture/primary",
+            fallbacks: ["fixture/primary", "fixture/backup", "fixture/backup"],
+          },
+        },
+      });
+      await expect(reviewer(input)).resolves.toMatchObject({
+        decision: "deny",
+        rationale: "fallback verdict",
+      });
+      expect(prepare.mock.calls.map(([request]) => request.modelRef)).toEqual([
+        "fixture/primary",
+        "fixture/backup",
+      ]);
+    },
+  );
+
+  it.each(["allow", "deny", "ask", "invalid"] as const)(
+    "does not seek a different verdict after a completed %s response",
+    async (decision) => {
+      const prepare = vi.fn(async () => preparedModel());
+      const complete = vi.fn(async () =>
+        decision === "invalid"
+          ? { stopReason: "stop", content: [{ type: "text", text: "not JSON" }] }
+          : response(decision, decision === "allow" ? "low" : "high"),
+      );
+      const reviewer = withCompletion(prepare, complete, {
+        cfg: {},
+        reviewer: { model: { primary: "fixture/primary", fallbacks: ["fixture/backup"] } },
+      });
+      await expect(reviewer(input)).resolves.toMatchObject({
+        decision: decision === "allow" ? "allow-once" : decision === "invalid" ? "ask" : decision,
+      });
+      expect(prepare).toHaveBeenCalledOnce();
+      expect(complete).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("asks a human after every configured reviewer fails", async () => {
+    const prepare = vi.fn(async ({ modelRef }: { modelRef?: string }) => ({
+      error: `${modelRef} unavailable`,
+    }));
+    const reviewer = withCompletion(prepare, undefined, {
+      cfg: {},
+      reviewer: {
+        model: { primary: "fixture/primary", fallbacks: ["fixture/backup", "fixture/last"] },
+      },
+    });
+    await expect(reviewer(input)).resolves.toMatchObject({
+      decision: "ask",
+      risk: "unknown",
+      rationale: "exec reviewer model unavailable: fixture/last unavailable",
+    });
+    expect(prepare.mock.calls.map(([request]) => request.modelRef)).toEqual([
+      "fixture/primary",
+      "fixture/backup",
+      "fixture/last",
+    ]);
+  });
+
   it("reviews dashboard widget capabilities as a widget request", async () => {
     const { reviewer, complete } = createReviewerHarness();
 
@@ -354,7 +435,7 @@ describe("createModelExecAutoReviewer", () => {
       const prepare = vi.fn(() => pending.promise);
       const reviewer = withCompletion(prepare, undefined, {
         cfg: {},
-        reviewer: { timeoutMs: Number.MAX_SAFE_INTEGER },
+        reviewer: { timeoutMs: Number.MAX_SAFE_INTEGER, model: { fallbacks: ["fixture/backup"] } },
       });
 
       const result = parent.track(() => reviewer(input));
@@ -365,6 +446,7 @@ describe("createModelExecAutoReviewer", () => {
         decision: "ask",
         rationale: `exec reviewer timed out after ${MAX_TIMER_TIMEOUT_MS}ms`,
       });
+      expect(prepare).toHaveBeenCalledOnce();
     } finally {
       pending.resolve({ error: "fixture preparation finished" });
       await parent.drain();

@@ -7,6 +7,7 @@ import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listenProvider } from "../gateway/gateway-provider-fixture.test-support.js";
+import { saveExecApprovals } from "../infra/exec-approvals-store.test-support.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
@@ -15,15 +16,18 @@ import {
 } from "../plugins/test-helpers/cold-plugin-fixtures.js";
 import { createSyncSuiteTempRootTracker } from "../plugins/test-helpers/fs-fixtures.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
+import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
+import { resetProcessRegistryForTests } from "./bash-process-registry.test-support.js";
+import { createExecTool } from "./bash-tools.exec-run.js";
 import * as modelResolution from "./embedded-agent-runner/model.js";
 import { createModelExecAutoReviewer } from "./exec-auto-reviewer.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
 import { acquireSimpleCompletionModelForAgent } from "./simple-completion-runtime.js";
 
-// The reviewed command is input data only; this fixture never dispatches it.
+// Resource-lifetime probes review this command as data; the fallback probe dispatches a fixture.
 const input = {
   command: "git status",
   host: "gateway" as const,
@@ -31,7 +35,7 @@ const input = {
   analysis: { parsed: true, allowlistMatched: false, inlineEval: false },
 };
 
-it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)(
+it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail", "fallback"] as const)(
   "retains the exec reviewer model through %s",
   async (mode, testContext) => {
     if (mode === "cancel-tail" && process.versions.bun) {
@@ -39,7 +43,7 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
       testContext.skip();
     }
     const timesOut = mode === "late-preparation" || mode === "callback-tail";
-    const roots = createSyncSuiteTempRootTracker("exec-reviewer-resources");
+    const roots = createSyncSuiteTempRootTracker("exec-resource-probe");
     const root = fs.realpathSync(roots.makeTempDir());
     fs.mkdirSync(path.join(root, "provider"));
     const fixture = createColdPluginFixture({
@@ -55,17 +59,39 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
     const heldWorkStarted = createDeferred();
     const finishWork = createDeferred();
     const requests: ServerResponse[] = [];
+    const requestedModels: string[] = [];
+    let fixtureDecision: "allow" | "deny" | "ask" = "ask";
+    let cancelAtBackup: (() => void) | undefined;
     const finish = (response: ServerResponse) => {
       if (response.destroyed || response.writableEnded) {
         return;
       }
       response.writeHead(200, { "content-type": "text/event-stream" });
       response.end(
-        `data: ${JSON.stringify({ id: "review", object: "chat.completion.chunk", model: "reviewer", choices: [{ index: 0, delta: { content: JSON.stringify({ decision: "ask", risk: "low", rationale: "fixture" }) }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
+        `data: ${JSON.stringify({ id: "review", object: "chat.completion.chunk", model: "reviewer", choices: [{ index: 0, delta: { content: JSON.stringify({ decision: fixtureDecision, risk: "low", rationale: "fixture" }) }, finish_reason: "stop" }] })}\n\ndata: [DONE]\n\n`,
       );
     };
-    const server = createServer((_request, response) => {
+    const server = createServer((request, response) => {
       requests.push(response);
+      if (mode === "fallback") {
+        let body = "";
+        request.setEncoding("utf8");
+        request.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        request.on("end", () => {
+          const model = JSON.parse(body).model as string;
+          requestedModels.push(model);
+          if (model === "reviewer") {
+            response.writeHead(503, { "content-type": "application/json" });
+            response.end(JSON.stringify({ error: { message: "fixture provider unavailable" } }));
+          } else {
+            cancelAtBackup?.();
+            finish(response);
+          }
+        });
+        return;
+      }
       arrived.resolve();
     });
     const baseUrl = await listenProvider(server);
@@ -78,17 +104,15 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
             api: "openai-completions",
             apiKey: "fixture-only",
             baseUrl,
-            models: [
-              {
-                id: "reviewer",
-                name: "Reviewer",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 8192,
-                maxTokens: 1024,
-              },
-            ],
+            models: ["reviewer", "backup"].map((id) => ({
+              id,
+              name: id,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 8192,
+              maxTokens: 1024,
+            })),
           },
         },
       },
@@ -193,6 +217,75 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
             return prepared;
           };
           try {
+            if (mode === "fallback") {
+              saveExecApprovals({
+                version: 1,
+                defaults: { security: "allowlist", ask: "on-miss", askFallback: "deny" },
+                agents: {},
+              });
+              for (const scenario of ["allow", "deny", "ask", "cancel"] as const) {
+                requestedModels.length = 0;
+                fixtureDecision = scenario === "cancel" ? "allow" : scenario;
+                const controller = new AbortController();
+                cancelAtBackup = scenario === "cancel" ? () => controller.abort() : undefined;
+                const marker = path.join(root, `${scenario}.txt`);
+                const script = path.join(root, `${scenario}.cjs`);
+                fs.writeFileSync(
+                  script,
+                  `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "executed");process.stdout.write("EFFECT_OK");`,
+                );
+                const quote = (value: string) =>
+                  `'${value.replaceAll("'", process.platform === "win32" ? "''" : "'\\''")}'`;
+                const command = `${process.platform === "win32" ? "& " : ""}${quote(process.execPath)} ${quote(script)}`;
+                const tool = createExecTool({
+                  config: cfg,
+                  agentId: "main",
+                  host: "gateway",
+                  mode: "auto",
+                  safeBins: [],
+                  cwd: root,
+                  nonInteractiveApproval: true,
+                  notifyOnExit: false,
+                  allowBackground: false,
+                  preparedSubagentExecution: false,
+                  preparedStoreEnvironment: {},
+                  reviewer: {
+                    timeoutMs: 5000,
+                    model: {
+                      primary: `${fixture.providerId}/reviewer`,
+                      fallbacks: [`${fixture.providerId}/backup`],
+                    },
+                  },
+                });
+                first = parent.track(() =>
+                  tool.execute(`fallback-${scenario}`, { command }, controller.signal),
+                );
+                if (scenario === "allow") {
+                  const result = await first;
+                  expect(result, JSON.stringify(result)).toMatchObject({
+                    details: { status: "completed", exitCode: 0 },
+                  });
+                  expect(fs.readFileSync(marker, "utf8")).toBe("executed");
+                } else if (scenario === "cancel") {
+                  await expect(first).rejects.toThrow();
+                } else {
+                  await expect(first).resolves.toMatchObject({
+                    details: {
+                      status: "failed",
+                      failureKind: scenario === "deny" ? "auto-review-denied" : "approval_required",
+                    },
+                  });
+                }
+                expect(requestedModels[0]).toBe("reviewer");
+                expect(requestedModels.at(-1)).toBe("backup");
+                expect(requestedModels.filter((model) => model === "backup")).toHaveLength(1);
+              }
+              await parent.drain();
+              for (const scenario of ["deny", "ask", "cancel"]) {
+                expect(fs.existsSync(path.join(root, `${scenario}.txt`))).toBe(false);
+              }
+              return;
+            }
             const reviewer = createModelExecAutoReviewer({
               cfg,
               agentId: "main",
@@ -277,6 +370,10 @@ it.for(["overlap", "late-preparation", "callback-tail", "cancel-tail"] as const)
             clearRuntimeAuthProfileStoreSnapshots();
             clearPluginMetadataLifecycleCaches();
             resetPluginLoaderTestStateForTest();
+            if (mode === "fallback") {
+              resetProcessRegistryForTests();
+              await closeOpenClawStateDatabaseAsync();
+            }
           }
         },
       );
