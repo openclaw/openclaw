@@ -351,29 +351,28 @@ describe("commitConfigWithPendingPluginInstalls", () => {
           return { nextConfig: params.nextConfig, persistedHash: "test-config-hash" };
         },
       );
-      mocks.transformConfigFileWithRetry.mockImplementationOnce(async (params: unknown) => {
-        const transformParams = params as {
+      mocks.transformConfigFileWithRetry.mockImplementationOnce(
+        async (params: {
           writeOptions?: ConfigWriteOptions;
           transform: (
             config: OpenClawConfig,
             context: { snapshot: typeof snapshot },
           ) => { nextConfig: OpenClawConfig };
           commit: (input: unknown) => Promise<unknown>;
-        };
-        const transformed = transformParams.transform(sourceConfig, { snapshot });
-        return await transformParams.commit({
-          nextConfig: transformed.nextConfig,
-          snapshot,
-          writeOptions: transformParams.writeOptions,
-        });
-      });
+        }) => {
+          const transformed = params.transform(sourceConfig, { snapshot });
+          return await params.commit({
+            nextConfig: transformed.nextConfig,
+            snapshot,
+            writeOptions: params.writeOptions,
+          });
+        },
+      );
 
       const result = await transformConfigWithPendingPluginInstalls({
         afterWrite,
         writeOptions: attachRuntimeConfigWriteApplication({}, application),
-        transform: () => ({
-          nextConfig: withInstalls({ codex: codexRecord }),
-        }),
+        transform: () => ({ nextConfig: withInstalls({ codex: codexRecord }) }),
       });
       expect(result.afterWrite).toEqual(afterWrite ?? { mode: "auto" });
       expect(mocks.replaceConfigFile.mock.calls[0]?.[0].writeOptions.afterWrite).toEqual(
@@ -400,9 +399,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     setPluginInstallRecordMapEntry(installs, "constructor", constructorRecord);
     setPluginInstallRecordMapEntry(installs, "toString", toStringRecord);
     setPluginInstallRecordMapEntry(installs, "__proto__", protoRecord);
-    const nextConfig = { plugins: { installs } } satisfies OpenClawConfig;
-
-    const stripped = stripPendingPluginInstallRecords(nextConfig, ["__proto__"]);
+    const stripped = stripPendingPluginInstallRecords(withInstalls(installs), ["__proto__"]);
     const remaining = stripped.plugins?.installs;
     expect(Object.getPrototypeOf(remaining)).toBeNull();
     expect(Object.hasOwn(remaining ?? {}, "__proto__")).toBe(false);
@@ -410,26 +407,20 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     expect(getPluginInstallRecordMapEntry(remaining, "toString")).toBe(toStringRecord);
   });
 
-  it("does not mark arbitrary npm paths outside the managed npm root", async () => {
-    const stateDir = tempDirs.make("openclaw-record-commit-");
-    const outsideRoot = tempDirs.make("openclaw-record-outside-");
-    const previous = managedRecord(outsideRoot, "codex", "1");
-    const next = managedRecord(stateDir, "codex", "2");
-
-    await commitRecords({ codex: previous }, { codex: next }, stateDir);
-
-    expect(hasRetainedManagedNpmInstallMarker(previous.installPath)).toBe(false);
-  });
-
-  it("marks replaced npm generations across install record id migrations", async () => {
-    const stateDir = tempDirs.make("openclaw-record-commit-");
-    const previous = managedRecord(stateDir, "voice-call", "1");
-    const next = managedRecord(stateDir, "voice-call", "2");
-
-    await commitRecords({ "voice-call": previous }, { "@openclaw/voice-call": next }, stateDir);
-
-    expect(hasRetainedManagedNpmInstallMarker(previous.installPath)).toBe(true);
-  });
+  it.each([
+    ["outside the managed npm root", "codex", "codex", false],
+    ["across install record id migrations", "voice-call", "@openclaw/voice-call", true],
+  ] as const)(
+    "retains replaced generations only when managed: %s",
+    async (_, id, nextId, retained) => {
+      const stateDir = tempDirs.make("openclaw-record-commit-");
+      const previousRoot = retained ? stateDir : tempDirs.make("openclaw-record-outside-");
+      const previous = managedRecord(previousRoot, id, "1");
+      const next = managedRecord(stateDir, id, "2");
+      await commitRecords({ [id]: previous }, { [nextId]: next }, stateDir);
+      expect(hasRetainedManagedNpmInstallMarker(previous.installPath)).toBe(retained);
+    },
+  );
 
   it("removes earlier retained markers when a later marker creation fails", async () => {
     const stateDir = tempDirs.make("openclaw-record-commit-");
@@ -460,7 +451,7 @@ describe("commitConfigWithPendingPluginInstalls", () => {
     }
     const laterMarkerPath = resolveRetainedManagedNpmInstallMarkerPath(installPaths[1] ?? "");
     const realRm = fs.promises.rm.bind(fs.promises);
-    const rmSpy = vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
+    vi.spyOn(fs.promises, "rm").mockImplementation(async (target, options) => {
       if (String(target) === laterMarkerPath) {
         const error = new Error("marker clear failed") as NodeJS.ErrnoException;
         error.code = "EIO";
@@ -469,23 +460,19 @@ describe("commitConfigWithPendingPluginInstalls", () => {
       return await realRm(target, options);
     });
 
-    try {
-      await expect(
-        commitRecords(
-          {},
-          Object.fromEntries(
-            installPaths.map((installPath, index) => {
-              const pluginId = index === 0 ? "codex" : "voice-call";
-              return [pluginId, npmRecord(`@openclaw/${pluginId}@2.0.0`, installPath)];
-            }),
-          ),
+    await expect(
+      commitRecords(
+        {},
+        Object.fromEntries(
+          installPaths.map((installPath, index) => {
+            const pluginId = index === 0 ? "codex" : "voice-call";
+            return [pluginId, npmRecord(`@openclaw/${pluginId}@2.0.0`, installPath)];
+          }),
         ),
-      ).rejects.toThrow("marker clear failed");
+      ),
+    ).rejects.toThrow("marker clear failed");
 
-      expect(installPaths.every(hasRetainedManagedNpmInstallMarker)).toBe(true);
-    } finally {
-      rmSpy.mockRestore();
-    }
+    expect(installPaths.every(hasRetainedManagedNpmInstallMarker)).toBe(true);
   });
 
   it("leaves marker state intact when a successor owns the plugin index", async () => {

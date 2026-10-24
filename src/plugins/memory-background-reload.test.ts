@@ -416,19 +416,6 @@ it("retires Memory Core while session startup discovery is in flight", async ({ 
 it.for([false, true])(
   "syncs detached background work after reload (replace Memory Core: %s)",
   async (replaceMemory, { signal }) => {
-    let awaitingStage = "fixture state creation";
-    let awaitingInstance: PluginInstance | undefined;
-    const reportInterruptedStage = () => {
-      console.error("Memory background reload interrupted", {
-        replaceMemory,
-        awaitingStage,
-        pluginId: awaitingInstance?.pluginId,
-        ordinaryCalls: awaitingInstance?.ordinaryCallCount,
-        retainedWork: awaitingInstance?.retainedWorkCount,
-        disposing: awaitingInstance?.disposing,
-      });
-    };
-    signal.addEventListener("abort", reportInterruptedStage, { once: true });
     const state = await createOpenClawTestState({ label: "memory-background-reload" });
     const managers = new Set<RegisteredMemorySearchManager>();
     const instances: PluginInstance[] = [];
@@ -513,8 +500,6 @@ it.for([false, true])(
       const oldProvider = addProvider(initial, 1);
       const memory = inTurn(() => loadMemory(initial, config("bootstrap")));
       instances.push(memory.instance);
-      awaitingInstance = memory.instance;
-      awaitingStage = "initial manager acquisition";
       const boot = await inTurn(() => openManager(memory, config("bootstrap"), "bootstrap", "cli"));
       managers.add(boot.manager);
       const { prototype } = boot;
@@ -537,7 +522,6 @@ it.for([false, true])(
         startupCompletions.set(this, work);
         return work;
       });
-      awaitingStage = "initial manager close";
       await boot.manager.close?.();
       managers.delete(boot.manager);
 
@@ -549,13 +533,10 @@ it.for([false, true])(
           ({ provider }) => provider,
         ),
       });
-      awaitingStage = "prepareReload drain";
       await expect(prepared?.drain()).resolves.toEqual({ errors: [] });
       let current = memory;
       if (replaceMemory) {
-        awaitingStage = "initial Memory Core disposal";
         await expect(memory.instance.dispose()).resolves.toEqual({ errors: [] });
-        awaitingStage = "replacement Memory Core registration";
         current = inTurn(() => loadMemory(successor, config("bootstrap")));
         instances.push(current.instance);
       } else {
@@ -563,10 +544,7 @@ it.for([false, true])(
         successor.registry.memoryCapabilities.push(...initial.registry.memoryCapabilities);
       }
       adoptPluginRegistryRecords(successor.registry);
-      awaitingStage = "old embedding provider disposal";
-      awaitingInstance = oldProvider;
       await expect(oldProvider.dispose()).resolves.toEqual({ errors: [] });
-      awaitingInstance = current.instance;
       if (!replaceMemory) {
         prepared?.resume();
       }
@@ -578,7 +556,6 @@ it.for([false, true])(
         timeout(AsyncLocalStorage.bind(callback), delay, ...args),
       );
       for (const reason of ["session-startup-catchup", "session-delta", "watch"] as const) {
-        awaitingStage = `${reason}: prepare sources`;
         const agentId = reason;
         const cfg = config(agentId, reason);
         publishConfig(cfg);
@@ -599,16 +576,13 @@ it.for([false, true])(
         const completed = createDeferredCore<Promise<void>>();
         completions.set(reason, completed);
         const before = embedded.length;
-        awaitingStage = `${reason}: open manager`;
         const opened = await inTurn(() => openManager(current, cfg, agentId));
         managers.add(opened.manager);
         if (reason === "session-startup-catchup" || reason === "session-delta") {
           const startupWork = startupCompletions.get(opened.raw);
           assert(startupWork, "Constructor must own startup discovery");
-          awaitingStage = `${reason}: startup discovery`;
           await withinTest(startupWork, signal);
           if (reason === "session-delta") {
-            awaitingStage = "session-delta: publish transcript update";
             await inTurn(async () => {
               const target = await seedSession(agentId);
               await publishSessionTranscriptUpdateByIdentity(target);
@@ -620,7 +594,6 @@ it.for([false, true])(
           assert(subscription, "Memory manager must subscribe to its workspace host");
           inTurn(subscription.notify);
         }
-        awaitingStage = `${reason}: sync completion`;
         await withinTest(completed.promise, signal);
         expect(embedded.slice(before), reason).not.toHaveLength(0);
         expect(
@@ -630,7 +603,6 @@ it.for([false, true])(
           reason,
         ).toBe(true);
         expect(opened.manager.status().chunks, reason).toBeGreaterThan(0);
-        awaitingStage = `${reason}: manager close`;
         await opened.manager.close?.();
         managers.delete(opened.manager);
       }
@@ -642,7 +614,6 @@ it.for([false, true])(
     } catch (error) {
       errors.push(error);
     } finally {
-      awaitingStage = "fixture cleanup";
       // Convert synchronous cleanup throws into rejections so every owner still retires.
       const closed = await Promise.allSettled(
         [...managers].map(async (manager) => await manager.close?.()),
@@ -656,7 +627,6 @@ it.for([false, true])(
         instances.toReversed().map(async (instance) => await instance.dispose()),
       );
       const cleaned = await Promise.allSettled([cleanupState(state)]);
-      signal.removeEventListener("abort", reportInterruptedStage);
       errors.push(
         ...[...closed, ...disposed, ...cleaned].flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
