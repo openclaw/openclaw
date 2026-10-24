@@ -12,6 +12,7 @@ import { mintBrowserScreencastToken } from "../screencast/tokens.js";
 import type { BrowserRouteContext } from "../server-context.js";
 import { getProfileLifecycle, isProfileOperationCurrent } from "../server-context.lifecycle.js";
 import { registerBrowserAgentActRoutes } from "./agent.act.js";
+import { registerBrowserAgentArchiveRoutes } from "./agent.archive.js";
 import { createPlaywrightRouteRegistrar } from "./agent.playwright.js";
 import {
   browserNavigationPolicyForProfile,
@@ -42,6 +43,7 @@ export function registerBrowserRoutes(registrar: BrowserRouteRegistrar, ctx: Bro
   registerBrowserTabRoutes(app, ctx);
   registerBrowserPermissionRoutes(app, ctx);
   registerBrowserAgentSnapshotRoutes(app, ctx);
+  registerBrowserAgentArchiveRoutes(app, ctx);
   app.post("/screencast", async (req, res) => {
     const requesterGone = () => {
       if (!req.requester || req.requester.isCurrent()) {

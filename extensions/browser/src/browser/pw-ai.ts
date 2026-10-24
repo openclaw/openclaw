@@ -39,6 +39,7 @@ export const pwAi = {
   highlightViaPlaywright: interactionActions.highlightViaPlaywright,
   navigateViaPlaywright: snapshot.navigateViaPlaywright,
   pdfViaPlaywright: snapshot.pdfViaPlaywright,
+  archiveViaPlaywright: snapshot.archiveViaPlaywright,
   responseBodyViaPlaywright: responses.responseBodyViaPlaywright,
   setDeviceViaPlaywright: state.setDeviceViaPlaywright,
   setExtraHTTPHeadersViaPlaywright: state.setExtraHTTPHeadersViaPlaywright,

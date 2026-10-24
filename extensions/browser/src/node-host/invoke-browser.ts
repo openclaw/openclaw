@@ -418,17 +418,30 @@ export async function runBrowserProxyCommand(
   let response;
   try {
     response = await withTimeout(
-      (timeoutSignal) =>
-        dispatcher.dispatch({
+      (timeoutSignal) => {
+        const signal =
+          combineBrowserProxySignals(timeoutSignal, invocationSignal) ??
+          new AbortController().signal;
+        return dispatcher.dispatch({
           method,
           path,
           query,
           body,
-          signal: combineBrowserProxySignals(timeoutSignal, invocationSignal),
+          signal,
+          // Media publication uses a synchronous guard after asynchronous preparation.
+          // Carry the same node/profile authority through that final commit boundary.
+          requester: {
+            signal,
+            isCurrent: () => {
+              assertCurrent();
+              return true;
+            },
+          },
           assertCurrent: async (profile) => {
             assertCurrent(profile);
           },
-        }),
+        });
+      },
       remainingTimeoutMs,
       "browser proxy request",
     );
