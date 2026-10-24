@@ -17,28 +17,13 @@ import { onIrcTestLine, startIrcTestServer as startServer } from "./irc-server.t
 import { setIrcRuntime } from "./runtime.js";
 import type { CoreConfig } from "./types.js";
 
-const effectGate = vi.hoisted(() => ({
-  beforeInitiate: undefined as (() => Promise<void>) | undefined,
-}));
-vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
-  return {
-    ...actual,
-    captureEffectAuthority: () => {
-      const authority = actual.captureEffectAuthority();
-      const beforeInitiate = effectGate.beforeInitiate;
-      return beforeInitiate
-        ? {
-            ...authority,
-            initiate: async <T>(effect: () => T | Promise<T>) => {
-              await beforeInitiate();
-              return authority.initiate(effect);
-            },
-          }
-        : authority;
-    },
-  };
-});
+const effectGate = await vi.hoisted(async () =>
+  (
+    await import("../../test-support/effect-preparation.test-support.js")
+  ).createEffectPreparationGate(),
+);
+// mock-isolation: Share the export-preserving factory, but keep the preparation gate suite-local.
+vi.mock("openclaw/plugin-sdk/fetch-runtime", effectGate.mockRuntime);
 
 async function startIrcTestServer(onConnection: (socket: net.Socket) => void) {
   const server = await startServer(onConnection);
@@ -267,7 +252,7 @@ function maxRelayedLineBytes(bodies: string[]): number {
 
 describe("irc client PRIVMSG chunking on the wire", () => {
   afterEach(() => {
-    effectGate.beforeInitiate = undefined;
+    effectGate.prepare = undefined;
   });
   const refusal = new PlatformMessageNotDispatchedError("authority ended", {
     cause: new Error("scheduled sender retired"),
@@ -275,7 +260,7 @@ describe("irc client PRIVMSG chunking on the wire", () => {
   it("admits all raw chunks before sending the message", async () => {
     const server = await startLoopbackIrcServer();
     let attempts = 0;
-    effectGate.beforeInitiate = async () => {
+    effectGate.prepare = async () => {
       if (++attempts > 1) {
         throw refusal;
       }
@@ -289,7 +274,7 @@ describe("irc client PRIVMSG chunking on the wire", () => {
 
   it("preserves an admission refusal without sending any raw chunks", async () => {
     const server = await startLoopbackIrcServer();
-    effectGate.beforeInitiate = async () => {
+    effectGate.prepare = async () => {
       throw refusal;
     };
     const client = await connectTestClient(server, { messageChunkMaxChars: 3 });
