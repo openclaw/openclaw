@@ -136,7 +136,9 @@ export type TerminalizeOperatorApprovalsResult = {
 
 export type OperatorApprovalDatabase = Pick<
   OpenClawStateKyselyDatabase,
-  "operator_approvals" | "operator_approval_execution_identities"
+  | "operator_approvals"
+  | "operator_approval_execution_identities"
+  | "operator_approval_standing_grants"
 >;
 export type OperatorApprovalRow = Selectable<OperatorApprovals>;
 

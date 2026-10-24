@@ -12,6 +12,7 @@ import type { CronStandingGrantMintSpec } from "./operator-approval-standing-gra
 import { mintCronStandingGrantLocked } from "./operator-approval-standing-grants.worker.js";
 import { operatorApprovalTerminalFields } from "./operator-approval-store.fields.js";
 import { operatorApprovalPublication } from "./operator-approval-store.publication.js";
+import { deleteTerminalOperatorApprovalsPastRetention } from "./operator-approval-store.retention.worker.js";
 import {
   OPERATOR_APPROVAL_TERMINAL_RETENTION_MS,
   requireApprovalId,
@@ -285,22 +286,15 @@ export function recoverOperatorApprovalsInDatabase(params: {
     }
   }
   operatorApprovalPublication.stagePostimages(database.db, terminalRows);
-  const prunedRows = executeSqliteQuerySync(
-    database.db,
-    stateDb
-      .deleteFrom("operator_approvals")
-      .where("status", "!=", "pending")
-      .where("resolved_at_ms", "is not", null)
-      .where("resolved_at_ms", "<=", nowMs - OPERATOR_APPROVAL_TERMINAL_RETENTION_MS)
-      .returning("approval_id"),
-  ).rows;
-  operatorApprovalPublication.stageDeletions(
-    database.db,
-    prunedRows.map((row) => row.approval_id),
-  );
+  const deletedIds = deleteTerminalOperatorApprovalsPastRetention({
+    db: database.db,
+    cutoffMs: nowMs - OPERATOR_APPROVAL_TERMINAL_RETENTION_MS,
+    nowMs,
+  });
+  operatorApprovalPublication.stageDeletions(database.db, deletedIds);
   return {
     affected,
-    pruned: prunedRows.length,
+    pruned: deletedIds.length,
     records: terminalRows
       .map((row) => decodeOperatorApprovalRow(row))
       .filter((record): record is OperatorApprovalRecord => record !== null),
