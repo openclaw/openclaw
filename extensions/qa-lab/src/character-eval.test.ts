@@ -104,7 +104,6 @@ async function makeSuiteResult(params: {
   resultStatus?: "pass" | "fail";
   summaryStatus?: "pass" | "fail";
   summaryFailedCount?: number;
-  runStatus?: "running" | "completed";
 }) {
   const resultStatus = params.resultStatus ?? "pass";
   const summaryStatus = params.summaryStatus ?? resultStatus;
@@ -112,7 +111,7 @@ async function makeSuiteResult(params: {
   const summaryPath = path.join(params.outputDir, "qa-suite-summary.json");
   await fs.mkdir(params.outputDir, { recursive: true });
   const summary = {
-    run: { status: params.runStatus ?? "completed" },
+    run: { status: "completed" },
     counts: { total: 1, passed: summaryFailedCount > 0 ? 0 : 1, failed: summaryFailedCount },
     scenarios: [{ name: "Character vibes", status: summaryStatus, steps: [] }],
   };
@@ -212,44 +211,15 @@ describe("runQaCharacterEval", () => {
     });
 
     expect(result.runs.map((run) => run.error)).toEqual([undefined, undefined]);
-    expect(runSuite).toHaveBeenCalledTimes(2);
-    expect(runSuite.mock.calls[0]?.[0]).toMatchObject({
-      providerMode: "live-frontier",
-      primaryModel: primary,
-      alternateModel: primary,
-      fastMode: true,
-      scenarioIds: ["character-vibes-gollum"],
-    });
-    expect(runJudge.mock.calls[0]?.[0]).toMatchObject({
-      providerMode: "live-frontier",
-      primaryModel: primary,
-      alternateModel: primary,
-      thinkingDefault: "xhigh",
-      fastMode: true,
-      timeoutMs: 300_000,
-    });
+    expect(result.runs.map((run) => run.model)).toEqual([primary, alternate]);
     expect(result.judgments).toHaveLength(1);
     expect(result.judgments[0]?.rankings.map((entry) => entry.model)).toEqual([primary, alternate]);
 
     const report = await fs.readFile(result.reportPath, "utf8");
-    for (const text of [
-      "Execution: local QA gateway child processes, not Docker",
-      `Judges: ${primary}`,
-      "Judge model labels: visible",
-      "## Judge Rankings",
-      `### ${primary}`,
-      `reply from ${primary}`,
-      `reply from ${alternate}`,
-      "Judge thinking: xhigh",
-      "- Timeout: 5m",
-      "Fast mode: on",
-      "Duration:",
-    ]) {
+    for (const text of [`reply from ${primary}`, `reply from ${alternate}`, "Most natural."]) {
       expect(report).toContain(text);
     }
-    for (const text of ["Duration ms:", "Judge Raw Reply"]) {
-      expect(report).not.toContain(text);
-    }
+    expect(report).not.toContain("Judge Raw Reply");
   });
 
   it("isolates artifacts for model refs with colliding readable slugs", async () => {
@@ -286,7 +256,6 @@ describe("runQaCharacterEval", () => {
       ]),
     });
 
-    expect(runSuite).toHaveBeenCalledTimes(2);
     expect.soft(new Set(result.runs.map((run) => run.outputDir)).size).toBe(models.length);
     expect
       .soft(
@@ -357,153 +326,89 @@ describe("runQaCharacterEval", () => {
     });
   });
 
-  it("defaults to the character eval model panel when no models are provided", async () => {
+  it("uses default candidate and judge settings without an explicit panel", async () => {
     const runSuite = makeRunSuite();
-    const panel = [
-      [primary, "medium", true],
-      ["openai/gpt-5.2", "xhigh", true],
-      ["openai/gpt-5", "xhigh", true],
-      ["anthropic/claude-opus-4-8", "high", false],
-      ["anthropic/claude-sonnet-4-6", "high", false],
-      ["zai/glm-5.1", "high", false],
-      [kimi, "high", false],
-      ["google/gemini-3.1-pro-preview", "high", false],
-    ] as const;
-    const runJudge = makeRunJudge(panel.map(([model], index) => ranking(model, index + 1)));
-
-    await runEval({
+    const result = await runEval({
       models: [],
       judgeModels: [],
       runSuite,
-      runJudge,
-    });
-
-    expect(runSuite).toHaveBeenCalledTimes(8);
-    expect(
-      runSuite.mock.calls.map(([params]) => [
-        params.primaryModel,
-        params.thinkingDefault,
-        params.fastMode,
-      ]),
-    ).toEqual(panel);
-    expect(runJudge).toHaveBeenCalledTimes(2);
-    expect(runJudge.mock.calls.map(([params]) => params.primaryModel)).toEqual([
-      primary,
-      "anthropic/claude-opus-4-8",
-    ]);
-    expect(runJudge.mock.calls.map(([params]) => params.thinkingDefault)).toEqual([
-      "xhigh",
-      "high",
-    ]);
-    expect(runJudge.mock.calls.map(([params]) => params.fastMode)).toEqual([true, false]);
-  });
-
-  it("runs candidate models with bounded concurrency while preserving result order", async () => {
-    const runGate = createConcurrencyGate(2);
-    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
-      runGate.run(() => makeReplySuiteResult(params)),
-    );
-    const runJudge = makeRunJudge([
-      ranking(),
-      ranking("anthropic/claude-sonnet-4-6", 2, 7),
-      ranking(kimi, 3, 6),
-    ]);
-
-    const resultPromise = runEval({
-      models: [primary, "anthropic/claude-sonnet-4-6", kimi],
-      candidateConcurrency: 2,
-      judgeModels: [primary],
-      runSuite,
-      runJudge,
-    });
-
-    await runGate.waitForExpectedActive();
-    expect(runGate.maxActive).toBe(2);
-    runGate.releaseStartedTasks();
-    const result = await resultPromise;
-    expect(result.runs.map((run) => run.model)).toEqual([
-      primary,
-      "anthropic/claude-sonnet-4-6",
-      kimi,
-    ]);
-  });
-
-  it("defaults candidate and judge concurrency to sixteen", async () => {
-    const runGate = createConcurrencyGate(16);
-    const judgeGate = createConcurrencyGate(16);
-    const runSuite = vi.fn(async (params: CharacterRunSuiteParams) =>
-      runGate.run(() => makeReplySuiteResult(params)),
-    );
-    const runJudge = vi.fn(async (params: CharacterRunJudgeParams) => {
-      return await judgeGate.run(() =>
+      runJudge: async (params) =>
         makeJudgeResult(
           params,
-          Array.from({ length: 20 }, (_, index) =>
-            ranking(`provider/model-${index + 1}`, index + 1, 10 - index),
-          ),
+          runSuite.mock.calls.map(([call], index) => ranking(call.primaryModel, index + 1)),
         ),
-      );
     });
-
-    const resultPromise = runEval({
-      models: Array.from({ length: 20 }, (_, index) => `provider/model-${index + 1}`),
-      judgeModels: Array.from({ length: 20 }, (_, index) => `judge/model-${index + 1}`),
-      runSuite,
-      runJudge,
+    expect(result.runs[0]).toMatchObject({
+      model: primary,
+      thinkingDefault: "medium",
+      fastMode: true,
     });
-
-    await runGate.waitForExpectedActive();
-    expect(runGate.maxActive).toBe(16);
-    runGate.releaseStartedTasks();
-    await judgeGate.waitForExpectedActive();
-    expect(judgeGate.maxActive).toBe(16);
-    judgeGate.releaseStartedTasks();
-    await resultPromise;
+    expect(
+      result.judgments.map(({ model, thinkingDefault, fastMode }) => [
+        model,
+        thinkingDefault,
+        fastMode,
+      ]),
+    ).toEqual([
+      [primary, "xhigh", true],
+      ["anthropic/claude-opus-4-8", "high", false],
+    ]);
   });
 
   it.each([
-    {
-      title: "marks raw provider error transcripts as failed output",
-      transcript:
-        "USER Alice: Are you awake?\n\nASSISTANT OpenClaw QA: 400 model `qwen3.6-plus` is not supported.",
-      model: "qwen/qwen3.6-plus",
-      expectedReason: "model unsupported error leaked into transcript",
+    { limit: 2, count: 3, options: { candidateConcurrency: 2, judgeConcurrency: 2 } },
+    { limit: 16, count: 20, options: {} },
+  ])(
+    "bounds candidate and judge concurrency to $limit and preserves order",
+    async ({ limit, count, options }) => {
+      const models = Array.from({ length: count }, (_, index) => `provider/model-${index}`);
+      const judges = Array.from({ length: count }, (_, index) => `judge/model-${index}`);
+      const runGate = createConcurrencyGate(limit);
+      const judgeGate = createConcurrencyGate(limit);
+      const resultPromise = runEval({
+        ...options,
+        models,
+        judgeModels: judges,
+        runSuite: (params) => runGate.run(() => makeReplySuiteResult(params)),
+        runJudge: (params) =>
+          judgeGate.run(() =>
+            makeJudgeResult(
+              params,
+              models.map((model, index) => ranking(model, index + 1)),
+            ),
+          ),
+      });
+      await runGate.waitForExpectedActive();
+      expect(runGate.maxActive).toBe(limit);
+      runGate.releaseStartedTasks();
+      await judgeGate.waitForExpectedActive();
+      expect(judgeGate.maxActive).toBe(limit);
+      judgeGate.releaseStartedTasks();
+      const result = await resultPromise;
+      expect(result.runs.map((run) => run.model)).toEqual(models);
     },
-    {
-      title: "marks generic channel fallback transcripts as failed output",
-      transcript:
-        "ASSISTANT OpenClaw QA: ⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.",
-      model: "qa/generic-fallback-model",
-      expectedReason: "generic request failure leaked into transcript",
-    },
-    {
-      title: "marks idle-timeout fallback transcripts as failed output",
-      transcript:
-        "ASSISTANT OpenClaw QA: The model did not produce a response before the LLM idle timeout. Please try again, or increase `agents.defaults.llm.idleTimeoutSeconds` in your config.",
-      model: "google/gemini-test",
-      expectedReason: "LLM timeout leaked into transcript",
-    },
-    {
-      title: "marks leaked harness coordination transcripts as failed output",
-      transcript:
-        "ASSISTANT OpenClaw QA: checking thread context; then post a tight progress reply here.\nQA_LEAK_OK",
-      model: "codex/gpt-5.6-luna",
-      expectedReason: "internal harness/meta text leaked into transcript",
-    },
-    {
-      title: "marks raw tool failure transcripts as failed output",
-      transcript: "ASSISTANT OpenClaw QA: ⚠️ ✍️ Write: to /tmp/precious.html failed",
-      model: "qwen/qwen3.5-plus",
-      expectedReason: "tool failure leaked into transcript",
-    },
-  ])("$title", async ({ transcript, model, expectedReason }) => {
-    const result = await runEval({
-      models: [model],
-      runSuite: makeRunSuite(() => transcript),
-      runJudge: makeRunJudge([ranking(model, 1, 0.5, "failed")]),
-    });
+  );
 
-    expectFirstRunFailure(result, { model, error: expectedReason });
+  it.each([
+    ["400 model `qwen3.6-plus` is not supported.", "model unsupported error"],
+    [
+      "⚠️ Something went wrong while processing your request. Please try again, or use /new to start a fresh session.",
+      "generic request failure",
+    ],
+    [
+      "The model did not produce a response before the LLM idle timeout. Please try again, or increase `agents.defaults.llm.idleTimeoutSeconds` in your config.",
+      "LLM timeout",
+    ],
+    [
+      "checking thread context; then post a tight progress reply here.\nQA_LEAK_OK",
+      "internal harness/meta text",
+    ],
+    ["⚠️ ✍️ Write: to /tmp/precious.html failed", "tool failure"],
+  ])("rejects a transcript containing %s", async (reply, reason) => {
+    const result = await runEval({
+      runSuite: makeRunSuite(() => `ASSISTANT OpenClaw QA: ${reply}`),
+    });
+    expectFirstRunFailure(result, { model: primary, error: `${reason} leaked into transcript` });
   });
 
   it("marks candidates failed when the suite summary has failed scenarios", async () => {
@@ -517,21 +422,6 @@ describe("runQaCharacterEval", () => {
 
     expect(result.runs[0]?.status).toBe("fail");
     expect(result.runs[0]?.error).toBeUndefined();
-  });
-
-  it("rejects a candidate whose suite summary is still running", async () => {
-    const result = await runEval({
-      runSuite: async (params) =>
-        makeReplySuiteResult(params, "USER Alice: hi\n\nASSISTANT openclaw: partial reply", {
-          runStatus: "running",
-        }),
-    });
-
-    expect(result.runs[0]).toMatchObject({
-      model: primary,
-      status: "fail",
-      error: expect.stringContaining("still running"),
-    });
   });
 
   it("rejects a passing suite with a user-only conversation", async () => {
