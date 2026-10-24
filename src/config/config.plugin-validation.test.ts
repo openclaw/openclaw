@@ -77,9 +77,9 @@ function expectMessage(entries: Diagnostics, pathValue: string, message: string)
 }
 
 function expectIncludes(entries: Diagnostics, pathValue: string, fragment: string) {
-  expect(
-    entries?.some((entry) => entry.path === pathValue && entry.message.includes(fragment)),
-  ).toBe(true);
+  expect(entries).toContainEqual(
+    expect.objectContaining({ path: pathValue, message: expect.stringContaining(fragment) }),
+  );
 }
 
 function expectNoPath(entries: Diagnostics, pathValue: string) {
@@ -341,12 +341,12 @@ describe("config plugin validation", () => {
 
     const expectMissingCodexPluginWarning = (warnings: Diagnostics, expected = true) => {
       expect(
-        (warnings ?? []).some(
+        (warnings ?? []).filter(
           ({ path: issuePath, message }) =>
             issuePath === "plugins.entries.codex" &&
             message.includes("plugin not installed: codex"),
         ),
-      ).toBe(expected);
+      ).toHaveLength(expected ? 1 : 0);
     };
     const expectCodexRequirement = (
       config: Record<string, unknown>,
@@ -369,13 +369,7 @@ describe("config plugin validation", () => {
         ),
       );
       expect(result.ok).toBe(true);
-      expect(
-        (result.warnings ?? []).filter(
-          ({ path: issuePath, message }) =>
-            issuePath === "plugins.entries.codex" &&
-            message.includes("plugin not installed: codex"),
-        ),
-      ).toHaveLength(needsCodex ? 1 : 0);
+      expectMissingCodexPluginWarning(result.warnings, needsCodex);
     });
 
     it.each([
@@ -755,11 +749,7 @@ describe("config plugin validation", () => {
         "memory-core": { config: { dreaming: { enabled: true } } },
       },
     });
-    expect(
-      res.warnings?.some(
-        (w) => w.path === "plugins.allow" && w.message.includes("plugin not found: dreaming"),
-      ),
-    ).toBe(false);
+    expectNoMessage(res.warnings, /plugin not found: dreaming/);
     expect(
       res.warnings?.some(
         (w) =>
