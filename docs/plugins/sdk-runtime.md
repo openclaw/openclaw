@@ -471,6 +471,14 @@ by Doctor after backup, the maintenance scope owns the reader. Other sources use
 an artifact-preserving private copy with the existing unstable-source refusal.
 The helper owns cleanup; callbacks must not retain or close the connection.
 
+First-party imports of an external SQLite database can use
+`startSqliteReadOnlyLocationAsync(path, { signal })` from the private
+`sqlite-runtime` facade. Snapshot preparation, native flushes, and staging
+retirement run outside the Gateway thread. Await `preparation.result` to read
+its private `location`, and always await `preparation.startClose().result` in
+`finally`, including when preparation fails. Keep readers closed before disposal;
+cleanup failure rejects instead of reporting a successful import.
+
 SQLite worker backends set connection lock-wait policy with
 `setSqliteBusyTimeout` from `openclaw/plugin-sdk/sqlite-worker-runtime`, including
 temporary changes. The connection owner retains the current timeout, skips

@@ -346,7 +346,11 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
       runActive,
       runStatus: state.chatRunStatus,
       startupStatus: activeChatRunStartupStatus(state.chatRunStartup),
-      awaitingActivity: state.chatRunStartup == null,
+      awaitingActivity:
+        state.chatRunStartup == null &&
+        !(state.chatRunId
+          ? state.knownAgentRunIds.has(state.chatRunId)
+          : selectedSession?.activeRunIds?.some((runId) => state.knownAgentRunIds.has(runId))),
       environmentStartStatus:
         placement?.state === "provisioning" ? placement.startStatus : undefined,
       waitingApproval: state.waitingApprovalStatuses.size > 0,

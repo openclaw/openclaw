@@ -64,6 +64,7 @@ import { recordAgentProvenance } from "../state/agent-provenance.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
+import { getMaxChatHistoryMessagesBytes } from "./chat-history-budget.js";
 import {
   assertPluginMetadataSnapshotConsistency,
   createGatewayPluginMetadataSnapshot,
@@ -76,7 +77,6 @@ import {
   createTextTranscriptEvent,
   registerChatConnectionIdentityTest,
 } from "./server-chat.agent-events.test-helpers.js";
-import { getMaxChatHistoryMessagesBytes } from "./server-constants.js";
 import { createGatewayChatMetadataRuntime } from "./server-methods/chat-metadata-runtime.js";
 import {
   createQueuedFollowupFixtureForTest,

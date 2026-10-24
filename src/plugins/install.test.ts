@@ -1041,7 +1041,9 @@ describe("linkOpenClawPeerDependencies (via installPluginFromDir)", () => {
     }
     const { result, warnings } = installed;
     expect(result.ok).toBe(true);
-    expect(warnings).toHaveLength(0);
+    expect(warnings).toEqual(
+      update ? [] : [expect.stringMatching(/^Repaired OpenClaw host link at /)],
+    );
     if (!result.ok) {
       return;
     }

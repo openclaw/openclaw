@@ -2,7 +2,6 @@ import type { JSX } from "@solidjs/web";
 import { createSignal, onCleanup, type Accessor } from "solid-js";
 import { analyzeConfigSchema } from "../components/config-form.analyze.ts";
 import { ConfigArray, ConfigObject } from "../components/config-form.node.collection.tsx";
-import { JsonTextarea } from "../components/config-form.node.json.tsx";
 import { NumberInput, SelectInput, TextInput } from "../components/config-form.node.scalar.tsx";
 import type { ConfigNodeRenderParams } from "../components/config-form.node.shared.ts";
 import { renderNode } from "../components/config-form.node.tsx";
@@ -65,7 +64,6 @@ export const renderArrayFixture = nodeFixture((props) => (
 export const renderObjectFixture = nodeFixture((props) => (
   <ConfigObject params={props()} renderNode={renderNode} />
 ));
-export const renderJsonTextareaFixture = nodeFixture((props) => <JsonTextarea params={props()} />);
 export const renderTextInputFixture = nodeFixture<{ inputType: "text" | "number" }>((props) => (
   <TextInput params={props()} />
 ));

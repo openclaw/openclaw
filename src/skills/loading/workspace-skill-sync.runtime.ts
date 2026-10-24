@@ -401,7 +401,10 @@ export async function syncWorkspaceSkills(params: {
         skillsVersion,
       };
       assertCurrent?.();
-      await target.writeJson(SYNCED_SKILLS_MANIFEST_NAME, nextManifest, { trailingNewline: true });
+      await target.writeJson(SYNCED_SKILLS_MANIFEST_NAME, nextManifest, {
+        trailingNewline: true,
+        durable: false,
+      });
       assertCurrent?.();
       syncedSkillsUsageCache.set(targetSkillsDir, {
         destinations: new Map(

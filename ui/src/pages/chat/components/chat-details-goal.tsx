@@ -279,7 +279,12 @@ export function ChatDetailsGoal(props: ChatDetailsGoalProps) {
         <Show
           when={props.goal}
           fallback={
-            <PanelEmptyState icon={<GoalIcon />} heading={t("chat.goals.empty")} description="" />
+            <PanelEmptyState
+              presentation="mobile"
+              icon={<GoalIcon />}
+              heading={t("chat.goals.empty")}
+              description=""
+            />
           }
         >
           <ChatGoalBody goal={props.goal!} resumeRecovery={resumeRecovery()} />

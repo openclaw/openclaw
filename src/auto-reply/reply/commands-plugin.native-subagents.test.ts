@@ -754,19 +754,30 @@ describe("command-scoped native subagent boundary", () => {
       initializeGlobalHookRunner(fixture.registry);
       const params = fixture.params();
       const entry = expectDefined(params.sessionEntry, "direct parent session");
-      for (const goalRequestFingerprint of [
+      const identity = { operationId: "literal-goal", issuedAtMs: Date.now() };
+      for (const goalOperation of [
         undefined,
-        "goal-start-receipt",
-        "goal-resume-receipt",
-      ]) {
+        {
+          ...identity,
+          action: "start",
+          requestFingerprint: "goal-start-receipt",
+          objective: "/review-panel is literal Goal objective text",
+        },
+        {
+          ...identity,
+          action: "resume",
+          requestFingerprint: "goal-resume-receipt",
+          goalId: "literal-goal",
+        },
+      ] as const) {
         const request = await createRestartSafeChatRequest({
           eligible: true,
           senderIsOwner: true,
-          message: goalRequestFingerprint
+          message: goalOperation
             ? "/review-panel is literal Goal objective text"
             : "Continue the review",
           cfg: fixture.cfg,
-          goalRequestFingerprint,
+          goalOperation,
         });
         expect(request).toBeDefined();
         expect(

@@ -41,6 +41,7 @@ const scenarios = [
   "compare",
   "reconcile",
   "checkpoint",
+  "startup",
   "baseline-build",
 ] as const;
 type Scenario = (typeof scenarios)[number];
@@ -105,7 +106,8 @@ type SourceResult = {
 };
 
 const digest = (value: string | Uint8Array) => createHash("sha256").update(value).digest("hex");
-const nameAt = (index: number) => `file-${String(index).padStart(6, "0")}.txt`;
+const nameAt = (index: number, scenario?: Scenario) =>
+  `${scenario === "startup" ? `src/group-${Math.floor(index / 32)}/` : ""}file-${String(index).padStart(6, "0")}.txt`;
 
 function summarize(values: number[]) {
   assert(values.length > 0, "measurement has no samples");
@@ -249,7 +251,7 @@ async function createFixture(params: {
 }) {
   const { root, source, scenario, size, concurrency, options } = params;
   const reconciliation = scenario === "reconcile";
-  const checkpoint = scenario === "checkpoint" || scenario === "baseline-build";
+  const checkpoint = ["checkpoint", "startup", "baseline-build"].includes(scenario);
   assert(
     size * options.fileBytes <= 4 * 1024 ** 3,
     "fixture exceeds the production 4 GiB inventory limit",
@@ -259,21 +261,20 @@ async function createFixture(params: {
   const changed = Buffer.from("worker change\n");
   const sha256 = digest(content);
   const entries = Array.from({ length: size }, (_, index): WorkerWorkspaceManifestEntry => ({
-    path: nameAt(index),
+    path: nameAt(index, scenario),
     type: "file",
     mode: 0o644,
     size: content.length,
     sha256,
   }));
-  const changedFiles =
-    scenario === "delta" || scenario === "compare" || reconciliation || scenario === "checkpoint"
-      ? options.changedFiles
-      : 0;
+  const changedFiles = ["delta", "compare", "reconcile", "checkpoint", "startup"].includes(scenario)
+    ? options.changedFiles
+    : 0;
   assert(changedFiles <= size, "--changed-files exceeds the fixture entry count");
   const changedEntries = Array.from(
     { length: changedFiles },
     (_, index): WorkerWorkspaceManifestEntry => ({
-      path: nameAt(index),
+      path: nameAt(index, scenario),
       type: "file",
       mode: 0o644,
       size: changed.length,
@@ -312,7 +313,11 @@ async function createFixture(params: {
     if (reconciliation || checkpoint) {
       assert(size * options.fileBytes <= 128 * 1024 ** 2, "reconciliation fixture exceeds 128 MiB");
       for (let index = 0; index < size; index++) {
-        await fs.writeFile(path.join(workspace, nameAt(index)), content, { mode: 0o644 });
+        const file = path.join(workspace, nameAt(index, scenario));
+        if (scenario === "startup" && index % 32 === 0) {
+          await fs.mkdir(path.dirname(file), { recursive: true });
+        }
+        await fs.writeFile(file, content, { mode: 0o644 });
         if (index % 256 === 0) {
           await checkDirtyPages();
         }
@@ -443,10 +448,11 @@ async function importOwner<T>(root: string, relative: string): Promise<T> {
 async function childMain(fixturePath: string, reopening: boolean): Promise<void> {
   const fixture = JSON.parse(await fs.readFile(fixturePath, "utf8")) as Fixture;
   const baselineBuild = fixture.scenario === "baseline-build";
+  const startup = fixture.scenario === "startup";
   // Checkpoint GC runs must also work without allocation sampling, whose
   // start/stop cycle forces collections between measured operations.
   const traceGc =
-    fixture.scenario === "checkpoint" || baselineBuild || fixture.samplingInterval > 0;
+    fixture.scenario === "checkpoint" || startup || baselineBuild || fixture.samplingInterval > 0;
   const inspector = traceGc ? new Session() : undefined;
   inspector?.connect();
   const markGc = (phase: string, profilePath?: string) => {
@@ -523,7 +529,7 @@ async function childMain(fixturePath: string, reopening: boolean): Promise<void>
       }))
     : undefined;
   const checkpointOwner =
-    fixture.scenario === "checkpoint" || baselineBuild
+    fixture.scenario === "checkpoint" || startup || baselineBuild
       ? await importOwner<
           typeof import("../src/gateway/worker-environments/local-workspace-projection.js")
         >(fixture.source, "src/gateway/worker-environments/local-workspace-projection.ts")
@@ -871,7 +877,13 @@ async function childMain(fixturePath: string, reopening: boolean): Promise<void>
             }
             const projection = checkpoint.projection;
             assert(projection);
-            await projection.checkpoint();
+            if (startup) {
+              projection[Symbol.dispose]();
+              checkpoint.projection = await checkpoint.prepare();
+              assert(checkpoint.projection, "managed workspace was not reopened");
+            } else {
+              await projection.checkpoint();
+            }
             return async () => {
               const row = await checkpointStore.withLocalWorkspaceStore(
                 { worktreeId: id },
@@ -889,11 +901,11 @@ async function childMain(fixturePath: string, reopening: boolean): Promise<void>
               }
               if (fixture.changedEntries.length < fixture.size) {
                 assert.deepEqual(
-                  await fs.readFile(path.join(root, nameAt(fixture.size - 1))),
+                  await fs.readFile(path.join(root, nameAt(fixture.size - 1, fixture.scenario))),
                   Buffer.alloc(fixture.fileBytes, 65),
                 );
               }
-              return `checkpoint:${fixture.changedEntries.length}`;
+              return `${startup ? "startup" : "checkpoint"}:${fixture.changedEntries.length}`;
             };
           }
           if (reconcile) {
@@ -1051,7 +1063,7 @@ async function runSource(
   reopening = false,
 ): Promise<SourceResult> {
   const baselineBuild = fixture.scenario === "baseline-build";
-  if ((fixture.scenario === "checkpoint" || baselineBuild) && !reopening) {
+  if (["checkpoint", "startup", "baseline-build"].includes(fixture.scenario) && !reopening) {
     // Each child owns a fresh synthetic database/projection; source files persist
     // to avoid bulk fixture generation inside the measurement window.
     await fs.rm(path.join(fixture.root, "state"), { recursive: true, force: true });
@@ -1059,7 +1071,10 @@ async function runSource(
   const fixturePath = path.join(fixture.root, "fixture.json");
   await fs.writeFile(fixturePath, JSON.stringify(fixture));
   const traceGc =
-    fixture.scenario === "checkpoint" || baselineBuild || fixture.samplingInterval > 0;
+    fixture.scenario === "checkpoint" ||
+    fixture.scenario === "startup" ||
+    baselineBuild ||
+    fixture.samplingInterval > 0;
   const child = fork(
     fileURLToPath(import.meta.url),
     ["--worker", fixturePath, ...(reopening ? ["--reopen"] : [])],
@@ -1225,7 +1240,7 @@ node --import ./scripts/tsx.mjs scripts/bench-workspace-computation.ts [options]
   --baseline <root>    Optional frozen baseline checkout with ready dependencies
   --candidate <root>   Candidate checkout (default: current directory)
   --source-commit <sha> Archive revision supplied by operator; single candidate only, not independently verified
-  --scenarios <list>   inventory,manifest,delta,unchanged,compare,reconcile,checkpoint,baseline-build (default: all)
+  --scenarios <list>   inventory,manifest,delta,unchanged,compare,reconcile,checkpoint,startup,baseline-build (default: all)
   --sizes <list>       Entries per workspace (default: 1000; max: 100000)
   --concurrency <list> Independent workspaces (default: 1; max: 4)
   --runs <n>           Warm measured samples (default: 3)
@@ -1347,7 +1362,7 @@ The HTTP probe measures the owner process, not a full Gateway RPC workload.`);
               );
               assert.equal(
                 fixture.changedEntries.length,
-                ["delta", "compare", "reconcile", "checkpoint"].includes(scenario)
+                ["delta", "compare", "reconcile", "checkpoint", "startup"].includes(scenario)
                   ? options.changedFiles
                   : 0,
                 "prepared fixture changed count differs",

@@ -52,7 +52,10 @@ import {
   resolveHeartbeatSchedulerSeed,
 } from "./doctor-heartbeat-schedule.js";
 import { resolveLegacyHeartbeatSessionKey } from "./doctor-heartbeat-session.js";
-import { isHeartbeatTaskCronJob } from "./doctor-heartbeat-task-identity.js";
+import {
+  isHeartbeatTaskCronJob,
+  resolveHeartbeatTaskPromptRepair,
+} from "./doctor-heartbeat-task-identity.js";
 
 const CHECK_ID = "core/doctor/heartbeat-cadence-migration";
 
@@ -396,7 +399,12 @@ export function hasPendingHeartbeatCadenceMigration(
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
   const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
-  const loaded = readDoctorHeartbeatJobs(storePath, env);
+  const rows =
+    withExistingOpenClawStateDatabaseReadOnly(
+      ({ db }) => loadCronRows(db, cronStoreKey(storePath)),
+      { env },
+    ) ?? [];
+  const loaded = decodeDoctorHeartbeatJobRows(rows);
   const configured = new Set(
     resolveLegacyHeartbeatAgents(cfg)
       .filter((agent) => agent.heartbeat !== undefined)
@@ -421,7 +429,19 @@ export function hasPendingHeartbeatCadenceMigration(
       ({ db }) =>
         [...agentIds].some((agentId) => {
           const receipt = readDefaultProactiveJobReceiptInDatabase(db, storePath, agentId);
-          return receipt?.phase === "pending" || (configured.has(agentId) && !receipt);
+          return (
+            receipt?.phase === "pending" ||
+            (configured.has(agentId) && !receipt) ||
+            loaded.some(
+              (job) =>
+                job.agentId === agentId &&
+                resolveHeartbeatTaskPromptRepair(
+                  job,
+                  receipt,
+                  rows.find((row) => row.job_id === job.id)?.updated_at,
+                ),
+            )
+          );
         }),
       { env },
     ) ?? configured.size > 0

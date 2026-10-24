@@ -111,10 +111,10 @@ it("retains an open activity disclosure and its animation when usage updates", (
   const totals = { bubbleMode: true, outputTokens: 12 };
   const { container, draw, find } = indicator("run", totals);
   const details = Object.assign(container.querySelector("details")!, { open: true });
-  const glyph = find(bubbleSelector)!;
+  const glyph = find("summary .chat-bubble-dots")!;
   draw({ ...totals, outputTokens: 27 });
   expect(find("details")).toBe(details);
   expect(details.open).toBe(true);
-  expect(find(bubbleSelector)).toBe(glyph);
+  expect(find("summary .chat-bubble-dots")).toBe(glyph);
   expect(container.textContent).toContain("27 output tokens");
 });

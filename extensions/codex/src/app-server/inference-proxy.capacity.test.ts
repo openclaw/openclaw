@@ -593,7 +593,7 @@ describe("inference relay capacity", () => {
         const stale = await open();
         const next = await open();
         const streams = await holdUploads();
-        const registration = proxy.context.register({
+        const registration = await proxy.context.register({
           threadId: "root",
           text: "synthetic persona",
           signal: new AbortController().signal,

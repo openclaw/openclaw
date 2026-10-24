@@ -38,6 +38,7 @@ export const defaultControlUiFeatureMethods = [
   "sessions.patchMany",
   "sessions.branches.switch",
   "sessions.compact",
+  "sessions.companion.state",
   "sessions.create",
   "sessions.delete",
   "sessions.dispatch",

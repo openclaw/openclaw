@@ -13,6 +13,7 @@ const RETIRED_NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURES = [
   "node-worker-supervisor-v5",
 ] as const;
 export const NODE_WORKER_BUNDLE_RETENTION_VERSION = 1;
+export const NODE_WORKER_BUNDLE_PREFETCH_VERSION = 1;
 export const NODE_WORKER_BUNDLE_STATUS_VERSION = 1;
 export const NODE_WORKER_PORTAL_STREAM_VERSION = 1;
 export const NODE_WORKER_ENVIRONMENT_SESSION_VERSION = 1;
@@ -83,6 +84,7 @@ const WorkerHost = z
       capacity: CapacitySnapshot,
       bundlePrewarm: z.literal(WORKER_BUNDLE_PREWARM_VERSION).optional(),
       bundleRetention: z.literal(NODE_WORKER_BUNDLE_RETENTION_VERSION).optional(),
+      bundlePrefetch: z.literal(NODE_WORKER_BUNDLE_PREFETCH_VERSION).optional(),
       bundleStatus: z.literal(NODE_WORKER_BUNDLE_STATUS_VERSION).optional(),
       portalStream: z.literal(NODE_WORKER_PORTAL_STREAM_VERSION).optional(),
       environmentSession: z.literal(NODE_WORKER_ENVIRONMENT_SESSION_VERSION).optional(),

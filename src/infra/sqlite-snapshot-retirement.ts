@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { collectSynchronousErrors } from "./error-graph-internal.js";
 import {
   acquireSqliteStagingToken,
   SQLITE_STAGING_TOKEN_FILES,
@@ -15,14 +16,7 @@ export const SQLITE_SNAPSHOT_LEGACY_MARKER = new RegExp(
 const tokenMarker = new RegExp(`^${SQLITE_SNAPSHOT_PREFIX}${suffix}`, "u");
 export const SQLITE_SNAPSHOT_LEGACY_AGE_MS = 24 * 60 * 60 * 1000;
 function releaseTokens(tokens: Iterable<SqliteStagingToken>): void {
-  const failures: unknown[] = [];
-  for (const token of tokens) {
-    try {
-      token();
-    } catch (error) {
-      failures.push(error);
-    }
-  }
+  const failures = collectSynchronousErrors(tokens, (token) => token());
   if (failures.length) {
     throw new AggregateError(failures, "SQLite snapshot retirement token release failed");
   }

@@ -70,7 +70,16 @@ export function TranscriptSearchForm(props: TranscriptSearchProps) {
             value={query()}
             onInput={(event) => props.onTranscriptSearchChange(event.currentTarget.value)}
             onKeyDown={(event: KeyboardEvent) => {
-              if (event.key === "Escape") {
+              if (
+                event.key === "Escape" &&
+                !event.defaultPrevented &&
+                !event.isComposing &&
+                event.keyCode !== 229 &&
+                !event.altKey &&
+                !event.ctrlKey &&
+                !event.metaKey &&
+                !event.shiftKey
+              ) {
                 event.preventDefault();
                 setExpanded(false);
                 onSettled(() => trigger?.focus({ preventScroll: true }));

@@ -99,6 +99,7 @@ export function readRunProjections(state: ChatState, sessionKey: string, agentId
 export function applyHistoryRun(params: {
   state: ChatState;
   run: ChatHistoryResult["inFlightRun"];
+  observedRunActivity?: boolean;
   sessionInfo: GatewaySessionRow | undefined;
   historyRun: ChatHistoryRunObservation | undefined;
   previousRunProjections: ReturnType<typeof getChatSessionProjection>["runs"];
@@ -274,7 +275,10 @@ export function applyHistoryRun(params: {
   );
   const startupPhase = startup?.data.phase;
   if (
-    run.text &&
+    (run.text ||
+      (!startup &&
+        state.chatRunStartup?.runId !== inFlightRunId &&
+        (params.observedRunActivity ?? state.knownAgentRunIds?.has(inFlightRunId)))) &&
     startupPhase !== "waiting_for_model" &&
     !isChatRunRecoveryStatus(state.chatRunStartup)
   ) {

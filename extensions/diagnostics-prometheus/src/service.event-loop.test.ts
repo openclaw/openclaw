@@ -387,7 +387,7 @@ describe("diagnostics-prometheus runtime metrics", () => {
     }
   });
 
-  it("exports cumulative worker traffic without recounting repeated memory samples", () => {
+  it("exports cumulative work without recounting repeated memory samples", () => {
     const metrics = createMetricsHarness();
     try {
       const sample = {
@@ -408,10 +408,15 @@ describe("diagnostics-prometheus runtime metrics", () => {
               unmeasuredMessages: 2,
             },
           ],
+          sessionRowSelections: {
+            selections: [{ kind: "parent" as const, task: "control-ui-pr", calls: 4, rows: 12 }],
+            resets: 2,
+          },
         },
       };
       metrics.record(sample, untrusted);
       expect(metrics.render()).not.toContain("openclaw_worker_messages_total");
+      expect(metrics.render()).not.toContain("openclaw_session_row_selections_total");
       metrics.record(sample, trusted);
       metrics.record(sample, trusted);
       const rendered = metrics.render();
@@ -424,6 +429,13 @@ describe("diagnostics-prometheus runtime metrics", () => {
           `openclaw_worker_${metric}{direction="from_worker",kind="sqlite_reply"} ${value}\n`,
         );
       }
+      expect(rendered).toContain(
+        'openclaw_session_row_selections_total{kind="parent",task="control-ui-pr"} 4\n',
+      );
+      expect(rendered).toContain(
+        'openclaw_session_row_selection_rows_total{kind="parent",task="control-ui-pr"} 12\n',
+      );
+      expect(rendered).toContain("openclaw_session_row_selection_resets_total 2\n");
     } finally {
       metrics.stop();
     }

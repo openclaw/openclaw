@@ -213,7 +213,8 @@ function childSessionOwnerKey(entry: {
   childAgentId?: string;
 }): string | undefined {
   const owner = resolveSubagentChildAgentId(entry);
-  return owner ? JSON.stringify([owner, entry.childSessionKey]) : undefined;
+  // Process-local index keys need no JSON encoding; the owner length keeps arbitrary child keys injective.
+  return owner ? `${owner.length}:${owner}${entry.childSessionKey}` : undefined;
 }
 
 function collectorGroupKey(entry: SubagentRunRecord): string | undefined {

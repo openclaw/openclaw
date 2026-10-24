@@ -1,4 +1,5 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
+import syncFs from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -193,6 +194,7 @@ describe("playback transcode policy", () => {
   );
 
   it("does not reuse a rendition after the source file is replaced", async () => {
+    using sync = vi.spyOn(syncFs, "fsyncSync");
     const original = await createSource("replaced-cache.mkv", "first-source");
     const params = { ...original, mimeType: "video/x-matroska", kind: "video" as const };
     runFfmpeg.mockImplementation(async (args: string[]) => {
@@ -222,6 +224,7 @@ describe("playback transcode policy", () => {
       throw new Error("Expected replacement playback output");
     }
     expect(await fs.readFile(result.path, "utf8")).toBe("rendition-2");
+    expect(sync).not.toHaveBeenCalled();
   });
 });
 

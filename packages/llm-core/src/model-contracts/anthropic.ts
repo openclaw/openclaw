@@ -22,14 +22,6 @@ function readListedClaudeCapability(
   return typeof value === "boolean" ? value : undefined;
 }
 
-function normalizeClaudeModelId(modelId?: string): string {
-  const normalized = modelId?.trim().toLowerCase() ?? "";
-  const unprefixed = normalized.startsWith("anthropic/")
-    ? normalized.slice("anthropic/".length)
-    : normalized;
-  return unprefixed.replace(/[._\s]+/g, "-");
-}
-
 export const CLAUDE_FABLE_5_THINKING_PROFILE = {
   levels: [{ id: "low" }, { id: "medium" }, { id: "high" }, { id: "xhigh" }, { id: "max" }],
   defaultLevel: "medium",
@@ -86,7 +78,11 @@ export function resolveClaudeHaiku55ModelIdentity(ref: ClaudeModelRef): string |
 export function resolveClaudeModelIdentity(ref: ClaudeModelRef): string {
   const configuredCanonicalModelId =
     typeof ref.params?.canonicalModelId === "string" ? ref.params.canonicalModelId : undefined;
-  const normalized = normalizeClaudeModelId(configuredCanonicalModelId ?? ref.id);
+  const modelId = (configuredCanonicalModelId ?? ref.id)?.trim().toLowerCase() ?? "";
+  const unprefixed = modelId.startsWith("anthropic/")
+    ? modelId.slice("anthropic/".length)
+    : modelId;
+  const normalized = unprefixed.replace(/[._\s]+/g, "-");
   // Routing namespaces can themselves start with "Claude"; only the final
   // path component identifies the backing model.
   const match = /(?:^|[-/])(claude-[^/]+)$/.exec(normalized);

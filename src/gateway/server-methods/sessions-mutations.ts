@@ -32,6 +32,7 @@ import {
   projectSessionActor,
 } from "../session-identity-projection.js";
 import { loadSessionLifecycleRuntime } from "../session-lifecycle-runtime-loader.js";
+import { sessionMutationForbiddenError } from "../session-mutation-authorization-error.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { prepareSessionMutationFacts } from "../session-sharing-preparation.js";
 import {
@@ -309,11 +310,8 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
                   current.entry,
                 ) === false
               ) {
-                throw new SessionMutationAuthorizationChangedError(
-                  errorShape(
-                    ErrorCodes.FORBIDDEN,
-                    "Session access changed. Refresh the session list.",
-                  ),
+                throw sessionMutationForbiddenError(
+                  "Session access changed. Refresh the session list.",
                 );
               }
             },

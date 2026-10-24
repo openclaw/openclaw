@@ -554,7 +554,11 @@ describe("chat waiting on subagents", () => {
       const part = { kind: "reading-indicator" as const, key: "parent-wait", startedAt: 1_500 };
       const draw = mountWorkingIndicator(container, part, options);
       expect(container.textContent).toContain("Working…");
-      expect(container.querySelector(".chat-reading-indicator")).not.toBeNull();
+      expect(
+        container.querySelector(
+          bubbleMode ? ".chat-bubble-dots--working" : ".chat-reading-indicator",
+        ),
+      ).not.toBeNull();
       draw({
         ...options,
         subagentActivity: { rows: projection.activity, onOpenSubagent },
@@ -563,8 +567,16 @@ describe("chat waiting on subagents", () => {
       flush();
       expect(container.textContent).toContain("Backend implementation");
       expect(container.textContent).not.toContain("Waiting on");
-      expect(container.querySelector(".chat-working-indicator")).toBeNull();
-      container.querySelector("button")?.click();
+      if (bubbleMode) {
+        const details = container.querySelector("details")!;
+        expect(details.open).toBe(false);
+        details.querySelector("summary")!.click();
+        expect(details.open).toBe(true);
+        expect(details.querySelector(".chat-working-indicator")).not.toBeNull();
+      } else {
+        expect(container.querySelector(".chat-working-indicator")).toBeNull();
+      }
+      container.querySelector<HTMLButtonElement>("[data-subagent-session-key] button")?.click();
       expect(onOpenSubagent).toHaveBeenCalledWith(child.key);
       container.remove();
     },

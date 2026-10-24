@@ -76,7 +76,7 @@ it.each(["shutdown", "restart"] as const)(
       getRuntimeConfig: () => config,
       recoveryRuntime: runtime,
     });
-    const recovery = recoverSessionSendDeliveries(context, cancellation.signal);
+    const recovery = recoverSessionSendDeliveries(context, cancellation.signal).settled;
     try {
       await awaitGateBeforeSettlement(
         paused.promise,

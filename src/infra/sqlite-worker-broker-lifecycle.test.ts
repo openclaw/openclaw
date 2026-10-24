@@ -19,7 +19,10 @@ import { readSqliteWorkerRequestCustody } from "./sqlite-worker-request-custody.
 
 const createCpuTrackedWorker = vi.hoisted(() => vi.fn());
 // mock-isolation: Synthetic carriers exercise admission and retirement without native threads.
-vi.mock("./worker-cpu.js", () => ({ createCpuTrackedWorker }));
+vi.mock("./worker-cpu.js", () => ({
+  createCpuTrackedWorker,
+  receiveWorkerMemoryPort: () => false,
+}));
 // mock-isolation: Use synthetic workers without selecting a native SQLite library.
 vi.mock("./bun-sqlite-library.js", () => ({ ensureSqliteLibrarySelected() {} }));
 

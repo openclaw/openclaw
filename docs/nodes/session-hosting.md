@@ -42,19 +42,26 @@ refreshes its session-hosting declaration and current worker slots. The Gateway
 waits for that fresh declaration before making the host available again; the
 app or node-host process does not need to restart.
 
-When a session first needs the current worker build, the Gateway sends its sealed
-worker artifact to the paired host. The node verifies the exact content hash,
+After a Gateway update or reconnect, supported persistent paired hosts prefetch
+the current sealed worker archive in the background. Prefetch downloads and verifies
+the archive only; it does not extract, prewarm, or launch a worker. A session arriving
+during prefetch takes priority and cancels the background transfer if needed.
+Prefetch failures produce a warning and leave normal session installation available.
+Older nodes and cloud-enrolled nodes keep session-owned installation.
+
+When a session first needs the current worker build, the node reuses a valid
+prefetched archive or acquires it from the paired Gateway. It verifies the exact content hash,
 publishes the artifact atomically, and prewarms it when supported by the execution mode.
 The artifact contains its complete JavaScript dependency closure; the node does
 not install packages or execute lifecycle scripts. Runtime chunks are sealed and
 verified with the artifact, and cold workers complete admission before loading
-the turn runtime. Installation belongs to the
-session request and receives its cancellation signal. Reconnect maintenance does
-not install or prewarm a worker build.
+the turn runtime. Installation belongs to the session request and receives its
+cancellation signal.
 
 Once installed, persistent nodes retain one current worker artifact per Gateway
-namespace, even with no sessions. Older builds remain only while a live or
-recoverable placement needs them; normal maintenance removes unreferenced builds.
+namespace, even with no sessions. Prefetched archives use the same bounded retention.
+Older builds remain only while a live or recoverable placement needs them;
+normal maintenance removes unreferenced builds.
 Each new dispatch still validates the installed artifact and reuses it when valid,
 avoiding another download. Cloud-enrolled nodes keep their own execution-mode-specific
 installation and retention lifecycle.

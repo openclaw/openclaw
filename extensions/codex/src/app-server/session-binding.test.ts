@@ -644,7 +644,7 @@ describe("Codex app-server binding store", () => {
           reclaimGeneration({
             bindingStore: store,
             identity: current,
-            storePath,
+            config: { session: { store: storePath } },
           }),
         ).resolves.toBe(true);
         expect(store.read(current)).toEqual(binding);
@@ -701,7 +701,7 @@ describe("Codex app-server binding store", () => {
         reclaimGeneration({
           bindingStore: store,
           identity: current,
-          storePath,
+          config: { session: { store: storePath } },
         }),
       ).resolves.toBe(mismatch !== "two generations behind" || !supervision);
       expect(store.read(current)).toBeUndefined();

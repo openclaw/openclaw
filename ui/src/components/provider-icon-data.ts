@@ -65,6 +65,7 @@ const PROVIDER_ICON_NAMES = new Set([
   "poe",
   "qianfan",
   "qoder",
+  "requesty",
   "runway",
   "sakana",
   "stepfun",

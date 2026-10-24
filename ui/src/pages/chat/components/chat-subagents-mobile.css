@@ -295,3 +295,7 @@
   background: var(--subagent-row-surface);
   box-shadow: 0 0 0 2px var(--subagent-row-surface);
 }
+
+.chat-subagents-mobile:has(> openclaw-panel-empty-state) {
+  padding: 0;
+}

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { getSqliteRuntimeCapabilities } from "../infra/bun-sqlite-library.js";
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
@@ -45,6 +46,7 @@ import { assertStateReadSchemaForPolicy } from "./openclaw-state-db-read-schema.
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
 import {
   admitStateSchemaFacts,
+  PostgresSchemaAdmissionUnavailableError,
   type StateSchemaContentVersionRowReader,
 } from "./openclaw-state-db-schema-version.js";
 import { postgresStateReadSnapshot } from "./openclaw-state-postgres-snapshot-context.js";
@@ -264,6 +266,8 @@ export function readOpenClawStateReadOnlyLocation<T>(
     // Scope and path policy are authority, not ordinary schema SQL failure.
     const existingSchema = isExistingOpenClawStateSchema(pathname, opened.database.db);
     try {
+      let operationStarted = false;
+      const snapshot = postgresStateReadSnapshot.getStore();
       const read = () =>
         runSqliteReadOperationSync(opened.database.db, () => {
           admitStateSchemaFacts(opened.database.db, pathname);
@@ -274,14 +278,13 @@ export function readOpenClawStateReadOnlyLocation<T>(
             undefined,
             readContentVersionRow,
           );
+          operationStarted = true;
           return operation(opened.database);
         });
-      result = {
-        status: "available",
-        value: isPostgresSqlConnection(opened.database.db)
+      const readTransaction = () =>
+        isPostgresSqlConnection(opened.database.db)
           ? opened.database.db.runTransaction(
               () => {
-                const snapshot = postgresStateReadSnapshot.getStore();
                 if (snapshot?.path === pathname) {
                   // sqlite-allow-raw: PostgreSQL imports the retained worker's MVCC snapshot before any read.
                   opened.database.db.exec(
@@ -293,8 +296,29 @@ export function readOpenClawStateReadOnlyLocation<T>(
               undefined,
               true,
             )
-          : read(),
-      };
+          : read();
+      let value: T;
+      try {
+        value = readTransaction();
+      } catch (error) {
+        if (
+          !(error instanceof PostgresSchemaAdmissionUnavailableError) ||
+          operationStarted ||
+          snapshot?.path === pathname ||
+          !isPostgresSqlConnection(opened.database.db) ||
+          !opened.database.db.isOpen ||
+          opened.database.db.isTransaction
+        ) {
+          throw error;
+        }
+        // A sibling can publish schema after BEGIN. Refresh only after rollback,
+        // before caller work, and without replacing an imported MVCC snapshot.
+        if (!getPostgresPhysicalFacts(opened.database.db)) {
+          throw error;
+        }
+        value = readTransaction();
+      }
+      result = { status: "available", value };
     } catch (error) {
       if (!isPostgresSqlConnection(opened.database.db) && isSqliteCorruptionError(error)) {
         invalidateOpenClawStateRuntimeIntegrity(opened.database.db);

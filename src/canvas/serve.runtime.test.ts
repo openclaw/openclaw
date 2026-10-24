@@ -10,15 +10,19 @@ import { buildWidgetDocument } from "./wrap.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let stateDir: string;
+let documentId: string;
 beforeEach(() => {
   stateDir = tempDirs.make("openclaw-canvas-serve-");
+  documentId = "missing-widget";
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
 });
 afterEach(() => vi.unstubAllEnvs());
-const documentUrl = (file = "index.html") => `/__openclaw__/canvas/documents/widget-1/${file}`;
+const documentUrl = (file = "index.html") => `/__openclaw__/canvas/documents/${documentId}/${file}`;
 
 async function createHtmlDocument(html: string, cspSandbox?: "scripts") {
-  return createCanvasDocument({ id: "widget-1", html, cspSandbox }, { stateDir });
+  const document = await createCanvasDocument({ html, cspSandbox });
+  documentId = document.id;
+  return document;
 }
 
 async function capture(url: string, method = "GET") {
@@ -89,7 +93,8 @@ describe("core canvas document host", () => {
 
   it("serves Content-Length on HEAD responses", async () => {
     const document = await createHtmlDocument("<html><body>widget</body></html>", "scripts");
-    const file = (name: string) => path.join(resolveCanvasDocumentsDir(stateDir), "widget-1", name);
+    const file = (name: string) =>
+      path.join(resolveCanvasDocumentsDir(stateDir), document.id, name);
     await writeFile(file("style.css"), "body { color: red; }", "utf8");
 
     const { get: getHtml, head: headHtml } = await expectHead(document.entryUrl);

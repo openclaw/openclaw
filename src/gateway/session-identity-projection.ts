@@ -25,7 +25,6 @@ import { looksLikeAvatarPath } from "../shared/avatar-policy.js";
 import { SESSIONS_LIST_OWNER_LIMIT } from "../shared/session-list-limits.js";
 import type { SessionOwnerFacetIdentity } from "../shared/session-types.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
-import type { SynchronousWork } from "../shared/synchronous-work.js";
 import { resolveUserProfileReference } from "../state/user-profile-list.js";
 import { buildControlUiResourcePath } from "./control-ui-contract.js";
 import { normalizeControlUiBasePath } from "./control-ui-shared.js";
@@ -291,13 +290,12 @@ export function projectSessionPeople(
 }
 
 /** Resolve navigation references within the caller-prepared visibility scope. */
-export function* resolveSessionListProfileReference(
+export function resolveSessionListProfileReference(
   reference: string,
   entries: readonly SessionEntryPair[],
   identities: Map<string, SessionActorProfileIdentity | undefined>,
   allowedProfileIds: ReadonlySet<string> | undefined,
-  shouldYield?: () => boolean,
-): SynchronousWork<Result<string | undefined, "ambiguous">> {
+): Result<string | undefined, "ambiguous"> {
   const exact = resolveSessionProfileId(reference, identities);
   if (identities.get(reference) && (!allowedProfileIds || allowedProfileIds.has(exact))) {
     return ok(exact);
@@ -315,9 +313,6 @@ export function* resolveSessionListProfileReference(
   // Qualified associations outlive profile rows. Resolve over caller-visible identities
   // before time/search filters so hidden associations cannot affect the result.
   for (const [, entry] of entries) {
-    if (shouldYield?.()) {
-      yield;
-    }
     if (
       matchesReference(sessionCreatorProfileId(entry.createdActor)) ||
       entry.participants?.some(matchesParticipant)

@@ -397,6 +397,14 @@ describe.skipIf(!connection)("agent database port", () => {
       INSERT INTO memory_entry_origins VALUES ('retained-memory', 'main', 'session', 'agent:main:main', 'owner', 1);
       INSERT INTO memory_session_tombstones VALUES ('forgotten-session', 'main', 'deleted', 1);
       INSERT INTO cache_entries VALUES ('retained', 'binary', NULL, X'00ff80', NULL, 1);`);
+    const cachedEmbedding = Buffer.from("000000000000f03f0000000000000080", "hex");
+    for (const providerKey of ["current-provider-settings", "retained-provider-settings"]) {
+      source
+        .prepare(`INSERT INTO memory_embedding_cache
+        (provider, model, provider_key, hash, embedding, dims, updated_at)
+        VALUES ('fixture-provider', 'fixture-model', ?, 'unchanged-chunk', ?, 2, 17)`)
+        .run(providerKey, cachedEmbedding);
+    }
     admitSqliteSchema(source);
     const event = JSON.stringify({
       type: "message",
@@ -577,6 +585,22 @@ describe.skipIf(!connection)("agent database port", () => {
       expect(roundtrip.prepare("SELECT count(*) AS count FROM memory_index_chunks").get()).toEqual({
         count: 0,
       });
+      expect(
+        roundtrip
+          .prepare(`SELECT provider, model, provider_key, hash, hex(embedding) AS embedding,
+          dims, updated_at FROM memory_embedding_cache ORDER BY provider_key`)
+          .all(),
+      ).toEqual(
+        ["current-provider-settings", "retained-provider-settings"].map((provider_key) => ({
+          provider: "fixture-provider",
+          model: "fixture-model",
+          provider_key,
+          hash: "unchanged-chunk",
+          embedding: "000000000000F03F0000000000000080",
+          dims: 2,
+          updated_at: 17,
+        })),
+      );
       expect(
         roundtrip
           .prepare(

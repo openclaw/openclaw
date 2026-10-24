@@ -371,13 +371,7 @@ export function runSqliteMutationWorkerRequest<Result>(params: {
                     : acquire();
                   schemaLease = lease;
                   authority.maintenanceScope?.own(lease, "shared-resources", () => lease.release());
-                  return {
-                    assertCurrent() {
-                      assertAccess();
-                      lease.assertCurrent();
-                    },
-                    release: () => lease.release(),
-                  };
+                  return lease;
                 },
               });
             }

@@ -120,6 +120,14 @@ and does not bind or prepare the PR in the conversation. Its result is data,
 not authority for another action. The separate `inspect` action below keeps its
 existing full-operator and session-publication requirements.
 
+Do not use `inspect_pr` as a credential preflight for the managed publisher.
+A PR authored by that publisher is not necessarily authored by an account linked
+to the requesting person. For the current conversation's existing publication,
+read metadata with `edit` without a title or body. For new work, use `publish`;
+it checks the selected publisher at the publication boundary. A bot-authored PR
+from another conversation is not eligible for own-PR import just because the
+publisher created it; continue in its original publication conversation.
+
 To continue that PR in the same local conversation, use `github_publish` with
 `action: "prepare_pr"` and `pullRequestUrl`. This action is offered only in
 sessions with a writable managed sandbox or an ordinary local Docker or Podman
@@ -293,6 +301,8 @@ Publication stages workspace changes with ordinary Git attribute conversion. It 
 <a id="workflow-and-ci-changes" />
 
 Session-only write access can publish ordinary source changes from the requester's own sessions through the configured shared account. Membership in another session does not grant that publication authority. Changes to GitHub Actions definitions in `.github/workflows/*.yml` or `.github/workflows/*.yaml` require the original requester's full operator write authority. This includes committed edits, deletions, and renames. If an accepted snapshot changes those definitions, publication preserves the saved work and asks a maintainer to publish it, or asks the requester to restore the definitions before requesting publication again. The check compares exact paths, modes, and blobs (including deleted definitions) with the published branch or original pull request base. Unchanged published definitions remain allowed. An update inherited unchanged from the authenticated target branch is also allowed when the published definition still matches their unambiguous common ancestor. Newly authored changes and conflicting resolutions still require full write authority, even when the result matches the target branch. Repository-only checkpoints cannot prove unambiguous inheritance from a source base that has diverged from the target, or infer a merge from previously copied workflow contents; those ambiguous updates still require a maintainer.
+
+This is an OpenClaw requester-permission check, not a GitHub token-scope check. Reconnecting the publisher or granting its token additional scopes does not grant the requester full operator write authority.
 
 This check covers only workflow definition files. Workflows commonly run code from the pull request branch, such as package scripts, local actions under `.github/actions/`, and repository scripts. When the checkout's `origin` is the upstream repository, publication pushes the session branch into that repository, and its `pull_request` workflows run with repository secrets. If people with session-only access publish, point the checkout's `origin` at a fork owned by the shared account. Publication then pushes to the fork and opens a pull request against the parent repository's default branch, and the shared account no longer needs write access upstream for publication. By default, GitHub withholds repository secrets from `pull_request` workflows triggered by forks. That isolation does not hold when a private repository sends secrets to fork pull requests, or for `pull_request_target` workflows that run pull request code; review those workflows separately. Publication creates open pull requests by default, or drafts when explicitly requested. It never merges, approves, or changes the state of an existing pull request. Same-conversation landing requires the shared account to have merge access to the PR's base repository. Protect that base branch with required reviews and checks, without granting the shared account bypass permission. A publication-only account can remain unable to merge.
 
