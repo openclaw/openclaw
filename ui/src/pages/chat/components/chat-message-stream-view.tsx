@@ -351,18 +351,9 @@ function WorkGroupSummaryBody(props: {
           ref={(element) => (disclosureContent = element)}
           class="chat-tool-disclosure__content"
         >
-          <span class="chat-activity-group__label">
-            {compact() && props.summary.total > 0
-              ? t(
-                  props.summary.total === 1
-                    ? "chat.workRun.toolCallsOne"
-                    : "chat.workRun.toolCallsMany",
-                  { count: String(props.summary.total) },
-                )
-              : props.summary.label}
-          </span>
+          <span class="chat-activity-group__label">{props.summary.label}</span>
         </span>
-        <Show when={!compact() && props.options.expanded && props.summary.total > 0}>
+        <Show when={props.options.expanded && props.summary.total > 0}>
           <span class="chat-work-group__total">
             {" · "}
             {t(`chat.workRun.toolCalls${props.summary.total === 1 ? "One" : "Many"}`, {

@@ -5,8 +5,7 @@ import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
-import { WorkGroupSummary } from "./chat-message-stream-view.tsx";
-import { createToolGroup, createToolResultMessage } from "./chat-message.test-support.ts";
+import { createToolResultMessage } from "./chat-message.test-support.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import {
   installTranscriptDomMocks,
@@ -225,26 +224,4 @@ it("collapses parallel work behind one bubble without hiding task links", async 
   container.querySelector("summary")!.click();
   expect(container.querySelector("details")?.open).toBe(true);
   expect(container.querySelectorAll("[data-subagent-session-key] button")).toHaveLength(2);
-});
-
-it("settles completed bubble work to a counted receipt rather than a working timer", () => {
-  const { container, dispose } = mountSolid(WorkGroupSummary, {
-    item: {
-      key: "completed-work",
-      durationMs: 47_000,
-      groups: [
-        createToolGroup("read", [
-          {
-            key: "read-result",
-            message: createToolResultMessage("read", "read", "Contents"),
-          },
-        ]),
-      ],
-    },
-    options: { bubbleMode: true, expanded: false, onToggle: () => {} },
-  });
-  onTestFinished(dispose);
-  expect(container.querySelector("button")?.textContent).toContain("1 tool call");
-  expect(container.textContent).not.toContain("47s");
-  expect(container.querySelector(".chat-bubble-dots--working")).toBeNull();
 });
