@@ -34,19 +34,15 @@ function writeStore(
   storeJson = "{}",
   asView = false,
 ) {
-  const [key, value, updated] =
-    table === "config_machine_state"
-      ? ["state_key", "value_json", "updated_at_ms"]
-      : ["store_key", "store_json", "updated_at"];
+  const [key, value] =
+    table === "config_machine_state" ? ["state_key", "value_json"] : ["store_key", "store_json"];
   if (asView) {
-    db.exec(
-      `CREATE VIEW ${table} AS SELECT '${rowKey}' AS ${key}, '{}' AS ${value}, 1 AS ${updated}`,
-    );
+    db.exec(`CREATE VIEW ${table} AS SELECT '${rowKey}' AS ${key}, '{}' AS ${value}`);
   } else {
-    db.exec(`CREATE TABLE ${table} (
-      ${key} TEXT NOT NULL PRIMARY KEY, ${value} TEXT NOT NULL, ${updated} INTEGER NOT NULL
-    ) STRICT`);
-    db.prepare(`INSERT INTO ${table} VALUES (?, ?, ?)`).run(rowKey, storeJson, Date.now());
+    db.exec(
+      `CREATE TABLE ${table} (${key} TEXT NOT NULL PRIMARY KEY, ${value} TEXT NOT NULL) STRICT`,
+    );
+    db.prepare(`INSERT INTO ${table} VALUES (?, ?)`).run(rowKey, storeJson);
   }
 }
 
@@ -87,23 +83,21 @@ it("reads the release-owned shared row before schema v13", () => {
   expect(readSharedAuthProfileStoreText(stateDir)).toBe('{"version":1,"schema":12}');
 });
 
-it("reads and permits the pre-v13 primary agent-store contract", () => {
-  writeAgentDatabase();
+it.each([false, true])(
+  "uses the agent store before shared-auth ownership (state DB: %s)",
+  (shared) => {
+    // Candidate 2026.6.35 creates this unused state table at schema v1 while
+    // its auth runtime still owns primary credentials in the agent database.
+    if (shared) {
+      writeSharedDatabase({ schemaVersion: 1, storeJson: '{"shared":true}' });
+    }
+    writeAgentDatabase();
 
-  expect(readCanonicalAuthProfileStoreText(stateDir)).toBe('{"version":1,"profiles":{}}');
-  expect(() => assertNoLegacyPrimaryAuthRows(stateDir)).not.toThrow();
-});
-
-it("uses the agent store before the shared-auth schema boundary", () => {
-  // Candidate 2026.6.35 creates this unused state table at schema v1 while
-  // its auth runtime still owns primary credentials in the agent database.
-  writeSharedDatabase({ schemaVersion: 1, storeJson: '{"shared":true}' });
-  writeAgentDatabase();
-
-  expect(readSharedAuthProfileStoreText(stateDir)).toBe("");
-  expect(readCanonicalAuthProfileStoreText(stateDir)).toBe('{"version":1,"profiles":{}}');
-  expect(() => assertNoLegacyPrimaryAuthRows(stateDir)).not.toThrow();
-});
+    expect(readSharedAuthProfileStoreText(stateDir)).toBe("");
+    expect(readCanonicalAuthProfileStoreText(stateDir)).toBe('{"version":1,"profiles":{}}');
+    expect(() => assertNoLegacyPrimaryAuthRows(stateDir)).not.toThrow();
+  },
+);
 
 it("does not let a retired agent row mask a missing v7 shared table", () => {
   writeSharedDatabase({ schemaVersion: 7, withoutCanonicalTable: true });

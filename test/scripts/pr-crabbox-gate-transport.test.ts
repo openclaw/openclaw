@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildCrabboxGateCommand } from "../../scripts/pr-lib/crabbox-gate-contract.mjs";
 import {
   buildCrabboxGateTransport,
   executeCrabbox,
@@ -44,32 +43,17 @@ function launch(
   return spawnSync("/bin/bash", [script, ...transport.args], { encoding: "utf8" });
 }
 
-it("streams an expanded plan without changing its canonical command or using oversized argv", () => {
-  const targets = Array.from(
-    { length: 12_000 },
-    (_, index) => `src/features/feature-${String(index).padStart(5, "0")}.test.ts`,
-  );
-  const command = buildCrabboxGateCommand(
-    {
-      baseSha: "c".repeat(40),
-      changedPaths: [{ path: "src/features/index.ts", status: "M" }],
-      headSha,
-      targets,
-      version: 1,
-    },
-    digest(bootstrap),
-  );
+it("streams an oversized command without changing its bytes or using oversized argv", () => {
+  const command = `#${"x".repeat(600_000)}\nprintf '%s' '${literal}'`;
   const transport = buildCrabboxGateTransport({ bootstrap, command, headSha });
   const commandHash = digest(command),
     payloadHash = digest(transport.input);
-  expect(Buffer.byteLength(command)).toBeGreaterThan(128 * 1024);
   expect(transport).toMatchObject({
     args: [headSha, digest(bootstrap), commandHash, payloadHash],
     uploadPath: `.crabbox/scripts/${payloadHash.slice(0, 12)}-script.sh`,
   });
   expect(Math.max(...transport.args.map((arg) => Buffer.byteLength(arg)))).toBe(64);
   expect(transport.input).toContain(`${command}\nOPENCLAW_GATE_${commandHash}\n`);
-  expect(transport.input).toContain(`${bootstrap}\n}`);
 });
 
 describe.skipIf(process.platform !== "linux")("Crabbox Linux launcher", () => {

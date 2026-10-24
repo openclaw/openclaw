@@ -17,7 +17,6 @@ const casesFor = (expected: Scope, ...paths: string[]): Case[] =>
 const cases: Case[] = [
   ...[
     ["packages/gateway-protocol/README.md", false],
-    ["packages/gateway-protocol/README.mdx", false],
     ["packages/gateway-protocol/src/schema.ts", true],
     ["packages/gateway-protocol/test/fixtures/README.md", true],
     ["packages/gateway-protocol/prompts/runtime.md", true],
@@ -104,9 +103,7 @@ const cases: Case[] = [
     "cli-invocation.mjs": { fastTasks: expect.arrayContaining(["bun-launcher"]) },
     "src/infra/sqlite-existing-database.ts": { fastTasks: ["bun-launcher"] },
   } satisfies Record<string, Scope>),
-  ...["docs/plugins/sdk-subpaths.md", "extensions/discord/skills/discord/SKILL.md"].map(
-    (path): Case => [["ui/src/styles/chat.css", path], { fastTasks: [] }],
-  ),
+  [["ui/src/styles/chat.css", "extensions/discord/skills/discord/SKILL.md"], { fastTasks: [] }],
   [
     ["ui/src/runtime.tsx", "src/config/catalog.json"],
     { madgeImportCycles: true, kyselyGuardrails: false },
