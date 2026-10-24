@@ -110,6 +110,21 @@ export function SidebarAgentRoster(props: RosterProps) {
     };
   };
   const parkedSections = createParkedProjection(() => props.sections, presented);
+  const sectionsByAgent = createMemo(() => {
+    const indexed = new Map<string, SidebarVisibleSections["sections"]>();
+    for (const section of parkedSections()) {
+      const agentId = /^agent:([^:]+):/.exec(section.id)?.[1];
+      if (agentId) {
+        const sections = indexed.get(agentId);
+        if (sections) {
+          sections.push(section);
+        } else {
+          indexed.set(agentId, [section]);
+        }
+      }
+    }
+    return indexed;
+  });
   const navigation = createMemo(() => projectOwner(context.navigation, (owner) => owner.snapshot));
   const pinnedIds = createParkedProjection(
     () => new Set(navigation().read().pinnedAgentIds),
@@ -347,25 +362,28 @@ export function SidebarAgentRoster(props: RosterProps) {
             {(card) => {
               const linkRef = createAgentLinkRef(card);
               const mainKey = () => host().selectedAgentMainSessionKey(card().id);
-              const sections = () =>
-                parkedSections().filter((section) => section.id.startsWith(`agent:${card().id}:`));
-              const main = createParkedProjection(
+              const sections = createMemo(() => sectionsByAgent().get(card().id) ?? []);
+              const parkedMain = createParkedProjection(
                 () => host().visibleHomeSession(card().id),
                 presented,
               );
-              const summaryRows = () => [
+              const main = createMemo(() => parkedMain());
+              const summaryRows = createMemo(() => [
                 ...(main() ? [main()!] : []),
                 ...sections().flatMap((section) => section.rows),
-              ];
-              const headerSummary = (): TeamSessionSlotsProps => ({
-                rows: summaryRows(),
-                includeChildren: true,
-                childCount: 0,
-                groupConflicts: summaryRows().reduce(
-                  (count, row) => count + (row.workspaceConflictCount ?? 0),
-                  0,
-                ),
-                statusOnly: true,
+              ]);
+              const headerSummary = createMemo<TeamSessionSlotsProps>(() => {
+                const rows = summaryRows();
+                return {
+                  rows,
+                  includeChildren: true,
+                  childCount: 0,
+                  groupConflicts: rows.reduce(
+                    (count, row) => count + (row.workspaceConflictCount ?? 0),
+                    0,
+                  ),
+                  statusOnly: true,
+                };
               });
               const active = () =>
                 isSessionRouteId(host().activeRouteId) &&

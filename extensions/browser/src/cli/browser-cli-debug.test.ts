@@ -26,7 +26,7 @@ describe("browser debug command timeouts", () => {
     { args: ["errors"], path: "/errors" },
     { args: ["requests"], path: "/requests" },
     { args: ["trace", "start"], path: "/trace/start" },
-    { args: ["trace", "stop"], path: "/trace/stop" },
+    { args: ["trace", "stop", "--out", " trace.zip "], path: "/trace/stop" },
   ])("inherits the parent timeout for $path", async ({ args, path }) => {
     for (const timeout of ["30000", "60000"]) {
       const { program, browser, parentOpts } = createBrowserProgram();
@@ -42,6 +42,9 @@ describe("browser debug command timeouts", () => {
         expect.objectContaining({ path, timeoutMs: Number(timeout) }),
         expect.objectContaining({ scopes: ["operator.admin"] }),
       );
+      if (path === "/trace/stop") {
+        expect(gatewayMock.mock.calls.at(-1)?.[2].body).toMatchObject({ path: " trace.zip " });
+      }
     }
   });
 });

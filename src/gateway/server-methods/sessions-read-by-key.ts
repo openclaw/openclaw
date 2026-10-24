@@ -16,7 +16,7 @@ import { projectOperatorModelRead } from "../operator-model-presentation.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
-import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
+import { prepareSessionRowPublication } from "../session-row-presentation.js";
 import { requireSessionRowProjection } from "../session-row-projection-access.js";
 import {
   authorizeIncognitoSessionTarget,
@@ -64,17 +64,19 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
         return undefined;
       }
       const query = { key, agentId: requestedAgent.agentId };
-      const presentation = prepareProjectedSessionPresentation(
-        read,
-        client,
+      const presentation = prepareSessionRowPublication(
+        projection,
         Date.now(),
+        read,
+      )(
+        client,
         createVisibleActiveSessionRunProjector(
           read.state.rowContext.projectedAgentRuns,
           undefined,
           context.resolveGatewayContext,
           read.physicalPaths,
         ),
-      );
+      ).getPresentation();
       const denied = presentation.authorizeDescription(query);
       if (denied) {
         respond(false, undefined, denied);
@@ -157,17 +159,19 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
         await withReadySessionRows(projection, queries, (read) => {
           assertCurrent();
           sessionMutationAuthorization?.assertCurrent();
-          const presentation = prepareProjectedSessionPresentation(
-            read,
-            client,
+          const presentation = prepareSessionRowPublication(
+            projection,
             Date.now(),
+            read,
+          )(
+            client,
             createVisibleActiveSessionRunProjector(
               read.state.rowContext.projectedAgentRuns,
               undefined,
               context.resolveGatewayContext,
               read.physicalPaths,
             ),
-          );
+          ).getPresentation();
           const query = { key, agentId: selected.agentId };
           const denied = presentation.authorizeDescription(query);
           if (denied) {

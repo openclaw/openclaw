@@ -13,7 +13,15 @@ export const visitorInviteDetailsSchema = Type.Object(
     githubLogin: Type.Optional(Type.String()),
     expiresAt: expiresAtSchema,
     gatewayAccess: Type.String(),
-    signInUrl: Type.String(),
+    signInUrl: Type.Optional(
+      Type.String({
+        description: "Absent without gateway.publicOrigin or when the Control UI is disabled.",
+      }),
+    ),
+    noteStored: Type.Boolean({ description: "Whether the grant now carries an inviter note." }),
+    invitationText: Type.String({
+      description: "Plain text for the inviter to hand to the visitor; contains no credentials.",
+    }),
   },
   {
     additionalProperties: false,

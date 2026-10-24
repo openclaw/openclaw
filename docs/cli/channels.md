@@ -61,6 +61,9 @@ With `--json`, every channel entry includes `label` alongside its accounts, inst
 
 ## Status / capabilities / resolve / logs
 
+Human-readable capability probe and diagnostic lines neutralize terminal control
+sequences. `--json` preserves the original values.
+
 `capabilities` and `resolve` reject explicitly empty or whitespace-only `--account`
 values. Omit the option to keep each command's default or broader account scope;
 do not pass an empty shell variable to request that scope.

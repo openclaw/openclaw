@@ -8,9 +8,9 @@
   },
   "type": "module",
   "dependencies": {
-    "@anthropic-ai/vertex-sdk": "0.20.4",
-    "google-auth-library": "11.3.0",
-    "undici": "8.11.2"
+    "@anthropic-ai/vertex-sdk": "0.21.0",
+    "google-auth-library": "11.3.1",
+    "undici": "8.12.2"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

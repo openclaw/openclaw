@@ -88,7 +88,7 @@ function holdObservation(onRead: (count: number) => void = () => {}) {
     .spyOn(stateReads, "executeExistingOpenClawStateRead")
     .mockImplementation(async (...args) => {
       const result = await execute(...args);
-      if (args[1].type === "githubPublication.sharedObservation") {
+      if (args[1].type === "githubPublications.sharedObservation") {
         entered.resolve();
         onRead(held.mock.calls.length);
         await release.promise;
@@ -370,7 +370,7 @@ describe("shared worktree receipt observation", () => {
     expect(await coordinator.latestShared(session, "accepted")).toEqual(expected);
     expect(
       reads.mock.calls.filter(
-        ([, command]) => command.type === "githubPublication.sharedObservation",
+        ([, command]) => command.type === "githubPublications.sharedObservation",
       ),
     ).toHaveLength(3);
     expect(observer).not.toHaveBeenCalled();

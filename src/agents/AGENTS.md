@@ -16,7 +16,7 @@ Own agent assembly, run authority, focused tests.
 
 ## Client Capability Scope
 
-- Attached-client tools: current connection/session capabilities, never backend host flags; clients differ. Capabilities ≠ authorization: [client capabilities](../../docs/gateway/protocol/handshake.md#client-capabilities).
+- Attached-client tool listing uses the session's recorded operator capabilities, never the current turn or backend host flags. Execution uses current client authority and checks the live recipient; clients differ. Capabilities ≠ authorization: [client capabilities](../../docs/gateway/protocol/handshake.md#client-capabilities).
 - Capability caches: connection/session lifecycles; share only process-stable provider metadata. Never select tools from another client's cached answer.
 - Backend portable-artifact tools need no client merely for UI display.
 - Prove differing clients on one backend, supported remote client without local UI flag, retirement of cached capabilities.

@@ -23,6 +23,7 @@ import { MAX_TASK_ARCHIVE_RECORD_BYTES } from "./session-accessor.sqlite-archive
 import * as archiveWorker from "./session-accessor.sqlite-archive.js";
 import { seedUnindexedTranscriptForTest } from "./session-accessor.sqlite-import.test-support.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
+import { listSessionTranscriptArchivesReadOnly } from "./session-history-read.js";
 import * as history from "./session-history.js";
 import * as historyReaders from "./session-transcript-worker-readers.js";
 
@@ -402,7 +403,7 @@ it("reads a pre-archive store without creating its optional archive table", asyn
     };
 
     expect(
-      history.listSessionTranscriptArchivesReadOnly({ ...scope, sessionIds: [scope.sessionId] }),
+      listSessionTranscriptArchivesReadOnly({ ...scope, sessionIds: [scope.sessionId] }),
     ).toEqual([]);
     await expect(
       withoutHostSql(() => history.findSessionTranscriptArchiveEventReadOnly(scope, "absent-run")),

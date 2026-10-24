@@ -428,12 +428,13 @@ describe("persisted human mentions in message bubbles", () => {
   >([
     ["string content", "user", text, { humanMentions }, true],
     ["text block", "user", [{ type: "text", text }], { humanMentions }, true],
-    ["assistant", "assistant", text, { humanMentions }, false],
+    ["Gateway-authored assistant", "assistant", [{ type: "text", text }], { humanMentions }, true],
+    ["tool result", "toolResult", text, { humanMentions }, false],
     ["capped user", "user", text, { humanMentions, truncated: true, reason: "oversized" }, false],
     ["unselected text", "user", text, undefined, false],
     ["replaced display", "user", text, { humanMentions }, false, "@Different Person"],
   ])(
-    "attaches identities only to unchanged selected user spans: %s",
+    "attaches identities only to unchanged selected message spans: %s",
     (_name, role, content, metadata, selected, replacement) => {
       const entry = { role, content, metadata, selected, replacement };
       const host = document.createElement("div");

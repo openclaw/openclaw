@@ -1,6 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, onTestFinished, vi, type Mock } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../../test/helpers/promise.js";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { resolveRuntimeWorkerUrl } from "../../../infra/runtime-worker-url.js";
 import { workerTaskPoolEntrypoints } from "../../../infra/worker-task-pool-runtime.test-support.js";
@@ -138,6 +142,117 @@ export function registerRequesterWakeSettlementBoundaryTests<Response>({
       progressOperationId: runId,
     };
   }
+  it.for(["cohort", "individual"] as const)(
+    "drains a restored %s before later cohorts when registry order differs",
+    async (firstKind, { signal }) => {
+      vi.setSystemTime(100_000);
+      const registryOrder = ["later-a", "later-b", "first"];
+      for (const [index, runId] of registryOrder.entries()) {
+        const endedAt = runId === "first" ? 3_000 : 4_000 + index;
+        await restoreChild(runId, {
+          createdAt: 1_000 + index,
+          execution: { status: "terminal", endedAt, outcome: { status: "ok" } },
+          cleanupCompletedAt: endedAt,
+          requesterSettleWake: pendingWake(runId),
+          ...(runId === "first" && firstKind === "individual"
+            ? {
+                cleanupCompletedAt: undefined,
+                requesterSettleWake: undefined,
+                delivery: { status: "pending" },
+                completion: {
+                  required: true,
+                  resultText: "Earlier child result",
+                  capturedAt: endedAt,
+                },
+              }
+            : {}),
+        });
+      }
+      await registry.resetSubagentRegistryForTests({ persist: false });
+      await activate();
+      const mailbox = getExistingSessionControllerMailbox(
+        requesterSessionKey,
+        captureSessionTarget({
+          storeScope: getFixture().sessionStorePath,
+          sessionKey: requesterSessionKey,
+        }),
+      );
+      try {
+        await withinTest(flushOwnedWork(), signal);
+        const expected = ["first", "later-a", "later-b"].map((runId) =>
+          runId === "first" && firstKind === "individual"
+            ? "announce:v1:agent:main:subagent:first:first"
+            : `announce:requester-settle:main:${requesterSessionKey}:${runId}:yield-1`,
+        );
+        expect(getAgentCalls().map((request) => request.params?.idempotencyKey)).toEqual(expected);
+        for (const runId of registryOrder) {
+          expect(readWake(runId)).toBeUndefined();
+        }
+        await advance(120_000, firstKind === "individual" ? 2 : 3);
+        expect(getAgentCalls().map((request) => request.params?.idempotencyKey)).toEqual(expected);
+      } finally {
+        for (const input of mailbox?.entries.slice() ?? []) {
+          retireSessionControllerInput(input);
+        }
+        await flushOwnedWork();
+      }
+    },
+  );
+  it("dispatches a yielded cohort once after a second restart retires an already-delivered wave", async ({
+    signal,
+  }) => {
+    vi.setSystemTime(100_000);
+    const earlierWave = ["earlier-a", "earlier-b"];
+    for (const runId of earlierWave) {
+      await restoreChild(runId, {
+        cleanupCompletedAt: 3_000,
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 1,
+          nextAttemptAt: 200_000,
+          batchRunIds: earlierWave,
+          rearmGeneration: 1,
+        },
+      });
+    }
+    await restoreChild("yielded-child", {
+      cleanupCompletedAt: 4_000,
+      requesterSettleWake: { ...pendingWake("yielded-child"), nextAttemptAt: 200_000 },
+    });
+    await registry.resetSubagentRegistryForTests({ persist: false });
+    await activate();
+    await flushOwnedWork();
+    expect(getRequesterWakeCalls()).toHaveLength(0);
+
+    await registry.resetSubagentRegistryForTests({ persist: false });
+    vi.setSystemTime(200_000);
+    await activate();
+    const mailbox = getExistingSessionControllerMailbox(
+      requesterSessionKey,
+      captureSessionTarget({
+        storeScope: getFixture().sessionStorePath,
+        sessionKey: requesterSessionKey,
+      }),
+    );
+    try {
+      await withinTest(flushOwnedWork(), signal);
+      for (const runId of earlierWave) {
+        expect(readWake(runId)).toBeUndefined();
+      }
+      expect(getRequesterWakeCalls()).toHaveLength(1);
+      expect(getRequesterWakeCalls()[0]?.params?.idempotencyKey).toBe(
+        `announce:requester-settle:main:${requesterSessionKey}:yielded-child:yield-1`,
+      );
+      expect(readWake("yielded-child")).toBeUndefined();
+      await advance(120_000, 1);
+    } finally {
+      // A regressed raw reservation must not hold the fixture's teardown behind it.
+      for (const input of mailbox?.entries.slice() ?? []) {
+        retireSessionControllerInput(input);
+      }
+      await flushOwnedWork();
+    }
+  });
   it.each(["retry", "cancel", "replace"] as const)(
     "preserves a saved wake through worker capacity preparation (%s)",
     async (outcome) => {

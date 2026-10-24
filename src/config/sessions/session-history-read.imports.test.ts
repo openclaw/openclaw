@@ -32,7 +32,7 @@ const readOwners = [
   ...sessionFiles("transcript.worker accessor.sqlite-branches"),
   ...gatewayFiles(
     "session-history-readonly-reader session-transcript-preview-reader",
-    "server-methods/chat-history-page-kernel session-history-snapshot",
+    "chat-history-page-kernel session-history-snapshot",
   ),
 ];
 
@@ -101,9 +101,9 @@ const prewarm = vi.hoisted(() => ({
 // mock-isolation: Observe lazy evaluation without loading the presentation graph being excluded.
 vi.mock("../../gateway/session-history-worker-reader.js", () => prewarm.modules[0]!());
 // mock-isolation: Observe lazy evaluation without loading the presentation graph being excluded.
-vi.mock("../../gateway/server-methods/chat-history-page-kernel.js", () => prewarm.modules[1]!());
+vi.mock("../../gateway/chat-history-page-kernel.js", () => prewarm.modules[1]!());
 // mock-isolation: Observe lazy evaluation without loading the presentation graph being excluded.
-vi.mock("../../gateway/server-methods/chat-history-response-page.js", () => prewarm.modules[2]!());
+vi.mock("../../gateway/chat-history-response-page.js", () => prewarm.modules[2]!());
 // mock-isolation: Observe lazy evaluation without loading the presentation graph being excluded.
 vi.mock("../../gateway/session-history-snapshot.js", () => prewarm.modules[3]!());
 // mock-isolation: Capture dispatch without installing native worker ports in the test process.

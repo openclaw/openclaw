@@ -555,6 +555,11 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/acpx/**"
+"extensions: abliteration":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/abliteration/**"
+          - "docs/providers/abliteration.md"
 "extensions: arcee":
   - changed-files:
       - any-glob-to-any-file:

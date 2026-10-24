@@ -121,10 +121,13 @@ export default definePluginEntry({
       },
       { name: "github_search", workspaceAccess: false },
     );
-    // Commits open in the reader, but do not spend anonymous quota on hover.
     for (const reader of [
       { id: "github", pathPattern: GITHUB_ITEM_PATH_PATTERN, previewMethod: "github.preview" },
-      { id: "github-commit", pathPattern: GITHUB_COMMIT_PATH_PATTERN },
+      {
+        id: "github-commit",
+        pathPattern: GITHUB_COMMIT_PATH_PATTERN,
+        previewMethod: "github.preview",
+      },
     ]) {
       api.session.controls.registerControlUiDescriptor({
         surface: "link-reader",
@@ -150,7 +153,11 @@ export default definePluginEntry({
           pathPattern: GITHUB_ITEM_PATH_PATTERN,
           previewMethod: "github.sessionPreview",
         },
-        { id: "github-session-commit", pathPattern: GITHUB_COMMIT_PATH_PATTERN },
+        {
+          id: "github-session-commit",
+          pathPattern: GITHUB_COMMIT_PATH_PATTERN,
+          previewMethod: "github.sessionPreview",
+        },
       ]) {
         api.session.controls.registerControlUiDescriptor({
           surface: "link-reader",

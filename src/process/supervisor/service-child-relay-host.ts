@@ -34,8 +34,6 @@ import {
 } from "./service-child-relay-retirement.js";
 import type { AwaitedStdoutConsumer, ProcessAdapterStartup } from "./types.js";
 
-type AuthorityState = "starting" | "active" | "closing" | "closed" | "identity-lost";
-
 export function createServiceChildRelayAdapter(
   params: ServiceChildRelayParams & { stdoutConsumption: "awaited" },
 ): Promise<ProcessAdapterStartup<ServiceChildRelayAdapter & AwaitedStdoutConsumer>>;
@@ -110,7 +108,7 @@ export async function createServiceChildRelayAdapter(
     child.stdin?.on("error", (error) => events.emitError(error, "stdin"));
   }
 
-  let state: AuthorityState = "starting";
+  let state: "starting" | "active" | "closing" | "closed" | "identity-lost" = "starting";
   let commandPid: number | undefined;
   let anchorPid: number | undefined = useLinuxSubreaper ? child.pid : undefined;
   let outboundSequence = 0;
@@ -697,6 +695,7 @@ export async function createServiceChildRelayAdapter(
     : undefined;
 
   const adapter: ServiceChildRelayAdapter = {
+    memoryRootPid: child.pid,
     // The durable worker receipt binds the group owner, which survives application loss.
     get pid() {
       return params.ownedWorker ? anchorPid : commandPid;

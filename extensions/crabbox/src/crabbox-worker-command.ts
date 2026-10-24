@@ -277,40 +277,84 @@ export async function stopCrabboxLease(params: {
   id: string;
   provider: string;
   warn: (message: string) => void;
+  onCleanupAccepted?: () => void;
 }): Promise<void> {
   const deadline = performance.now() + CRABBOX_STOP_TIMEOUT_MS;
-  let result = await runCrabboxCommandWithCoordinatorRetry({
-    action: "stop",
-    args: ["stop", "--provider", params.provider, "--id", params.id],
-    binary: params.binary,
-    timeoutMs: CRABBOX_STOP_TIMEOUT_MS,
-  });
-  if (isUnrecognizedLease(result, params.id, "stop")) {
-    params.warn(
-      `Crabbox lease ${params.id} (provider ${params.provider}) is absent; treating stop as already released`,
-    );
-    return;
-  }
-  const output = `${result.stderr}\n${result.stdout}`;
-  if (
-    params.provider === "azure" &&
-    result.termination === "exit" &&
-    result.code === 4 &&
-    output.includes("Azure fixed lease cannot be adopted without its create intent")
-  ) {
-    // Recovery shares the cleanup allowance reserved by the provider lifecycle.
-    const remainingMs = deadline - performance.now();
-    if (remainingMs <= 0) {
-      throw new Error("Crabbox stop timed out before Azure fixed-lease recovery", {
-        cause: crabboxCommandError("stop", result),
+  const stop = async (wait: boolean): Promise<"released" | "accepted" | "blocking"> => {
+    const timeoutMs = deadline - performance.now();
+    if (timeoutMs <= 0) {
+      throw new Error("Crabbox stop exceeded its cleanup deadline");
+    }
+    let result = await runCrabboxCommandWithCoordinatorRetry({
+      action: "stop",
+      args: [
+        "stop",
+        "--provider",
+        params.provider,
+        "--id",
+        params.id,
+        ...(!wait ? ["--wait=false"] : []),
+      ],
+      binary: params.binary,
+      timeoutMs,
+    });
+    if (
+      !wait &&
+      result.termination === "exit" &&
+      result.code === 2 &&
+      result.stdout.trim() === "" &&
+      result.stderr.trim() === "--wait=false requires an ordinary coordinator-backed stop"
+    ) {
+      return "blocking";
+    }
+    const output = `${result.stderr}\n${result.stdout}`;
+    if (
+      params.provider === "azure" &&
+      result.termination === "exit" &&
+      result.code === 4 &&
+      output.includes("Azure fixed lease cannot be adopted without its create intent")
+    ) {
+      // Recovery shares the cleanup allowance reserved by the provider lifecycle.
+      const remainingMs = deadline - performance.now();
+      if (remainingMs <= 0) {
+        throw new Error("Crabbox stop timed out before Azure fixed-lease recovery", {
+          cause: crabboxCommandError("stop", result),
+        });
+      }
+      result = await runCrabboxCommandWithCoordinatorRetry({
+        action: "stop recovery",
+        args: [
+          "stop",
+          "--provider",
+          params.provider,
+          "--id",
+          params.id,
+          "--force",
+          ...(!wait ? ["--wait=false"] : []),
+        ],
+        binary: params.binary,
+        timeoutMs: remainingMs,
       });
     }
-    result = await runCrabboxCommandWithCoordinatorRetry({
-      action: "stop recovery",
-      args: ["stop", "--provider", params.provider, "--id", params.id, "--force"],
-      binary: params.binary,
-      timeoutMs: remainingMs,
-    });
+    if (isUnrecognizedLease(result, params.id, "stop")) {
+      params.warn(
+        `Crabbox lease ${params.id} (provider ${params.provider}) is absent; treating stop as already released`,
+      );
+      return "released";
+    }
+    crabboxCommandOutput("stop", result);
+    return wait ? "released" : "accepted";
+  };
+  if (params.onCleanupAccepted) {
+    const result = await stop(false);
+    if (result === "released") {
+      return;
+    }
+    if (result === "accepted") {
+      params.onCleanupAccepted();
+    }
   }
-  crabboxCommandOutput("stop", result);
+  // Terminal inspection can still describe a billable resource. Crabbox's waiting
+  // stop owns physical-release proof; both calls share one bounded cleanup budget.
+  await stop(true);
 }

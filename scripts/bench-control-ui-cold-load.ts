@@ -43,6 +43,7 @@ import {
   createStreamingReplyProbeInitScript,
 } from "../ui/src/test-helpers/control-ui-streaming-reply.ts";
 import { createControlUiTeamScaleFixture } from "../ui/src/test-helpers/control-ui-team-scale-fixture.ts";
+import { resolveColdLoadLatency } from "./lib/control-ui-bench-latency.ts";
 import {
   persistColdLoadWarmState,
   restoreColdLoadWarmState,
@@ -219,7 +220,8 @@ const { values } = parseArgs({
     "warm-reload": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
     "dashboard-widget": { type: "boolean", default: false },
-    "connect-not-before-ms": { type: "string", default: "0" },
+    "connect-not-before-ms": { type: "string" },
+    "latency-profile": { type: "string" },
     "transcript-messages": { type: "string" },
     "overlay-probe": { type: "boolean", default: false },
     untraced: { type: "boolean", default: false },
@@ -263,14 +265,14 @@ const { values } = parseArgs({
     "sandbox-port": { type: "string" },
     "compare-bundle-dir": { type: "string", multiple: true, default: [] },
     runs: { type: "string", default: "3" },
-    "latency-ms": { type: "string", default: "35" },
+    "latency-ms": { type: "string" },
     "method-latency-ms": { type: "string", multiple: true, default: [] },
     "sidebar-query-latency-ms": { type: "string", multiple: true, default: [] },
     face: { type: "string", default: "dashboard" },
     "short-route": { type: "boolean", default: false },
     "full-uuid-route": { type: "boolean", default: false },
     "off-roster-route": { type: "boolean", default: false },
-    "frame-gap-ms": { type: "string", default: "4" },
+    "frame-gap-ms": { type: "string" },
     "sidebar-view": { type: "string", default: "sessions" },
     output: { type: "string", default: ".artifacts/control-ui-cold-load" },
   },
@@ -379,8 +381,21 @@ if (
     "gateway-url requires an HTTP origin, bundle-dir and first-load; first-load requires runs=1 and sidebar-view=sessions without warm-reload/comparison; network limits must be nonnegative and cpu-throttle at least 1",
   );
 }
-const latencyMs = Number(values["latency-ms"]);
-const connectNotBeforeMs = Number(values["connect-not-before-ms"]);
+const {
+  latencyProfile,
+  latencyMs,
+  frameGapMs,
+  connectNotBeforeMs,
+  methodLatencyMs,
+  sidebarQueryLatencyMs,
+} = resolveColdLoadLatency({
+  profile: values["latency-profile"],
+  latencyMs: values["latency-ms"],
+  frameGapMs: values["frame-gap-ms"],
+  connectNotBeforeMs: values["connect-not-before-ms"],
+  methodLatencyMs: values["method-latency-ms"],
+  sidebarQueryLatencyMs: values["sidebar-query-latency-ms"],
+});
 const historyValidatorDelayMs = Number(values["history-validator-delay-ms"]);
 if (
   !Number.isFinite(historyValidatorDelayMs) ||
@@ -390,27 +405,6 @@ if (
 ) {
   throw new Error("history-validator-delay-ms requires warm-reload and a delay from 0 to 10000");
 }
-const methodLatencyMs: Record<string, number> = {};
-const sidebarQueryLatencyMs: Record<string, number> = {};
-for (const [entries, target] of [
-  [values["method-latency-ms"], methodLatencyMs],
-  [values["sidebar-query-latency-ms"], sidebarQueryLatencyMs],
-] as const) {
-  for (const value of entries) {
-    const [method, delay, ...extra] = value.split("=");
-    const milliseconds = Number(delay);
-    if (
-      !method ||
-      delay === undefined ||
-      extra.length ||
-      !Number.isFinite(milliseconds) ||
-      milliseconds < 0
-    ) {
-      throw new Error("Expected method-latency-ms method=nonnegative-milliseconds");
-    }
-    target[method] = milliseconds;
-  }
-}
 const face = values.face;
 if (face !== "chat" && face !== "dashboard") {
   throw new Error("Expected face chat or dashboard");
@@ -418,7 +412,6 @@ if (face !== "chat" && face !== "dashboard") {
 if (values["chat-dashboard-route"] && face !== "dashboard") {
   throw new Error("chat-dashboard-route requires the dashboard face");
 }
-const frameGapMs = Number(values["frame-gap-ms"]);
 const captureMs = Number(values["capture-ms"]);
 const transcriptMessages =
   values["transcript-messages"] === undefined ? undefined : Number(values["transcript-messages"]);
@@ -2118,6 +2111,7 @@ try {
         sidebarComparison: values["sidebar-list-churn"]
           ? "Same final client bundle; full/delta wire response A/B using the production presenter and one synthetic query/history owner. This does not measure real Gateway selection, history reset/fallback lifecycle, or server projection CPU. Node IPC is outside the measured application response task."
           : undefined,
+        latencyProfile,
         latencyMs,
         methodLatencyMs,
         sidebarQueryLatencyMs,

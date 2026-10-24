@@ -467,8 +467,16 @@ describe("barnacle-auto-response", () => {
     expectNoActions(calls, ["createComment", "update"]);
   });
 
-  it("still adds candidate labels to broad contributor PRs", async () => {
-    const calls = await runBarnacle(barnacleContext({}), broadFiles());
+  it("adds candidate labels with a GitHub Actions context repo getter", async () => {
+    class ActionsContext {
+      payload = barnacleContext({}).payload;
+
+      get repo() {
+        return repo;
+      }
+    }
+
+    const calls = await runBarnacle(new ActionsContext(), broadFiles());
     expect(calls.addLabels).toStrictEqual([
       expectedAddLabels(123, [
         candidateLabels.blankTemplate,

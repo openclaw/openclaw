@@ -1,3 +1,4 @@
+import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -65,29 +66,20 @@ function extractErrorMessage(err: unknown): string | undefined {
   if (!err) {
     return undefined;
   }
-  if (err instanceof Error) {
+  if (err instanceof Error || (typeof err !== "object" && typeof err !== "function")) {
+    return coerceErrorMessage(err);
+  }
+  if (typeof err !== "object") {
+    return undefined;
+  }
+  if ("message" in err && typeof err.message === "string") {
     return err.message;
   }
-  if (typeof err === "object" && "message" in err && typeof err.message === "string") {
-    return err.message;
+  try {
+    return JSON.stringify(err);
+  } catch {
+    return undefined;
   }
-  if (
-    typeof err === "string" ||
-    typeof err === "number" ||
-    typeof err === "boolean" ||
-    typeof err === "bigint" ||
-    typeof err === "symbol"
-  ) {
-    return String(err);
-  }
-  if (typeof err === "object") {
-    try {
-      return JSON.stringify(err);
-    } catch {
-      return undefined;
-    }
-  }
-  return undefined;
 }
 
 function isMacPlatform(platform?: string, deviceFamily?: string): boolean {

@@ -139,6 +139,9 @@ it("shares lineage work across audiences without sharing visibility or stale des
     }));
   const allowsAll = () => true;
   const allowsShared = (row: { key: string }) => row.key !== hidden;
+  const selected = selectTaskPublicationSessions(projection, root, allowsAll);
+  expect(selected).toEqual(expected([child, hidden, leaf, sessionKey]));
+  selected.reverse();
   expect(selectTaskPublicationSessions(projection, root, allowsAll)).toEqual(
     expected([child, hidden, leaf, sessionKey]),
   );
