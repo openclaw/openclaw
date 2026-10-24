@@ -40,6 +40,7 @@ console.log(JSON.stringify({ answer, mode: getStandaloneRuntimeBuild()?.mode ?? 
     "cli-invocation.mjs",
     "cli-parent-lifetime.mjs",
     "gateway-shutdown-budget.mjs",
+    "node-runtime-env.mjs",
   ]) {
     fs.copyFileSync(
       new URL(`../../${filename}`, import.meta.url),
@@ -114,6 +115,7 @@ describe("matched standalone support artifacts", () => {
         "cli-invocation.mjs",
         "cli-parent-lifetime.mjs",
         "gateway-shutdown-budget.mjs",
+        "node-runtime-env.mjs",
       ]) {
         fs.unlinkSync(path.join(input.runtimeRoot, name));
       }

@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { HeapSpaceInfo } from "node:v8";
 import * as v8 from "node:v8";
 import { isMainThread } from "node:worker_threads";
-import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
+import { parseNodeOptionsEnvVar } from "../../node-runtime-env.mjs";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 
 export const DIAGNOSTIC_PROFILE_MAX_BYTES = 1024 * 1024;

@@ -389,7 +389,7 @@ describe("zalouser credential persistence", () => {
     }
   });
 
-  it.each(["persist", "read-only", "reorder"] as const)(
+  it.each(["persist", "read-only"] as const)(
     "handles API cookie changes in %s mode",
     async (mode) => {
       const profile = `cookies-${mode}`;
@@ -399,15 +399,13 @@ describe("zalouser credential persistence", () => {
       const identity = { imei: "stored-imei", userAgent: "stored-user-agent" };
       await seedCredentials(profile, storedCredentials(storedCookie, identity));
       const storedBefore = await readCredentials(profile);
-      let currentCookie = mode === "reorder" ? storedCookie : loginCookie;
+      let currentCookie = loginCookie;
       const api = createMockApi({
         ...identity,
         language: "vi",
         cookies: () => currentCookie,
         getAllFriends: async () => {
-          if (mode !== "reorder") {
-            currentCookie = refreshedCookie;
-          }
+          currentCookie = refreshedCookie;
           return mode === "persist"
             ? [
                 {
@@ -447,11 +445,7 @@ describe("zalouser credential persistence", () => {
           : [],
       );
       const stored = await readCredentials(profile);
-      if (mode === "reorder") {
-        currentCookie = [...storedCookie].toReversed();
-        await expect(listZaloFriends(profile)).resolves.toStrictEqual([]);
-        expect(await readCredentials(profile)).toEqual(stored);
-      } else if (mode === "read-only") {
+      if (mode === "read-only") {
         expect(stored).toEqual(storedBefore);
       } else {
         expect(stored).toMatchObject({

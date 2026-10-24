@@ -7,6 +7,7 @@ import {
   clipInteractionCpuProfile,
   summarizeInteractionSelectors,
   summarizeInteractionTrace,
+  summarizeLongTaskCpuProfiles,
 } from "../../scripts/lib/control-ui-interaction-trace.ts";
 
 it("measures only the marked renderer interval, unions nesting, and rejects missing boundaries", () => {
@@ -54,6 +55,7 @@ it("measures only the marked renderer interval, unions nesting, and rejects miss
     busyMs: 90,
     longTasks: 1,
     longTaskMs: 80,
+    longTaskIntervals: [{ startUs: 100_000, endUs: 180_000, durationMs: 80 }],
     longestTaskMs: 80,
     scriptCount: 3,
     scriptMs: 75,
@@ -70,6 +72,132 @@ it("measures only the marked renderer interval, unions nesting, and rejects miss
   expect(() =>
     summarizeInteractionTrace([...trace, event(marks.start, "I", 105_000)], marks),
   ).toThrow("exactly one mark: filter:start");
+});
+
+it("attributes separate long tasks to their nearest mapped application callers", () => {
+  const profile = {
+    startTime: 1_000,
+    endTime: 121_000,
+    nodes: [
+      {
+        id: 1,
+        callFrame: { functionName: "(root)", url: "", lineNumber: -1, columnNumber: -1 },
+        children: [2, 5, 7],
+      },
+      {
+        id: 2,
+        callFrame: {
+          functionName: "renderTranscript",
+          url: "ui/src/components/chat/message-list.tsx",
+          lineNumber: 20,
+          columnNumber: 4,
+        },
+        children: [3],
+      },
+      {
+        id: 3,
+        callFrame: {
+          functionName: "flush",
+          url: "node_modules/solid-js/dist/solid.js",
+          lineNumber: 10,
+          columnNumber: 0,
+        },
+        children: [4],
+      },
+      {
+        id: 4,
+        callFrame: { functionName: "appendChild", url: "", lineNumber: -1, columnNumber: -1 },
+      },
+      {
+        id: 5,
+        callFrame: {
+          functionName: "updateSettings",
+          url: "ui/src/pages/settings/settings-page.tsx",
+          lineNumber: 30,
+          columnNumber: 2,
+        },
+        children: [6],
+      },
+      {
+        id: 6,
+        callFrame: {
+          functionName: "flush",
+          url: "node_modules/solid-js/dist/solid.js",
+          lineNumber: 10,
+          columnNumber: 0,
+        },
+      },
+      {
+        id: 7,
+        callFrame: {
+          functionName: "(garbage collector)",
+          url: "",
+          lineNumber: -1,
+          columnNumber: -1,
+        },
+      },
+    ],
+    samples: [4, 4, 7, 6, 6, 6],
+    timeDeltas: [20_000, 20_000, 20_000, 20_000, 20_000, 20_000],
+  };
+  expect(
+    summarizeLongTaskCpuProfiles(profile, [
+      { startUs: 1_000, endUs: 61_000, durationMs: 60 },
+      { startUs: 61_000, endUs: 121_000, durationMs: 60 },
+      { startUs: 101_000, endUs: 161_000, durationMs: 60 },
+      { startUs: 121_000, endUs: 181_000, durationMs: 60 },
+    ]),
+  ).toMatchObject([
+    {
+      startUs: 1_000,
+      endUs: 61_000,
+      durationMs: 60,
+      sampledMs: 60,
+      uncoveredMs: 0,
+      unattributedMs: 20,
+      owner: {
+        functionName: "renderTranscript",
+        url: "ui/src/components/chat/message-list.tsx",
+        attributedMs: 40,
+      },
+      hotspots: [
+        { functionName: "appendChild", selfMs: 40 },
+        { functionName: "(garbage collector)", selfMs: 20 },
+      ],
+    },
+    {
+      startUs: 61_000,
+      endUs: 121_000,
+      durationMs: 60,
+      sampledMs: 60,
+      uncoveredMs: 0,
+      unattributedMs: 0,
+      owner: {
+        functionName: "updateSettings",
+        url: "ui/src/pages/settings/settings-page.tsx",
+        attributedMs: 60,
+      },
+      hotspots: [{ functionName: "flush", selfMs: 60 }],
+    },
+    {
+      startUs: 101_000,
+      endUs: 161_000,
+      durationMs: 60,
+      sampledMs: 20,
+      uncoveredMs: 40,
+      owner: { functionName: "updateSettings", attributedMs: 20 },
+    },
+    {
+      startUs: 121_000,
+      endUs: 181_000,
+      durationMs: 60,
+      sampledMs: 0,
+      uncoveredMs: 60,
+      owner: null,
+      sourceOwners: [],
+      hotspots: [],
+    },
+  ]);
 });
 
 it("ranks Chromium selector snapshots inside the renderer interval without merging stylesheets", () => {

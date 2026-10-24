@@ -981,7 +981,6 @@ packages/markdown-core/src/format-capabilities.ts	1
 packages/markdown-core/src/ir.ts	5
 packages/markdown-core/src/reasoning-tag-parser.ts	1
 packages/media-core/src/read-byte-stream-with-limit.ts	1
-packages/media-understanding-common/src/output-extract.ts	1
 packages/memory-host-sdk/src/host/batch-error-utils.ts	1
 packages/memory-host-sdk/src/host/batch-http.ts	2
 packages/memory-host-sdk/src/host/batch-output.ts	1

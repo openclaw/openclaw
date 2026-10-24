@@ -101,6 +101,11 @@ describe("cold-load trace accounting", () => {
       busyMs: 180,
       longTasks: 3,
       longTaskMs: 180,
+      longTaskIntervals: [
+        { startUs: 1_000_000, endUs: 1_070_000, durationMs: 70 },
+        { startUs: 1_040_000, endUs: 1_130_000, durationMs: 90 },
+        { startUs: 1_150_000, endUs: 1_200_000, durationMs: 50 },
+      ],
       longestTaskMs: 90,
       layoutCount: 2,
       layoutMs: 30,
