@@ -7,7 +7,7 @@ import {
   isRetryableDeliveryNotSentError,
   resolveDeliveryNotSentRetryability,
 } from "../../infra/delivery-recovery.shared.js";
-import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { toErrorObject } from "../../infra/errors.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import type { OutboundPayloadPlan } from "../../infra/outbound/reply-payload-parts.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
@@ -72,7 +72,8 @@ type ReplyDispatchDeliveryOutcomeTracker = {
 };
 
 function reportObserverFailure(error: unknown): void {
-  log.warn(`reply dispatcher observer failed: ${formatErrorMessage(error)}`);
+  const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  log.warn(`reply dispatcher observer failed: ${detail}`);
 }
 
 /** Invoke immediately without letting observer failures interrupt delivery bookkeeping. */
