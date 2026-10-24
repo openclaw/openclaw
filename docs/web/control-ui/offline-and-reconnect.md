@@ -14,6 +14,16 @@ stale connection. These signals do not retry a connection that requires a page
 reload, corrected credentials, or a new pairing request. Follow the displayed
 recovery instructions; automatic document refresh remains available after an update.
 
+If an update or rollback leaves a tab using an incompatible connection protocol,
+the Control UI stops reconnecting and reloads the document served by the same
+Gateway. The tab records the attempt in session storage: it reloads once for a
+given server build and never more than once in 60 seconds, even if the build changes.
+If the refreshed page still cannot connect, it keeps the compatibility error and
+**Refresh** action visible. Open the Gateway's dashboard again or update and
+restart the Gateway so its served UI matches its protocol. Automatic reloads wait
+for unsaved-work protection and require working session storage; a separately
+hosted UI must be refreshed or updated at its own host.
+
 Agent names and avatars keep their last loaded values when an identity refresh
 fails. Reads for the same agent share one request across the sidebar and chat,
 including failures: subsequent reads back off from 500 ms to 5 seconds and honor

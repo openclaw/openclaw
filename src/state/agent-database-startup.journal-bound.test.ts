@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
@@ -162,6 +163,82 @@ it("retries shared-pool capacity rejections and prepares the agent", async () =>
   readJournal.mockRejectedValueOnce(overload()).mockRejectedValueOnce(overload());
   await prepareAgents(1);
   expectAdmission(["agent-0"], [], 4);
+});
+
+it.each(["openAgent", "migrateAgent"] as const)(
+  "recovers a transient SQLite lock in %s without restarting",
+  async (operation) => {
+    const busy = Object.assign(new Error("database is locked"), { errcode: 5 });
+    const run = vi.fn().mockRejectedValueOnce(busy).mockResolvedValue(undefined);
+    const opened = vi.fn().mockResolvedValue(undefined);
+    await prepareAgents(1, { openAgent: opened, [operation]: run });
+    expectAdmission(["agent-0"], [], 3);
+    expect(run).toHaveBeenCalledTimes(2);
+    if (operation === "migrateAgent") {
+      expect(opened).toHaveBeenCalledOnce();
+    }
+  },
+);
+
+it("bounds startup lock retries and leaves the agent refused", async () => {
+  const run = vi
+    .fn()
+    .mockRejectedValue(Object.assign(new Error("locked"), { code: "SQLITE_LOCKED" }));
+  await prepareAgents(1, { migrateAgent: run });
+  expectAdmission([], ["agent-0"], 4);
+  expect(run).toHaveBeenCalledTimes(4);
+});
+
+it.each(["deletion", "replacement"] as const)(
+  "refuses %s before retrying a locked migration",
+  async (change) => {
+    const run = vi.fn().mockRejectedValue(Object.assign(new Error("locked"), { errcode: 5 }));
+    readJournal.mockImplementation(async (_agentId, options) => {
+      const env = options?.env;
+      if (readJournal.mock.calls.length === 2) {
+        if (change === "deletion") {
+          return "pending";
+        }
+        const pathname = path.join(env!.OPENCLAW_STATE_DIR!, "openclaw-agent.sqlite");
+        fs.renameSync(pathname, `${pathname}.previous`);
+        fs.writeFileSync(pathname, "replacement");
+      }
+      return "absent";
+    });
+    await prepareAgents(1, { migrateAgent: run });
+    expectAdmission([], ["agent-0"], 2);
+    expect(run).toHaveBeenCalledOnce();
+  },
+);
+
+it("does not retry a lock combined with a cleanup failure", async () => {
+  const run = vi
+    .fn()
+    .mockRejectedValue(
+      new AggregateError([
+        Object.assign(new Error("locked"), { errcode: 5 }),
+        new Error("cleanup failed"),
+      ]),
+    );
+  await prepareAgents(1, { migrateAgent: run });
+  expectAdmission([], ["agent-0"], 1);
+  expect(run).toHaveBeenCalledOnce();
+});
+
+it("keeps real database corruption terminal during migration", async () => {
+  const pathname = path.join(tempDirTracker.make("corrupt-startup-"), "corrupt.sqlite");
+  fs.writeFileSync(pathname, "This is not a SQLite database".repeat(100));
+  const migrateAgent = vi.fn(async () => {
+    const database = new DatabaseSync(pathname);
+    try {
+      database.prepare("PRAGMA schema_version").get();
+    } finally {
+      database.close();
+    }
+  });
+  await prepareAgents(1, { migrateAgent });
+  expect(migrateAgent).toHaveBeenCalledOnce();
+  expectAdmission([], ["agent-0"], 1);
 });
 
 it.each([

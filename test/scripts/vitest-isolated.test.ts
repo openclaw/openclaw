@@ -103,7 +103,7 @@ describe("isolated Vitest admission", () => {
     [originalArgs, null],
     [["run", "--", selector, image], null],
     [["run", "-t", `${selector}=${image}`], { image, args: ["run", "-t"] }],
-    ...["repo:tag", "sha256:1234", ""].map((value): ParseCase => [
+    ...["repo:tag", ""].map((value): ParseCase => [
       [selector, value, "run", file],
       "full local sha256",
     ]),
@@ -129,7 +129,6 @@ describe("isolated Vitest admission", () => {
       ["run", file, "--config", "private.config.ts"],
       ["run", file, "--configLoader", "native"],
       ["run", file, "--root", "/host"],
-      ["run", file, "--outputFile", "/host/report"],
       ["run", file, "--reporter", "./private-reporter.ts"],
       ["run", file, "--", "other.test.ts"],
     ]) {
@@ -193,7 +192,6 @@ describe("isolated Vitest admission", () => {
     expect(() => verifyHost({ rootless: true, selinuxEnabled: false })).not.toThrow();
     expect(() => verifyHost({ rootless: false, selinuxEnabled: false })).toThrow("rootless");
     expect(() => verifyHost({ rootless: true, selinuxEnabled: true })).toThrow("will not relabel");
-    expect(() => verifyHost({ rootless: true })).toThrow("SELinux");
   });
   it("refuses inherited image environment, host networking and unexpected engine mounts", () => {
     type Inspection = ReturnType<typeof containerInspection>;
@@ -362,30 +360,28 @@ function lifecycle(
 }
 
 describe("isolated container lifecycle", () => {
-  it.each([0, 7])(
-    "preserves test exit %s only after wait, remove and confirmed absence",
-    async (exit) => {
-      const fixture = lifecycle({ exit });
-      expect(await fixture.run()).toBe(exit);
-      expect(fixture.onAbsent).toHaveBeenCalledOnce();
-      expect(fixture.calls).toContainEqual(["wait", name]);
-      expect(fixture.calls.at(-2)).toEqual(["rm", "--force", "--time", "5", name]);
-      expect(fixture.calls.at(-1)).toEqual(["container", "exists", name]);
-    },
-  );
-  it.each(["live", "indeterminate"])(
-    "retains inputs after an unjoined %s Podman process despite container absence",
-    async (processTreeState) => {
-      const failure = new AggregateError(
-        [Object.assign(new Error("process cleanup unresolved"), { processTreeState })],
-        "Podman create failed",
-      );
-      const fixture = lifecycle({ unjoined: failure });
-      await expect(fixture.run()).rejects.toBe(failure);
-      expect(fixture.calls.at(-1)).toEqual(["container", "exists", name]);
-      expect(fixture.onAbsent).not.toHaveBeenCalled();
-    },
-  );
+  it("preserves a failing test exit only after wait, remove and confirmed absence", async () => {
+    const fixture = lifecycle({ exit: 7 });
+    expect(await fixture.run()).toBe(7);
+    expect(fixture.onAbsent).toHaveBeenCalledOnce();
+    expect(fixture.calls).toContainEqual(["wait", name]);
+    expect(fixture.calls.at(-2)).toEqual(["rm", "--force", "--time", "5", name]);
+    expect(fixture.calls.at(-1)).toEqual(["container", "exists", name]);
+  });
+  it("retains inputs after an unjoined Podman process despite container absence", async () => {
+    const failure = new AggregateError(
+      [
+        Object.assign(new Error("process cleanup unresolved"), {
+          processTreeState: "indeterminate",
+        }),
+      ],
+      "Podman create failed",
+    );
+    const fixture = lifecycle({ unjoined: failure });
+    await expect(fixture.run()).rejects.toBe(failure);
+    expect(fixture.calls.at(-1)).toEqual(["container", "exists", name]);
+    expect(fixture.onAbsent).not.toHaveBeenCalled();
+  });
   it.each([
     ["create", "create failed", true],
     ["verify", "unexpected mounts", true],

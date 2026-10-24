@@ -1,4 +1,5 @@
 import { isMainThread } from "node:worker_threads";
+import { assertRuntimeSupportsPluginModule } from "../infra/runtime-profile.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { VERSION } from "../version.js";
 import { runPluginRegistration } from "./api-lifecycle.js";
@@ -199,6 +200,7 @@ export function createPluginModuleLoader(options: {
     });
   return Object.assign(load, {
     async prepare(modulePath: string, owner: Owner): Promise<void> {
+      assertRuntimeSupportsPluginModule(modulePath);
       // Compute workers already own retained native-ESM source captures. Keep their
       // inline acquisition path so a prepared artifact cannot compete with that owner.
       // An inspection that joins a retained native ESM artifact binds it synchronously;

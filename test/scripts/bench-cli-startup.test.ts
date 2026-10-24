@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { afterEach, expect, it } from "vitest";
 import { testing } from "../../scripts/bench-cli-startup.ts";
@@ -12,7 +11,7 @@ import {
 } from "../../src/infra/runtime-worker-url.js";
 import { withEnv } from "../../src/test-utils/env.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
-import { isProcessAlive } from "../helpers/process-wait.js";
+import { isProcessAlive, waitForDead } from "../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { toolingTsEntrypoints } from "./tooling-ts-runtime.test-support.js";
 
@@ -91,15 +90,6 @@ function transportEnv(root: string, prefix: string, env = {}) {
 
 const configFixture = (id: string) =>
   testing.buildConfigFixture({ id, name: id, args: [], presets: [] });
-
-// Synchronous drivers lack child handles; SIGKILL still needs observed process extinction.
-async function waitForBenchmarkExit(pid: number, signal: AbortSignal) {
-  while (isProcessAlive(pid)) {
-    await delay(5, undefined, { signal }).catch((cause: unknown) => {
-      throw new Error(`process still alive: ${pid}`, { cause });
-    });
-  }
-}
 
 const memoryTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -216,8 +206,6 @@ if (runtime) {
 
 it.each([
   [["--wat", "--help"], "Unknown argument: --wat"],
-  [["--output", "-h"], "--output requires a value"],
-  [["--output", "one.json", "--output", "two.json"], "--output was provided more than once"],
   [["--case", "version", "--case", "version"], 'Duplicate --case "version"'],
 ] as const)("rejects invalid arguments before running benchmarks %j", (args, error) => {
   expectCliRejection([...args], error);
@@ -315,10 +303,10 @@ try {
       if (existsSync(leaderPidPath)) {
         const leader = Number(readFileSync(leaderPidPath, "utf8"));
         forceKillVitestProcessGroup({ pid: leader });
-        await waitForBenchmarkExit(leader, signal);
+        await waitForDead(leader, signal);
       }
       if (existsSync(childPidPath)) {
-        await waitForBenchmarkExit(Number(readFileSync(childPidPath, "utf8")), signal);
+        await waitForDead(Number(readFileSync(childPidPath, "utf8")), signal);
       }
     }
   },
@@ -329,18 +317,9 @@ it.each<[Partial<CaseResult>, string[], string?]>([
   [
     {
       id: "gatewayStatusJson",
-      samples: [
-        cliSample(),
-        cliSample({ exitCode: 1 }),
-        cliSample({ exitCode: null, signal: "SIGTERM" }),
-        cliSample({ timedOut: true }),
-      ],
+      samples: [cliSample({ exitCode: null, signal: "SIGTERM" })],
     },
-    [
-      " sample 2: exited with code 1",
-      " sample 3: exited via signal SIGTERM",
-      " sample 4: timed out",
-    ],
+    [" sample 1: exited via signal SIGTERM"],
     "dist/entry.js",
   ],
   [

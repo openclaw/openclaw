@@ -1,11 +1,15 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { emitAgentEvent } from "../infra/agent-events.js";
+import type { ExecAutoReviewDecision } from "../infra/exec-auto-review.js";
 import { tail } from "./bash-process-registry.js";
 import { formatExecApprovalContinuationSourceOutput } from "./bash-tools.exec-approval-output.js";
+import type { ProcessGatewayAllowlistParams } from "./bash-tools.exec-host-gateway.types.js";
 import { appendExecTimeoutRetryGuidance, normalizeNotifyOutput } from "./bash-tools.exec-output.js";
 import type {
   ExecApprovalFollowupFactory,
   ExecApprovalFollowupOutcome,
   ExecToolDetails,
+  ExecToolApprovalReview,
 } from "./bash-tools.exec-types.js";
 import { formatExecDeniedReasonMessage } from "./exec-approval-result.js";
 import type { AgentToolResult } from "./runtime/index.js";
@@ -168,4 +172,43 @@ export async function resolveGatewayExecApprovalFollowupText(params: {
     const message = error instanceof Error ? error.message : String(error);
     return `Diagnostics follow-up failed: ${message}`;
   }
+}
+
+export function publishGatewayGuardianReview(
+  params: ProcessGatewayAllowlistParams,
+  status: ExecToolApprovalReview["status"],
+  decision?: ExecAutoReviewDecision,
+): void {
+  if (!params.toolCallId) {
+    return;
+  }
+  const approvalReviewOutcome =
+    status === "in_progress" ? "reviewing" : status === "approved" ? "approved" : "denied";
+  const review: ExecToolApprovalReview = {
+    id: `guardian:${params.toolCallId}`,
+    label: "Guardian",
+    status,
+    ...(decision ? { riskLevel: decision.risk, rationale: decision.rationale } : {}),
+  };
+  // Preserve terminal evidence before synchronous listeners can change reviewed operands.
+  if (status !== "in_progress") {
+    params.onApprovalReview?.(review);
+  }
+  if (!params.runId) {
+    return;
+  }
+  emitAgentEvent({
+    runId: params.runId,
+    sessionKey: params.sessionKey,
+    sessionId: params.sessionId,
+    stream: "tool",
+    data: {
+      phase: "review",
+      name: "exec",
+      toolCallId: params.toolCallId,
+      hideFromChannelProgress: true,
+      approvalReviewOutcome,
+      review,
+    },
+  });
 }
