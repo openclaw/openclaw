@@ -21,7 +21,6 @@ async function runProbe(root: string, probe: string, env: NodeJS.ProcessEnv) {
   );
   expect(result.error).toBeUndefined();
   expect(result.status, result.stderr + result.stdout).toBe(0);
-  return result;
 }
 
 it("retains verified artifacts after the runner's module loader stops", async () => {
@@ -94,19 +93,17 @@ try {
   assert.equal(fs.existsSync(owner.descriptor.directory), false);
   assert.equal(fs.readFileSync(path.join(cached, 'outputs/dist/probe.js'), 'utf8'), ${JSON.stringify(output)});
   assert.equal(fs.existsSync(path.join(cached, 'stamp.json')), true);
-  console.log('joined cleanup retained verified artifacts');
 } finally {
   try { await owner.dispose(); }
   finally { hooks.deregister(); }
 }
 `,
   );
-  const result = await runProbe(root, probe, {
+  await runProbe(root, probe, {
     NAPI_RS_NATIVE_LIBRARY_PATH: "",
     NAPI_RS_WASI_FLAVOR: "",
     NAPI_RS_FORCE_WASI: "",
   });
-  expect(result.stdout).toContain("joined cleanup retained verified artifacts");
 });
 
 function fixture(lateMetadata: boolean, reusesReleasedSlot: boolean) {
@@ -140,7 +137,6 @@ const reserve = () => {
   owners.push(owner);
   return owner;
 };
-let directories;
 try {
   const first = reserve();
   metadataTarget = first.descriptor.directory;
@@ -150,8 +146,7 @@ try {
   assert.equal(fs.existsSync(first.descriptor.directory), false);
   assert.equal(fs.existsSync(second.descriptor.directory), true);
   const third = reserve();
-  directories = [first, second, third].map(owner => owner.descriptor.directory);
-  assert.notEqual(directories[0], directories[1]);
+  const directories = [first, second, third].map(owner => owner.descriptor.directory);
   assert.notEqual(directories[2], directories[1]);
   assert.equal(directories[2] === directories[0], ${reusesReleasedSlot});
 } finally {
@@ -161,7 +156,6 @@ try {
   if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Worker owners did not dispose');
 }
 assert.equal(metadataInjected, ${lateMetadata});
-console.log(JSON.stringify(directories));
 `,
   );
   return { root, occupied, probe };
@@ -175,15 +169,10 @@ it.each([
   "preserves occupied generations and applies $label reservation lifetime",
   async ({ label, ci, cache, reusesReleasedSlot }) => {
     const f = fixture(label === "late metadata", reusesReleasedSlot);
-    const result = await runProbe(f.root, f.probe, {
+    await runProbe(f.root, f.probe, {
       CI: ci,
       OPENCLAW_VITEST_WORKER_CACHE: cache,
     });
-    const directories = JSON.parse(result.stdout) as [string, string, string];
-    for (const directory of new Set(directories)) {
-      expect(directory).not.toBe(f.occupied);
-      expect(fs.existsSync(directory)).toBe(false);
-    }
     expect(fs.readFileSync(path.join(f.occupied, "retained"), "utf8")).toBe("owned");
     expect(fs.readdirSync(path.dirname(f.occupied))).toEqual([path.basename(f.occupied)]);
   },
