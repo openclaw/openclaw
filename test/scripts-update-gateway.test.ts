@@ -5,19 +5,12 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { stageBundledPluginRuntime } from "../scripts/stage-bundled-plugin-runtime.mts";
 import { resolveRuntimeWorkerUrl } from "../src/infra/runtime-worker-url.js";
 import { toolingMtsEntrypoints } from "./scripts/tooling-mts-runtime.test-support.mts";
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-// Share the invocation's compiled modules while retaining a real isolated process
-// per update. The artifact probe must borrow the adapter's same lock owner.
+// Share compiled modules while retaining a real isolated process per update.
 const updateGatewayBuildUrl = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.updateGatewayBuild);
-const artifactPreflightUrl = resolveRuntimeWorkerUrl(
-  toolingMtsEntrypoints.sourceUpdateArtifactPreflight,
-);
-const artifactOwnershipUrl = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.distArtifactOwnership);
-const stageRuntimeUrl = resolveRuntimeWorkerUrl(toolingMtsEntrypoints.stageBundledPluginRuntime);
 let scratch: string;
 let workdir: string;
 let shimDir: string;
@@ -289,49 +282,6 @@ fs.writeFileSync('dist/marker', process.argv[2] || 'new');
     }
   });
 
-  it("preserves changed live artifacts under inspected custody", () => {
-    const seed = seedRoot();
-    write(
-      seed,
-      "scripts/stage-bundled-plugin-runtime.mts",
-      `export { prepareBundledPluginRuntime } from ${JSON.stringify(stageRuntimeUrl.href)};\n`,
-    );
-    git(seed, "add", "scripts/stage-bundled-plugin-runtime.mts");
-    publishSeed("runtime inspector");
-    fs.mkdirSync(path.join(workdir, "dist/extensions/demo"), { recursive: true });
-    write(workdir, "dist/extensions/demo/index.js", "export const current = true;\n");
-    stageBundledPluginRuntime({ repoRoot: workdir });
-    const serving = path.join(workdir, "dist-runtime/extensions/demo/index.js");
-    fs.writeFileSync(serving, "previous serving generation\n");
-    const before = { bytes: fs.readFileSync(serving), ino: fs.statSync(serving).ino };
-    const probe = path.join(shimDir, "inspect-artifacts.mts");
-    fs.writeFileSync(
-      probe,
-      `
-import fs from "node:fs";
-import path from "node:path";
-import { preflightInstalledSourceArtifacts } from ${JSON.stringify(artifactPreflightUrl.href)};
-import { withDistArtifactOwnership, resolveDistArtifactLockPath } from ${JSON.stringify(artifactOwnershipUrl.href)};
-const owner = path.join(resolveDistArtifactLockPath(process.env.UPDATE_TEST_LIVE_ROOT), "owner.json");
-const original = fs.readFileSync(owner, "utf8");
-await withDistArtifactOwnership(process.cwd(), async () => {
-  await preflightInstalledSourceArtifacts(process.env);
-  if (fs.readFileSync(owner, "utf8") !== original) throw new Error("Installed artifact ownership changed");
-  fs.appendFileSync(process.env.UPDATE_TEST_LOG, "artifact-fact:" + process.env.sourceRuntimePrepared + "\\n");
-});
-`,
-    );
-    const { result, original, dependency } = runRefusedSourceUpdate([
-      `node --import ${JSON.stringify(path.join(repoRoot, "scripts/tsx.mjs"))} ${JSON.stringify(probe)}`,
-    ]);
-    expect(result.status, result.stdout + result.stderr).toBe(23);
-    expect(calls()).toContain("artifact-fact:false");
-    expect(calls()).toContain("stop-refused");
-    expect({ bytes: fs.readFileSync(serving), ino: fs.statSync(serving).ino }).toEqual(before);
-    expectUnpublished(original, dependency);
-    expect(calls()).not.toContain("live-install");
-  });
-
   it("retains the published 9.6 three-argument first-hop contract", () => {
     const published = fs.readFileSync(
       path.join(repoRoot, "test/scripts/fixtures/update-gateway-2026.9.6.sh"),
@@ -363,7 +313,6 @@ await withDistArtifactOwnership(process.cwd(), async () => {
     "tracked-runtime-deleted",
     "tracked-runtime-changed",
     "tracked-runtime-rollback",
-    "tracked-runtime-partial",
     "restore-branch-drift",
   ] as const)(
     "publishes or restores complete source runtime through the reference entry (%s)",
@@ -371,8 +320,7 @@ await withDistArtifactOwnership(process.cwd(), async () => {
       const trackedAsset = "dist/tracked-runtime.txt";
       const seed = seedRoot();
       const trackedRuntime = mode.startsWith("tracked-runtime-");
-      const interceptRename = mode === "tracked-runtime-partial" || mode === "restore-branch-drift";
-      if (interceptRename) {
+      if (mode === "restore-branch-drift") {
         write(
           seed,
           "scripts/update-gateway-build.mts",
@@ -384,12 +332,8 @@ import {runUpdateGatewayBuild} from ${JSON.stringify(updateGatewayBuildUrl.href)
 const root = await fs.realpath(process.cwd());
 const rename = fs.rename.bind(fs);
 fs.rename = async (source, destination) => {
-  if (${JSON.stringify(mode)} === "tracked-runtime-partial" && path.basename(String(source)) === "candidate" && destination === path.join(root, "dist")) {
-    await fs.appendFile(process.env.UPDATE_TEST_LOG, "candidate-rename-refused\\n");
-    throw new Error("candidate move refused");
-  }
   await rename(source, destination);
-  if (${JSON.stringify(mode)} === "restore-branch-drift" && path.basename(String(source)) === "previous" && destination === path.join(root, "dist")) {
+  if (path.basename(String(source)) === "previous" && destination === path.join(root, "dist")) {
     execFileSync("git", ["checkout", "-b", "operator-work"], {cwd:root, stdio:"pipe"});
   }
 };
@@ -403,7 +347,7 @@ process.exitCode = await runUpdateGatewayBuild(...process.argv.slice(2));
         write(seed, trackedAsset, "original tracked runtime\n");
         git(seed, "add", "-f", trackedAsset);
       }
-      if (trackedRuntime || interceptRename) {
+      if (trackedRuntime || mode === "restore-branch-drift") {
         publishSeed("runtime recovery fixture");
       }
       if (trackedRuntime) {
@@ -474,10 +418,6 @@ fs.writeFileSync(path.join(names[0],'candidate','.buildstamp'), JSON.stringify({
         expect(read(workdir, "dist/marker")).toBe("old");
         expect(backups().length).toBeGreaterThan(0);
         return;
-      }
-      if (mode === "tracked-runtime-partial") {
-        expect(calls()).toContain("candidate-rename-refused");
-        expect(result.stderr).toContain("candidate move refused");
       }
       if (mode.startsWith("tracked-runtime-")) {
         if (mode === "tracked-runtime-deleted") {

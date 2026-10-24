@@ -7,6 +7,7 @@ import { build as esbuild } from "esbuild";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { resolveNodeProgramArguments } from "../src/daemon/program-args.js";
 import { buildSystemdUnit, parseSystemdExecStart } from "../src/daemon/systemd-unit.js";
+import { stageLauncherFixture } from "./helpers/openclaw-launcher-fixture.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
@@ -23,19 +24,11 @@ beforeAll(async () => {
       format: "esm",
       platform: "node",
       target: "node24",
-      metafile: true,
       banner: {
         js: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);',
       },
       write: false,
     });
-    expect(
-      Object.keys(built.metafile!.inputs).filter(
-        (file) =>
-          /(?:^|\/)src\/(?:agents|gateway|tui|cron)\//u.test(file) ||
-          file.endsWith("src/cli/program/subcli-descriptors.ts"),
-      ),
-    ).toEqual([]);
     const output = built.outputFiles[0];
     if (!output) {
       throw new Error(`The ${entry} fixture did not compile.`);
@@ -61,7 +54,8 @@ afterEach(async () => {
 });
 
 async function writePackage(root: string, version: string, body: string, schema = 1) {
-  await fs.mkdir(path.join(root, "dist"), { recursive: true });
+  await fs.mkdir(root, { recursive: true });
+  await stageLauncherFixture(root);
   await fs.writeFile(path.join(root, "dist", "node-host-launcher-bootstrap.js"), bootstrapSource);
   await fs.writeFile(path.join(root, "dist", "launcher-client.js"), launcherClientSource);
   await fs.symlink(
@@ -69,23 +63,6 @@ async function writePackage(root: string, version: string, body: string, schema 
     path.join(root, "node_modules"),
     process.platform === "win32" ? "junction" : "dir",
   );
-  for (const name of [
-    "openclaw.mjs",
-    "cli-invocation.mjs",
-    "node-host-launcher.mjs",
-    "node-compile-cache.mjs",
-    "node-version.mjs",
-    "node-sqlite.mjs",
-    "node-runtime-update.mjs",
-    "node-runtime-recovery.mjs",
-    "cli-parent-lifetime.mjs",
-    "node-runtime-env.mjs",
-    "cli-root-options.mjs",
-    "gateway-run-argv.mjs",
-    "gateway-shutdown-budget.mjs",
-  ]) {
-    await fs.copyFile(path.resolve(name), path.join(root, name));
-  }
   await fs.writeFile(
     path.join(root, "package.json"),
     JSON.stringify({

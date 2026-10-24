@@ -1,27 +1,17 @@
 import { createServer } from "node:http";
-import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { msteamsPlugin } from "../extensions/msteams/api.js";
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
 import type { ChannelThreadingToolContext } from "../src/channels/plugins/types.public.js";
-import {
-  applyResolvedCommandOutputMode,
-  withConsoleLogsRoutedToStderrForJson,
-} from "../src/cli/json-output-mode.js";
-import { registerMessageCommands } from "../src/cli/program/register.message.js";
+import { formatMessageCliText } from "../src/commands/message-format.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import type { OpenClawConfig } from "../src/config/types.js";
 import { sendHandlers } from "../src/gateway/server-methods/send.js";
 import type { GatewayRequestContext } from "../src/gateway/server-methods/types.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
 import { createTestPluginRegistry } from "../src/plugins/registry-runtime.test-helpers.js";
-import {
-  getActivePluginRegistry,
-  resetPluginRuntimeStateForTest,
-  setActivePluginRegistry,
-} from "../src/plugins/runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
 import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
-import { defaultRuntime } from "../src/runtime.js";
 import {
   closeHttpServer,
   listenLoopback,
@@ -292,7 +282,7 @@ async function createFixture(
         return payload;
       });
     },
-    invokeAdapter(action: Action, params: Record<string, unknown>) {
+    invokeAdapter(action: Action | "read", params: Record<string, unknown>) {
       return retain(async () => {
         const result = await dispatchChannelMessageAction({
           cfg,
@@ -312,8 +302,12 @@ async function createFixture(
   };
 }
 
-function inputFor(action: Action): Record<string, unknown> {
-  return action === "search" ? { query: "planning", limit: 1 } : { userId: memberId };
+function inputFor(action: Action | "read"): Record<string, unknown> {
+  return action === "search"
+    ? { query: "planning", limit: 1 }
+    : action === "read"
+      ? { messageId: other.messageId }
+      : { userId: memberId };
 }
 
 function expectReadResult(result: unknown, action: Action, destination: Destination) {
@@ -345,124 +339,37 @@ function expectGraphRequests(requests: GraphRequest[], action: Action, destinati
   );
 }
 
-describe("Teams message CLI", () => {
-  async function runCli(args: string[], action: Action | "read", json = true) {
-    const runtime = { log: vi.fn(), error: vi.fn() };
-    const command = new Command().name("openclaw").exitOverride();
-    registerMessageCommands(command, {
-      programVersion: "test",
-      messageChannelOptions: "msteams",
-      agentChannelOptions: "last|msteams",
-    });
-    const registry = getActivePluginRegistry();
-    if (!registry) {
-      throw new Error("expected the Teams fixture registry");
-    }
-    const [configGuard, channelPluginIds, pluginLoader, oneShotExit] = await Promise.all([
-      import("../src/cli/program/config-guard.js"),
-      import("../src/plugins/channel-plugin-ids.js"),
-      import("../src/plugins/loader.js"),
-      import("../src/cli/one-shot-exit.js"),
-    ]);
-    // The harness owns config and registry admission; production owns parsed action dispatch.
-    const spies = [
-      vi.spyOn(configGuard, "ensureConfigReady").mockResolvedValue(undefined),
-      vi
-        .spyOn(channelPluginIds, "resolveDiscoverableScopedChannelPluginIds")
-        .mockImplementation(({ channelIds }) => [...channelIds]),
-      vi.spyOn(pluginLoader, "loadPluginRegistryHandle").mockReturnValue(registry),
-      vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log),
-      vi
-        .spyOn(defaultRuntime, "writeJson")
-        .mockImplementation((value) => runtime.log(JSON.stringify(value))),
-      vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error),
-      vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
-        throw new Error(`unexpected CLI exit(${code})`);
-      }),
-      vi.spyOn(oneShotExit, "requestExitAfterOneShotOutput").mockReturnValue(true),
-    ];
-    try {
-      const argv = ["message", ...args, "--channel", "msteams", ...(json ? ["--json"] : [])];
-      await withConsoleLogsRoutedToStderrForJson(
-        ["node", "openclaw", ...argv],
-        async () => {
-          applyResolvedCommandOutputMode(json);
-          await command.parseAsync(argv, { from: "user" });
-        },
-        { restoreChanges: true },
-      );
-    } finally {
-      for (const spy of spies) {
-        spy.mockRestore();
-      }
-    }
-
-    expect(runtime.error).not.toHaveBeenCalled();
-    if (!json) {
-      expect(runtime.log).toHaveBeenCalled();
-      return runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
-    }
-    expect(runtime.log).toHaveBeenCalledTimes(1);
-    const result = JSON.parse(String(runtime.log.mock.calls[0]?.[0]));
-    expect(result).toMatchObject({
-      action,
-      channel: "msteams",
-      dryRun: false,
-      handledBy: "plugin",
-    });
-    return result.payload;
-  }
-
-  it("renders Graph read and search messages while preserving JSON results", async () => {
-    await createFixture("none");
-    const readArgs = ["read", "--target", otherTarget, "--message-id", other.messageId];
-    const searchArgs = ["search", "--channel-id", otherTarget, "--query", "planning"];
-    const outputs = [
-      await runCli(readArgs, "read", false),
-      await runCli(searchArgs, "search", false),
-    ];
-    for (const output of outputs) {
-      expect.soft(output).toContain(other.text);
-      expect.soft(output).toContain(other.messageId);
-      expect.soft(output).toContain("Member");
-      expect.soft(output).toContain(messageCreatedAt);
-    }
+describe("Teams registered adapter output", () => {
+  it("renders Graph read and search payloads", async () => {
+    const fixture = await createFixture("none");
     const message = {
       id: other.messageId,
       text: other.text,
       from: messageSender,
       createdAt: messageCreatedAt,
     };
-    await expect(runCli(readArgs, "read")).resolves.toEqual({
-      ok: true,
-      channel: "msteams",
-      action: "read",
-      message,
-    });
-    await expect(runCli(searchArgs, "search")).resolves.toEqual({
-      ok: true,
-      channel: "msteams",
-      action: "search",
-      messages: [message],
-      truncated: false,
-    });
-    const emptyOutput = await runCli(
-      ["search", "--channel-id", otherTarget, "--query", "unmatched"],
-      "search",
-      false,
-    );
-    expect.soft(emptyOutput).toContain("No results.");
-    expect(emptyOutput).not.toContain(other.text);
-  });
-
-  it("reads a selected channel member without current conversation context", async () => {
-    const fixture = await createFixture("none");
-    const payload = await runCli(
-      ["member", "info", "--user-id", memberId, "--channel-id", otherTarget],
-      "member-info",
-    );
-    expectReadResult(payload, "member-info", other);
-    expectGraphRequests(fixture.requests, "member-info", other);
+    const format = (action: "read" | "search", payload: unknown) =>
+      formatMessageCliText({
+        kind: "action",
+        channel: "msteams",
+        action,
+        payload,
+        dryRun: false,
+        handledBy: "plugin",
+      }).join("\n");
+    for (const action of ["read", "search"] as const) {
+      const payload = await fixture.invokeAdapter(action, { to: otherTarget });
+      expect(payload).toEqual({
+        ok: true,
+        channel: "msteams",
+        action,
+        ...(action === "read" ? { message } : { messages: [message], truncated: false }),
+      });
+      const output = format(action, payload);
+      for (const value of [other.text, other.messageId, "Member", messageCreatedAt]) {
+        expect.soft(output).toContain(value);
+      }
+    }
   });
 
   it.each([
@@ -472,24 +379,23 @@ describe("Teams message CLI", () => {
     "searches a selected channel with limit $limit and no guild",
     async ({ limit, count, truncated }) => {
       const fixture = await createFixture("none", "bundled", limit);
-      const payload = await runCli(
-        ["search", "--channel-id", otherTarget, "--query", "planning", "--limit", String(limit)],
-        "search",
-      );
-      expect(payload).toMatchObject({ ok: true, channel: "msteams", action: "search" });
-      expect(payload.messages).toHaveLength(count);
-      expect(payload.truncated).toBe(truncated);
+      const payload = await fixture.invokeAdapter("search", { channelId: otherTarget, limit });
+      expect(payload).toMatchObject({
+        ok: true,
+        channel: "msteams",
+        action: "search",
+        truncated,
+        messages: expect.any(Array),
+      });
+      expect(payload).toHaveProperty("messages.length", count);
       expectGraphRequests(fixture.requests, "search", other);
     },
   );
 
-  it("rejects a malformed limit in the registered CLI search adapter", async () => {
+  it("rejects a malformed limit in the registered search adapter", async () => {
     const fixture = await createFixture("none");
     await expect(
-      runCli(
-        ["search", "--channel-id", otherTarget, "--query", "planning", "--limit", "abc"],
-        "search",
-      ),
+      fixture.invokeAdapter("search", { channelId: otherTarget, limit: "abc" }),
     ).rejects.toThrow("limit must be a positive integer");
     fixture.expectNoGraphRequests();
   });

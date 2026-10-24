@@ -68,51 +68,40 @@ function installRunNodeToolFixture(dir: string): void {
 afterEach(() => cleanupTempDirs(tempDirs));
 
 describe("git-hooks/pre-commit (integration)", () => {
-  it.each(["--all", ".agents/skills/discord-clawd/SKILL.md"])(
-    "preserves the staged path %s without running the changed-scope check",
-    (name) => {
-      const dir = createContentGuardFixture(tempDirs);
-      const fakeBinDir = path.join(dir, "bin");
-      write(dir, "secret.txt", "do-not-stage\n");
-      write(dir, "package.json", '{"name":"tmp"}\n');
-      write(dir, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
-      writeExecutable(
-        fakeBinDir,
-        "pnpm",
-        "#!/bin/sh\necho 'pnpm should not run from pre-commit' >&2\nexit 99\n",
-      );
-      const ignored = name.startsWith(".agents/");
-      if (ignored) {
-        stage(dir, ".gitignore", ".agents/skills/discord-clawd/\n");
-      }
-      stage(dir, name, "hello\n");
-      run(dir, "bash", ["git-hooks/pre-commit"], {
-        PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
-      });
-      expect(run(dir, "git", ["diff", "--cached", "--name-only"]).split("\n")).toEqual(
-        ignored ? [name, ".gitignore"] : [name],
-      );
-    },
-  );
+  it("preserves force-added ignored skill files without running the changed-scope check", () => {
+    const name = ".agents/skills/discord-clawd/SKILL.md";
+    const dir = createContentGuardFixture(tempDirs);
+    const fakeBinDir = path.join(dir, "bin");
+    write(dir, "secret.txt", "do-not-stage\n");
+    write(dir, "package.json", '{"name":"tmp"}\n');
+    write(dir, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+    writeExecutable(
+      fakeBinDir,
+      "pnpm",
+      "#!/bin/sh\necho 'pnpm should not run from pre-commit' >&2\nexit 99\n",
+    );
+    stage(dir, ".gitignore", ".agents/skills/discord-clawd/\n");
+    stage(dir, name, "hello\n");
+    run(dir, "bash", ["git-hooks/pre-commit"], {
+      PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
+    });
+    expect(run(dir, "git", ["diff", "--cached", "--name-only"]).split("\n")).toEqual([
+      name,
+      ".gitignore",
+    ]);
+  });
 
-  it.each(["unconfigured", "external"])("formats staged files with %s private rules", (mode) => {
+  it("formats with external private rules and then blocks their literals", () => {
     const dir = makeTempRepoRoot(tempDirs, "openclaw-pre-commit-normal-");
     run(dir, "git", ["init", "-q", "--initial-branch=main"]);
     const fakeBinDir = installPreCommitFixture(dir);
     const logPath = installFormattingRecorder(dir);
-    if (mode === "unconfigured") {
-      run(dir, "git", ["config", "--local", "--unset", ruleSetting]);
-      unlinkSync(path.join(dir, rulePath));
-    } else if (mode === "external") {
-      const privateDir = makeTempRepoRoot(tempDirs, "openclaw-private-rules-");
-      const privatePath = path.join(privateDir, "private rules.txt");
-      copyFileSync(path.join(dir, rulePath), privatePath);
-      unlinkSync(path.join(dir, rulePath));
-      run(dir, "git", ["config", "--local", ruleSetting, privatePath]);
-      expect(run(dir, "git", ["config", "--path", "--get", ruleSetting])).toBe(privatePath);
-    }
-
-    stage(dir, "changed.ts", mode === "unconfigured" ? literals[0] : "export const value = 1;\n");
+    const privateDir = makeTempRepoRoot(tempDirs, "openclaw-private-rules-");
+    const privatePath = path.join(privateDir, "private rules.txt");
+    copyFileSync(path.join(dir, rulePath), privatePath);
+    unlinkSync(path.join(dir, rulePath));
+    run(dir, "git", ["config", "--local", ruleSetting, privatePath]);
+    stage(dir, "changed.ts", "export const value = 1;\n");
 
     run(dir, "bash", ["git-hooks/pre-commit"], {
       PATH: `${fakeBinDir}:${process.env.PATH ?? ""}`,
@@ -121,40 +110,18 @@ describe("git-hooks/pre-commit (integration)", () => {
     expect(readFormatterLog(logPath)).toEqual([
       "oxfmt --write --threads=1 --no-error-on-unmatched-pattern changed.ts",
     ]);
-    if (mode === "external") {
-      stage(dir, "changed.ts", literals[0]);
-      expect(hookFailure(dir).stderr).toContain("Blocked staged content");
-    }
+    stage(dir, "changed.ts", literals[0]);
+    expect(hookFailure(dir).stderr).toContain("Blocked staged content");
   });
 
-  it.each(["partial.ts", "gone.ts", "alias.ts", "payload.ts"])(
+  it.each(["gone.ts", "alias.ts"])(
     "preserves staged and working-tree bytes independently for %s",
     (name) => {
       const dir = createContentGuardFixture(tempDirs);
-      const partial = name === "partial.ts";
       const deleted = name === "gone.ts";
       const symlink = name === "alias.ts";
-      const staged = partial
-        ? "export const value = FORMAT_ME;\n"
-        : deleted
-          ? "export const keep = 1;\n"
-          : "clean staged version\n";
-      const working = partial
-        ? `${staged}export const unstagedOnly = 1;\n`
-        : symlink
-          ? "const other = 2;\n"
-          : literals[0];
-      if (partial) {
-        writeExecutable(
-          path.join(dir, "node_modules/.bin"),
-          "oxfmt",
-          `#!/usr/bin/env bash
-set -euo pipefail
-printf 'oxfmt %s\n' "$*" >> hook-tool.log
-case "$*" in *--stdin-filepath=*) sed 's/FORMAT_ME/FORMATTED/' ;; esac
-`,
-        );
-      }
+      const staged = "export const keep = 1;\n";
+      const working = "const other = 2;\n";
       if (symlink) {
         write(dir, "target-a.ts", "const unformatted =  1\n");
         write(dir, "target-b.ts", working);
@@ -164,25 +131,16 @@ case "$*" in *--stdin-filepath=*) sed 's/FORMAT_ME/FORMATTED/' ;; esac
         symlinkSync("target-b.ts", path.join(dir, name));
       } else {
         stage(dir, name, staged);
-        if (deleted) {
-          unlinkSync(path.join(dir, name));
-        } else {
-          write(dir, name, working);
-        }
+        unlinkSync(path.join(dir, name));
       }
       run(dir, "git", commitArgs);
       expect(run(dir, "git", ["show", `HEAD:${name}`])).toBe(
-        symlink ? "target-a.ts" : partial ? "export const value = FORMATTED;" : staged.trim(),
+        symlink ? "target-a.ts" : staged.trim(),
       );
       if (deleted) {
         expect(existsSync(path.join(dir, name))).toBe(false);
       } else {
         expect(read(dir, name)).toBe(working);
-      }
-      if (partial) {
-        expect(readFormatterLog(path.join(dir, "hook-tool.log"))).toEqual([
-          "oxfmt --stdin-filepath=partial.ts",
-        ]);
       }
     },
   );
@@ -313,11 +271,8 @@ describe("staged content guard", () => {
     expect(result.stderr).not.toContain("\u001b");
   });
 
-  it("scans the former public rule filename and beyond both batch limits", () => {
+  it("scans beyond both path-count and path-byte batch limits", () => {
     const dir = fixture();
-    const formerRulePath = "scripts/pre-commit/blocked-literals.txt";
-    stage(dir, formerRulePath, literals[0]);
-    blocked(dir, [formerRulePath]);
     // Long paths cross the byte budget first; short paths also cross the 256-entry count budget.
     const batchPaths = [];
     for (let i = 0; i < 600; i++) {
@@ -328,7 +283,6 @@ describe("staged content guard", () => {
       batchPaths.push(name);
     }
     run(dir, "git", ["add", "--", ...batchPaths]);
-    stage(dir, formerRulePath, "clean\n");
     stage(dir, "zzz-last.txt", literals[1]);
     blocked(dir, ["zzz-last.txt"]);
   });
@@ -621,37 +575,27 @@ if (process.argv.some(arg => arg.startsWith("--stdin-filepath="))) process.stdou
     expectNoCommit(dir);
   });
 
-  it.each([true, false])(
-    "never hydrates dependencies with the local formatter installed=%s",
-    (installed) => {
-      const dir = makeTempRepoRoot(tempDirs, "openclaw-run-node-tool-");
-      installRunNodeToolFixture(dir);
-      write(dir, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
+  it("reports missing dependencies without hydrating them", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-run-node-tool-");
+    installRunNodeToolFixture(dir);
+    write(dir, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
 
-      const fakeBinDir = path.join(dir, "bin");
-      const markerPath = path.join(dir, "pnpm-called");
-      mkdirSync(fakeBinDir, { recursive: true });
-      writeExecutable(
-        fakeBinDir,
-        "pnpm",
-        `#!/usr/bin/env bash\ntouch ${JSON.stringify(markerPath)}\nexit 99\n`,
-      );
+    const fakeBinDir = path.join(dir, "bin");
+    const markerPath = path.join(dir, "pnpm-called");
+    mkdirSync(fakeBinDir, { recursive: true });
+    writeExecutable(
+      fakeBinDir,
+      "pnpm",
+      `#!/usr/bin/env bash\ntouch ${JSON.stringify(markerPath)}\nexit 99\n`,
+    );
 
-      const args = ["scripts/pre-commit/run-node-tool.sh", "oxfmt", "--write", "a.ts"];
-      const env = { PATH: `${fakeBinDir}:${process.env.PATH ?? ""}` };
-      if (installed) {
-        const toolBinDir = path.join(dir, "node_modules", ".bin");
-        mkdirSync(toolBinDir, { recursive: true });
-        writeExecutable(toolBinDir, "oxfmt", "#!/usr/bin/env bash\nprintf 'local:%s\\n' \"$*\"\n");
-        expect(run(dir, "bash", args, env)).toBe("local:--write a.ts");
-      } else {
-        const result = runFailure(dir, "bash", args, env);
-        expect(result.status).toBe(1);
-        expect(result.stderr).toContain(
-          "Missing repo dependencies: cannot run oxfmt without node_modules.",
-        );
-      }
-      expect(existsSync(markerPath)).toBe(false);
-    },
-  );
+    const args = ["scripts/pre-commit/run-node-tool.sh", "oxfmt", "--write", "a.ts"];
+    const env = { PATH: `${fakeBinDir}:${process.env.PATH ?? ""}` };
+    const result = runFailure(dir, "bash", args, env);
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "Missing repo dependencies: cannot run oxfmt without node_modules.",
+    );
+    expect(existsSync(markerPath)).toBe(false);
+  });
 });

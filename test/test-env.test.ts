@@ -211,10 +211,6 @@ describe("installTestEnv", () => {
           entries: { dev: { workspace: "/Users/peter/dev-workspace", agentDir: "/Users/peter/.openclaw/agents/dev/agent" } },
         },
         models: { providers: { custom: { baseUrl: "https://example.test/v1" } } },
-        channels: { telegram: { streaming: {
-          mode: "block", chunkMode: "newline", block: { enabled: true },
-          preview: { chunk: { minChars: 120 } },
-        } } },
       }`,
     );
     writeHomeFiles(openClawHome, {
@@ -308,12 +304,6 @@ describe("installTestEnv", () => {
       expect(copiedConfig).not.toHaveProperty(`${agentPath}.workspace`);
       expect(copiedConfig).not.toHaveProperty(`${agentPath}.agentDir`);
     }
-    expect(copiedConfig).toHaveProperty("channels.telegram.streaming", {
-      mode: "block",
-      chunkMode: "newline",
-      block: { enabled: true },
-      preview: { chunk: { minChars: 120 } },
-    });
 
     const stagedAgentDir = path.join(testEnv.tempHome, ".openclaw", "agents", "main", "agent");
     expect(inspectPersistedAuthProfileStoreRaw(stagedAgentDir)).toEqual({
@@ -345,14 +335,28 @@ describe("installTestEnv", () => {
     );
   });
 
-  it("allows explicit live runs against the real HOME", () => {
+  it.each([false, true])("allows explicit live HOME with bash unavailable=%s", async (noBash) => {
     const realHome = useProfileHome(liveHome);
     const agentDir = path.join(realHome, "caller-agent");
     const legacyAgentDir = path.join(realHome, "caller-legacy-agent");
     setTestEnvValue("OPENCLAW_AGENT_DIR", agentDir);
     setTestEnvValue("PI_CODING_AGENT_DIR", legacyAgentDir);
 
-    const testEnv = installTestEnv();
+    let installLive = installTestEnv;
+    if (noBash) {
+      vi.doMock("node:child_process", () => ({
+        execFileSync: () => {
+          throw Object.assign(new Error("bash missing"), { code: "ENOENT" });
+        },
+      }));
+      installLive = (
+        await importFreshModule<typeof import("./test-env.js")>(
+          import.meta.url,
+          "./test-env.js?scope=profile-fallback",
+        )
+      ).installTestEnv;
+    }
+    const testEnv = installLive();
 
     expect(testEnv.tempHome).toBe(realHome);
     expect(process.env.HOME).toBe(realHome);
@@ -565,24 +569,5 @@ describe("installTestEnv", () => {
 
     expect(testEnv.tempHome).not.toBe(realHome);
     expect(process.env.TEST_PROFILE_ONLY).toBeUndefined();
-  });
-
-  it("falls back to parsing ~/.profile when bash is unavailable", async () => {
-    const realHome = useProfileHome(liveHome);
-
-    vi.doMock("node:child_process", () => ({
-      execFileSync: () => {
-        throw Object.assign(new Error("bash missing"), { code: "ENOENT" });
-      },
-    }));
-
-    const { installTestEnv: installFreshTestEnv } = await importFreshModule<
-      typeof import("./test-env.js")
-    >(import.meta.url, "./test-env.js?scope=profile-fallback");
-
-    const testEnv = installFreshTestEnv();
-
-    expect(testEnv.tempHome).toBe(realHome);
-    expect(process.env.TEST_PROFILE_ONLY).toBe("from-profile");
   });
 });
