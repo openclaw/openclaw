@@ -14,6 +14,7 @@ import {
   isSessionWorktreeSource,
 } from "../protocol-validators.generated/session-input.js";
 import type { SessionCreateParams } from "./create.ts";
+import { SESSION_PLACEMENT_ERROR_MAX_LENGTH } from "./session-placement-recovery-error.ts";
 import {
   listSessionPlacementRecoveryStorageKeys,
   sessionPlacementRecoveryExactStorageKey,
@@ -51,6 +52,7 @@ type SessionPlacementSubmission = {
   sessionKey: string;
   messageId: string;
   message: string;
+  sendError?: string;
   mentions?: readonly HumanMention[];
   attachments?: unknown[];
   target: SessionPlacementTarget;
@@ -71,8 +73,6 @@ export type SessionPlacementPausedRecovery = SessionPlacementSubmission & {
 export type SessionPlacementRecovery =
   | SessionPlacementPendingRecovery
   | SessionPlacementPausedRecovery;
-
-const SESSION_PLACEMENT_ERROR_MAX_LENGTH = 4096;
 
 // Keep the create -> dispatch -> first-send handoff recoverable across reloads,
 // while scoping it to this tab, Gateway, and authenticated credential.
@@ -225,6 +225,9 @@ function validateSessionPlacementRecovery(
     !isNonEmptyString(value.sessionKey) ||
     (expectedSessionKey !== undefined && value.sessionKey !== expectedSessionKey) ||
     !isNonEmptyString(value.messageId) ||
+    (value.sendError !== undefined &&
+      (!isNonEmptyString(value.sendError) ||
+        value.sendError.length > SESSION_PLACEMENT_ERROR_MAX_LENGTH)) ||
     typeof value.message !== "string" ||
     (!isNonEmptyString(value.message) && !value.attachments?.length) ||
     (value.attachments !== undefined && !Array.isArray(value.attachments)) ||
@@ -617,4 +620,17 @@ export function pauseSessionPlacementRecovery(
     );
   }
   return { recovery: paused, persisted };
+}
+
+/** Keep the first send failure separate from later history-only checks. */
+export function retainSessionPlacementSendError<T extends SessionPlacementRecovery>(
+  recovery: T,
+  error: string,
+): T & { sendError: string } {
+  return {
+    ...recovery,
+    sendError:
+      recovery.sendError ??
+      truncateUtf16Safe(formatUiError(error), SESSION_PLACEMENT_ERROR_MAX_LENGTH),
+  };
 }

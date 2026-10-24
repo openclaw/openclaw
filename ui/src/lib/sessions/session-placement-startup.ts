@@ -37,7 +37,7 @@ type SessionPlacementRequests = {
 type SessionPlacementStartOutcome =
   | { status: "started"; messageId: string }
   | { status: "cancelled" }
-  | { status: "interrupted" }
+  | { status: "interrupted"; error?: string }
   | { status: "cleanup-rejected"; error: string; messageId?: string }
   | { status: "dispatch-rejected"; error: string }
   | { status: "session-missing"; error: string }
@@ -476,7 +476,15 @@ export async function startSessionPlacementInitialTurn(
     };
   } catch (error) {
     if (!isCurrent()) {
-      return cancelSessionPlacement(client, params, cleanupOnCancellation, messageId);
+      const cancelled = await cancelSessionPlacement(
+        client,
+        params,
+        cleanupOnCancellation,
+        messageId,
+      );
+      return cancelled.status === "interrupted"
+        ? { ...cancelled, error: formatUiError(error) }
+        : cancelled;
     }
     // protocol-client rejects this exact error before socket.send; payload
     // limits likewise fail in the browser transport before any bytes are sent.

@@ -152,7 +152,7 @@ it("restores a required target and reconciles uncertain delivery without a dupli
   )!;
   expect(restored.target).toEqual(target);
   const request = vi.fn(async (_method: string) => ({ messages: [] }));
-  const result = await advanceSessionPlacementDraft({
+  const advance = await advanceSessionPlacementDraft({
     ...clientWith(request),
     recovery: restored,
     mode: "recover",
@@ -162,6 +162,8 @@ it("restores a required target and reconciles uncertain delivery without a dupli
     setRecoveryPhase: vi.fn(),
     cleanupOnCancellation: () => false,
   });
+  expect(advance.status).toBe("history-read");
+  const result = advance.status === "history-read" ? advance.settle() : advance;
   expect(result).toMatchObject({ status: "paused", recovery: { reason: "unconfirmed", target } });
   expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.history"]);
 });

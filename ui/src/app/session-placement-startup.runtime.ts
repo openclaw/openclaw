@@ -8,8 +8,10 @@ import {
   type GatewayConnectionScope,
 } from "../lib/gateway-connection-lifecycle.ts";
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
+import { formatSessionPlacementRecoveryError } from "../lib/sessions/session-placement-recovery-error.ts";
 import {
   clearSessionPlacementRecovery,
+  retainSessionPlacementSendError,
   listSessionPlacementRecoveries,
   readSessionPlacementRecovery,
   type SessionPlacementRecovery,
@@ -181,6 +183,7 @@ export default function createApplicationPlacementStartupRuntime(
       signal: entry.abort.signal,
       isLifecycleCurrent: () => lifecycleCurrent(entry),
       ownsRecovery: () => ownsRecovery(entry),
+      readSendError: () => entry.work.recovery.sendError,
       clearRecovery: () =>
         clearSessionPlacementRecovery(
           entry.owner.gatewayUrl,
@@ -194,7 +197,40 @@ export default function createApplicationPlacementStartupRuntime(
         publish();
       },
     })
-      .then((result) => {
+      .then((advance) => {
+        const result = advance.status === "history-read" ? advance.settle() : advance;
+        if (result.status === "interrupted" && result.error && entry.retainsConnection()) {
+          const current = findEntry(entry.owner.sessionKey)?.entry;
+          // Stop or reconnect may replace this entry while its send is pending.
+          // Retain only the diagnostic for that same unconfirmed submission.
+          if (
+            current?.owner.messageId === entry.owner.messageId &&
+            current.work.kind !== "cancelled" &&
+            (current.work.recovery.phase === "sending" ||
+              (current.work.recovery.phase === "paused" &&
+                current.work.recovery.reason === "unconfirmed")) &&
+            ownsRecovery(current) &&
+            current.retainsConnection()
+          ) {
+            let retained: SessionPlacementRecovery = retainSessionPlacementSendError(
+              current.work.recovery,
+              result.error,
+            );
+            if (current.persistRecovery && !writeSessionPlacementRecoveryIfAvailable(retained)) {
+              retained = pauseSessionPlacementRecovery(
+                retained,
+                retained.phase === "paused" ? retained.error : result.error,
+                current.persistRecovery,
+              ).recovery;
+            }
+            // Updating diagnostics must not reopen admission to a second check.
+            current.work =
+              current.work.kind !== "checking" && retained.phase === "paused"
+                ? { kind: "paused", recovery: retained }
+                : { kind: "checking", recovery: retained };
+            publish();
+          }
+        }
         if (!ownsRecovery(entry) || !entry.retainsConnection()) {
           retireEntry(entry);
           return;
@@ -372,7 +408,7 @@ export default function createApplicationPlacementStartupRuntime(
       const error = cancelled
         ? t("newSession.placementCancelled")
         : entry.work.recovery.phase === "paused"
-          ? entry.work.recovery.error
+          ? formatSessionPlacementRecoveryError(entry.work.recovery)
           : undefined;
       let phase: PlacementStartupPhase = reconnecting
         ? "reconnecting"
@@ -456,7 +492,7 @@ export default function createApplicationPlacementStartupRuntime(
         run(entry, entry.work.recovery, "recover");
         return;
       }
-      const { reason, error: _error, ...submission } = entry.work.recovery;
+      const { reason, error: _error, sendError: _sendError, ...submission } = entry.work.recovery;
       const recovery: SessionPlacementPendingRecovery = {
         ...submission,
         phase: "dispatching",

@@ -10,6 +10,7 @@ import type { SessionCapability } from "./session-capability.ts";
 import { isUiGlobalSessionKey } from "./session-key.ts";
 import {
   pauseSessionPlacementRecovery,
+  retainSessionPlacementSendError,
   readSessionPlacementRecovery,
   type SessionPlacementRecovery,
   type SessionPlacementStartMode,
@@ -27,7 +28,7 @@ export type SessionPlacementDraftAdvanceResult =
   | { status: "accepted"; consumedByEventId?: string }
   | { status: "paused"; recovery: SessionPlacementPausedRecovery }
   | { status: "cancelled"; cleanupError?: string }
-  | { status: "interrupted" }
+  | { status: "interrupted"; error?: string }
   | { status: "ownership-lost" };
 
 type SessionPlacementRecoveryRetirement = "resolved" | "interrupted";
@@ -41,13 +42,17 @@ export async function advanceSessionPlacementDraft(params: {
   mode: SessionPlacementStartMode;
   isLifecycleCurrent: () => boolean;
   ownsRecovery: () => boolean;
+  readSendError?: () => string | undefined;
   clearRecovery: (retirement: SessionPlacementRecoveryRetirement) => void;
   setRecoveryPhase: (phase: "sending", durable: boolean) => void;
   signal?: AbortSignal;
-}): Promise<SessionPlacementDraftAdvanceResult> {
+}): Promise<
+  | SessionPlacementDraftAdvanceResult
+  | { status: "history-read"; settle: () => SessionPlacementDraftAdvanceResult }
+> {
   const persistRecovery = params.persistRecovery !== false;
   const recovering = params.mode !== "dispatch";
-  const recovery = params.recovery;
+  let recovery = params.recovery;
   let reason: SessionPlacementPausedRecovery["reason"] = "not-sent";
   const pause = (error: string, next = reason): SessionPlacementDraftAdvanceResult => ({
     status: "paused",
@@ -88,30 +93,41 @@ export async function advanceSessionPlacementDraft(params: {
           : {}),
       })
       .catch((error: unknown) => ({ error: formatUiError(error) }));
-    if (!isCurrentOwner()) {
-      return { status: "interrupted" };
-    }
-    if ("error" in history) {
-      return pause(history.error, "unconfirmed");
-    }
-    const input = { sendRunId: recovery.messageId };
-    const inputReceipt = readChatInputReceipt(history, input);
-    if (inputReceipt || findChatSubmissionMessage(history.messages, recovery.messageId, true)) {
-      params.clearRecovery("resolved");
-      const receipt = history.inputReceipts?.find((item) => item.runId === recovery.messageId);
-      return inputReceipt
-        ? {
-            status: "accepted",
-            ...(receipt?.state === "consumed"
-              ? { consumedByEventId: receipt.consumedByEventId }
-              : {}),
-          }
-        : { status: "started", messageId: recovery.messageId };
-    }
-    return pause(
-      "No matching user message was found in the available history. Delivery remains unconfirmed.",
-      "unconfirmed",
-    );
+    // Settle in the startup owner's continuation, so no late send can land between
+    // updating the stored recovery and publishing that same decision in memory.
+    return {
+      status: "history-read",
+      settle: () => {
+        if (!isCurrentOwner()) {
+          return { status: "interrupted" };
+        }
+        const sendError = params.readSendError?.();
+        if (sendError) {
+          recovery = retainSessionPlacementSendError(recovery, sendError);
+        }
+        if ("error" in history) {
+          return pause(history.error, "unconfirmed");
+        }
+        const input = { sendRunId: recovery.messageId };
+        const inputReceipt = readChatInputReceipt(history, input);
+        if (inputReceipt || findChatSubmissionMessage(history.messages, recovery.messageId, true)) {
+          params.clearRecovery("resolved");
+          const receipt = history.inputReceipts?.find((item) => item.runId === recovery.messageId);
+          return inputReceipt
+            ? {
+                status: "accepted",
+                ...(receipt?.state === "consumed"
+                  ? { consumedByEventId: receipt.consumedByEventId }
+                  : {}),
+              }
+            : { status: "started", messageId: recovery.messageId };
+        }
+        return pause(
+          "No matching user message was found in the available history. Delivery remains unconfirmed.",
+          "unconfirmed",
+        );
+      },
+    };
   }
   if (recovery.phase === "paused") {
     return { status: "paused", recovery };
@@ -188,11 +204,16 @@ export async function advanceSessionPlacementDraft(params: {
       return persisted;
     },
   );
-  if (!params.cleanupOnCancellation() && !isCurrentOwner()) {
-    return { status: "interrupted" };
-  }
   if (placementStart.status === "interrupted") {
     return placementStart;
+  }
+  if (!params.cleanupOnCancellation() && !isCurrentOwner()) {
+    return placementStart.status === "send-rejected"
+      ? { status: "interrupted", error: placementStart.error }
+      : { status: "interrupted" };
+  }
+  if (placementStart.status === "send-rejected") {
+    recovery = retainSessionPlacementSendError(recovery, placementStart.error);
   }
   if (placementStart.status === "cancelled") {
     const cleanupError = await deleteDraft(false);

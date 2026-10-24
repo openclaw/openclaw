@@ -616,6 +616,7 @@ suite.define(() => {
         }),
       );
     await pollLocatorText(page.getByRole("alert")).toContain("No matching user message");
+    await pollLocatorText(page.getByRole("alert")).toContain("send outcome unknown");
     await expectPastedPngImage(retainedTurn.locator("img.chat-message-image"));
     const followUp = page.locator(".agent-chat__composer-combobox textarea");
     await pollDisabled(followUp).toBe(false);
@@ -625,6 +626,7 @@ suite.define(() => {
       phase: "paused",
       reason: "unconfirmed",
       messageId: (firstSend.params as { idempotencyKey: string }).idempotencyKey,
+      sendError: expect.stringContaining("send outcome unknown"),
       sessionKey,
       message,
       attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],

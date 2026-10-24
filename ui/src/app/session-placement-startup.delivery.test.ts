@@ -413,6 +413,61 @@ describe("placement startup reconnect", () => {
   });
 
   describe("initial turn ownership through disconnect", () => {
+    it.each(["receipt", "no receipt"] as const)(
+      "settles replacement history (%s) once when the original send rejects alongside it",
+      async (outcome) => {
+        const send = createDeferred<unknown>();
+        const history = createDeferred<unknown>();
+        const request = startupRequest({
+          "sessions.dispatch": () => ({ placement: createStartupPlacement("active", 1) }),
+          "sessions.send": () => send.promise,
+          "chat.history": () => history.promise,
+        });
+        const { startup, input, client, gateway, key } = createPlacementStartupHarness(request);
+        startup.start(input);
+        await vi.waitFor(() => expect(startupCalls(request, "sessions.send")).toHaveLength(1));
+        client.recoveryScopeReady = false;
+        transition(gateway, { ...gateway.snapshot, phase: "reconnecting" });
+        transition(gateway, {
+          ...gateway.snapshot,
+          phase: "connected",
+          client: { ...client, recoveryScopeReady: true } as never,
+        });
+        await vi.waitFor(() => expect(startupCalls(request, "chat.history")).toHaveLength(1));
+
+        const sendError = "connection lost during the first send";
+        const inputReceipts =
+          outcome === "receipt" ? [{ runId: input.recovery.messageId, state: "pending" }] : [];
+        // The old send unwinds while the replacement client is settling its history check.
+        send.reject(new Error(sendError));
+        await Promise.resolve();
+        history.resolve({ messages: [], inputReceipts });
+        await flushStartupMicrotasks();
+
+        const status = startup.get(key);
+        const stored = readStartupRecovery(input.recovery);
+        if (outcome === "receipt") {
+          expect(status).toBeNull();
+          expect(stored).toBeNull();
+        } else {
+          const error = expect.stringContaining("No matching user message");
+          expect(status?.error).toEqual(error);
+          expect(status?.error).toContain(sendError);
+          expect(stored).toMatchObject({
+            phase: "paused",
+            reason: "unconfirmed",
+            error,
+            sendError,
+          });
+        }
+        expect(startupMethods(request)).toEqual([
+          "sessions.dispatch",
+          "sessions.send",
+          "chat.history",
+        ]);
+      },
+    );
+
     it("restores paused content without effects after storage failure and client replacement", async () => {
       const request = vi.fn(() => {
         blockStorageWrites();

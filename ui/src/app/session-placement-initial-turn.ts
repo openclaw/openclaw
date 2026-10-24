@@ -1,4 +1,5 @@
 import type { ChatAttachment, ChatQueueItem } from "../lib/chat/chat-types.ts";
+import { formatSessionPlacementRecoveryError } from "../lib/sessions/session-placement-recovery-error.ts";
 import type { SessionPlacementRecovery } from "../lib/sessions/session-placement-recovery.ts";
 
 // Getters rebuild this on every pane render; transcript caches key queued turns by identity.
@@ -35,7 +36,13 @@ export function buildPlacementStartupInitialTurn(params: {
               : "failed"
             : "sending",
     ...(error || recovery.phase === "paused"
-      ? { sendError: error ?? (recovery.phase === "paused" ? recovery.error : undefined) }
+      ? {
+          sendError:
+            error ??
+            (recovery.phase === "paused"
+              ? formatSessionPlacementRecoveryError(recovery)
+              : undefined),
+        }
       : {}),
   };
   const previous = initialTurns.get(recovery);

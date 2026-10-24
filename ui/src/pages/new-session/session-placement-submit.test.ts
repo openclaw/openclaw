@@ -39,13 +39,13 @@ function storeRecovery(record: SessionPlacementRecovery) {
   sessionStorage.setItem(recoveryStorageKey(record.sessionKey), JSON.stringify(record));
 }
 
-function advanceSessionPlacementDraft(
+async function advanceSessionPlacementDraft(
   request: ReturnType<typeof vi.fn>,
   recovery: SessionPlacementRecovery,
   options: AdvanceOptions = {},
 ) {
   const client = clientWith(request);
-  return advanceSessionPlacementDraftWithRecovery({
+  const advance = await advanceSessionPlacementDraftWithRecovery({
     client,
     recovery,
     describe: (params) => client.request("sessions.describe", params),
@@ -57,6 +57,7 @@ function advanceSessionPlacementDraft(
     cleanupOnCancellation: () => true,
     ...options,
   });
+  return advance.status === "history-read" ? advance.settle() : advance;
 }
 
 function clientWith(request: ReturnType<typeof vi.fn>): Pick<GatewayBrowserClient, "request"> {
