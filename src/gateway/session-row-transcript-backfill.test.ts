@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   observeHostDataSql,
   observeSqliteReadSql,
@@ -28,22 +28,58 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { backfillSessionRowTranscriptFields } from "./session-row-transcript-backfill.js";
 import { backfillSessionRowTranscriptFieldsInDatabase } from "./session-row-transcript-backfill.worker.js";
 
-const generateConversationLabelWithFallback = vi.hoisted(() => vi.fn());
-vi.mock("../auto-reply/reply/conversation-label-generator.js", () => ({
-  generateConversationLabelWithFallback,
-}));
-vi.mock("../agents/utility-model.js", () => ({
-  resolveUtilityModelRefForAgent: () => undefined,
-}));
-
-beforeEach(() => {
-  generateConversationLabelWithFallback.mockReset();
-});
 afterEach(() => {
   vi.restoreAllMocks();
 });
 
 type BackfillParams = Parameters<typeof backfillSessionRowTranscriptFields>[0];
+
+const fallbackEntry = {
+  lastRunId: "terminal-run",
+  fallbackNotice: {
+    kind: "active",
+    selectedModel: "unit-test/selected",
+    activeModel: "unit-test/fallback",
+  },
+} satisfies Partial<InternalSessionEntry>;
+const terminalModel = (model = "fallback") => ({
+  runId: "terminal-run",
+  modelProvider: "unit-test",
+  model,
+});
+const terminalMessage = (content: string, model = "fallback") => ({
+  role: "assistant",
+  content,
+  provider: "unit-test",
+  model,
+  stopReason: "stop",
+  __openclaw: { runId: "terminal-run" },
+});
+const assistantPreview = (text: string) => ({
+  lastMessagePreview: text,
+  lastAssistantMessage: { text, timestamp: expect.any(Number) },
+});
+
+function readFacts(params: BackfillParams) {
+  return readSessionRowDatabaseFacts({
+    kind: "session-row-facts",
+    database: sessionDatabaseOptions(params),
+    env: process.env,
+    sessionKeys: [params.sessionKey],
+  }).rows[0];
+}
+
+async function withoutHostSql(run: () => Promise<void>) {
+  const hostSql = observeHostDataSql();
+  try {
+    await run();
+    for (const statement of hostSql.calls) {
+      expect(statement).not.toHaveBeenCalled();
+    }
+  } finally {
+    hostSql.restore();
+  }
+}
 
 function sessionDatabaseOptions(params: BackfillParams) {
   return {
@@ -117,13 +153,6 @@ describe("session row transcript backfill", () => {
     await withSession(
       async (params) => {
         const options = sessionDatabaseOptions(params);
-        const readFacts = () =>
-          readSessionRowDatabaseFacts({
-            kind: "session-row-facts",
-            database: options,
-            env: process.env,
-            sessionKeys: [params.sessionKey],
-          }).rows[0];
         const fields = expectDefined(backfillInDatabase(params), "seeded transcript fields");
         runOpenClawAgentWriteTransaction(({ db }) => {
           db.prepare("UPDATE session_windows SET row_transcript_json = ? WHERE session_id = ?").run(
@@ -135,12 +164,12 @@ describe("session row transcript backfill", () => {
             params.sessionId,
           );
         }, options);
-        expect(readFacts()?.transcriptAssistantMessage).toBe("unknown");
+        expect(readFacts(params)?.transcriptAssistantMessage).toBe("unknown");
         await expect(backfillSessionRowTranscriptFields(params)).resolves.toMatchObject({
           lastAssistantMessage: { text: "The rollout is verified.", timestamp: 100 },
         });
         await withColdStore(params, async () => {
-          expect(readFacts()?.transcriptAssistantMessage).toEqual({
+          expect(readFacts(params)?.transcriptAssistantMessage).toEqual({
             text: "The rollout is verified.",
             timestamp: 100,
           });
@@ -179,20 +208,12 @@ describe("session row transcript backfill", () => {
     await withSession(
       async (params) => {
         await withColdStore(params, async () => {
-          const hostSql = observeHostDataSql();
-          try {
-            await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
-              lastMessagePreview: "Found the slow query",
-              lastAssistantMessage: { text: "Found the slow query", timestamp: expect.any(Number) },
-            });
-            for (const statement of hostSql.calls) {
-              expect(statement).not.toHaveBeenCalled();
-            }
-          } finally {
-            hostSql.restore();
-          }
+          await withoutHostSql(async () => {
+            await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual(
+              assistantPreview("Found the slow query"),
+            );
+          });
           expect(sessionAccessor.loadSessionEntryReadOnly(params)).toEqual(params.sessionEntry);
-          expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
         });
       },
       [
@@ -260,35 +281,22 @@ describe("session row transcript backfill", () => {
           }
           try {
             await withColdStore(params, async () => {
-              const hostSql = observeHostDataSql();
-              try {
+              await withoutHostSql(async () => {
                 await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual(
                   storage === "media-only rewrite"
                     ? { fallbackModel: { provider: "unit-test", model: "fallback" } }
                     : storage === "current"
                       ? {
-                          lastMessagePreview: "Finished with fallback",
-                          lastAssistantMessage: {
-                            text: "Finished with fallback",
-                            timestamp: expect.any(Number),
-                          },
+                          ...assistantPreview("Finished with fallback"),
                           fallbackModel: { provider: "unit-test", model: "fallback" },
                         }
                       : alias
-                        ? {
-                            lastMessagePreview: preview,
-                            lastAssistantMessage: { text: preview, timestamp: expect.any(Number) },
-                          }
+                        ? assistantPreview(preview)
                         : storage === "unavailable" || storage === "absent"
                           ? undefined
                           : {},
                 );
-                for (const statement of hostSql.calls) {
-                  expect(statement).not.toHaveBeenCalled();
-                }
-              } finally {
-                hostSql.restore();
-              }
+              });
               if (storage === "unavailable") {
                 expect(isSessionTranscriptIndexReconcileRunning(options)).toBe(false);
                 expect(
@@ -315,8 +323,7 @@ describe("session row transcript backfill", () => {
         },
         [
           {
-            role: "assistant",
-            content: preview,
+            ...terminalMessage(preview, alias ? "same" : "fallback"),
             ...(mediaRewrite || silentRewrite
               ? {
                   openclawDisplayContent: [
@@ -329,10 +336,6 @@ describe("session row transcript backfill", () => {
                 }
               : {}),
             ...(storage === "hidden rewrite" ? { display: false } : {}),
-            provider: "unit-test",
-            model: alias ? "same" : "fallback",
-            stopReason: "stop",
-            __openclaw: { runId: "terminal-run" },
           },
         ],
         {
@@ -369,81 +372,32 @@ describe("session row transcript backfill", () => {
         try {
           expect(read()).toMatchObject({
             lastMessagePreview: "First terminal reply",
-            terminalModel: { runId: "terminal-run", modelProvider: "unit-test", model: "fallback" },
+            terminalModel: terminalModel(),
           });
           await sessionAccessor.persistSessionTranscriptTurn(params, {
-            messages: [
-              {
-                message: {
-                  role: "assistant",
-                  content: "Next terminal reply",
-                  provider: "unit-test",
-                  model: "next-fallback",
-                  stopReason: "stop",
-                  __openclaw: { runId: "terminal-run" },
-                },
-              },
-            ],
+            messages: [{ message: terminalMessage("Next terminal reply", "next-fallback") }],
             touchSessionEntry: false,
           });
-          expect(
-            readSessionRowDatabaseFacts({
-              kind: "session-row-facts",
-              database: sessionDatabaseOptions(params),
-              env: process.env,
-              sessionKeys: [params.sessionKey],
-            }).rows[0],
-          ).toMatchObject({
+          expect(readFacts(params)).toMatchObject({
             transcriptPreview: "Next terminal reply",
-            transcriptTerminalModel: {
-              runId: "terminal-run",
-              modelProvider: "unit-test",
-              model: "next-fallback",
-            },
+            transcriptTerminalModel: terminalModel("next-fallback"),
           });
           expect(read()).toMatchObject({
             lastMessagePreview: "Next terminal reply",
-            terminalModel: {
-              runId: "terminal-run",
-              modelProvider: "unit-test",
-              model: "next-fallback",
-            },
+            terminalModel: terminalModel("next-fallback"),
           });
         } finally {
           reads.restore();
         }
       },
-      [
-        {
-          role: "assistant",
-          content: "First terminal reply",
-          provider: "unit-test",
-          model: "fallback",
-          stopReason: "stop",
-          __openclaw: { runId: "terminal-run" },
-        },
-      ],
-      {
-        lastRunId: "terminal-run",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "unit-test/selected",
-          activeModel: "unit-test/fallback",
-        },
-      },
+      [terminalMessage("First terminal reply")],
+      fallbackEntry,
     );
   });
 
   it("reuses a completed backfill after reopening and invalidates an equal-mtime legacy import", async () => {
     await withSession(async (params) => {
       const options = sessionDatabaseOptions(params);
-      const readFacts = () =>
-        readSessionRowDatabaseFacts({
-          kind: "session-row-facts",
-          database: options,
-          env: process.env,
-          sessionKeys: [params.sessionKey],
-        }).rows[0];
       const transcriptMtimeMs = runOpenClawAgentWriteTransaction(({ db }) => {
         db.prepare(
           "UPDATE session_windows SET row_transcript_json = NULL, row_transcript_updated_at = NULL WHERE session_id = ?",
@@ -456,16 +410,15 @@ describe("session row transcript backfill", () => {
         }
         return row.transcript_updated_at;
       }, options);
-      expect(readFacts()?.transcriptPreview).toBeUndefined();
-      await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
-        lastMessagePreview: "Found the slow query",
-        lastAssistantMessage: { text: "Found the slow query", timestamp: expect.any(Number) },
-      });
+      expect(readFacts(params)?.transcriptPreview).toBeUndefined();
+      await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual(
+        assistantPreview("Found the slow query"),
+      );
 
       await withColdStore(params, async () => {
         const reads = observeSqliteReadSql(nodeSqlite.requireNodeSqlite().StatementSync.prototype);
         try {
-          expect(readFacts()).toMatchObject({
+          expect(readFacts(params)).toMatchObject({
             transcriptPreview: "Found the slow query",
             transcriptTerminalModel: null,
           });
@@ -499,13 +452,13 @@ describe("session row transcript backfill", () => {
           .db.prepare("SELECT transcript_updated_at FROM session_windows WHERE session_id = ?")
           .get(params.sessionId),
       ).toEqual({ transcript_updated_at: transcriptMtimeMs });
-      expect(readFacts()?.transcriptPreview).toBeUndefined();
+      expect(readFacts(params)?.transcriptPreview).toBeUndefined();
       await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({
         lastMessagePreview: "Imported next",
       });
-      expect(readFacts()?.transcriptPreview).toBe("Imported next");
+      expect(readFacts(params)?.transcriptPreview).toBe("Imported next");
       // Legacy events without a message or record timestamp cannot rank an agent's reply.
-      expect(readFacts()?.transcriptAssistantMessage).toBeNull();
+      expect(readFacts(params)?.transcriptAssistantMessage).toBeNull();
     });
   });
 
@@ -515,28 +468,11 @@ describe("session row transcript backfill", () => {
         expect(backfillInDatabase(params)).toMatchObject({
           lastMessagePreview: null,
           lastAssistantMessage: null,
-          terminalModel: { runId: "terminal-run", modelProvider: "unit-test", model: "fallback" },
+          terminalModel: terminalModel(),
         });
       },
-      [
-        { role: "assistant", content: "Older preview" },
-        {
-          role: "assistant",
-          content: "x".repeat(70 * 1024),
-          provider: "unit-test",
-          model: "fallback",
-          stopReason: "stop",
-          __openclaw: { runId: "terminal-run" },
-        },
-      ],
-      {
-        lastRunId: "terminal-run",
-        fallbackNotice: {
-          kind: "active",
-          selectedModel: "unit-test/selected",
-          activeModel: "unit-test/fallback",
-        },
-      },
+      [{ role: "assistant", content: "Older preview" }, terminalMessage("x".repeat(70 * 1024))],
+      fallbackEntry,
     );
   });
 
@@ -590,7 +526,6 @@ describe("session row transcript backfill", () => {
         await sessionAccessor.patchSessionEntryCore(params, () => ({ displayName: "My title" }));
         await expect(backfillSessionRowTranscriptFields(params)).resolves.toEqual({});
         expect(sessionAccessor.loadSessionEntry(params)?.displayName).toBe("My title");
-        expect(generateConversationLabelWithFallback).not.toHaveBeenCalled();
       },
       [
         { role: "user", content: "Old user prompt" },

@@ -55,17 +55,34 @@ function runtimeConfig(
   defaults: AgentDefaultsConfig = {},
 ): OpenClawConfig {
   return {
-    agents: {
-      defaults: {
-        ...defaults,
-        models: { [model]: { agentRuntime: { id } } },
-      },
-    },
+    agents: { defaults: { ...defaults, models: { [model]: { agentRuntime: { id } } } } },
   };
 }
 
 const mainThinking = { cfg: {}, agentId: "main", agentRuntime: "openclaw" };
 const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+function modelDefinition(
+  id: string,
+  fields: Partial<ModelDefinitionConfig>,
+): ModelDefinitionConfig {
+  return {
+    id,
+    name: id,
+    input: ["text"],
+    cost: zeroCost,
+    maxTokens: 4096,
+    reasoning: false,
+    ...fields,
+  };
+}
+
+function policyEntry(provider: string, resolve: PreparedThinkingPolicy["resolve"] | null) {
+  return catalogEntry(provider, "Reasoner", {
+    reasoning: true,
+    [PREPARED_THINKING_POLICY]: resolve && { resolve },
+  });
+}
+
 const projectionMustNotRun = async () => {
   throw new Error("projection must not execute");
 };
@@ -104,8 +121,7 @@ it.each([false, true])("keeps configured reasoning=%s on runtime routes", (reaso
     expect(projection.effectiveThinkingLevel).toBe("high");
   } else {
     expect(levels).toEqual(["off", "ultra"]);
-    expect(projection.thinkingDefault).toBe("off");
-    expect(projection.effectiveThinkingLevel).toBe("off");
+    expect(projection).toMatchObject({ thinkingDefault: "off", effectiveThinkingLevel: "off" });
   }
 });
 
@@ -206,16 +222,7 @@ it("keeps logical defaults separate from donor levels", () => {
     levels: [{ id: "off" }, { id: "low", label: "On" }, { id: "high" }],
     defaultLevel: "high",
   }));
-  const catalog: (ModelCatalogEntry & ThinkingCatalogPolicyCarrier)[] = [
-    catalogEntry("logical", "Reasoner", {
-      reasoning: true,
-      [PREPARED_THINKING_POLICY]: { resolve: logicalPolicy },
-    }),
-    catalogEntry("donor", "Reasoner", {
-      reasoning: true,
-      [PREPARED_THINKING_POLICY]: { resolve: donorPolicy },
-    }),
-  ];
+  const catalog = [policyEntry("logical", logicalPolicy), policyEntry("donor", donorPolicy)];
   const profile = thinkingProfile({
     ...mainThinking,
     provider: "logical",
@@ -237,12 +244,7 @@ it("retains an authoritative absent policy across all default and clamp reads", 
     levels: [{ id: "high" }],
     defaultLevel: "high",
   }));
-  const catalog: (ModelCatalogEntry & ThinkingCatalogPolicyCarrier)[] = [
-    catalogEntry("captured-null", "Reasoner", {
-      reasoning: true,
-      [PREPARED_THINKING_POLICY]: null,
-    }),
-  ];
+  const catalog = [policyEntry("captured-null", null)];
   const profile = thinkingProfile({
     ...mainThinking,
     provider: "captured-null",
@@ -261,15 +263,13 @@ it("retains an authoritative absent policy across all default and clamp reads", 
 
 describe("resolveGatewaySessionThinkingProjectionInternal", () => {
   const registeredHarnesses = listRegisteredAgentHarnesses();
-  beforeEach(() => {
-    clearAgentHarnesses();
-  });
+  beforeEach(clearAgentHarnesses);
   afterAll(() => restoreRegisteredAgentHarnesses(registeredHarnesses));
 
   it.each([
-    { api: true, baseUrl: true, levels: ["Off", "High"] },
-    { api: false, baseUrl: true, levels: ["Off"] },
-  ])("uses catalog-only runtime route facts (api=$api, baseUrl=$baseUrl)", (scenario) => {
+    { api: true, levels: ["Off", "High"] },
+    { api: false, levels: ["Off"] },
+  ])("uses catalog-only runtime route facts (api=$api)", (scenario) => {
     const api = "openai-responses" as const;
     const baseUrl = "https://catalog-route.example.test/v1";
     registerAgentHarness({
@@ -303,7 +303,7 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
         catalogEntry("route-provider", "route-model", {
           reasoning: true,
           ...(scenario.api ? { api } : {}),
-          ...(scenario.baseUrl ? { baseUrl } : {}),
+          baseUrl,
         }),
       ],
     };
@@ -312,10 +312,7 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
         scenario.levels,
       );
       expect(
-        thinkingProjection({
-          ...params,
-          entry: session("catalog-route"),
-        }).thinkingOptions,
+        thinkingProjection({ ...params, entry: session("catalog-route") }).thinkingOptions,
       ).toEqual(scenario.levels);
     } finally {
       profile.mockRestore();
@@ -332,19 +329,15 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
           : { supported: true },
       runAttempt: projectionMustNotRun,
     });
-    const definition: ModelDefinitionConfig = {
-      id: "gpt-5.6-sol",
-      name: "Sol",
+    const definition = modelDefinition("gpt-5.6-sol", {
       reasoning: true,
-      input: ["text"],
-      cost: zeroCost,
       maxTokens: 8192,
       compat: {
         supportsReasoningEffort: true,
         supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
         ...(transportOverride ? { supportsStore: false } : {}),
       },
-    };
+    });
     const provider = {
       baseUrl: "https://api.openai.com/v1",
       api: "openai-responses" as const,
@@ -403,16 +396,12 @@ describe("Gateway model identity", () => {
     "refreshes context without rescanning for %s",
     async (selected) => {
       await withStateDirEnv("session-context-projection-", async ({ stateDir }) => {
-        const rows: ModelDefinitionConfig[] = Array.from({ length: 64 }, (_, index) => ({
-          id: index === 63 ? "selected" : `model-${index}`,
-          name: `Model ${index}`,
-          contextWindow: 128_000,
-          contextTokens: 80_000,
-          maxTokens: 4096,
-          input: ["text"],
-          reasoning: false,
-          cost: zeroCost,
-        }));
+        const rows = Array.from({ length: 64 }, (_, index) =>
+          modelDefinition(index === 63 ? "selected" : `model-${index}`, {
+            contextWindow: 128_000,
+            contextTokens: 80_000,
+          }),
+        );
         let visits = 0;
         const models = [...rows];
         Object.defineProperty(models, Symbol.iterator, {
@@ -502,16 +491,10 @@ describe("Gateway model identity", () => {
 
   test.each([false, true])("normalizes once with resolved-first=%s", async (resolvedFirst) => {
     await withIdentityScope(() => {
-      const resolved = { entry: writtenModelOverride("middle"), model: "middle" };
-      const raw = {
-        entry: session("raw-model", {
-          providerOverride: "custom",
-          modelOverride: "latest",
-        }),
-        model: "middle",
-      };
+      const resolved = writtenModelOverride("middle");
+      const raw = session("raw-model", { providerOverride: "custom", modelOverride: "latest" });
       const context = rowContext({ now: 1 });
-      for (const { entry, model } of resolvedFirst ? [resolved, raw] : [raw, resolved]) {
+      for (const entry of resolvedFirst ? [resolved, raw] : [raw, resolved]) {
         const selected = resolveSessionSelectedModelRef({
           cfg: identityConfig,
           agentId: "main",
@@ -519,22 +502,20 @@ describe("Gateway model identity", () => {
           rowContext: context,
           allowPluginNormalization: false,
         });
-        expect
-          .soft(selected)
-          .toEqual({ provider: "custom", model, storedOverrideSource: "session" });
+        expect.soft(selected).toEqual({
+          provider: "custom",
+          model: "middle",
+          storedOverrideSource: "session",
+        });
       }
     });
   });
 
   test.each([
-    { provider: "demo-cli", model: "shared-model", expectedProvider: "demo-provider" },
-    { provider: "standalone-cli", model: "shared-model", expectedProvider: "standalone-cli" },
-    {
-      provider: "demo-cli",
-      model: "demo-provider/shared-model",
-      expectedProvider: "demo-provider",
-    },
-  ])("keeps $provider/$model identity across session reads", async (fixture) => {
+    ["demo-cli", "shared-model", "demo-provider"],
+    ["standalone-cli", "shared-model", "standalone-cli"],
+    ["demo-cli", "demo-provider/shared-model", "demo-provider"],
+  ])("keeps %s/%s identity across session reads", async (provider, model, expectedProvider) => {
     await withStateDirEnv("session-model-identity-", async ({ stateDir }) => {
       const registry = createEmptyPluginRegistry();
       registry.cliBackends = [
@@ -549,27 +530,24 @@ describe("Gateway model identity", () => {
         },
       }));
       setActivePluginRegistry(registry);
-      const selected = `${fixture.provider}/${fixture.model}`;
+      const selected = `${provider}/${model}`;
       const cfg = runtimeConfig(selected, "openclaw", { model: "unrelated/shared-model" });
       cfg.agents = { ...cfg.agents, entries: { main: {} } };
       setRuntimeConfigSnapshot(cfg);
       const key = "agent:main:identity";
       const entry = session("identity", {
-        providerOverride: fixture.provider,
-        modelOverride: fixture.model,
+        providerOverride: provider,
+        modelOverride: model,
         modelOverrideRouteResolution: "resolved",
       });
       const store = { [key]: entry };
       const source = { cfg, storePath: stateDir, store, key, entry };
-      const expected = { modelProvider: fixture.expectedProvider, model: "shared-model" };
+      const expected = { modelProvider: expectedProvider, model: "shared-model" };
       for (const lightweightListRow of [false, true]) {
-        const row = sessionRow({
-          ...source,
-          agentId: "main",
-          lightweightListRow,
+        expect(sessionRow({ ...source, agentId: "main", lightweightListRow })).toMatchObject({
+          ...expected,
+          agentRuntime: { id: "openclaw" },
         });
-        expect(row).toMatchObject(expected);
-        expect(row.agentRuntime?.id).toBe("openclaw");
       }
       expect(
         patchResult({
@@ -581,7 +559,7 @@ describe("Gateway model identity", () => {
       ).toMatchObject({ ...expected, agentRuntime: { id: "openclaw" } });
       const listed = await listSessionFixture({
         ...source,
-        opts: { agentId: "main", search: `${fixture.expectedProvider}/shared-model` },
+        opts: { agentId: "main", search: `${expectedProvider}/shared-model` },
       });
       expect(listed.sessions).toMatchObject([{ key, ...expected }]);
       const defaultConfig: OpenClawConfig = {

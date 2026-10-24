@@ -170,17 +170,11 @@ it("retains a worker approval scope through delayed first signed use", async () 
   expect(stale).toBeDefined();
   expect(validateAgentRunDelegatedAuthority(stale!.delegatedAuthority)).toBe(false);
   expect(validateAgentRunDelegatedAuthority(run.delegatedAuthority)).toBe(true);
-  const current = await createIdentity({
-    ...params,
-    approvalAuthority: replacement,
-  });
+  const current = await createIdentity({ ...params, approvalAuthority: replacement });
   expect(current).toBeDefined();
   expect(validateAgentRunDelegatedAuthority(current!.delegatedAuthority)).toBe(true);
   await expect(
-    api.direct({
-      ...params,
-      approvalAuthority: run.delegatedAuthority,
-    }),
+    api.direct({ ...params, approvalAuthority: run.delegatedAuthority }),
   ).rejects.toThrow("original claim approval authority");
 });
 
@@ -211,10 +205,7 @@ it("rejects signed delegated authority after terminal, replacement, and restart 
 it("creates direct identities without credentials and rejects inactive runs or expired context", async () => {
   const run = operationalRun();
   const params = runtimeParams({}, run);
-  await expect(api.direct(params)).resolves.toMatchObject({
-    kind: "agentRuntime",
-    ...params,
-  });
+  await expect(api.direct(params)).resolves.toMatchObject({ kind: "agentRuntime", ...params });
   expect(readSocketToken()).toBeUndefined();
   await expect(
     api.direct({
@@ -393,11 +384,7 @@ it.each(["run-1", "run-other"])(
         operationalRunInstance: run.operationalRunInstance,
         sessionSpawnContext: {
           ...(inheritedPermissionMode ? { inheritedPermissionMode } : spawnFacts),
-          inheritedToolPolicy: {
-            version: 1,
-            allow: ["read", "sessions_spawn"],
-            deny: ["exec"],
-          },
+          inheritedToolPolicy: { ...inheritedToolPolicy, allow: ["read", "sessions_spawn"] },
         },
       });
       if (identityRunId === run.operationalRunInstance.runId) {
@@ -425,10 +412,7 @@ it("round-trips a short-lived cron self-management capability", async () => {
     agentId: "ops",
     sessionKey: "agent:ops:cron:job-1:run:run-1",
   });
-  const token = await api.mint({
-    ...params,
-    cronSelfManagementJobId: " job-1 ",
-  });
+  const token = await api.mint({ ...params, cronSelfManagementJobId: " job-1 " });
   await expect(api.verify(token, 60_999)).resolves.toMatchObject({
     kind: "agentRuntime",
     ...params,

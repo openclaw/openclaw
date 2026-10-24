@@ -46,6 +46,11 @@ const lifecycleUpdate =
   "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lifecycleRevision', 'life-b') WHERE session_key = ?";
 const preambleEvent = (progressText: string) =>
   event({ stream: "item", data: { kind: "preamble", progressText } });
+const observerConfig = (store: string | undefined, utilityModel = ""): OpenClawConfig => ({
+  session: { store },
+  gateway: { controlUi: { sessionObserver: true } },
+  agents: { defaults: { utilityModel } },
+});
 
 function traceSql() {
   const trace = observeMainThreadSql();
@@ -442,14 +447,7 @@ it("lets the publisher finish its nested write before persisting the background 
         return true;
       }),
     );
-    const harness = createHarness({
-      config: {
-        session: { store: options.path },
-        gateway: { controlUi: { sessionObserver: true } },
-        agents: { defaults: { utilityModel: "" } },
-      },
-      persistDigest,
-    });
+    const harness = createHarness({ config: observerConfig(options.path), persistDigest });
     let successor: Promise<void> | undefined;
     let disposal: Promise<void> | undefined;
     try {
@@ -487,13 +485,10 @@ it.for(["model", "failed model", "synthesized terminal"] as const)(
   "rechecks physical source authority before consuming a %s digest",
   async (kind, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const config: OpenClawConfig = {
-        session: { store: state.path("original.sqlite") },
-        gateway: { controlUi: { sessionObserver: true } },
-        agents: {
-          defaults: { utilityModel: kind === "synthesized terminal" ? "" : "openai/gpt-test" },
-        },
-      };
+      const config = observerConfig(
+        state.path("original.sqlite"),
+        kind === "synthesized terminal" ? "" : "openai/gpt-test",
+      );
       const replacementStore = state.path("replacement.sqlite");
       let changeSourceOnRead = false;
       let sourceChanges = 0;
