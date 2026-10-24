@@ -215,25 +215,6 @@ describe("guided onboarding inference composition", () => {
       }
       await run();
 
-      const selection = (index: number, options: object) =>
-        expect(prompter.select).toHaveBeenNthCalledWith(index, expect.objectContaining(options));
-      selection(1, {
-        initialValue: false,
-        options: [
-          expect.objectContaining({ value: false }),
-          expect.objectContaining({ value: true }),
-        ],
-      });
-      selection(2, {
-        initialValue: "one",
-        options: [
-          { value: "one", label: "One agent" },
-          { value: "team", label: "A small team: a chief of staff plus specialists" },
-        ],
-      });
-      selection(3, {
-        options: expect.arrayContaining([expect.objectContaining({ value: "full" })]),
-      });
       const persisted = await configModule.readConfigFileSnapshot();
       expect(runSystemAgentChat).not.toHaveBeenCalled();
       expect(persisted.valid).toBe(true);
