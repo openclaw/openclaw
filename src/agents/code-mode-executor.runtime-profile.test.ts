@@ -5,7 +5,7 @@ import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
 
 vi.mock("../../cli-invocation.mjs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../cli-invocation.mjs")>()),
-  readStandaloneRuntimeManifest: () => ({ mode: "aot" }),
+  getStandaloneRuntimeBuild: () => ({ mode: "aot" }),
 }));
 
 const config = {

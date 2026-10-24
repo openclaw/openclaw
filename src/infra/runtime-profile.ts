@@ -1,7 +1,7 @@
 import {
+  getStandaloneRuntimeBuild,
   isEmbeddedStandaloneModule,
-  readStandaloneRuntimeManifest,
-  type StandaloneRuntimeManifest,
+  type StandaloneBuildInfo,
 } from "../../cli-invocation.mjs";
 
 export type RuntimeExecutionProfile = "dynamic-execution" | "embedded-aot";
@@ -9,16 +9,14 @@ export type RuntimeExecutionProfile = "dynamic-execution" | "embedded-aot";
 let runtimeExecutionProfile: RuntimeExecutionProfile | undefined;
 
 export function resolveRuntimeExecutionProfile(
-  build: Pick<StandaloneRuntimeManifest, "mode"> | undefined,
+  build: Pick<StandaloneBuildInfo, "mode"> | undefined,
 ): RuntimeExecutionProfile {
   return build?.mode === "aot" ? "embedded-aot" : "dynamic-execution";
 }
 
 /** Artifact capabilities stay fixed for this process, including its workers. */
 export function getRuntimeExecutionProfile(): RuntimeExecutionProfile {
-  return (runtimeExecutionProfile ??= resolveRuntimeExecutionProfile(
-    readStandaloneRuntimeManifest(),
-  ));
+  return (runtimeExecutionProfile ??= resolveRuntimeExecutionProfile(getStandaloneRuntimeBuild()));
 }
 
 const DYNAMIC_EXECUTION_NEXT_STEP =

@@ -5,7 +5,7 @@ import { makeQaSuiteTestScenario } from "./suite-test-helpers.js";
 
 vi.mock("../../../cli-invocation.mjs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../cli-invocation.mjs")>()),
-  readStandaloneRuntimeManifest: () => ({ mode: "aot" }),
+  getStandaloneRuntimeBuild: () => ({ mode: "aot" }),
 }));
 
 async function runActions(actions: unknown[]) {

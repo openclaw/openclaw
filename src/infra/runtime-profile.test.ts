@@ -9,7 +9,7 @@ import {
 const manifest = vi.hoisted(() => ({ mode: "aot" as const }));
 vi.mock("../../cli-invocation.mjs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../cli-invocation.mjs")>()),
-  readStandaloneRuntimeManifest: () => manifest,
+  getStandaloneRuntimeBuild: () => manifest,
   isEmbeddedStandaloneModule: (filename: string) => filename === "/image/plugin.js",
 }));
 

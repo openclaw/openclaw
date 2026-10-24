@@ -9,8 +9,9 @@ read_when:
 
 OpenClaw distinguishes the code compiled into a host from code supplied after
 that host was built. The runtime profile owns that distinction. It is selected
-from the standalone artifact's manifest, not a user setting, filename suffix,
-operating system, or a trial call to `eval`.
+from the standalone artifact's immutable bootstrap facts, with a manifest
+fallback for hosts without those facts. A user setting, filename suffix,
+operating system, or trial call to `eval` does not select the profile.
 
 ## Profiles
 

@@ -7,7 +7,7 @@ import { getCachedPluginModuleLoader, preparePluginModule } from "./plugin-modul
 
 vi.mock("../../cli-invocation.mjs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../cli-invocation.mjs")>()),
-  readStandaloneRuntimeManifest: () => ({ mode: "aot" }),
+  getStandaloneRuntimeBuild: () => ({ mode: "aot" }),
 }));
 
 const temp = useAutoCleanupTempDirTracker(afterEach);
