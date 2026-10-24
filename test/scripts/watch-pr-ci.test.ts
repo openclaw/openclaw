@@ -49,6 +49,28 @@ ${body}
 console.log(JSON.stringify(value));
 `;
 }
+async function replayGh(
+  body: string,
+  options: {
+    fixture?: unknown;
+    head?: string;
+    args?: string[];
+    clock?: Parameters<typeof runWatcher>[3];
+  } = {},
+) {
+  return withTempDir("openclaw-watch-pr-ci-replay-", async (root) => {
+    const callsPath = join(root, "calls.jsonl");
+    writeFileSync(callsPath, "");
+    const result = await runWatcher(
+      ghProgram(callsPath, `const fixture = ${JSON.stringify(options.fixture)};\n${body}`),
+      options.head ?? sha,
+      options.args ?? [],
+      options.clock,
+    );
+    const callText = readFileSync(callsPath, "utf8");
+    return { ...result, callText, calls: parseCalls(callText) };
+  });
+}
 function contextPage(nodes: RollupCheck[], state = "FAILURE") {
   return {
     state,
@@ -87,7 +109,7 @@ function expectBlocked(
   expect(result.stdout).not.toContain(green);
 }
 
-function replayPlaceholder(
+async function replayPlaceholder(
   fixture = structuredClone(placeholderFixture),
   evidence: {
     runSnapshots?: unknown[];
@@ -102,20 +124,12 @@ function replayPlaceholder(
     rest?: boolean;
   } = {},
 ) {
-  return withTempDir("openclaw-watch-pr-ci-replay-", async (root) => {
-    const payload = join(root, "payload.json");
-    const calls = join(root, "calls.jsonl");
-    // The live capture is merged. Only lifecycle is reopened for the historical watch.
-    if (!evidence.merged) {
-      fixture.graphql.data.repository.pullRequest.state = "OPEN";
-    }
-    writeFileSync(payload, JSON.stringify({ ...fixture, ...evidence }));
-    writeFileSync(calls, "");
-    const result = await runWatcher(
-      ghProgram(
-        calls,
-        `
-const fixture = JSON.parse(fs.readFileSync(${JSON.stringify(payload)}, "utf8"));
+  // The live capture is merged. Only lifecycle is reopened for the historical watch.
+  if (!evidence.merged) {
+    fixture.graphql.data.repository.pullRequest.state = "OPEN";
+  }
+  const result = await replayGh(
+    `
 const runPath = "repos/openclaw/openclaw/actions/runs/33155056361";
 const scanned = calls.some((call) => call[1]?.startsWith("repos/openclaw/openclaw/actions/jobs/"));
 const currentGraphql = scanned && fixture.afterAliasScan !== undefined ? fixture.afterAliasScan : fixture.graphql;
@@ -180,22 +194,29 @@ else if (args[1]?.startsWith("repos/openclaw/openclaw/actions/jobs/")) {
   const jobId = Number(args[1].split("/").at(-1));
   if (fixture.delayFirstAlias && jobId === jobIds[0]) {
     Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
-    fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(["slow-alias-completed"]) + "\\n");
+    fs.appendFileSync(callsPath, JSON.stringify(["slow-alias-completed"]) + "\\n");
   }
   value = fixture.directJobs[jobIds.indexOf(jobId)];
   if (value === undefined) throw new Error("missing direct job response");
 }
 else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 `,
-      ),
-      placeholderFixture.run.head_sha,
-      evidence.watchTimeout === undefined
-        ? []
-        : ["--timeout", String(evidence.watchTimeout), "--interval", String(evidence.watchTimeout)],
-      evidence.clock,
-    );
-    return { ...result, calls: readFileSync(calls, "utf8") };
-  });
+    {
+      fixture: { ...fixture, ...evidence },
+      head: placeholderFixture.run.head_sha,
+      args:
+        evidence.watchTimeout === undefined
+          ? []
+          : [
+              "--timeout",
+              String(evidence.watchTimeout),
+              "--interval",
+              String(evidence.watchTimeout),
+            ],
+      clock: evidence.clock,
+    },
+  );
+  return { ...result, calls: result.callText };
 }
 
 function replaySummary({
@@ -218,13 +239,8 @@ function replaySummary({
   supersededFailure?: boolean;
   completeAfter?: number;
 }) {
-  return withTempDir("openclaw-watch-pr-ci-summary-", async (root) => {
-    const callsPath = join(root, "calls.jsonl");
-    writeFileSync(callsPath, "");
-    const result = await runWatcher(
-      ghProgram(
-        callsPath,
-        `
+  return replayGh(
+    `
 const runReads = calls.filter((call) => call[0] === "run" && call[1] === "view").length;
 const identity = {
   workflow_id: 10, event: "pull_request", head_sha: "${sha}",
@@ -273,15 +289,8 @@ if (args[0] === "browse") {
   throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 }
 `,
-      ),
-      sha,
-      ["--timeout", "3"],
-    );
-    return {
-      ...result,
-      calls: readCalls(callsPath),
-    };
-  });
+    { args: ["--timeout", "3"] },
+  );
 }
 
 function restCheck(id = 1, patch: Record<string, unknown> = {}) {
@@ -353,20 +362,13 @@ function replayRestRollup(
     runStatuses?: string[];
   } = {},
 ) {
-  return withTempDir("openclaw-watch-pr-ci-fallback-", async (root) => {
-    const callsPath = join(root, "calls.jsonl");
-    const payloadPath = join(root, "payload.json");
-    writeFileSync(callsPath, "");
-    writeFileSync(payloadPath, JSON.stringify(fixture));
-    const result = await runWatcher(
-      ghProgram(
-        callsPath,
-        `
-const original = JSON.parse(fs.readFileSync(${JSON.stringify(payloadPath)}, "utf8"));
+  return replayGh(
+    `
+const original = fixture;
 const runReads = calls.filter((call) => call[0] === "run" && call[1] === "view").length;
-const fixture = { ...original, ...(runReads >= 2 ? original.afterRun : {}) };
+const current = { ...original, ...(runReads >= 2 ? original.afterRun : {}) };
 const run = { id: 201, workflow_id: 10, check_suite_id: 20_000, event: "pull_request", head_sha: "${sha}" };
-const checkPages = fixture.checkPages ?? [{ total_count: 1, check_runs: [${JSON.stringify(restCheck())}] }];
+const checkPages = current.checkPages ?? [{ total_count: 1, check_runs: [${JSON.stringify(restCheck())}] }];
 const page = Number(new URLSearchParams(args[1]?.split("?")[1]).get("page") ?? 1);
 const collected = calls.some((call) => call[1]?.includes("/check-suites?"));
 if (args[0] === "browse") {
@@ -374,27 +376,27 @@ if (args[0] === "browse") {
   process.exit(0);
 } else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
   value = { state: "open", merged_at: null, mergeable: true, head: { sha: "${sha}" },
-    ...(collected ? fixture.afterCollection : {}) };
+    ...(collected ? current.afterCollection : {}) };
 } else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) {
   value = { workflow_runs: [run] };
 } else if (args[0] === "run" && args[1] === "view") {
   const reads = calls.filter((call) => call[0] === "run" && call[1] === "view").length;
-  const snapshots = fixture.runStatuses ?? ["completed"];
+  const snapshots = current.runStatuses ?? ["completed"];
   const status = snapshots[Math.min(reads, snapshots.length - 1)];
   value = { status, conclusion: status === "completed" ? "success" : null };
 } else if (args[1] === "graphql") {
-  console.error(fixture.graphqlError ?? "gh: API rate limit exceeded for fixture-user.");
+  console.error(current.graphqlError ?? "gh: API rate limit exceeded for fixture-user.");
   process.exit(1);
 } else if (args[1]?.includes("/check-runs?filter=latest&")) {
   value = checkPages[page - 1];
 } else if (args[1]?.includes("/status?")) {
-  value = (fixture.statusPages ?? [{ sha: "${sha}", state: "pending", total_count: 0, statuses: [] }])[page - 1];
+  value = (current.statusPages ?? [{ sha: "${sha}", state: "pending", total_count: 0, statuses: [] }])[page - 1];
 } else if (args[1]?.startsWith("repos/openclaw/openclaw/actions/runs?head_sha=")) {
-  value = (fixture.runPages ?? [{ total_count: 1, workflow_runs: [run] }])[page - 1];
+  value = (current.runPages ?? [{ total_count: 1, workflow_runs: [run] }])[page - 1];
 } else if (args[1]?.includes("/check-suites?")) {
   const checks = checkPages.flatMap((page) => page.check_runs);
   const ids = [...new Set(checks.map((check) => check.check_suite.id))];
-  value = (fixture.suitePages ?? [{ total_count: ids.length, check_suites: ids.map((id) => ({
+  value = (current.suitePages ?? [{ total_count: ids.length, check_suites: ids.map((id) => ({
     id, head_sha: "${sha}", status: "completed", conclusion: "success",
     latest_check_runs_count: checks.filter((check) => check.check_suite.id === id).length,
   })) }])[page - 1];
@@ -403,15 +405,8 @@ if (args[0] === "browse") {
 }
 if (value === undefined) throw new Error("missing fixture page");
 `,
-      ),
-      sha,
-      ["--timeout", "3"],
-    );
-    return {
-      ...result,
-      calls: readCalls(callsPath),
-    };
-  });
+    { fixture, args: ["--timeout", "3"] },
+  );
 }
 
 describe("watch-pr-ci", () => {
@@ -528,13 +523,8 @@ esac
     { label: "missing job details", jobs: undefined, progress: "jobs=unknown" },
     { label: "malformed job details", jobs: [{ name: "incomplete" }], progress: "jobs=unknown" },
   ])("reports $label without changing native completion", async ({ jobs, progress }) => {
-    await withTempDir("openclaw-watch-pr-ci-progress-", async (root) => {
-      const callsPath = join(root, "calls.jsonl");
-      writeFileSync(callsPath, "");
-      const result = await runWatcher(
-        ghProgram(
-          callsPath,
-          `
+    const result = await replayGh(
+      `
 if (args[0] === "browse") {
   console.log("https://github.com/openclaw/openclaw");
   process.exit(0);
@@ -551,15 +541,12 @@ if (args[0] === "browse") {
   throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 }
 `,
-        ),
-        sha,
-        ["--completion", "ci-run"],
-      );
-      expectRun(result, 16, `STATUS run=queued conclusion=pending ${progress}`);
-      expect(result.stdout).toContain("TIMEOUT completion=ci-run");
-      expect(result.stdout).not.toContain("\nGREEN");
-      expect(result.stdout).not.toContain("\nFAILING");
-    });
+      { args: ["--completion", "ci-run"] },
+    );
+    expectRun(result, 16, `STATUS run=queued conclusion=pending ${progress}`);
+    expect(result.stdout).toContain("TIMEOUT completion=ci-run");
+    expect(result.stdout).not.toContain("\nGREEN");
+    expect(result.stdout).not.toContain("\nFAILING");
   });
 
   type CiRunScenario = {
@@ -1494,13 +1481,8 @@ console.log(JSON.stringify(value));
           });
           pr.statusCheckRollup.contexts.totalCount += 1;
         }
-        const result = await withTempDir("openclaw-watch-pr-ci-ownership-", async (root) => {
-          const calls = join(root, "calls.jsonl");
-          writeFileSync(calls, "");
-          const watched = await runWatcher(
-            ghProgram(
-              calls,
-              `
+        const result = await replayGh(
+          `
 const metadataRead = calls.some((call) => call[1] === "repos/openclaw/openclaw/actions/runs/100");
 const pr = { ...${JSON.stringify(pr)}, ...(metadataRead ? ${JSON.stringify(afterMetadata ?? {})} : {}) };
 if (metadataRead && ${Boolean(afterMetadataState)}) pr.statusCheckRollup.state = ${JSON.stringify(afterMetadataState)};
@@ -1530,16 +1512,15 @@ else if (args[1]?.startsWith("repos/openclaw/openclaw/actions/runs/")) {
 else if (args[1]?.includes("/actions/runs?event=pull_request_target")) value = { workflow_runs: [{ ...runs[0], event: "pull_request_target", pull_requests: [] }] };
 else throw new Error("unexpected gh invocation: " + JSON.stringify(args));
 `,
-            ),
-            sha,
-            completion ? ["--completion", completion] : oldRunCount > 1 ? ["--timeout", "6"] : [],
-            slowMetadata || slowFinalRun || slowWatchPr ? "wall" : "poll",
-          );
-          return {
-            ...watched,
-            calls: readCalls(calls),
-          };
-        });
+          {
+            args: completion
+              ? ["--completion", completion]
+              : oldRunCount > 1
+                ? ["--timeout", "6"]
+                : [],
+            clock: slowMetadata || slowFinalRun || slowWatchPr ? "wall" : "poll",
+          },
+        );
         expectRun(result, exitCode, `ATTACHED run=${expectedRun}`);
         expect(result.stdout).toContain(output);
         expect(
