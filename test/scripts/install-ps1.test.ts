@@ -36,6 +36,8 @@ it("preserves the min-release-age probe status before raw npmrc detection", () =
 const harness = createScriptTestHarness();
 const powershell = process.platform === "win32" ? "powershell" : "pwsh";
 const powershellArgs = "-NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass".split(" ");
+const runPowerShell = (args: string[]) =>
+  spawnSync(powershell, [...powershellArgs, ...args], { encoding: "utf8" });
 const probe = spawnSync(powershell, ["-NoLogo", "-NoProfile", "-Command", "exit 0"]);
 const runWithPowerShell = probe.status === 0 ? it : it.skip;
 runWithPowerShell.each(["file", "streamed"] as const)(
@@ -43,24 +45,19 @@ runWithPowerShell.each(["file", "streamed"] as const)(
   (mode) => {
     const nodePrefix = join(harness.createTempDir("openclaw-install-failure-"), "private-node");
     const scriptPath = join(process.cwd(), SCRIPT_PATH).replaceAll("'", "''");
-    const result = spawnSync(
-      powershell,
-      [
-        ...powershellArgs,
-        ...(mode === "file"
-          ? ["-File", SCRIPT_PATH, "-NodePrefix", nodePrefix, "-DryRun"]
-          : [
-              "-Command",
-              `try {
+    const result = runPowerShell(
+      mode === "file"
+        ? ["-File", SCRIPT_PATH, "-NodePrefix", nodePrefix, "-DryRun"]
+        : [
+            "-Command",
+            `try {
   & ([scriptblock]::Create((Get-Content -LiteralPath '${scriptPath}' -Raw))) -NodePrefix '${nodePrefix.replaceAll("'", "''")}' -DryRun
 } catch {
   if ($_.Exception.Message -ne 'OpenClaw installation failed with exit code 2.') { throw }
   Write-Output 'caught canonical failure'
 }
 Write-Output 'installer caller survived'`,
-            ]),
-      ],
-      { encoding: "utf8" },
+          ],
     );
     const output = result.stdout.replace(/\r\n/g, "\n");
     expect(result.status, result.stdout + result.stderr).toBe(mode === "file" ? 2 : 0);
@@ -75,9 +72,7 @@ Write-Output 'installer caller survived'`,
 runWithPowerShell(
   "offers support and self-service in Windows installer help without installing",
   () => {
-    const result = spawnSync(powershell, [...powershellArgs, "-File", SCRIPT_PATH, "-Help"], {
-      encoding: "utf8",
-    });
+    const result = runPowerShell(["-File", SCRIPT_PATH, "-Help"]);
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(result.stdout).toContain("Support: https://community.openclaw.ai/");
     expect(result.stdout).toContain("FAQ: https://docs.openclaw.ai/start/faq");
@@ -86,21 +81,16 @@ runWithPowerShell(
 runWithPowerShell.each(["valid", "missing-head", "broken-gitfile", "subdirectory"])(
   "preserves real Git checkout boundaries before package setup: %s",
   (scenario) => {
-    const result = spawnSync(
-      powershell,
-      [
-        ...powershellArgs,
-        "-File",
-        "test/scripts/install-git-worktree.ps1",
-        "-InstallerPath",
-        join(process.cwd(), SCRIPT_PATH),
-        "-FixtureRoot",
-        join(harness.createTempDir("openclaw-install-worktree-"), "fixture"),
-        "-Scenario",
-        scenario,
-      ],
-      { encoding: "utf8" },
-    );
+    const result = runPowerShell([
+      "-File",
+      "test/scripts/install-git-worktree.ps1",
+      "-InstallerPath",
+      join(process.cwd(), SCRIPT_PATH),
+      "-FixtureRoot",
+      join(harness.createTempDir("openclaw-install-worktree-"), "fixture"),
+      "-Scenario",
+      scenario,
+    ]);
     expect(result.status, result.stdout + result.stderr).toBe(0);
   },
 );

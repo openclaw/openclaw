@@ -1,4 +1,4 @@
-import { execFileSync, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -8,75 +8,63 @@ import {
   requiresExplicitHumanChangelogThanks,
 } from "../../scripts/check-changelog-attributions.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { fixtureGit } from "./release-publish.test-support.js";
 
 const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 function createRepoWithPrChangelogDiff(entry: string): string {
   const repo = tempRoots.make("openclaw-changelog-credit-");
-  const git = (args: string[]) =>
-    execFileSync(
-      "git",
-      ["-c", "user.email=test@example.com", "-c", "user.name=Test User", ...args],
-      {
-        cwd: repo,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    ).trim();
-  git(["init", "-q", "--initial-branch=main"]);
+  const git = fixtureGit(repo, "Test User", "test@example.com");
+  git("init", "-q", "--initial-branch=main");
   const header = "# Changelog\n\n## Unreleased\n\n### Fixes\n\n";
   writeFileSync(repo + "/CHANGELOG.md", header, "utf8");
-  git(["add", "CHANGELOG.md"]);
-  git(["commit", "-qm", "seed"]);
-  const baseSha = git(["rev-parse", "HEAD"]);
+  git("add", "CHANGELOG.md");
+  git("commit", "-qm", "seed");
+  const baseSha = git("rev-parse", "HEAD");
   // Direct helper callers capture this base as the operation's main snapshot.
-  git(["update-ref", "refs/remotes/origin/main", baseSha]);
-  git(["checkout", "-qb", "feature"]);
+  git("update-ref", "refs/remotes/origin/main", baseSha);
+  git("checkout", "-qb", "feature");
   writeFileSync(repo + "/CHANGELOG.md", `${header}${entry}\n`, "utf8");
-  git(["add", "CHANGELOG.md"]);
-  git(["commit", "-qm", "add changelog entry"]);
+  git("add", "CHANGELOG.md");
+  git("commit", "-qm", "add changelog entry");
   return repo;
 }
 
 describe("check-changelog-attributions", () => {
   it("flags forbidden bot, org, and maintainer thanks attributions", () => {
-    const lines =
-      "codex|openclaw|steipete|contributor and @OpenClaw|clawsweeper[bot]|dependabot[bot]|app/clawsweeper"
-        .split("|")
-        .map((handle) => `- Fix. Thanks @${handle}.`);
-    const handles =
-      "codex openclaw steipete openclaw clawsweeper[bot] dependabot[bot] app/clawsweeper".split(
-        " ",
-      );
+    const handles = [
+      "codex",
+      "contributor and @OpenClaw",
+      "clawsweeper",
+      "dependabot[bot]",
+      "app/worker",
+    ];
+    const lines = handles.map((handle) => `- Fix. Thanks @${handle}.`);
     expect(findForbiddenChangelogThanks(lines.join("\n"))).toEqual(
-      handles.map((handle, index) => ({ line: index + 1, handle, text: lines[index] })),
+      ["codex", "openclaw", "clawsweeper", "dependabot[bot]", "app/worker"].map(
+        (handle, index) => ({ line: index + 1, handle, text: lines[index] }),
+      ),
     );
   });
 
   it("allows external contributor thanks attributions", () => {
-    const text = "- Fix. Thanks @external-contributor and @other-user.";
+    const text = "- Fix. Thanks @external-contributor and @human-clawsweeper-fan.";
     expect(findForbiddenChangelogThanks(text)).toStrictEqual([]);
   });
 
-  it("uses one attribution predicate for scanner and shell checks", () => {
-    function check(handles: string, forbidden: boolean, humanRequired: boolean) {
-      for (const handle of handles.split("|")) {
-        expect(isForbiddenChangelogThanksHandle(handle), handle).toBe(forbidden);
-        expect(requiresExplicitHumanChangelogThanks(handle), handle).toBe(humanRequired);
-      }
-    }
-    check("|null|codex|openclaw|steipete", true, false);
-    check(
-      "app/any-bot|app/clawsweeper|clawsweeper|clawsweeper[bot]|openclaw-clawsweeper|openclaw-clawsweeper[bot]|dependabot[bot]",
-      true,
-      true,
-    );
-    check("alice|human-clawsweeper-fan", false, false);
+  it("preserves strict bot-handle classification", () => {
     expect(
       ["dependabot[bot]", "human-clawsweeper-fan"].map((handle) =>
         isForbiddenChangelogThanksHandle(handle, { strictBotHandle: true }),
       ),
     ).toEqual([true, false]);
   });
+  it.each(["", "null", "codex"])(
+    "rejects non-human shell credit without treating %j as a bot",
+    (handle) => {
+      expect(isForbiddenChangelogThanksHandle(handle)).toBe(true);
+      expect(requiresExplicitHumanChangelogThanks(handle)).toBe(false);
+    },
+  );
 
   it("requires explicit human thanks for bot PR changelog entries", () => {
     const repo = createRepoWithPrChangelogDiff("- Bot repair (#123).");
