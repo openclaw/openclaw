@@ -6,7 +6,7 @@ import {
   createTestSession,
   registerAgentSessionLoopTestLifecycle,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
-import { createStubTool } from "../../test-helpers/agent-tool-stubs.js";
+import { createClientToolDefinition, createStubTool } from "../../test-helpers/agent-tool-stubs.js";
 import {
   applyToolSearchCatalog,
   clearToolSearchCatalog,
@@ -51,15 +51,7 @@ describe("prompt tool policy with the session registry", () => {
           toolSearchCatalogRef: catalogRef,
           toolSearchRuntimeConfig: config,
           uncompactedEffectiveTools: native,
-          clientTools: [
-            {
-              type: "function",
-              function: {
-                name: "acme_lookup",
-                parameters: { type: "object", properties: {} },
-              },
-            },
-          ],
+          clientTools: [createClientToolDefinition("acme_lookup")],
         });
         const { session } = await createTestSession({ customTools: clients.allCustomTools });
         expect(session.getToolDefinition("acme_lookup")).toBe(clients.clientToolDefs[0]);

@@ -37,7 +37,10 @@ import type { PreparedEmbeddedRunInput } from "./run/execution-context.js";
 import { claimAgentSessionWriter } from "./run/session-bootstrap.js";
 import { createEmbeddedRunSessionPromptState } from "./run/session-prompt-state.js";
 import { resolveEmbeddedRunTerminal } from "./run/terminal-resolution.js";
-import { makeTerminalInput } from "./run/terminal-resolution.test-support.js";
+import {
+  compactionAssistantFixture,
+  makeTerminalInput,
+} from "./run/terminal-resolution.test-support.js";
 import { createEmbeddedRunTerminalRetryState } from "./run/terminal-retry-state.js";
 
 const assertActive = () => {};
@@ -396,19 +399,7 @@ describe("embedded run session prompt state", () => {
   it("retains compaction continuation across reasoning and empty retries", async () => {
     await using state = await createState();
     const retryState = createEmbeddedRunTerminalRetryState();
-    const compactionAssistant = buildEmbeddedRunnerAssistant({
-      stopReason: "length",
-      providerReplay: {
-        v: 1,
-        type: "openai-responses-compaction",
-        id: "cmp-shared-state",
-        data: "opaque-compaction",
-        provider: "openai",
-        api: "openai-responses",
-        model: "gpt-5.6-luna",
-        baseUrlHash: "base-url-hash",
-      },
-    });
+    const compactionAssistant = compactionAssistantFixture("cmp-shared-state");
     const compactionAttempt = replaySafeAttempt(compactionAssistant);
     await expect(
       resolveEmbeddedRunTerminal({
