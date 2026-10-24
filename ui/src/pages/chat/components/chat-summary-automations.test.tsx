@@ -9,7 +9,7 @@ import {
   createGatewayRequestMock,
   createTestGatewayClient,
 } from "../../../test-helpers/gateway-client.ts";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { SessionAutomationMobileList } from "./chat-automation-mobile.tsx";
 import { ChatDetailsMobileContent } from "./chat-details-mobile-content.tsx";
@@ -103,7 +103,17 @@ function component(
   };
 }
 
-afterEach(() => document.body.replaceChildren());
+afterEach(() => {
+  cleanupSolid();
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  document.body.replaceChildren();
+});
+
+async function tick(ms = 0) {
+  await vi.advanceTimersByTimeAsync(ms);
+  flush();
+}
 
 it.each([false, true])("coalesces hidden refreshes: %s", async (hiddenEvents) => {
   const pending = createDeferred<Page>();
@@ -145,31 +155,26 @@ it.each([false, true])(
       sequence(page([job()]), pending.promise, page([job({ name: "Current automation" })])),
     );
     const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
-    try {
-      await current.ready();
-      current.cron();
-      current.cron();
-      current.cron();
-      current.cron();
-      expect(current.request).toHaveBeenCalledTimes(2);
-      if (hidden) {
-        visibility.mockReturnValue("hidden");
-        document.dispatchEvent(new Event("visibilitychange"));
-      }
-
-      pending.resolve(page([job({ name: "Older automation" })]));
-      if (hidden) {
-        await current.ready("Older automation");
-        expect(current.request).toHaveBeenCalledTimes(2);
-        visibility.mockReturnValue("visible");
-        document.dispatchEvent(new Event("visibilitychange"));
-      }
-      await current.ready("Current automation");
-      expect(current.request).toHaveBeenCalledTimes(3);
-    } finally {
-      current.unmount();
-      visibility.mockRestore();
+    await current.ready();
+    current.cron();
+    current.cron();
+    current.cron();
+    current.cron();
+    expect(current.request).toHaveBeenCalledTimes(2);
+    if (hidden) {
+      visibility.mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
     }
+
+    pending.resolve(page([job({ name: "Older automation" })]));
+    if (hidden) {
+      await current.ready("Older automation");
+      expect(current.request).toHaveBeenCalledTimes(2);
+      visibility.mockReturnValue("visible");
+      document.dispatchEvent(new Event("visibilitychange"));
+    }
+    await current.ready("Current automation");
+    expect(current.request).toHaveBeenCalledTimes(3);
   },
 );
 
@@ -287,32 +292,24 @@ it.each([false, true])(
     }
     request.mockRejectedValueOnce(new Error("Temporary inventory failure"));
     const current = component(request);
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      flush();
-      if (loaded) {
-        current.cron();
-        await vi.advanceTimersByTimeAsync(0);
-        flush();
-        expect(current.element.textContent).toContain("Paused");
-      }
-      expect(current.find(".chat-summary__automation-retry")).toBeNull();
-      const count = request.mock.calls.length;
-      request.mockResolvedValue(page([job({ name: "Recovered automation", enabled: false })]));
-      current.publish({ ...current.gateway.snapshot });
-      await vi.advanceTimersByTimeAsync(29_999);
-      expect(request).toHaveBeenCalledTimes(count);
-      await vi.advanceTimersByTimeAsync(1);
-      flush();
-      expect(current.element.textContent).toContain("Recovered automation");
+    await tick();
+    if (loaded) {
+      current.cron();
+      await tick();
       expect(current.element.textContent).toContain("Paused");
-      expect(current.find(".chat-summary__automation-retry")).toBeNull();
-      expect(request).toHaveBeenCalledTimes(count + 1);
-      expect(request.mock.calls.every(([method]) => method === "cron.list")).toBe(true);
-    } finally {
-      current.unmount();
-      vi.useRealTimers();
     }
+    expect(current.find(".chat-summary__automation-retry")).toBeNull();
+    const count = request.mock.calls.length;
+    request.mockResolvedValue(page([job({ name: "Recovered automation", enabled: false })]));
+    current.publish({ ...current.gateway.snapshot });
+    await vi.advanceTimersByTimeAsync(29_999);
+    expect(request).toHaveBeenCalledTimes(count);
+    await tick(1);
+    expect(current.element.textContent).toContain("Recovered automation");
+    expect(current.element.textContent).toContain("Paused");
+    expect(current.find(".chat-summary__automation-retry")).toBeNull();
+    expect(request).toHaveBeenCalledTimes(count + 1);
+    expect(request.mock.calls.every(([method]) => method === "cron.list")).toBe(true);
   },
 );
 
@@ -324,42 +321,34 @@ it.each(["retry", "event", "reconnect"] as const)(
       page([job({ enabled: false })]),
     );
     const current = component(request);
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      flush();
-      expect(current.element.textContent).toContain("Check the task");
-      request.mockRejectedValue(
-        new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "Read authority revoked" }),
-      );
+    await tick();
+    expect(current.element.textContent).toContain("Check the task");
+    request.mockRejectedValue(
+      new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "Read authority revoked" }),
+    );
+    current.cron();
+    await tick();
+    expect(current.element.textContent).not.toContain("Check the task");
+    expect(current.find(".chat-summary__automation-more")).toBeNull();
+    current.publish({ ...current.gateway.snapshot });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+    request.mockResolvedValue(page([job({ name: "Authorized automation", enabled: false })]));
+    if (recovery === "retry") {
+      current.find<HTMLButtonElement>(".chat-summary__automation-retry")!.click();
+    } else if (recovery === "event") {
       current.cron();
-      await vi.advanceTimersByTimeAsync(0);
-      flush();
-      expect(current.element.textContent).not.toContain("Check the task");
-      expect(current.find(".chat-summary__automation-more")).toBeNull();
-      current.publish({ ...current.gateway.snapshot });
-      await vi.advanceTimersByTimeAsync(60_000);
-      expect(request).toHaveBeenCalledTimes(2);
-      expect(vi.getTimerCount()).toBe(0);
-      request.mockResolvedValue(page([job({ name: "Authorized automation", enabled: false })]));
-      if (recovery === "retry") {
-        current.find<HTMLButtonElement>(".chat-summary__automation-retry")!.click();
-      } else if (recovery === "event") {
-        current.cron();
-      } else {
-        const snapshot = current.gateway.snapshot;
-        current.publish({ ...snapshot, phase: "reconnecting" });
-        current.publish(snapshot);
-      }
-      await vi.advanceTimersByTimeAsync(0);
-      flush();
-      expect(current.element.textContent).toContain("Authorized automation");
-      expect(current.element.textContent).toContain("Paused");
-      expect(request).toHaveBeenCalledTimes(3);
-      expect(request.mock.calls.every(([method]) => method === "cron.list")).toBe(true);
-    } finally {
-      current.unmount();
-      vi.useRealTimers();
+    } else {
+      const snapshot = current.gateway.snapshot;
+      current.publish({ ...snapshot, phase: "reconnecting" });
+      current.publish(snapshot);
     }
+    await tick();
+    expect(current.element.textContent).toContain("Authorized automation");
+    expect(current.element.textContent).toContain("Paused");
+    expect(request).toHaveBeenCalledTimes(3);
+    expect(request.mock.calls.every(([method]) => method === "cron.list")).toBe(true);
   },
 );
 
@@ -370,32 +359,23 @@ it.each(["hidden", "offline", "denied", "unmounted"] as const)(
     const current = component(
       createGatewayRequestMock().mockRejectedValue(new Error("Temporary failure")),
     );
-    try {
-      await vi.advanceTimersByTimeAsync(0);
-      flush();
-      if (boundary === "hidden") {
-        current.update({ presented: false });
-      } else if (boundary === "offline") {
-        current.publish({ ...current.gateway.snapshot, phase: "reconnecting" });
-      } else if (boundary === "denied") {
-        current.publish({
-          ...current.gateway.snapshot,
-          hello: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes: [] } },
-        });
-      } else {
-        current.unmount();
-      }
-      const count = current.request.mock.calls.length;
-      await vi.advanceTimersByTimeAsync(60_000);
-      flush();
-      expect(current.request).toHaveBeenCalledTimes(count);
-      expect(vi.getTimerCount()).toBe(0);
-    } finally {
-      if (boundary !== "unmounted") {
-        current.unmount();
-      }
-      vi.useRealTimers();
+    await tick();
+    if (boundary === "hidden") {
+      current.update({ presented: false });
+    } else if (boundary === "offline") {
+      current.publish({ ...current.gateway.snapshot, phase: "reconnecting" });
+    } else if (boundary === "denied") {
+      current.publish({
+        ...current.gateway.snapshot,
+        hello: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes: [] } },
+      });
+    } else {
+      current.unmount();
     }
+    const count = current.request.mock.calls.length;
+    await tick(60_000);
+    expect(current.request).toHaveBeenCalledTimes(count);
+    expect(vi.getTimerCount()).toBe(0);
   },
 );
 
@@ -562,35 +542,6 @@ it.each([false, true])("retires automation access and late pages: loaded=%s", as
   expect(current.element.textContent).not.toContain("Retired automation");
 });
 
-it("shares the mobile session inventory with consumers without starting another catalog", async () => {
-  const current = source(createGatewayRequestMock(async () => page([job()])));
-  const view = mountSolid(() => {
-    let host!: HTMLElement;
-    const props = { gateway: current.gateway, sessionKey: "agent:ops:task", presented: true };
-    const inventory = createSessionAutomationInventory(props, () => host);
-    return (
-      <section ref={(element) => (host = element)}>
-        {inventory.lifecycle}
-        <output>{inventory.loaded() ? inventory.total() : "unknown"}</output>
-        <SessionAutomationMobileList inventory={inventory} basePath="" onOpenAutomation={vi.fn()} />
-      </section>
-    );
-  });
-  await waitForSolid(() => {
-    expect(view.container.textContent).toContain("Check the task");
-    expect(view.container.querySelector('[aria-busy="false"]')).not.toBeNull();
-  });
-  expect(view.container.querySelector("output")?.textContent).toBe("1");
-  expect(current.request).toHaveBeenCalledTimes(1);
-  current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
-  await waitForSolid(() => {
-    expect(view.container.textContent).toContain("Check the task");
-    expect(view.container.querySelector('[aria-busy="false"]')).not.toBeNull();
-  });
-  expect(current.request).toHaveBeenCalledTimes(2);
-  view.unmount();
-});
-
 it("shares pending reads and failed refresh recovery between the mobile list and overview", async () => {
   const first = createDeferred<Page>();
   const refresh = createDeferred<Page>();
@@ -603,6 +554,7 @@ it("shares pending reads and failed refresh recovery between the mobile list and
     return (
       <section ref={(element) => (host = element)}>
         {inventory.lifecycle}
+        <output>{inventory.loaded() ? inventory.total() : "unknown"}</output>
         <SessionAutomationMobileList inventory={inventory} basePath="" onOpenAutomation={vi.fn()} />
         <ChatDetailsMobileContent
           details={{
@@ -655,6 +607,7 @@ it("shares pending reads and failed refresh recovery between the mobile list and
   first.resolve(page([job()]));
   const rows = () => view.container.querySelectorAll<HTMLAnchorElement>("a");
   await waitForSolid(() => expect(rows()).toHaveLength(1));
+  expect(view.container.querySelector("output")?.textContent).toBe("1");
   const retainedRows = [...rows()];
   retainedRows[0]!.focus();
   current.publishEvent({ type: "event", event: "cron", payload: { action: "updated" } });
@@ -688,7 +641,7 @@ it("shares pending reads and failed refresh recovery between the mobile list and
 });
 
 it("expands 25 retained jobs in tens independently of RPC pagination and resets on reentry", async () => {
-  const pending = createDeferred<CronJobsListResult<CronCompactJob>>();
+  const pending = createDeferred<Page>();
   const jobs = Array.from({ length: 25 }, (_, index) =>
     job({ id: `job-${index}`, name: `Automation ${index + 1}` }),
   );
@@ -697,12 +650,8 @@ it("expands 25 retained jobs in tens independently of RPC pagination and resets 
       .mockResolvedValueOnce(page(jobs))
       .mockImplementationOnce(() => pending.promise),
   );
-  const view = current;
   const { element } = current;
-  await waitForSolid(() => {
-    expect(element.textContent).toContain("Automation 1");
-    expect(element.querySelector('[aria-busy="false"]')).not.toBeNull();
-  });
+  await current.ready("Automation 1");
   const rows = () => element.querySelectorAll<HTMLAnchorElement>(".chat-summary__automation");
   expect(rows()).toHaveLength(10);
   const more = element.querySelector<HTMLButtonElement>(".chat-summary__automation-more")!;
@@ -718,12 +667,12 @@ it("expands 25 retained jobs in tens independently of RPC pagination and resets 
   expect(document.activeElement).toBe(rows()[20]);
   expect(element.querySelector(".chat-summary__automation-more")).toBeNull();
   expect(current.request).toHaveBeenCalledTimes(1);
-  view.update({ onNavigate: vi.fn() });
+  current.update({ onNavigate: vi.fn() });
   flush();
   expect(rows()).toHaveLength(25);
-  view.update({ presented: false });
+  current.update({ presented: false });
   flush();
-  view.update({ presented: true });
+  current.update({ presented: true });
   flush();
   expect(rows()).toHaveLength(10);
   expect(current.request).toHaveBeenCalledTimes(2);
@@ -737,7 +686,7 @@ it("expands 25 retained jobs in tens independently of RPC pagination and resets 
 });
 
 it("retains reconnect facts and distinguishes auto-disabled from paused and stale running", async () => {
-  const pending = createDeferred<CronJobsListResult<CronCompactJob>>();
+  const pending = createDeferred<Page>();
   const current = component(
     createGatewayRequestMock()
       .mockResolvedValueOnce(
@@ -755,10 +704,7 @@ it("retains reconnect facts and distinguishes auto-disabled from paused and stal
       .mockImplementationOnce(() => pending.promise),
   );
   const { element } = current;
-  await waitForSolid(() => {
-    expect(element.textContent).toContain("Needs attention");
-    expect(element.querySelector('[aria-busy="false"]')).not.toBeNull();
-  });
+  await current.ready("Needs attention");
   const attention = element.querySelector<HTMLAnchorElement>('[href$="job=attention"]')!;
   expect(attention.textContent).not.toContain("Paused");
   expect(attention.querySelector(".chat-summary__automation-attention")).not.toBeNull();
@@ -797,8 +743,8 @@ it("describes cron weekdays and non-uniform minute steps without inventing a fix
     ),
   );
   await current.ready("Weekday review");
-  const weekday = current.element.querySelector<HTMLAnchorElement>('a[href$="job=weekdays"]')!;
-  const minutes = current.element.querySelector<HTMLAnchorElement>('a[href$="job=minute-grid"]')!;
+  const weekday = current.find<HTMLAnchorElement>('a[href$="job=weekdays"]')!;
+  const minutes = current.find<HTMLAnchorElement>('a[href$="job=minute-grid"]')!;
   expect(weekday.textContent).toContain("Weekdays at 9:00 AM");
   expect(minutes.textContent).toContain(
     "At minutes 0, 7, 14, 21, 28, 35, 42, 49, and 56 of every hour",
