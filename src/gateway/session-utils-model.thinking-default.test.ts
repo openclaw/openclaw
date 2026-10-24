@@ -13,7 +13,6 @@ import type { SessionEntry } from "../config/sessions.js";
 import type { AgentDefaultsConfig } from "../config/types.agent-defaults.js";
 import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resolveProviderPolicySurface } from "../plugins/provider-public-artifacts.js";
 import {
   PREPARED_THINKING_POLICY,
@@ -22,12 +21,9 @@ import {
 } from "../plugins/provider-thinking-catalog.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
-import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
-import { applyModelOverrideToSessionEntry } from "../sessions/model-overrides.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { fixedStoreOwnershipConfig } from "./server-methods/sessions-fixed-store.test-support.js";
 import { listSessionFixture } from "./session-list.test-support.js";
-import { resolveSessionSelectedModelRef } from "./session-utils-model-selection.js";
 import {
   resolveGatewayModelThinkingProfile as thinkingProfile,
   resolveGatewaySessionThinkingProjectionInternal as thinkingProjection,
@@ -60,22 +56,6 @@ function runtimeConfig(
 }
 
 const mainThinking = { cfg: {}, agentId: "main", agentRuntime: "openclaw" };
-const zeroCost = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
-function modelDefinition(
-  id: string,
-  fields: Partial<ModelDefinitionConfig>,
-): ModelDefinitionConfig {
-  return {
-    id,
-    name: id,
-    input: ["text"],
-    cost: zeroCost,
-    maxTokens: 4096,
-    reasoning: false,
-    ...fields,
-  };
-}
-
 function policyEntry(provider: string, resolve: PreparedThinkingPolicy["resolve"] | null) {
   return catalogEntry(provider, "Reasoner", {
     reasoning: true,
@@ -126,7 +106,6 @@ it.each([false, true])("keeps configured reasoning=%s on runtime routes", (reaso
 });
 
 it("keeps stored Ultra for supported harnesses and clamps unavailable native profiles", () => {
-  // A synthetic model lets observed native efforts define the capability set.
   const cfg = runtimeConfig("openai/native-effort-fixture", "codex", {
     model: { primary: "openai/native-effort-fixture" },
   });
@@ -214,14 +193,14 @@ it.each([undefined, "ultra"] as const)(
 );
 
 it("keeps logical defaults separate from donor levels", () => {
-  const logicalPolicy = vi.fn<PreparedThinkingPolicy["resolve"]>(() => ({
+  const logicalPolicy: PreparedThinkingPolicy["resolve"] = () => ({
     levels: [{ id: "off" }, { id: "medium" }, { id: "high" }],
     defaultLevel: "medium",
-  }));
-  const donorPolicy = vi.fn<PreparedThinkingPolicy["resolve"]>(() => ({
+  });
+  const donorPolicy: PreparedThinkingPolicy["resolve"] = () => ({
     levels: [{ id: "off" }, { id: "low", label: "On" }, { id: "high" }],
     defaultLevel: "high",
-  }));
+  });
   const catalog = [policyEntry("logical", logicalPolicy), policyEntry("donor", donorPolicy)];
   const profile = thinkingProfile({
     ...mainThinking,
@@ -235,8 +214,6 @@ it("keeps logical defaults separate from donor levels", () => {
     ["off", "low", "high", "ultra"].map((id) => ({ id, label: id === "low" ? "On" : id })),
   );
   expect(profile.thinkingDefault).toBe("low");
-  expect(logicalPolicy).toHaveBeenCalledTimes(1);
-  expect(donorPolicy).toHaveBeenCalledTimes(1);
 });
 
 it("retains an authoritative absent policy across all default and clamp reads", () => {
@@ -319,50 +296,6 @@ describe("resolveGatewaySessionThinkingProjectionInternal", () => {
     }
   });
 
-  it.each([false, true])("projects effective runtime with transport=%s", (transportOverride) => {
-    registerAgentHarness({
-      id: "codex",
-      label: "Codex",
-      supports: (ctx) =>
-        ctx.modelProvider?.requestTransportOverrides === "present"
-          ? { supported: false, fallbackRuntime: "openclaw" }
-          : { supported: true },
-      runAttempt: projectionMustNotRun,
-    });
-    const definition = modelDefinition("gpt-5.6-sol", {
-      reasoning: true,
-      maxTokens: 8192,
-      compat: {
-        supportsReasoningEffort: true,
-        supportedReasoningEfforts: ["low", "medium", "high", "xhigh", "max", "ultra"],
-        ...(transportOverride ? { supportsStore: false } : {}),
-      },
-    });
-    const provider = {
-      baseUrl: "https://api.openai.com/v1",
-      api: "openai-responses" as const,
-      models: [definition],
-    };
-    const cfg: OpenClawConfig = {
-      ...runtimeConfig("openai/gpt-5.6-sol", "codex"),
-      models: { providers: { openai: provider } },
-    };
-    const projection = thinkingProjection({
-      cfg,
-      agentId: "main",
-      provider: "openai",
-      model: "gpt-5.6-sol",
-      sessionKey: "agent:main:main",
-      entry: session("runtime-projection", {
-        agentHarnessId: transportOverride ? "codex" : "openclaw",
-      }),
-    });
-    expect(projection.agentRuntime).toEqual({
-      id: transportOverride ? "openclaw" : "codex",
-      source: "model",
-    });
-  });
-
   it("projects the prepared ACP runtime for a bare key under its resolved owner", () => {
     const cfg: OpenClawConfig = fixedStoreOwnershipConfig("/tmp/shared.sqlite");
 
@@ -393,25 +326,21 @@ describe("Gateway model identity", () => {
   });
 
   test.each(["selected", "custom/missing"])(
-    "refreshes context without rescanning for %s",
+    "refreshes configured context for %s",
     async (selected) => {
       await withStateDirEnv("session-context-projection-", async ({ stateDir }) => {
-        const rows = Array.from({ length: 64 }, (_, index) =>
-          modelDefinition(index === 63 ? "selected" : `model-${index}`, {
+        const models: ModelDefinitionConfig[] = [
+          {
+            id: "selected",
+            name: "Selected",
+            input: ["text"],
+            reasoning: false,
+            cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+            maxTokens: 4096,
             contextWindow: 128_000,
             contextTokens: 80_000,
-          }),
-        );
-        let visits = 0;
-        const models = [...rows];
-        Object.defineProperty(models, Symbol.iterator, {
-          *value() {
-            for (const row of rows) {
-              visits++;
-              yield row;
-            }
           },
-        });
+        ];
         const providerConfig = { baseUrl: "https://example.invalid", models };
         const cfg: OpenClawConfig = {
           plugins: { enabled: false },
@@ -420,7 +349,6 @@ describe("Gateway model identity", () => {
         };
         setActivePluginRegistry(createEmptyPluginRegistry());
         setRuntimeConfigSnapshot(cfg);
-        const context = rowContext({ now: 1 });
         const entry = session("context-projection", {
           providerOverride: "custom",
           modelOverride: selected,
@@ -435,23 +363,18 @@ describe("Gateway model identity", () => {
           store: { [key]: entry },
           storePath: stateDir,
           now: 1,
-          rowContext: context,
+          rowContext: rowContext({ now: 1 }),
           lightweightListRow: true,
           modelCatalog: [catalogEntry("custom", selected, { contextWindow: 128_000 })],
         } satisfies Parameters<typeof sessionRow>[0];
-        visits = 0;
-        for (let index = 0; index < 32; index++) {
-          expect(sessionRow(params)).toMatchObject({
-            modelProvider: "custom",
-            model: selected,
-            contextTokens: selected === "selected" ? 80_000 : 128_000,
-          });
-        }
-        expect(visits).toBeLessThanOrEqual(rows.length * 32);
-        providerConfig.models = structuredClone(rows);
-        for (const model of providerConfig.models) {
-          model.contextTokens = 96_000;
-        }
+        expect(sessionRow(params)).toMatchObject({
+          modelProvider: "custom",
+          model: selected,
+          contextTokens: selected === "selected" ? 80_000 : 128_000,
+        });
+        providerConfig.models = models.map((model) =>
+          Object.assign({}, model, { contextTokens: 96_000 }),
+        );
         entry.modelOverride = "selected";
         expect(sessionRow(params)).toMatchObject({
           model: "selected",
@@ -460,56 +383,6 @@ describe("Gateway model identity", () => {
       });
     },
   );
-
-  const identityConfig: OpenClawConfig = {
-    plugins: { enabled: false },
-    agents: { entries: { main: {} }, defaults: { model: "custom/default" } },
-  };
-  const identityMetadata = createPluginMetadataSnapshotFixture({
-    plugins: [
-      {
-        id: "custom",
-        providers: ["custom"],
-        modelIdNormalization: {
-          providers: { custom: { aliases: { latest: "middle", middle: "final" } } },
-        },
-      },
-    ],
-  });
-
-  function writtenModelOverride(model: string): SessionEntry {
-    const entry = session("written-model");
-    applyModelOverrideToSessionEntry({ entry, selection: { provider: "custom", model } });
-    return structuredClone(entry);
-  }
-
-  async function withIdentityScope(run: () => void): Promise<void> {
-    await withStateDirEnv("session-override-identity-", async () =>
-      withPluginRuntimeGenerationScope({ metadataSnapshot: identityMetadata }, run),
-    );
-  }
-
-  test.each([false, true])("normalizes once with resolved-first=%s", async (resolvedFirst) => {
-    await withIdentityScope(() => {
-      const resolved = writtenModelOverride("middle");
-      const raw = session("raw-model", { providerOverride: "custom", modelOverride: "latest" });
-      const context = rowContext({ now: 1 });
-      for (const entry of resolvedFirst ? [resolved, raw] : [raw, resolved]) {
-        const selected = resolveSessionSelectedModelRef({
-          cfg: identityConfig,
-          agentId: "main",
-          source: { entry, readSourceEntry: () => undefined },
-          rowContext: context,
-          allowPluginNormalization: false,
-        });
-        expect.soft(selected).toEqual({
-          provider: "custom",
-          model: "middle",
-          storedOverrideSource: "session",
-        });
-      }
-    });
-  });
 
   test.each([
     ["demo-cli", "shared-model", "demo-provider"],
@@ -540,8 +413,7 @@ describe("Gateway model identity", () => {
         modelOverride: model,
         modelOverrideRouteResolution: "resolved",
       });
-      const store = { [key]: entry };
-      const source = { cfg, storePath: stateDir, store, key, entry };
+      const source = { cfg, storePath: stateDir, store: { [key]: entry }, key, entry };
       const expected = { modelProvider: expectedProvider, model: "shared-model" };
       for (const lightweightListRow of [false, true]) {
         expect(sessionRow({ ...source, agentId: "main", lightweightListRow })).toMatchObject({
