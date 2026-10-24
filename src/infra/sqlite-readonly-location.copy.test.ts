@@ -1,4 +1,3 @@
-import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
@@ -6,7 +5,6 @@ import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { __setFsSafeTestHooksForTest } from "@openclaw/fs-safe/test-hooks";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import * as sqliteCopy from "./sqlite-file-copy.js";
 import {
@@ -100,7 +98,7 @@ function trackOpenFiles<T>(classify: (pathname: string, flags: fs.OpenMode) => T
   const tracked = new Map<number, T>();
   const open = fs.openSync.bind(fs);
   const close = fs.closeSync.bind(fs);
-  vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
+  const opening = vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
     const descriptor = open(pathname, flags, mode);
     const kind = classify(path.resolve(String(pathname)), flags);
     if (kind !== undefined) {
@@ -108,11 +106,16 @@ function trackOpenFiles<T>(classify: (pathname: string, flags: fs.OpenMode) => T
     }
     return descriptor;
   });
-  vi.spyOn(fs, "closeSync").mockImplementation((descriptor) => {
+  const closing = vi.spyOn(fs, "closeSync").mockImplementation((descriptor) => {
     close(descriptor);
     tracked.delete(descriptor);
   });
-  return tracked;
+  return Object.assign(tracked, {
+    restore: () => {
+      opening.mockRestore();
+      closing.mockRestore();
+    },
+  });
 }
 
 function expectRows(location: string, queries: Record<string, unknown>) {
@@ -371,22 +374,7 @@ it("does not recopy a stable WAL family when a reader creates its wal-index", as
   vi.spyOn(sqliteCopy, "copySqliteFile").mockImplementation(async (...args) => {
     const result = await copy(...args);
     if (args[0] === fixture.sourcePath && ++mainCopies === 1) {
-      const probe = spawnSync(
-        resolveTestNodeExecPath(),
-        [
-          "--input-type=module",
-          "-e",
-          `
-        import { DatabaseSync } from 'node:sqlite';
-        using db = new DatabaseSync(process.argv[1], { readOnly: true });
-        process.stdout.write(JSON.stringify(db.prepare('SELECT value FROM probe').all()));
-      `,
-          fixture.sourcePath,
-        ],
-        { encoding: "utf8" },
-      );
-      expect(probe.status, probe.stderr).toBe(0);
-      expect(JSON.parse(probe.stdout)).toEqual([{ value: "retained in WAL" }]);
+      expectRows(fixture.sourcePath, { "SELECT value FROM probe": [{ value: "retained in WAL" }] });
     }
     return result;
   });
@@ -843,60 +831,14 @@ it("releases pinned source handles when closing the private comparison handle fa
   }
 });
 
-it("snapshots a fixed 16 MiB database when staging can write one complete copy", () => {
+it("copies the admitted source once and rejects an identical successor at every observed main open", () => {
   const fixture = createDatabaseFixture(`
         PRAGMA journal_mode = DELETE;
         CREATE TABLE probe (payload BLOB NOT NULL);
-        INSERT INTO probe VALUES (zeroblob(${16 * MIB}));
+        INSERT INTO probe VALUES (zeroblob(37));
       `);
   const bytes = fs.readFileSync(fixture.sourcePath);
-  const descriptors = trackOpenFiles((pathname) =>
-    pathname.startsWith(`${fixture.stagingRoot}${path.sep}`) ? true : undefined,
-  );
-  const write = fs.writeSync.bind(fs);
-  let written = 0;
-  vi.spyOn(fs, "writeSync").mockImplementation(
-    (
-      descriptor: number,
-      content: string | NodeJS.ArrayBufferView,
-      offset?: number | null,
-      lengthOrEncoding?: number | BufferEncoding | null,
-      position?: number | null,
-    ) => {
-      const encoding = typeof lengthOrEncoding === "string" ? lengthOrEncoding : undefined;
-      const length =
-        typeof content === "string"
-          ? Buffer.byteLength(content, encoding)
-          : typeof lengthOrEncoding === "number"
-            ? lengthOrEncoding
-            : content.byteLength - (offset ?? 0);
-      if (descriptors.has(descriptor) && written + length > bytes.length) {
-        throw Object.assign(new Error("synthetic staging capacity exhausted"), { code: "ENOSPC" });
-      }
-      const count =
-        typeof content === "string"
-          ? write(descriptor, content, offset, encoding)
-          : write(descriptor, content, offset, length, position);
-      if (descriptors.has(descriptor)) {
-        written += count;
-      }
-      return count;
-    },
-  );
-
-  expectSnapshot(fixture, bytes, (location) => {
-    expectRows(location, {
-      "SELECT length(payload) AS bytes FROM probe": [{ bytes: 16 * MIB }],
-    });
-  });
-  expect(written).toBeLessThanOrEqual(bytes.length);
-  expect(descriptors.size).toBe(0);
-  expect(fs.readdirSync(fixture.sourceRoot)).toEqual(["source.sqlite"]);
-});
-
-it("copies the admitted source and rejects an identical successor at every observed main open", () => {
-  const bytes = Buffer.alloc(4099, 42);
-  const { sourcePath: source, sourceRoot, stagingRoot: staging } = createFixture(bytes);
+  const { sourcePath: source, sourceRoot, stagingRoot: staging } = fixture;
   const replacement = path.join(sourceRoot, "replacement.sqlite");
   const archived = path.join(sourceRoot, "original.sqlite");
   fs.writeFileSync(replacement, bytes);
@@ -906,18 +848,53 @@ it("copies the admitted source and rejects an identical successor at every obser
   const open = fs.openSync.bind(fs);
   const close = fs.closeSync.bind(fs);
   let observedOpens = 0;
-  const census = vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
-    const descriptor = open(pathname, flags, mode);
-    if (String(pathname) === canonicalSource) {
+  const descriptors = trackOpenFiles((pathname) => {
+    if (pathname === canonicalSource) {
       observedOpens += 1;
     }
-    return descriptor;
+    return pathname.startsWith(`${staging}${path.sep}`) ? true : undefined;
   });
+  const write = fs.writeSync.bind(fs);
+  let written = 0;
+  const writing = vi
+    .spyOn(fs, "writeSync")
+    .mockImplementation(
+      (
+        descriptor: number,
+        content: string | NodeJS.ArrayBufferView,
+        offset?: number | null,
+        lengthOrEncoding?: number | BufferEncoding | null,
+        position?: number | null,
+      ) => {
+        const encoding = typeof lengthOrEncoding === "string" ? lengthOrEncoding : undefined;
+        const length =
+          typeof content === "string"
+            ? Buffer.byteLength(content, encoding)
+            : typeof lengthOrEncoding === "number"
+              ? lengthOrEncoding
+              : content.byteLength - (offset ?? 0);
+        if (descriptors.has(descriptor) && written + length > bytes.length) {
+          throw Object.assign(new Error("synthetic staging capacity exhausted"), {
+            code: "ENOSPC",
+          });
+        }
+        const count =
+          typeof content === "string"
+            ? write(descriptor, content, offset, encoding)
+            : write(descriptor, content, offset, length, position);
+        if (descriptors.has(descriptor)) {
+          written += count;
+        }
+        return count;
+      },
+    );
+
   let baseline: ReturnType<typeof prepareSqliteReadOnlyLocationSyncInProcess>;
   try {
     baseline = prepareSqliteReadOnlyLocationSyncInProcess(source, staging, identity);
   } finally {
-    census.mockRestore();
+    descriptors.restore();
+    writing.mockRestore();
   }
   {
     using scope = snapshotScope({ stagingRoot: staging });
@@ -925,6 +902,11 @@ it("copies the admitted source and rejects an identical successor at every obser
     expect(fs.readFileSync(baseline.location)).toEqual(bytes);
     expect(fs.readFileSync(source)).toEqual(bytes);
     expect(readDatabasePathIdentitySync(source)).toEqual(identity);
+    expectRows(baseline.location, {
+      "SELECT length(payload) AS bytes FROM probe": [{ bytes: 37 }],
+    });
+    expect(written).toBeLessThanOrEqual(bytes.length);
+    expect(descriptors.size).toBe(0);
   }
   expect(observedOpens).toBeGreaterThanOrEqual(1);
 

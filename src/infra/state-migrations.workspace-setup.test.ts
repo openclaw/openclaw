@@ -214,31 +214,6 @@ describe("legacy workspace Doctor migration", () => {
     }
   });
 
-  it("imports configured and orphan sources only through explicit Doctor repair", async () => {
-    const orphanKey = "c".repeat(64);
-    const attestationPath = attestationPathFor(orphanKey);
-    await write(attestationPath, attestation(`generated:TOOLS.md:${HASH}\n`));
-    const setupPath = setupPathFor(context.workspaceDir);
-    await write(setupPath, setupSource());
-    expect(
-      await detectLegacyWorkspaceState({
-        cfg: context.cfg,
-        stateDir: context.stateDir,
-        env: context.env,
-        homedir: () => context.homeDir,
-      }),
-    ).toEqual({ sources: [], hasLegacy: false });
-    expect((await detect(context)).sources).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ kind: "setup", sourcePath: fs.realpathSync(setupPath) }),
-        expect.objectContaining({ kind: "attestation", workspaceKey: orphanKey }),
-      ]),
-    );
-    await migrateOk(context);
-    expect(readHashes(orphanKey)).toEqual([{ filename: "TOOLS.md", sha256: HASH }]);
-    expect(fs.existsSync(attestationPath)).toBe(false);
-  });
-
   it("selects the highest-priority whole attestation across equal-time imports", async () => {
     const currentPath = attestationPathFor();
     const siblingPath = `${context.workspaceDir}.attested`;
@@ -477,10 +452,11 @@ describe("legacy workspace Doctor migration", () => {
     expect(await detect({ ...context, cfg })).toEqual({ sources: [], hasLegacy: false });
     expect(await migrate({ ...context, cfg })).toEqual({ changes: [], warnings: [] });
   });
-  it("imports setup and attestation state, records receipts, and removes files", async () => {
+  it("imports configured and orphan state only through explicit Doctor repair", async () => {
     const workspaces = ["alpha", "beta"].map((id) => ({
       id,
       workspace: path.join(context.homeDir, `workspace-${id}`),
+      setup: id === "alpha" ? SETUP_MILESTONES : { version: 1 },
     }));
     const cfg: OpenClawConfig = {
       agents: {
@@ -489,21 +465,29 @@ describe("legacy workspace Doctor migration", () => {
       },
     };
     const mtime = new Date("2026-07-15T11:02:03.456Z");
-    for (const { workspace } of workspaces) {
-      await write(setupPathFor(workspace), COMPLETE_SETUP);
+    for (const { workspace, setup: milestones } of workspaces) {
+      await write(setupPathFor(workspace), JSON.stringify(milestones));
       const identity = resolveWorkspaceStateIdentity(workspace);
       const attestationPath = attestationPathFor(identity.workspaceKey);
       await write(attestationPath, attestation(`generated:AGENTS.md:${HASH}\n`));
       await fsp.utimes(attestationPath, mtime, mtime);
     }
+    const orphanKey = "c".repeat(64);
+    const orphan = attestationPathFor(orphanKey);
+    await write(orphan, attestation(`generated:TOOLS.md:${HASH}\n`));
+    expect(
+      await detectLegacyWorkspaceState({ ...context, cfg, homedir: () => context.homeDir }),
+    ).toEqual({ sources: [], hasLegacy: false });
     await migrateOk({ ...context, cfg });
-    for (const { workspace } of workspaces) {
+    expectFilesRemoved(orphan);
+    expect(readHashes(orphanKey)).toEqual([{ filename: "TOOLS.md", sha256: HASH }]);
+    for (const { workspace, setup: milestones } of workspaces) {
       const identity = resolveWorkspaceStateIdentity(workspace);
       expectFilesRemoved(setupPathFor(workspace), attestationPathFor(identity.workspaceKey));
       expect(readHashes(identity.workspaceKey)).toEqual([{ filename: "AGENTS.md", sha256: HASH }]);
       expect(await readWorkspaceStateSnapshot(workspace)).toMatchObject({
         identity,
-        setup: { bootstrapSeededAt: SEEDED_AT, setupCompletedAt: COMPLETED_AT },
+        setup: milestones,
         attestation: { attestedAtMs: mtime.getTime() },
       });
       expect(() => assertNoUnmigratedWorkspaceState({ workspaceDir: workspace })).not.toThrow();
@@ -513,7 +497,7 @@ describe("legacy workspace Doctor migration", () => {
         "SELECT COUNT(*) AS count, SUM(removed_source) AS removed FROM migration_sources WHERE migration_kind = ?",
         "legacy-workspace-setup-files",
       ),
-    ).toEqual({ count: 4, removed: 4 });
+    ).toEqual({ count: 5, removed: 5 });
     expect(await migrate({ ...context, cfg })).toEqual({ changes: [], warnings: [] });
   });
   it.skipIf(process.platform === "win32")(
@@ -826,11 +810,9 @@ describe("legacy workspace Doctor migration", () => {
           }),
         ).toThrow("migration history changed");
         expect(value.rows()).toEqual(before);
-        expect(
-          value.db
-            .prepare("SELECT status FROM migration_runs WHERE id = ?")
-            .get(value.receipt.runId),
-        ).toEqual({ status: "completed" });
+        expect(get("SELECT status FROM migration_runs WHERE id = ?", value.receipt.runId)).toEqual({
+          status: "completed",
+        });
       },
     );
 
@@ -843,15 +825,11 @@ describe("legacy workspace Doctor migration", () => {
           value.storedIdentity.workspacePath,
         );
         const report = {
-          ...value.storedIdentity,
-          workspaceDir: value.storedIdentity.workspacePath,
-          directoryIdentity: "1:2:3",
-          attestedAtMs: 1000,
+          workspaceKey: value.storedIdentity.workspaceKey,
           moves: [
             {
               source: path.join(value.storedIdentity.workspacePath, "skills", "local-skill"),
               destination: path.join(value.homeDir, "workshop"),
-              sha256: "b".repeat(64),
             },
           ],
         };

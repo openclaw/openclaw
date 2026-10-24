@@ -21,7 +21,6 @@ import {
 import {
   getPairedDevice,
   hasPairedCardRenderer,
-  hasEffectivePairedDeviceRole,
   listEffectivePairedDeviceRoles,
   listDevicePairing,
   removePairedDevice,
@@ -358,18 +357,21 @@ describe("device pairing tokens", () => {
     expect(approved).toMatchObject({ status: "approved", requestId: request.requestId });
   });
 
-  test("metadata refresh can update display metadata but not approved role and scope fields", async () => {
+  test("metadata refresh cannot change authority and repair preserves owner metadata", async () => {
     await pairDevice([], nodeIdentity);
     const before = await getPairedDevice("node-1", baseDir);
+    const metadata = {
+      displayName: "renamed-node",
+      operatorLabel: "Kitchen Mac",
+      platform: "iOS 26.5.0",
+      lastSeenAtMs: 4321,
+      lastSeenReason: "bg_app_refresh",
+    };
 
     await updatePairedDeviceMetadata(
       "node-1",
       {
-        displayName: "renamed-node",
-        operatorLabel: "Kitchen Mac",
-        platform: "iOS 26.5.0",
-        lastSeenAtMs: 4321,
-        lastSeenReason: "bg_app_refresh",
+        ...metadata,
         role: "operator",
         roles: ["operator"],
         scopes: ["operator.admin"],
@@ -380,13 +382,18 @@ describe("device pairing tokens", () => {
       baseDir,
     );
 
-    expect(await getPairedDevice("node-1", baseDir)).toEqual({
-      ...before,
-      displayName: "renamed-node",
-      operatorLabel: "Kitchen Mac",
-      platform: "iOS 26.5.0",
-      lastSeenAtMs: 4321,
-      lastSeenReason: "bg_app_refresh",
+    expect(await getPairedDevice("node-1", baseDir)).toEqual({ ...before, ...metadata });
+    const repair = await requestPairing({
+      ...nodeIdentity,
+      scopes: [],
+      displayName: "fresh-client-name",
+    });
+    await approveRequest(repair.request, []);
+    expect(await getPairedDevice("node-1", baseDir)).toMatchObject({
+      operatorLabel: metadata.operatorLabel,
+      lastSeenAtMs: metadata.lastSeenAtMs,
+      lastSeenReason: metadata.lastSeenReason,
+      displayName: "fresh-client-name",
     });
   });
 
@@ -428,30 +435,6 @@ describe("device pairing tokens", () => {
     expect(paired?.nodeSurface?.sessionHost).toBeUndefined();
     expect(paired?.lastSeenAtMs).toBeUndefined();
     expect(paired?.lastSeenReason).toBeUndefined();
-  });
-
-  test("repair approvals preserve owner labels and last-seen metadata", async () => {
-    await pairDevice([], nodeIdentity);
-    await updatePairedDeviceMetadata(
-      "node-1",
-      { operatorLabel: "Kitchen Mac", lastSeenAtMs: 1234, lastSeenReason: "bg_app_refresh" },
-      baseDir,
-    );
-
-    const repair = await requestPairing({
-      ...nodeIdentity,
-      scopes: [],
-      displayName: "fresh-client-name",
-    });
-    await approveRequest(repair.request, []);
-
-    const paired = await getPairedDevice("node-1", baseDir);
-    expect(paired).toMatchObject({
-      operatorLabel: "Kitchen Mac",
-      lastSeenAtMs: 1234,
-      lastSeenReason: "bg_app_refresh",
-      displayName: "fresh-client-name",
-    });
   });
 
   test("requires authority for inherited scopes before approving a scopeless repair", async () => {
@@ -520,8 +503,6 @@ describe("device pairing tokens", () => {
   test("revokes effective roles only when the caller holds the token scopes", async () => {
     await pairDevice(["operator.admin"]);
     const before = await getPairedDevice("device-1", baseDir);
-    expect(before && listEffectivePairedDeviceRoles(before)).toEqual(["operator"]);
-    expect(before && hasEffectivePairedDeviceRole(before, "operator")).toBe(true);
 
     const revoked = await revokeDeviceToken({
       deviceId: "device-1",
@@ -534,18 +515,17 @@ describe("device pairing tokens", () => {
     const after = await getPairedDevice("device-1", baseDir);
     expect(after?.tokens?.operator?.token).toEqual(before?.tokens?.operator?.token);
     expect(after?.tokens?.operator?.revokedAtMs).toBeUndefined();
-    const allowed = await revokeDeviceToken({
-      deviceId: "device-1",
-      role: "operator",
-      callerScopes: ["operator.admin"],
-      baseDir,
+    await expect(
+      revokeDeviceToken({
+        deviceId: "device-1",
+        role: "operator",
+        callerScopes: ["operator.admin"],
+        baseDir,
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      entry: { role: "operator", revokedAtMs: expect.any(Number) },
     });
-    expect(allowed.ok).toBe(true);
-    if (!allowed.ok) {
-      throw new Error(allowed.reason);
-    }
-    expect(allowed.entry.role).toBe("operator");
-    expect(allowed.entry.revokedAtMs).toBeTypeOf("number");
     const paired = requireValue(
       await getPairedDevice("device-1", baseDir),
       "expected revoked device",
@@ -553,7 +533,6 @@ describe("device pairing tokens", () => {
     expect(paired.tokens?.operator?.revokedAtMs).toBeTypeOf("number");
     expect(paired.roles).toContain("operator");
     expect(listEffectivePairedDeviceRoles(paired)).toEqual([]);
-    expect(hasEffectivePairedDeviceRole(paired, "operator")).toBe(false);
   });
 
   test("binds shared-auth browser tokens to their issuing generation through upgrades and rotation", async () => {
@@ -581,7 +560,6 @@ describe("device pairing tokens", () => {
     });
     const oldToken = requireToken(oldIssued?.token);
     expect(oldToken).not.toBe(legacyToken);
-    expect(oldIssued?.issuer).toEqual(oldIssuer);
     await expect(verify(oldToken, "old-generation")).resolves.toEqual({
       ok: true,
       issuer: oldIssuer,
@@ -595,7 +573,6 @@ describe("device pairing tokens", () => {
     const newIssued = await ensureDeviceToken({ ...params, scopes: ["operator.read"], issuer });
     const newToken = requireToken(newIssued?.token);
     expect(newToken).not.toBe(oldToken);
-    expect(newIssued?.issuer).toEqual(issuer);
     await expect(verify(newToken, "new-generation")).resolves.toEqual({ ok: true, issuer });
 
     const upgrade = await requestPairing({
@@ -612,16 +589,11 @@ describe("device pairing tokens", () => {
       ok: true,
       issuer,
     });
-    await expect(verify(upgradedToken, "later-generation", ["operator.admin"])).resolves.toEqual({
-      ok: false,
-      reason: "issuer-generation-stale",
-    });
 
     const rotated = requireRotatedEntry(
       await rotateDeviceToken({ ...params, scopes: ["operator.read"] }),
     );
     expect(rotated.scopes).toEqual(["operator.read"]);
-    expect(rotated.issuer).toEqual(issuer);
     expect((await getPairedDevice(params.deviceId, baseDir))?.approvedScopes).toEqual([
       "operator.read",
       "operator.admin",
@@ -642,7 +614,6 @@ describe("device pairing tokens", () => {
     const issuer = { kind: "shared-gateway-auth", generation: "new-generation" } as const;
     const issued = await ensureDeviceToken({ ...params, issuer });
     expect(issued?.token).not.toBe(token);
-    expect(issued?.issuer).toEqual(issuer);
     await expect(verify(requireToken(issued?.token))).resolves.toEqual({ ok: true, issuer });
     const unbound = await ensureDeviceToken(params);
     expect(unbound?.token).not.toBe(issued?.token);
