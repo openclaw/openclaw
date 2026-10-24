@@ -466,7 +466,10 @@ export class ChatLog extends Container {
     const run = this.getAssistantRun(effectiveRunId);
     const segmentText = this.resolveAssistantSegment(effectiveRunId, text);
     const existing = run.streaming;
-    const finalized = new Set(run.frozen);
+    // Finalization replaces the run's tracking set, so carry earlier surviving segments
+    // forward: a delayed peer prompt must anchor before the earliest reply of its run,
+    // not the most recent one.
+    const finalized = new Set([...run.frozen, ...run.finalized]);
     let lastAssistant: MarkdownMessageComponent | undefined;
     run.frozen.clear();
     run.committedText = undefined;
