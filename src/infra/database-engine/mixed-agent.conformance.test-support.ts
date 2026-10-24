@@ -9,7 +9,6 @@ import { resetConfigRuntimeState } from "../../config/runtime-snapshot.js";
 import { installGatewayDatabaseEngine } from "../../gateway/server-database-engine.js";
 import { closeOpenClawAgentDatabases } from "../../state/openclaw-agent-db-lifecycle.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
-import { dropPostgresTestSchemas } from "../postgres-sync/schema-cleanup.test-support.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
 import type { DatabaseEngineId } from "./types.js";
@@ -36,7 +35,13 @@ export function useMixedAgentPair(stateEngine: DatabaseEngineId, agentEngine: Da
           const client = new Client({ connectionString: mixedAgentConnection });
           await client.connect();
           try {
-            await dropPostgresTestSchemas(client, prefix);
+            const schemas = await client.query<{ nspname: string }>(
+              "SELECT nspname FROM pg_namespace WHERE left(nspname, $1) = $2",
+              [prefix.length + 1, `${prefix}_`],
+            );
+            for (const { nspname } of schemas.rows) {
+              await client.query(`DROP SCHEMA "${nspname.replaceAll('"', '""')}" CASCADE`);
+            }
           } finally {
             await client.end();
           }

@@ -10,7 +10,6 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { dropPostgresTestSchemas } from "../postgres-sync/schema-cleanup.test-support.js";
 import { createSqliteDatabaseAdmissionRelay } from "../sqlite-worker-operation-admission.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { conformanceWorkerResult, spawnConformanceWorker } from "./conformance.test-support.js";
@@ -220,8 +219,17 @@ it.skipIf(!connection).each(scenarios)("settles $name", async (scenario) => {
   } finally {
     closeOpenClawStateDatabaseForTest();
     resetDatabaseEngineSelectionForTest();
-    await withPostgresConnection({ connection: connection!, schemaPrefix: prefix }, (client) =>
-      dropPostgresTestSchemas(client, prefix),
+    await withPostgresConnection(
+      { connection: connection!, schemaPrefix: prefix },
+      async (client) => {
+        const schemas = await client.query<{ nspname: string }>(
+          "SELECT nspname FROM pg_namespace WHERE starts_with(nspname, $1)",
+          [`${prefix}_`],
+        );
+        for (const { nspname } of schemas.rows) {
+          await client.query(`DROP SCHEMA "${nspname}" CASCADE`);
+        }
+      },
     );
   }
 });
