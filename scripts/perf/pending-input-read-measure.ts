@@ -100,10 +100,10 @@ try {
   await ready.promise;
   for (let index = 0; index <= reads; index++) {
     phase(index === 0 ? "cold-read" : `warm-read-${index}`);
-    const result = await peer.request<{
+    const result: {
       ok: boolean;
       message?: { role: string; content: unknown };
-    }>("chat.message.get", {
+    } = await peer.request("chat.message.get", {
       sessionKey: scope.sessionKey,
       messageId: `pending:${receipt.inputId}`,
     });
