@@ -26,6 +26,7 @@ import {
 } from "../../agents/model-catalog-lookup.js";
 import { recordModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
+import { captureRequesterOrigin } from "../../agents/requester-origin.js";
 import { resolveScheduledToolCallerContext } from "../../agents/scheduled-tool-policy.js";
 import { withLocalSessionPlacementTurnSettlement } from "../../agents/session-placement-admission.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
@@ -123,6 +124,17 @@ export function createCronPromptExecutor(
     params.job,
     params.agentPayload?.toolsAllow,
   );
+  const channelRequester = resolveCronAuthenticatedChannelRequester(params.job);
+  const requesterOrigin =
+    channelRequester && scheduledToolPolicy?.mode === "account"
+      ? captureRequesterOrigin({
+          sessionKey: scheduledToolPolicy.ownerSessionKey,
+          operatorProfileId: params.operatorAuthority?.profileId,
+          messageProvider: channelRequester.channel,
+          agentAccountId: channelRequester.accountId,
+          senderId: channelRequester.senderId,
+        })
+      : undefined;
   const { sourceDelivery, runId } = params;
   const messageChannel = sourceDelivery.target.channel ?? params.resolvedDelivery.channel;
   if (scheduledToolPolicy?.mode === "account") {
@@ -227,7 +239,7 @@ export function createCronPromptExecutor(
       sessionId: params.cronSession.sessionEntry.sessionId,
       sessionKey: params.runSessionKey,
       jobId: params.job.id,
-      channelRequester: resolveCronAuthenticatedChannelRequester(params.job),
+      channelRequester,
       toolsAllow: params.agentPayload?.toolsAllow,
       scheduledToolPolicy,
       executionIdentity: params.executionIdentity,
@@ -447,6 +459,7 @@ export function createCronPromptExecutor(
             cwd: params.cwd,
             sessionId: params.cronSession.sessionEntry.sessionId,
             sessionKey: params.runSessionKey,
+            requesterOrigin,
             sessionTarget,
             agentId: params.agentId,
             trigger,

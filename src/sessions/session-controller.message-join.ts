@@ -348,20 +348,32 @@ async function prepareLegacyReplySteeringAuthority(
   }
 }
 
-/** Strict steering and question responses require the execution's authenticated requester. */
-export function hasReplySteeringRequesterMismatch(
+/** Distinguish missing requester evidence from a positively identified different human. */
+export function resolveReplySteeringRequesterRelationship(
   followupRun: FollowupRun,
   operation: ReplyOperation | undefined,
-): boolean {
+): "compatible" | "different" | "unknown" {
+  if (
+    followupRun.currentInboundEventKind === "room_event" ||
+    (followupRun.run.inputProvenance && followupRun.run.inputProvenance.kind !== "external_user")
+  ) {
+    return "compatible";
+  }
   const requesterPrincipalKey = resolveRequesterPrincipalKey({
     ...followupRun.run,
     messageChannel: followupRun.originatingChannel,
     operatorAuthority: followupRun.operatorAuthority,
   });
-  return (
-    followupRun.currentInboundEventKind !== "room_event" &&
-    (!followupRun.run.inputProvenance ||
-      followupRun.run.inputProvenance.kind === "external_user") &&
-    (!requesterPrincipalKey || requesterPrincipalKey !== operation?.requesterPrincipalKey)
-  );
+  if (!requesterPrincipalKey || !operation?.requesterPrincipalKey) {
+    return "unknown";
+  }
+  return requesterPrincipalKey === operation.requesterPrincipalKey ? "compatible" : "different";
+}
+
+/** Strict steering and question responses require the execution's authenticated requester. */
+export function hasReplySteeringRequesterMismatch(
+  followupRun: FollowupRun,
+  operation: ReplyOperation | undefined,
+): boolean {
+  return resolveReplySteeringRequesterRelationship(followupRun, operation) !== "compatible";
 }

@@ -11,6 +11,10 @@ import {
   setCliRunnerPrepareTestDeps,
 } from "../../agents/cli-runner/prepare.test-support.js";
 import type { PreparedCliRunContext, RunCliAgentParams } from "../../agents/cli-runner/types.js";
+import {
+  decodeRequesterOrigin,
+  resolveRequesterPrincipalKey,
+} from "../../agents/requester-origin.js";
 import { mockCall } from "../../test-utils/mock-call-assertions.js";
 import { applyJobPatch } from "../service/jobs.js";
 import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
@@ -195,6 +199,50 @@ describe("runCronIsolatedAgentTurn delivery policy", () => {
         bootstrapContextRunKind: "cron",
         terminalReplyExpectation: "optional",
       });
+    },
+  );
+
+  it.for(["default", "foreign"])(
+    "retains only the account-owned channel requester for execution (%s)",
+    async (requesterAccount) => {
+      const result = await runJob(
+        { mode: "none" },
+        { toolsAllow: ["read"] },
+        {
+          owner: {
+            agentId: "main",
+            sessionKey: "agent:main:telegram:direct:123",
+            accountId: "default",
+          },
+          scheduledToolPolicy: {
+            version: 1,
+            mode: "account",
+            ownerSessionKey: "agent:main:telegram:direct:123",
+            ownerAccountId: "default",
+          },
+          toolsAllowProvenance: {
+            version: 1,
+            source: "authenticated-requester",
+            channelRequester: {
+              version: 1,
+              channel: "telegram",
+              accountId: requesterAccount,
+              senderId: "creator",
+            },
+          },
+        },
+      );
+      expect(result.status, result.error).toBe("ok");
+      const requesterOrigin = decodeRequesterOrigin(embedded().requesterOrigin);
+      // Delivery may use another channel; requester policy stays in the creator's conversation.
+      expect(requesterOrigin?.sessionKey).toBe(
+        requesterAccount === "default" ? "agent:main:telegram:direct:123" : undefined,
+      );
+      expect(resolveRequesterPrincipalKey({ requesterOrigin })).toBe(
+        requesterAccount === "default"
+          ? JSON.stringify(["telegram", "default", "creator"])
+          : undefined,
+      );
     },
   );
 

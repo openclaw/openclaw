@@ -19,8 +19,8 @@ import {
 } from "../../sessions/session-controller.js";
 import { canInjectReplyMessageTarget } from "../../sessions/session-controller.message-injection.js";
 import {
-  hasReplySteeringRequesterMismatch,
   prepareReplyMessageJoin,
+  resolveReplySteeringRequesterRelationship,
 } from "../../sessions/session-controller.message-join.js";
 import {
   getSessionControllerEntryForOperation,
@@ -233,10 +233,16 @@ export async function runActiveReplySteer(
       return await fallback("injection_unavailable");
     }
     assertReadCurrent();
+    const requesterRelationship = resolveReplySteeringRequesterRelationship(
+      followupRun,
+      activeReplyOperation,
+    );
+    if (requesterRelationship === "unknown") {
+      return await fallback("requester-mismatch", injectionTarget.runId);
+    }
     if (
-      isInboundUserMessage &&
-      followupRun.run.config.messages?.queue?.allowCollaborativeSteering !== true &&
-      hasReplySteeringRequesterMismatch(followupRun, activeReplyOperation)
+      requesterRelationship === "different" &&
+      followupRun.run.config.messages?.queue?.allowCollaborativeSteering !== true
     ) {
       if (!canInjectReplyMessageTarget(injectionTarget)) {
         return await fallback("injection_unavailable", injectionTarget.runId);
