@@ -132,11 +132,10 @@ const inspector = new Session();
 inspector.connect();
 
 // Observe the existing LRU owner only in the counts pass. Never instrument timed samples.
-// These original methods are called with the observed cache as their receiver.
-// eslint-disable-next-line @typescript-eslint/unbound-method
-const get = LruCache.prototype.get;
-// eslint-disable-next-line @typescript-eslint/unbound-method
-const set = LruCache.prototype.set;
+const descriptors = Object.getOwnPropertyDescriptors(LruCache.prototype);
+const get = descriptors.get.value;
+const set = descriptors.set.value;
+assert.ok(get && set);
 let residentEntries = 0;
 const slots = new Map<string, { admissions: number; hits: number }>();
 let lookups = 0;
@@ -179,8 +178,7 @@ try {
     });
   }
 } finally {
-  LruCache.prototype.get = get;
-  LruCache.prototype.set = set;
+  Object.defineProperties(LruCache.prototype, descriptors);
 }
 function heapBytes(profile: HeapProfiler.SamplingHeapProfile) {
   let total = 0;

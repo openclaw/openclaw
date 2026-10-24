@@ -153,7 +153,7 @@ describe("Tool Search input-dependent output contracts", () => {
   });
 
   it("observes mutable descendants of a shallow-frozen output schema", async () => {
-    const branch = Type.Object({ removed: Type.Boolean({ const: true }) });
+    const branch = Type.Object({ removed: { ...Type.Boolean(), const: true } });
     const outputSchema = Object.freeze(
       defineToolOutputSchema({ inputProperty: "operation", variants: { remove: branch } }),
     );
