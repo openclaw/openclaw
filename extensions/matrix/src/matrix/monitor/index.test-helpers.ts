@@ -201,7 +201,10 @@ vi.mock("../../resolve-targets.js", () => ({
   resolveMatrixTargets: vi.fn(async () => []),
 }));
 
-vi.mock("../../runtime.js", () => ({
+vi.mock("../../runtime.js", async (importOriginal) => ({
+  // The real store answers getOptionalMatrixRuntime (read lazily by the approval-reaction
+  // state the media hold's reaction preflight imports) with undefined until a runtime is set.
+  ...(await importOriginal<typeof import("../../runtime.js")>()),
   getMatrixRuntime: () => ({
     config: {
       current: () => ({

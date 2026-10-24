@@ -1,7 +1,9 @@
 import { decodeHtmlEntities } from "openclaw/plugin-sdk/html-entity-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
+import type { CoreConfig, MatrixConfig } from "../../types.js";
 import type { RoomMessageEventContent } from "./types.js";
 
 const MATRIX_HTML_ENTITY_RE = /&(?:#x?[0-9a-f]+|amp|apos|gt|lt|nbsp|quot);/gi;
@@ -57,6 +59,41 @@ function stripMatchedMatrixMentionPrefix(
 ): string | null {
   const match = text.match(new RegExp(`^\\s*${source}(?:\\s*[:,])?(?:\\s+|$)`, flags));
   return match ? text.slice(match[0].length).trimStart() : null;
+}
+
+/**
+ * The one way a Matrix text is normalised before the control-command check: the
+ * agents mention patterns for this room plus the bots user id and display name
+ * are stripped, so every owner of that decision sees the same command text.
+ */
+export function resolveMatrixCommandCheckText(params: {
+  core: Pick<PluginRuntime, "channel">;
+  cfg: CoreConfig;
+  agentId: string;
+  roomId: string;
+  mentionPatterns: MatrixConfig["mentionPatterns"];
+  selfUserId: string;
+  selfDisplayName: string | undefined;
+  text: string;
+}): { mentionRegexes: RegExp[]; commandCheckText: string } {
+  const mentionRegexes = params.core.channel.mentions.buildMentionRegexes(
+    params.cfg,
+    params.agentId,
+    {
+      provider: "matrix",
+      conversationId: params.roomId,
+      providerPolicy: params.mentionPatterns,
+    },
+  );
+  return {
+    mentionRegexes,
+    commandCheckText: stripMatrixMentionPrefix({
+      text: params.text,
+      userId: params.selfUserId,
+      displayName: params.selfDisplayName,
+      mentionRegexes,
+    }),
+  };
 }
 
 export function stripMatrixMentionPrefix(params: {

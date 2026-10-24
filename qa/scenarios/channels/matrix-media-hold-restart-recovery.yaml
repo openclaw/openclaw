@@ -1,0 +1,33 @@
+title: Matrix media hold keeps a held attachment across a gateway restart and still joins it with the text
+scenario:
+  id: matrix-media-hold-restart-recovery
+  surface: channels
+  coverage:
+    primary:
+      - matrix.legacy-state
+  execution:
+    kind: flow
+    channel: matrix
+    providerMode: mock-openai
+    timeoutMs: 180000
+    retryCount: 0
+    suiteIsolation: isolated
+    isolationReason: Hard-restarts the gateway while an attachment is held.
+    config:
+      matrixConfigOverrides:
+        mediaHoldMs: 60000
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - key: driver-dm
+            kind: dm
+            members:
+              - driver
+              - sut
+            name: Matrix QA Driver/SUT DM
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-media-hold.js
+  call: runMediaHoldRestartRecoveryScenario
+  args:
+    - expr: "scenarioContext"

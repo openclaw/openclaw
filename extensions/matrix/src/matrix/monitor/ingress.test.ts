@@ -193,4 +193,47 @@ describe("Matrix sync admission", () => {
       }
     },
   );
+
+  it("shows a sync batch to its observer until every event in it is durable", async () => {
+    const queue = createQueue();
+    const batchRoomId = "!batch:example.org";
+    const image = {
+      event_id: "$batch-image",
+      sender: "@alice:example.org",
+      type: "m.room.message",
+      origin_server_ts: 1_000,
+      content: { msgtype: "m.image", body: "photo.png", url: "mxc://example.org/photo" },
+    } satisfies MatrixRawEvent;
+    const text = {
+      ...image,
+      event_id: "$batch-text",
+      origin_server_ts: 4_000,
+      content: { msgtype: "m.text", body: "what is this?" },
+    } satisfies MatrixRawEvent;
+    const sync = matrixSyncResponse("cursor", batchRoomId, image, "previous");
+    sync.rooms.join[batchRoomId]!.timeline.events.push(text);
+    const seen: string[][] = [];
+    const durableAtRelease: Array<Promise<string[]>> = [];
+    const monitor = createMatrixIngressMonitor({
+      accountId: "default",
+      client: createClient(),
+      startupMs: 0,
+      queue,
+      dispatch: async () => {},
+      onSyncBatch: (events) => {
+        seen.push(events.map(({ event }) => event.event_id));
+        return () => {
+          durableAtRelease.push(queue.listPending().then((rows) => rows.map((row) => row.id)));
+        };
+      },
+    });
+    try {
+      await monitor.admitSync(sync, { hasSavedSync: true });
+      expect(seen).toEqual([["$batch-image", "$batch-text"]]);
+      expect(durableAtRelease).toHaveLength(1);
+      await expect(durableAtRelease[0]).resolves.toEqual(["$batch-image", "$batch-text"]);
+    } finally {
+      await monitor.stop();
+    }
+  });
 });

@@ -49,7 +49,7 @@ Rapid text messages from the same sender can be batched into one agent turn via 
 }
 ```
 
-- Debounce applies to text-only messages; media/attachments flush immediately.
+- Debounce applies to text-only messages; media/attachments flush immediately. Matrix can instead hold a captionless attachment briefly so the sender's next text joins it; see [`channels.matrix.mediaHoldMs`](/channels/matrix).
 - Control commands (stop/abort/status, etc.) bypass debouncing so they dispatch immediately.
 - Telegram batches ordinary text by default after a 300ms quiet window. Other channels have no generic debounce delay unless configured.
 - `messages.inbound.byChannel.<channel>` takes precedence over `messages.inbound.debounceMs`; either overrides the channel default. Set `0` to disable ordinary burst batching.

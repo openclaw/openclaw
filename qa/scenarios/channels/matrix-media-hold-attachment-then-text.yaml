@@ -1,0 +1,34 @@
+title: Matrix media hold answers a captionless attachment and the text sent after it as one turn
+scenario:
+  id: matrix-media-hold-attachment-then-text
+  surface: channels
+  coverage:
+    primary:
+      - matrix.media-and-rich-content
+  execution:
+    kind: flow
+    channel: matrix
+    providerMode: mock-openai
+    timeoutMs: 90000
+    retryCount: 0
+    config:
+      matrixConfigOverrides:
+        mediaHoldMs: 8000
+      matrixTopology:
+        defaultRoomKey: main
+        rooms:
+          - encrypted: false
+            key: media-hold
+            kind: group
+            members:
+              - driver
+              - observer
+              - sut
+            name: Matrix QA Media Hold Room
+            requireMention: true
+
+flow:
+  module: ./live-transports/matrix/scenarios/scenario-runtime-media-hold.js
+  call: runMediaHoldAttachmentThenTextScenario
+  args:
+    - expr: "scenarioContext"
