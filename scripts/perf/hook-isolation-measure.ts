@@ -4,7 +4,10 @@ import type { HeapProfiler } from "node:inspector";
 import { Session } from "node:inspector/promises";
 import { performance } from "node:perf_hooks";
 import { parseArgs } from "node:util";
-import { normalizeTranscriptJsonValue } from "../../src/config/sessions/transcript-json.js";
+import {
+  isOwnedTranscriptPayload,
+  normalizeTranscriptJsonValue,
+} from "../../src/config/sessions/transcript-json.js";
 import { createHookRunner } from "../../src/plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../../src/plugins/registry-empty.js";
 
@@ -92,11 +95,27 @@ const cells = [200, 1_000].flatMap((size) => {
 });
 
 // Count native clones and JS graph enumerations separately from either measured pass.
+function countOwnedPayloads(value: unknown, seen = new Set<object>()): number {
+  if (!value || typeof value !== "object" || seen.has(value)) {
+    return 0;
+  }
+  seen.add(value);
+  if (isOwnedTranscriptPayload(value)) {
+    return 1;
+  }
+  // The synthetic fixture contains only ordinary JSON envelopes and payloads.
+  return Object.values(value).reduce<number>(
+    (count, entry: unknown) => count + countOwnedPayloads(entry, seen),
+    0,
+  );
+}
+
 const counts = [];
 for (const cell of cells) {
   const ownKeys = Reflect.ownKeys;
   const clone = globalThis.structuredClone;
   let clones = 0;
+  let ownedPayloadClones = 0;
   let sourceEnumerations = 0;
   let cloneEnumerations = 0;
   Reflect.ownKeys = new Proxy(ownKeys, {
@@ -112,6 +131,7 @@ for (const cell of cells) {
   globalThis.structuredClone = new Proxy(clone, {
     apply(target, receiver, args: Parameters<typeof clone>) {
       clones++;
+      ownedPayloadClones += countOwnedPayloads(args[0]);
       return Reflect.apply(target, receiver, args);
     },
   });
@@ -122,6 +142,7 @@ for (const cell of cells) {
       handlers: cell.handlers,
       dispatches: 1,
       clones,
+      ownedPayloadClones,
       sourceEnumerations,
       cloneEnumerations,
     });
