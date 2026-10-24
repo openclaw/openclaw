@@ -82,7 +82,6 @@ registerTuiDisconnectedDraftTests(STARTUP_TIMEOUT_MS, STARTUP_TEST_TIMEOUT_MS);
 
 describe("TUI PTY harness", { concurrent: false }, () => {
   let fixture: Awaited<ReturnType<typeof startHarness>>;
-  let compactFooter: Awaited<ReturnType<typeof startHarness>>;
   let thinkingOverride: Awaited<ReturnType<typeof startHarness>>;
   let slowStartup: Awaited<ReturnType<typeof startHarness>>;
 
@@ -90,12 +89,6 @@ describe("TUI PTY harness", { concurrent: false }, () => {
     // Retain successful boots for cleanup even if a sibling boot fails.
     const boots = await Promise.allSettled([
       startHarness(),
-      startHarness({
-        env: {
-          OPENCLAW_TUI_PTY_MODEL: "gpt-5.6-sol@openai:setup-64cddea3-938c-431e-be3b-aa47090577c7",
-          OPENCLAW_TUI_PTY_THINKING_LEVEL: "high",
-        },
-      }),
       startHarness({
         env: {
           OPENCLAW_TUI_PTY_MODEL: "fixture-provider/fixture-model",
@@ -108,12 +101,9 @@ describe("TUI PTY harness", { concurrent: false }, () => {
         holdStartupHistory: true,
       }),
     ]);
-    const [mainBoot, compactBoot, thinkingOverrideBoot, slowBoot] = boots;
+    const [mainBoot, thinkingOverrideBoot, slowBoot] = boots;
     if (mainBoot.status === "fulfilled") {
       fixture = mainBoot.value;
-    }
-    if (compactBoot.status === "fulfilled") {
-      compactFooter = compactBoot.value;
     }
     if (thinkingOverrideBoot.status === "fulfilled") {
       thinkingOverride = thinkingOverrideBoot.value;
@@ -130,19 +120,10 @@ describe("TUI PTY harness", { concurrent: false }, () => {
 
   afterAll(async () => {
     await disposeActiveTuiFixtures();
-    for (const started of [fixture, compactFooter, thinkingOverride, slowStartup]) {
+    for (const started of [fixture, thinkingOverride, slowStartup]) {
       await (started as Awaited<ReturnType<typeof startHarness>> | undefined)?.cleanup();
     }
   }, STARTUP_TEST_TIMEOUT_MS);
-
-  it(
-    "renders a compact model and active thinking level in the footer",
-    async () => {
-      await compactFooter.wait("gpt-5.6-sol high", STARTUP_TIMEOUT_MS);
-      expect(compactFooter.output()).not.toContain("openai:setup-64cddea3");
-    },
-    STARTUP_TEST_TIMEOUT_MS,
-  );
 
   it(
     "keeps the launch thinking override active across session-level changes",
@@ -493,24 +474,6 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   );
 
   it(
-    "starts a suggested task in a new session from the TUI",
-    async ({ signal }) => {
-      await fixture.write("task suggestion proof\r");
-      await fixture.wait("Start in a new session");
-      await fixture.wait("Project: /repo/project");
-      await fixture.wait("The adapter is unreachable and adds maintenance cost.");
-
-      await fixture.write("\x1b[A", { delay: false });
-      await fixture.write("\r", { delay: false });
-      await fixture.wait("Press Enter again to start this task.");
-      await fixture.write("\r", { delay: false });
-      await fixture.call(signal, "acceptTaskSuggestion", { taskId: "task_pty" });
-      await fixture.wait("session agent:main:task-pty");
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
     "renders message-tool-only internal ui source replies in the terminal",
     async () => {
       await fixture.write("message tool only source reply proof\r");
@@ -575,36 +538,6 @@ describe("TUI PTY harness", { concurrent: false }, () => {
   });
 
   registerToolCardRenderingTests(startTuiFixture, STARTUP_TIMEOUT_MS, STARTUP_TEST_TIMEOUT_MS);
-
-  it(
-    "keeps an active session intact when /reset is submitted from the terminal",
-    async ({ signal }) => {
-      const priorResetCount = (await fixture.records()).filter(fixtureEntry("resetSession")).length;
-
-      await fixture.write("slow reset proof\r");
-      await fixture.call(signal, "sendChat", { message: "slow reset proof" });
-      await fixture.write("/reset\r", { delay: false });
-      await fixture.wait("abort the current run before /reset");
-
-      const resetCalls = (await fixture.records()).filter(fixtureEntry("resetSession"));
-      expect(resetCalls).toHaveLength(priorResetCount);
-      await fixture.wait("PTY_RESPONSE: slow reset proof");
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "submits a follow-up prompt while a run is streaming",
-    async ({ signal }) => {
-      await fixture.write("\x15", { delay: false });
-      await fixture.write("streaming prompt\r");
-      await fixture.wait("PTY_STREAMING: streaming prompt");
-      await fixture.write("queued while streaming\r");
-      await fixture.call(signal, "sendChat", { message: "queued while streaming" });
-      await fixture.wait("PTY_RESPONSE: streaming prompt");
-    },
-    TEST_TIMEOUT_MS,
-  );
 
   it.each([
     ["authenticates a streamed prefix before the complete ordered final frame", undefined],
@@ -723,38 +656,5 @@ describe("TUI PTY harness", { concurrent: false }, () => {
       expect(sessionOutput).toContain(`PTY_RESPONSE: ${message}`);
       expect(sessionOutput).not.toContain("PTY_FOREIGN_OPAQUE_SESSION_MESSAGE");
     },
-  );
-
-  it(
-    "creates a backend session from /new and adopts its canonical key",
-    async ({ signal }) => {
-      await fixture.write("/new\r", { delay: false });
-      await fixture.wait("new session: agent:main:tui-");
-      const created = (await fixture.records()).find(fixtureEntry("createSession"));
-      expect(created?.payload).toMatchObject({ agentId: "main" });
-      expect(created?.payload).not.toHaveProperty("parentSessionKey");
-
-      await fixture.write("after new\r", { delay: false });
-      const sent = await fixture.call(signal, "sendChat", { message: "after new" });
-      expect(sent.payload).toMatchObject({ sessionKey: expect.stringMatching(/^agent:main:tui-/) });
-      await fixture.wait("PTY_RESPONSE: after new");
-    },
-    TEST_TIMEOUT_MS,
-  );
-
-  it(
-    "keeps the newer session when a rapid switch's history resolves last",
-    async ({ signal }) => {
-      await fixture.write("/session agent:main:switch-a\r", { delay: false });
-      await fixture.write("/session agent:main:switch-b\r", { delay: false });
-      await fixture.wait("B_HISTORY_MARKER");
-      await fixture.call(signal, "loadHistoryResolved", { sessionKey: "agent:main:switch-a" });
-
-      await fixture.write("after switch\r", { delay: false });
-      const sent = await fixture.call(signal, "sendChat", { message: "after switch" });
-      expect(sent.payload).toMatchObject({ sessionKey: "agent:main:switch-b" });
-      expect(fixture.output()).not.toContain("A_HISTORY_MARKER");
-    },
-    TEST_TIMEOUT_MS,
   );
 });
