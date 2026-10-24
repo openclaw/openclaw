@@ -52,7 +52,7 @@ const sourceHash = hash("sha256", await readFile(ownerUrl), "hex");
 const databasePath = path.join(stateDir, "admission.sqlite");
 const database = sqlite.openNodeSqliteDatabase(databasePath);
 const identity = admission.getSqliteDatabaseAdmissionIdentityForPath(databasePath);
-assert(identity?.key.startsWith("file:"), "Replica requires admitted physical identity");
+assert(identity && identity.key.startsWith("file:"), "Replica requires admitted physical identity");
 const source = {
   identity: identity.key.slice("file:".length),
   birthtime: identity.birthtime,
