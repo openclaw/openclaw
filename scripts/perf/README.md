@@ -4964,3 +4964,32 @@ Gateway benchmark; 100 calls cannot qualify latency p95/p99 as gates. Apply the
 campaign's absolute-delta rules and matched A/A controls before attributing GC
 or pause regressions. Accept reduced process-table transfer/parse work with
 unchanged descendant cleanup and no material CPU or latency regression.
+
+## Catalog worker retained revisions
+
+`catalog-worker-retention-measure.ts` sends synthetic catalogs through the real
+catalog worker pool, prepares 20 workspace contexts, then replaces every context
+with a second remote catalog revision. Each revision contains 5,000 synthetic
+model rows. Every request must return the configured fixture model. The shared
+worker observer forces collection after the first workspace and each complete
+revision; these are retention samples, not latency or GC-throughput measurements.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/catalog-worker-retention-measure.ts \
+  --output /path/to/new-fixture --workspaces 20 --models 5000
+```
+
+Use fresh output directories and five alternating baseline/candidate runs. For
+source comparisons without another checkout, pass `--owner-dir` on both sides:
+its directory mirrors `src/agents/prepared-model-catalog.worker.ts` from the
+selected revision. Both sides use the same source substitution hook. JSON lines
+report successful request count, fixture size, post-GC worker heap and external
+bytes, runtime, and substituted modules. `--snapshot` captures the final synthetic
+worker after collection; use only on a host approved for snapshots.
+
+The fixture isolates remote catalog retention from plugin execution and network
+discovery. It is not a full Gateway or production heap estimate: source-runtime
+loads include TypeScript tooling. Workspace/source/revision correctness and
+retirement are covered by the catalog worker heap integration test. Analyze
+snapshots with the [retention runbook](heap-retention-runbook.md); preserve the
+campaign's host, disk, and production-safety restrictions.
