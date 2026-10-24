@@ -15,24 +15,32 @@ type SpawnCall = {
 };
 
 const spawnCalls = vi.hoisted(() => [] as SpawnCall[]);
+const dockerEndpoint = "unix:///synthetic-docker.sock";
+
+function dockerCommandArgs(args: string[]): string[] {
+  return args[0] === "--host" ? args.slice(2) : args;
+}
+
 const mountInspectFormat = '{"Mounts":{{json .Mounts}},"Tmpfs":{{json .HostConfig.Tmpfs}}}';
 
 function inspectCreatedDockerMounts(containerName: string | undefined) {
-  const create = spawnCalls.findLast(
-    (call) =>
+  const create = spawnCalls.findLast((call) => {
+    const args = dockerCommandArgs(call.args);
+    return (
       call.command === "docker" &&
-      call.args[0] === "create" &&
-      (call.args[call.args.indexOf("--name") + 1] === containerName ||
-        call.containerId === containerName),
-  );
+      args[0] === "create" &&
+      (args[args.indexOf("--name") + 1] === containerName || call.containerId === containerName)
+    );
+  });
   if (!create?.containerId) {
     throw new Error(`No recorded Docker create for ${containerName}`);
   }
+  const args = dockerCommandArgs(create.args);
   const mounts: { Type: "bind"; Source: string; Destination: string; RW: boolean }[] = [];
   const tmpfs: Record<string, string> = {};
-  for (let index = 0; index < create.args.length; index += 1) {
-    const flag = create.args[index];
-    const value = create.args[index + 1];
+  for (let index = 0; index < args.length; index += 1) {
+    const flag = args[index];
+    const value = args[index + 1];
     if (flag === "-v") {
       const bind = value && splitSandboxBindSpec(value);
       if (!bind) {
@@ -69,7 +77,7 @@ function inspectCreatedDockerMounts(containerName: string | undefined) {
   }));
   const escapePath = (value: string) =>
     value.replace(/[\\ \t\n]/g, (char) => `\\${char.charCodeAt(0).toString(8).padStart(3, "0")}`);
-  const rootMode = create.args.includes("--read-only") ? "ro" : "rw";
+  const rootMode = args.includes("--read-only") ? "ro" : "rw";
   // Model this fixture's ordinary, unstacked mounts from the actual create
   // arguments so the real backend snapshot keeps the workspace visible.
   const mountinfo = [
@@ -88,10 +96,11 @@ function inspectCreatedDockerMounts(containerName: string | undefined) {
 }
 
 async function spawnDockerProcess(commandAndArgs: string[]) {
-  const [command = "", ...args] = commandAndArgs;
+  const [command = "", ...rawArgs] = commandAndArgs;
+  const args = dockerCommandArgs(rawArgs);
   spawnCalls.push({
     command,
-    args,
+    args: rawArgs,
     ...(command === "docker" && args[0] === "create"
       ? { containerId: (spawnCalls.length + 1).toString(16).padStart(64, "0") }
       : {}),
@@ -103,7 +112,23 @@ async function spawnDockerProcess(commandAndArgs: string[]) {
     args[2] === "{{.State.Running}}";
   const code = command === "docker" && !shouldFailContainerInspect ? 0 : 1;
   let stdout = "";
-  if (command === "docker" && args[0] === "create") {
+  if (command === "docker" && args[0] === "context" && args[1] === "inspect") {
+    stdout = JSON.stringify({ Host: dockerEndpoint });
+  } else if (command === "docker" && args[0] === "info" && args[2] === "{{.ID}}") {
+    stdout = "synthetic-daemon";
+  } else if (command === "docker" && args[0] === "inspect" && args[2] === "{{json .State}}") {
+    const { containerId } = inspectCreatedDockerMounts(args[3]);
+    const running = spawnCalls.some((call) => {
+      const recorded = dockerCommandArgs(call.args);
+      return call.command === "docker" && recorded[0] === "start" && recorded[1] === containerId;
+    });
+    stdout = JSON.stringify({
+      Running: running,
+      Paused: false,
+      Pid: running ? 123 : 0,
+      StartedAt: "2026-01-01T00:00:00.000Z",
+    });
+  } else if (command === "docker" && args[0] === "create") {
     stdout = inspectCreatedDockerMounts(args[args.indexOf("--name") + 1]).containerId;
   } else if (command === "docker" && args[0] === "inspect" && args[2] === "{{.Id}}") {
     stdout = inspectCreatedDockerMounts(args[3]).containerId;
@@ -153,22 +178,33 @@ async function resolveContext(config: OpenClawConfig, sessionKey: string, worksp
   });
   if (context) {
     const { containerId } = inspectCreatedDockerMounts(context.containerName);
+    for (const call of spawnCalls) {
+      if (call.command === "docker" && call.args[0] !== "context") {
+        expect(call.args.slice(0, 2)).toEqual(["--host", dockerEndpoint]);
+      }
+    }
     expect(
       spawnCalls.filter(
         (call) =>
           call.command === "docker" &&
-          (call.args[2] === "{{.Id}}" ||
-            call.args[2] === mountInspectFormat ||
-            call.args[3] === "/proc/self/mountinfo"),
+          (dockerCommandArgs(call.args)[2] === "{{.Id}}" ||
+            dockerCommandArgs(call.args)[2] === mountInspectFormat ||
+            dockerCommandArgs(call.args)[3] === "/proc/self/mountinfo"),
       ),
     ).toEqual([
       {
         command: "docker",
-        args: ["inspect", "--format", mountInspectFormat, containerId],
+        args: ["--host", dockerEndpoint, "inspect", "--format", mountInspectFormat, containerId],
       },
-      { command: "docker", args: ["exec", containerId, "cat", "/proc/self/mountinfo"] },
+      {
+        command: "docker",
+        args: ["--host", dockerEndpoint, "exec", containerId, "cat", "/proc/self/mountinfo"],
+      },
     ]);
-    expect(spawnCalls).toContainEqual({ command: "docker", args: ["start", containerId] });
+    expect(spawnCalls).toContainEqual({
+      command: "docker",
+      args: ["--host", dockerEndpoint, "start", containerId],
+    });
     expect(context.fsBridge?.resolvePath({ filePath: "marker.txt" }).hostPath).toBe(
       path.join(context.workspaceDir, "marker.txt"),
     );
@@ -180,7 +216,7 @@ function expectDockerSetupCommand(command: string) {
   const matched = spawnCalls.some(
     (call) =>
       call.command === "docker" &&
-      call.args[0] === "exec" &&
+      dockerCommandArgs(call.args)[0] === "exec" &&
       call.args.includes("-lc") &&
       call.args.includes(command),
   );

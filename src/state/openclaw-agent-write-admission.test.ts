@@ -231,6 +231,42 @@ it("keeps a missing reservation current when its database is created", async () 
   });
 });
 
+it.each(["symlink", "hardlink"] as const)(
+  "borrows one foreground admission for %s aliases without admitting a worker reservation",
+  async (kind) => {
+    const { options, root } = makeFixture("openclaw-batch-alias-");
+    fs.writeFileSync(options.path, "database");
+    const aliasDirectory = path.join(root, "alias");
+    const alias = {
+      ...options,
+      path:
+        kind === "symlink"
+          ? path.join(aliasDirectory, path.basename(options.path))
+          : path.join(root, "alias.sqlite"),
+    };
+    if (kind === "symlink") {
+      fs.symlinkSync(root, aliasDirectory, process.platform === "win32" ? "junction" : "dir");
+    } else {
+      fs.linkSync(options.path, alias.path);
+    }
+    await write(options, async () => {
+      expect(await writeMany([alias, options], () => "read complete")).toBe("read complete");
+    });
+    await workerWrite(options, async () => {
+      await expect(writeMany([alias, options], () => "unsafe read")).rejects.toThrow(
+        "cannot reenter an active SQLite writer admission",
+      );
+    });
+    const distinct = { ...options, path: path.join(root, "distinct.sqlite") };
+    fs.writeFileSync(distinct.path, "other database");
+    await write(options, async () => {
+      await expect(writeMany([options, distinct], () => "unsafe read")).rejects.toThrow(
+        "cannot reenter an active SQLite writer admission",
+      );
+    });
+  },
+);
+
 it.each([
   { count: 773, outcome: "ok" },
   { count: 5_000, outcome: "error" },
