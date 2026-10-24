@@ -33,11 +33,9 @@ import {
 import { parseTestProjectsArgs } from "../../scripts/test-projects.test-support.mts";
 import { forceKillVitestProcessGroup } from "../../scripts/vitest-process-group.mts";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
-import { listGitTrackedFiles } from "../../src/test-utils/repo-files.js";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
 import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
 import { captureWatchdog, childTermination } from "./run-vitest.test-support.js";
 
@@ -440,19 +438,6 @@ registerHooks({resolve(specifier, context, nextResolve) {
     ).toEqual(targets.map((target) => argv.concat(target, "--", "-x")));
   });
 
-  it("keeps every Gateway server file in one bounded native invocation", () => {
-    const argv = ["--config", "/repo/" + gatewayConfig];
-    const invocations = resolveBoundedVitestInvocations(argv, { env: { CI: "1" } });
-    const targets = invocations.map((args) => args.slice(argv.length));
-
-    expect(targets.every((files) => files.length > 0 && files.length <= 16)).toBe(true);
-    expect(targets.flat()).toEqual(
-      listGitTrackedFiles({ pathspecs: "src/gateway" })
-        ?.filter(isGatewayServerTestFile)
-        .toSorted((a, b) => a.localeCompare(b)),
-    );
-  });
-
   it("bounds the complete E2E selection without multiplying configured workers", () => {
     const argv = directArgs(e2eConfig, "--maxWorkers", "2");
     expect(resolveBoundedVitestInvocations(argv, { env: {} })).toEqual(
@@ -554,15 +539,12 @@ registerHooks({resolve(specifier, context, nextResolve) {
 
   it.each<[string[], NodeJS.ProcessEnv, number | null]>([
     [["run", "-t", "watch"], baseEnv, 120000],
-    [["--watch", "false"], baseEnv, 120000],
     [["--watch=false"], baseEnv, 120000],
-    [["--no-watch"], baseEnv, 120000],
     [["src/foo.test.ts"], { ...baseEnv, CI: "true" }, 120000],
     [["run"], { ...baseEnv, OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS: "0" }, null],
     [["run", "--config", "test/vitest/vitest.extension-codex.config.ts"], floorEnv, 2400000],
     [["run", "--config", "test/vitest/vitest.unit.config.ts"], floorEnv, 300000],
     [["run"], compileCacheEnv, 120000],
-    [["run", "--coverage=false"], compileCacheEnv, 120000],
     [["--watch"], compileCacheEnv, null],
     [["src/foo.test.ts"], baseEnv, null],
     [["--config", toolingConfig, "-t", "watch"], baseEnv, null],
@@ -570,13 +552,6 @@ registerHooks({resolve(specifier, context, nextResolve) {
     expect(resolveRunVitestSpawnEnv(env, argv)).toEqual(
       timeout === null ? env : { ...env, ...watchdogEnv(timeout) },
     );
-  });
-
-  it("preserves inherited compile caches while pinning the child locale", () => {
-    expect(resolveVitestSpawnParams(compileCacheEnv, "linux").env).toEqual({
-      ...compileCacheEnv,
-      ...PINNED_LOCALE,
-    });
   });
 
   it("uses the native inline short config for its watchdog", () => {

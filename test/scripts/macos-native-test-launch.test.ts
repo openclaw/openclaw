@@ -160,8 +160,9 @@ if (tool === 'git' && args[0] === 'diff' && args.includes('--name-only')) consol
 if (['xcrun', 'lldb', 'xctest', 'swiftpm-testing-helper'].includes(tool)) {
   throw new Error('Unexpected native tool invocation in the fake launcher fixture');
 }
-if (tool === 'swift' && args[0] === 'test') {
-  if (env.OPENCLAW_TEST_MENU_CAPTURE_DIR) {
+if ((tool === 'swift' && args[0] === 'test') || tool === 'OpenClawRecoveryTestHost') {
+  const appHost = tool === 'OpenClawRecoveryTestHost';
+  if (!appHost && env.OPENCLAW_TEST_MENU_CAPTURE_DIR) {
     const name = env.OPENCLAW_PROFILE === 'default' ? 'catalog' : 'thread-reasoning';
     for (const suffix of ['-window.png', '-menu-42.png', '-capture-status.json']) {
       fs.writeFileSync(path.join(env.OPENCLAW_TEST_MENU_CAPTURE_DIR, name + suffix), suffix.endsWith('.json') ? JSON.stringify({blockers: ['synthetic fixture, not visual proof']}) : 'synthetic-png-bytes');
@@ -173,10 +174,10 @@ if (tool === 'swift' && args[0] === 'test') {
   if (eventPathIndex !== -1) {
     const eventPath = args[eventPathIndex + 1];
     assert.ok(path.isAbsolute(eventPath));
-    assert.ok(eventPath.startsWith(path.dirname(env.HOME) + path.sep));
+    assert.ok(eventPath.startsWith(path.dirname(appHost ? env.TMPDIR : env.HOME) + path.sep));
     assert.equal(args[args.indexOf('--event-stream-version') + 1], '6.3');
-    const eventReport = ${JSON.stringify(eventReport)};
-    if (eventReport !== null) fs.writeFileSync(eventPath, eventReport);
+    const report = ${JSON.stringify(eventReport)};
+    if (report !== null) fs.writeFileSync(eventPath, appHost ? report.replaceAll('fixture/function', 'fixture/' + args[args.indexOf('--filter') + 1]) : report);
   }
   if (env.OPENCLAW_STATE_DIR !== ${JSON.stringify(path.join(root, "ambient-state"))}) {
     fs.writeFileSync(path.join(env.OPENCLAW_STATE_DIR, 'child-owned'), 'fixture');
@@ -315,27 +316,10 @@ describe.skipIf(process.platform === "win32")("native test launch ownership", ()
       const f = fixture("", "3", events);
       const contents = path.join(f.root, "Fixture.app/Contents");
       fs.mkdirSync(path.join(contents, "MacOS"), { recursive: true });
-      const helper = read(path.join(f.root, "bin/swift"))
-        .replace(
-          "if (tool === 'swift' && args[0] === 'test')",
-          "if (tool === 'OpenClawRecoveryTestHost')",
-        )
-        .replace(
-          "if (env.OPENCLAW_TEST_MENU_CAPTURE_DIR)",
-          "if (false && env.OPENCLAW_TEST_MENU_CAPTURE_DIR)",
-        )
-        .replace(
-          "assert.ok(eventPath.startsWith(path.dirname(env.HOME) + path.sep));",
-          "assert.ok(eventPath.startsWith(path.dirname(env.TMPDIR) + path.sep));",
-        )
-        .replace("const eventReport = ", "let eventReport = ")
-        .replace(
-          "if (eventReport !== null)",
-          "eventReport = eventReport?.replaceAll('fixture/function', 'fixture/' + args[args.indexOf('--filter') + 1]); if (eventReport !== null)",
-        );
-      fs.writeFileSync(path.join(contents, "MacOS/OpenClawRecoveryTestHost"), helper, {
-        mode: 0o755,
-      });
+      fs.copyFileSync(
+        path.join(f.root, "bin/swift"),
+        path.join(contents, "MacOS/OpenClawRecoveryTestHost"),
+      );
       const bundle = path.join(f.root, "compiled-tests");
       fs.writeFileSync(bundle, "synthetic compiled test bundle");
       fs.writeFileSync(
