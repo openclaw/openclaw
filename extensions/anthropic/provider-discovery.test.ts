@@ -63,10 +63,15 @@ it("expires a negative capture so a recovered login is observed", async () => {
   expect(probeClaudeCliAuthStatus).toHaveBeenCalledTimes(2);
 });
 
-it.each(["timeout", "unreadable", "missing"])("auth probe: %s", async (status) => {
+it.each([
+  ["timeout", true],
+  ["unreadable", true],
+  ["missing", false],
+  ["not-installed", false],
+])("auth probe: %s", async (status, authenticated) => {
   probeClaudeCliAuthStatus.mockResolvedValue({ status });
   const auth = await prepare();
-  expect(Boolean(auth?.apiKey)).toBe(status !== "missing");
+  expect(Boolean(auth?.apiKey)).toBe(authenticated);
 });
 
 it("joins one probe per cancellation scope and preserves a surviving capture", async () => {
