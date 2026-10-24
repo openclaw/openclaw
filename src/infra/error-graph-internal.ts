@@ -72,3 +72,19 @@ export function materializeErrorStack(failure: unknown): void {
     error = error.cause;
   }
 }
+
+/** Run every operation in iteration order; callers retain their own settlement and error envelope. */
+export function collectSynchronousErrors<T>(
+  items: Iterable<T>,
+  run: (item: T) => unknown,
+): unknown[] {
+  const errors: unknown[] = [];
+  for (const item of items) {
+    try {
+      run(item);
+    } catch (error) {
+      errors.push(error);
+    }
+  }
+  return errors;
+}

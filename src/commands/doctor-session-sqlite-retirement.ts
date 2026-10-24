@@ -40,9 +40,14 @@ import {
 } from "./doctor-session-sqlite-verification.js";
 import { withDoctorSqliteMaintenanceLock } from "./doctor-sqlite-maintenance-lock.js";
 import { retireUpdateCaptures } from "./update-capture-cleanup.js";
+import {
+  assertUnmanifestedSelectionCurrent,
+  retireUnmanifestedRecovery,
+  selectUnmanifestedRecovery,
+} from "./update-cleanup-unmanifested.js";
 
 export type RecoveryCleanupProgress = {
-  phase: "verifying" | "claiming" | "removing-capture";
+  phase: "verifying" | "claiming" | "removing-capture" | "removing-unmanifested";
   path: string;
   index: number;
   total: number;
@@ -188,6 +193,8 @@ export type RecoveryRetirementParams = {
   onProgress?: (progress: RecoveryCleanupProgress) => void;
   /** Automatic retirement leaves historical originals for explicit verified cleanup. */
   verifyHistorical?: boolean;
+  /** Manual per-path consent only; automatic callers must leave this absent. */
+  includeUnmanifested?: readonly string[];
 };
 
 function assertRecoveryStateWriteAllowed(stateDir: string, env: NodeJS.ProcessEnv) {
@@ -216,10 +223,15 @@ export async function retireOwnedSessionSqliteRecovery(
   authority: { assertCurrent(): void },
 ): Promise<RecoveryCleanupReport> {
   authority.assertCurrent();
-  const { report, references, manifestPaths, captureIdentities } = collectUpdateCleanupInventory({
-    cfg: await params.readConfig(),
+  const cfg = await params.readConfig();
+  const inventory = collectUpdateCleanupInventory({ cfg, env: params.env });
+  const unmanifested = selectUnmanifestedRecovery({
+    inventory,
+    cfg,
     env: params.env,
+    paths: params.includeUnmanifested,
   });
+  const { report, references, manifestPaths, captureIdentities } = inventory;
   authority.assertCurrent();
   if (
     report.stateDir !== params.preview.stateDir ||
@@ -234,6 +246,7 @@ export async function retireOwnedSessionSqliteRecovery(
   const originals = report.artifacts.filter(
     (item) =>
       item.kind !== "update-capture" &&
+      !unmanifested.has(item.path) &&
       (item.outcome === "candidate" || item.outcome === "verification-required"),
   );
   // Unfinished/blocked historical originals may already be protected. Their
@@ -299,7 +312,11 @@ export async function retireOwnedSessionSqliteRecovery(
   }
   // Historical adoption also opens SQLite readers; finish those before fencing sidecar state.
   for (const item of report.artifacts) {
-    if (item.outcome !== "candidate" || item.kind === "update-capture") {
+    if (
+      item.outcome !== "candidate" ||
+      item.kind === "update-capture" ||
+      unmanifested.has(item.path)
+    ) {
       continue;
     }
     try {
@@ -319,14 +336,26 @@ export async function retireOwnedSessionSqliteRecovery(
     report.missingOriginals,
   );
   const candidates = verified.artifacts.filter((item) => item.outcome === "candidate");
-  const selected = candidates.filter((item) => item.kind !== "update-capture");
-  const captures = candidates.filter((item) => item.kind === "update-capture");
+  const explicit = candidates.filter((item) => unmanifested.has(item.path));
+  const selected = candidates.filter(
+    (item) => item.kind !== "update-capture" && !unmanifested.has(item.path),
+  );
+  const captures = candidates.filter(
+    (item) => item.kind === "update-capture" && !unmanifested.has(item.path),
+  );
   if (!(await params.confirm(verified))) {
     return { ...verified, status: "refused" };
   }
   authority.assertCurrent();
   const currentConfig = await params.readConfig();
   const rechecked = collectUpdateCleanupInventory({ cfg: currentConfig, env: params.env });
+  const currentUnmanifested = selectUnmanifestedRecovery({
+    inventory: rechecked,
+    cfg: currentConfig,
+    env: params.env,
+    paths: params.includeUnmanifested,
+  });
+  assertUnmanifestedSelectionCurrent(unmanifested, currentUnmanifested);
   // Existing artifacts can become protected during confirmation, not only newly added manifests.
   // Revalidate the whole selection before retiring any dependent originals.
   if (
@@ -398,6 +427,34 @@ export async function retireOwnedSessionSqliteRecovery(
         path: item.path,
         index: index + 1,
         total: captures.length,
+        bytes: item.bytes,
+      }),
+  });
+  await retireUnmanifestedRecovery({
+    selected: explicit,
+    identities: unmanifested,
+    assertCurrent: () => authority.assertCurrent(),
+    assertReferences: async (item) => {
+      const effectConfig = await params.readConfig();
+      authority.assertCurrent();
+      const fresh = collectUpdateCleanupInventory({ cfg: effectConfig, env: params.env });
+      const selection = selectUnmanifestedRecovery({
+        inventory: fresh,
+        cfg: effectConfig,
+        env: params.env,
+        paths: [item.path],
+      });
+      assertUnmanifestedSelectionCurrent(
+        new Map([[item.path, unmanifested.get(item.path)!]]),
+        selection,
+      );
+    },
+    onProgress: (item, index) =>
+      params.onProgress?.({
+        phase: "removing-unmanifested",
+        path: item.path,
+        index: index + 1,
+        total: explicit.length,
         bytes: item.bytes,
       }),
   });

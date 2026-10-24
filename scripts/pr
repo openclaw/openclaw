@@ -80,7 +80,7 @@ unset COLORTERM
 # PR_SUBCOMMAND_CLASSIFICATIONS_BEGIN
 pr_subcommand_classification() {
   case "$1" in
-    ls | ci-dispatch)
+    ls | workspace | ci-dispatch)
       printf 'advisory\n'
       ;;
     gc | lock-recover | tooling-recover | review-init | review-checkout-main | review-checkout-pr | review-claim | review-guard | review-artifacts-init | review-validate-artifacts | review-tests | prepare-init | prepare-correction-init | prepare-correction-continue | prepare-correction-review-init | prepare-baseline-refresh | prepare-baseline-successor | prepare-baseline-signing-request | prepare-baseline-signing-continue | prepare-validate-commit | prepare-gates | prepare-push | prepare-sync-head | prepare-run | merge-verify | merge-run | merge-recover | merge-complete)
@@ -531,6 +531,8 @@ admit_pr_workflow_binding() {
 # Keep dependency sourcing independent of wrapper selection. In particular, an
 # older anchor still supplies its own package/version policy to this bootstrap.
 pr_materialize_dependencies() {
+  # Location discovery uses only Git and Node built-ins, before dependency repair.
+  [ "$requested_subcommand" != workspace ] || return 0
   node --input-type=module - "$1" "$canonical_repo_root" "$2" <<'EOF_TOOLING'
 import { execFileSync, spawnSync } from "node:child_process";
 import { mkdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
@@ -914,6 +916,8 @@ usage() {
 Usage:
   scripts/pr [--dev-wrapper] <subcommand> ...
   scripts/pr ls
+  scripts/pr workspace <PR>
+    Report physical checkout/artifact paths before review-init; no PR state changes.
   scripts/pr gc [--pr <number>] [--dry-run]
   scripts/pr lock-recover <PR> <OWNER_OID> --confirmed-no-running-tools
   scripts/pr tooling-recover <PR> <plan> --plan-sha256 <SHA256> --confirmed-quiescent
@@ -981,6 +985,7 @@ Usage:
   classified advisory. OPENCLAW_PR_DEV_WRAPPER=1 is equivalent.
 
 Required commands: git, gh, jq, rg (ripgrep), pnpm, node.
+workspace does not require gh, jq, rg, pnpm, or installed Node packages.
 When macOS blocks ps, PR operation locks require Python 3 with ctypes on PATH.
 USAGE
 }
@@ -1058,6 +1063,12 @@ main() {
 
   case "$cmd" in
     ls) ;;
+    workspace)
+      [ "$#" -eq 1 ] && is_canonical_pr_number "$1" || { usage; exit 2; }
+      # No GitHub tooling, dependency installation, or PR lock is needed to locate artifacts.
+      show_pr_workspace "$1"
+      return
+      ;;
     gc)
       local gc_dry_run=false gc_pr=""
       while [ "$#" -gt 0 ]; do

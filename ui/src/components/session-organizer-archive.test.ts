@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
@@ -16,6 +17,7 @@ import {
   archiveConfirmedSessionsWithUndo,
   archiveSessionWithUndo,
   confirmSessionArchive,
+  captureSessionArchivePins,
 } from "./session-organizer-archive.runtime.ts";
 import {
   createHarness,
@@ -249,4 +251,82 @@ describe("session organizer nested archive choice", () => {
       expect(document.body.querySelector("openclaw-modal-dialog")).toBeNull();
     },
   );
+});
+
+describe("personal pin archive Undo", () => {
+  it.each(["success", "failure", "profile", "manual"] as const)(
+    "settles a personal pin receipt without replacing newer intent (%s)",
+    async (outcome) => {
+      const h = createHarness();
+      const key = sessionRow(1).key;
+      const pin = "session:" + key;
+      const retained = ["session-rail:" + key, "session:agent:main:other"];
+      const navigation = h.scope.context.navigation;
+      navigation.update({ sidebarEntries: [pin, ...retained] });
+      const undoPins = captureSessionArchivePins(h.scope, [key]);
+      navigation.update({ sidebarEntries: retained });
+      const reply = createDeferred<readonly string[]>();
+      const operation = undoPins(() => reply.promise);
+      expect(navigation.snapshot.sidebarEntries).toEqual(retained);
+      if (outcome === "profile") {
+        h.retireScope();
+        navigation.update({ sidebarEntries: ["session:agent:main:another-profile"] });
+      } else if (outcome === "manual") {
+        navigation.update({ sidebarEntries: [...retained, pin] });
+        navigation.update({ sidebarEntries: retained });
+      } else if (outcome === "success") {
+        navigation.update({ sidebarEntries: [...retained, "route:usage"] });
+      }
+      if (outcome === "failure") {
+        reply.reject(new Error("Undo rejected"));
+        await expect(operation).rejects.toThrow("Undo rejected");
+      } else {
+        reply.resolve([key]);
+        await operation;
+      }
+      expect(navigation.snapshot.sidebarEntries).toEqual(
+        outcome === "success"
+          ? [...retained, "route:usage", pin]
+          : outcome === "profile"
+            ? ["session:agent:main:another-profile"]
+            : retained,
+      );
+    },
+  );
+
+  it("repins only originally pinned sessions whose bulk Undo succeeds", async () => {
+    const h = createHarness();
+    const rows = [sessionRow(1), sessionRow(2), sessionRow(3)];
+    const pins = rows.slice(0, 2).map((row) => "session:" + row.key);
+    const rail = "session-rail:" + rows[0]!.key;
+    const navigation = h.scope.context.navigation;
+    navigation.update({ sidebarEntries: [...pins, rail] });
+    h.host.pruneSidebarSessionEntry = (key) =>
+      navigation.update({
+        sidebarEntries: navigation.snapshot.sidebarEntries.filter(
+          (entry) => entry !== "session:" + key,
+        ),
+      });
+    h.scope.sessions.invalidate = vi.fn();
+    h.scope.sessions.refreshReplacement = vi.fn(async () => sessionsResult([], 1));
+    await archiveConfirmedSessionsWithUndo(h.host, rows, h.scope);
+    expect(navigation.snapshot.sidebarEntries).toEqual([rail]);
+    h.request.mockResolvedValueOnce({
+      outcomes: rows.map((row, index) =>
+        index === 1
+          ? {
+              key: row.key,
+              ok: false as const,
+              error: { code: "INVALID_REQUEST" as const, message: "Restore rejected" },
+            }
+          : { key: row.key, ok: true as const },
+      ),
+    });
+    vi.mocked(showToast).mock.calls.at(-1)![0].onAction!();
+    await waitForFast(() => expect(navigation.snapshot.sidebarEntries).toEqual([rail, pins[0]]));
+    expect(h.publishSessionMutationError).toHaveBeenCalledWith(
+      h.scope,
+      expect.stringContaining("Restore rejected"),
+    );
+  });
 });

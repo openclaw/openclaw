@@ -161,13 +161,15 @@ export async function preserveDoctorOriginalState(params: {
       throw new Error("The Doctor process could not be identified for the pre-repair capture.");
     }
     assertCurrent();
-    const standaloneRunId = `doctor-${randomUUID()}`;
+    const { findReusableDoctorCapture } = await import("../infra/doctor-capture-reuse.js");
     const controller = new AbortController();
     const deadline = performance.now() + ORIGINAL_CAPTURE_TIMEOUT_MS;
     const timeout = new Error("Original-state capture timed out after 600 s");
     const timer = setTimeout(() => controller.abort(timeout), ORIGINAL_CAPTURE_TIMEOUT_MS);
     timer.unref();
     let captured: Awaited<ReturnType<typeof captureUpdateRecoveryBaseline>>;
+    let reused: Awaited<ReturnType<typeof findReusableDoctorCapture>>;
+    let standaloneRunId: string;
     try {
       const assertCaptureCurrent = () => {
         // Synchronous admission/hash work must also observe the deadline before its timer fires.
@@ -177,17 +179,33 @@ export async function preserveDoctorOriginalState(params: {
         controller.signal.throwIfAborted();
         assertCurrent();
       };
+      const signal = AbortSignal.any([params.signal, controller.signal]);
+      // Explicit full verification keeps its database-integrity work. Ordinary
+      // repair can retain the newest standalone original only after exact proof.
+      reused = params.fullIntegrityCheck
+        ? undefined
+        : await findReusableDoctorCapture({
+            stateDir,
+            installRoot,
+            env: params.env,
+            assertCurrent: assertCaptureCurrent,
+            signal,
+          });
+      assertCaptureCurrent();
+      standaloneRunId = reused ? path.basename(reused.directory) : `doctor-${randomUUID()}`;
       // Await cancellation settlement; racing a timeout could release repair while copies still run.
-      captured = await captureUpdateRecoveryBaseline({
-        runId: standaloneRunId,
-        installRoot,
-        env: params.env,
-        drivers: [driver],
-        assertCurrent: assertCaptureCurrent,
-        signal: AbortSignal.any([params.signal, controller.signal]),
-        acquisition: { mode: "maintenance-owner" },
-        fullIntegrityCheck: params.fullIntegrityCheck,
-      });
+      captured = reused
+        ? { ref: reused, warnings: [], diagnostics: { databaseWarnings: [] } }
+        : await captureUpdateRecoveryBaseline({
+            runId: standaloneRunId,
+            installRoot,
+            env: params.env,
+            drivers: [driver],
+            assertCurrent: assertCaptureCurrent,
+            signal,
+            acquisition: { mode: "maintenance-owner" },
+            fullIntegrityCheck: params.fullIntegrityCheck,
+          });
       assertCaptureCurrent();
     } finally {
       clearTimeout(timer);
@@ -210,7 +228,9 @@ export async function preserveDoctorOriginalState(params: {
       })),
     );
     log.debug(
-      `Recovery copy saved before repair. No action needed. For manual recovery: ${captured.ref.manifestPath}.`,
+      reused
+        ? `Unchanged original recovery copy verified and retained before repair. For manual recovery: ${captured.ref.manifestPath}.`
+        : `Recovery copy saved before repair. No action needed. For manual recovery: ${captured.ref.manifestPath}.`,
     );
     if (activationMarker) {
       try {

@@ -48,6 +48,12 @@ Use the existing read-only worker scope for descriptive reads and the store's
 writer broker for mutations. Keep multi-statement snapshot reads together; use
 the writer's ordered operation when a read must follow its accepted writes.
 Do not open a second main-thread connection or add a synchronous fallback.
+
+Agent creation and workspace mutations keep their recovery-hold recheck inside
+the existing synchronous engine admission; filesystem effects remain outside it.
+PostgreSQL cron-owner and schema inspection use the existing cron read worker,
+including when agent creation or Doctor requests those facts.
+
 Agent provenance presentation and managed outgoing media inventory/lookups use
 that read-only scope, so reconnect reads do not reserve the shared writer queue.
 Missing provenance storage stays absent until an agent is created. Media inserts,

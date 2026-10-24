@@ -23,6 +23,7 @@ export function parseTeamShapeOptions(argv: string[]) {
       "settled-runs": { type: "boolean" },
       approvals: { type: "string" },
       cron: { type: "string" },
+      "cron-announce-last": { type: "boolean" },
       projects: { type: "string" },
       seed: { type: "string" },
       now: { type: "string" },
@@ -56,6 +57,11 @@ export function parseTeamShapeOptions(argv: string[]) {
   if (retainedRuns > 0 && sessions < 2) {
     throw new Error("--runs requires at least two sessions (parent and child)");
   }
+  const cronJobs = integer("cron", 100);
+  const cronAnnounceLast = values["cron-announce-last"] ?? false;
+  if (cronAnnounceLast && (sessions < 2 || cronJobs === 0)) {
+    throw new Error("--cron-announce-last requires at least two sessions and one cron job");
+  }
   const transcriptBytes = integer("transcript-mib", 64) * 1024 * 1024;
   if (!Number.isSafeInteger(transcriptBytes)) {
     throw new Error("--transcript-mib exceeds the safe byte range");
@@ -86,7 +92,8 @@ export function parseTeamShapeOptions(argv: string[]) {
     retainedRuns,
     settledRuns: values["settled-runs"] ?? false,
     approvals: integer("approvals", 200),
-    cronJobs: integer("cron", 100),
+    cronJobs,
+    cronAnnounceLast,
     projects,
     seed: integer("seed", 967),
     now: integer("now", Date.parse("2026-10-13T12:00:00Z"), 1),
@@ -204,6 +211,7 @@ async function main() {
     console.log(`Usage: node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts --state-dir <new-dir> [options]
   --sessions 5000 --runs 6000 --approvals 200 --cron 100 --projects 12
   --settled-runs           Keep run history terminal and delivered, without a subagent recovery backlog.
+  --cron-announce-last     Seed disabled isolated cron jobs with announce/last delivery.
   --seed 967 --now <epoch-ms> --transcript-mib 64
   --long-transcript-entries 0 --long-transcript-sessions 4
   --worktree-files 0 --nested-repository

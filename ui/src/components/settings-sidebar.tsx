@@ -17,6 +17,7 @@ import type { ApplicationNavigationOptions } from "../app/context.ts";
 import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
 import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts";
 import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
+import { registerRouteSubtitlesEnglish } from "../i18n/locales/en-route-subtitles.ts";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
@@ -44,10 +45,12 @@ import {
 import { SidebarBuildChip } from "./sidebar-build-chip.tsx";
 import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
-import { Kbd } from "./solid/kbd.tsx";
 import "./agent-select-registration.ts";
 import "../styles/settings.css";
+import { Kbd } from "./solid/kbd.tsx";
 import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
+
+registerRouteSubtitlesEnglish();
 
 registerSettingsEnglish();
 

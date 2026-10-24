@@ -38,6 +38,7 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
     fsSafeCopy: runtimeProcessEntrypoint("infra/fs-safe-copy.worker"),
     sharedStateStore: runtimeProcessEntrypoint("state/openclaw-state.worker"),
     clientCredentials: runtimeProcessEntrypoint("infra/client-credential.worker"),
+    ttsPreferences: runtimeProcessEntrypoint("tts/tts-settings-write.worker"),
     authProfileInlineUsage: runtimeProcessEntrypoint("agents/auth-profiles/inline-usage.worker"),
     pluginModelCatalogRead: runtimeProcessEntrypoint("agents/plugin-model-catalog-read.worker"),
     pluginModelCatalogCredentials: runtimeProcessEntrypoint("agents/plugin-model-catalog.worker"),

@@ -165,7 +165,24 @@ with a warning and directs you to `openclaw update repair`. A verified update
 stays installed; this process-inspection failure does not trigger rollback.
 Inherited control-plane and managed-helper runs retain their existing capture
 behavior. Standalone `doctor --fix` preserves a separate pre-repair copy; that
-copy does not replace an earlier update's originals. Standalone `doctor --fix`
+copy does not replace an earlier update's originals. Before allocating another
+standalone copy, Doctor can reuse its newest sealed standalone capture after
+verifying every retained file and comparing the complete current config/includes,
+database ownership and discovery, declared plugin resources, directory contents,
+links, missing paths, permissions, and file digests. Timestamps alone never prove
+that the source is unchanged. SQLite reuse requires exact consolidated bytes and
+no nonempty WAL or rollback journal. Doctor uses the same private snapshot producer
+as fresh capture and compares each image's complete digest, including normalized
+WAL-mode headers; it never ignores header fields or compares only rows. The temporary
+images are removed after comparison. PostgreSQL, unknown plugin coverage, incomplete
+inventories, and failed comparisons fall back to the existing fresh-capture path.
+Large payloads are streamed with a size-aware comparison allowance; an exhausted
+comparison budget is not an update failure. `--full-integrity-check` takes a fresh
+capture rather than substituting prior integrity evidence.
+
+The capture boundary still precedes repair discovery. A run with no reported
+repairs can still create a capture, because discovery and repair bookkeeping can
+change persisted state. When a fresh copy is needed, standalone `doctor --fix`
 snapshots databases under its own maintenance custody with a single isolated backup worker.
 Shared database families larger than 64 MiB keep discovery copies in an isolated process
 so a slow copy does not block Doctor's main thread from processing cancellation.
@@ -196,6 +213,11 @@ generation could not be recorded. Unsafe source acquisition or file changes duri
 copying can still leave a capture incomplete. Capture is best effort: when it fails,
 the update warns that it continues without the original-state capture, names the
 step and source paths that failed, and proceeds.
+If measured free space is insufficient, the warning explicitly says **this update
+has no original-state snapshot to restore from**, with needed and available bytes.
+The same warning is retained in JSON and the update run record. The update does
+not delete older copies to make room and does not fail solely because this
+optional capture could not be made.
 Database rollback uses the pre-migration snapshots the update takes after the
 Gateway stops, described in
 [Recovery limits](/cli/update/how-updates-run#recovery-limits).
@@ -959,7 +981,18 @@ originals requiring additional import verification are left for manual cleanup.
 When that verification is deferred, migration originals are retained together:
 a historical index may reference an original in another manifest. Independently
 eligible update and Doctor captures can still be retired.
-There is no age-only expiration of update captures or migration originals.
+There is no age-only expiration of update captures or migration originals, no
+total-size cap, and no byte-budget-driven deletion.
+
+`openclaw status` (including `--json`) and read-only Doctor report local recovery
+copy logical bytes and counts by kind: update captures, standalone Doctor
+captures, and migration originals. Each kind separates retirable, protected,
+and unmanifested/orphan copies. Status uses a bounded metadata/file-size scan,
+not payload hashing. An incomplete estimate reports observed bytes only;
+unverified eligibility stays protected. Entry, metadata-byte, and time limits
+only mark the result incomplete and never fail status, Doctor, update, or rollback.
+Run `openclaw update cleanup --dry-run` for the full per-path inventory.
+Logical bytes are not allocated disk blocks or a promise of reclaimed space.
 
 Retirement is best effort. A partial removal, verification/resource limit, or
 ownership refusal leaves the update successful and reports a recovery-cleanup
@@ -1023,15 +1056,35 @@ ownership, file identity, or dependency checks. Applicable flags (`--dry-run`,
 `--channel`, `--tag`, `--timeout`, `--no-restart`, and `--accept-capabilities`
 are rejected.
 
+### Explicitly retire an unmanifested original
+
+For an old `.pre-startup-migration-*.bak` original that predates manifest
+registration, or an orphan update capture without a matching update run, opt in
+by exact path. Repeat the option for each path; it is never a wildcard or an
+automatic retention rule:
+
+```bash
+openclaw update cleanup --dry-run --include-unmanifested /path/to/state/state/openclaw.sqlite.pre-startup-migration-old.bak
+openclaw update cleanup --yes --include-unmanifested /path/to/state/state/openclaw.sqlite.pre-startup-migration-old.bak
+```
+
+Review the path, size, and irreversible rollback loss in the preview. Stop the
+Gateway for the selected state before applying. Opt-in does not override pending
+recovery references, active databases or their WAL/SHM files, file identity,
+owner custody, or symlink/hardlink checks. Paths outside known recovery locations
+are refused. Unmanifested copies are never added to automatic retirement. A
+filename alone does not authorize deletion; the exact path and normal consent
+are both required.
+
 While applying cleanup, stderr reports each original being verified or retired
 and each capture being removed, with its path, logical bytes, and position in the
 selection. Large files can take time between these messages. With `--json`,
 stdout still contains only the final result.
 
-Only owner-recorded recovery artifacts with complete import evidence are
+By default, only owner-recorded recovery artifacts with complete import evidence are
 eligible. Unknown or unimported history, malformed inputs, trajectories,
 forensic corrupt databases, operator backups, and unmanifested artifacts stay
-protected. Old manifests are verified offline where possible; missing evidence
+protected by default. Old manifests are verified offline where possible; missing evidence
 is a reason to retain an artifact. Automatic post-update retirement uses these
 same eligibility rules, without adopting historical originals.
 Immutable release-retention inspection is separate from this migration-backup
@@ -1042,8 +1095,8 @@ or snapshots. They do not make immutable releases eligible for `update cleanup`;
 Doctor's `<database>.pre-startup-migration-<id>.bak` groups, including their
 `.scoped.bak` members, become eligible only
 after Doctor verifies migration completion and update history records a successful
-update that started later. Until then they appear as protected. Changed or
-unrecorded backups remain protected or blocked; cleanup never infers permission
+update that started later. Until then they appear as protected. Changed backups remain blocked; unrecorded backups remain protected unless
+explicitly selected as described below; cleanup never infers permission
 to delete from their filenames. Keep these files with your pre-upgrade backups
 while you still need to restore the matching database generation.
 Private package, command-shim, and Git runtime backups remain owned by the update
@@ -1076,7 +1129,7 @@ captures through their sealed manifests; it never reads the captured payload:
   retention rule. Active recovery references remain `pending-update-recovery`.
 - `protected` / `orphan-update-capture`: a sealed update capture with no matching
   update run, outside the Doctor namespace. Its creation time appears in the
-  detail. No supported command retires these unattributed captures.
+  detail. Only an explicit `--include-unmanifested <path>` can select it.
 - `protected` / `unmanifested-update-capture`: an incomplete or unreadable capture,
   a directory without the capture marker or a matching manifest, and any other
   file in the capture directory. `unreadable-update-history` also

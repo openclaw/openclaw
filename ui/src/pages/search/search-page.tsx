@@ -32,6 +32,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { i18n } from "../../i18n/lib/translate.ts";
+import { registerRouteSubtitlesEnglish } from "../../i18n/locales/en-route-subtitles.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { formatUiError } from "../../lib/format-error.ts";
@@ -49,6 +50,8 @@ import { createCredentialPresentation } from "../plugins/credential-presentation
 import { readConfigValue, searchConfigRevision, isSearchConfigSettled } from "./search-config.ts";
 import { renderSearchTestResult } from "./search-results.tsx";
 import { SearchSetup, AdvancedSearchSettings } from "./search-setup.tsx";
+
+registerRouteSubtitlesEnglish();
 
 registerEnglishCatalog(registerSettingsEnglish);
 

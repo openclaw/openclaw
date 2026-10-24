@@ -442,9 +442,9 @@ export function createSessionWorkspaceProps(
         state,
         workspace,
         `artifact:${artifactId}`,
-        () =>
+        (signal) =>
           readWorkspaceContent(state, workspace, (runtime) =>
-            runtime.loadSessionWorkspaceArtifactContent(state, workspace, artifactId),
+            runtime.loadSessionWorkspaceArtifactContent(state, workspace, artifactId, signal),
           ),
         (result) => result.content,
         `Failed to load artifact ${artifactId}`,

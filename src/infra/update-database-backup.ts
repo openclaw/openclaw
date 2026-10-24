@@ -42,6 +42,7 @@ import {
   readUpdateStateDatabaseSizes,
   readUpdateStateDatabaseSizesInProcess,
 } from "./update-candidate-state.sizes.js";
+import { UpdateCaptureSpaceError } from "./update-capture-space.js";
 import { readUpdatePhysicalDatabaseGenerations } from "./update-physical-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 
@@ -176,8 +177,9 @@ async function checkDatabaseBackupSpace(directory: string, files: readonly strin
   const check = (target: string, requiredBytes: number, purpose: string) => {
     const space = tryReadDiskSpace(target);
     if (space && space.availableBytes < requiredBytes) {
-      throw new Error(
+      throw new UpdateCaptureSpaceError(
         `${purpose} needs ${formatDiskSpaceBytes(requiredBytes)} near ${target}, but only ${formatDiskSpaceBytes(space.availableBytes)} is available. Free disk space before retrying; the databases have not been migrated.`,
+        { requiredBytes, availableBytes: space.availableBytes },
       );
     }
     if (!space) {

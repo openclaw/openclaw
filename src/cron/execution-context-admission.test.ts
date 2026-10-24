@@ -20,7 +20,8 @@ vi.mock("../config/sessions/session-delivery-generation.js", async (importOrigin
 
 const { admitScheduledOccurrence } = await import("./execution-context-admission.js");
 const { prepareCronRunAdmission } = await import("./run-admission.js");
-const { readScheduledToolTargets } = await import("./execution-context-registry.js");
+const { readScheduledMemoryParent, readScheduledToolTargets } =
+  await import("./execution-context-registry.js");
 const { buildScheduledParentPauseNotice } = await import("./scheduled-occurrence.js");
 
 const PARENT_KEY = "agent:main:dashboard:parent";
@@ -173,7 +174,9 @@ describe("admitScheduledOccurrence", () => {
       deliveryAttemptFence: null,
       scheduledExecution: minted,
     });
-    await admission.preparedRunAdmission.admit("embedded");
+    const operatorRun = await admission.preparedRunAdmission.admit("embedded");
+    // An operator job keeps resolving memory from its own run row.
+    expect(readScheduledMemoryParent(operatorRun.operationalRunInstance)).toBeUndefined();
     const context = admission.readScheduledExecution();
     expect(context).toMatchObject({
       jobId: "job-1",
@@ -218,7 +221,7 @@ describe("admitScheduledOccurrence", () => {
     );
   });
 
-  it("exposes a child's board and media targets to tool construction for the run", async () => {
+  it("exposes a child's board, media and memory parent for the run", async () => {
     readSessionEntryInWorker.mockResolvedValue({
       sessionId: "parent-session",
       lifecycleRevision: "rev-1",
@@ -241,8 +244,16 @@ describe("admitScheduledOccurrence", () => {
       throw new Error("parent reset");
     });
     expect(() => targets?.assertCurrent()).toThrow("parent reset");
+    // No requester check ran for this occurrence, so the parent's audience is not owner-private.
+    expect(readScheduledMemoryParent(admitted.operationalRunInstance)).toEqual({
+      sessionKey: PARENT_KEY,
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+      senderIsOwner: false,
+    });
     admission.close();
     expect(readScheduledToolTargets(admitted)).toBeUndefined();
+    expect(readScheduledMemoryParent(admitted.operationalRunInstance)).toBeUndefined();
     // Tools built during the run keep the assertion; it must refuse after the run settles.
     expect(() => targets?.assertCurrent()).toThrow("settled");
     occurrence.release();

@@ -5,7 +5,10 @@ import fs from "node:fs";
 import path from "node:path";
 import { collectPluginSourceEntries } from "../scripts/lib/bundled-plugin-build-entries.mjs";
 import { createManagedHandoffBuildConfigs } from "../scripts/lib/managed-handoff-build-config.mts";
+import { createNativeTypeScriptParser } from "../scripts/lib/native-typescript.mts";
 import { runtimeProcessBuildEntries } from "../scripts/lib/runtime-process-build-entries.mts";
+import { readUpdateCompatibilityInventory } from "../scripts/lib/update-compat-chunks.mts";
+import { ModuleGraph } from "../scripts/lib/update-compat-module-graph.mts";
 import { buildPackageDistEntriesFromExports } from "../scripts/lib/workspace-package-entries.mts";
 import { controlUiSource } from "../src/plugins/package-manifest.js";
 import aiBuildConfig from "../tsdown.ai.config.ts";
@@ -87,6 +90,8 @@ const repositoryScriptEntries = [
   "scripts/bench-control-ui-document.ts!",
   // The channel-turn benchmark guide invokes this opt-in CLI by path.
   "scripts/bench-channel-turn.mts!",
+  // The guide's async-context census wrapper imports this preload before the channel-turn entry.
+  "scripts/perf/async-context-probe.cjs!",
   // docs/reference/test/performance.md invokes the Decision transport comparison driver.
   "scripts/bench-decision-transport.mts!",
   // docs/reference/test/performance.md invokes the frozen-revision benchmark builder.
@@ -821,6 +826,46 @@ function compileDynamicMjsConsumers(source: string, filePath: string): string {
   return source;
 }
 
+function compileUpdateCompatibilityConsumers(rootDir: string): string[] {
+  using parser = createNativeTypeScriptParser({ cwd: rootDir });
+  const graph = new ModuleGraph(parser, rootDir);
+  const inventory = readUpdateCompatibilityInventory(
+    path.join(rootDir, "scripts/lib/update-compat-inventory.json"),
+  );
+  const recordedOrigins = new Map<string, { module: string; symbol: string }>();
+  for (const release of inventory.releases) {
+    for (const chunk of release.chunks) {
+      for (const { origin } of chunk.exports) {
+        recordedOrigins.set(`${origin.module}:${origin.symbol}`, origin);
+      }
+    }
+  }
+  const imports: string[] = [];
+  const origins = [...recordedOrigins.values()].toSorted((left, right) =>
+    `${left.module}:${left.symbol}`.localeCompare(`${right.module}:${right.symbol}`),
+  );
+  for (const [index, origin] of origins.entries()) {
+    const sourceFile = path.join(rootDir, origin.module);
+    if (graph.names(sourceFile).includes(origin.symbol)) {
+      imports.push(
+        `import { ${origin.symbol} as __updateCompatibilityConsumer${index} } from ${JSON.stringify(`./${origin.module}`)};`,
+      );
+      continue;
+    }
+    const currentOrigin = graph.localOrigin(sourceFile, origin.symbol);
+    if (
+      !currentOrigin ||
+      (currentOrigin.module === origin.module && currentOrigin.symbol === origin.symbol) ||
+      !graph.names(path.join(rootDir, currentOrigin.module)).includes(currentOrigin.symbol)
+    ) {
+      throw new Error(
+        `Recorded updater binding ${origin.module}:${origin.symbol} is neither a named export nor an imported named binding`,
+      );
+    }
+  }
+  return imports;
+}
+
 function compileBundledPackageConsumers(source: string, filePath: string): string {
   const manifestPath = path.resolve(filePath);
   if (
@@ -836,10 +881,13 @@ function compileBundledPackageConsumers(source: string, filePath: string): strin
     if (typeof neverBundle !== "function") {
       throw new Error("Expected the AI build's externalization callback.");
     }
-    return Object.keys(manifest.dependencies ?? {})
+    const imports = Object.keys(manifest.dependencies ?? {})
       .filter((dependency) => neverBundle(dependency, undefined, false))
-      .map((dependency) => `import ${JSON.stringify(dependency)};`)
-      .join("\n");
+      .map((dependency) => `import ${JSON.stringify(dependency)};`);
+    if (manifestPath === path.resolve("package.json")) {
+      imports.push(...compileUpdateCompatibilityConsumers(path.dirname(manifestPath)));
+    }
+    return imports.join("\n");
   }
   // JSON has no import graph in Knip unless a compiler supplies one.
   return "";
