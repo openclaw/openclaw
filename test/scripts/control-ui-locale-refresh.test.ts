@@ -41,9 +41,9 @@ async function createFixture() {
   const files = fixtureFiles(tempDirs.make("locale-reconciliation-"));
   const { root, write, json } = files;
   const git = fixtureGit(root, "Locale Fixture", "locale@example.invalid");
-  const commit = () => {
+  const commit = (message = "fixture") => {
     git("add", ".");
-    git("commit", "--quiet", "-m", "fixture");
+    git("commit", "--quiet", "-m", message);
     return git("rev-parse", "HEAD");
   };
   git("init", "--quiet", "--initial-branch=main");
@@ -114,7 +114,7 @@ it("retains completed workers when only the finalizer is retried in the same run
 it("rejects a replacement history before importing matching artifact envelopes", async () => {
   const f = await createFixture();
   f.git("checkout", "--quiet", "--orphan", "replacement");
-  f.commit();
+  f.commit("unrelated canonical history");
   await expect(f.restore()).rejects.toThrow();
   expect(f.git("status", "--porcelain")).toBe("");
 });
