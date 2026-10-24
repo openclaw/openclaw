@@ -1,5 +1,7 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import {
   loadTranscriptEvents,
   upsertSessionEntryCore,
@@ -171,10 +173,12 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     expect(fixture.order).toEqual([
       "prompt",
       "finalize",
+      "context-total-close",
       "clear-timers",
       "unsubscribe",
       "detach-backend",
       "clear-active-run",
+      "context-total-abandon",
       "result",
     ]);
     expect(fixture.state).toMatchObject({
@@ -195,6 +199,28 @@ describe("runEmbeddedAttemptSettledPhase", () => {
       undefined,
       registration,
     );
+  });
+
+  it("starts after-turn work only once the per-call context total has flushed", async () => {
+    const fixture = createFixture(mocks);
+    const closeStarted = createDeferredCore();
+    const flushed = createDeferredCore();
+    fixture.contextTotalTokensWriter.close.mockImplementationOnce(async () => {
+      closeStarted.resolve();
+      await flushed.promise;
+    });
+
+    const run = settle(fixture.input);
+    await awaitGateBeforeSettlement(
+      closeStarted.promise,
+      run,
+      "settlement finished without flushing the per-call context total",
+    );
+    expect(mocks.completeAfterTurn).not.toHaveBeenCalled();
+    flushed.resolve();
+    await run;
+
+    expect(mocks.completeAfterTurn).toHaveBeenCalledOnce();
   });
 
   it("persists image failure notes after after-turn transcript reconciliation", async () => {
@@ -705,6 +731,53 @@ describe("runEmbeddedAttemptSettledPhase", () => {
     expect(mocks.logError).toHaveBeenCalledWith(
       expect.stringContaining("unsubscribe failed, possible resource leak"),
     );
+    // A failed prompt drops its pending per-call total once the subscription is released.
+    expect(fixture.contextTotalTokensWriter.close).not.toHaveBeenCalled();
+    expect(fixture.order.slice(-2)).toEqual(["clear-active-run", "context-total-abandon"]);
+  });
+
+  it("waits for the context writer to drain before returning a prompt failure", async ({
+    signal,
+  }) => {
+    const fixture = createFixture(mocks);
+    const failure = new Error("prompt failed");
+    const abandonStarted = createDeferredCore();
+    const drained = createDeferredCore();
+    mocks.runPrompt.mockRejectedValueOnce(failure);
+    fixture.contextTotalTokensWriter.abandon.mockImplementationOnce(async () => {
+      abandonStarted.resolve();
+      await drained.promise;
+    });
+    let settled = false;
+    const outcome = settle(fixture.input).then(
+      (value) => {
+        settled = true;
+        return { value };
+      },
+      (error: unknown) => {
+        settled = true;
+        return { error };
+      },
+    );
+
+    try {
+      await withinTest(
+        awaitGateBeforeSettlement(
+          abandonStarted.promise,
+          outcome,
+          "settlement finished without abandoning the context writer",
+        ),
+        signal,
+      );
+      expect(mocks.clearActiveEmbeddedRun).toHaveBeenCalledOnce();
+      await nextTurn();
+      expect(settled).toBe(false);
+    } finally {
+      drained.resolve();
+      await outcome;
+    }
+
+    expect(await outcome).toEqual({ error: failure });
   });
 
   it("defaults a source-less settlement failure without dropping it", async () => {

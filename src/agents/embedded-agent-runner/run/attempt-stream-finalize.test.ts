@@ -133,6 +133,11 @@ function createFixture(overrides: FixtureOverrides = {}) {
       onBlockReplyFlush: undefined,
       stream: {
         subscription,
+        contextTotalTokensWriter: {
+          offer: vi.fn(),
+          close: vi.fn(async () => undefined),
+          abandon: vi.fn(async () => undefined),
+        },
         queueHandle,
         stopAcceptingSteerMessages: vi.fn(),
         getBeforeAgentFinalizeRevisionReason,

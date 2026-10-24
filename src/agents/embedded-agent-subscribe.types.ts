@@ -68,6 +68,8 @@ export type SubscribeEmbeddedAgentSessionParams = Pick<
     usage: NormalizedUsage | undefined,
     identity?: Pick<AssistantMessage, "responseId" | "turnId">,
   ) => void;
+  /** Fires synchronously for every successful provider response; must not block. */
+  onModelCallSettled?: (usage: NormalizedUsage | undefined) => void;
   onExecutionPhase?: (info: {
     phase: "tool_execution_started";
     tool?: string;

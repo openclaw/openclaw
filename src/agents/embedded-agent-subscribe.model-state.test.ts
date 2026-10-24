@@ -525,6 +525,20 @@ it("retains billed cost-only usage after a prior model call", async () => {
   });
 });
 
+it("reports every successful provider response as settled, never a failed one", async () => {
+  const onModelCallSettled = vi.fn();
+  const harness = createSubscribedSessionHarness({ runId: "run-each-call", onModelCallSettled });
+  await runUsageCalls(harness, [
+    { usage: makeUsage({ input: 1_000, output: 10 }) },
+    { usage: makeUsage({ input: 2_000, cacheRead: 500, output: 10 }) },
+    { usage: makeUsage({ input: 3_000, output: 10 }), stopReason: "error" },
+  ]);
+  expect(onModelCallSettled.mock.calls.map(([usage]) => [usage.input, usage.cacheRead])).toEqual([
+    [1_000, 0],
+    [2_000, 500],
+  ]);
+});
+
 it.each([
   {
     name: "keeps a successful retry call when later post-call processing fails",
