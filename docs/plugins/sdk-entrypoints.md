@@ -278,13 +278,13 @@ path projection, context order, instruction carriers, and session/turn lifetimes
 Optional `projectPath` projects file paths after budgeting without changing their
 contents or personal-user provenance. It describes existing execution placement;
 it does not transfer or mount files.
-Full-context preparation preserves Codex's existing selection timing: projecting
-the root instruction path away from `workspaceDir` produces an empty root snapshot.
-Callers preparing source-workspace instructions should omit `projectPath`.
+The root instruction snapshot is selected by its source path under `workspaceDir`
+and then projected, so a sandbox or remote execution workspace keeps it.
 
-`buildAgentWorkspaceInstructionSnapshot(contextFiles, workspaceDir)` selects and
-renders that root instruction document from already-bounded context, including
-hook-free child preparation. An empty instruction string is a successful capture;
+`buildAgentWorkspaceInstructionSnapshot(contextFiles, workspaceDir, projectPath?)`
+selects and renders that root instruction document from already-bounded source
+context, including hook-free child preparation. Optional `projectPath` maps the
+selected path after selection. An empty instruction string is a successful capture;
 preparation failures must remain distinguishable and retryable.
 
 Agents API can consume the instruction-only snapshot at session creation. Its

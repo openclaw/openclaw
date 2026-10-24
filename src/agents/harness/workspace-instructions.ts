@@ -1,16 +1,24 @@
 import path from "node:path";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers/context-file.js";
 
-/** Projects already-bounded agent instructions without changing bootstrap budgets. */
+/**
+ * Projects already-bounded agent instructions without changing bootstrap budgets.
+ * Selection compares source paths; `projectPath` maps the selected paths afterward.
+ */
 export function buildAgentWorkspaceInstructionSnapshot(
   contextFiles: readonly EmbeddedContextFile[],
   workspaceDir: string,
+  projectPath?: (filePath: string) => string,
 ): { files: EmbeddedContextFile[]; instructions: string } {
-  const files = selectAgentWorkspaceInstructionFiles(contextFiles, workspaceDir).filter(
-    (file) =>
-      !file.content.trimStart().startsWith("[MISSING] Expected at:") &&
-      file.content.trim().length > 0,
-  );
+  const files = selectAgentWorkspaceInstructionFiles(contextFiles, workspaceDir)
+    .filter(
+      (file) =>
+        !file.content.trimStart().startsWith("[MISSING] Expected at:") &&
+        file.content.trim().length > 0,
+    )
+    .map((file) =>
+      projectPath ? Object.assign({}, file, { path: projectPath(file.path) }) : file,
+    );
   if (files.length === 0) {
     // Empty is a successful capture; callers distinguish it from preparation failure.
     return { files, instructions: "" };

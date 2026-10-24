@@ -71,12 +71,14 @@ export async function prepareAgentWorkspaceContext(
     : memoryToolRouted
       ? bootstrapFiles.filter((file) => !isRootMemoryPath(file.path, params.workspaceDir))
       : bootstrapFiles;
-  const contextFiles = buildBootstrapContextForFiles(budgetFiles, params).map((file) =>
+  const sourceContextFiles = buildBootstrapContextForFiles(budgetFiles, params);
+  const contextFiles = sourceContextFiles.map((file) =>
     projectContextFile(file, params.projectPath),
   );
   const instructionSnapshot = buildAgentWorkspaceInstructionSnapshot(
-    contextFiles,
+    sourceContextFiles,
     params.workspaceDir,
+    params.projectPath,
   );
   if (instructionsOnly) {
     return {

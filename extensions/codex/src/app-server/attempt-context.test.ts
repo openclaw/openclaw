@@ -327,6 +327,49 @@ describe("Codex app-server attempt context", () => {
     }
   });
 
+  it("carries agent AGENTS.md into restricted turns that execute in a sandbox workspace", async () => {
+    await withTempDir("codex-restricted-workspace-", async (workspaceDir) => {
+      await withTempDir("codex-restricted-sandbox-", async (sandboxWorkspaceDir) => {
+        const rules = "Restricted sandbox fixture rules.";
+        await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), rules);
+        await fs.writeFile(path.join(sandboxWorkspaceDir, "AGENTS.md"), "Sandbox copy rules.");
+
+        for (const restricted of [true, false]) {
+          const context = await buildCodexWorkspaceBootstrapContext({
+            params: {
+              sessionId: "session-1",
+              sessionKey: "agent:main:session-1",
+              pluginHarnessToolPolicyRestricted: restricted,
+              config: { agents: { defaults: { workspace: workspaceDir } } },
+            } as EmbeddedRunAttemptParams,
+            resolvedWorkspace: workspaceDir,
+            effectiveWorkspace: sandboxWorkspaceDir,
+            sessionKey: "agent:main:session-1",
+            sessionAgentId: "main",
+            tools: [],
+            ringZeroActive: false,
+            sandboxed: true,
+          });
+
+          expect(context.promptContext ?? "").not.toContain(rules);
+          if (!restricted) {
+            // Unrestricted turns keep Codex-native project-doc discovery.
+            expect(context.threadDeveloperInstructions).toBeUndefined();
+            continue;
+          }
+          const sandboxInstructionsPath = path.join(sandboxWorkspaceDir, "AGENTS.md");
+          expect(context.threadDeveloperInstructionFiles).toEqual([
+            { path: sandboxInstructionsPath, content: rules },
+          ]);
+          expect(context.threadDeveloperInstructions).toContain(
+            `### ${sandboxInstructionsPath}\n\n${rules}`,
+          );
+          expect(context.threadDeveloperInstructions).not.toContain("Sandbox copy rules.");
+        }
+      });
+    });
+  });
+
   it.each([
     {
       name: "ring-zero",
