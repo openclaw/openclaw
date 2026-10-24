@@ -44,12 +44,28 @@ describe("scripts/bench-sqlite-state", () => {
         p50Ms: number;
         p95Ms: number;
         plan: SqliteQueryPlanEvidence;
+        rows: number;
         runs: number;
       }>;
     };
     expect(report.schemaVersion).toBe(2);
-    expect(report.queries).toHaveLength(12);
+    const expectedRows = new Map([
+      ["cron.store.load", 13],
+      ["task-runs.cron.list", 1_000],
+      ["task-runs.cron-source.list", 250],
+      ["delivery.pending.load", 696],
+      ["ingress.pending.first-page", 100],
+      ["ingress.pending.seek-page", 100],
+      ["ingress.pending.id-page", 100],
+      ["ingress.pending.id-seek-page", 100],
+      ["plugin-state.namespace.live", 675],
+      ["agent-cache.plugin-model-catalog.list", 64],
+      ["transcript.tail.metadata", 256],
+      ["transcript.tail.payload", 256],
+    ]);
+    expect(report.queries.map((query) => query.id)).toEqual([...expectedRows.keys()]);
     for (const query of report.queries) {
+      expect(query.rows).toBe(expectedRows.get(query.id));
       expect(query.runs).toBe(20);
       expect(Number.isFinite(query.p50Ms)).toBe(true);
       expect(Number.isFinite(query.p95Ms)).toBe(true);
