@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { hasNodeErrorCode } from "@openclaw/fs-safe/path";
 import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { resolveWorkspaceTemplateSearchDirs } from "./workspace-templates.js";
@@ -21,7 +22,7 @@ export function loadWorkspaceTemplate(name: string): Promise<string> {
           const content = await fs.readFile(templatePath, "utf-8");
           return extractFrontmatterBlock(content)?.body.replace(/^\s+/, "") ?? content;
         } catch (error) {
-          if ((error as NodeJS.ErrnoException | undefined)?.code !== "ENOENT") {
+          if (!hasNodeErrorCode(error, "ENOENT")) {
             throw error;
           }
         }
