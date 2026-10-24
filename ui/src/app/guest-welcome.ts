@@ -3,8 +3,11 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { getSafeLocalStorage } from "../local-storage.ts";
-import type { ApplicationGateway } from "./gateway.ts";
-import { GUEST_WELCOME_ENSURE_METHOD } from "./guest-welcome-handle.ts";
+import {
+  GUEST_WELCOME_ENSURE_METHOD,
+  type GuestWelcomeOptions,
+  type GuestWelcomePresentation,
+} from "./guest-welcome-handle.ts";
 import { isRestrictedSessionGuest } from "./operator-access.ts";
 
 type GuestWelcomeEnsureResult =
@@ -12,12 +15,6 @@ type GuestWelcomeEnsureResult =
   | { status: "pending"; retryAfterMs: number }
   | { status: "ready"; sessionKey: string; agentId: string; created: boolean }
   | { status: "failed"; message: string };
-
-/** Hidden covers idle, the first in-flight call, ready, and not applicable. */
-export type GuestWelcomePresentation =
-  | { kind: "hidden" }
-  | { kind: "pending" }
-  | { kind: "failed"; message: string | null };
 
 const POLL_MIN_MS = 500;
 const POLL_MAX_MS = 5_000;
@@ -62,13 +59,6 @@ function parseEnsureResult(value: unknown): GuestWelcomeEnsureResult | null {
       return null;
   }
 }
-
-export type GuestWelcomeOptions = {
-  gateway: Pick<ApplicationGateway, "snapshot" | "subscribe" | "connection">;
-  /** True only while the guest still sits on the default Home landing, never a deep link. */
-  isHomeLanding: () => Promise<boolean>;
-  openSession: (sessionKey: string, agentId: string) => void;
-};
 
 /**
  * Asks Visitor Access for the signed-in guest's welcome session after connect.

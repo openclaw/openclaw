@@ -1,21 +1,38 @@
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
-import type {
-  GuestWelcome,
-  GuestWelcomeOptions,
-  GuestWelcomePresentation,
-} from "./guest-welcome.ts";
+import type { ApplicationGateway } from "./gateway.ts";
 
 /** Visitor Access plugin method; its presence in hello is the only feature gate. */
 export const GUEST_WELCOME_ENSURE_METHOD = "visitor-access.welcome.ensure";
+
+/** Hidden covers idle, the first in-flight call, ready, and not applicable. */
+export type GuestWelcomePresentation =
+  | { kind: "hidden" }
+  | { kind: "pending" }
+  | { kind: "failed"; message: string | null };
+
+export type GuestWelcomeOptions = {
+  gateway: Pick<ApplicationGateway, "snapshot" | "subscribe" | "connection">;
+  /** True only while the guest still sits on the default Home landing, never a deep link. */
+  isHomeLanding: () => Promise<boolean>;
+  openSession: (sessionKey: string, agentId: string) => void;
+};
+
+type GuestWelcomeOwner = {
+  readonly presentation: GuestWelcomePresentation;
+  retry(): void;
+  subscribe(listener: () => void): () => void;
+  start(): () => void;
+};
 
 const HIDDEN: GuestWelcomePresentation = { kind: "hidden" };
 
 /**
  * Startup handle for the guest welcome owner. Its code loads only once a Gateway
- * advertises the method, so other users never download it.
+ * advertises the method, so other users never download it. Keep this module a leaf:
+ * the owner imports its contract from here.
  */
 export function createGuestWelcome(options: GuestWelcomeOptions) {
-  let owner: GuestWelcome | undefined;
+  let owner: GuestWelcomeOwner | undefined;
   let loading = false;
   let stopped = false;
   let stopOwner: (() => void) | undefined;

@@ -2,12 +2,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createStorageMock } from "../test-helpers/storage.ts";
-import { GUEST_WELCOME_ENSURE_METHOD } from "./guest-welcome-handle.ts";
-import {
-  GUEST_WELCOME_PENDING_LIMIT_MS,
-  GuestWelcome,
-  type GuestWelcomeOptions,
-} from "./guest-welcome.ts";
+import { GUEST_WELCOME_ENSURE_METHOD, type GuestWelcomeOptions } from "./guest-welcome-handle.ts";
+import { GUEST_WELCOME_PENDING_LIMIT_MS, GuestWelcome } from "./guest-welcome.ts";
 
 const GUEST_AUTH = { role: "operator", scopes: ["operator.sessions.write"], sessionCap: "view" };
 const READY = { status: "ready", sessionKey: "agent:main:welcome-sam", agentId: "main" };
