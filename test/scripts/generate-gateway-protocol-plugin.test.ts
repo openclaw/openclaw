@@ -19,16 +19,15 @@ it.runIf(process.platform === "darwin")(
       fs.writeFileSync(target, content, { mode });
     };
     const copy = (file: string) => write(file, fs.readFileSync(file, "utf8"));
+    const shell = (file: string, body: string) => write(file, `#!/bin/sh\n${body}\n`, 0o755);
     copy("node-version.mjs");
     copy("apps/shared/OpenClawKit/Plugins/GenerateGatewayProtocol/plugin.swift");
     write(
       "apps/shared/OpenClawKit/Package.swift",
       `// swift-tools-version: 6.0
 import PackageDescription
-
 let package = Package(
     name: "OpenClawKit",
-    platforms: [.macOS(.v15)],
     targets: [
         .target(name: "OpenClawProtocol", plugins: ["GenerateGatewayProtocol"]),
         .plugin(name: "GenerateGatewayProtocol", capability: .buildTool()),
@@ -51,15 +50,10 @@ writeFileSync(out + "/GatewayModels.swift", "public let generatedBy = " + runtim
     );
     // Skip unsupported Node and resolve an environment-dependent version-manager shim.
     write("old-node.mjs", 'Object.defineProperty(process, "version", { value: "v22.0.0" });\n');
-    write(
-      "old/node",
-      `#!/bin/sh\nexec "${node}" --import "${path.join(root, "old-node.mjs")}" "$@"\n`,
-      0o755,
-    );
-    write(
+    shell("old/node", `exec "${node}" --import "${path.join(root, "old-node.mjs")}" "$@"`);
+    shell(
       "shims/node",
-      '#!/bin/sh\n[ -n "$FIXTURE_NODE" ] || { echo "No version is set for shim: node" >&2; exit 1; }\nexec "$FIXTURE_NODE" "$@"\n',
-      0o755,
+      '[ -n "$FIXTURE_NODE" ] || { echo "No version is set for shim: node" >&2; exit 1; }\nexec "$FIXTURE_NODE" "$@"',
     );
     const env: NodeJS.ProcessEnv = {
       ...process.env,

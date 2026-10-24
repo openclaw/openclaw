@@ -1,8 +1,14 @@
+import { createServer } from "node:http";
 import type {
   pollProviderOperationJson,
   postJsonResponse,
 } from "openclaw/plugin-sdk/provider-http";
+import { acquireTestPortBlock } from "openclaw/plugin-sdk/test-env";
 import { afterEach, assert, expect, it, vi } from "vitest";
+import {
+  createModelProviderConfig,
+  createProxyRequestModelProviderConfig,
+} from "../test-support/model-provider-config.test-support.js";
 import { buildBytePlusVideoGenerationProvider } from "./video-generation-provider.js";
 
 const { postMock, pollMock } = vi.hoisted(() => ({
@@ -33,21 +39,7 @@ it("preserves configured task headers and proxy through submission and polling",
       provider: "byteplus",
       model: "seedance-1-0-pro-250528",
       prompt: "a synthetic lobster",
-      cfg: {
-        models: {
-          providers: {
-            byteplus: {
-              baseUrl: "https://relay.example.test",
-              models: [],
-              request: {
-                headers: { "X-Relay": "synthetic-route" },
-                proxy: { mode: "explicit-proxy", url: "http://proxy.example:8080" },
-                allowPrivateNetwork: true,
-              },
-            },
-          },
-        },
-      },
+      cfg: createProxyRequestModelProviderConfig("byteplus"),
     }),
   ).rejects.toBe(intercepted);
 
@@ -88,15 +80,120 @@ it("denies private polling without needing a proxy override", async () => {
       provider: "byteplus",
       model: "seedance-1-0-pro-250528",
       prompt: "a synthetic lobster",
-      cfg: {
-        models: {
-          providers: {
-            byteplus: { baseUrl: "http://127.0.0.1:9", models: [] },
-          },
-        },
-      },
+      cfg: createModelProviderConfig({
+        byteplus: { baseUrl: "http://127.0.0.1:9", models: [] },
+      }),
     }),
   ).rejects.toMatchObject({ name: "SsrFBlockedError" });
   expect(postMock).toHaveBeenCalled();
   expect(fetchMock).not.toHaveBeenCalled();
+});
+
+it.each(["http://169.254.169.254/video.mp4"])(
+  "blocks generated result URL %s before connecting",
+  async (url) => {
+    postMock.mockResolvedValue({ id: "synthetic-task" });
+    pollMock.mockResolvedValue({ status: "succeeded", content: { video_url: url } });
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockRejectedValue(new Error("unguarded download reached fetch"));
+
+    await expect(
+      buildBytePlusVideoGenerationProvider().generateVideo({
+        provider: "byteplus",
+        model: "seedance-1-0-pro-250528",
+        cfg: {},
+        prompt: "a synthetic lobster",
+      }),
+    ).rejects.toMatchObject({ name: "SsrFBlockedError" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  },
+);
+
+it("blocks a loopback result before contacting the synthetic HTTP server", async () => {
+  let requests = 0;
+  const server = createServer((_request, response) => {
+    requests += 1;
+    response.writeHead(200, { "content-type": "video/mp4" }).end("synthetic video");
+  });
+  const claim = await acquireTestPortBlock({ offsets: [0] });
+  try {
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(claim.port, "127.0.0.1", resolve);
+    });
+    postMock.mockResolvedValue({ id: "synthetic-task" });
+    pollMock.mockResolvedValue({
+      status: "succeeded",
+      content: { video_url: `http://127.0.0.1:${claim.port}/video.mp4` },
+    });
+    await expect(
+      buildBytePlusVideoGenerationProvider().generateVideo({
+        provider: "byteplus",
+        model: "seedance-1-0-pro-250528",
+        cfg: {},
+        prompt: "a synthetic lobster",
+      }),
+    ).rejects.toMatchObject({ name: "SsrFBlockedError" });
+    expect(requests).toBe(0);
+  } finally {
+    try {
+      if (server.listening) {
+        await new Promise<void>((resolve, reject) => {
+          server.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    } finally {
+      await claim.release();
+    }
+  }
+});
+
+it("downloads public results without forwarding task credentials", async () => {
+  postMock.mockResolvedValue({ id: "synthetic-task" });
+  pollMock.mockResolvedValue({
+    status: "succeeded",
+    content: { video_url: "http://93.184.216.34/video.mp4" },
+  });
+  const fetchMock = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValue(
+      new Response("synthetic video", { headers: { "content-type": "video/mp4" } }),
+    );
+
+  const result = await buildBytePlusVideoGenerationProvider().generateVideo({
+    provider: "byteplus",
+    model: "seedance-1-0-pro-250528",
+    cfg: {},
+    prompt: "a synthetic lobster",
+  });
+  expect(result.videos[0]?.buffer?.toString()).toBe("synthetic video");
+  const init = fetchMock.mock.calls[0]?.[1];
+  expect(new Headers(init?.headers).has("authorization")).toBe(false);
+  expect(init?.signal?.aborted).toBe(true);
+});
+
+it("reports failed download status and releases the guarded request", async () => {
+  postMock.mockResolvedValue({ id: "synthetic-task" });
+  pollMock.mockResolvedValue({
+    status: "succeeded",
+    content: { video_url: "http://93.184.216.34/missing.mp4" },
+  });
+  const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response("missing synthetic video", {
+      status: 404,
+      headers: { "content-type": "video/mp4" },
+    }),
+  );
+
+  await expect(
+    buildBytePlusVideoGenerationProvider().generateVideo({
+      provider: "byteplus",
+      model: "seedance-1-0-pro-250528",
+      cfg: {},
+      prompt: "a synthetic lobster",
+    }),
+  ).rejects.toThrow(/BytePlus generated video download failed.*404/);
+  expect(fetchMock).toHaveBeenCalledOnce();
+  expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
 });

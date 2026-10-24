@@ -111,7 +111,6 @@ export type ChatThreadProps = Omit<
     transcriptVisible?: PresentationValue;
     gatewayClient?: GatewayBrowserClient | null;
     selectedSession: GatewaySessionRow | undefined;
-    swarm?: import("./chat-swarm-progress-types.ts").ChatSwarmProgressProps;
     transcriptMetadata?: ChatTranscriptMetadata;
     announceTranscript?: boolean;
     loading: boolean;

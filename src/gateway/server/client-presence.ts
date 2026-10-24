@@ -91,7 +91,6 @@ export function refreshClientPresence(
     activityAt === undefined ||
     timing?.lastActivityAt === undefined ||
     publication?.identity !== identity ||
-    activityAt < publication.at ||
     activityAt - publication.at >= ACTIVITY_BROADCAST_INTERVAL_MS;
   if (timing && activityAt !== undefined) {
     timing.lastActivityAt = activityAt;

@@ -403,7 +403,7 @@ it("keeps submitted content through reconnect and fences a late acceptance behin
   pane.applyGatewaySnapshot({ ...snapshot, phase: "reconnecting", hello: null, selfUser: null });
   draw(false);
   expect(container.textContent).toContain(suggestion.prompt);
-  expect(container.textContent).toContain("Delivery unconfirmed");
+  expect(container.textContent).toContain("Couldn't confirm the task started");
   expect(query<HTMLButtonElement>(".task-suggestion__retry")?.disabled).toBe(true);
   await accept();
   expect(attempts).toBe(1);

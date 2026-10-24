@@ -294,6 +294,16 @@ it("preserves scoped lookup recovery guidance with triggers enabled", () => {
   expect(tool.description).toContain("ask an authorized administrator");
 });
 
+it("describes conversation workspace inheritance for current jobs", () => {
+  const { description } = createTestCronTool();
+  expect(description).toContain(
+    "works at this conversation's saved workspace root with its sandbox",
+  );
+  expect(description).not.toContain(
+    "uses the scheduled agent workspace with its own session identity",
+  );
+});
+
 it.each([
   { timeoutMs: undefined, waitTimeoutMs: 60_000 },
   { timeoutMs: 3_600_000, waitTimeoutMs: 600_000 },

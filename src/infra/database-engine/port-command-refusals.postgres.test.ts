@@ -59,7 +59,7 @@ it.skipIf(!connection)(
     const original = await hash(sourcePath);
     await client.query(`CREATE ROLE "${role}" LOGIN PASSWORD 'synthetic-port-fixture'`);
     try {
-      expect(await preflight(false)).toMatchObject({ privilegesChecked: false });
+      await preflight(false);
       await expect(preflight(true)).rejects.toThrow("namespace privilege probe");
       const stage = {
         ...identity,

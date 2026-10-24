@@ -89,32 +89,6 @@ function renderMentionElement(element: Record<string, unknown>): string {
   return `@${escapeMarkdownText(mention)}`;
 }
 
-function renderEmotionElement(element: Record<string, unknown>): string {
-  const text =
-    toStringOrEmpty(element.emoji) ||
-    toStringOrEmpty(element.text) ||
-    toStringOrEmpty(element.emoji_type);
-  return escapeMarkdownText(text);
-}
-
-function renderCodeBlockElement(element: Record<string, unknown>): string {
-  const language = (toStringOrEmpty(element.language) || toStringOrEmpty(element.lang))
-    .trim()
-    .replace(/[^A-Za-z0-9_+#.-]/g, "");
-  const code = (toStringOrEmpty(element.text) || toStringOrEmpty(element.content)).replace(
-    /\r\n/g,
-    "\n",
-  );
-  const trailingNewline = code.endsWith("\n") ? "" : "\n";
-  // The enclosing fence must outlast any literal backtick run in the code.
-  let fenceLength = 3;
-  for (const run of code.matchAll(/`+/g)) {
-    fenceLength = Math.max(fenceLength, run[0].length + 1);
-  }
-  const fence = "`".repeat(fenceLength);
-  return `${fence}${language}\n${code}${trailingNewline}${fence}`;
-}
-
 function renderElement(
   element: unknown,
   attachments: PostParseResult["attachments"],
@@ -155,8 +129,13 @@ function renderElement(
       }
       return renderMediaPlaceholders ? "[media]" : "";
     }
-    case "emotion":
-      return renderEmotionElement(element);
+    case "emotion": {
+      const text =
+        toStringOrEmpty(element.emoji) ||
+        toStringOrEmpty(element.text) ||
+        toStringOrEmpty(element.emoji_type);
+      return escapeMarkdownText(text);
+    }
     case "md":
     case "lark_md":
       return toStringOrEmpty(element.text) || toStringOrEmpty(element.content);
@@ -169,8 +148,23 @@ function renderElement(
       return code ? wrapInlineCode(code) : "";
     }
     case "code_block":
-    case "pre":
-      return renderCodeBlockElement(element);
+    case "pre": {
+      const language = (toStringOrEmpty(element.language) || toStringOrEmpty(element.lang))
+        .trim()
+        .replace(/[^A-Za-z0-9_+#.-]/g, "");
+      const code = (toStringOrEmpty(element.text) || toStringOrEmpty(element.content)).replace(
+        /\r\n/g,
+        "\n",
+      );
+      const trailingNewline = code.endsWith("\n") ? "" : "\n";
+      // The enclosing fence must outlast any literal backtick run in the code.
+      let fenceLength = 3;
+      for (const run of code.matchAll(/`+/g)) {
+        fenceLength = Math.max(fenceLength, run[0].length + 1);
+      }
+      const fence = "`".repeat(fenceLength);
+      return `${fence}${language}\n${code}${trailingNewline}${fence}`;
+    }
     default:
       return escapeMarkdownText(toStringOrEmpty(element.text));
   }

@@ -11020,26 +11020,22 @@ surfaces:
         features:
           - name: Embedding provider selection
             coverageIds: [local-models.embedding-provider-selection]
-            description: Covers Embedding provider selection across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, local `memoryFlush` model overrides, and related local embeddings and memory behavior.
+            description: Covers Embedding provider selection across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, and related local embeddings and memory behavior.
           - name: Memory search readiness
             coverageIds: [local-models.memory-search-readiness]
-            description: Covers Memory search readiness across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, local `memoryFlush` model overrides, and related local embeddings and memory behavior.
-          - name: memoryFlush model override
-            coverageIds: [local-models.memoryflush-model-override]
-            description: Covers memoryFlush model override across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, local `memoryFlush` model overrides, and related local embeddings and memory behavior.
+            description: Covers Memory search readiness across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, and related local embeddings and memory behavior.
           - name: Fallback lexical search
             coverageIds: [local-models.fallback-lexical-search]
-            description: Covers Fallback lexical search across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, local `memoryFlush` model overrides, and related local embeddings and memory behavior.
+            description: Covers Fallback lexical search across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, and related local embeddings and memory behavior.
           - name: Provider mismatch guidance
             coverageIds: [local-models.provider-mismatch-guidance]
-            description: Covers Provider mismatch guidance across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, local `memoryFlush` model overrides, and related local embeddings and memory behavior.
+            description: Covers Provider mismatch guidance across local embedding provider registration for Ollama and LM Studio, memory host embedding behavior, memory search readiness, and related local embeddings and memory behavior.
         docs:
           - docs/concepts/memory.md
           - docs/gateway/doctor.md
         search_anchors:
           - Embedding provider selection
           - Memory search readiness
-          - memoryFlush model override
           - Fallback lexical search
           - Provider mismatch guidance
         category_note: local-embeddings-and-memory-provider-usage.md

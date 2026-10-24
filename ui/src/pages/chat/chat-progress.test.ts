@@ -17,7 +17,7 @@ describe("resolveWorkingProgress", () => {
     vi.useRealTimers();
   });
 
-  it.each(["failed", "unconfirmed", "waiting-idle"] as const)(
+  it.each(["failed", "held", "waiting-idle"] as const)(
     "does not let an older %s send identify an unknown active turn",
     (sendState) => {
       expect(
@@ -58,7 +58,7 @@ describe("resolveWorkingProgress", () => {
     });
   });
 
-  it.each(["failed", "unconfirmed", "waiting-idle"] as const)(
+  it.each(["failed", "held", "waiting-idle"] as const)(
     "retains matching durable timing from a %s send after the run is identified",
     (sendState) => {
       const queue = ["old-run", "active-run"].map((sendRunId, index) => ({

@@ -323,6 +323,13 @@ finished. OpenClaw also adds a host notice under the recovered answer saying
 that the turn was cut off and some work may be unfinished, because a tool-free
 summary cannot show that the interrupted work completed.
 
+An answered finalizer after a non-visible `length` stop preserves that original
+stop reason in terminal and completion metadata and records an `incomplete_turn`
+failure. The summary and notice remain deliverable, while CLI exits, HTTP/ACP
+results, channel reactions, session status, and scheduled tasks reflect the
+incomplete work. A tool-free answer provides a summary without proving task completion.
+Summary recovery after a normally completed turn remains successful.
+
 The callback returns `AgentHarnessSettledTurnFinalizationResult`, not an
 ordinary attempt result. Its public fields are limited to the completed
 assistant message, finalization-call usage, transcript-ownership metadata, and

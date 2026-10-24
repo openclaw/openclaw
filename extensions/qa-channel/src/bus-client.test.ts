@@ -5,6 +5,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { getQaBusState, pollQaBus, resolveQaTargetThread, sendQaBusMessage } from "./bus-client.js";
 
 const guardedFetchCalls = vi.hoisted(
@@ -52,19 +53,9 @@ async function listenLoopbackServer(server: Server) {
     sockets.add(socket);
     socket.once("close", () => sockets.delete(socket));
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("test server failed to bind");
-  }
+  const port = await listenOnLoopback(server);
   return {
-    port: address.port,
+    port,
     stop: () =>
       new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));

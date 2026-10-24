@@ -4,6 +4,7 @@ import { connect, Socket } from "node:net";
 import { Readable } from "node:stream";
 import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../test-support/hanging-loopback-server.js";
 import { handleAdminHttpRpcRequest } from "./handler.js";
 
 const { dispatchGatewayMethod } = vi.hoisted(() => ({ dispatchGatewayMethod: vi.fn() }));
@@ -64,12 +65,8 @@ async function withHttpServer(run: (port: number, requestStarted: Promise<void>)
     started.resolve();
   });
   try {
-    await once(server.listen(0, "127.0.0.1"), "listening");
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected TCP server address");
-    }
-    await run(address.port, started.promise);
+    const port = await listenOnLoopback(server);
+    await run(port, started.promise);
   } finally {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));

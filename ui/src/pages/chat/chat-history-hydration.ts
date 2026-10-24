@@ -128,7 +128,6 @@ export async function hydrateChatHistory(
       },
       cursor,
       inputRunIds,
-      undefined,
       historyState,
     );
   };

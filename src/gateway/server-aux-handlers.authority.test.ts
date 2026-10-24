@@ -20,8 +20,7 @@ import { ApprovalObserverClosedError } from "./exec-approval-lifecycle.js";
 import { installTestApprovalClock } from "./exec-approval-manager.test-support.js";
 import { getOperatorApprovalDetailed } from "./operator-approval-store.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
-import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
-import { createTestRuntimeSecretsActivator } from "./server-startup-config.test-support.js";
+import { createGatewayAuxHandlerTestParams } from "./server-aux-handlers.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 import { advancePlacementFixtureToActive } from "./worker-environments/placement-test-fixtures.js";
 import { bindWorkerTurnOwner } from "./worker-environments/placement-turn-claim-events.js";
@@ -80,26 +79,12 @@ function createAuthorityHarness(
     | "registerWorkerTurnClaimClosedHandler"
   > = {},
 ): GatewayAux {
-  const aux = createGatewayAuxHandlers({
-    scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
-    log: {},
-    getNativeApprovalRouteCoordinator: () => undefined,
-    activateRuntimeSecrets: createTestRuntimeSecretsActivator(),
-    sharedGatewaySessionGenerationState: new SharedGatewaySessionGenerationState({
-      current: undefined,
-      required: null,
+  const aux = createGatewayAuxHandlers(
+    createGatewayAuxHandlerTestParams({
+      scheduler: createTestGatewayScheduler(vi.isFakeTimers() ? "fake-timers" : undefined),
+      ...params,
     }),
-    resolveSharedGatewaySessionGenerationForConfig: () => undefined,
-    clients: [],
-    channelManager: {
-      startChannel: async () => new Map(),
-      stopChannel: async () => {},
-      isManuallyStopped: () => false,
-      resolveRuntimeAccountId: (_channel, accountId) => accountId,
-    },
-    logChannels: { info: () => {} },
-    ...params,
-  });
+  );
   auxiliaries.push(aux);
   return aux;
 }

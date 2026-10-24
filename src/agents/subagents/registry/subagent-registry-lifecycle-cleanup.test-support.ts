@@ -7,6 +7,7 @@ import * as rootWork from "../../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { getOpenClawStateWorkerOwner } from "../../../state/openclaw-state-worker-owner.js";
 import { createTestAdmittedRunContext } from "../../admitted-run-context.test-support.js";
+import { createRequesterTranscriptWriter } from "../../test-helpers/requester-transcript-writer.test-support.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import * as sessionEntryRuntime from "../announce/subagent-announce-delivery.runtime.js";
 import * as ended from "./subagent-lifecycle-events.js";
@@ -46,14 +47,8 @@ export function registerDetachedCleanupAuthorityTest({
     });
     let disposed = false;
     const cleanupReady = createDeferredCore();
-    const requesterTranscriptWrite = vi.fn();
-    const withRequesterTranscriptWrite = async <T>(operation: () => Promise<T> | T): Promise<T> => {
-      requesterTranscriptWrite();
-      if (disposed) {
-        throw new Error("attempt disposed before transcript write");
-      }
-      return await operation();
-    };
+    const { requesterTranscriptWrite, withRequesterTranscriptWrite } =
+      createRequesterTranscriptWriter(() => disposed);
     const freshTranscriptWrite = vi.fn(async () => {});
     const gatewayContext = createGatewayContext();
     const idempotencyKey = "detached-cleanup-delivery";

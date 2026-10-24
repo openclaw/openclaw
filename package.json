@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.10.6",
+  "version": "2026.10.7",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "databaseEngines": [
@@ -16,7 +16,7 @@
     ],
     "schemaVersions": {
       "state": 31,
-      "agent": 32
+      "agent": 33
     }
   },
   "description": "Multi-channel AI gateway with extensible messaging integrations",
@@ -1547,6 +1547,10 @@
     "./plugin-sdk/provider-http": {
       "default": "./dist/plugin-sdk/provider-http.js"
     },
+    "./plugin-sdk/provider-request-headers": {
+      "types": "./dist/plugin-sdk/provider-request-headers.d.ts",
+      "default": "./dist/plugin-sdk/provider-request-headers.js"
+    },
     "./plugin-sdk/provider-binary-stream": {
       "types": "./dist/plugin-sdk/provider-binary-stream.d.ts",
       "default": "./dist/plugin-sdk/provider-binary-stream.js"
@@ -1805,10 +1809,13 @@
     "check:opengrep-rule-metadata": "node security/opengrep/check-rule-metadata.mjs",
     "check:protocol-coverage": "node scripts/check-protocol-event-coverage.mjs",
     "check:runtime-sidecar-loaders": "node --import ./scripts/tsx.mjs scripts/check-runtime-sidecar-loaders.mts",
+    "runtime:scripts:gen": "node scripts/generate-runtime-script-assets.mjs",
+    "runtime:scripts:check": "node scripts/generate-runtime-script-assets.mjs --check",
     "check:script-erasability": "node --disable-warning=ExperimentalWarning scripts/check-script-erasability.mjs",
     "check:static-import-sccs": "pnpm check:madge-import-cycles",
     "check:temp-path-guardrails": "node --import ./scripts/tsx.mjs scripts/check-temp-path-guardrails.ts",
     "check:wrapper-shadowing": "node --import ./scripts/tsx.mjs scripts/check-wrapper-shadowing.mts",
+    "check:test-lines-ratchet": "node --import ./scripts/tsx.mjs scripts/check-test-lines-ratchet.mts",
     "check:test-mock-exports": "node --import ./scripts/tsx.mjs scripts/check-test-mock-exports.mts",
     "check:test-timeout-race-ratchet": "node --import ./scripts/tsx.mjs scripts/check-test-timeout-race-ratchet.mts",
     "check:test-types": "pnpm tsgo:test",
@@ -1827,6 +1834,8 @@
     "clean:dist": "node -e \"require('fs').rmSync('dist', {recursive: true, force: true})\"",
     "codex-app-server:protocol:check": "node --import ./scripts/tsx.mjs scripts/check-codex-app-server-protocol.ts",
     "codex-app-server:protocol:sync": "node --import ./scripts/tsx.mjs scripts/sync-codex-app-server-protocol.ts",
+    "codex-app-server:validators:gen": "node --import ./scripts/tsx.mjs scripts/generate-codex-validators.mts",
+    "codex-app-server:validators:check": "node --import ./scripts/tsx.mjs scripts/generate-codex-validators.mts --check",
     "codex-supervisor:mcp": "node --import ./scripts/tsx.mjs src/mcp/codex-supervision-tools-serve.ts",
     "codex:mcp": "node --import ./scripts/tsx.mjs src/mcp/codex-supervision-tools-serve.ts",
     "config:channels:check": "node --import ./scripts/tsx.mjs scripts/generate-bundled-channel-config-metadata.ts --check",
@@ -1890,6 +1899,8 @@
     "format:swift": "./scripts/format-swift.sh",
     "gateway:dev": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_SKIP_CHANNELS=1 -- node scripts/run-node.mjs --dev gateway",
     "gateway:dev:reset": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_SKIP_CHANNELS=1 -- node scripts/run-node.mjs --dev gateway --reset",
+    "gateway:validators:gen": "node --import ./scripts/tsx.mjs scripts/generate-gateway-validators.mts",
+    "gateway:validators:check": "node --import ./scripts/tsx.mjs scripts/generate-gateway-validators.mts --check",
     "gateway:watch": "node --import ./scripts/tsx.mjs scripts/gateway-watch-tmux.mts gateway --force",
     "gateway:watch:raw": "node scripts/watch-node.mjs gateway --force",
     "gen:browser-inspect-script:swift": "node --import ./scripts/tsx.mjs scripts/generate-browser-inspect-script-swift.mts --write",
@@ -2331,10 +2342,14 @@
     "ui:install": "node scripts/ui.js install",
     "update:compat:gen": "node scripts/update-compat-inventory.mts",
     "update:compat:check": "node scripts/update-compat-inventory.mts --check",
+    "static:validators:gen": "node --import ./scripts/tsx.mjs scripts/generate-static-validators.mts",
+    "static:validators:check": "node --import ./scripts/tsx.mjs scripts/generate-static-validators.mts --check",
+    "validators:check": "pnpm gateway:validators:check && pnpm ui:validators:check && pnpm codex-app-server:validators:check && pnpm static:validators:check",
     "verify": "node --import ./scripts/tsx.mjs scripts/verify.mts"
   },
   "bundleDependencies": [
-    "chrome-devtools-mcp"
+    "chrome-devtools-mcp",
+    "playwright-core"
   ],
   "dependencies": {
     "@agentclientprotocol/sdk": "1.9.0",
@@ -2356,7 +2371,7 @@
     "@modelcontextprotocol/server": "2.3.1",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.26.11",
+    "@openclaw/fs-safe": "0.26.13",
     "@openclaw/proc-safe": "0.4.2",
     "@openclaw/proxyline": "0.4.0",
     "@opentelemetry/semantic-conventions": "1.43.0",

@@ -1,7 +1,10 @@
 import { streamSimple, type SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 import { buildProviderStreamFamilyHooks } from "openclaw/plugin-sdk/provider-stream-family";
-import { createOpenAIHostedWebSearchWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
+import {
+  createOpenAIHostedWebSearchWrapper,
+  mergeTransportHeaders,
+} from "openclaw/plugin-sdk/provider-stream-shared";
 import { asOptionalRecord, normalizeFastMode } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveNativeWebSearch } from "./native-web-search-policy.js";
 import { resolveOpenAIModelServiceTiers } from "./service-tier-policy.js";
@@ -49,14 +52,14 @@ export function wrapOpenAIResponsesStream(ctx: ProviderWrapStreamFnContext) {
         responsesServerCompaction: false,
       },
       streamFn: (model, context, options) => {
-        const headers = new Headers(options?.headers);
         // Required by the OSS preview; remove when OpenAI retires this header.
-        headers.set("x-openai-chatpass-test", "codex-direct");
         // Shared provider policy can enable item references. This grant requires
         // complete-context replay before request payload transforms run.
         const sharingOptions: SimpleStreamOptions & { replayResponsesItemIds: false } = {
           ...options,
-          headers: Object.fromEntries(headers.entries()),
+          headers: mergeTransportHeaders(options?.headers, {
+            "x-openai-chatpass-test": "codex-direct",
+          }),
           transport: "sse",
           replayResponsesItemIds: false,
           onPayload: async (payload, payloadModel) => {

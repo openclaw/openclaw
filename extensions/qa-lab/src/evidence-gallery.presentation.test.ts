@@ -13,19 +13,13 @@ import {
 } from "./evidence-gallery.test-support.js";
 import { createQaEvidenceInvocation } from "./evidence-invocation.js";
 import { QA_EVIDENCE_FILENAME } from "./evidence-summary.js";
+import { makeQaSuiteTestLaunch } from "./suite-test-helpers.js";
 
 function invocation(id: string) {
   return createQaEvidenceInvocation({
     scenarios: [{ id, execution: { kind: "script" } }],
     channel: null,
-    launch: {
-      source: { ref: null, integrity: null },
-      runtime: { id: null, version: null },
-      package: null,
-      protocol: null,
-      accountRef: null,
-      proofClass: null,
-    },
+    launch: makeQaSuiteTestLaunch(),
   });
 }
 function artifactEvidence(artifact: { kind: string; path: string }, id = "recorded") {

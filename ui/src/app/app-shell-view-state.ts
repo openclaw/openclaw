@@ -52,7 +52,6 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   readonly navigationSidebar: HTMLElement;
   readonly onboardingMode: boolean;
   readonly routeState: ShellRouteState;
-  readonly settingsPreloadTimers: Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>;
   readonly settingsSearchQuery: string;
   readonly storedOutboxes: ReturnType<OutboxStoreRuntime["read"]> | undefined;
   readonly viewCallbacks: ShellViewCallbacks;
@@ -229,7 +228,6 @@ export function readShellView(host: ShellViewHost) {
     onUpdateSidebarEntries: callbacks.updateSidebarEntries,
     onPairMobile: callbacks.openDevicePairSetup,
     onNavigate: host.shellNavigation.navigate,
-    onPreloadRoute: callbacks.preloadRoute,
   };
   const embedNavigation =
     nativeEmbed && !(nativeEmbedHost()?.surface === "conversation" && activeRoute === "chat");

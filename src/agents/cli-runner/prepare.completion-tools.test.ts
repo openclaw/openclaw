@@ -18,7 +18,10 @@ import {
 import { buildMcpToolSchema } from "../../gateway/mcp-http.schema.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
-import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
+import {
+  createClaudeMcpCliBackend,
+  testing as cliBackendsTesting,
+} from "../cli-backends.test-support.js";
 import {
   createCliRunnerPrepareFixture,
   createTestMcpLoopbackClientGrant,
@@ -42,23 +45,7 @@ const { buildAnthropicCliBackend } = await loadBundledPluginFacade<{
   buildAnthropicCliBackend: () => CliBackendPlugin;
 }>({ pluginId: "anthropic", artifactBasename: "api.js" });
 
-const claudeBackend: CliBackendPlugin & { pluginId: string } = {
-  id: "claude-cli",
-  pluginId: "anthropic",
-  bundleMcp: true,
-  bundleMcpMode: "claude-config-file",
-  nativeToolMode: "selectable",
-  toolAvailabilityEnforcement: "execution-args",
-  resolveExecutionArgs: ({ baseArgs }) => [...baseArgs],
-  config: {
-    command: "claude",
-    args: ["--print"],
-    output: "jsonl",
-    jsonlDialect: "claude-stream-json",
-    input: "stdin",
-    sessionMode: "existing",
-  },
-};
+const claudeBackend = createClaudeMcpCliBackend();
 
 /** A completion run whose handoff names a child without persisted lineage. */
 function completionRun(sessionTarget: {
@@ -906,12 +893,12 @@ describe("restricted CLI tool preparation", () => {
           [
             "write",
             { path: deniedPath, content: "must not execute" },
-            "write is outside the authority this completion turn carries from its requester. Do not retry write.",
+            "write is not available during a child-completion turn because it is outside the authority carried from its requester. Do not retry write.",
           ],
           [
             "gateway",
             { action: "config.get" },
-            "gateway needs the owner's authority, and this turn was not started by the owner. Do not retry gateway.",
+            "gateway is not available during a child-completion turn because it is outside the authority carried from its requester. Do not retry gateway.",
           ],
           [
             "intent",

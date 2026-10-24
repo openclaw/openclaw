@@ -1,7 +1,7 @@
 // Feishu tests cover streaming card plugin behavior.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
-import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
+import { jsonResponse, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readRequestBody, stripDispatcher, writeOversizedJson } from "./http.test-support.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
@@ -113,13 +113,6 @@ function createMemoryFetch(
 function writeJson(res: ServerResponse, payload: unknown, status = 200): void {
   res.writeHead(status, { "content-type": "application/json" });
   res.end(JSON.stringify(payload));
-}
-
-function jsonResponse(payload: unknown, status = 200): Response {
-  return new Response(JSON.stringify(payload), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
 }
 
 function setStreamingSessionInternals(
@@ -1109,4 +1102,3 @@ describe("mergeStreamingText", () => {
     expect(mergeStreamingText("abc", "cabc")).toBe("cabc");
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

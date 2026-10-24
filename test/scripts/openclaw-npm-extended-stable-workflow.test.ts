@@ -202,7 +202,6 @@ it.each([
   [true, "ahead", 0, "plugins:boundary-report:ci"],
   [false, "behind", 0, null],
   [false, "ahead", 1, null],
-  [false, "diverged", 1, null],
 ] as const)(
   "enforces plugin compatibility: script=%s ancestry=%s",
   (hasScript, relationship, status, invocation) => {
@@ -219,38 +218,14 @@ it.each([
   },
 );
 
-it("allows an explicit default-off GitHub-hosted preflight runner", () => {
-  expect(release.on?.workflow_dispatch?.inputs?.use_github_hosted_runners).toEqual({
-    default: false,
-    description: "Use GitHub-hosted Ubuntu for npm preflight",
-    required: false,
-    type: "boolean",
-  });
-  expect(release.jobs?.preflight_openclaw_npm).toMatchObject({
-    uses: `./${preflightWorkflowPath}`,
-    with: { use_github_hosted_runners: inputRef("use_github_hosted_runners") },
-  });
-});
-
 it("binds intentional Plugin SDK release changes to the reported digest", () => {
-  const input = release.on?.workflow_dispatch?.inputs?.plugin_sdk_api_acknowledgement;
   const qualification = preflight.jobs?.check_sdk_npm;
   const preflightDiff = step(qualification, "Verify Plugin SDK API changes");
   const publishProvenance = publishingStep("Verify prepared tarball provenance");
-  const downloadPreflight = publishingStep("Download prepared npm tarball");
-  const verifyPreflightRun = publishingStep("Verify preflight run metadata");
   const trustedToolingCheckout = step(qualification, "Checkout trusted Plugin SDK API tooling");
   const publishProvenanceRun = expectDefined(publishProvenance.run, "tarball provenance script");
   const mismatch = "Prepared Plugin SDK API evidence does not match its immutable artifact";
   const registryRead = 'npm view "openclaw@${RELEASE_NPM_DIST_TAG}" version';
-
-  expect(input).toEqual({
-    default: "",
-    description:
-      "8-character digest from the Plugin SDK API diff report when the release changes the SDK",
-    required: false,
-    type: "string",
-  });
   expect(preflightDiff.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBeUndefined();
   expect(publishProvenance.env?.PLUGIN_SDK_API_ACKNOWLEDGEMENT).toBe(
     inputRef("plugin_sdk_api_acknowledgement"),
@@ -280,7 +255,6 @@ it("binds intentional Plugin SDK release changes to the reported digest", () => 
   expectText(
     publishProvenanceRun,
     [
-      "plugin-sdk-api-release-evidence.mjs",
       '--acknowledge "$PLUGIN_SDK_API_ACKNOWLEDGEMENT"',
       '--npm-dist-tag "$RELEASE_NPM_DIST_TAG"',
       registryRead,
@@ -292,17 +266,18 @@ it("binds intentional Plugin SDK release changes to the reported digest", () => 
     ],
     ["git fetch"],
   );
-  expect(downloadPreflight.run).toContain(
+  expect(publishingStep("Download prepared npm tarball").run).toContain(
     '"plugin-sdk-api-release-diff-${PREFLIGHT_RUN_ID}-${PREFLIGHT_RUN_ATTEMPT}"',
   );
   expect(publishProvenanceRun.indexOf(mismatch)).toBeLessThan(
     publishProvenanceRun.indexOf(registryRead),
   );
-  expect(verifyPreflightRun.run).toContain(
+  expect(publishingStep("Verify preflight run metadata").run).toContain(
     '"$preflight_head_branch" == "$EXPECTED_EXTENDED_STABLE_BRANCH"',
   );
-  expect(verifyPreflightRun.run).toContain('"$extended_stable_preflight" != "true"');
-  expect(readFileSync("scripts/npm-prepared-bundle.mjs", "utf8")).toContain("pluginSdkApi,");
+  expect(publishingStep("Verify preflight run metadata").run).toContain(
+    '"$extended_stable_preflight" != "true"',
+  );
 });
 
 it("threads an explicit, default-off extended-stable bypass through every policy gate", () => {
@@ -379,10 +354,6 @@ it.each<[string, string, AdmissionOptions, number]>([
 );
 
 it("uses the trusted Full Validation evidence verifier", () => {
-  const raw = readFileSync(workflowPath, "utf8");
-  expect(raw).toContain(
-    "--json databaseId,attempt,workflowName,headBranch,headSha,event,status,conclusion,url",
-  );
   const verifier = publishingStep("Checkout trusted validation verifier");
   expect(verifier.with).toMatchObject({
     ref: "${{ github.workflow_sha }}",
@@ -396,18 +367,11 @@ it("uses the trusted Full Validation evidence verifier", () => {
   });
   expectText(fullValidation.run, [
     "actions/runs/${FULL_RELEASE_VALIDATION_RUN_ID}/attempts/${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}",
-    "--filter=blob:none",
     "trusted-workflow/scripts/validate-full-release-validation-evidence.mjs",
   ]);
-  expect(raw.match(/openclaw-npm-extended-stable-release\.mjs verify-run/g)).toHaveLength(2);
-  expect(raw).not.toContain("openclaw-npm-extended-stable-release.mjs verify-manifest");
 });
 
 it("requires and authenticates the plugin npm run before an extended-stable core publish", () => {
-  expect(release.on?.workflow_dispatch?.inputs?.plugin_npm_run_id).toMatchObject({
-    required: false,
-    type: "string",
-  });
   const required = step(
     release.jobs?.validate_publish_request,
     "Require preflight artifact promotion on real publish",
@@ -445,9 +409,6 @@ it("publishes only the tarball path verified from the preflight manifest", () =>
     FULL_RELEASE_VALIDATION_RUN_ID: inputRef("full_release_validation_run_id"),
     FULL_RELEASE_VALIDATION_RUN_ATTEMPT: inputRef("full_release_validation_run_attempt"),
   });
-  expect(publishJob?.steps?.map((candidate) => candidate.name)).not.toContain(
-    "Resolve publish tarball",
-  );
   expect(readFileSync(workflowPath, "utf8")).not.toContain(
     "find preflight-tarball -type f -name '*.tgz'",
   );

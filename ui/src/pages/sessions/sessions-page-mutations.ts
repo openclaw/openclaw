@@ -14,7 +14,11 @@ import {
   type SessionMethodAccessRequest,
 } from "../../lib/session-method-access.ts";
 import { fetchPagedSessionRows } from "../../lib/sessions/paged-session-rows.ts";
-import type { SessionPatch, SessionPatchResult } from "../../lib/sessions/patch.ts";
+import {
+  isSessionDeferredPatch,
+  type SessionPatch,
+  type SessionPatchResult,
+} from "../../lib/sessions/patch.ts";
 import { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import type {
   SessionDeleteTarget,
@@ -35,7 +39,9 @@ import type { SessionsPageState } from "./sessions-page-state.types.ts";
 type SessionsPageMutationHost = {
   application: ApplicationContext;
   state: SessionsPageState;
-  captureScope: () => SessionsPageRequestScope | null;
+  captureScope: (
+    options?: Pick<SessionsPageRequestScope, "allowDeferred">,
+  ) => SessionsPageRequestScope | null;
   isCurrent: (scope: SessionsPageRequestScope) => boolean;
   refresh: (scope: SessionsPageRequestScope) => Promise<void>;
   listOptions: (context: ApplicationContext) => SessionListOptions;
@@ -102,6 +108,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     for (const row of state.selectedSessions.values()) {
       const reason = mutationDisabledReason({
         method: "sessions.delete",
+        allowDeferred: true,
         params: {
           key: row.key,
           ...(row.archived === true ? { archivedOnly: true } : {}),
@@ -119,7 +126,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     if (rows.length === 0 || state.loading || sessionMutations.pending) {
       return;
     }
-    const scope = captureRequestScope();
+    const scope = captureRequestScope({ allowDeferred: true });
     if (!scope) {
       return;
     }
@@ -157,7 +164,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     if (rows.length === 0 || state.loading || sessionMutations.pending) {
       return;
     }
-    const scope = captureRequestScope();
+    const scope = captureRequestScope({ allowDeferred: true });
     if (!scope) {
       return;
     }
@@ -169,7 +176,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
       ...(row.archived === true ? { archivedOnly: true } : {}),
     }));
     for (const params of requests) {
-      if (mutationAccessError(scope, { method: "sessions.delete", params })) {
+      if (mutationAccessError(scope, { method: "sessions.delete", params, allowDeferred: true })) {
         return;
       }
     }
@@ -271,7 +278,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
 
   async function deleteSessionFromMenu(row: GatewaySessionRow) {
     const label = normalizeOptionalString(row.label) ?? row.key;
-    const scope = captureRequestScope();
+    const scope = captureRequestScope({ allowDeferred: true });
     if (
       !scope ||
       !(await confirmMutation(t("sessionsView.deleteSessionConfirm", { session: label }), {
@@ -322,7 +329,9 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
   async function patchSession(
     key: string,
     patch: SessionPatch,
-    scope: SessionsPageRequestScope | null = captureRequestScope(),
+    scope: SessionsPageRequestScope | null = captureRequestScope({
+      allowDeferred: isSessionDeferredPatch(patch),
+    }),
     expectedSessionId?: string,
     options: { onConfirmed?: (result: SessionPatchResult) => void; sessionScope?: boolean } = {},
   ): Promise<SessionsPageMutationResult> {
@@ -343,6 +352,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
     const row = state.result?.sessions.find((entry) => entry.key === key);
     const accessError = mutationAccessError(scope, {
       method: "sessions.patch",
+      allowDeferred: scope.allowDeferred && isSessionDeferredPatch(patch),
       sessionScope: options.sessionScope,
       session: row,
       params: {
@@ -360,6 +370,7 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
         scope.sessions.patch(key, patch, {
           agentId,
           ...(expectedSessionId ? { expectedSessionId } : {}),
+          ...(options.onConfirmed ? { onConfirmed: options.onConfirmed } : {}),
         });
       const patched =
         patch.archived === true
@@ -376,9 +387,6 @@ export function createSessionsPageMutations(host: SessionsPageMutationHost) {
               request,
             })
           : await request();
-      if (patched && !("queued" in patched)) {
-        options.onConfirmed?.(patched);
-      }
       if (!isRequestScopeCurrent(scope)) {
         return "stale";
       }

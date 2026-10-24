@@ -506,19 +506,14 @@ suite.define(() => {
       await expectTextContains(popover, "~190k / 200k · ~95%");
     } else {
       await expect.poll(() => popover.isVisible()).toBe(true);
-      for (const text of [
-        "46k / 200k · 23%",
-        "757.3k",
-        "42.3k",
-        "Est. cost",
-        "$0.023",
-        "Cost by Type",
-        "$0.0035",
-        "$0.018",
-        "$0.0015",
-        "$0.0005",
-      ]) {
+      for (const text of ["46k / 200k · 23%", "757.3k", "42.3k", "Cost", "$0.023"]) {
         await expectTextContains(popover, text);
+      }
+      const costBreakdown = await popover
+        .locator(".context-usage__stats > div[title]")
+        .getAttribute("title");
+      for (const amount of ["$0.0035", "$0.018", "$0.0015", "$0.0005"]) {
+        expect(costBreakdown).toContain(amount);
       }
       await page.keyboard.press("Escape");
       await expect.poll(() => popover.isHidden()).toBe(true);

@@ -1,8 +1,6 @@
-import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { promisify } from "node:util";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
@@ -12,6 +10,7 @@ import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { useStateDatabaseTempDirs } from "../../test-utils/state-database-temp-dirs.js";
 import * as checkoutGitOwner from "./checkout-git-config.js";
 import * as checkoutInspection from "./checkout-inspection.js";
+import { git } from "./git-fixture.test-support.js";
 import * as gitOwner from "./git.js";
 import { updateRegistryWorktree } from "./registry.js";
 import { getRegistryWorktree } from "./registry.test-support.js";
@@ -23,9 +22,6 @@ import {
 } from "./service.test-support.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 
-const execFileAsync = promisify(execFile);
-const git = async (cwd: string, ...args: string[]) =>
-  (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
 const read = (directory: string) => fs.readFile(path.join(directory, "README.md"), "utf8");
 const write = (directory: string, content: string) =>
   fs.writeFile(path.join(directory, "README.md"), content);

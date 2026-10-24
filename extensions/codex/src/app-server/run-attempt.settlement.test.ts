@@ -42,6 +42,48 @@ import { CODEX_APP_SERVER_VERSION } from "./version.js";
 
 setupRunAttemptTestHooks();
 
+async function attachTranscript(
+  params: ReturnType<typeof createTestParams>,
+  name: string,
+  sessionId = `session-${name}`,
+) {
+  await attachSqliteSessionTarget(params, path.join(tempDir, `${name}.sqlite`), sessionId);
+  const target = params.sessionTarget;
+  if (!target?.sessionId || !target.sessionKey) {
+    throw new Error("SQLite transcript target was not attached");
+  }
+  return { ...target, sessionId: target.sessionId, sessionKey: target.sessionKey };
+}
+
+function completedTurn(text: string, threadId = "thread-1", id = "turn-1", itemId = "answer") {
+  return {
+    method: "turn/completed",
+    params: {
+      threadId,
+      turn: {
+        id,
+        status: "completed",
+        items: [{ id: itemId, type: "agentMessage", text }],
+      },
+    },
+  };
+}
+
+function expectSettled(
+  result: Awaited<ReturnType<typeof runCodexAppServerAttempt>>,
+  text: string,
+  aborted = false,
+) {
+  expect(readAttemptTerminal(result)).toMatchObject({
+    aborted,
+    timedOut: false,
+    promptError: null,
+  });
+  expect(result.codexAppServerFailure).toBeUndefined();
+  expect(result.promptTimeoutOutcome).toBeUndefined();
+  expect(result.assistantTexts).toEqual([text]);
+}
+
 describe("Codex app-server terminal settlement", () => {
   beforeEach(() => {
     resetSharedCodexAppServerClientForTests();
@@ -53,11 +95,7 @@ describe("Codex app-server terminal settlement", () => {
 
   it("recovers one durable unknown result for an active native command at settlement expiry", async () => {
     const params = createTestParams();
-    await attachSqliteSessionTarget(
-      params,
-      path.join(tempDir, "recovered-native-result.sqlite"),
-      "session-recovered-native-result",
-    );
+    await attachTranscript(params, "recovered-native-result");
     const promptPersisted = createDeferred<void>();
     params.onUserMessagePersisted = () => promptPersisted.resolve();
     params.timeoutMs = 60 * 60_000;
@@ -108,13 +146,7 @@ describe("Codex app-server terminal settlement", () => {
         }),
       );
       const receivedAt = Date.now();
-      void harness.notify(
-        turnCompleted({
-          id: "turn-1",
-          status: "completed",
-          items: [{ id: "answer", type: "agentMessage", text: "Command is still running." }],
-        }),
-      );
+      void harness.notify(completedTurn("Command is still running."));
       await projectionEntered.promise;
       await Promise.resolve();
       await Promise.resolve();
@@ -148,11 +180,7 @@ describe("Codex app-server terminal settlement", () => {
 
   it("checkpoints one failed native result when settlement throws before normal close", async () => {
     const params = createTestParams();
-    await attachSqliteSessionTarget(
-      params,
-      path.join(tempDir, "exceptional-native-result.sqlite"),
-      "session-exceptional-native-result",
-    );
+    await attachTranscript(params, "exceptional-native-result");
     const failure = new Error("injected settlement inventory failure");
     vi.spyOn(
       CodexAppServerEventProjector.prototype,
@@ -175,13 +203,7 @@ describe("Codex app-server terminal settlement", () => {
         status: "inProgress",
       }),
     );
-    await harness.notify(
-      turnCompleted({
-        id: "turn-1",
-        status: "completed",
-        items: [{ id: "answer", type: "agentMessage", text: "Settlement failed." }],
-      }),
-    );
+    await harness.notify(completedTurn("Settlement failed."));
 
     await expect(run).rejects.toThrow(failure);
     const durableResults = (await readTranscriptMessagesByIdentity(params)).filter(
@@ -199,20 +221,7 @@ describe("Codex app-server terminal settlement", () => {
     "settles a native receipt while prompt persistence is blocked with execution budget %i",
     async (timeoutMs) => {
       const params = createTestParams();
-      await attachSqliteSessionTarget(
-        params,
-        path.join(tempDir, "held-prompt.sqlite"),
-        "session-held-prompt",
-      );
-      const target = params.sessionTarget;
-      if (!target?.sessionId || !target.sessionKey) {
-        throw new Error("SQLite transcript target was not attached");
-      }
-      const transcriptTarget = {
-        ...target,
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-      };
+      const transcriptTarget = await attachTranscript(params, "held-prompt");
       const held = createDeferred<void>();
       const writerAcquired = createDeferred<void>();
       let writer: Promise<void> | undefined;
@@ -330,18 +339,17 @@ describe("Codex app-server terminal settlement", () => {
             params?: { threadId?: string };
           },
       );
+    const answer = async (method: string, result: unknown, since = 0) => {
+      const request = await waitForHarnessRequest(physical, method, since);
+      physical.send({ id: request.id, result });
+    };
     try {
-      const initialize = await waitForHarnessRequest(physical, "initialize");
-      physical.send({
-        id: initialize.id,
-        result: { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)` },
+      await answer("initialize", {
+        userAgent: `openclaw/${CODEX_APP_SERVER_VERSION} (macOS; test)`,
       });
-      const firstRequirements = await waitForHarnessRequest(physical, "configRequirements/read");
-      physical.send({ id: firstRequirements.id, result: { requirements: null } });
-      const firstThread = await waitForHarnessRequest(physical, "thread/start");
-      physical.send({ id: firstThread.id, result: threadStartResult("thread-settlement") });
-      const warmupTurn = await waitForHarnessRequest(physical, "turn/start");
-      physical.send({ id: warmupTurn.id, result: turnStartResult("turn-warmup") });
+      await answer("configRequirements/read", { requirements: null });
+      await answer("thread/start", threadStartResult("thread-settlement"));
+      await answer("turn/start", turnStartResult("turn-warmup"));
       physical.send({
         method: "turn/completed",
         params: {
@@ -355,28 +363,15 @@ describe("Codex app-server terminal settlement", () => {
       const firstStart = physical.writes.length;
       firstRun = runCodexAppServerAttempt(firstParams);
       void firstRun.then(firstSettled, firstSettled);
-      const firstRequirementsAgain = await waitForHarnessRequest(
-        physical,
-        "configRequirements/read",
-        firstStart,
-      );
-      physical.send({ id: firstRequirementsAgain.id, result: { requirements: null } });
-      const firstTurn = await waitForHarnessRequest(physical, "turn/start", firstStart);
-      physical.send({ id: firstTurn.id, result: turnStartResult("turn-settlement") });
+      await answer("configRequirements/read", { requirements: null }, firstStart);
+      await answer("turn/start", turnStartResult("turn-settlement"), firstStart);
       expect(isCodexAppServerLiveThreadClaimed(physical.client, "thread-settlement")).toBe(true);
 
       const siblingStart = physical.writes.length;
       siblingRun = runCodexAppServerAttempt(siblingParams);
-      const siblingRequirements = await waitForHarnessRequest(
-        physical,
-        "configRequirements/read",
-        siblingStart,
-      );
-      physical.send({ id: siblingRequirements.id, result: { requirements: null } });
-      const siblingThread = await waitForHarnessRequest(physical, "thread/start", siblingStart);
-      physical.send({ id: siblingThread.id, result: threadStartResult("thread-sibling") });
-      const siblingTurn = await waitForHarnessRequest(physical, "turn/start", siblingStart);
-      physical.send({ id: siblingTurn.id, result: turnStartResult("turn-sibling") });
+      await answer("configRequirements/read", { requirements: null }, siblingStart);
+      await answer("thread/start", threadStartResult("thread-sibling"), siblingStart);
+      await answer("turn/start", turnStartResult("turn-sibling"), siblingStart);
       await vi.waitFor(() => {
         expect(resolveActiveEmbeddedRunSessionId(firstParams.sessionKey)).toBe(
           firstParams.sessionId,
@@ -397,19 +392,9 @@ describe("Codex app-server terminal settlement", () => {
       const receivedAt = Date.now();
       // Queue both frames before yielding. The second callback starts only after
       // the real router has finished handling the exact terminal notification.
-      physical.send({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-settlement",
-          turn: {
-            id: "turn-settlement",
-            status: "completed",
-            items: [
-              { id: "answer", type: "agentMessage", text: "Completed work remains visible." },
-            ],
-          },
-        },
-      });
+      physical.send(
+        completedTurn("Completed work remains visible.", "thread-settlement", "turn-settlement"),
+      );
       physical.send({
         method: "item/reasoning/textDelta",
         params: {
@@ -434,15 +419,10 @@ describe("Codex app-server terminal settlement", () => {
       physical.send({ id: unsubscribe.id, result: {} });
       await vi.waitFor(() => expect(firstSettled).toHaveBeenCalledOnce(), fastWait);
       const result = await firstRun;
+      expectSettled(result, "Completed work remains visible.");
       expect(readAttemptTerminal(result)).toMatchObject({
-        aborted: false,
-        timedOut: false,
-        promptError: null,
         settlementWarning: { pendingStage: "onReasoningStream" },
       });
-      expect(result.codexAppServerFailure).toBeUndefined();
-      expect(result.promptTimeoutOutcome).toBeUndefined();
-      expect(result.assistantTexts).toEqual(["Completed work remains visible."]);
       expect(
         wireRequests()
           .filter(
@@ -460,19 +440,14 @@ describe("Codex app-server terminal settlement", () => {
         siblingParams.sessionId,
       );
 
-      physical.send({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-sibling",
-          turn: {
-            id: "turn-sibling",
-            status: "completed",
-            items: [
-              { id: "sibling-answer", type: "agentMessage", text: "Sibling stayed healthy." },
-            ],
-          },
-        },
-      });
+      physical.send(
+        completedTurn(
+          "Sibling stayed healthy.",
+          "thread-sibling",
+          "turn-sibling",
+          "sibling-answer",
+        ),
+      );
       const siblingResult = await siblingRun;
       expect(readAttemptTerminal(siblingResult)).toMatchObject({
         aborted: false,
@@ -507,20 +482,11 @@ describe("Codex app-server terminal settlement", () => {
     async ({ boundary, termination, release }) => {
       const queuedNetworkResult = boundary === "checkpoint" && termination === "timeout";
       const params = createTestParams();
-      await attachSqliteSessionTarget(
+      const transcriptTarget = await attachTranscript(
         params,
-        path.join(tempDir, "settlement-checkpoint.sqlite"),
+        "settlement-checkpoint",
         "session-checkpoint",
       );
-      const target = params.sessionTarget;
-      if (!target?.sessionId || !target.sessionKey) {
-        throw new Error("SQLite transcript target was not attached");
-      }
-      const transcriptTarget = {
-        ...target,
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
-      };
       const checkpoint = createDeferred<void>();
       const checkpointWrites: Promise<unknown>[] = [];
       const holdWriter = async () => {
@@ -682,12 +648,7 @@ describe("Codex app-server terminal settlement", () => {
         // Keep the grace clock fixed while accepted transcript work and cleanup settle.
         const result = await run;
         expect(settled).toHaveBeenCalledOnce();
-        expect(readAttemptTerminal(result)).toMatchObject({
-          aborted: termination === "abort",
-          timedOut: false,
-          promptError: null,
-        });
-        expect(result.codexAppServerFailure).toBeUndefined();
+        expectSettled(result, "Completed before checkpoint.", termination === "abort");
         if (termination === "timeout") {
           expect(result.terminal).toMatchObject({
             kind: "ok",
@@ -697,9 +658,7 @@ describe("Codex app-server terminal settlement", () => {
             },
           });
         }
-        expect(result.promptTimeoutOutcome).toBeUndefined();
         expect(onAttemptTimeout).not.toHaveBeenCalled();
-        expect(result.assistantTexts).toEqual(["Completed before checkpoint."]);
         expect(result.lastAssistant?.stopReason).toBe(termination === "abort" ? "aborted" : "stop");
         expect(result.attemptUsage).toMatchObject({ input: 3, output: 7, cacheRead: 2, total: 12 });
         if (termination === "abort") {
@@ -740,19 +699,12 @@ describe("Codex app-server terminal settlement", () => {
             }),
           ]);
           if (termination === "timeout") {
-            expect(assistantRows[0]).toMatchObject({
-              message: {
-                __openclaw: {
-                  settlementWarning: expect.objectContaining({
-                    timeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
-                  }),
-                },
-              },
-            });
+            expect(assistantRows[0]).toHaveProperty(
+              "message.__openclaw.settlementWarning.timeoutMs",
+              TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
+            );
             if (queuedNetworkResult) {
-              expect(assistantRows[0]).toMatchObject({
-                message: { __openclaw: { turnTainted: true } },
-              });
+              expect(assistantRows[0]).toHaveProperty("message.__openclaw.turnTainted", true);
             }
           }
           if (boundary === "publication") {

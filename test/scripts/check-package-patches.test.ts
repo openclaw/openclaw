@@ -35,6 +35,12 @@ function makeRepo() {
 
 it("allows approved pnpm patches together", () => {
   const approvedPatches = [
+    ["apache-arrow@21.2.0", "patches/apache-arrow@21.2.0.patch"],
+    ["@shinyoshiaki/binary-data@0.6.1", "patches/@shinyoshiaki__binary-data@0.6.1.patch"],
+    ["@openclaw/crabline@0.1.30", "patches/@openclaw__crabline@0.1.30.patch"],
+    ["playwright-core@1.64.1", "patches/playwright-core@1.64.1.patch"],
+    ["minizlib@3.1.0", "patches/minizlib@3.1.0.patch"],
+    ["tar@7.5.22", "patches/tar@7.5.22.patch"],
     ["baileys@7.0.0-rc12", "patches/baileys@7.0.0-rc12.patch"],
     ["baileys@7.0.0-rc13", "patches/baileys@7.0.0-rc13.patch"],
     ["baileys@7.0.0-rc14", "patches/baileys@7.0.0-rc14.patch"],

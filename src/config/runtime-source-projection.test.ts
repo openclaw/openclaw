@@ -95,6 +95,26 @@ it("uses one captured value when no authored source is active", () => {
   expect(captured.gateway?.port).toBe(19001);
 });
 
+it("captures a revision at publication and reuses it until the next publication", () => {
+  const runtime = { gateway: { port: 19001 } };
+  const source = { gateway: { port: 19002 } };
+  setSnapshot(runtime, source);
+  runtime.gateway.port = 19003;
+  source.gateway.port = 19004;
+  const first = capture(runtime);
+  expect(first.gateway?.port).toBe(19001);
+  expect(projectSource(first).gateway?.port).toBe(19002);
+  expect(capture(runtime)).toBe(first);
+  expect(capture(first)).toBe(first);
+
+  setSnapshot(runtime, source);
+  const next = capture(runtime);
+  expect(next).not.toBe(first);
+  expect(next.gateway?.port).toBe(19003);
+  expect(projectSource(next).gateway?.port).toBe(19004);
+  expect(first.gateway?.port).toBe(19001);
+});
+
 it("keeps a scoped capture pinned when its mutable origin later matches the process source", () => {
   const source: OpenClawConfig = { gateway: { port: 19001 } };
   const runtime: OpenClawConfig = { gateway: { port: 19001, mode: "local" } };

@@ -313,15 +313,9 @@ export function createConfigPage(
     }
     const config = runtimeConfig.state;
     if (!config.configSnapshot && !config.configLoading && !currentConfigRead(config)) {
-      void runtimeConfig
-        .ensureLoaded()
-        .then(() =>
-          runtimeConfigSource === runtimeConfig && pageId !== "updates" && !runtimeConfig.schemaRead
-            ? runtimeConfig.ensureSchemaLoaded()
-            : undefined,
-        )
-        .catch(() => undefined);
-    } else if (pageId !== "updates" && !config.configSchema && !runtimeConfig.schemaRead) {
+      void runtimeConfig.ensureLoaded().catch(() => undefined);
+    }
+    if (pageId !== "updates" && !config.configSchema && !runtimeConfig.schemaRead) {
       void runtimeConfig.ensureSchemaLoaded().catch(() => undefined);
     }
   }

@@ -257,6 +257,23 @@ it("describes and freezes only effective tab-bound actions when evaluation is di
   });
 });
 
+it("carries prepared loopback capability and live authority into the browser tool", async () => {
+  const assertInvocationCurrent = vi.fn();
+  const assertLocalLoopbackCurrent = vi.fn();
+  const tool = createTool({
+    browser: { allowLocalLoopback: true, assertLocalLoopbackCurrent },
+    assertInvocationCurrent,
+  });
+  await tool.execute("preview", { action: "status" });
+  expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith(
+    expect.objectContaining({
+      allowLocalLoopback: true,
+      assertLocalLoopbackCurrent,
+      assertInvocationCurrent,
+    }),
+  );
+});
+
 it("omits unsupported actions for a host-bound existing-session profile", () => {
   const tool = createTool({
     runtimeConfig: {

@@ -861,7 +861,7 @@ describe("sidebar attention source publication", () => {
       storageScope: outboxStorageScope(host),
       text: "private submission",
       createdAt: 1,
-      sendState: "unconfirmed" as const,
+      sendState: "held" as const,
       sendRunId: "run-review",
     };
     expect(

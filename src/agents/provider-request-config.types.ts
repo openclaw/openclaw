@@ -1,3 +1,5 @@
+import type { ModelRequestHeaders } from "../llm/types.js";
+
 /** Auth override accepted from sanitized provider/model request config. */
 export type ProviderRequestAuthOverride =
   | {
@@ -37,7 +39,7 @@ export type ProviderRequestProxyOverride =
     };
 
 export type ProviderRequestTransportOverrides = {
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   auth?: ProviderRequestAuthOverride;
   proxy?: ProviderRequestProxyOverride;
   tls?: ProviderRequestTlsOverride;

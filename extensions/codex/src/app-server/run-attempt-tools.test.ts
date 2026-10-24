@@ -4,7 +4,7 @@ import { resolveCodexAppServerRuntimeOptions } from "./config.js";
 import { createCodexDynamicToolSpecs, projectCodexDynamicTools } from "./dynamic-tool-catalog.js";
 import { resolveCodexDynamicToolsLoadingForRuntime } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
-import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec } from "./protocol.js";
+import type { CodexDynamicToolFunctionSpec, CodexDynamicToolSpec, JsonObject } from "./protocol.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
 import { buildCodexThreadConfiguration } from "./thread-requests.js";
 
@@ -209,3 +209,67 @@ it.each(["direct", "searchable"] as const)(
     expect(bridge.specs[0]?.type).toBe(loading === "direct" ? "function" : "namespace");
   },
 );
+
+it.each<{
+  name: string;
+  config?: JsonObject;
+  available: boolean;
+  restricted?: boolean;
+  expected: boolean | undefined;
+}>([
+  { name: "callable default", available: true, expected: false },
+  { name: "unavailable default", available: false, expected: undefined },
+  {
+    name: "explicit native blocking tool",
+    config: { "tools.experimental_request_user_input.enabled": true },
+    available: true,
+    expected: true,
+  },
+  {
+    name: "nested native blocking tool",
+    config: { tools: { experimental_request_user_input: { enabled: true } } },
+    available: true,
+    expected: undefined,
+  },
+  {
+    name: "explicit Default-mode native questions",
+    config: { "features.default_mode_request_user_input": true },
+    available: true,
+    expected: undefined,
+  },
+  {
+    name: "nested Default-mode native questions",
+    config: { features: { default_mode_request_user_input: true } },
+    available: true,
+    expected: undefined,
+  },
+  {
+    name: "explicit native denial without an executor",
+    config: { "tools.experimental_request_user_input.enabled": false },
+    available: false,
+    expected: false,
+  },
+  {
+    name: "restricted native opt-in",
+    config: { "tools.experimental_request_user_input.enabled": true },
+    available: true,
+    restricted: true,
+    expected: false,
+  },
+])("preserves question policy for $name", ({ config, available, restricted, expected }) => {
+  const thread = buildCodexThreadConfiguration(
+    createAttemptParams({ config: {}, pluginHarnessToolPolicyRestricted: restricted }),
+    {
+      appServer: resolveCodexAppServerRuntimeOptions({}),
+      developerInstructions: "Test instructions",
+      hostSystemAgentActive: false,
+      nativeCodeModeEnabled: !restricted,
+      askUserAvailable: available,
+      config,
+    },
+  );
+  expect(thread.config["tools.experimental_request_user_input.enabled"]).toBe(expected);
+  if (config && !restricted) {
+    expect(thread.config).toMatchObject(config);
+  }
+});

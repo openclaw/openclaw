@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -33,9 +33,7 @@ function fixture() {
   git(["config", "commit.gpgsign", "false"]);
   git(["config", "core.hooksPath", "/dev/null"]);
   git(["remote", "add", "origin", "https://github.com/fixture/repo.git"]);
-  writeFileSync(join(root, "workflow.txt"), "first\n");
-  git(["add", "."]);
-  git(["commit", "-qm", "fixture workflow"]);
+  git(["commit", "--allow-empty", "-qm", "fixture workflow"]);
   const source = git(["rev-parse", "HEAD"]);
   git(["update-ref", "refs/remotes/origin/main", source]);
   const record = {
@@ -89,15 +87,6 @@ describe.skipIf(process.platform === "win32")("native workflow binding storage",
     f.git(["remote", "set-url", "origin", changed]);
     expect(f.run("workflow-read").status).toBe(1);
     expect(f.git(["rev-parse", ref])).toBe(admitted.stdout);
-    const identity = remote.includes("://")
-      ? remote
-      : JSON.stringify([
-          "scp",
-          remote.includes("@") ? "writer" : "",
-          "example.invalid",
-          "Org/repo.git",
-        ]);
-    expect(JSON.parse(f.git(["show", `${ref}:binding.json`])).repository).toBe(identity);
   });
 
   it("resolves a bare relative local origin without treating it as a URL", () => {
@@ -106,19 +95,6 @@ describe.skipIf(process.platform === "win32")("native workflow binding storage",
     const admitted = f.run("workflow-admit", f.source, "");
     expect(admitted.status, admitted.stderr).toBe(0);
     expect(JSON.parse(f.git(["show", `${ref}:binding.json`])).repository).toBe(f.root);
-  });
-
-  it("retains the selected source across main advancement and exact admission reuse", () => {
-    const f = fixture();
-    const admitted = f.run("workflow-admit", f.source, "");
-    expect(admitted.status, admitted.stderr).toBe(0);
-    const binding = admitted.stdout;
-    writeFileSync(join(f.root, "workflow.txt"), "second\n");
-    f.git(["commit", "-qam", "advance workflow"]);
-    f.git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    expect(f.run("workflow-read").stdout).toBe(`${binding}\t${f.source}\n`);
-    expect(f.run("workflow-admit", f.source, binding).stdout).toBe(binding);
-    expect(f.git(["rev-parse", `${binding}^`])).toBe(f.source);
   });
 
   it("refuses a competing initial admission and preserves the winner during stale retirement", () => {

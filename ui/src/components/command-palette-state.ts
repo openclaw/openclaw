@@ -15,7 +15,7 @@ import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-sear
 import {
   createHumanMentionMenu,
   type HumanMentionMenuHost,
-} from "../pages/chat/components/chat-composer-mention-menu.tsx";
+} from "../pages/chat/components/chat-composer-mention-menu-state.ts";
 import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import { PluginIconOwner, pluginIconFetchContext } from "../pages/plugins/plugin-icon-owner.ts";
 import {

@@ -3,7 +3,7 @@ import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it } from "vitest";
 import { matrixPlugin } from "./channel.js";
 import { resolveMatrixAccount } from "./matrix/accounts.js";
-import { resolveMatrixConfigForAccount } from "./matrix/client/config.js";
+import { resolveMatrixAuthContext } from "./matrix/client/config.js";
 import type { MatrixSetupInput } from "./setup-config.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 import type { CoreConfig } from "./types.js";
@@ -205,7 +205,11 @@ describe("matrix directory", () => {
     expect(defaultAccount?.groups).toEqual({ "!room:example.org": { requireMention: true } });
     const opsAccount = updated.channels?.["matrix"]?.accounts?.ops;
     expect(opsAccount).toMatchObject({ enabled: true, ...auth });
-    const resolvedOps = resolveMatrixConfigForAccount(updated, "ops", {});
+    const resolvedOps = resolveMatrixAuthContext({
+      cfg: updated,
+      accountId: "ops",
+      env: {},
+    }).resolved;
     expect(resolvedOps).toMatchObject(auth);
     expect(resolvedOps.deviceId).toBeUndefined();
   });
@@ -281,7 +285,11 @@ describe("matrix directory", () => {
           enabled: true,
           encryption: true,
         });
-        const resolvedOps = resolveMatrixConfigForAccount(updated, "ops", process.env);
+        const resolvedOps = resolveMatrixAuthContext({
+          cfg: updated,
+          accountId: "ops",
+          env: process.env,
+        }).resolved;
         expect(resolvedOps).toMatchObject({
           homeserver: "https://ops.env.example.org",
           accessToken: "ops-env-token",

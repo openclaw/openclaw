@@ -21,7 +21,7 @@ import {
   createCompletionScope,
   notifyChildStarted,
   childTurnCompletedNotification,
-  directSpawnItem,
+  collabItem,
   nativeCompletionNotification,
   registerParent,
   successfulSendInputOutput,
@@ -33,23 +33,8 @@ import type {
   CodexNativeSubagentSubmissionStore,
   CodexNativeSubagentSubmission,
 } from "./native-subagent-submission.js";
-import type { CodexServerNotification } from "./protocol.js";
 import { matchesCodexNativeSubagentSubmissionBinding } from "./session-binding-record.js";
 import { createCodexTestBindingStore } from "./session-binding.test-helpers.js";
-
-function spawnNotification(
-  childThreadId = "child-thread",
-  turnId = "parent-turn",
-): CodexServerNotification {
-  return {
-    method: "item/completed",
-    params: {
-      threadId: "parent-thread",
-      turnId,
-      item: directSpawnItem("v2", "parent-thread", childThreadId),
-    },
-  };
-}
 
 afterEach(() => vi.useRealTimers());
 
@@ -101,7 +86,7 @@ describe("native assignment completion custody", () => {
       let pendingSuccessor: ReturnType<typeof registerParent> | undefined;
       try {
         await notifyChildStarted(client, "parent-thread", "early-child");
-        await client.notify(spawnNotification("early-child", "parent-turn"));
+        await client.spawn("early-child");
         expect(claimChildThread).not.toHaveBeenCalled();
         expect(claimDirectChild).not.toHaveBeenCalled();
         expect(runtime.createAgentHarnessCompletionEventSink).not.toHaveBeenCalled();
@@ -135,7 +120,7 @@ describe("native assignment completion custody", () => {
         if (ending === "ready") {
           const owner = await pending;
           owner.bindTurn("parent-turn");
-          await client.notify(spawnNotification("child-thread", "parent-turn"));
+          await client.spawn();
           expect(claimDirectChild).toHaveBeenCalledExactlyOnceWith("child-thread");
           expect(runtime.createAgentHarnessCompletionEventSink).toHaveBeenCalledExactlyOnceWith(
             expect.objectContaining({
@@ -156,7 +141,7 @@ describe("native assignment completion custody", () => {
             await notifyChildStarted(client);
             expect(runtime.createAgentHarnessCompletionEventSink).not.toHaveBeenCalled();
             expect(replacement.live()).toHaveLength(1);
-            await client.notify(spawnNotification("child-thread", "replacement-turn"));
+            await client.spawn("child-thread", "replacement-turn");
             expect(runtime.createAgentHarnessCompletionEventSink).toHaveBeenCalledOnce();
             expect(replacement.live()).toHaveLength(2);
             await successor.unregister();
@@ -199,7 +184,7 @@ describe("native assignment completion custody", () => {
         const other = await registerParent(monitor);
         other.bindTurn("other-turn");
         // Native spawn evidence can arrive before the admitting turn/start response.
-        await client.notify(spawnNotification("child-thread", "parent-turn"));
+        await client.spawn();
         owner.bindTurn("parent-turn");
         await owner.unregister();
         expect(first.live()).toHaveLength(1);
@@ -250,7 +235,7 @@ describe("native assignment completion custody", () => {
     const parent = await registerParent(monitor);
     parent.bindTurn("parent-turn");
     for (const child of ["child-thread", "other-child"]) {
-      await client.notify(spawnNotification(child, "parent-turn"));
+      await client.spawn(child);
       await client.notify(turnStartedNotification("child-turn", { threadId: child }));
     }
     await parent.unregister();
@@ -276,22 +261,8 @@ describe("native assignment completion custody", () => {
     });
     const parent = await registerParent(monitor);
     parent.bindTurn("parent-turn");
-    await client.notify(spawnNotification("child-thread", "parent-turn"));
-    await client.notify({
-      method: "item/completed",
-      params: {
-        threadId: "parent-thread",
-        turnId: "parent-turn",
-        item: {
-          id: "send-child",
-          type: "collabAgentToolCall",
-          tool: "sendInput",
-          status: "completed",
-          senderThreadId: "parent-thread",
-          receiverThreadIds: ["child-thread"],
-        },
-      },
-    });
+    await client.spawn();
+    await client.item(collabItem("sendInput", ["child-thread"], { id: "send-child" }));
     await client.notify(
       successfulSendInputOutput({ callId: "send-child", submissionId: "followup-turn" }),
     );
@@ -510,28 +481,13 @@ async function createSubmissionFixture() {
   parent.bindTurn("parent-turn-a");
   await notifyChildStarted(client);
   await client.notify(turnStartedNotification("turn-a"));
-  await client.notify(
-    childTurnCompletedNotification({
-      turnId: "turn-a",
-      status: "completed",
-      items: [{ id: "a", type: "agentMessage", text: "result A" }],
+  await client.finishTurn("turn-a", { id: "a", type: "agentMessage", text: "result A" });
+  await client.item(
+    collabItem("wait", ["child-thread"], {
+      agentsStates: { "child-thread": { status: "completed", message: "result A" } },
     }),
+    "parent-turn-a",
   );
-  await client.notify({
-    method: "item/completed",
-    params: {
-      threadId: binding.threadId,
-      turnId: "parent-turn-a",
-      item: {
-        type: "collabAgentToolCall",
-        tool: "wait",
-        status: "completed",
-        senderThreadId: binding.threadId,
-        receiverThreadIds: ["child-thread"],
-        agentsStates: { "child-thread": { status: "completed", message: "result A" } },
-      },
-    },
-  });
   await vi.waitFor(() =>
     expect(isCodexAppServerLiveThreadClaimed(client as never, "child-thread")).toBe(false),
   );
@@ -540,22 +496,13 @@ async function createSubmissionFixture() {
 
   const submit = async (submissionId: string) => {
     parent.bindTurn("parent-turn-b");
-    await client.notify({
-      method: "item/completed",
-      params: {
-        threadId: binding.threadId,
-        turnId: "parent-turn-b",
-        item: {
-          id: "send-b",
-          type: "collabAgentToolCall",
-          tool: "sendInput",
-          status: "completed",
-          senderThreadId: binding.threadId,
-          receiverThreadIds: ["child-thread"],
-          agentsStates: { "child-thread": { status: "running" } },
-        },
-      },
-    });
+    await client.item(
+      collabItem("sendInput", ["child-thread"], {
+        id: "send-b",
+        agentsStates: { "child-thread": { status: "running" } },
+      }),
+      "parent-turn-b",
+    );
     await client.notify(
       successfulSendInputOutput({
         parentThreadId: binding.threadId,
@@ -625,13 +572,7 @@ it("admits a delayed exact start under warm backing and retains its completion o
   await expect(releaseCodexAppServerLiveThread(client as never, "child-thread")).resolves.toBe(
     false,
   );
-  await client.notify(
-    childTurnCompletedNotification({
-      turnId: "turn-b",
-      status: "completed",
-      items: [{ id: "b", type: "agentMessage", text: "result B" }],
-    }),
-  );
+  await client.finishTurn("turn-b", { id: "b", type: "agentMessage", text: "result B" });
   await vi.waitFor(async () => expect(await submissionStore.read()).toEqual([]));
   expect(runtime.deliverAgentHarnessCompletion).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({ childSessionKey: runId, result: "result B" }),
@@ -648,41 +589,34 @@ async function startTurn(client: Client, id: string) {
 }
 
 async function completeTurn(client: Client, id: string, text: string) {
-  await client.notify(
-    childTurnCompletedNotification({
-      turnId: id,
-      status: "completed",
-      items: [{ type: "agentMessage", id: `message-${id}`, phase: "final_answer", text }],
-    }),
-  );
+  await client.finishTurn(id, {
+    type: "agentMessage",
+    id: `message-${id}`,
+    phase: "final_answer",
+    text,
+  });
 }
 
 async function collabCall(client: Client, tool: "wait" | "sendInput", id: string) {
   for (const phase of ["started", "completed"] as const) {
-    await client.notify({
-      method: `item/${phase}`,
-      params: {
-        threadId: "parent-thread",
-        turnId: "parent-turn",
-        item: {
-          type: "collabAgentToolCall",
-          id,
-          tool,
-          status: phase === "started" ? "inProgress" : "completed",
-          senderThreadId: "parent-thread",
-          receiverThreadIds: ["child-thread"],
-          agentsStates:
-            phase === "started"
-              ? {}
-              : {
-                  "child-thread":
-                    tool === "wait"
-                      ? { status: "completed", message: "A result" }
-                      : { status: "running" },
-                },
-        },
-      },
-    });
+    await client.item(
+      collabItem(tool, ["child-thread"], {
+        id,
+        status: phase === "started" ? "inProgress" : "completed",
+        agentsStates:
+          phase === "started"
+            ? {}
+            : {
+                "child-thread":
+                  tool === "wait"
+                    ? { status: "completed", message: "A result" }
+                    : { status: "running" },
+              },
+      }),
+      "parent-turn",
+      "parent-thread",
+      phase,
+    );
   }
 }
 

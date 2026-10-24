@@ -8,7 +8,6 @@ import {
   openOpenClawAgentDatabase,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
-import { runInMemoryTestBackgroundContext } from "./background-context.test-support.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import * as memoryCpuWorkerRuntime from "./manager-cpu-worker-runtime.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
@@ -25,10 +24,8 @@ describe("memory index", () => {
     createConfig: createCfg,
     getFtsSessionManager,
     getPersistentManager,
-    requireManager,
-    resetManager: resetManagerForTest,
+    getPreparedPersistentManager,
     seedSessionTranscript: seedMemoryIndexSessionTranscript,
-    trackManager,
   } = fixture;
 
   it("scores a recovered keyword answer outside the top vector candidates", async () => {
@@ -92,14 +89,7 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0.35,
     });
-    const result = await getMemorySearchManager({
-      runInBackgroundContext: runInMemoryTestBackgroundContext,
-      cfg,
-      agentId: "main",
-    });
-    const manager = requireManager(result);
-    trackManager(manager);
-    await resetManagerForTest(manager);
+    const manager = await getPreparedPersistentManager(cfg);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -258,14 +248,7 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0.35,
     });
-    const result = await getMemorySearchManager({
-      runInBackgroundContext: runInMemoryTestBackgroundContext,
-      cfg,
-      agentId: "main",
-    });
-    const manager = requireManager(result);
-    trackManager(manager);
-    await resetManagerForTest(manager);
+    const manager = await getPreparedPersistentManager(cfg);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -371,14 +354,7 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0,
     });
-    const result = await getMemorySearchManager({
-      runInBackgroundContext: runInMemoryTestBackgroundContext,
-      cfg,
-      agentId: "main",
-    });
-    const manager = requireManager(result);
-    trackManager(manager);
-    await resetManagerForTest(manager);
+    const manager = await getPreparedPersistentManager(cfg);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -442,14 +418,7 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0,
     });
-    const result = await getMemorySearchManager({
-      runInBackgroundContext: runInMemoryTestBackgroundContext,
-      cfg,
-      agentId: "main",
-    });
-    const manager = requireManager(result);
-    trackManager(manager);
-    await resetManagerForTest(manager);
+    const manager = await getPreparedPersistentManager(cfg);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -497,14 +466,7 @@ describe("memory index", () => {
       extraPaths: [staleDir, freshDir],
       minScore: 0,
     });
-    const result = await getMemorySearchManager({
-      runInBackgroundContext: runInMemoryTestBackgroundContext,
-      cfg,
-      agentId: "main",
-    });
-    const manager = requireManager(result);
-    trackManager(manager);
-    await resetManagerForTest(manager);
+    const manager = await getPreparedPersistentManager(cfg);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -538,14 +500,7 @@ describe("memory index", () => {
       extraPaths,
       minScore: 0,
     });
-    const result = await getMemorySearchManager({
-      runInBackgroundContext: runInMemoryTestBackgroundContext,
-      cfg,
-      agentId: "main",
-    });
-    const manager = requireManager(result);
-    trackManager(manager);
-    await resetManagerForTest(manager);
+    const manager = await getPreparedPersistentManager(cfg);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -630,14 +585,7 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0,
     });
-    const result = await getMemorySearchManager({
-      runInBackgroundContext: runInMemoryTestBackgroundContext,
-      cfg,
-      agentId: "main",
-    });
-    const manager = requireManager(result);
-    trackManager(manager);
-    await resetManagerForTest(manager);
+    const manager = await getPreparedPersistentManager(cfg);
     if (!manager.status().fts?.available) {
       return;
     }
@@ -676,14 +624,7 @@ describe("memory index", () => {
       provider: "none",
       minScore: 0,
     });
-    const result = await getMemorySearchManager({
-      runInBackgroundContext: runInMemoryTestBackgroundContext,
-      cfg,
-      agentId: "main",
-    });
-    const manager = requireManager(result);
-    trackManager(manager);
-    await resetManagerForTest(manager);
+    const manager = await getPreparedPersistentManager(cfg);
     if (!manager.status().fts?.available) {
       return;
     }

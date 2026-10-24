@@ -17,6 +17,7 @@ import {
 import type { SessionEntryWritePostimages } from "../../config/sessions/session-entry-write-postimage.js";
 import { readTranscriptContextVersionsInTransaction } from "../../config/sessions/session-transcript-context-versions.js";
 import { buildRestartRecoveryExpectedState } from "../../config/sessions/session-transcript-turn-state.js";
+import { promptReport } from "../../config/sessions/system-prompt-report.test-support.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import {
   openOpenClawAgentDatabase,
@@ -29,14 +30,7 @@ import { withEngineStoreAdmission } from "./admission-scope.js";
 import { mixedAgentConnection, useMixedAgentPair } from "./mixed-agent.conformance.test-support.js";
 
 function report(generatedAt: number): NonNullable<SessionEntry["systemPromptReport"]> {
-  return {
-    source: "run",
-    generatedAt,
-    systemPrompt: { chars: 10, projectContextChars: 0, nonProjectContextChars: 10 },
-    injectedWorkspaceFiles: [],
-    skills: { promptChars: 0, entries: [] },
-    tools: { listChars: 0, schemaChars: 0, entries: [] },
-  };
+  return promptReport(generatedAt, 10, 0);
 }
 
 function persisted(db: EngineConnection, sessionKey: string, sessionId: string) {

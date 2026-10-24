@@ -111,7 +111,7 @@ describe("plugin session fork visibility transport", () => {
           },
           async () => {
             const baseUrl = `http://127.0.0.1:${claim.port}/v1`;
-            const model: Model<"openai-completions"> = {
+            const model = {
               provider: fixture.providerId,
               id: "fork-model",
               name: "Fork model",
@@ -122,7 +122,7 @@ describe("plugin session fork visibility transport", () => {
               cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
               contextWindow: 8192,
               maxTokens: 1024,
-            };
+            } satisfies Model<"openai-completions">;
             const config: OpenClawConfig = {
               agents: {
                 defaults: {

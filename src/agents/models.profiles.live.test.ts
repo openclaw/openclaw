@@ -1079,7 +1079,16 @@ describe("explicit live model discovery scope", () => {
     }
   });
 
-  it("honors configured local Ollama credentials before the live local marker", async () => {
+  it.each([
+    {
+      name: "honors configured local Ollama credentials before the live local marker",
+      baseUrl: "http://127.0.0.1:11434",
+    },
+    {
+      name: "reuses configured local Ollama credentials across canonical base URL forms",
+      baseUrl: "http://127.0.0.1:11434/v1",
+    },
+  ])("$name", async ({ baseUrl }) => {
     const oldEnv = process.env.LOCAL_OLLAMA_API_KEY;
     process.env.LOCAL_OLLAMA_API_KEY = "secured-local-key";
     try {
@@ -1090,54 +1099,7 @@ describe("explicit live model discovery scope", () => {
             providers: {
               ollama: {
                 api: "ollama",
-                baseUrl: "http://127.0.0.1:11434",
-                apiKey: { source: "env", provider: "default", id: "LOCAL_OLLAMA_API_KEY" },
-                models: [],
-              },
-            },
-          },
-        },
-        providers: ["ollama"],
-        env: {},
-      });
-
-      await expect(
-        resolveLiveModelApiKeyInfo({
-          model: {
-            provider: "ollama",
-            id: "gemma3:4b",
-            api: "ollama",
-            baseUrl: "http://127.0.0.1:11434",
-          } as Model,
-          cfg,
-          requireProfileKeys: false,
-        }),
-      ).resolves.toEqual({
-        apiKey: "secured-local-key",
-        source: "env: LOCAL_OLLAMA_API_KEY (models.json secretref)",
-        mode: "api-key",
-      });
-    } finally {
-      if (oldEnv === undefined) {
-        delete process.env.LOCAL_OLLAMA_API_KEY;
-      } else {
-        process.env.LOCAL_OLLAMA_API_KEY = oldEnv;
-      }
-    }
-  });
-
-  it("reuses configured local Ollama credentials across canonical base URL forms", async () => {
-    const oldEnv = process.env.LOCAL_OLLAMA_API_KEY;
-    process.env.LOCAL_OLLAMA_API_KEY = "secured-local-key";
-    try {
-      const cfg = applyLiveProviderDiscoveryPluginCompat({
-        config: {
-          plugins: {},
-          models: {
-            providers: {
-              ollama: {
-                api: "ollama",
-                baseUrl: "http://127.0.0.1:11434/v1",
+                baseUrl,
                 apiKey: { source: "env", provider: "default", id: "LOCAL_OLLAMA_API_KEY" },
                 models: [],
               },

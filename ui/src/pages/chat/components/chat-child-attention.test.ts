@@ -81,6 +81,12 @@ it.each(["failed", "timeout"] as const)(
     flush();
     expect(notice.querySelector('[role="alert"]')?.textContent).toContain(failed.lastRunError);
     expect(notice.querySelector("img")).toBeNull();
+    update({ subagentSessions: [{ ...failed, suppressErrorNotice: true }] });
+    flush();
+    expect(notice.querySelector(".chat-child-attention")).toBeNull();
+    update({ subagentSessions: [failed] });
+    flush();
+    expect(notice.querySelector('[role="alert"]')?.textContent).toContain(failed.lastRunError);
     update({ subagentSessions: [{ ...failed, lastReadAt: now }] });
     flush();
     expect(notice.querySelector(".chat-child-attention")).toBeNull();

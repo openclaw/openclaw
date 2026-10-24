@@ -232,7 +232,7 @@ describe("ClawRouter plugin", () => {
     ] as const) {
       const { calls, dispatch } = createStreamCapture(provider, agentId);
       dispatch(streamModel(), { sessionId });
-      captured.push(calls[0]?.headers ?? {});
+      captured.push(omitNullRequestHeaders(calls[0]?.headers) ?? {});
     }
 
     expect(captured).toHaveLength(2);
@@ -446,3 +446,4 @@ describe("ClawRouter plugin", () => {
     });
   });
 });
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";

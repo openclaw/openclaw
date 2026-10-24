@@ -225,6 +225,9 @@ describe("Crabbox warm-image doctor", () => {
                 provider: "aws",
                 startedAtMs: now - (operation === "scrubbing" ? 1_200_000 : 0),
                 phase: operation,
+                ...(operation === "uncertain"
+                  ? { checkpointIds: ["chk_interrupted_a", "chk_interrupted_b"] }
+                  : {}),
               });
       }
       store.register("profile", record);
@@ -259,6 +262,7 @@ describe("Crabbox warm-image doctor", () => {
           "supports native checkpoints",
         ]);
       } else if (operation === "uncertain") {
+        expectText(findings[0]?.fixHint, ["chk_interrupted_a", "chk_interrupted_b"]);
         expect(findings[0]?.fixHint).toContain(
           "--recover capture-selector --acknowledge-provider-cleanup",
         );

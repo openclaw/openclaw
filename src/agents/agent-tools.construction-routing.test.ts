@@ -9,6 +9,7 @@ import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
 } from "./cron-creator-authority-context.js";
+import { createOpenClawOnlyToolConstructionPlan } from "./test-helpers/tool-construction-plan.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 const mocks = vi.hoisted(() => {
@@ -61,13 +62,7 @@ function firstOpenClawToolsOptions(): { cronSelfRemoveOnlyJobId?: string } | und
     | undefined;
 }
 
-const openClawPlan = {
-  includeBaseCodingTools: false,
-  includeShellTools: false,
-  includeChannelTools: false,
-  includeOpenClawTools: true,
-  includePluginTools: false,
-};
+const openClawPlan = createOpenClawOnlyToolConstructionPlan();
 const shellPlan = { ...openClawPlan, includeShellTools: true, includeOpenClawTools: false };
 
 describe("createOpenClawCodingTools cron scope", () => {

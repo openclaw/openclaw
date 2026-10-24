@@ -26,6 +26,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import * as inProcessDispatch from "./server-plugin-in-process-dispatch.js";
 import { createGatewaySubagentRuntime } from "./server-plugin-subagent-runtime.js";
+import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 
 const HOST_PLUGIN_ID = "test-completion";
 const PINNED_KEY = "sk-pinned-primary";
@@ -233,12 +234,7 @@ describe("plugin background completion transport", () => {
       let pending: Promise<{ text: string }> | undefined;
       await inProcessDispatch.withOperatorToolGatewayAuthority(
         {
-          authenticatedUserProfile: {
-            profileId: profile.id,
-            displayName: "Completion operator",
-            hasAvatar: false,
-            updatedAt: 1,
-          },
+          authenticatedUserProfile: gatewayProfile(profile.id, "Completion operator"),
           scopes: ["operator.write"],
         },
         async () => {

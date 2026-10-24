@@ -200,7 +200,7 @@ it("uses allowFrom to disambiguate bare numeric DM delivery targets", () => {
   });
 });
 
-it("uses webhook persona delivery for bound thread text replies", async () => {
+it("uses webhook persona delivery for bound thread text without a native reply", async () => {
   mockDiscordBoundThreadManager(hoisted);
   const cfg = { channels: { discord: { token: "resolved-token" } } };
 
@@ -209,7 +209,6 @@ it("uses webhook persona delivery for bound thread text replies", async () => {
     cfg,
     text: "hello from persona",
     threadId: "thread-1",
-    replyToId: "reply-1",
     identity: {
       name: "Codex",
       avatarUrl: "https://example.com/avatar.png",
@@ -226,7 +225,6 @@ it("uses webhook persona delivery for bound thread text replies", async () => {
     username: "Codex",
     avatarUrl: "https://example.com/avatar.png",
   });
-  expect(options.replyTo).toEqual({ messageId: "reply-1", scope: "all" });
   expect(options.cfg).toBe(cfg);
   expect(sendMessage).not.toHaveBeenCalled();
   expect(result).toEqual(sendResult("msg-webhook-1", "thread-1"));

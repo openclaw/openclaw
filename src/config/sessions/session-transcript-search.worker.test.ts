@@ -34,7 +34,7 @@ import {
   searchSessionTranscriptsReadOnlySync,
 } from "./session-transcript-search.js";
 import {
-  historyClearTimeout,
+  clearDatabaseWorkerIdleRetirement,
   historyLane,
   projectionLane,
   registerSessionTranscriptReaderLane,
@@ -511,7 +511,7 @@ describe("search reader concurrency", () => {
                 reader.release();
               }
               if (ownedLane) {
-                historyClearTimeout(ownedLane.idleTimer);
+                clearDatabaseWorkerIdleRetirement(ownedLane);
               }
               await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
               const failures = closed.flatMap((result) =>

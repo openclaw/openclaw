@@ -40,6 +40,10 @@ import {
 } from "./current-conversation-bindings.js";
 import { updateCurrentConversationBindingRecordInDatabase as updateRecordInDatabase } from "./current-conversation-bindings.kernel.js";
 import { currentConversationBindingPublication as publication } from "./current-conversation-bindings.publication.js";
+import {
+  recordPublications,
+  type CurrentConversationBindingPublication,
+} from "./current-conversation-bindings.test-support.js";
 import { conversationBindingOperations } from "./current-conversation-bindings.worker.js";
 import { expectedCurrentSessionBinding } from "./session-binding-native-selection.js";
 import {
@@ -52,10 +56,6 @@ import {
 } from "./session-binding-service.js";
 import type { SessionBindingRecord } from "./session-binding.types.js";
 
-type CurrentConversationBindingPublication = Extract<
-  Parameters<Parameters<typeof publication.subscribeFacts>[0]>[0],
-  { receipt: unknown }
->;
 const service = getSessionBindingService();
 
 aroundEach(async (runTest) => {
@@ -128,17 +128,6 @@ function bindingRows(columns = "*") {
 
 function touch(binding: SessionBindingRecord, at: number) {
   return touchRecord({ conversation: binding.conversation, bindingId: binding.bindingId, at });
-}
-
-function recordPublications() {
-  const publications: CurrentConversationBindingPublication[] = [];
-  const unsubscribe = publication.subscribeFacts((value) => {
-    if ("receipt" in value) {
-      publications.push(value);
-    }
-  });
-  onTestFinished(unsubscribe);
-  return publications;
 }
 
 function facts(value: CurrentConversationBindingPublication) {

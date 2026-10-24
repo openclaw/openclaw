@@ -72,6 +72,27 @@ retain restart behavior under a broader no-op prefix.
 
 ## Reusable runtime utilities
 
+### Runtime execution profile
+
+`getRuntimeExecutionProfile()` from `openclaw/plugin-sdk/runtime-env` returns
+`dynamic-execution` for Node/Bun installations and JIT/bytecode standalone hosts,
+or `embedded-aot` for an AOT standalone. The artifact owns this process-stable
+fact; it is not a user setting or an authorization grant.
+
+Before intentionally evaluating host JavaScript, call
+`assertRuntimeSupportsDynamicExecution("Your feature name")` from the same
+entrypoint. In an embedded AOT host it throws an error naming the required
+runtime and the next step. Propagate that error instead of switching to another
+host evaluator. Fixed programs should be ordinary source functions; runtime
+schemas and syntax checks need codegen-free validators and parsers.
+
+Installing a plugin after compilation does not embed it, even if it ships
+JavaScript rather than TypeScript. Run fetched code in a dynamic-execution host
+or rebuild the complete artifact with the plugin. Metadata discovery does not
+execute its runtime. See [Runtime execution profiles](/concepts/runtime-profiles).
+
+### Process and network utilities
+
 `runInDetachedAsyncContext` from `openclaw/plugin-sdk/concurrency-runtime` starts
 work in the host's context-free async root. Use it at an independently admitted
 service request boundary when a long-lived listener can retain its startup
@@ -154,6 +175,19 @@ for the terminal's exit before releasing its backend resources.
 
 Sandbox command adapters retain the sandbox owner's per-stream output bound,
 `SANDBOX_COMMAND_MAX_BUFFER_BYTES`, from `openclaw/plugin-sdk/sandbox`.
+
+Bundled plugin worker and child entries use
+`createPluginRuntimeProcessEntrypoint(name, import.meta.url)` from
+`openclaw/plugin-sdk/process-runtime`, then `resolveRuntimeWorkerUrl(entry)`.
+The host's runtime-process manifest owns these cataloged targets, including their
+source and installed package paths; package `openclaw.build.workerEntries`
+metadata must agree with that manifest. Keep each worker in an explicit entry
+module rather than starting its host module again or passing source with
+`eval: true`.
+
+Third-party plugins retain the explicit descriptor contract of
+`resolveRuntimeWorkerUrl`; loading new plugin code is a separate runtime boundary
+from declaring entries embedded in a standalone executable.
 
 `WorkerTaskPool` from `openclaw/plugin-sdk/process-runtime` retains workers and
 unconsumed inputs when termination fails. Retry `close()` on that same pool;

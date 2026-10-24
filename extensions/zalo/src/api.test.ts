@@ -4,26 +4,13 @@ import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const effectGate = vi.hoisted(() => ({ prepare: undefined as (() => Promise<void>) | undefined }));
-vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>();
-  return {
-    ...actual,
-    captureEffectAuthority: () => {
-      const authority = actual.captureEffectAuthority();
-      const prepare = effectGate.prepare;
-      return prepare
-        ? {
-            ...authority,
-            initiate: async <T>(effect: () => T | Promise<T>) => {
-              await prepare();
-              return authority.initiate(effect);
-            },
-          }
-        : authority;
-    },
-  };
-});
+const effectGate = await vi.hoisted(async () =>
+  (
+    await import("../../test-support/effect-preparation.test-support.js")
+  ).createEffectPreparationGate(),
+);
+// mock-isolation: Share the export-preserving factory, but keep the preparation gate suite-local.
+vi.mock("openclaw/plugin-sdk/fetch-runtime", effectGate.mockRuntime);
 
 const { resolvePinnedHostnameWithPolicyMock } = vi.hoisted(() => ({
   resolvePinnedHostnameWithPolicyMock: vi.fn(),

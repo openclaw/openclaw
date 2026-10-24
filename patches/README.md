@@ -149,3 +149,48 @@ The plugin package owner bundles patched runtime dependencies so installed
 WhatsApp plugins retain the adapter. Remove this patch and its registration
 when an upstream Baileys version accepts the current decoder and passes the
 same voice-note regression.
+
+`apache-arrow@21.2.0` replaces per-builder JavaScript generation for null
+sentinels with a direct predicate for the common `[null]` case and a snapshot
+`Set` for other sentinels. NaN, signed zero, undefined, bigint, and literal
+strings retain their equality semantics. Both CommonJS and ESM distributions,
+the TypeScript source, declarations, and maps are generated from the same owner.
+This lets LanceDB serialize memory writes when code generation from strings is
+disabled and avoids compiling a predicate for each column on ordinary Node/Bun.
+
+Remove this patch and its registration when an upstream release passes
+`extensions/memory-lancedb/arrow-null-predicates.test.ts` and the existing
+`lancedb-store.delete.test.ts` and `lancedb-store.staleness.test.ts` contracts. The former exercises both module formats in a
+Node process with `--disallow-code-generation-from-strings`; the latter covers
+memory writes, vector search, agent isolation, and reopened tables.
+
+`@shinyoshiaki/binary-data@0.6.1` uses ordinary closures for its finite numeric,
+stream, transaction, and BufferList methods instead of compiling functions at
+module initialization. This keeps the existing codec API and endian, byte-count,
+fragmented-read, and transactional-consumption behavior while allowing the
+OpenAI realtime WebRTC transport to load with JavaScript string compilation
+disabled. No runtime globals or werift call sites are patched.
+
+The patch SHA-256 is
+`231e04c1ca6a2f66dda30dfe23c1178d2df9fbc2161d9eac7689e3a751a85a9b`.
+Remove this patch and its registration when an upstream dependency release
+passes `extensions/openai/realtime-binary-codecs.test.ts` unmodified. The test
+covers all numeric codec wire bytes and fragmented transactional reads, plus a
+real werift DTLS handshake and encrypted application-data exchange over an
+in-memory datagram transport, with string compilation disabled throughout.
+
+`@openclaw/crabline@0.1.30` uses fixed generated protobuf codecs for Feishu frames instead of building codecs from a reflected schema on first use. The protobuf wire format, required fields, decimal uint64 IDs, object conversion, and private schema ownership are unchanged. The runtime imports only `protobufjs/minimal.js`; no dynamic-code-generation setting is required.
+
+The patch includes the canonical `dist/src/servers/feishu-wire.proto` plus `dist/src/servers/generate-feishu-wire.mjs`. Regenerate in the extracted package with `node dist/src/servers/generate-feishu-wire.mjs` (the generator uses pinned protobufjs-cli 2.7.0 and protobufjs 8.8.0 at build time). The original reflection source map is removed with its source-map reference rather than shipping incorrect debugger mappings. Existing public declarations remain unchanged; the new codec is an internal JavaScript module.
+
+Remove this patch and its registration when an upstream release passes `extensions/qa-lab/src/crabline-feishu-wire.test.ts`, including the real installed dependency round trip under Node's string-code-generation ban. The synthetic fixtures cover uint64 values beyond JavaScript's safe-integer range, negative int32, UTF-8 headers, arbitrary payload bytes, optional fields, unknown fields, malformed/truncated frames, and invalid IDs. They make no live Feishu or Gateway request.
+
+The owning plugin manifests bundle these patched runtime dependencies. Selected-plugin distributions carry those bundle declarations and their installed dependency closures into Docker and node artifacts; the default core package does not gain optional media or QA dependencies.
+`playwright-core@1.64.1` has an approved syntax-only normalizer patch. Acorn
+parses serialized callbacks in the same function-body grammar instead of
+constructing a host Function. Execution remains in the target browser; ordinary
+functions, method shorthand, and async methods retain Playwright's normalization.
+The package extension supplies Acorn, and the root and browser plugin packages
+bundle the patched runtime for npm installs. Remove the patch, extension, and
+exact-version guard when upstream passes the browser serialization regression
+with host string compilation disabled.

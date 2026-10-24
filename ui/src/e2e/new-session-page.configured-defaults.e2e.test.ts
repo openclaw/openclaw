@@ -74,7 +74,7 @@ suite.define(() => {
                 "chat.metadata",
                 "chat.startup",
                 "sessions.create",
-                ...(required ? ["sessions.describe", "sessions.send"] : []),
+                ...(required ? ["sessions.describe", "chat.send"] : []),
                 ...(source === "identity" ? ["users.prefs.get", "users.prefs.set"] : []),
               ],
               sessions: [],
@@ -105,10 +105,11 @@ suite.define(() => {
                 "sessions.describe": {
                   session: {
                     key: "agent:main:configured-defaults-proof",
+                    sessionId: "session:agent:main:configured-defaults-proof",
                     placement: { state: "active" },
                   },
                 },
-                "sessions.send": { runId: "configured-defaults-proof", status: "started" },
+                "chat.send": { runId: "configured-defaults-proof", status: "started" },
                 "users.prefs.get": {
                   status: "ok",
                   entries: { "new-session.migration.v1": true, "new-session.v1:main": preference },
@@ -372,7 +373,14 @@ suite.define(() => {
             const request = await gateway.waitForRequest("sessions.create");
             expect(request.params).toMatchObject({ model: preference.model, thinkingLevel: "low" });
             expect(request.params).toHaveProperty("fastMode", true);
-            const initialTurn = required ? await gateway.waitForRequest("sessions.send") : request;
+            const initialTurn = required ? await gateway.waitForRequest("chat.send") : request;
+            if (required) {
+              expect(initialTurn.params).toMatchObject({
+                sessionKey: "agent:main:configured-defaults-proof",
+                sessionId: "session:agent:main:configured-defaults-proof",
+                expectedLeafEntryId: null,
+              });
+            }
             if (configuredDefaults && source === "browser") {
               expect(initialTurn.params).toMatchObject({
                 attachments: [

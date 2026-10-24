@@ -35,6 +35,7 @@ import { createSubscribedSessionHarness } from "../../embedded-agent-subscribe.e
 import { SessionManager } from "../../sessions/index.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { runEmbeddedAttemptSettledPhase } from "./attempt-settle.js";
+import { createSettledStreamResult as settledResult } from "./attempt-stream.test-helpers.js";
 
 type SettledInput = Parameters<typeof runEmbeddedAttemptSettledPhase>[0];
 type SettleMockInput = {
@@ -53,28 +54,6 @@ type FixtureOverrides = {
   sessionManager?: SettledInput["prepared"]["sessionRuntime"]["sessionManager"];
   waitForPendingEvents?: (options?: { includePartialReplies?: boolean }) => Promise<void>;
 };
-
-type SettledStream = Awaited<
-  ReturnType<typeof import("./attempt-stream-settle.js").settleEmbeddedAttemptStream>
->;
-function settledResult(overrides: Partial<SettledStream> = {}): SettledStream {
-  return {
-    promptError: null,
-    promptErrorSource: null,
-    timedOutDuringCompaction: false,
-    compactionOccurredThisAttempt: false,
-    messagesSnapshot: [],
-    sessionIdUsed: "session-1",
-    lastAssistant: undefined,
-    currentAttemptAssistant: undefined,
-    currentAttemptCompletedAssistant: undefined,
-    attemptUsage: undefined,
-    lastCallUsage: undefined,
-    promptCache: undefined,
-    successfulNestedToolNames: [],
-    ...overrides,
-  };
-}
 
 function createFixture(overrides: FixtureOverrides = {}) {
   const order: string[] = [];

@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareModelRequestBody } from "../../../packages/ai/src/transports/model-request-body.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import {
   clearProviderPromptState,
@@ -315,10 +316,7 @@ describe("provider prompt state", () => {
 
   it("records identity after an asynchronous payload hook finishes", async () => {
     const stream = createAssistantMessageEventStream();
-    let releasePayloadHook: (() => void) | undefined;
-    const payloadHookGate = new Promise<void>((resolve) => {
-      releasePayloadHook = resolve;
-    });
+    const { promise: payloadHookGate, resolve: releasePayloadHook } = createDeferred();
     let observedPayloadHook: Promise<unknown> | undefined;
     const transport = vi.fn<StreamFn>((_model, _context, options) => {
       observedPayloadHook = options?.onPayload?.({ input: "hello" }, model) as Promise<unknown>;

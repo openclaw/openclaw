@@ -6,8 +6,14 @@ import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { fnv1aUtf16 } from "../../../lib/fnv1a.ts";
 import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import { createApplicationGateway } from "../../../test-helpers/application-context-fixtures.ts";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { ChatContextPanel } from "./chat-context-panel.tsx";
 import { ChatDetailsEnvironmentMobile } from "./chat-details-environment-mobile.tsx";
 import { ChatDetailsEnvironment } from "./chat-details-environment.tsx";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
@@ -93,19 +99,46 @@ it("omits empty linked-work disclosures and opens arriving pull requests", async
 it("keeps compaction busy until the owning request settles and uses the current callback", async () => {
   const pending = createDeferred();
   const compact = vi.fn(() => pending.promise);
-  const element = await mount({
-    selectedSession: {
-      key: "agent:main:details",
-      kind: "direct",
-      totalTokens: 50000,
-      contextTokens: 100000,
-    },
-    onCompact: compact,
-  });
-  const disclosure = element.querySelector<HTMLDetailsElement>(".chat-details__context")!;
-  disclosure.open = true;
-  disclosure.dispatchEvent(new Event("toggle"));
-  flush();
+  const { gateway, publish } = createApplicationGateway();
+  const request = createGatewayRequestMock(() => ({
+    sessions: [
+      {
+        key: "agent:main:details",
+        contextWeight: {
+          source: "run",
+          generatedAt: 1,
+          systemPrompt: { chars: 4000, projectContextChars: 0, nonProjectContextChars: 4000 },
+          injectedWorkspaceFiles: [],
+          skills: { promptChars: 0, entries: [] },
+          tools: { listChars: 0, schemaChars: 0, entries: [] },
+        },
+      },
+    ],
+  }));
+  publish({ ...gateway.snapshot, phase: "connected", client: createTestGatewayClient(request) });
+  const view = mountSolid(() =>
+    createComponent(ChatContextPanel, {
+      presented: true,
+      details: {
+        currentAgentId: "main",
+        pullRequestsGateway: gateway,
+        selectedSession: {
+          key: "agent:main:details",
+          kind: "direct",
+          totalTokens: 50000,
+          contextTokens: 100000,
+        },
+        onCompact: compact,
+      },
+    }),
+  );
+  const element = view.container.querySelector("openclaw-chat-context-panel")!;
+  await element.updateComplete;
+  await waitForSolid(() =>
+    expect(element.querySelector<HTMLButtonElement>(".chat-context__compact")?.disabled).toBe(
+      false,
+    ),
+  );
   const button = element.querySelector<HTMLButtonElement>(".chat-context__compact")!;
   try {
     button.click();
@@ -121,7 +154,7 @@ it("keeps compaction busy until the owning request settles and uses the current 
   }
   await waitForSolid(() => expect(button.disabled).toBe(false));
   const replacement = vi.fn(async () => {});
-  element.props = { ...element.props!, onCompact: replacement };
+  element.details = { ...element.details!, onCompact: replacement };
   await element.updateComplete;
   button.click();
   await waitForSolid(() => expect(replacement).toHaveBeenCalledOnce());
@@ -289,7 +322,6 @@ it("projects direct active children through the live observer with stable rounde
   const live = element.querySelector<ChatSubagentActivityLive>("openclaw-chat-subagent-activity")!;
   await live.updateComplete;
   expect(live.rows[0]?.session).toBe(child);
-  expect(live.compact).toBe(true);
   expect(live.querySelector(".chat-details__agent-avatar")?.getAttribute("style")).toContain(
     String(fnv1aUtf16(child.key) % 360),
   );
@@ -409,7 +441,7 @@ it("shows finished subagents after the parent stops waiting and omits the group 
   expect(element.querySelector('[data-details-group="subagents"]')).toBeNull();
 });
 
-it("shows live environment and context facts while preserving disclosure intent", async () => {
+it("shows live environment facts without duplicating composer context", async () => {
   const element = await mount({
     detailsWorkspace: { label: "project", root: "/workspace/project", branch: "feature/details" },
     selectedSession: {
@@ -429,20 +461,7 @@ it("shows live environment and context facts while preserving disclosure intent"
   expect(environment.textContent).not.toContain("Design workstation");
   expect(environment.textContent).not.toContain("/workspace/project");
   expect(environment.querySelector('[aria-label="Copy path"]')).toBeNull();
-  const context = element.querySelector<HTMLDetailsElement>(".chat-details__context")!;
-  expect(context.querySelector("summary")?.textContent).toContain("50%");
-  context.open = true;
-  element.props = {
-    ...element.props!,
-    selectedSession: {
-      ...element.props!.selectedSession!,
-      totalTokens: 32000,
-      totalTokensFresh: false,
-    },
-  };
-  await element.updateComplete;
-  expect(context.open).toBe(true);
-  expect(context.querySelector("summary")?.textContent).toContain("~25%");
+  expect(element.querySelector(".chat-details__context")).toBeNull();
 });
 
 it.each([
@@ -609,7 +628,7 @@ it.each([false, true])(
   },
 );
 
-it("restores the Environment branch after publication even before stale diff facts refresh", async () => {
+it("keeps local Changes after publication and accepts a confirmed clean working tree", async () => {
   const branch = sessionBranch({ branch: "feature/published", additions: 7, deletions: 2 });
   const element = await mount({
     detailsWorkspace: { root: "/synthetic/project", label: "project", branch: branch.branch },
@@ -637,12 +656,58 @@ it("restores the Environment branch after publication even before stale diff fac
   });
   const environment = element.querySelector('[data-details-group="environment"]')!;
   expect(environment.textContent).toContain(branch.branch);
-  expect(environment.querySelector(".chat-pr__diff, .chat-pr__publication-actions")).toBeNull();
+  expect(environment.querySelector(".chat-pr__publication-actions")).toBeNull();
+  expect(environment.querySelector(".chat-pr__diff")?.textContent).toContain("+7");
+  expect(environment.querySelector(".chat-pr__diff")?.textContent).toContain("−2");
+  element.props = {
+    ...element.props!,
+    environment: {
+      uncommitted: { sessionKey: "agent:main:details", files: [], additions: 0, deletions: 0 },
+    },
+  };
+  await element.updateComplete;
+  expect(environment.querySelector(".chat-pr__diff")).toBeNull();
+  expect(environment.textContent).toContain(branch.branch);
   await waitForSolid(() =>
     expect(
       element.querySelector('[data-details-group="pull-requests"] a[href$="/pull/44"]'),
     ).not.toBeNull(),
   );
+});
+
+it("keeps unresolved publication recovery and a different unpublished branch available", async () => {
+  const failed = publication({
+    result: {
+      requestId: "failed",
+      status: "failed",
+      code: "unavailable",
+      message: "Publication failed.",
+      nextAction: "Check publication.",
+    },
+  });
+  const element = await mount({
+    detailsWorkspace: { root: "/synthetic/project", label: "project", branch: "feature/current" },
+    pullRequests: [pullRequest({ branch: "feature/current" })],
+    githubPublication: failed,
+  });
+  const environment = element.querySelector('[data-details-group="environment"]')!;
+  expect(environment.querySelector(".chat-pr__publication-actions")).toBeNull();
+  element.props = {
+    ...element.props!,
+    githubPublication: publication({
+      locked: true,
+    }),
+  };
+  await element.updateComplete;
+  expect(environment.querySelector(".chat-pr__create")?.textContent).toBe("Check publication");
+  element.props = {
+    ...element.props!,
+    githubPublication: failed,
+    pullRequestsBranch: sessionBranch({ branch: "feature/next", additions: 3 }),
+  };
+  await element.updateComplete;
+  expect(environment.querySelector(".chat-pr__create")?.textContent).toBe("Retry");
+  expect(environment.querySelector(".chat-pr__diff")?.textContent).toContain("+3");
 });
 
 it.each([false, true])(

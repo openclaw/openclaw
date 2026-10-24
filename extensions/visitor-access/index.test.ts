@@ -307,7 +307,8 @@ describe("visitor-access plugin lifecycle", () => {
       { email: "visitor@example.test", note: "  Welcome!\n" },
       { assertCurrent: first.toolContext.assertInvocationCurrent },
     );
-    const invitation = service.findActiveInvitation({ emails: ["visitor@example.test"] })!;
+    const { grantId } = (await first.store.lookup("visitor@example.test"))!;
+    const invitation = service.findActiveInvitation(grantId!)!;
     const result = await service.compareAndSetOnboarding({
       grantId: invitation.grantId,
       expected: invitation.onboarding!,
@@ -324,9 +325,7 @@ describe("visitor-access plugin lifecycle", () => {
       onboarding: { state: "ready", welcomeSessionKey: "welcome", welcomeSessionId: "welcome-id" },
     });
     expect(
-      visitorRuntimeStore
-        .getRuntime()
-        .service.findActiveInvitation({ emails: ["visitor@example.test"] }),
+      visitorRuntimeStore.getRuntime().service.findActiveInvitation(invitation.grantId),
     ).toEqual(await second.store.lookup("visitor@example.test"));
   });
 
@@ -347,7 +346,7 @@ describe("visitor-access plugin lifecycle", () => {
     const visitor = { profileId: "stable", emails: [stableGrant.email], assignedRole: null };
     expect(upgraded.authorize(visitor)).toBeDefined();
     const service = visitorRuntimeStore.getRuntime().service;
-    expect(service.findActiveInvitation(visitor)).toEqual(stableGrant);
+    expect(service.findActiveInvitation(stableGrant.grantId)).toEqual(stableGrant);
     await expect(
       service.compareAndSetOnboarding({
         grantId: stableGrant.grantId,

@@ -69,7 +69,22 @@ export function sessionMenuReasons(params: {
   const lifecycleRows = batchRows ?? [session];
   const archiveReason = lifecycleRows.some((row) => !row.sessionId?.trim())
     ? "Session lifecycle action requires a durable session identity."
-    : batchPatchReason({ archived: true }, true);
+    : batchRows &&
+        snapshot?.phase === "connected" &&
+        !snapshot.deferredIntentCount &&
+        !snapshot.deferredIntentDraining
+      ? batchPatchReason({ archived: true }, true)
+      : lifecycleRows
+          .map((row) =>
+            reason({
+              method: "sessions.patch",
+              params: { key: row.key, archived: !row.archived },
+              sessionScope: true,
+              session: row,
+              allowDeferred: true,
+            }),
+          )
+          .find((value) => value !== undefined);
   const snoozeReason = !session.sessionId?.trim()
     ? "Session lifecycle action requires a durable session identity."
     : patchReason({ snoozedUntil: null }, true);
@@ -81,6 +96,7 @@ export function sessionMenuReasons(params: {
     .map((row) =>
       reason({
         method: "sessions.delete",
+        allowDeferred: true,
         params: {
           key: row.key,
           ...(row.sessionId ? { expectedSessionId: row.sessionId } : {}),

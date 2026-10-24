@@ -1782,6 +1782,7 @@ jobs:
           run_check database-dialect pnpm check:database-dialect-ratchet "${ratchet_base_args[@]}"
           run_check timeout-race pnpm check:test-timeout-race-ratchet "${ratchet_base_args[@]}"
           run_check mock-exports pnpm check:test-mock-exports "${ratchet_base_args[@]}"
+          run_check test-lines pnpm check:test-lines-ratchet "${ratchet_base_args[@]}"
           run_check protocol-additions node --import ./scripts/tsx.mjs scripts/check-protocol-since.mts
           finish_checks
 
@@ -1855,6 +1856,21 @@ jobs:
             # Frozen release candidates predate this generated-asset contract.
             # Their own build remains the available asset validation surface.
             echo "Selected release candidate predates plugins:assets:check; skipping unavailable check."
+          fi
+
+      - name: Check generated schema validators
+        if: ${{ !cancelled() && (steps.dist_build.outcome == 'success' || steps.dist_build_cache.outputs.cache-hit == 'true') }}
+        run: |
+          set -euo pipefail
+          if node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+          process.exit(pkg.scripts?.["validators:check"] ? 0 : 1);
+          NODE
+          then
+            pnpm validators:check
+          else
+            echo "Selected release candidate predates validators:check; skipping unavailable check."
           fi
 
       - name: Package runtime for native policy tests
@@ -2543,6 +2559,15 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+      - name: Upload synthetic protocol mismatch recovery proof
+        if: always() && matrix.task == 'control-ui' && hashFiles('.artifacts/control-ui-e2e/protocol-mismatch-recovery-*/*.png') != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: protocol-mismatch-recovery-${{ strategy.job-index }}-${{ github.run_attempt }}
+          path: .artifacts/control-ui-e2e/protocol-mismatch-recovery-*/*.png
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload synthetic widget prompt failure evidence
         if: failure() && hashFiles('.artifacts/control-ui-e2e/control-ui-authenticated-widget-sandbox-*/widget-prompt-failure.json') != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -2924,6 +2949,9 @@ jobs:
             run_check database-dialect pnpm check:database-dialect-ratchet "${ratchet_base_args[@]}"
             run_check timeout-race pnpm check:test-timeout-race-ratchet "${ratchet_base_args[@]}"
             run_check mock-exports pnpm check:test-mock-exports "${ratchet_base_args[@]}"
+            if has_package_script check:test-lines-ratchet; then
+              run_check test-lines pnpm check:test-lines-ratchet "${ratchet_base_args[@]}"
+            fi
             run_check config-docs pnpm config:docs:check
             run_check plugin-inventory pnpm plugins:inventory:check
           fi

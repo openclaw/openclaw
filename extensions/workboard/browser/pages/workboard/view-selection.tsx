@@ -255,7 +255,10 @@ function agentOptions(workboard: WorkboardProps) {
     }),
   );
 }
-export function SelectionActions(input: { workboard: WorkboardProps }) {
+export function SelectionActions(input: {
+  workboard: WorkboardProps;
+  focusSelectedCard: () => void;
+}) {
   const state = workboardViewState(() => input.workboard);
   const cardIds = createMemo(() =>
     state()
@@ -389,6 +392,7 @@ export function SelectionActions(input: { workboard: WorkboardProps }) {
         aria-label={t("workboard.clearSelection")}
         disabled={busy()}
         onClick={() => {
+          input.focusSelectedCard();
           state().selectedCardIds.clear();
           input.workboard.onRequestUpdate?.();
         }}

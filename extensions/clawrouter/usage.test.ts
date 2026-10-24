@@ -1,11 +1,12 @@
 import { createServer, type RequestListener, type Server } from "node:http";
-import { connect, type AddressInfo } from "node:net";
+import { connect } from "node:net";
 import type { Duplex } from "node:stream";
 import { setImmediate } from "node:timers/promises";
 import * as ssrf from "openclaw/plugin-sdk/ssrf-runtime";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback as bindLoopbackServer } from "../test-support/hanging-loopback-server.js";
 import { fetchClawRouterUsage } from "./usage.js";
 
 const fetchWithSsrFGuard = ssrf.fetchWithSsrFGuard;
@@ -22,12 +23,9 @@ function trackSocket(socket: Duplex): void {
 }
 
 async function listenOnLoopback(server: Server): Promise<number> {
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => resolve());
-  });
+  const port = await bindLoopbackServer(server);
   runningServers.push(server);
-  return (server.address() as AddressInfo).port;
+  return port;
 }
 
 async function startUsageServer(handler: RequestListener) {

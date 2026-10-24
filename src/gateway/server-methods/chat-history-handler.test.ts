@@ -219,6 +219,32 @@ it.each(["chat.history", "chat.startup"] as const)(
     }),
 );
 
+it("chat.history reports the session agent's own verboseDefault", () =>
+  withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async (state) => {
+    const cfg = {
+      agents: {
+        defaults: { verboseDefault: "off" },
+        entries: { main: {}, ops: { verboseDefault: "full" } },
+      },
+    } satisfies OpenClawConfig;
+    await state.writeConfig(cfg);
+    setRuntimeConfigSnapshot(cfg);
+    const context = await createHistoryReadContext({ getRuntimeConfig: () => cfg });
+    const client = { connect: { scopes: ["operator.admin"] } } as never;
+    for (const [agentId, expected] of [
+      ["ops", "full"],
+      ["main", "off"],
+    ] as const) {
+      const scope = { agentId, sessionKey: `agent:${agentId}:main`, sessionId: `${agentId}-main` };
+      await sessions.upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const payload = expectSuccess(
+        await requestHistory("chat.history", { sessionKey: scope.sessionKey }, context, client),
+      );
+      expect(payload.verboseLevel).toBe(expected);
+      expect(payload.sessionInfo).toMatchObject({ verboseLevel: expected });
+    }
+  }));
+
 it.each(["chat.history", "chat.startup"] as const)(
   "%s projects unbound canonical ACP metadata without host ACP reads",
   historyCase(async (method) => {

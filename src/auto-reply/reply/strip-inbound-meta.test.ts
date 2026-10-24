@@ -391,34 +391,22 @@ describe("builder compatibility", () => {
     expect(stripInboundMetadata(input)).toBe("Actual user message");
   });
 
-  it("strips stale message-tool delivery hints from replayed user text", () => {
-    const input = [
+  it.each([
+    [
+      "strips stale message-tool delivery hints from replayed user text",
       "Delivery: to send a message, use the `message` tool.",
-      "",
-      "Actual user message",
-    ].join("\n");
-
-    expect(stripInboundMetadata(input)).toBe("Actual user message");
-  });
-
-  it("strips current message-tool-only delivery hints from replayed user text", () => {
-    const input = [
+    ],
+    [
+      "strips current message-tool-only delivery hints from replayed user text",
       "Delivery: Final assistant text is not automatically delivered in this run. Use the `message` tool to send user-visible output.",
-      "",
-      "Actual user message",
-    ].join("\n");
-
-    expect(stripInboundMetadata(input)).toBe("Actual user message");
-  });
-
-  it("strips narration-aware message-tool-only delivery hints from replayed user text", () => {
-    const input = [MESSAGE_TOOL_ONLY_DELIVERY_HINT, "", "Actual user message"].join("\n");
-
-    expect(stripInboundMetadata(input)).toBe("Actual user message");
-  });
-
-  it("strips room-event delivery hints from replayed user text", () => {
-    const input = [ROOM_EVENT_DELIVERY_HINT, "", "Actual user message"].join("\n");
+    ],
+    [
+      "strips narration-aware message-tool-only delivery hints from replayed user text",
+      MESSAGE_TOOL_ONLY_DELIVERY_HINT,
+    ],
+    ["strips room-event delivery hints from replayed user text", ROOM_EVENT_DELIVERY_HINT],
+  ] as const)("%s", (_name, hint) => {
+    const input = [hint, "", "Actual user message"].join("\n");
 
     expect(stripInboundMetadata(input)).toBe("Actual user message");
   });

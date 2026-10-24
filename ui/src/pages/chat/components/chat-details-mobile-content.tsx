@@ -5,17 +5,13 @@ import {
   progressCardNoteSummary,
   progressCardPresentation,
 } from "../../../components/session-progress-card.ts";
-import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { listSubagents } from "../chat-subagent-wait.ts";
 import {
   SessionAutomationMobileList,
   type SessionAutomationMobileListProps,
 } from "./chat-automation-mobile.tsx";
-import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
-import { ChatDetailsContextContent, ChatDetailsContextSummary } from "./chat-details-context.tsx";
 import { ChatDetailsEnvironmentMobile } from "./chat-details-environment-mobile.tsx";
 import { ChatDetailsGoal, type ChatDetailsGoalProps } from "./chat-details-goal.tsx";
 import {
@@ -125,7 +121,6 @@ export type ChatDetailsMobilePage =
     }
   | { kind: "versions"; content: ChatSessionVersionsMobileProps }
   | { kind: "outputs" }
-  | { kind: "context" }
   | { kind: "automations"; content: SessionAutomationMobileListProps }
   | { kind: "sharing"; content: ChatSessionSharingMobileAdapter }
   | { kind: "session-access"; content: ChatSessionSharingMobileAdapter }
@@ -159,9 +154,6 @@ function MobileRoot(
       metadata: count === null ? undefined : count,
     };
   };
-  const hasContext = createMemo(() =>
-    Boolean(getContextNoticeViewModel(props.details.selectedSession)),
-  );
   const progress = createMemo(() => {
     const card = props.details.progressCard;
     return card
@@ -248,10 +240,6 @@ function MobileRoot(
     <ChatDetailsMobileRoot
       {...props.content.entries}
       presented={props.presented}
-      sessionTitle={resolveSessionDisplayName(
-        props.details.selectedSession?.key ?? "",
-        props.details.selectedSession,
-      )}
       taskProgress={
         progress()?.counts || progressNote()
           ? {
@@ -299,26 +287,6 @@ function MobileRoot(
       }
       publicationEntry={
         props.details.githubPublication ? props.content.publicationEntry : undefined
-      }
-      context={
-        hasContext() ? (
-          <button
-            type="button"
-            class="chat-details-mobile-root__entry chat-details-mobile-context__summary"
-            data-details-destination="context"
-            aria-label={props.content.entries.labels.context}
-            disabled={!props.presented}
-            onClick={(event) =>
-              props.content.entries.onNavigate(
-                { kind: "context" },
-                { kind: "details-root", trigger: event.currentTarget },
-              )
-            }
-          >
-            <ChatDetailsContextSummary details={props.details} />
-            <Icon name="chevronRight" class="chat-details-mobile-root__chevron" />
-          </button>
-        ) : undefined
       }
       processes={
         props.content.processes &&
@@ -401,14 +369,6 @@ export function ChatDetailsMobileContent(props: ChatDetailsMobileContentProps) {
       </Match>
       <Match when={props.page.kind === "versions" && props.page}>
         {(page) => <ChatSessionVersionsMobile {...page().content} />}
-      </Match>
-      <Match when={props.page.kind === "context"}>
-        <div class="chat-details-mobile-context">
-          <div class="chat-details-mobile-context__summary">
-            <ChatDetailsContextSummary details={props.details} />
-          </div>
-          <ChatDetailsContextContent details={props.details} presented={props.presented} />
-        </div>
       </Match>
       <Match when={props.page.kind === "outputs"}>
         <Show when={props.details.outputs}>

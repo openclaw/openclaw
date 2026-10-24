@@ -39,6 +39,7 @@ import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { startCatalogRecoveryMcpServer } from "./agent-bundle-mcp-catalog-recovery.test-support.js";
 import { createCombinedSessionMcpRuntime } from "./agent-bundle-mcp-combined.js";
 import { createConnectionInvalidationMcpFixture } from "./agent-bundle-mcp-invalidation.test-support.js";
+import { startMcpHttpFixture } from "./agent-bundle-mcp-lifecycle.test-support.js";
 import { disposeAllSessionMcpRuntimes } from "./agent-bundle-mcp-manager-api.js";
 import { completeDeferredSessionMcpRuntimeRetirement } from "./agent-bundle-mcp-manager-cleanup.js";
 import {
@@ -436,7 +437,7 @@ async function startSessionExpiryServer(stateful: boolean) {
     staleTerminations: [],
     invalidAuthHeaders: [],
   };
-  const server = http.createServer((req, res) => {
+  const server = await startMcpHttpFixture(async (req, res) => {
     const auth = req.headers["x-mcp-recovery"];
     const rawSession = req.headers["mcp-session-id"];
     const sessionId = typeof rawSession === "string" ? rawSession : undefined;
@@ -506,20 +507,10 @@ async function startSessionExpiryServer(stateful: boolean) {
       })().catch(() => res.destroy());
     }
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("Expected HTTP fixture address");
-  }
   return {
     state,
-    url: `http://127.0.0.1:${address.port}/mcp`,
-    close: () =>
-      new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      }),
+    url: `${server.url}/mcp`,
+    close: server.close,
   };
 }
 

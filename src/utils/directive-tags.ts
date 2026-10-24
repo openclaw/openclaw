@@ -460,9 +460,6 @@ export const inlineDirectiveDisplayTextFilter: TextFilter = {
         if (delta) {
           previousChar = delta.slice(-1);
         }
-        if (prefix) {
-          prefix.checkedRawLength = input.text.length;
-        }
         return hasMarker && !prefix;
       },
     );

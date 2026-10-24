@@ -152,7 +152,7 @@ Cancel sends no installation RPC. The Gateway does not manage confirmation dialo
 Runtime-only refresh works with read-only, Nix-managed, and root `$include` configurations without rewriting them.
 Plugin lifecycle and Claw package removal requests return retryable `UNAVAILABLE` with `retryAfterMs` when another plugin or config operation is already applying. This busy response occurs before the requested mutation starts; retry after the current operation completes. Failures after a mutation starts retain their application details and are not automatically retryable.
 
-These mutations wait for runtime application without restarting the Gateway. Successful responses include `restartRequired` and a `runtime` receipt with `operationId`, `generation`, `pluginIds`, and optional `sourceDigests`. Reloading unchanged bundled code or replacing captured external code returns `restartRequired: false`; edited bundled code that remains loaded, or whose files cannot be verified, requires a restart. The Gateway broadcasts `plugins.changed` with `{ generation }` after publication. Runtime replacement errors include `details.runtime.phase` and `details.runtime.committed`, so clients can distinguish rejection before publication from failure after a new generation became active.
+These mutations wait for runtime application without restarting the Gateway. Successful responses include `restartRequired` and a `runtime` receipt with `operationId`, `generation`, `pluginIds`, and optional `sourceDigests`. Explicit reload of a loaded, enabled bundled plugin refreshes registrations and returns `restartRequired: true`, even when its files are unchanged. Restart the Gateway to load updated bundled code; embedded code changes require a new executable. Replacing captured external code returns `restartRequired: false`. The Gateway broadcasts `plugins.changed` with `{ generation }` after publication. Runtime replacement errors include `details.runtime.phase` and `details.runtime.committed`, so clients can distinguish rejection before publication from failure after a new generation became active.
 
 If a multi-step mutation publishes a runtime and later fails, `details.runtime` retains the published receipt with `committed: true`. A subsequent replacement that fails before publication is reported separately in `details.runtimeAttempt`. Clients should refresh their runtime view after any committed change, even when the overall mutation fails.
 
@@ -279,6 +279,7 @@ No cross-kind category taxonomy or global relevance ranking is introduced.
 
 ## Messaging and logs
 
+- `chat.history`, `chat.startup`, and live `session.message` payloads contain display projections. Provider replay bookkeeping stays in the durable transcript for model continuation; it is omitted from these client payloads without changing visible message content or tool arguments.
 - `send` is the direct outbound-delivery RPC for channel/account/thread-targeted sends outside the chat runner.
 - `logs.tail` returns the configured gateway file-log tail with cursor/limit and max-byte controls.
 

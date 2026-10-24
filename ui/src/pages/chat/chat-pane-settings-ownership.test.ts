@@ -4,6 +4,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { withSessionMutationOperations } from "../../lib/sessions/session-mutation-operations.ts";
 import type { GatewayRequestHandler } from "../../test-helpers/gateway-client.ts";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import { mountSettings, settingsAck, settingsRow } from "./chat-pane-settings.test-support.ts";
@@ -64,8 +65,9 @@ it.each(["rejected", "older-clock ACK"] as const)(
       });
       assertFields(firstFields);
       second = sessions.patch(initial.key, secondFields, options);
-      expect(patch).toHaveBeenCalledTimes(2);
       assertFields(secondFields);
+      await withSessionMutationOperations(() => undefined);
+      expect(patch).toHaveBeenCalledTimes(2);
 
       secondReply.resolve(secondAcknowledgement);
       await expect(second).resolves.toMatchObject(secondAcknowledgement);
@@ -156,8 +158,9 @@ it.each([
       };
       const options = { agentId: "main", deferListRefresh: read === "deferred" };
       first = sessions.patch(initial.key, { fastMode: true }, options);
-      expect(patch).toHaveBeenCalledOnce();
       assertModes(true, true);
+      await withSessionMutationOperations(() => undefined);
+      expect(patch).toHaveBeenCalledOnce();
       if (observeEffective) {
         emitGatewayEvent("sessions.changed", {
           sessionKey: initial.key,

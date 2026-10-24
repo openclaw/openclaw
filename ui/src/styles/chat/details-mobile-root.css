@@ -18,14 +18,6 @@
   font-variant-numeric: lining-nums tabular-nums;
 }
 
-.chat-details-mobile-root__title {
-  margin: 0 12px;
-  overflow-wrap: anywhere;
-  font-size: 18px;
-  font-weight: 600;
-  line-height: 1.35;
-}
-
 .chat-details-mobile-root__section {
   min-width: 0;
 }
@@ -199,27 +191,6 @@
 /* The root group owns its inset divider; the collection page keeps its own divider. */
 .chat-details-mobile-root__group > .chat-pr-mobile__row + .chat-pr-mobile__row {
   border-top: 0;
-}
-
-.chat-details-mobile-context {
-  padding: 12px 14px 24px;
-}
-
-.chat-details-mobile-context__summary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 12px;
-}
-
-.chat-details-mobile-context__summary .chat-details__meter {
-  flex: 1;
-  min-width: 0;
-}
-
-.chat-details-mobile-context > .chat-details-mobile-context__summary {
-  margin-bottom: 10px;
 }
 
 .chat-details-mobile-root__avatars {

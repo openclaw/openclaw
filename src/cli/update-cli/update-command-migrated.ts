@@ -295,12 +295,13 @@ export async function continueMigratedUpdateInFreshProcess(
       deadline: _deadline,
       ...runIdentity
     } = run;
+    const { onResult: _onResult, ...serializableOptions } = params.opts;
     const input: MigratedUpdateFinalizationInput = {
       ...handoff,
       params: {
         ...serializable,
         opts: {
-          ...params.opts,
+          ...serializableOptions,
           timeout: handoff.timeout.serialized,
           run: {
             ...runIdentity,

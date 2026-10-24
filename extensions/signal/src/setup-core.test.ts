@@ -162,6 +162,12 @@ it("keeps bare HTTP URLs on the historical external-native transport", () => {
   });
 });
 
+it("keeps IPv6 bind hosts on the managed transport", () => {
+  expect(apply({ httpHost: "::1", httpPort: "9090" })).toMatchObject({
+    transport: { kind: "managed-native", httpHost: "::1", httpPort: 9090 },
+  });
+});
+
 it.each([
   [{ signalNumber: "+1+2345" }, invalidPhone],
   [{ signalNumber: "+1234567890123456" }, invalidPhone],

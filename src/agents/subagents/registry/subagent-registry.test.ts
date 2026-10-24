@@ -36,6 +36,7 @@ import {
   mockGatewayMethods,
   waitForFast,
 } from "../../subagent-test-fixtures.test-helpers.js";
+import { createRequesterTranscriptWriter } from "../../test-helpers/requester-transcript-writer.test-support.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { releaseSwarmRun } from "../swarm/swarm-scheduler.js";
 import { observeSwarmSchedulerWork } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
@@ -984,14 +985,8 @@ describe("subagent registry seam flow", () => {
     const pendingWait = createDeferred<Record<string, unknown>>();
     const waitStarted = createDeferred();
     const announceStarted = createDeferred();
-    const requesterTranscriptWrite = vi.fn();
-    const withRequesterTranscriptWrite = async <T>(operation: () => Promise<T> | T): Promise<T> => {
-      requesterTranscriptWrite();
-      if (disposed) {
-        throw new Error("attempt disposed before transcript write");
-      }
-      return await operation();
-    };
+    const { requesterTranscriptWrite, withRequesterTranscriptWrite } =
+      createRequesterTranscriptWriter(() => disposed);
     const freshTranscriptWrite = vi.fn(async () => {});
     const freshCompletionWrite = vi.fn(async () => {});
 

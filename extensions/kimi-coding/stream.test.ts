@@ -6,6 +6,7 @@ import type {
   Model,
 } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
+import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import { wrapKimiProviderStream } from "./stream.js";
 
@@ -123,14 +124,7 @@ describe("kimi tool-call markup wrapper", () => {
       api: KIMI_MODEL.api,
       provider: KIMI_MODEL.provider,
       model: KIMI_MODEL.id,
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-      },
+      usage: createZeroUsageFixture(),
       timestamp: 1,
       content: [{ type: "text", text: KIMI_TOOL_TEXT }],
       stopReason: "stop",

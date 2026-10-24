@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import type { AssistantMessageEvent } from "openclaw/plugin-sdk/llm";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { onLlmRequestActivity } from "openclaw/plugin-sdk/provider-stream-shared";
 import type { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
@@ -6,6 +7,7 @@ import { requestBodyText, withServer } from "openclaw/plugin-sdk/test-env";
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createModel } from "../model.test-support.js";
 
 const { fetchWithSsrFGuardMock } = vi.hoisted(() => ({
   fetchWithSsrFGuardMock: vi.fn(),
@@ -66,7 +68,11 @@ function terminalChunk(metadata: Partial<Parameters<typeof buildAssistantMessage
 }
 
 async function readEvents(stream: ReturnType<ReturnType<typeof createOllamaStreamFn>>) {
-  return Array.fromAsync(await stream);
+  const events: AssistantMessageEvent[] = [];
+  for await (const event of await stream) {
+    events.push(event);
+  }
+  return events;
 }
 
 const realContext = { messages: [{ role: "user" as const, content: "test", timestamp: 0 }] };
@@ -104,16 +110,10 @@ function denseChunks() {
 const USER = { messages: [{ role: "user" as const, content: "hello", timestamp: 0 }] };
 const MODEL_INFO = { api: "ollama", provider: "ollama", id: "qwen3.5" };
 const STREAM_MODEL = {
+  ...createModel("qwen3.5", "qwen3.5", { reasoning: true, contextWindow: 65536 }),
   api: "ollama",
   provider: "ollama",
-  id: "qwen3.5",
-  name: "qwen3.5",
   baseUrl: "http://127.0.0.1:11434",
-  reasoning: true,
-  input: ["text"],
-  contextWindow: 65536,
-  maxTokens: 8192,
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 } satisfies ProviderRuntimeModel;
 
 afterEach(() => {
@@ -503,6 +503,23 @@ describe("createOllamaStreamFn thinking events", () => {
     expect(events.some((event) => event.type === "done")).toBe(true);
     expect(refreshTimeout).toHaveBeenCalledTimes(chunks.length);
     expect(onActivity).toHaveBeenCalledTimes(chunks.length);
+  });
+
+  it("omits a deleted model header from a real Ollama request", async () => {
+    let received: string | string[] | undefined = "request not received";
+    await withNativeServer(
+      (request, response) => {
+        received = request.headers["x-proxy-auth"];
+        response.writeHead(200, { "content-type": "application/x-ndjson" });
+        response.end(`${JSON.stringify(makeOllamaResponse({ content: "ok" }))}\n`);
+      },
+      async (streamFn) => {
+        const events = await requestEvents(streamFn, { headers: { "x-proxy-auth": null } });
+        expect(events.some((event) => event.type === "done")).toBe(true);
+      },
+      { "X-Proxy-Auth": "removed" },
+    );
+    expect(received).toBeUndefined();
   });
 
   it("redacts reflected credentials from a real non-2xx Ollama response", async () => {

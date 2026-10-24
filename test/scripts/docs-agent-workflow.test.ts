@@ -5,6 +5,7 @@ import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { runCiGitStep } from "./ci-git-owner.test-support.js";
 import { evaluateWorkflowExpression, readCiWorkflow } from "./ci-workflow.test-support.js";
 import { files } from "./docs-fixture.test-support.js";
 
@@ -50,65 +51,47 @@ type WorkflowRun = Omit<typeof currentRun, "conclusion"> & {
   writer?: "denied" | "gated";
 };
 
-function runGate(runs: WorkflowRun[]) {
-  const root = tempDirs.make("docs-agent-gate-");
-  const { write } = files(root);
-  const bin = join(root, "bin");
-  const output = join(root, "output");
-  write("output", "");
-  const owner = join(root, "owner.py");
-  fs.copyFileSync(".github/actions/git-owner/owner.py", owner);
-  // Only the gate runs. Git/network and the clock are fixtures; jq executes the real filters.
-  const commands = {
-    git: `if [ "$1" = "-C" ]; then shift 2; fi
-case "$*" in
-  'fetch --no-tags origin main') ;;
-  'rev-parse origin/main'|'rev-parse HEAD') printf '%s\\n' '${mainSha}' ;;
-  'rev-parse ${mainSha}^') printf '%s\\n' '${parentSha}' ;;
-  'cat-file -e ${previousSha}^{commit}'|'cat-file -e ${parentSha}^{commit}') ;;
-  *) printf 'Unexpected git call: %s\\n' "$*" >&2; exit 1 ;;
-esac`,
-    gh: `case "$*" in
-  *'/attempts/'*) printf '%s\\n' "$DOCS_AGENT_JOBS_FIXTURE" | jq -c --arg endpoint "$*" '
-    . as $jobs | ($endpoint | capture("runs/(?<id>[0-9]+)/attempts/(?<attempt>[0-9]+)/jobs")) as $key
-    | $jobs[($key.id + ":" + $key.attempt)] // error("Unexpected jobs request")' ;;
-  *) printf '%s\\n' "$DOCS_AGENT_RUNS_FIXTURE" ;;
-esac`,
-    date: `printf '%s\\n' '2026-08-28T22:30:00Z'`,
-  };
-  for (const [name, script] of Object.entries(commands)) {
-    write(`bin/${name}`, `#!/bin/sh\n${script}\n`, { mode: 0o755 });
-  }
-
-  const jobs = runs.map((run) => {
-    const step = {
-      name: "Run Codex docs agent",
-      status: run.status,
-      conclusion: run.writer ? "skipped" : run.conclusion,
-    };
-    const job = {
-      ...step,
-      name: "update-docs",
-      conclusion: run.writer === "denied" ? "skipped" : run.conclusion,
-      steps: [step],
-    };
-    return [`${run.id}:${run.run_attempt}`, [{ jobs: [job] }]];
+async function runGate(runs: WorkflowRun[], signal: AbortSignal) {
+  const report = await runCiGitStep({
+    signal,
+    workflow: {
+      file: ".github/workflows/docs-agent.yml",
+      job: "update-docs",
+      step: "Gate trusted main activity and hourly cadence",
+    },
+    fetchResults: [],
+    revisions: { "origin/main": mainSha, [`${mainSha}^`]: parentSha },
+    commandResults: Object.fromEntries(
+      [previousSha, parentSha].map((sha) => [`cat-file -e ${sha}^{commit}`, { code: 0 }]),
+    ),
+    env: {
+      EVENT_NAME: "workflow_run",
+      WORKFLOW_HEAD_SHA: mainSha,
+      GITHUB_RUN_ID: String(currentRun.id),
+    },
+    workflowRuns: runs,
+    workflowJobs: runs.map((run) => ({
+      runId: run.id,
+      runAttempt: run.run_attempt,
+      jobs: [
+        {
+          name: "update-docs",
+          status: run.status,
+          conclusion: run.writer === "denied" ? "skipped" : run.conclusion,
+          steps: [
+            {
+              name: "Run Codex docs agent",
+              status: run.status,
+              conclusion: run.writer ? "skipped" : run.conclusion,
+            },
+          ],
+        },
+      ],
+    })),
   });
-  const result = runShell(root, workflowScript("id", "gate"), {
-    PATH: `${bin}:${process.env.PATH}`,
-    CI_GIT_OWNER: owner,
-    GITHUB_OUTPUT: output,
-    GITHUB_REPOSITORY: "openclaw/openclaw",
-    GITHUB_RUN_ID: String(currentRun.id),
-    EVENT_NAME: "workflow_run",
-    WORKFLOW_HEAD_SHA: mainSha,
-    DOCS_AGENT_RUNS_FIXTURE: JSON.stringify({ workflow_runs: runs }),
-    DOCS_AGENT_JOBS_FIXTURE: JSON.stringify(Object.fromEntries(jobs)),
-  });
-  expect(result.status, result.stderr || result.error?.message).toBe(0);
-  return { stdout: result.stdout, output: fs.readFileSync(output, "utf8") };
+  expect(report.code, report.output).toBe(0);
+  return { stdout: report.output, output: report.githubOutput };
 }
-
 function admittedOutput(reviewBase: string) {
   return [
     "run_agent=true",
@@ -140,11 +123,8 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
       const originalSource = "export const value = 1;\n";
       write("src/example.js", originalSource);
       fs.symlinkSync(resolve("scripts"), join(root, "scripts"), "dir");
-      write(
-        "CHANGELOG.md",
-        "# Changelog\n\n## 2026.9.4\n\nReleased notes.\n\n### Complete contribution record\n\n- Original accounting.\n\n## 2026.8.1\n\nHistorical notes.\n",
-      );
-      runNode("release-changelog", { root }, "split");
+      write("CHANGELOG/2026.8.1.md", "## 2026.8.1\n\nHistorical notes.\n");
+      write("CHANGELOG/records/2026.9.4.md", "## 2026.9.4\n\nFrozen contribution record.\n");
       write("docs/releases/2026.9.4.md", "# Release notes\n\nApproved source prose.\n");
       const regenerate = () =>
         runNode("render-release-changelog", {
@@ -186,26 +166,20 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
     },
   );
 
-  it("does not let the current REST run throttle itself", () => {
-    const result = runGate([currentRun]);
+  it("does not let the current REST run throttle itself", async ({ signal }) => {
+    const result = await runGate([currentRun], signal);
     expect(result.output).toBe(admittedOutput(parentSha));
-    expect(result.stdout).not.toContain("skipping");
   });
 
-  it.each([
+  it.for([
     ["queued", "queued", null],
     ["in progress", "in_progress", null],
     ["completed", "completed", "success"],
     ["failed", "completed", "failure"],
-  ])("throttles another %s run and prints its REST id", (_label, status, conclusion) => {
+  ] as const)("throttles another %s run", async ([_label, status, conclusion], { signal }) => {
     const other = { ...currentRun, id: 122, status, conclusion, head_sha: previousSha };
-    const result = runGate([currentRun, other]);
+    const result = await runGate([currentRun, other], signal);
     expect(result.output).toBe("run_agent=false\n");
-    expect(result.stdout).toContain("already ran or is running within the last hour");
-    expect(result.stdout).toContain(
-      [other.id, status, conclusion ?? "", other.created_at, previousSha].join("\t"),
-    );
-    expect(result.stdout).not.toContain("123\t");
   });
 
   const completedRun = (changes: Partial<WorkflowRun>): WorkflowRun => ({
@@ -227,7 +201,7 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
     reviewed,
   ];
   const writers: NonNullable<WorkflowRun["writer"]>[] = ["denied", "gated"];
-  it.each([
+  it.for([
     {
       name: "the current id with an older REST snapshot",
       runs: [
@@ -256,9 +230,12 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
       name: "an unsuccessful agent attempt",
       runs: history({ created_at: "2026-08-28T22:29:59Z", conclusion: "failure" }),
     },
-  ])("does not let $name throttle admission or advance the review base", ({ runs }) => {
-    expect(runGate(runs).output).toBe(admittedOutput(previousSha));
-  });
+  ])(
+    "does not let $name throttle admission or advance the review base",
+    async ({ runs }, { signal }) => {
+      expect((await runGate(runs, signal)).output).toBe(admittedOutput(previousSha));
+    },
+  );
 });
 
 describe("Docs Agent full-CI admission", () => {

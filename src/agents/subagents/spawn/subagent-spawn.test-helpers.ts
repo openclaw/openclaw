@@ -56,6 +56,39 @@ type SubagentSpawnModuleForTest = Awaited<typeof import("./subagent-spawn.js")> 
   resetSubagentRegistryForTests: typeof import("../registry/subagent-registry.test-helpers.js").resetSubagentRegistryForTests;
 };
 
+type ThinkingProvenanceCase = [
+  name: string,
+  context: Parameters<typeof import("./subagent-spawn.js").spawnSubagentDirect>[1] & {
+    requesterThinkingExplicit?: boolean;
+  },
+  saved: string | undefined,
+  expected: string | undefined,
+  spawnThinking?: string,
+  requesterThinkingDefault?: string,
+];
+
+export function createThinkingProvenanceCases(): ThinkingProvenanceCase[] {
+  const automatic: ThinkingProvenanceCase[1] = {
+    requesterThinkingLevel: "high",
+    requesterThinkingExplicit: false,
+  };
+  return [
+    [
+      "inherits explicit active effort",
+      { requesterThinkingLevel: "ultra", requesterThinkingExplicit: true },
+      "medium",
+      "ultra",
+    ],
+    ["inherits legacy active effort", { requesterThinkingLevel: "ultra" }, "medium", "ultra"],
+    ["ignores automatic effort and stale preference", automatic, "medium", undefined],
+    ["ignores automatic effort without a preference", automatic, undefined, undefined],
+    ["does not persist an unselected model default", {}, undefined, undefined],
+    ["prefers explicit spawn effort", automatic, undefined, "low", "low"],
+    ["inherits persisted effort", {}, "off", "off"],
+    ["inherits configured effort", {}, undefined, "high", undefined, "high"],
+  ];
+}
+
 export function createSubagentRegistrationScopeForTest(
   overrides: Partial<SubagentRegistrationScope> &
     Pick<SubagentRegistrationScope, "settleFailedLaunch">,

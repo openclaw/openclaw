@@ -177,6 +177,16 @@ after editing its source; reload does not run the build. Multiple IDs use one Ga
 and one applied runtime generation. Repeated IDs are collapsed, and the Gateway
 resolves package siblings together. The request supports up to 64 distinct IDs.
 
+Bundled plugins share the running Gateway's code. Reload refreshes their
+registrations and returns `restartRequired: true`, even if their files have not
+changed. Restart the Gateway to load updated bundled code; rebuild first for
+compiled installations. Updating code embedded in an executable requires a new
+executable. External plugins loaded from disk pick up their captured source changes
+without restarting the Gateway.
+
+AOT hosts admit embedded plugins only. See
+[Runtime execution profiles](/concepts/runtime-profiles#plugins-fetched-after-the-build).
+
 Busy plugins admit replacement and fence new retained work on the old instance.
 Existing agent runs keep their original callbacks while new runs wait for the
 replacement. Before stopping services or channels, replacement waits up to
@@ -251,14 +261,8 @@ remain loaded after their registrations are removed.
 Bundled plugins can reload while preserving their enabled or disabled policy.
 Reload follows the selected bundled copy even when a dormant registry install
 record remains after a source update; that record stays unchanged.
-Explicit bundled reload captures fresh plugin code, including TypeScript source
-entries and plugin-only compiled chunks. Host and SDK modules retain their
-process-loaded identity. Successful replacement returns `restartRequired: false`
-for both bundled and external plugins. Unselected plugins keep their registrations.
-Reload does not rebuild bundled code. Rebuild before reloading when the installation
-loads compiled output. Compiled reload requires the build's runtime dependency
-ownership metadata; rebuild if reload reports that it is missing. Changes to host
-or SDK code require a Gateway restart.
+Unselected plugins keep their registrations. Changes to host or SDK code also
+require a Gateway restart.
 Reloading a discovered source does not create an
 install record or grant permission to install, replace, or remove its files.
 

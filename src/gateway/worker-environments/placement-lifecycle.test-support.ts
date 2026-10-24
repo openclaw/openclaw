@@ -1,16 +1,21 @@
-import { createHash } from "node:crypto";
 import { expect } from "vitest";
 import {
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import { WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-exec-approval.js";
+import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import { REQUEST, type PlacementStore } from "./placement-dispatch-test-fixtures.js";
 import { placementTurnOwner, type WorkerSessionPlacementRecord } from "./placement-record.js";
+import { journalOwner } from "./placement-suite.test-support.js";
+import { workspaceJournal } from "./workspace-manifest-fixtures.test-support.js";
 
 type ActivePlacement = Extract<WorkerSessionPlacementRecord, { state: "active" }>;
 export const WORKER_PROTOCOL_FEATURES = [
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
+  WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
 ] as const;
 export const workerBundle = (
   artifact: typeof import("./service.test-support.js").BUNDLE_ARTIFACT,
@@ -41,22 +46,12 @@ export async function seedReconciliationJournal(
   currentManifestRef: string,
   nonce = "a",
 ) {
-  const owner = {
-    sessionId: active.sessionId,
-    environmentId: active.environmentId,
-    ownerEpoch: active.activeOwnerEpoch,
-    placementGeneration: active.generation,
-  };
-  await store.beginWorkspaceReconciliation(owner, {
-    version: 1,
-    temporaryNonce: nonce.repeat(32),
-    baseManifestRef: active.workspaceBaseManifestRef,
-    currentManifestRef,
-    baseEntries: [],
-    appliedEntries: [],
-    baseTree: "f".repeat(40),
-    basePackSha256: createHash("sha256").update("").digest("hex"),
-    basePack: Buffer.alloc(0),
-  });
+  const owner = journalOwner(active);
+  await store.beginWorkspaceReconciliation(
+    owner,
+    workspaceJournal(active.workspaceBaseManifestRef, currentManifestRef, {
+      temporaryNonce: nonce.repeat(32),
+    }),
+  );
   return owner;
 }

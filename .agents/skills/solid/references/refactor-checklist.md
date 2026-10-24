@@ -15,7 +15,7 @@ is neither React nor Solid 1, and both priors produce plausible-looking bugs.
 ## Measure
 
 `pnpm check:control-ui-controllers` is the enforced native-AST census for
-production `ui/src`. Unlike the quick grep below, it counts generic calls,
+production `ui/src` and the bundled plugin view roots listed in the guard. Unlike the quick grep below, it counts generic calls,
 optional calls, computed literal method names, and named import aliases. It
 enforces zero feature-code render effects, zero direct TSX listeners, and zero
 DOM queries outside the explicit foreign-DOM owners in the guard, and option-free

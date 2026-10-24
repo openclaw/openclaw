@@ -5,6 +5,7 @@ import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
 import { withServer } from "openclaw/plugin-sdk/test-env";
 import { createZeroUsageFixture } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
+import { makeTextToolResult } from "../test-support/message-fixtures.test-support.js";
 import { wrapCopilotProviderStream } from "./stream.js";
 
 type ResponsesTestPayload = { input: Array<Record<string, unknown>> };
@@ -51,7 +52,7 @@ function payloadStream(payload: unknown) {
 it("preserves a single configured integration identity through completions streaming", () => {
   const captured: Headers[] = [];
   const baseStreamFn = vi.fn<StreamFn>((_model, _context, options) => {
-    captured.push(new Headers(options?.headers));
+    captured.push(new Headers(omitNullRequestHeaders(options?.headers)));
     return { async *[Symbol.asyncIterator]() {} } as never;
   });
   const wrapped = expectDefined(
@@ -236,14 +237,9 @@ describe("wrapCopilotAnthropicStream", () => {
               stopReason: "toolUse",
               timestamp: 2,
             },
-            ...sourceIds.map((toolCallId, index) => ({
-              role: "toolResult" as const,
-              toolCallId,
-              toolName: "read",
-              content: [{ type: "text" as const, text: `result ${index}` }],
-              isError: false,
-              timestamp: index + 3,
-            })),
+            ...sourceIds.map((toolCallId, index) =>
+              makeTextToolResult(toolCallId, "read", `result ${index}`, false, index + 3),
+            ),
           ],
         } satisfies Context;
         const persistedTranscript = structuredClone(context.messages);
@@ -389,3 +385,4 @@ describe("wrapCopilotAnthropicStream", () => {
     expect(wrapCopilotProviderStream({ streamFn: undefined } as never)).toBeUndefined();
   });
 });
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";

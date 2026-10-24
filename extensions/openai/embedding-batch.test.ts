@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback as listenLoopbackServer } from "../test-support/hanging-loopback-server.js";
 import { cancelTrackedTextResponse } from "../test-support/streaming-error-response.js";
 import { runOpenAiEmbeddingBatches } from "./embedding-batch.js";
 
@@ -158,21 +159,6 @@ function parseStringBody(init: RequestInit | undefined): unknown {
     throw new Error("missing JSON request body");
   }
   return JSON.parse(init.body) as unknown;
-}
-
-async function listenLoopbackServer(server: ReturnType<typeof createServer>): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("expected loopback TCP address"));
-        return;
-      }
-      resolve(address.port);
-    });
-  });
 }
 
 async function closeServer(server: ReturnType<typeof createServer>): Promise<void> {
