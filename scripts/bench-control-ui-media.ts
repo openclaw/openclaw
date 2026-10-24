@@ -424,50 +424,55 @@ try {
             while (settledFrames < 2) {
               // Allow intersection admission and fetch-to-img handoff before testing quiescence.
               await frames(page);
-              const loading = await page.evaluate(() =>
-                [...document.images].some((image) => {
-                  // Unadmitted off-screen placeholders have neither src nor loading state.
-                  if (
-                    image.dataset.linkFaviconState !== "loading" &&
-                    (!image.src || image.complete)
-                  ) {
-                    return false;
-                  }
-                  const rect = image.getBoundingClientRect();
-                  if (
-                    image.closest("[inert]") ||
-                    rect.bottom <= 0 ||
-                    rect.top >= innerHeight ||
-                    rect.right <= 0 ||
-                    rect.left >= innerWidth
-                  ) {
-                    return false;
-                  }
-                  let top = rect.top;
-                  let bottom = rect.bottom;
-                  let left = rect.left;
-                  let right = rect.right;
-                  for (let parent = image.parentElement; parent; parent = parent.parentElement) {
-                    const style = getComputedStyle(parent);
-                    const bounds = parent.getBoundingClientRect();
-                    if (style.overflowY !== "visible") {
-                      top = Math.max(top, bounds.top + parent.clientTop);
-                      bottom = Math.min(
-                        bottom,
-                        bounds.top + parent.clientTop + parent.clientHeight,
-                      );
-                    }
-                    if (style.overflowX !== "visible") {
-                      left = Math.max(left, bounds.left + parent.clientLeft);
-                      right = Math.min(right, bounds.left + parent.clientLeft + parent.clientWidth);
-                    }
-                    if (bottom <= top || right <= left) {
+              const loading =
+                pendingMedia > 0 ||
+                (await page.evaluate(() =>
+                  [...document.images].some((image) => {
+                    // Unadmitted off-screen placeholders have neither src nor loading state.
+                    if (
+                      image.dataset.linkFaviconState !== "loading" &&
+                      (!image.src || image.complete)
+                    ) {
                       return false;
                     }
-                  }
-                  return true;
-                }),
-              );
+                    const rect = image.getBoundingClientRect();
+                    if (
+                      image.closest("[inert]") ||
+                      rect.bottom <= 0 ||
+                      rect.top >= innerHeight ||
+                      rect.right <= 0 ||
+                      rect.left >= innerWidth
+                    ) {
+                      return false;
+                    }
+                    let top = rect.top;
+                    let bottom = rect.bottom;
+                    let left = rect.left;
+                    let right = rect.right;
+                    for (let parent = image.parentElement; parent; parent = parent.parentElement) {
+                      const style = getComputedStyle(parent);
+                      const bounds = parent.getBoundingClientRect();
+                      if (style.overflowY !== "visible") {
+                        top = Math.max(top, bounds.top + parent.clientTop);
+                        bottom = Math.min(
+                          bottom,
+                          bounds.top + parent.clientTop + parent.clientHeight,
+                        );
+                      }
+                      if (style.overflowX !== "visible") {
+                        left = Math.max(left, bounds.left + parent.clientLeft);
+                        right = Math.min(
+                          right,
+                          bounds.left + parent.clientLeft + parent.clientWidth,
+                        );
+                      }
+                      if (bottom <= top || right <= left) {
+                        return false;
+                      }
+                    }
+                    return true;
+                  }),
+                ));
               settledFrames = pendingMedia === 0 && !loading ? settledFrames + 1 : 0;
               if (Date.now() > deadline) {
                 throw new Error(
