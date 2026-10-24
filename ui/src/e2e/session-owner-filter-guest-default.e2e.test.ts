@@ -55,13 +55,29 @@ suite.define(() => {
       await expectBrowser(owner).toHaveAccessibleName("Owners: My sessions");
       await page.reload();
       await expectBrowser(owner).toHaveAccessibleName("Owners: My sessions");
-      expect(
-        await page.evaluate(() =>
-          Object.entries(localStorage).flatMap(([key, value]) =>
-            key.startsWith("openclaw.control.sidebarSessionOwnerFilter.v1:") ? [value] : [],
-          ),
+      const storageKeys = await page.evaluate(() =>
+        Object.keys(localStorage).filter((key) =>
+          key.startsWith("openclaw.control.sidebarSessionOwnerFilter.v1:"),
         ),
-      ).toEqual([`owner:${sam.id}`]);
+      );
+      expect(storageKeys).toHaveLength(1);
+      expect(await page.evaluate((key) => localStorage.getItem(key), storageKeys[0])).toBe(
+        `owner:${sam.id}`,
+      );
+
+      // Choices saved in the existing storage format keep winning over the guest default.
+      for (const [saved, label] of [
+        ["all", "All owners"],
+        [`owner:${josh.id}`, josh.label],
+        ["involving-me", "Involving me"],
+      ]) {
+        await page.evaluate(
+          ([key, value]) => localStorage.setItem(key, value),
+          [storageKeys[0], saved],
+        );
+        await page.reload();
+        await expectBrowser(owner).toHaveAccessibleName(`Owners: ${label}`);
+      }
     });
   });
 });
