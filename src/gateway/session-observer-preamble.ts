@@ -118,9 +118,7 @@ export function createSessionObserverPreamblePublisher(params: {
 
       const elapsed = Date.now() - entry.lastPublishedAt;
       if (!entry.published || elapsed >= PREAMBLE_PUBLISH_INTERVAL_MS) {
-        if (entry.timer) {
-          clearTimeout(entry.timer);
-        }
+        clearTimeout(entry.timer);
         const pending = publish(state, entry);
         if (pending) {
           return pending.then(() => true);
@@ -136,9 +134,7 @@ export function createSessionObserverPreamblePublisher(params: {
     flush(state: SessionObserverState): void | Promise<void> {
       const entry = entries.get(state);
       if (entry) {
-        if (entry.timer) {
-          clearTimeout(entry.timer);
-        }
+        clearTimeout(entry.timer);
         return publish(state, entry);
       }
     },
