@@ -181,31 +181,26 @@ export function createMattermostPostHandler(monitor: MattermostMonitorContext) {
           return;
         }
         if (accessDecision.ingress.decision === "pairing") {
-          const { code, created } = await pairing.upsertPairingRequest({
-            id: senderId,
+          const { created } = await pairing.issueChallenge({
+            senderId,
+            senderIdLine: `Your Mattermost user id: ${senderId}`,
             meta: { name: senderName },
+            sendPairingReply: async (text) => {
+              await sendMessageMattermost(`channel:${channelId}`, text, {
+                cfg,
+                accountId: account.accountId,
+              });
+              monitor.statusSink?.({ lastOutboundAt: Date.now() });
+            },
+            onReplyError: (err) => {
+              monitor.logVerboseMessage(
+                `mattermost: pairing reply failed for ${senderId}: ${String(err)}`,
+              );
+            },
           });
           monitor.logVerboseMessage(
             `mattermost: pairing request sender=${senderId} created=${created}`,
           );
-          if (created) {
-            try {
-              await sendMessageMattermost(
-                `channel:${channelId}`,
-                core.channel.pairing.buildPairingReply({
-                  channel: "mattermost",
-                  idLine: `Your Mattermost user id: ${senderId}`,
-                  code,
-                }),
-                { cfg, accountId: account.accountId },
-              );
-              monitor.statusSink?.({ lastOutboundAt: Date.now() });
-            } catch (err) {
-              monitor.logVerboseMessage(
-                `mattermost: pairing reply failed for ${senderId}: ${String(err)}`,
-              );
-            }
-          }
           return;
         }
         monitor.logVerboseMessage(

@@ -23,6 +23,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MattermostPost } from "./client.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
 import { FakeWebSocket, mattermostPostEvent } from "./monitor-websocket.test-support.js";
+import { registerMattermostDmPairingTests } from "./monitor.dm-pairing.test-support.js";
 import { registerMattermostIngressDebounceTests } from "./monitor.ingress-debounce.test-support.js";
 import { monitorMattermostProvider } from "./monitor.js";
 import { registerMattermostPreviewDeliveryTests } from "./monitor.preview-delivery.test-support.js";
@@ -168,8 +169,15 @@ vi.mock("./thread-participation.js", async (importOriginal) => ({
 vi.mock("./runtime-api.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./runtime-api.js")>()),
   createChannelPairingController: vi.fn(() => ({
+    readAllowFromStore: vi.fn(async () => []),
     readStoreForDmPolicy: vi.fn(async () => []),
     upsertPairingRequest: vi.fn(async () => ({ code: "123456", created: true })),
+    issueChallenge: vi.fn(
+      async (challenge: { sendPairingReply: (text: string) => Promise<void> }) => {
+        await challenge.sendPairingReply("pairing required");
+        return { created: true, code: "123456" };
+      },
+    ),
   })),
   createChannelMessageReplyPipeline: vi.fn((params: { cfg: OpenClawConfig }) => ({
     onModelSelected: vi.fn(),
@@ -1017,4 +1025,5 @@ describe("mattermost inbound user posts", () => {
   const harness = { testConfig, createRuntimeCore: installRuntime, receivePost, mockState };
   registerMattermostPreviewPolicyTests(harness);
   registerMattermostPreviewDeliveryTests(harness);
+  registerMattermostDmPairingTests({ ...harness, publicChannel });
 });
