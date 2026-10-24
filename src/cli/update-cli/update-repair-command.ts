@@ -310,7 +310,7 @@ async function repairUpdate(opts: UpdateFinalizeOptions): Promise<void> {
     currentHistory.incomplete
   ) {
     throw new Error(
-      `Update history changed during inspection and now needs post-core maintenance. Retry ${formatCliCommand("openclaw update repair", env)}; if the managed Gateway cannot stop, run ${formatCliCommand("openclaw gateway stop", env)} first.`,
+      `Update history changed during inspection and now needs post-core maintenance. Retry ${formatCliCommand("openclaw update repair", env)}; if the managed Gateway cannot stop, an independent operator outside triage and the Gateway service must run ${formatCliCommand("openclaw gateway stop", env)} first. Preserve ownership refusals and later operator stops.`,
     );
   }
   const reconciled = activeRuns.length

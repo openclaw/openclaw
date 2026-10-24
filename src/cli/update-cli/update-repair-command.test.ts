@@ -154,13 +154,13 @@ afterEach(async () => {
 });
 
 describe("update repair ledger recovery", () => {
-  it("tells operators to stop the live Gateway owner before repair", async () => {
+  it("routes early state-owner contention to an independent operator outside triage", async () => {
     const run = seedRun();
     mocks.ownershipAllowed.mockRejectedValueOnce(
       new GatewayStateOwnerContentionError("/fixture/state/openclaw.sqlite"),
     );
     await expect(updateRepairCommand({ json: true })).rejects.toThrow(
-      /Stop the Gateway first \(openclaw gateway stop\)/,
+      /independent.*outside triage and the Gateway service.*stop the Gateway first \(openclaw gateway stop\)/s,
     );
     expect(mocks.finalize).not.toHaveBeenCalled();
     expect(getUpdateRun(run.runId)).toEqual(run);
@@ -610,7 +610,7 @@ describe("update repair ledger recovery", () => {
       await expect(updateRepairCommand({})).rejects.toThrow(
         change === "driver activity"
           ? "remains recorded as running"
-          : /openclaw update repair.*openclaw gateway stop/,
+          : /openclaw update repair.*independent.*outside triage.*openclaw gateway stop/,
       );
       if (change === "driver activity") {
         expect(getUpdateRun(run.runId)?.status).toBe("running");

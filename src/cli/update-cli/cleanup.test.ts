@@ -82,8 +82,9 @@ it.each(["refused", "blocked"] as const)("reports %s once", async (status) => {
   expect(vi.mocked(defaultRuntime.error).mock.calls.flat().join("\n")).not.toContain("exit 1");
 });
 
-const stopFirst =
-  "Error: Stop the Gateway first (openclaw --profile work gateway stop), then retry.";
+const stopFirst = expect.stringMatching(
+  /independent operator outside triage and the Gateway service.*openclaw --profile work gateway stop/,
+);
 it.each([
   [new Error("inventory unavailable"), "Error: inventory unavailable"],
   [new GatewayStateOwnerContentionError("/fixture/state/openclaw.sqlite"), stopFirst],

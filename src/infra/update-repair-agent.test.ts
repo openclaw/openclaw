@@ -130,11 +130,14 @@ it("caps the complete model prompt and redacts evidence and result summaries", a
   );
   const input = params();
   input.context.symptoms = Array.from({ length: 30 }, () => "Symptom 😀".repeat(100));
-  input.context.error = `token=${secret} ` + "failure ".repeat(2000);
+  input.context.error = `Original candidate failure. token=${secret} ` + "failure ".repeat(2000);
   const result = await repairLoop(input);
   const prompt = runtime.runUpdateRepairTurn.mock.calls[0]?.[0].prompt as string;
   expect(Buffer.byteLength(prompt)).toBeLessThanOrEqual(8192);
   expect(prompt).toContain("Never start, stop, or restart");
+  expect(prompt).not.toContain("atomic restart");
+  expect(prompt).not.toContain("openclaw gateway restart");
+  expect(prompt).toContain("Original candidate failure.");
   expect(prompt).toContain("REPAIR_RESULT:");
   expect(prompt).not.toContain(secret);
   expect(result.attempts[0]?.summary).not.toContain("x".repeat(20));
