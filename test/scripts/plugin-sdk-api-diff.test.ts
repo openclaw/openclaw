@@ -5,6 +5,7 @@ import {
   existsSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -92,7 +93,13 @@ await import(${JSON.stringify(pathToFileURL(resolve("scripts/plugin-sdk-api-diff
 
 function writePnpm(binDir: string, source: string) {
   const path = join(binDir, "pnpm");
-  writeFileSync(path, source);
+  const firstNewline = source.indexOf("\n");
+  const shebang = firstNewline === -1 ? source : source.slice(0, firstNewline);
+  const body = firstNewline === -1 ? "" : source.slice(firstNewline + 1);
+  writeFileSync(
+    path,
+    `${shebang}\nif [ -n "$TRUSTED_TYPESCRIPT_PATH" ]; then\n  mkdir -p node_modules/@typescript\n  cp -RL "$TRUSTED_TYPESCRIPT_PATH" node_modules/typescript\n  cp -RL "$TRUSTED_TYPESCRIPT_PLATFORM_PATH" node_modules/@typescript/typescript-linux-x64\nfi\n${body}`,
+  );
   chmodSync(path, 0o755);
 }
 
@@ -113,6 +120,11 @@ function cliEnv(runnerTemp: string, binDir: string) {
     PNPM_MARKER: join(binDir, "installs"),
     REVISION_RENDER_MARKER: join(binDir, "revision-renderer"),
     RUNNER_TEMP: runnerTemp,
+    TRUSTED_TYPESCRIPT_PATH: resolve("node_modules/typescript"),
+    TRUSTED_TYPESCRIPT_PLATFORM_PATH: join(
+      dirname(realpathSync(resolve("node_modules/typescript"))),
+      "@typescript/typescript-linux-x64",
+    ),
     TSX_TSCONFIG_PATH: resolve("tsconfig.json"),
   };
 }
@@ -281,7 +293,7 @@ if (process.argv.includes("--render-root")) {
   expect(existsSync(blockedMarker)).toBe(true);
   expect(existsSync(renderStarted)).toBe(true);
   expect(existsSync(renderDuringInstall)).toBe(false);
-  expect(existsSync(join(binDir, "revision-renderer"))).toBe(true);
+  expect(existsSync(join(binDir, "revision-renderer"))).toBe(false);
 }, 50_000);
 
 it.each([
