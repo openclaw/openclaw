@@ -66,6 +66,7 @@ function attachLightbox(props: Partial<Lightbox>) {
   return modal;
 }
 
+const animateDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, "animate");
 let container: HTMLDivElement;
 let restoreDialogPolyfill: () => void;
 let createObjectUrl: ReturnType<typeof vi.fn<(object: Blob | MediaSource) => string>>;
@@ -88,6 +89,10 @@ async function renderLightbox(props: Partial<ImageLightboxProps> = {}, target = 
 
 beforeEach(() => {
   restoreDialogPolyfill = installDialogPolyfill();
+  Object.defineProperty(Element.prototype, "animate", {
+    configurable: true,
+    value: () => ({ finished: Promise.resolve(), cancel: vi.fn() }),
+  });
   createObjectUrl = vi.fn(() => "blob:lightbox-original");
   revokeObjectUrl = vi.fn();
   fetchImage = vi.fn(async () => ({
@@ -115,6 +120,11 @@ afterEach(async () => {
     vi.useRealTimers();
   }
   restoreDialogPolyfill();
+  if (animateDescriptor) {
+    Object.defineProperty(Element.prototype, "animate", animateDescriptor);
+  } else {
+    Reflect.deleteProperty(Element.prototype, "animate");
+  }
   vi.unstubAllGlobals();
 });
 

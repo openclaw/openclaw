@@ -7,6 +7,55 @@ snapshot and run the streaming analyzer in aggregate-only mode with bounded host
 resources. It covers dominators, collections, duplicate strings, and session-key
 scaling without exporting snapshot payloads.
 
+## Released session authority
+
+### Pending-input timer retention
+
+Run `node --expose-gc --import ./scripts/tsx.mjs scripts/perf/pending-input-retention.ts
+--state-dir /path/to/fresh-synthetic-state --turns 100 --expect-released` on the
+approved benchmark host. Repeat with 1,000 turns and with `--collected` for the
+aggregate owner. Use at least five alternating baseline/candidate samples per
+shape. Each turn stages and settles a real pending input, captures a separately
+decoded 40 KiB synthetic session entry in its admission callback, and leaves a
+one-hour timer pending in the receipt's async scope. The script reports surviving
+entries and retained heap bytes, then clears the timers and verifies collection.
+Acceptance: zero settled entries retained with timers still pending, unchanged
+late-execution refusal, and zero survivors after timer cleanup on both versions.
+This is forced-GC owner retention proof, not a production timer census, allocation,
+promotion, latency, or GC-time benchmark. Retained heap includes timers and store
+bookkeeping as well as the captured entries.
+
+### Session publication authority
+
+`node --expose-gc --import ./scripts/tsx.mjs scripts/perf/session-authority-retention.ts
+--reads 1000 --expect-released` measures the session publication owner's payload
+lifetime while released sharing, predicate, and generation handles stay reachable.
+Each read deserializes identical synthetic row bytes. WeakRefs count surviving
+rows after collection; an active handle must still retain its row. Reports include
+read counts, serialized payload bytes, survivors, and retained heap delta including
+the handles themselves. Use `--owner /absolute/path/to/baseline.ts` for a saved
+owner module beside its original source so relative imports remain canonical.
+Run at least five alternating samples at 100 and 1,000 reads on the approved
+benchmark host. This is forced-GC owner retention proof, not a latency, allocation,
+promotion, or production GC benchmark.
+
+## Session-fork snapshots
+
+`node --expose-gc scripts/perf/session-fork-retention-measure.mjs <baseline-root> <candidate-root>`
+compares the fork snapshot owner with 64 near-budget requests, 1,000 requests
+with nested options, and three requests with 22 MiB Blob publications sliced from
+64 MiB backing stores. The roots
+need only the four source files listed in the script. Six alternating samples per
+side each capture and replace the same sessions twice, then verify retained
+prefixes, publications, and opaque-data isolation through public fork calls.
+Run on an approved benchmark host under its shared guard. Acceptance is bounded
+snapshot data within the unchanged 64 MiB budget, with latest-prefix replay and
+replacement cleanup preserved. Output includes source hashes, live-entry counts,
+and post-GC heapUsed, external, and arrayBuffers deltas. Their sum is a conservative
+aggregate because pooled buffers can overlap the external and arrayBuffers counters.
+These whole-process deltas exclude unreported native storage and shared transport runtime ownership; they are not
+exact dominator sizes or whole-Gateway CPU, GC, or promotion measurements.
+
 ## Private-array copies
 
 `node --expose-gc scripts/perf/private-array-copies-measure.mjs <baseline-root> <candidate-root>`
@@ -20,6 +69,50 @@ These are owner/site allocation bytes per call, not whole-Gateway or GC claims.
 Output includes source hashes, call counts, allocation sample counts, every sample,
 and absolute/relative mean deltas. Run on an approved benchmark host under its
 shared guard; equivalent results and reduced allocation are the acceptance rule.
+
+## Retained Gateway ownership assertions
+
+`gateway-state-owner-measure.ts` acquires the real Gateway lock over an existing,
+isolated team-shape fixture and repeatedly invokes its captured state owner's
+`assertCurrent`. It retains the normal ownership heartbeat throughout capture.
+This measures the owner boundary, not serving-Gateway throughput or workspace
+operations; the fixture's session rows are not read by the measured assertions.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/gateway-state-owner-measure.ts \
+  --state-dir /path/to/prepared-synthetic-state --output /path/to/run.json \
+  --operations 2000 --assertions-per-operation 100 --interval-ms 10 \
+  --warmup-operations 100 --start-file /path/to/pair.start
+```
+
+Prepare separate fixtures before launching either side. After warmup, each side
+writes `<output>.ready` and waits for the initially absent shared start file to
+contain a future Unix epoch in milliseconds. The report records both actual
+starts and process ages. Keep one exclusive measurement slot and the shared
+production guard around the pair, counterbalance launch order, and swap
+interleaved CPU placements. Freeze work count and pacing before comparing pairs.
+Collect matched A/A controls under the same instrumentation mode before applying
+the campaign's GC, promotion, or maximum-pause rejection gates. A noisy control
+protocol needs fresh controls at a longer fixed work count.
+
+`--owner-dir` selects source overlays using their repository-relative paths:
+`src/infra/gateway-state-owner.ts`, `src/infra/gateway-lock.ts`,
+`src/infra/gateway-lock-payload.ts`, and
+`src/gateway/worker-environments/local-workspace-projection.ts`. Both sides use
+the same esbuild transform and canonical module URLs, including when the option
+is omitted. The report lists source hashes and which overlays were loaded in
+the main isolate; the workspace module is not exercised by this workload.
+
+Untraced runs report process and main-thread CPU per assertion and measured
+minute, batch latency tails with counts, and the shared diagnostics' per-kind GC
+counts, total time, pause tails/maxima, and event-loop samples. `--allocations`
+adds a separate inspector pass including collected objects and writes a raw heap
+profile beside the result. For a separate promotion pass, add `--expose-gc
+--trace-gc-nvp --gc-log /path/to/capture.log` and redirect stdout there. Only
+trace identification forces GC, before preparation and warmup; no collection is
+forced in the measured interval. Traced and sampled timings are attribution,
+not untraced cost gates. Per-minute rates use this workload's measured duration,
+not a production assertion-rate estimate.
 
 ## Limited-scope Control UI RPCs
 
@@ -3245,6 +3338,27 @@ it does not measure a whole chat turn. Pair it with
 `transcript-broadcast-measure.ts --scenario chat.send --allocations` when assessing
 the effect on Gateway turn allocations.
 
+## Published schemas across sessions
+
+Measure factory-owned schema reuse through real tool finalization and settlement:
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/finalized-tool-schemas-measure.ts \
+  --factory message --sessions 63 --samples 5 \
+  --output /path/to/report.json --golden-output /path/to/provider-json.json
+```
+
+Use `message` for the default full message schema or `message-configured` for the
+send-only schema with an empty configuration. Each sample warms one session and
+creates up to 63 more, fitting the finalizer's 64-session snapshot bound. The
+probe counts distinct source objects, exact schema contents, retained published
+schemas, and publication/prewarming calls. It measures untraced CPU/time,
+allocation including collected objects, and survivors in separate passes.
+Compare at least five samples per revision on the approved benchmark host and
+compare provider JSON files byte for byte. Forced-GC retained bytes are contextual
+memory evidence, not natural GC cost or promotion measurements. The probe does
+not execute tools, send messages, or measure a whole Gateway turn.
+
 ## Allocated bytes per RPC or turn
 
 For a bounded chat-owner replay, run:
@@ -3406,6 +3520,31 @@ and larger text-attachment runs. Each turn sends a deterministic
 `synthetic-attachment.txt` with MIME type `text/plain` and origin `paste` through
 the real attachment path. The report records `chatAttachmentBytes`; zero means
 no attachment. Keep the attachment size identical within each comparison pair.
+
+For config snapshot work counts, run a separate source-mode pass with
+`--scenario chat.send --entry src/entry.ts --chat-attachment-kib 4
+--config-capture-counts --runs 1 --rounds 5`. Omit allocation, CPU, GC, and
+diagnostics profiling flags. The rig instruments the two config capture owners;
+production exposes no counting hooks. Each sample's `configCaptureCounts`
+reports capture calls, caller stacks, cloned payload count, serialized UTF-8
+payload bytes, graph object count, and primary turns. Active-input workloads
+include additional follow-up/steering work in those counts. `beforeFirstWindow`
+includes startup and warmup; measured counts reset each round. Payload bytes are
+the JSON size processed by clone/freeze, **not heap allocation**. Counting creates
+stacks and serializes configs, so its CPU and latency are not acceptance evidence;
+rerun without this flag for timing and allocation measurements.
+
+The driver preserves explicit synthetic agent and plugin entries in the fixture's
+`openclaw.json`, including plugin config payloads, while selecting the loopback
+model and disabling memory dreaming. Use the same generated fleet on both sides
+and retain its plugin paths under the owned fixture. `configShape` records the
+effective agent count, plugin-entry count, and serialized config bytes. Never
+populate this fixture from operator config or credentials.
+
+`--config-capture-source <checkout>` substitutes that checkout's runtime snapshot
+and ACP read-context owners in source mode and records their SHA-256 hashes.
+Use it for both counting and uninstrumented paired passes against one prepared
+runtime; it changes only those two main-thread source modules, not built workers.
 
 Add `--chat-active-hold-ms 1500 --runs 8 --rounds 63` to measure 1,008 ACKs for
 input arriving during active turns. At the model-arrival barrier, each session
@@ -4421,3 +4560,74 @@ outside GC capture. `--count-path-work` is another separate attribution mode:
 it counts `path.relative` calls from the sessions root after scanner warmup.
 These are the coverage checks for the unchanged-file workload; do not include
 this instrumentation in timing comparisons.
+
+## Skill resource delivery allocation
+
+`skill-resource-delivery-measure.ts` exercises production bundle preparation with
+metadata-shaped synthetic skills: 32 files, 1,302,894 bytes, and eight concurrent
+turns by default. File contents are generated Markdown and scripts; no operator
+skill content is copied. Delivery mode retains the payloads like a worker launch
+that may need to retry. Transfer mode runs the actual staging script over child
+stdin and retains the returned turn handles. It does not create a Gateway
+placement or run model inference.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/skill-resource-delivery-measure.ts \
+  --state-dir /path/to/isolated/skill-delivery --prepare-only
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/skill-resource-delivery-measure.ts \
+  --state-dir /path/to/isolated/skill-delivery --existing --operations 128 --concurrency 8
+```
+
+Use `--functional` for exact-byte verification without timing, `--mode transfer`
+for staging and supporting-file readback, and `--content unicode` or
+`--content binary` for alternate fixtures (prepare each in a separate directory).
+`--allocations` includes collected objects in inspector sampling; run that pass
+separately from uninstrumented CPU, GC, and event-loop comparisons. Reports also
+include source reads and bytes per turn, retained payload characters, JSON bytes,
+and post-GC retained heap. The transfer readback is performed by the verifier,
+not a model.
+
+Measure promotion in a separate pass with `--trace-gc-nvp --gc-log /path/to/run.log`
+and redirect stdout to that log. The existing warmup collection identifies the
+main isolate; capture markers exclude warmup and post-capture collections. The
+report includes promoted bytes and collection counts. Do not combine this mode
+with `--allocations`, and use only untraced runs for CPU, GC timing, and pause gates.
+
+Run on the authorized benchmark host. Prepare fixtures before acquiring the
+shared measurement slot, then use `--existing --start-file /path/to/barrier` on
+both sides. Each side prints `READY <pid>` after warmup; write a future Unix time
+in milliseconds to the barrier to synchronize the start. Compare concurrent
+baseline/candidate pairs on interleaved CPUs and swap sides for the next pair,
+using the host's guard and resource limits. Run identical-source controls before
+attributing GC or pause differences. Never compare profiled and unprofiled runs.
+
+## Measure transcript replica size memoization
+
+Run the sizing owner on synthetic nested message/tool payloads, without loading a
+Gateway or database:
+
+```bash
+node --expose-gc scripts/perf/transcript-size-memo-measure.mjs \
+  /path/to/session-actor-replica.ts table
+node --expose-gc scripts/perf/transcript-size-memo-measure.mjs \
+  /path/to/session-actor-replica.ts cpu
+node --expose-gc scripts/perf/transcript-size-memo-measure.mjs \
+  /path/to/session-actor-replica.ts allocation
+```
+
+The harness extracts the source's estimator and `retainTranscript` accounting;
+`touch` is a no-op, so this is owner evidence, not LRU or whole-Gateway timing.
+`table` retains 16 transcripts of 64 rows (shared by tail and context), checks each
+estimate against an uncached walk, and forces GC before reading the WeakMap's
+backing-table size from a heap snapshot. Its counting WeakMap is used only in that
+pass. `cpu` prepares 100 independent append sequences (128 initial rows, then
+128 appends), warms the code on disjoint rows, seeds each sequence's memo before
+measurement, and measures 12,800 appends with the native WeakMap. `allocation` repeats that workload with sampling that includes
+collected objects; its timing is not a CPU gate. Fixtures remain live during each
+pass. Table bytes exclude payloads, keys, and the WeakMap object itself.
+
+Use the same Node version and fixtures on both revisions. Run at least five
+alternating samples per side, counterbalance launch order and CPU placement, and
+keep CPU timing separate from heap inspection and allocation sampling. Compare
+absolute CPU per retain and table bytes; report the owner source hashes, total
+estimated residency, entry counts, and sample counts. Estimates must match exactly.

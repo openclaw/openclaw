@@ -30,44 +30,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
   isProviderAuthProfileConfiguredAsync: async () => false,
 }));
 
-const { FakeWebSocket } = await vi.hoisted(async () => {
-  const { EventEmitter } = await import("node:events");
-
-  class MockWebSocket extends EventEmitter {
-    static readonly OPEN = 1;
-    static readonly CONNECTING = 0;
-    static readonly CLOSED = 3;
-    static instances: MockWebSocket[] = [];
-    static onCreate: ((socket: MockWebSocket) => void) | undefined;
-
-    readyState = MockWebSocket.CONNECTING;
-    sent: string[] = [];
-
-    constructor(
-      readonly url?: string,
-      readonly options?: { headers?: Record<string, string>; maxPayload?: number },
-    ) {
-      super();
-      MockWebSocket.instances.push(this);
-      MockWebSocket.onCreate?.(this);
-    }
-
-    send(payload: string): void {
-      this.sent.push(payload);
-    }
-
-    close(): void {
-      this.readyState = MockWebSocket.CLOSED;
-      this.emit("close");
-    }
-
-    terminate(): void {
-      this.close();
-    }
-  }
-
-  return { FakeWebSocket: MockWebSocket };
-});
+const { FakeWebSocket } = await vi.hoisted(() => import("./realtime-voice-socket.test-support.js"));
 
 // mock-isolation: Drive WebSocket lifecycle synchronously without opening network connections.
 vi.mock("./ws-runtime.js", () => ({ WebSocket: FakeWebSocket }));

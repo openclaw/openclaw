@@ -397,8 +397,11 @@ suite.define(() => {
           },
           ...workspaceResponses(sessionKey),
           "sessions.list": createdSessionListResult(sessionKey),
-          "sessions.dispatch": { placement: { state: "active", generation: 1 } },
-          "sessions.send": { runId: "run-cleared-source", status: "started" },
+          "sessions.dispatch": {
+            sessionId: `session:${sessionKey}`,
+            placement: { state: "active", generation: 1 },
+          },
+          "chat.send": { runId: "run-cleared-source", status: "started" },
         },
         { workspace: WORKSPACE, workspaceGit: true },
       );
@@ -465,8 +468,10 @@ suite.define(() => {
         agentId: "main",
         profileId: "aws",
       });
-      expect((await gateway.waitForRequest("sessions.send")).params).toMatchObject({
-        key: sessionKey,
+      expect((await gateway.waitForRequest("chat.send")).params).toMatchObject({
+        sessionKey,
+        sessionId: `session:${sessionKey}`,
+        expectedLeafEntryId: null,
         message: "do not run directly",
       });
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey));

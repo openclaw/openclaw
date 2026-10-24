@@ -447,7 +447,10 @@ describe("voice reconciliation", () => {
     const messages = [
       savedMessage("Hidden saved words", "voice:saved"),
       savedMessage("Pending input", "pending:input"),
-      savedMessage("Pending send", "send:pending", { kind: "pending-send", state: "unconfirmed" }),
+      savedMessage("Pending send", "send:pending", {
+        kind: "pending-send",
+        state: "waiting-reconnect",
+      }),
     ];
     const map = vi.spyOn(messages, "map");
     const props = threadProps("voice-membership", undefined, messages);

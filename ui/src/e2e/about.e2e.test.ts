@@ -2,12 +2,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { installMockGateway, pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
-import {
-  expectAttribute,
-  expectCount,
-  expectText,
-  showHeading,
-} from "./activity-assertions.test-support.ts";
+import { expectAttribute, expectCount, expectText } from "./activity-assertions.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -189,14 +184,10 @@ suite.define(() => {
   );
 
   it("shows browser artifact identity separately from the Gateway version", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    await installMockGateway(page);
-
-    try {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      await installMockGateway(page);
       const response = await page.goto(`${suite.server.baseUrl}settings/about`);
       expect(response?.status()).toBe(200);
-      await showHeading(page, "Settings");
 
       const aboutLink = page.getByRole("link", { name: "About", exact: true });
       await expectAttribute(aboutLink, "aria-current").toBe("page");
@@ -233,22 +224,20 @@ suite.define(() => {
       await expectText(gatewayRow).toContain("separate from this Control UI build");
 
       const clawd = page.getByRole("button", { name: "Wave hello to Clawd" });
-      // CLAWD_WAVE_MS clears the class after 1400ms, so click and read it in one browser step.
-      const clawdWaving = await clawd.evaluate(async (element) => {
-        const button = element as HTMLButtonElement;
-        const owner = element.closest("openclaw-about-page") as
-          | (HTMLElement & {
-              updateComplete: Promise<unknown>;
-            })
-          | null;
-        if (!owner) {
-          throw new Error("About page owner is unavailable");
-        }
-        button.click();
-        await owner.updateComplete;
-        return button.classList.contains("about-hero__clawd--wave");
-      });
-      expect(clawdWaving).toBe(true);
+      // Read before the wave timer expires, even on a loaded runner.
+      expect(
+        await clawd.evaluate(async (element) => {
+          const owner = element.closest("openclaw-about-page") as
+            | (HTMLElement & { updateComplete: Promise<unknown> })
+            | null;
+          if (!owner) {
+            throw new Error("About page owner is unavailable");
+          }
+          (element as HTMLButtonElement).click();
+          await owner.updateComplete;
+          return element.classList.contains("about-hero__clawd--wave");
+        }),
+      ).toBe(true);
 
       await page.setViewportSize({ height: 812, width: 375 });
       await expect
@@ -258,8 +247,6 @@ suite.define(() => {
           ),
         )
         .toBeLessThanOrEqual(1);
-    } finally {
-      await context.close();
-    }
+    });
   });
 });

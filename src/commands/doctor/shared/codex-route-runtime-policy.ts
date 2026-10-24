@@ -38,7 +38,6 @@ function agentExplicitlyReferencesCanonicalModel(agent: unknown, modelRef: strin
   const compaction = asMutableRecord(record.compaction);
   return (
     modelConfigContainsRef(compaction?.model, modelRef) ||
-    modelConfigContainsRef(asMutableRecord(compaction?.memoryFlush)?.model, modelRef) ||
     asMutableRecord(record.models)?.[modelRef] !== undefined
   );
 }

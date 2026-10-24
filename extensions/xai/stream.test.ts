@@ -1,4 +1,9 @@
-import { streamSimple, type Model, type ModelThinkingLevel } from "openclaw/plugin-sdk/llm";
+import {
+  streamSimple,
+  type Model,
+  type ModelThinkingLevel,
+  type ModelRequestHeaders,
+} from "openclaw/plugin-sdk/llm";
 import { describe, expect, it } from "vitest";
 import { XAI_BASE_URL } from "./model-definitions.js";
 import { resolveFastModeSupport } from "./provider-policy-api.js";
@@ -9,7 +14,7 @@ import { captureXaiRequest, xaiModel } from "./test-helpers.js";
 function captureRequest(
   model: Model<"openai-responses">,
   extraParams: Record<string, unknown> = {},
-  headers?: Record<string, string>,
+  headers?: ModelRequestHeaders,
   payload?: Record<string, unknown>,
 ) {
   const captured = captureXaiRequest(model, {
@@ -119,15 +124,16 @@ describe("xai stream wrappers", () => {
         baseUrl: "https://cli-chat-proxy.grok.com/v1",
       }),
       {},
-      { "X-XAI-Token-Auth": "operator-value", "X-Existing": "kept" },
+      { "X-XAI-Token-Auth": "operator-value", "X-Existing": "kept", "x-delete": null },
     );
 
     expect(capturedModelId).toBe(id);
     expect(capturedHeaders).toEqual({
-      "x-existing": "kept",
+      "X-Existing": "kept",
+      "x-delete": null,
       "x-grok-client-version": "2026.7.2",
       "x-grok-model-override": id,
-      "x-xai-token-auth": "xai-grok-cli",
+      "X-XAI-Token-Auth": "xai-grok-cli",
     });
   });
 

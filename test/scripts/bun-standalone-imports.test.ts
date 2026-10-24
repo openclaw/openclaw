@@ -8,12 +8,10 @@ const filename = `${runtimeRoot}/dist/entry.mjs`;
 const relocatedRoot = "file:///relocated-app/runtime/";
 const moduleAliases = {
   ws: `${runtimeRoot}/node_modules/ws/index.js`,
-  undici: `${runtimeRoot}/node_modules/undici/index.js`,
 };
 const workerThreadsShim = "/removed-build/standalone-worker-threads.cjs";
 const embeddedPaths = {
   "node_modules/ws/index.js": "/$bunfs/root/runtime/node_modules/ws/index.js",
-  "node_modules/undici/index.js": "/$bunfs/root/runtime/node_modules/undici/index.js",
   "../standalone-worker-threads.cjs": "/$bunfs/root/standalone-worker-threads.js",
 };
 
@@ -32,7 +30,6 @@ function rewrite(contents: string, entries: Record<string, string> = embeddedPat
 describe("standalone import relocation", () => {
   it.each([
     [moduleAliases.ws, embeddedPaths["node_modules/ws/index.js"]],
-    [moduleAliases.undici, embeddedPaths["node_modules/undici/index.js"]],
     [workerThreadsShim, embeddedPaths["../standalone-worker-threads.cjs"]],
   ])("loads the embedded image after the build path disappears: %s", async (source, expected) => {
     const calls: { parent: string; target: string }[] = [];

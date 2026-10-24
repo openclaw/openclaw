@@ -7,7 +7,7 @@ import { WORKER_COMPUTER_PROTOCOL_FEATURE } from "./worker-computer.js";
 import {
   WORKER_EXEC_APPROVAL_METHOD,
   WORKER_EXEC_APPROVAL_PROTOCOL_FEATURE,
-} from "./worker-exec-approval.js";
+} from "./worker-exec-approval-schemas.js";
 import {
   WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
   WORKER_GATEWAY_TOOL_METHODS,

@@ -1,5 +1,5 @@
 import { ChildProcess } from "node:child_process";
-import { subscribe, unsubscribe } from "node:diagnostics_channel";
+import { channel } from "node:diagnostics_channel";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
@@ -61,6 +61,8 @@ function captureServicePid(healthUrl: string): number {
 }
 
 const serviceClosures = new Map<ChildProcess, Promise<void>>();
+// Retain the channel before the first spawn; Bun's channel registry holds it weakly.
+const serviceSpawnChannel = channel("child_process");
 const observeServiceSpawn = (message: unknown) => {
   if (
     message &&
@@ -96,13 +98,13 @@ async function killOwnedServices(pids: Set<number>, signal: AbortSignal): Promis
 describe("provider local service shutdown", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   const fixture = createProviderLocalServiceTestFixture();
-  beforeEach(() => subscribe("child_process", observeServiceSpawn));
+  beforeEach(() => serviceSpawnChannel.subscribe(observeServiceSpawn));
   afterEach(async ({ signal }) => {
     await runQaGatewayFixture(
       fixture.cleanup,
       () => killOwnedServices(servicePids, signal),
       () => {
-        unsubscribe("child_process", observeServiceSpawn);
+        serviceSpawnChannel.unsubscribe(observeServiceSpawn);
         serviceClosures.clear();
         servicePids.clear();
       },

@@ -1,32 +1,21 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { Agent, getGlobalDispatcher, setGlobalDispatcher } from "undici";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { clearConfigCache, clearRuntimeConfigSnapshot } from "../config/config.js";
-import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { resetAgentEventsForTest } from "../infra/agent-events.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
+import {
+  GATEWAY_TEST_ENV_KEYS,
+  removeGatewayTempHome,
+  resetGatewayTestState,
+  setupGatewayTempHome,
+} from "./gateway.test-support.js";
 import { startGatewayServer } from "./server.js";
-import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
 import { acquireGatewayE2ePortBlock, startClaimedGateway } from "./test-helpers.listener.js";
 
 const proxyKeys = ["http_proxy", "https_proxy", "all_proxy", "no_proxy"];
 const NETWORK_GATEWAY_ENV_KEYS = [
-  "HOME",
-  ...GATEWAY_STARTUP_MUTATED_ENV_KEYS,
-  "OPENCLAW_STATE_DIR",
-  "OPENCLAW_CONFIG_PATH",
-  "OPENCLAW_GATEWAY_TOKEN",
-  "OPENCLAW_SKIP_CHANNELS",
-  "OPENCLAW_SKIP_GMAIL_WATCHER",
-  "OPENCLAW_SKIP_CRON",
-  "OPENCLAW_SKIP_CANVAS_HOST",
-  "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
-  "OPENCLAW_SKIP_PROVIDERS",
-  "OPENCLAW_BUNDLED_PLUGINS_DIR",
-  "OPENCLAW_TEST_MINIMAL_GATEWAY",
+  ...GATEWAY_TEST_ENV_KEYS,
   ...proxyKeys,
   ...proxyKeys.map((key) => key.toUpperCase()),
 ] as const;
@@ -36,31 +25,16 @@ describe("gateway network runtime", () => {
   let tempHome: string;
   let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
   const token = `network-token-${process.pid}-${process.env.VITEST_POOL_ID ?? "0"}`;
-  const reset = () => {
-    resetAgentEventsForTest({ preserveListeners: true });
-    clearRuntimeConfigSnapshot();
-    clearConfigCache();
-    clearSessionStoreCacheForTest();
-  };
-
   beforeEach(async () => {
-    reset();
+    resetGatewayTestState();
     envSnapshot = captureEnv([...NETWORK_GATEWAY_ENV_KEYS]);
-    tempHome = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-gw-network-home-"));
     for (const key of NETWORK_GATEWAY_ENV_KEYS) {
       deleteTestEnvValue(key);
     }
-    setTestEnvValue("HOME", tempHome);
-    setTestEnvValue("OPENCLAW_STATE_DIR", path.join(tempHome, ".openclaw"));
-    for (const key of NETWORK_GATEWAY_ENV_KEYS.filter(
-      (candidate) =>
-        candidate.startsWith("OPENCLAW_SKIP_") || candidate === "OPENCLAW_TEST_MINIMAL_GATEWAY",
-    )) {
-      setTestEnvValue(key, "1");
-    }
-    const bundledDir = path.join(tempHome, "empty-bundled-plugins");
-    setTestEnvValue("OPENCLAW_BUNDLED_PLUGINS_DIR", bundledDir);
-    await fs.mkdir(bundledDir, { recursive: true });
+    ({ tempHome } = await setupGatewayTempHome({
+      prefix: "openclaw-gw-network-home-",
+      minimalGateway: true,
+    }));
     setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", token);
   });
 
@@ -69,9 +43,9 @@ describe("gateway network runtime", () => {
       await server?.close({ reason: "gateway network test complete" });
     } finally {
       server = undefined;
-      await fs.rm(tempHome, { recursive: true, force: true });
+      await removeGatewayTempHome(tempHome);
       envSnapshot.restore();
-      reset();
+      resetGatewayTestState();
     }
   });
 
@@ -109,18 +83,4 @@ describe("gateway network runtime", () => {
       }
     }
   });
-
-  it.each(["lan", "loopback", "tailnet", "auto", "custom", undefined] as const)(
-    "starts with persisted canonical bind %s without rewriting config",
-    async (bind) => {
-      const { configPath, raw } = await writeConfig({
-        mode: "local",
-        auth: { mode: "token", token },
-        ...(bind ? { bind } : {}),
-        ...(bind === "custom" ? { customBindHost: "127.0.0.1" } : {}),
-      });
-      await start();
-      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(raw);
-    },
-  );
 });

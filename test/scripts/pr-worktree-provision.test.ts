@@ -253,19 +253,20 @@ printf '${edit}\\n' > src/subject.ts
 
   it("preserves a caller fsmonitor hook without enabling it in managed Git", () => {
     const f = coldFixture(false);
-    const monitor = join(f.root, "fsmonitor");
+    const monitor = join(f.root, "fsmonitor's hook");
+    const monitorCommand = `'${monitor.replace(/'/gu, `'\\''`)}'`;
     const receipt = join(f.root, "fsmonitor.txt");
     // Git treats a nonzero monitor exit as a request for an ordinary scan.
     // This records invocation without faking a clean index or monitor token.
     writeFileSync(monitor, `#!/bin/sh\nprintf '%s\\n' "$PWD" >> "${receipt}"\nexit 1\n`);
     chmodSync(monitor, 0o755);
-    f.git(f.canonical, "config", "core.fsmonitor", monitor);
+    f.git(f.canonical, "config", "core.fsmonitor", monitorCommand);
     const result = f.run("review-init");
     expect(result.status, result.stderr).toBe(0);
     expect(result.stderr).toContain("PR source checkout: Git checkout.");
     expect(readFileSync(receipt, "utf8").trim().split("\n")).toContain(f.worktree);
     expectSeed(f);
-    expect(f.git(f.worktree, "config", "--get", "core.fsmonitor")).toBe(monitor);
+    expect(f.git(f.worktree, "config", "--get", "core.fsmonitor")).toBe(monitorCommand);
     expect(existsSync(join(f.canonical, ".worktrees", ".templates"))).toBe(false);
   });
 

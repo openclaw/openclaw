@@ -77,8 +77,8 @@ resolver. Return `null` to skip the flush for provider-specific reasons.
 
 There are two resolver fields:
 
-- `flushPlanResolver` returns a complete `MemoryFlushPlan` or `null`. Its
-  contract is unchanged from earlier releases. Memory Core uses it.
+- `flushPlanResolver` returns a complete `MemoryFlushPlan` or `null`. Memory
+  Core uses it.
 - `providerFlushPlanResolver` returns a plan the host completes: a
   `MemoryFlushFilePlanDraft` (a complete `MemoryFlushPlan` is one such draft)
   or a `MemoryFlushToolsPlan`. When a plugin registers both, the host uses
@@ -86,12 +86,10 @@ There are two resolver fields:
 
 Each plan has `prompt`, `systemPrompt`, and one persistence arm. In plans from
 `providerFlushPlanResolver`, the `softThresholdTokens`,
-`forceFlushTranscriptBytes`, `reserveTokensFloor`, and `model` fields are
-deliberate provider overrides. The host fills omitted timing fields from its
-resolved timing, and fills an omitted `model` from `memoryFlush.model` for the
-tools arm only; a file plan without `model` keeps the session's model. A `model` override pins the turn
-to an exact `provider/model` reference, such as `ollama/qwen3:8b`, without
-inheriting the active fallback chain.
+`forceFlushTranscriptBytes`, and `reserveTokensFloor` fields are deliberate
+provider overrides. The host fills omitted timing fields from its resolved
+timing. All flush turns use the active session model and its normal fallback
+chain; resolvers do not select a separate model.
 
 Choose exactly one persistence arm:
 

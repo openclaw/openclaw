@@ -224,9 +224,7 @@ export async function startPhoneProofServer(buildId: string) {
   }
 }
 
-export async function observePhoneProofServiceWorker(
-  page: Page,
-): Promise<ServiceWorkerObservation> {
+async function observePhoneProofServiceWorker(page: Page): Promise<ServiceWorkerObservation> {
   return page.evaluate(async () => {
     if (!("serviceWorker" in navigator)) {
       return {

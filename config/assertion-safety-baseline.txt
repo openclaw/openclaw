@@ -111,7 +111,7 @@ extensions/codex/src/app-server/native-mcp-app.ts	9
 extensions/codex/src/app-server/plugin-activation.ts	1
 extensions/codex/src/app-server/plugin-inventory.ts	6
 extensions/codex/src/app-server/plugin-metadata-cache.ts	5
-extensions/codex/src/app-server/run-attempt-resources.ts	12
+extensions/codex/src/app-server/run-attempt-resources.ts	9
 extensions/codex/src/app-server/run-attempt-runtime.ts	1
 extensions/codex/src/app-server/run-attempt-server-requests.ts	2
 extensions/codex/src/app-server/runtime-artifact.ts	1
@@ -376,7 +376,6 @@ extensions/matrix/src/cli-shared.ts	1
 extensions/matrix/src/config-schema.ts	1
 extensions/matrix/src/directory-live.ts	3
 extensions/matrix/src/exec-approvals.ts	1
-extensions/matrix/src/group-mentions.ts	1
 extensions/matrix/src/matrix/account-config.ts	2
 extensions/matrix/src/matrix/actions/devices.ts	1
 extensions/matrix/src/matrix/actions/messages.ts	5
@@ -544,7 +543,7 @@ extensions/ollama/src/provider-models.ts	1
 extensions/ollama/src/setup-pull.ts	1
 extensions/ollama/src/setup.runtime.ts	1
 extensions/ollama/src/stream-compat.ts	1
-extensions/ollama/src/stream.runtime.ts	3
+extensions/ollama/src/stream.runtime.ts	2
 extensions/onepassword/index.ts	2
 extensions/openai/embedding-batch.ts	2
 extensions/openai/index.ts	2
@@ -728,7 +727,7 @@ extensions/slack/src/outbound-adapter.ts	5
 extensions/slack/src/probe.ts	2
 extensions/slack/src/progress-blocks.ts	1
 extensions/slack/src/reply-action-ids.ts	1
-extensions/slack/src/reply-blocks.ts	5
+extensions/slack/src/reply-blocks.ts	4
 extensions/slack/src/security-audit.ts	6
 extensions/slack/src/send.ts	1
 extensions/slack/src/setup-core.ts	4
@@ -825,7 +824,6 @@ extensions/twitch/src/token.ts	3
 extensions/twitch/src/twitch-ingress.ts	3
 extensions/venice/models.ts	1
 extensions/voice-call/src/manager/outbound.ts	2
-extensions/voice-call/src/media-stream.ts	1
 extensions/voice-call/src/providers/shared/guarded-json-api.ts	2
 extensions/voice-call/src/runtime.ts	1
 extensions/voice-call/src/webhook.ts	5
@@ -916,7 +914,7 @@ packages/ai/src/providers/clean-for-gemini.ts	4
 packages/ai/src/providers/google-shared.ts	2
 packages/ai/src/providers/mistral.ts	1
 packages/ai/src/providers/openai-chatgpt-responses-protocol.ts	1
-packages/ai/src/providers/openai-chatgpt-responses.ts	17
+packages/ai/src/providers/openai-chatgpt-responses.ts	16
 packages/ai/src/providers/openai-completions.ts	1
 packages/ai/src/providers/openai-reasoning-effort.ts	6
 packages/ai/src/providers/openai-responses-shared.ts	4
@@ -966,7 +964,6 @@ packages/gateway-client/src/pending-request.ts	2
 packages/gateway-client/src/protocol-client.ts	1
 packages/gateway-client/src/scope-upgrade.ts	4
 packages/gateway-protocol/src/connect-error-details.ts	4
-packages/gateway-protocol/src/protocol-validator.ts	1
 packages/gateway-protocol/src/schema/audit-activity.ts	1
 packages/gateway-protocol/src/schema/devices.ts	1
 packages/gateway-protocol/src/schema/failover-reason.ts	1
@@ -1064,7 +1061,6 @@ src/agents/bash-tools.exec-run.ts	1
 src/agents/bash-tools.exec-script-preflight.ts	1
 src/agents/bash-tools.process.ts	5
 src/agents/bootstrap-files.ts	1
-src/agents/bootstrap-hooks.ts	1
 src/agents/btw-transcript.ts	5
 src/agents/cache-trace.ts	3
 src/agents/cli-credentials.ts	7
@@ -1208,7 +1204,7 @@ src/agents/model-tool-support.ts	1
 src/agents/models-config.merge.ts	1
 src/agents/models-config.plan.ts	2
 src/agents/models-config.providers.policy.lookup.ts	1
-src/agents/modes/interactive/theme/theme.ts	11
+src/agents/modes/interactive/theme/theme.ts	10
 src/agents/openai-model-routes.ts	2
 src/agents/openclaw-tools.requester-yield.ts	2
 src/agents/plugin-model-catalog.ts	3
@@ -1333,7 +1329,7 @@ src/agents/transcript-policy.ts	1
 src/agents/transport-message-transform.ts	2
 src/agents/utils/frontmatter.ts	2
 src/agents/workspace-legacy-state.ts	2
-src/agents/workspace.ts	4
+src/agents/workspace.ts	3
 src/agents/worktrees/run-lease.ts	1
 src/audit/execution-identity-admission.ts	3
 src/audit/execution-identity-context-build.ts	3
@@ -1351,7 +1347,6 @@ src/auto-reply/reply/commands-acp/diagnostics.ts	2
 src/auto-reply/reply/commands-allowlist.ts	6
 src/auto-reply/reply/commands-context-report.ts	1
 src/auto-reply/reply/commands-context.ts	1
-src/auto-reply/reply/commands-mcp.ts	2
 src/auto-reply/reply/commands-plugin.ts	1
 src/auto-reply/reply/commands-plugins.ts	1
 src/auto-reply/reply/commands-private-route.ts	1
@@ -1900,7 +1895,6 @@ src/infra/fetch-headers.ts	3
 src/infra/fetch.ts	5
 src/infra/file-lock-manager.ts	1
 src/infra/fs-safe-remove.ts	4
-src/infra/gateway-lock.ts	2
 src/infra/gateway-processes.ts	1
 src/infra/git-commit.ts	1
 src/infra/install-package-dir.ts	2
@@ -2088,7 +2082,6 @@ src/plugin-sdk/migration.ts	7
 src/plugin-sdk/plugin-test-api.ts	1
 src/plugin-sdk/provider-auth-login-flow-runtime.ts	2
 src/plugin-sdk/provider-auth-result.ts	2
-src/plugin-sdk/provider-auth-runtime.ts	1
 src/plugin-sdk/provider-entry.ts	1
 src/plugin-sdk/provider-stream-shared.ts	4
 src/plugin-sdk/provider-stream.ts	1

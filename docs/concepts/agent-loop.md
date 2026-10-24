@@ -337,6 +337,10 @@ Stop and restart cancellation can record the session outcome and any applicable
 failure notice. A replaced session, runtime candidate, or Gateway lifecycle
 cannot reuse that terminal writer.
 The lifecycle owner retires the terminal writer after its accepted writes settle.
+Settled pending-input owners also release their admission callbacks, so timers
+created during the turn no longer retain the decoded session entry through those
+callbacks. Captured owners remain inactive; terminal transcript mirroring keeps
+its existing replay facts and cannot reopen execution authority.
 
 The model idle and provider HTTP rows describe the built-in OpenClaw model
 path. Codex owns its native stream deadlines and network retries. After exact

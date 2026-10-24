@@ -8,11 +8,7 @@ import { withEnv } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "./api.js";
 import plugin from "./index.js";
-import {
-  loadMemoryWikiCompiledCache,
-  writeMemoryWikiCompiledCache,
-  type MemoryWikiCompiledCacheSnapshot,
-} from "./src/compiled-cache.js";
+import { loadMemoryWikiCompiledCache, writeMemoryWikiCompiledCache } from "./src/compiled-cache.js";
 import { resolveMemoryWikiConfig } from "./src/config.js";
 import { deferred } from "./src/deferred.test-helpers.js";
 import {
@@ -26,7 +22,10 @@ import { withMemoryWikiVaultMutation } from "./src/mutation-coordinator.js";
 import { closeMemoryWikiQueryReader } from "./src/query-reader.js";
 import { getMemoryWikiPage } from "./src/query.js";
 import { waitForMemoryWikiImportedSourceSyncs } from "./src/source-sync.js";
-import { createMemoryWikiTestHarness } from "./src/test-helpers.js";
+import {
+  createCompiledSnapshot as emptyCompiledSnapshot,
+  createMemoryWikiTestHarness,
+} from "./src/test-helpers.js";
 
 const toolMocks = vi.hoisted(() => {
   const createTool = (name: string) =>
@@ -47,32 +46,6 @@ const toolMocks = vi.hoisted(() => {
 vi.mock("./src/tool.js", () => toolMocks);
 
 const { createPluginApi, createTempDir } = createMemoryWikiTestHarness();
-
-function emptyCompiledSnapshot(): MemoryWikiCompiledCacheSnapshot {
-  return {
-    digest: { claimCount: 0, contradictionCount: 0, pages: [] },
-    claims: [],
-    dashboards: {
-      importInsights: {
-        sourceType: "chatgpt",
-        totalItems: 0,
-        totalClusters: 0,
-        clusters: [],
-        truncated: false,
-      },
-      overview: {
-        totalItems: 0,
-        totalPages: 0,
-        pageCounts: { synthesis: 0, entity: 0, concept: 0, source: 0, report: 0 },
-        totalClaims: 0,
-        totalQuestions: 0,
-        totalContradictions: 0,
-        clusters: [],
-        truncated: false,
-      },
-    },
-  };
-}
 
 describe("memory-wiki plugin", () => {
   it("registers default-vault tools inside the configured state directory", () => {

@@ -137,7 +137,6 @@ export function isUiTestTarget(relative) {
 }
 
 export const uiE2eRealGatewayTestFiles = [
-  "ui/src/e2e/approval-lookup.real-gateway.e2e.test.ts",
   "ui/src/e2e/plugin-inline-view.real-gateway.e2e.test.ts",
   "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/peer-followup-restart.real-gateway.e2e.test.ts",

@@ -199,7 +199,6 @@ export type ChatQueueItem = {
     | "executing-command"
     | "sending"
     | "waiting-reconnect"
-    | "unconfirmed"
     // Provider review requires a new operator decision even if delivery has prior attempts.
     | "held"
     | "failed";

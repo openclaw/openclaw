@@ -14,6 +14,7 @@ import {
   type SkillsLibraryReceipt,
   type SkillsLibraryUploadResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { defaultRuntime } from "../runtime.js";
 import { runCommandWithRuntime } from "./cli-utils.js";
 import { inheritOptionFromParent } from "./command-options.js";
@@ -52,7 +53,7 @@ function rpcOptions(command: Command): GatewayRpcOpts {
 }
 
 function receiptText(receipt: SkillsLibraryReceipt): string {
-  return `${receipt.state}: ${receipt.entry.slug} (${receipt.target}, owner ${receipt.entry.ownerLabel})\nSkill ID: ${receipt.entry.skillId}\nRevision: ${receipt.entry.revision}\n${receipt.nextAction}\n`;
+  return `${receipt.state}: ${sanitizeTerminalText(receipt.entry.slug)} (${receipt.target}, owner ${sanitizeTerminalText(receipt.entry.ownerLabel)})\nSkill ID: ${sanitizeTerminalText(receipt.entry.skillId)}\nRevision: ${sanitizeTerminalText(receipt.entry.revision)}\n${receipt.nextAction}\n`;
 }
 
 async function saveLocalLibrarySkill(input: string, slug: string, rpc: GatewayRpcOpts) {
@@ -135,7 +136,9 @@ export function registerSkillsLibraryCli(skills: Command): void {
                 ]
               : []),
             "",
-          ].join("\n"),
+          ]
+            .map(sanitizeTerminalText)
+            .join("\n"),
       ),
     );
 
@@ -162,14 +165,14 @@ export function registerSkillsLibraryCli(skills: Command): void {
         },
         (result) =>
           [
-            `${result.entry.slug} (${result.entry.ownerLabel})`,
-            `Skill ID: ${result.entry.skillId}`,
-            `Revision: ${result.entry.revision}`,
-            `Command: ${result.entry.name}`,
+            `${sanitizeTerminalText(result.entry.slug)} (${sanitizeTerminalText(result.entry.ownerLabel)})`,
+            `Skill ID: ${sanitizeTerminalText(result.entry.skillId)}`,
+            `Revision: ${sanitizeTerminalText(result.entry.revision)}`,
+            `Command: ${sanitizeTerminalText(result.entry.name)}`,
             "--- SKILL.md ---",
             result.content,
             ...result.files.flatMap((file) => [
-              `--- ${file.path} (${file.encoding ?? "utf8"}${file.executable ? ", executable" : ""}) ---`,
+              `--- ${sanitizeTerminalText(file.path)} (${file.encoding ?? "utf8"}${file.executable ? ", executable" : ""}) ---`,
               file.content,
             ]),
             "Retained revisions:",
@@ -374,7 +377,7 @@ export function registerSkillsLibraryCli(skills: Command): void {
             },
           ),
         (result) =>
-          `Queued for next turn: ${result.sessionKey}\n${result.selections.map((selection) => `${selection.skillId}  ${selection.name}  ${selection.revision}`).join("\n")}\n`,
+          `Queued for next turn: ${sanitizeTerminalText(result.sessionKey)}\n${result.selections.map((selection) => `${sanitizeTerminalText(selection.skillId)}  ${sanitizeTerminalText(selection.name)}  ${sanitizeTerminalText(selection.revision)}`).join("\n")}\n`,
       ),
     );
   }

@@ -35,20 +35,24 @@ function runMeasure(
 
 function checkTermination(
   signal: AbortSignal,
-  phase: string,
-  command: string[],
-  check: (
-    close: Awaited<ReturnType<typeof observeMeasuredChild>["closed"]>,
-    pid: number,
-  ) => void | Promise<void>,
-  { graceMs = "1500", closeStderr = false, stubborn = false } = {},
+  {
+    command,
+    graceMs = "1500",
+    closeStderr = false,
+    stubborn = false,
+  }: {
+    command: string[];
+    graceMs?: string;
+    closeStderr?: boolean;
+    stubborn?: boolean;
+  },
 ) {
   return fixtureLifetime.run(async () => {
     const { dir, summary } = measureFixture();
     const pidFile = path.join(dir, stubborn ? "descendant.pid" : "ready.pid");
     const result = spawn(
       stubborn ? process.execPath : "node",
-      [scriptPath, summary, phase, "--", ...command],
+      [scriptPath, summary, "external-stop", "--", ...command],
       {
         cwd: process.cwd(),
         env: {
@@ -69,7 +73,15 @@ function checkTermination(
         result.stderr.destroy();
       }
       result.kill("SIGTERM");
-      await check(await withinTest(observed.closed, signal), pid);
+      const close = await withinTest(observed.closed, signal);
+      expect(close.signal).toBe("SIGTERM");
+      if (stubborn) {
+        expect(close.stderr).toContain("reason=grace-elapsed signal=SIGTERM");
+        await waitForPidExit(pid, signal);
+        expect(pidExists(pid)).toBe(false);
+      } else if (!closeStderr) {
+        expectDrainedBeforeGraceDeadline(close.stderr);
+      }
     } finally {
       if (result.exitCode === null && result.signalCode === null) {
         result.kill("SIGTERM");
@@ -282,69 +294,39 @@ fs.readdirSync = (target, options) => {
     }),
 );
 
-it.runIf(process.platform === "linux")(
-  "forwards external termination to the measured process group",
-  ({ signal }) =>
-    checkTermination(
-      signal,
-      "external-stop",
+it.runIf(process.platform === "linux").for([
+  {
+    name: "forwards external termination to the measured process group",
+    stubborn: true,
+    graceMs: "200",
+    command: [
+      "bash",
+      "-lc",
+      'bash -c \'trap "" TERM; printf "%s\\n" "$$" >"$PID_FILE"; printf "fixture-ready:%s\\n" "$$"; while :; do sleep 1; done\' & wait',
+    ],
+  },
+  ...[false, true].map((closeStderr) => ({
+    name: `exits promptly during grace (stderr ${closeStderr ? "closed" : "open"})`,
+    closeStderr,
+    command: [
+      "node",
+      "--input-type=module",
+      "--eval",
       [
-        "bash",
-        "-lc",
-        'bash -c \'trap "" TERM; printf "%s\\n" "$$" >"$PID_FILE"; printf "fixture-ready:%s\\n" "$$"; while :; do sleep 1; done\' & wait',
-      ],
-      async (close, descendantPid) => {
-        expect(close.signal).toBe("SIGTERM");
-        expect(close.stderr).toContain("reason=grace-elapsed signal=SIGTERM");
-        await waitForPidExit(descendantPid, signal);
-        expect(pidExists(descendantPid)).toBe(false);
-      },
-      { graceMs: "200", stubborn: true },
-    ),
-);
-
-it.runIf(process.platform === "linux").for(["open", "closed"])(
-  "exits promptly when externally terminated phases stop during grace (stderr %s)",
-  (stderr, { signal }) =>
-    checkTermination(
-      signal,
-      "external-fast-stop",
-      [
-        "node",
-        "--input-type=module",
-        "--eval",
-        [
-          "import { writeFileSync } from 'node:fs';",
-          "process.on('SIGTERM', () => process.exit(0));",
-          "writeFileSync(process.env.READY_FILE, String(process.pid));",
-          "process.stdout.write('fixture-ready:' + process.pid + '\\n');",
-          "setInterval(() => {}, 1000);",
-        ].join("\n"),
-      ],
-      (close) => {
-        if (stderr === "open") {
-          expectDrainedBeforeGraceDeadline(close.stderr);
-        }
-        expect(close.signal).toBe("SIGTERM");
-      },
-      { closeStderr: stderr === "closed" },
-    ),
-);
-
-it.runIf(process.platform === "linux")(
-  "exits promptly when shell descendants drain during termination grace",
-  ({ signal }) =>
-    checkTermination(
-      signal,
-      "external-descendant-drain",
-      [
-        "bash",
-        "-lc",
-        'trap "exit 0" TERM; bash -c \'trap "sleep 0.15; exit 0" TERM; printf "%s\\n" "$$" >"$READY_FILE"; printf "fixture-ready:%s\\n" "$$"; while :; do sleep 1; done\' & wait',
-      ],
-      (close) => {
-        expectDrainedBeforeGraceDeadline(close.stderr);
-        expect(close.signal).toBe("SIGTERM");
-      },
-    ),
-);
+        "import { writeFileSync } from 'node:fs';",
+        "process.on('SIGTERM', () => process.exit(0));",
+        "writeFileSync(process.env.READY_FILE, String(process.pid));",
+        "process.stdout.write('fixture-ready:' + process.pid + '\\n');",
+        "setInterval(() => {}, 1000);",
+      ].join("\n"),
+    ],
+  })),
+  {
+    name: "exits promptly when shell descendants drain during termination grace",
+    command: [
+      "bash",
+      "-lc",
+      'trap "exit 0" TERM; bash -c \'trap "sleep 0.15; exit 0" TERM; printf "%s\\n" "$$" >"$READY_FILE"; printf "fixture-ready:%s\\n" "$$"; while :; do sleep 1; done\' & wait',
+    ],
+  },
+])("$name", (scenario, { signal }) => checkTermination(signal, scenario));

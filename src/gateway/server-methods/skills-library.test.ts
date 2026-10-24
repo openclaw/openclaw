@@ -219,7 +219,7 @@ describe("skill library retained support files", () => {
     expect(read[0]).toBe(true);
     expect(read[1] as SkillsLibraryReadResult).toMatchObject({
       content: params.content,
-      files: [image, { path: executable.path, encoding: "base64", executable: true }],
+      files: [image, { ...executable, encoding: "utf8" }],
     });
     expect(Buffer.from((read[1] as SkillsLibraryReadResult).files[0]!.content, "base64")).toEqual(
       Buffer.from(image.content, "base64"),
@@ -261,8 +261,8 @@ describe("skill library retained support files", () => {
       { ...image, executable: false },
       {
         path: "notes.txt",
-        content: Buffer.from("New support file").toString("base64"),
-        encoding: "base64",
+        content: "New support file",
+        encoding: "utf8",
         executable: false,
       },
     ]);

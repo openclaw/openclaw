@@ -1848,20 +1848,14 @@ describe("dispatchReplyFromConfig", () => {
 
   it("does not send the final fallback when aborted during block settlement", async () => {
     setNoAbort();
-    let markBlockStarted: (() => void) | undefined;
-    let releaseBlock: (() => void) | undefined;
-    const blockStarted = new Promise<void>((resolve) => {
-      markBlockStarted = resolve;
-    });
-    const blockRelease = new Promise<void>((resolve) => {
-      releaseBlock = resolve;
-    });
+    const blockStarted = createDeferred();
+    const blockRelease = createDeferred();
     const delivered: Array<{ kind: string; text?: string }> = [];
     const dispatcher = createReplyDispatcher({
       deliver: async (payload, info) => {
         if (info.kind === "block") {
-          markBlockStarted?.();
-          await blockRelease;
+          blockStarted.resolve();
+          await blockRelease.promise;
           throw new Error("block delivery failed after abort");
         }
         delivered.push({ kind: info.kind, text: payload.text });
@@ -1883,12 +1877,12 @@ describe("dispatchReplyFromConfig", () => {
       replyOptions: { abortSignal: abortController.signal },
       replyResolver,
     });
-    await blockStarted;
+    await blockStarted.promise;
     abortController.abort();
     await dispatch;
     expect(delivered).toEqual([]);
 
-    releaseBlock?.();
+    blockRelease.resolve();
     dispatcher.markComplete();
     await dispatcher.waitForIdle();
 
@@ -2046,19 +2040,13 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const ctx = buildTestCtx({ Provider: "whatsapp" });
     const delivered: ReplyPayload[] = [];
-    let releaseDelivery: (() => void) | undefined;
-    let markDeliveryStarted: (() => void) | undefined;
-    const deliveryStarted = new Promise<void>((resolve) => {
-      markDeliveryStarted = resolve;
-    });
-    const deliveryGate = new Promise<void>((resolve) => {
-      releaseDelivery = resolve;
-    });
+    const deliveryStarted = createDeferred();
+    const deliveryGate = createDeferred();
     const dispatcher = createReplyDispatcher({
       deliver: async (payload) => {
         delivered.push(payload);
-        markDeliveryStarted?.();
-        await deliveryGate;
+        deliveryStarted.resolve();
+        await deliveryGate.promise;
       },
     });
     let blockReplySettled = false;
@@ -2072,13 +2060,13 @@ describe("dispatchReplyFromConfig", () => {
         },
       );
 
-      await deliveryStarted;
+      await deliveryStarted.promise;
 
       expect(delivered).toEqual([{ text: "before tool" }]);
       await blockReplyPromise;
       expect(blockReplySettled).toBe(true);
 
-      releaseDelivery?.();
+      deliveryGate.resolve();
       return undefined;
     };
 
@@ -2097,19 +2085,13 @@ describe("dispatchReplyFromConfig", () => {
     setNoAbort();
     const ctx = buildTestCtx({ Provider: "whatsapp" });
     const delivered: ReplyPayload[] = [];
-    let releaseDelivery: (() => void) | undefined;
-    let markDeliveryStarted: (() => void) | undefined;
-    const deliveryStarted = new Promise<void>((resolve) => {
-      markDeliveryStarted = resolve;
-    });
-    const deliveryGate = new Promise<void>((resolve) => {
-      releaseDelivery = resolve;
-    });
+    const deliveryStarted = createDeferred();
+    const deliveryGate = createDeferred();
     const dispatcher = createReplyDispatcher({
       deliver: async (payload) => {
         delivered.push(payload);
-        markDeliveryStarted?.();
-        await deliveryGate;
+        deliveryStarted.resolve();
+        await deliveryGate.promise;
       },
     });
     const replyResolver = async (
@@ -2131,12 +2113,12 @@ describe("dispatchReplyFromConfig", () => {
       return result;
     });
 
-    await deliveryStarted;
+    await deliveryStarted.promise;
 
     expect(delivered).toEqual([{ text: "only block" }]);
     expect(dispatchSettled).toBe(false);
 
-    releaseDelivery?.();
+    deliveryGate.resolve();
     await dispatchPromise;
 
     expect(dispatchSettled).toBe(true);
@@ -2149,14 +2131,8 @@ describe("dispatchReplyFromConfig", () => {
     } as const satisfies OpenClawConfig;
     const ctx = buildTestCtx({ Provider: "whatsapp" });
     const delivered: ReplyPayload[] = [];
-    let releaseDelivery: (() => void) | undefined;
-    let markDeliveryStarted: (() => void) | undefined;
-    const deliveryStarted = new Promise<void>((resolve) => {
-      markDeliveryStarted = resolve;
-    });
-    const deliveryGate = new Promise<void>((resolve) => {
-      releaseDelivery = resolve;
-    });
+    const deliveryStarted = createDeferred();
+    const deliveryGate = createDeferred();
     const progressOrder: string[] = [];
     const dispatcher = createReplyDispatcher({
       deliver: async (payload) => {
@@ -2164,8 +2140,8 @@ describe("dispatchReplyFromConfig", () => {
         if (payload.text === "final") {
           progressOrder.push("final");
         }
-        markDeliveryStarted?.();
-        await deliveryGate;
+        deliveryStarted.resolve();
+        await deliveryGate.promise;
       },
     });
     const onToolStart = vi.fn();
@@ -2208,14 +2184,14 @@ describe("dispatchReplyFromConfig", () => {
       return result;
     });
 
-    await deliveryStarted;
+    await deliveryStarted.promise;
     expect(delivered).toEqual([{ text: "before tool" }]);
     expect(onToolStart).not.toHaveBeenCalled();
     expect(onPartialReply).not.toHaveBeenCalled();
     expect(toolProgressSettled).toBe(false);
     expect(dispatchSettled).toBe(false);
 
-    releaseDelivery?.();
+    deliveryGate.resolve();
     await Promise.all([dispatchPromise, toolProgressPromise, partialProgressPromise]);
 
     expect(dispatchSettled).toBe(true);
@@ -2233,19 +2209,13 @@ describe("dispatchReplyFromConfig", () => {
     } as const satisfies OpenClawConfig;
     const ctx = buildTestCtx({ Provider: "whatsapp" });
     const delivered: ReplyPayload[] = [];
-    let releaseDelivery: (() => void) | undefined;
-    let markDeliveryStarted: (() => void) | undefined;
-    const deliveryStarted = new Promise<void>((resolve) => {
-      markDeliveryStarted = resolve;
-    });
-    const deliveryGate = new Promise<void>((resolve) => {
-      releaseDelivery = resolve;
-    });
+    const deliveryStarted = createDeferred();
+    const deliveryGate = createDeferred();
     const dispatcher = createReplyDispatcher({
       deliver: async (payload) => {
         delivered.push(payload);
-        markDeliveryStarted?.();
-        await deliveryGate;
+        deliveryStarted.resolve();
+        await deliveryGate.promise;
       },
     });
     const onItemEvent = vi.fn();
@@ -2262,13 +2232,13 @@ describe("dispatchReplyFromConfig", () => {
         itemProgressSettled = true;
       });
 
-      await deliveryStarted;
+      await deliveryStarted.promise;
 
       expect(delivered).toEqual([{ text: "before item" }]);
       expect(onItemEvent).not.toHaveBeenCalled();
       expect(itemProgressSettled).toBe(false);
 
-      releaseDelivery?.();
+      deliveryGate.resolve();
       await itemProgressPromise;
       return undefined;
     };

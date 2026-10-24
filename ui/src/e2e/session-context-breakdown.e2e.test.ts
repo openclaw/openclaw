@@ -1,8 +1,6 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import type { SessionSystemPromptReport } from "../../../src/config/sessions/session-system-prompt-report.js";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { waitForControlUiFrameLayout } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import { controlUiE2eBuiltModuleRequest } from "./control-ui-built-module.test-support.ts";
@@ -10,6 +8,20 @@ import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts"
 
 const suite = createControlUiE2eSuite({ name: "Sidebar context breakdown" });
 const sessionKey = "agent:main:context-breakdown";
+const workspaceFile = (
+  path: string,
+  rootPath: string,
+  kind: "agent-workspace" | "execution-project",
+  chars: number,
+) => ({
+  name: path.split("/").at(-1)!,
+  path,
+  origin: { kind, rootPath },
+  missing: false,
+  rawChars: chars,
+  injectedChars: chars,
+  truncated: false,
+});
 const report: SessionSystemPromptReport = {
   source: "run",
   generatedAt: 1,
@@ -18,33 +30,9 @@ const report: SessionSystemPromptReport = {
   workspaceDir: "/projects/openclaw",
   systemPrompt: { chars: 40000, projectContextChars: 16000, nonProjectContextChars: 24000 },
   injectedWorkspaceFiles: [
-    {
-      name: "AGENTS.md",
-      path: "/workspace/AGENTS.md",
-      origin: { kind: "agent-workspace", rootPath: "/workspace" },
-      missing: false,
-      rawChars: 12000,
-      injectedChars: 12000,
-      truncated: false,
-    },
-    {
-      name: "USER.md",
-      path: "/workspace/USER.md",
-      origin: { kind: "agent-workspace", rootPath: "/workspace" },
-      missing: false,
-      rawChars: 2000,
-      injectedChars: 2000,
-      truncated: false,
-    },
-    {
-      name: "AGENTS.md",
-      path: "/projects/openclaw/AGENTS.md",
-      origin: { kind: "execution-project", rootPath: "/projects/openclaw" },
-      missing: false,
-      rawChars: 2000,
-      injectedChars: 2000,
-      truncated: false,
-    },
+    workspaceFile("/workspace/AGENTS.md", "/workspace", "agent-workspace", 12000),
+    workspaceFile("/workspace/USER.md", "/workspace", "agent-workspace", 2000),
+    workspaceFile("/projects/openclaw/AGENTS.md", "/projects/openclaw", "execution-project", 2000),
   ],
   skills: { promptChars: 8000, entries: [{ name: "code-review", blockChars: 8000 }] },
   tools: {
@@ -137,18 +125,6 @@ suite.define(() => {
       } else {
         await context.locator(":scope > summary").click();
       }
-      const initial = await takeControlUiScreenshotFrame(page, panel, [context], {
-        elements: [panel],
-        animations: "disabled",
-      });
-      await writeFile(
-        path.join(suite.artifactDir, "context-initial-" + width + ".png"),
-        initial.png,
-      );
-      await writeFile(
-        path.join(suite.artifactDir, "context-initial-" + width + "-panel.png"),
-        initial.elements[0]!.png,
-      );
       await context.getByText("Workspace files", { exact: true }).waitFor();
       expect(breakdownRequests).toHaveLength(1);
       const request = await gateway.waitForRequest("sessions.usage");
@@ -171,22 +147,10 @@ suite.define(() => {
       await context.getByText("/projects/openclaw/AGENTS.md", { exact: true }).waitFor();
       await context.getByText("Available on demand", { exact: true }).waitFor();
       await context.getByRole("button", { name: "Compact session", exact: true }).waitFor();
-      const after = await takeControlUiScreenshotFrame(
-        page,
-        panel,
-        [context.getByText("AGENTS.md", { exact: true }).first()],
-        { elements: [panel], animations: "disabled" },
-      );
-      await writeFile(
-        path.join(suite.artifactDir, "context-expanded-" + width + ".png"),
-        after.png,
-      );
-      await writeFile(
-        path.join(suite.artifactDir, "context-expanded-" + width + "-panel.png"),
-        after.elements[0]!.png,
-      );
       const contextScrollport =
         width <= 900 ? context.locator(".chat-mobile-details-page__body") : context;
+      await page.evaluate(() => document.fonts.ready.then(() => undefined));
+      await waitForControlUiFrameLayout([contextScrollport]);
       expect(
         await contextScrollport.evaluate((element) => element.scrollWidth <= element.clientWidth),
       ).toBe(true);
@@ -214,14 +178,6 @@ suite.define(() => {
         await gateway.setMethodResponse("sessions.usage", { sessions: [] });
         await context.getByRole("button", { name: "Refresh", exact: true }).click();
         await context.getByText("No matching context report.", { exact: false }).waitFor();
-        const unavailable = await takeControlUiScreenshotFrame(page, panel, [context], {
-          elements: [panel],
-          animations: "disabled",
-        });
-        await writeFile(
-          path.join(suite.artifactDir, "context-unavailable-panel.png"),
-          unavailable.elements[0]!.png,
-        );
         const nativeReport: SessionSystemPromptReport = {
           ...report,
           injectedWorkspaceFiles: [
@@ -248,19 +204,6 @@ suite.define(() => {
         await expect
           .poll(() => context.locator('[data-context-category="messages"]').textContent())
           .toContain("—");
-        const unknown = await takeControlUiScreenshotFrame(
-          page,
-          panel,
-          [context.getByText("Unverified", { exact: true })],
-          {
-            elements: [panel],
-            animations: "disabled",
-          },
-        );
-        await writeFile(
-          path.join(suite.artifactDir, "context-unverified-panel.png"),
-          unknown.elements[0]!.png,
-        );
       }
     });
   });

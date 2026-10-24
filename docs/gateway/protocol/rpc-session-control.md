@@ -17,6 +17,29 @@ The session control RPC family: session listing and filtering, message send and 
 `agents.defaults.timeoutSeconds`; keep a client's acknowledgment or reply wait
 budget separate. Ending a client-side wait does not abort accepted work.
 
+`chat.send.idempotencyKey` identifies one submission in the current session.
+Retry the same content with the original key after a lost acknowledgment.
+Before dispatch, the Gateway checks the recorded user message (`<key>:user`)
+or durable input receipt through an indexed submission lookup, not a history
+scan. A recorded submission cannot dispatch another turn or append another row,
+even after the in-memory deduplication cache expires or the Gateway restarts.
+Attachments, commands through `chat.send`, and per-message overrides use the same
+check. Reusing a recorded key with different content returns `INVALID_REQUEST`
+with `details.reason: "chat-request-conflict"`.
+
+A duplicate returns the cached acknowledgment when available, otherwise
+`{ runId, status: "in_flight" }` for accepted or recorded input with a live owner, or
+`{ runId, status: "ok" }` for a recorded submission without a live owner.
+An admission reservation without accepted or recorded input returns a retryable
+error so the sender retains its pending payload.
+This confirms acceptance, not completion or automatic restart recovery. The
+guarantee lasts while the user row or input receipt remains in that session;
+it does not cross a deleted or replaced session. RPC methods other than
+`chat.send` retain their own retry contracts.
+Retain the original `sessionId` when replaying a submission; a missing or different
+current physical session rejects that retry. The Control UI also keeps its
+transcript-root guard for non-steering sends.
+
 Session rows include `snapshotAt`, the Gateway's sampling time in milliseconds since the Unix epoch. Cached rows retain their original sampling time. Clients use it to order read snapshots, including runtime-only changes that do not advance persisted `updatedAt`; request order breaks equal-time ties. Read observations without sampling metadata retain request-order reconciliation. This read timestamp does not replace event ordering or session-identity checks.
 
 Once session stores are admitted, authorization for direct session targets prepares only the requested rows. A dirty target must pass stored-data validation before authorization; unrelated rows continue validating in the background. Method scopes, profile bindings, and startup availability are checked again after preparation. `sessions.list` authorizes the caller's scope first and leaves row validity and visibility filtering to the session reader.

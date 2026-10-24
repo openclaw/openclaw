@@ -57,16 +57,26 @@ const roles: GatewayOperatorRolesConfig = {
   },
 };
 
-type Welcome = { grant: unknown; sessionKey?: string; messageId?: string; error?: string };
+type Welcome = {
+  grant: unknown;
+  sessionKey?: string;
+  messageId?: string;
+  session?: unknown;
+  error?: string;
+};
 
-async function connectAs(port: number, email: string): Promise<WebSocket> {
+async function connectAs(
+  port: number,
+  email: string,
+  scopes = ["operator.read", "operator.write"],
+): Promise<WebSocket> {
   const ws = await openWs(port, { ...TRUSTED_BROWSER_HEADERS, "x-forwarded-user": email });
   const connected = await connectReq(ws, {
     prePairDevice: true,
     client: CONTROL_UI_CLIENT,
     browserOrigin: BROWSER_ORIGIN,
     skipDefaultAuth: true,
-    scopes: ["operator.read", "operator.write"],
+    scopes,
   });
   expect(connected.ok, JSON.stringify(connected.error)).toBe(true);
   return ws;
@@ -107,6 +117,16 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
           try {
             const sessionKey =
               typeof params.key === "string" ? params.key : `agent:main:dashboard:${randomUUID()}`;
+            if (params.describe === true) {
+              // Welcome setup checks that a ready session still exists, as the guest.
+              const { session } = await api.runtime.gateway.request<{ session: unknown }>(
+                "sessions.describe",
+                { key: sessionKey, agentId: "main" },
+                { scopes: ["operator.sessions.read"] },
+              );
+              respond(true, { grant, sessionKey, session } satisfies Welcome);
+              return;
+            }
             if (params.create === true) {
               // A retry after a crash repeats creation against the reserved key.
               await api.runtime.gateway.request("sessions.create", {
@@ -189,6 +209,31 @@ test("a guest's plugin RPC sees its visitor grant, owns the session it creates, 
       expect(inbox.payload?.items).toMatchObject([
         { senderProfileId: guest.id, sessionKey, messageId: welcome.payload?.messageId },
       ]);
+
+      // A guest's own welcome session is visible to its plugin RPC until an administrator deletes it.
+      const described = await rpcReq<Welcome>(guestWs, "visitor-access.probe", {
+        key: sessionKey,
+        describe: true,
+      });
+      expect(described.payload, JSON.stringify(described)).toMatchObject({
+        session: { key: sessionKey },
+      });
+      const deletedKey = `agent:main:dashboard:${randomUUID()}`;
+      const created = await rpcReq(guestWs, "sessions.create", {
+        key: deletedKey,
+        agentId: "main",
+      });
+      expect(created.ok, JSON.stringify(created.error)).toBe(true);
+      const adminWs = await connectAs(port, "staff@example.com", ["operator.admin"]);
+      const deleted = await rpcReq(adminWs, "sessions.delete", {
+        key: deletedKey,
+        agentId: "main",
+      });
+      adminWs.close();
+      expect(deleted.ok, JSON.stringify(deleted.error)).toBe(true);
+      expect(
+        await rpcReq<Welcome>(guestWs, "visitor-access.probe", { key: deletedKey, describe: true }),
+      ).toMatchObject({ ok: true, payload: { session: null } });
 
       // The seam keeps the caller's own write authority: a guest cannot write staff sessions.
       const staffSession = `agent:main:dashboard:${randomUUID()}`;

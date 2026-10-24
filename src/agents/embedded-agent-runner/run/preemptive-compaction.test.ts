@@ -3,6 +3,7 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import "../../test-helpers/agent-session-token-mock.js";
+import { createZeroUsageFixture } from "../../test-helpers/usage-fixtures.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 
 let estimateLlmBoundaryTokenPressure: typeof import("./preemptive-compaction.js").estimateLlmBoundaryTokenPressure;
@@ -45,17 +46,15 @@ function makeProviderAssistant(params: {
     role: "assistant",
     content: [{ type: "text", text: params.text ?? "provider answer" }],
     usage: {
+      ...createZeroUsageFixture(),
       input: params.promptTokens,
       output: params.totalTokens - params.promptTokens,
-      cacheRead: 0,
-      cacheWrite: 0,
       totalTokens: params.totalTokens,
       contextUsage: {
         state: "available",
         promptTokens: params.promptTokens,
         totalTokens: params.totalTokens,
       },
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: "stop",
     timestamp: timestamp++,
@@ -71,13 +70,10 @@ function makeUnavailableAssistant(params: {
     content: [{ type: "text", text: "usage unavailable" }],
     api: params.legacyCli ? "cli" : "anthropic-messages",
     usage: {
+      ...createZeroUsageFixture(),
       input: params.totalTokens,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
       totalTokens: params.totalTokens,
       ...(params.legacyCli ? {} : { contextUsage: { state: "unavailable" as const } }),
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
     },
     stopReason: "stop",
     timestamp: timestamp++,

@@ -619,8 +619,18 @@ export class VisitorAccessService {
         const gatewayAccess = access.describe(target);
         const githubLogin = access.githubLogin(target);
         const github = `Verified GitHub: ${githubLogin ? `@${githubLogin}` : "unavailable"}`;
+        // Grants recorded before onboarding metadata have no welcome progress until first sign-in.
+        const welcome = grant.onboarding && {
+          state: grant.onboarding.state,
+          ...(grant.onboarding.welcomeSessionKey
+            ? { sessionKey: grant.onboarding.welcomeSessionKey }
+            : {}),
+        };
+        const welcomeText = welcome
+          ? ` | welcome ${welcome.state}${welcome.sessionKey ? ` ${welcome.sessionKey}` : ""}`
+          : "";
         return {
-          line: `${visitorTargetKey(target)} | ${github}${profileId ? ` | profileId ${profileId}` : ""}${grant.grantId ? ` | grantId ${grant.grantId}` : ""} | invited ${new Date(grant.createdAt).toISOString()} | grant expires ${expiryText(grant.expiresAt)} | ${state} | ${gatewayAccess}`,
+          line: `${visitorTargetKey(target)} | ${github}${profileId ? ` | profileId ${profileId}` : ""}${grant.grantId ? ` | grantId ${grant.grantId}` : ""} | invited ${new Date(grant.createdAt).toISOString()} | grant expires ${expiryText(grant.expiresAt)} | ${state}${welcomeText} | ${gatewayAccess}`,
           grant: {
             ...(typeof target === "string" ? { email: target } : { githubAccountId: target }),
             ...(grant.grantId ? { grantId: grant.grantId } : {}),
@@ -629,6 +639,7 @@ export class VisitorAccessService {
             invitedAt: new Date(grant.createdAt).toISOString(),
             expiresAt: grant.expiresAt === null ? null : new Date(grant.expiresAt).toISOString(),
             state: missingFromPolicy ? "missing_from_policy" : expired ? "expired" : "managed",
+            ...(welcome ? { welcome } : {}),
             gatewayAccess,
           },
         };

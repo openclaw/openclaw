@@ -128,7 +128,7 @@ describe("one-shot CLI engine selection", () => {
         "gateway status --runtime-intent-only --json|daemon status --runtime-intent-only --json",
         "gateway discover|gateway call health|gateway health|gateway suspend",
         "gateway resume synthetic-suspension|gateway usage-cost|gateway stability|channels status",
-        "plugins build|completion|config set database.postgres.connection.id REPAIRED_DSN",
+        "plugins build|plugins lint|completion|config set database.postgres.connection.id REPAIRED_DSN",
         "config patch --stdin|config unset database|gateway run|gateway --dev --reset",
         "doctor --session-sqlite inspect --session-sqlite-store /selected/store",
         "doctor --post-upgrade|doctor --client-credentials --repair --non-interactive",

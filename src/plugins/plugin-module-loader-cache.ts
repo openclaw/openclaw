@@ -447,7 +447,9 @@ export function loadPluginPublicSurfaceModuleSync(
   }
   const sentinel: Record<string, unknown> = {};
   const boundaryRoot = getPluginCacheRoot(params.boundaryRoot).rootDir;
-  source.disposeModule ??= () => clearPluginModuleRequireCache(modulePath, boundaryRoot);
+  if (params.capturedSource || params.origin !== "bundled") {
+    source.disposeModule ??= () => clearPluginModuleRequireCache(modulePath, boundaryRoot);
+  }
   source.publicSurface = { exports: sentinel };
   try {
     Object.assign(sentinel, params.loadModule(modulePath));

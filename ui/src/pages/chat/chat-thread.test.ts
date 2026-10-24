@@ -1147,11 +1147,11 @@ describe("buildCachedChatItems", () => {
     expect(messageRecord(requireGroup(items[1])).content).toBe("Missing timestamp.");
   });
 
-  it("keeps an unconfirmed attempted send after the preceding reply for inline retry", () => {
+  it("keeps an attempted pending send after the preceding reply", () => {
     const groups = messageGroups({
       messages: [assistant("Previous reply", 2)],
       queue: [
-        queuedSend("attempted-send-1", "retry me from the transcript", 1, "unconfirmed", {
+        queuedSend("attempted-send-1", "retry me from the transcript", 1, "waiting-reconnect", {
           sendError: "Delivery diagnostic",
           sendAttempts: 1,
         }),
@@ -1167,7 +1167,7 @@ describe("buildCachedChatItems", () => {
     });
     expect(readPendingSendStatus(message)).toEqual({
       id: "attempted-send-1",
-      state: "unconfirmed",
+      state: "waiting-reconnect",
       error: "Delivery diagnostic",
     });
   });

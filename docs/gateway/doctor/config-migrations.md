@@ -178,6 +178,18 @@ Unrelated invalid fields, unsupported legacy shapes, and heartbeat repairs in
 read-only, future-written, or included configuration still require operator
 repair before admission.
 
+### Memory flush model selection
+
+`openclaw doctor --fix` removes the retired
+`agents.defaults.compaction.memoryFlush.model` setting and records a warning
+naming its removal. Memory flushes use the active session model and its normal
+fallback chain. To keep memory extraction local, select a local session model
+and local fallbacks.
+
+Updates apply the same migration through the existing backed-up config write
+flow. Run Doctor before starting a Gateway with a configuration that still
+contains the retired setting.
+
 ### Provider configuration
 
 Runtime config reads require per-model context budgets and current GitHub Copilot

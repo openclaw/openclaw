@@ -66,7 +66,9 @@ type RequesterSettleWakeRecoveryTarget = {
 
 /** The dispatched frozen cohort owns this exact requester input across a restart. */
 function findRequesterSettleWakeRecoveryBatch(
-  params: RequesterSettleWakeRecoveryTarget,
+  params: Omit<RequesterSettleWakeRecoveryTarget, "gatewayRuntime"> & {
+    gatewayRuntime?: GatewayRecoveryRuntime;
+  },
   requireGatewayCurrent = true,
   allowPending = false,
 ): SubagentRunRecord[] | undefined {
@@ -134,6 +136,48 @@ function findRequesterSettleWakeRecoveryBatch(
     }
   }
   return undefined;
+}
+
+/** An admitted private input keeps its processing receipt owner across Gateway generations. */
+export function resolvePrivateRequesterSettleRecoveryOwner(
+  requester: {
+    entry?: { sessionId: string; lifecycleRevision?: string };
+    agentId?: string;
+    canonicalKey: string;
+    storePath?: string;
+    physicalStorePath?: string;
+  },
+  runId: string | undefined,
+): "owned" | "unrestorable" | undefined {
+  const storePath = requester.physicalStorePath ?? requester.storePath;
+  if (!runId || !requester.entry || !requester.agentId || !storePath) {
+    return undefined;
+  }
+  const batch = findRequesterSettleWakeRecoveryBatch(
+    {
+      runId,
+      requesterSessionKey: requester.canonicalKey,
+      requesterAgentId: requester.agentId,
+      sessionId: requester.entry.sessionId,
+      lifecycleRevision: requester.entry.lifecycleRevision,
+      storePath,
+    },
+    false,
+    true,
+  );
+  if (
+    !batch?.some((entry) => entry.completionTarget === "parent") ||
+    !batch.every(
+      (entry) =>
+        entry.requesterSettleWake?.privateInput?.runId === runId &&
+        entry.requesterSettleWake.yieldedFinalDeliverable !== true,
+    )
+  ) {
+    return undefined;
+  }
+  return batch.some((entry) => getUnrestorableSubagentCompletionSourceReason(entry))
+    ? "unrestorable"
+    : "owned";
 }
 
 export async function captureRequesterSettleWakeRecoverySource(

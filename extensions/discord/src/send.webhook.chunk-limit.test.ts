@@ -98,9 +98,9 @@ describe("Discord webhook delivery", () => {
   it("leaves already-planned tall webhook text intact when chunk options are omitted", async () => {
     const text = Array.from({ length: 20 }, (_, index) => `line-${index}`).join("\n");
     await withWebhookServer(accepted, async (contents, references) => {
-      await realWebhookSend(text, { ...webhookOpts, replyTo: "legacy-reply" });
+      await realWebhookSend(text, webhookOpts);
       expect(contents).toEqual([text]);
-      expect(references).toEqual(["legacy-reply"]);
+      expect(references).toEqual([undefined]);
     });
   });
 

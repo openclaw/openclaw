@@ -206,7 +206,7 @@ suite.define(() => {
         ]);
 
         const newUrl = new URL("new", suite.server.baseUrl);
-        newUrl.hash = fragment;
+        // The first connection consumed the handoff; reload with the paired device credentials.
         expect((await page.goto(newUrl.toString()))?.status()).toBe(200);
         await waitForControlUiGatewayReady(page);
         const draftItem = await openMenu(page, ".new-session-page__composer");

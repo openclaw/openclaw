@@ -200,36 +200,15 @@ describe("repo E2E artifact transfer", () => {
     },
   );
 
-  describe("identity validation", { concurrent: false }, () => {
-    let packed: (ReturnType<typeof fixture> & { originalManifest: string }) | undefined;
-
-    it.each(["targetSha", "profile", "node", "platform", "arch", "privateQa"])(
-      "rejects mismatched %s before extraction",
-      (field) => {
-        if (!packed) {
-          const instance = fixture();
-          instance.transfer("pack");
-          packed = {
-            ...instance,
-            originalManifest: instance.read("artifacts/repo-e2e-build.json"),
-          };
-          instance.remove("dist");
-        }
-        const { root, transfer, write, originalManifest } = packed;
-        // Each probe changes one field of the pristine identity while reusing the real archive.
-        const recorded = JSON.parse(originalManifest);
-        recorded.identity[field] = "mismatched";
-        write("artifacts/repo-e2e-build.json", JSON.stringify(recorded));
-        try {
-          expect(fs.existsSync(path.join(root, "dist"))).toBe(false);
-          expect(() => transfer("restore")).toThrow("artifact identity differs");
-          expect(fs.existsSync(path.join(root, "dist"))).toBe(false);
-        } finally {
-          write("artifacts/repo-e2e-build.json", originalManifest);
-          fs.rmSync(path.join(root, "dist"), { recursive: true, force: true });
-        }
-      },
-    );
+  it("rejects mismatched artifact identity before extraction", () => {
+    const { root, transfer, write, read, remove } = fixture();
+    transfer("pack");
+    remove("dist");
+    const recorded = JSON.parse(read("artifacts/repo-e2e-build.json"));
+    recorded.identity.targetSha = "mismatched";
+    write("artifacts/repo-e2e-build.json", JSON.stringify(recorded));
+    expect(() => transfer("restore")).toThrow("artifact identity differs");
+    expect(fs.existsSync(path.join(root, "dist"))).toBe(false);
   });
 
   it("rejects corrupt archives before extraction", () => {

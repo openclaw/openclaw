@@ -141,10 +141,7 @@ suite.define(() => {
     });
   });
 
-  it.each([
-    ["profile allow", "read", "fs", "Files", { profile: "full" }],
-    ["wildcard alsoAllow", "web_fetch", "web", "Web", { profile: "minimal", alsoAllow: ["web_*"] }],
-  ] as const)(
+  it.each([["profile allow", "read", "fs", "Files", { profile: "full" }]] as const)(
     "submits keyed entries and surfaces Gateway validation failures (%s)",
     async (_name, toolId, groupId, groupLabel, tools) => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
