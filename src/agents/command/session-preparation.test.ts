@@ -25,6 +25,7 @@ import {
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { createOperatorRecoveryAuthority } from "../operator-recovery.test-support.js";
+import { buildAgentSystemPrompt } from "../system-prompt.js";
 import {
   prepareCommandSessionRecoveryEntry,
   prepareEmbeddedSessionState,
@@ -217,9 +218,14 @@ it.each([
       opts: {
         message: "Child completed",
         operatorAuthority,
-        requesterOrigin: requesterProfileId
-          ? { sessionKey: "agent:main:main", operatorProfileId: requesterProfileId }
-          : undefined,
+        ...(requesterProfileId
+          ? {
+              requesterOrigin: {
+                sessionKey: "agent:main:main",
+                operatorProfileId: requesterProfileId,
+              },
+            }
+          : {}),
         inputProvenance: {
           kind: "inter_session",
           sourceTool,
@@ -251,46 +257,75 @@ it.each([
   },
 );
 
-it("captures channel requester facts for command recovery", () => {
-  const requesterOrigin = {
-    sessionKey: "agent:research:telegram:group:requesters",
-    messageProvider: "telegram",
-    senderId: "bob",
-  };
-  const entry: InternalSessionEntry = {
-    sessionId: "destination-session",
-    lifecycleRevision: "destination-lifecycle",
-    updatedAt: 1,
-  };
-  const prepared = prepareCommandSessionRecoveryEntry({
-    agentId: "main",
-    sessionKey: "agent:main:destination",
-    sessionId: entry.sessionId,
-    entry,
-    runId: "current-run",
-    now: 2,
-    lifecycleGeneration: getAgentRunLifecycleGeneration(),
-    isSessionRollover: false,
-    opts: {
-      message: "continue accepted work",
-      requesterOrigin,
-    },
-  });
-  requesterOrigin.senderId = "replacement";
-  expect(prepared.nextEntry).toMatchObject({
-    restartRecoveryDeliveryRunId: "current-run",
-    restartRecoveryDeliverySourceRunId: "current-run",
-    restartRecoverySourceIngress: "channel",
-    restartRecoveryRequesterSource: {
+it.each(["channel", "delegate", "generated-media", "recovery"] as const)(
+  "binds requester facts to the existing %s command recovery claim",
+  (kind) => {
+    const requesterOrigin = {
+      sessionKey: "agent:research:telegram:group:requesters",
+      messageProvider: "telegram",
+      senderId: "bob",
+    };
+    const entry: InternalSessionEntry = {
+      sessionId: "destination-session",
+      lifecycleRevision: "destination-lifecycle",
+      updatedAt: 1,
+      ...(kind === "recovery"
+        ? {
+            restartRecoveryDeliveryRunId: "current-run",
+            restartRecoveryDeliverySourceRunId: "original-run",
+            restartRecoverySourceIngress: "internal" as const,
+            restartRecoveryRequesterSource: {
+              agentId: "main",
+              sessionKey: "agent:main:destination",
+              sessionId: "destination-session",
+              lifecycleRevision: "destination-lifecycle",
+              sourceRunId: "original-run",
+              requesterOrigin: { ...requesterOrigin, senderId: "original-requester" },
+            },
+          }
+        : {}),
+    };
+    const prepared = prepareCommandSessionRecoveryEntry({
       agentId: "main",
       sessionKey: "agent:main:destination",
       sessionId: entry.sessionId,
-      lifecycleRevision: entry.lifecycleRevision,
-      sourceRunId: "current-run",
-      requesterOrigin: { senderId: "bob" },
-    },
-  });
-});
+      entry,
+      runId: "current-run",
+      now: 2,
+      lifecycleGeneration: getAgentRunLifecycleGeneration(),
+      isSessionRollover: false,
+      opts: {
+        message: "continue accepted work",
+        requesterOrigin,
+        ...(kind === "channel"
+          ? {}
+          : {
+              inputProvenance: {
+                kind: "inter_session" as const,
+                sourceTool: kind === "generated-media" ? "subagent_settle" : "sessions_send",
+              },
+            }),
+        ...(kind === "generated-media"
+          ? { internalDeliveryMediaUrls: ["/synthetic/result.png"] }
+          : {}),
+      },
+    });
+    requesterOrigin.senderId = "replacement";
+    expect(prepared.nextEntry).toMatchObject({
+      restartRecoveryDeliveryRunId: "current-run",
+      restartRecoveryDeliverySourceRunId: kind === "recovery" ? "original-run" : "current-run",
+      restartRecoverySourceIngress: kind === "channel" ? "channel" : "internal",
+      restartRecoveryRequesterSource: {
+        agentId: "main",
+        sessionKey: "agent:main:destination",
+        sessionId: entry.sessionId,
+        lifecycleRevision: entry.lifecycleRevision,
+        sourceRunId: kind === "recovery" ? "original-run" : "current-run",
+        requesterOrigin: { senderId: kind === "recovery" ? "original-requester" : "bob" },
+      },
+    });
+  },
+);
 
 it.each([
   { internal: false, coordination: false },
@@ -316,9 +351,15 @@ it.each([
       await prepare({
         opts: {
           message: "hello",
-          inputProvenance: coordination
-            ? { kind: "inter_session", sourceTool: "sessions_send", sourceRole: "subagent" }
-            : undefined,
+          ...(coordination
+            ? {
+                inputProvenance: {
+                  kind: "inter_session" as const,
+                  sourceTool: "sessions_send",
+                  sourceRole: "subagent" as const,
+                },
+              }
+            : {}),
         },
         sessionKey,
         sessionId,
@@ -419,7 +460,14 @@ it.each([
       sessionKey,
       sessionId: entry.sessionId,
     });
-    expect(prepared.opts.extraSystemPrompt).toBe(normalContext);
+    const prompt = (extraSystemPrompt?: string) =>
+      buildAgentSystemPrompt({
+        workspaceDir: "/workspace",
+        toolNames: ["sessions_spawn", "sessions_yield"],
+        extraSystemPrompt,
+        silentReplyPromptMode: "none",
+      });
+    expect(prompt(prepared.opts.extraSystemPrompt)).toBe(prompt(normalContext));
     expect(prepared.opts.privateCompletion).toBe(privateCompletion);
     expect(prepared.opts.silentReplyPromptMode).toBe("none");
     expect(prepared.opts.inputProvenance).toEqual({

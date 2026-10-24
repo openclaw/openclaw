@@ -429,6 +429,7 @@ describe("command selection with configured model facts", () => {
 
   it.each([
     ["unconfigured", "unconfigured"],
+    ["wildcard", "z-first"],
     ["unqualified", "shared"],
   ] as const)("selects the manifest catalog's %s route", async (mode, model) => {
     const fixture = createFixture();
@@ -437,17 +438,25 @@ describe("command selection with configured model facts", () => {
       input: ["text", "image"],
     };
     fixture.store[sessionKey] = sessionEntry();
-    delete fixture.defaults.modelPolicy;
-    if (mode === "unconfigured") {
-      fixture.defaults.model = { primary: "remote/unconfigured" };
-      delete fixture.cfg.models;
-      fixture.inventory.mockReturnValue([declared]);
+    if (mode === "wildcard") {
+      fixture.defaults.modelPolicy = { allow: ["remote/*"] };
+      fixture.inventory.mockReturnValue([
+        catalogEntry("remote", "z-first"),
+        catalogEntry("remote", "a-second"),
+      ]);
     } else {
-      fixture.defaults.models = { shared: {} };
-      fixture.userSelection("shared", "remote", {
-        modelOverrideRouteResolution: "resolved",
-      });
-      fixture.inventory.mockReturnValue([catalogEntry("remote", "shared")]);
+      delete fixture.defaults.modelPolicy;
+      if (mode === "unconfigured") {
+        fixture.defaults.model = { primary: "remote/unconfigured" };
+        delete fixture.cfg.models;
+        fixture.inventory.mockReturnValue([declared]);
+      } else {
+        fixture.defaults.models = { shared: {} };
+        fixture.userSelection("shared", "remote", {
+          modelOverrideRouteResolution: "resolved",
+        });
+        fixture.inventory.mockReturnValue([catalogEntry("remote", "shared")]);
+      }
     }
     const selected = await fixture.unchanged(
       mode === "unconfigured" ? { configuredThinkingCatalog: [], requestedThinkLevel: "off" } : {},

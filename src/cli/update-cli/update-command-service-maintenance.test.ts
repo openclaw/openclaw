@@ -12,6 +12,7 @@ import { readScheduledTaskRuntime } from "../../daemon/schtasks-runtime.js";
 import {
   GatewayServiceStopUnsafeError,
   ServiceInspectionError,
+  formatServiceInspectionReason,
 } from "../../daemon/service-inspection-error.js";
 import { readGatewayServiceState, type GatewayService } from "../../daemon/service.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
@@ -31,7 +32,12 @@ import {
   maybeStopManagedServiceBeforeMutableUpdate,
   revalidateManagedGatewayServiceAfterUpdate,
 } from "./update-command-service-maintenance.js";
-import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
+import {
+  collectServiceInspectionFailureFacts,
+  assertGatewayServiceAdmissionUnchanged,
+  GatewayServiceUpdateOwnershipError,
+  inspectManagedGatewayServiceBeforeUpdate,
+} from "./update-command-service-plan.js";
 
 const {
   mocks,
@@ -43,61 +49,66 @@ const {
   expectNoServiceCalls,
 } = await import("./update-command-service-maintenance.test-support.js");
 
-const inspectService = (timeoutMs?: number) =>
-  maybeStopManagedServiceBeforeMutableUpdate({
-    ...maintenanceDefaults,
-    phase: "inspect",
-    timeoutMs,
-  });
-const beginMaintenance = () =>
-  beginDoctorMaintenance({
-    root: process.cwd(),
-    options: { repair: true },
-    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-  });
+it("preserves the shared service inspection deadline phase in recovery guidance", () =>
+  withServiceHome(async (home) => {
+    mockProcessPlatform("linux");
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    mockMaintenanceService(home, {
+      isLoaded: async () => false,
+      readRuntime: async () => ({ status: "stopped" }),
+      readCommand: async () => {
+        now = 101;
+        return {
+          programArguments: [process.execPath, "openclaw.mjs", "gateway"],
+          environment: { HOME: home },
+        };
+      },
+    });
+    const result = await maybeStopManagedServiceBeforeMutableUpdate({
+      ...maintenanceDefaults,
+      timeoutMs: 100,
+      phase: "inspect",
+    });
+    expect(result.serviceMutationSkipMessage).toContain("Service inspection deadline expired.");
+    expect(result.serviceMutationSkipMessage).toContain("Stalled check: service load state.");
+  }));
 
-it.each(["deadline", "runtime"] as const)(
-  "preserves unavailable inspection facts in recovery guidance: %s",
-  (failure) =>
-    withServiceHome(async (home) => {
-      mockProcessPlatform("linux");
-      let now = 0;
-      vi.spyOn(performance, "now").mockImplementation(() => now);
-      mockMaintenanceService(home, {
-        isLoaded: async () => false,
-        readRuntime: async () => ({
+it("reports observed service facts without inferring a manual launch when inspection times out", () =>
+  withServiceHome(async (home) => {
+    mockProcessPlatform("linux");
+    const verdict = await inspectManagedGatewayServiceBeforeUpdate({
+      root: process.cwd(),
+      state: {
+        env: { HOME: home },
+        installed: true,
+        running: false,
+        command: {
+          programArguments: [process.execPath, "openclaw.mjs", "gateway"],
+          sourcePath: path.join(home, ".config/systemd/user/openclaw-gateway.service"),
+        },
+        loadState: { status: "unknown", detail: "manager timeout" },
+        inspectionReason: "systemd-inspection-deadline-exceeded",
+        runtime: {
           status: "unknown",
           pid: 4242,
-          inspectionReason: "systemd-inspection-deadline-exceeded",
           inspectionFailure: {
             code: "service-runtime-inspection-failed",
             detail: "Stalled check: effective command LoadUnit.",
           },
-        }),
-        readCommand: async () => {
-          now = failure === "deadline" ? 101 : 0;
-          return {
-            programArguments: [process.execPath, "openclaw.mjs", "gateway"],
-            environment: { HOME: home },
-            sourcePath: path.join(home, ".config/systemd/user/openclaw-gateway.service"),
-          };
         },
-      });
-      const result = await inspectService(100);
-      const message = result.serviceMutationSkipMessage;
-      expect(result.serviceUpdateVerdict?.kind).toBe("unavailable");
-      if (failure === "deadline") {
-        expect(message).toContain("Service inspection deadline expired.");
-        expect(message).toContain("Stalled check: service load state.");
-      } else {
-        expect(message).toContain("service definition is present");
-        expect(message).toContain("Stalled check: effective command LoadUnit.");
-        expect(message).toContain("openclaw gateway stop");
-        expect(message).toContain("openclaw update repair");
-        expect(message).not.toContain("manually");
-      }
-    }),
-);
+      },
+    });
+    expect(verdict.kind).toBe("unavailable");
+    if (verdict.kind !== "unavailable") {
+      throw new Error("Expected unavailable inspection");
+    }
+    expect(verdict.message).toContain("service definition is present");
+    expect(verdict.message).toContain("Stalled check: effective command LoadUnit.");
+    expect(verdict.message).toContain("openclaw gateway stop");
+    expect(verdict.message).toContain("openclaw update repair");
+    expect(verdict.message).not.toContain("manually");
+  }));
 
 it.each(["authority-lost", "ordinary"] as const)(
   "preserves Doctor stop guidance through native preparation failure: %s",
@@ -128,13 +139,18 @@ it.each(["authority-lost", "ordinary"] as const)(
         current = scenario !== "authority-lost";
         throw refusal;
       });
-      const error = await beginMaintenance().catch((reason: unknown) => reason);
-      const causes = collectNestedErrorCandidates(error);
-      expect(causes).toContain(refusal);
+      const error = await beginDoctorMaintenance({
+        root: process.cwd(),
+        options: { repair: true },
+        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      }).catch((reason: unknown) => reason);
+      expect(collectNestedErrorCandidates(error)).toContain(refusal);
       if (scenario === "authority-lost") {
-        expect(causes).toContain(lost);
+        expect(collectNestedErrorCandidates(error)).toContain(lost);
         expect(
-          causes.some((cause) => cause instanceof AggregateError && cause.errors.includes(refusal)),
+          collectNestedErrorCandidates(error).some(
+            (cause) => cause instanceof AggregateError && cause.errors.includes(refusal),
+          ),
         ).toBe(true);
       }
       expect(String(error).includes("Stop the Gateway service and other OpenClaw processes")).toBe(
@@ -149,6 +165,7 @@ const maintenanceOperations = [
   "warning",
   "refresh",
   "no-restart",
+  "no-restart-text",
   "changed-during-refresh",
 ];
 it.each(maintenanceOperations)(
@@ -163,6 +180,11 @@ it.each(maintenanceOperations)(
       };
       const service = mockMaintenanceService(home, {
         readCommand: async () => structuredClone(command),
+        readRuntime: async () => ({
+          status: operation === "offline" ? "stopped" : "running",
+          pid: operation === "offline" ? undefined : fixtureGatewayPid,
+          systemd: { managerUid: 2001 },
+        }),
         stop: vi.fn(async () => {
           expect(timeout).toBe(330);
         }),
@@ -181,6 +203,11 @@ it.each(maintenanceOperations)(
       const warning =
         "Resident budget 25000ms: admitted turn interrupted; next Gateway starts with 330s.";
       mocks.drain.mockImplementationOnce(async ({ warn }, stop) => {
+        if (operation === "refused") {
+          throw new Error(
+            "Gateway maintenance stop refused: data at risk in owner phase session-mutation",
+          );
+        }
         if (runId) {
           warn(warning);
         }
@@ -191,6 +218,7 @@ it.each(maintenanceOperations)(
       const params = {
         ...maintenanceDefaults,
         shouldRestart: !operation.startsWith("no-restart"),
+        jsonMode: operation !== "no-restart-text",
         warn: vi.fn(),
         updateRun,
         recordPhase,
@@ -209,8 +237,10 @@ it.each(maintenanceOperations)(
           expectedService: inspected,
           ...(operation === "refresh" ? { phase: "refresh" as const } : {}),
         });
-        if (operation === "changed-during-refresh") {
-          await expect(stop).rejects.toThrow("definition changed");
+        if (operation === "refused" || operation === "changed-during-refresh") {
+          await expect(stop).rejects.toThrow(
+            operation === "refused" ? "owner phase session-mutation" : "definition changed",
+          );
           expect(service.stop).not.toHaveBeenCalled();
           return;
         }
@@ -228,7 +258,7 @@ it.each(maintenanceOperations)(
             }),
           );
         }
-        if (operation === "refresh" || operation === "no-restart") {
+        if (["offline", "refresh", "no-restart", "no-restart-text"].includes(operation)) {
           expect(timeout).toBe(330);
           expect(stopped.stopped).toBe(false);
           expectNoServiceCalls(service.stop, service.start, service.restart);
@@ -237,11 +267,13 @@ it.each(maintenanceOperations)(
         expect(service.stop).toHaveBeenCalledOnce();
         expect(mocks.drain).toHaveBeenCalledOnce();
         if (runId) {
-          expect(getUpdateRun(runId)?.steps).toContainEqual(
-            expect.objectContaining({
-              step: expect.stringMatching(/^warning:gateway-maintenance:/),
-              detail: warning,
-            }),
+          expect(getUpdateRun(runId)?.steps).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({
+                step: expect.stringMatching(/^warning:gateway-maintenance:/),
+                detail: warning,
+              }),
+            ]),
           );
         }
         expect(stopped.serviceDefinitionEnv?.OPENCLAW_SERVICE_VERSION).toBe("2026.7.1-2");
@@ -271,7 +303,10 @@ it("explains a blocked systemd inspection for a failed unit with residual tasks"
         systemd: { managerUid: 2001, tasksCurrent: 2 },
       }),
     });
-    const result = await inspectService();
+    const result = await maybeStopManagedServiceBeforeMutableUpdate({
+      ...maintenanceDefaults,
+      phase: "inspect",
+    });
     expect(result.serviceUpdateVerdict?.kind).toBe("unavailable");
     expect(result.serviceMutationSkipMessage).toContain(
       "Processes remain in the systemd service cgroup",
@@ -303,30 +338,53 @@ it.each(["systemd-user-bus-unavailable", "native-exception", undefined] as const
           return { status: "running", pid: fixtureGatewayPid, systemd: { managerUid: 2001 } };
         },
       });
-      const before = await inspectService();
+      const params = maintenanceDefaults;
+      const before = await maybeStopManagedServiceBeforeMutableUpdate({
+        ...params,
+        phase: "inspect",
+      });
       expect(before.serviceUpdateVerdict?.kind).toBe("owned");
       available = false;
       const failure = await maybeStopManagedServiceBeforeMutableUpdate({
-        ...maintenanceDefaults,
+        ...params,
         phase: "prepare",
         expectedService: before,
       }).catch((error: unknown) => error);
-      assert(failure instanceof GatewayServiceUpdateOwnershipError);
+      expect(failure).toBeInstanceOf(GatewayServiceUpdateOwnershipError);
+      if (!(failure instanceof GatewayServiceUpdateOwnershipError)) {
+        throw new Error("Expected service inspection refusal");
+      }
       if (reason === "native-exception") {
         expect(failure.message).toContain("systemd");
         expectNoServiceCalls(service.stop, service.start, service.install);
         return;
       }
-      expect(failure.message).toContain("Gateway service inspection is unavailable");
-      expect(failure.message).toContain("openclaw gateway status --deep");
+      const detail = reason
+        ? (formatServiceInspectionReason(reason).split(".", 1)[0] ?? "")
+        : "Gateway service inspection is unavailable";
+      for (const message of [
+        detail,
+        `Failing check managed-service-runtime (${reason ?? "service-ownership-unverified"})`,
+        `Update install root: ${process.cwd()}`,
+        `Gateway install root: ${process.cwd()}`,
+        `Update binary: ${path.join(process.cwd(), "openclaw.mjs")}`,
+        "Required: admitted service ownership owned; manager UID 2001; detected: unavailable; runtime unknown; manager UID unavailable",
+        "openclaw gateway status --deep",
+      ]) {
+        expect(failure.message).toContain(message);
+      }
       for (const message of ["identity changed", "private-runtime-detail"]) {
         expect(failure.message).not.toContain(message);
       }
-      expect(failure.failureFacts).toContainEqual(
-        expect.objectContaining({
-          check: "managed-service-runtime",
-          code: reason ?? "service-ownership-unverified",
-        }),
+      expect(failure.failureFacts).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            check: "managed-service-runtime",
+            code: reason ?? "service-ownership-unverified",
+            message:
+              "Required: admitted service ownership owned; manager UID 2001; detected: unavailable; runtime unknown; manager UID unavailable",
+          }),
+        ]),
       );
       expect(failure.failureFacts.length).toBeLessThanOrEqual(5);
       expect(failure.failureFacts.every((fact) => (fact.message?.length ?? 0) <= 200)).toBe(true);
@@ -341,6 +399,20 @@ it.each(["systemd-user-bus-unavailable", "native-exception", undefined] as const
         "installation and Gateway were left unchanged",
       );
       expect(result.failedStep.failureFacts).toEqual(failure.failureFacts);
+
+      const verdict = await inspectManagedGatewayServiceBeforeUpdate({
+        root: params.root,
+        state: await readGatewayServiceState(service),
+      });
+      expect(() => assertGatewayServiceAdmissionUnchanged(before, verdict)).toThrow(
+        reason ? detail : "Gateway service inspection is unavailable",
+      );
+      if (reason) {
+        expect(collectServiceInspectionFailureFacts(verdict)?.[0]).toMatchObject({
+          code: reason,
+          message: expect.stringContaining(detail.slice(0, 80)),
+        });
+      }
       expectNoServiceCalls(service.stop, service.start, service.restart, service.install);
     }),
 );
@@ -379,6 +451,9 @@ it.each(nativeOfflineCases)(
         scenario.runtime === "unknown" ? "unavailable" : "owned",
       );
       expect(inspected.offline).toBe(scenario.runtime === "unknown" ? undefined : scenario.offline);
+      for (const [args] of isEnabled.mock.calls) {
+        expect(args.timeoutMs).toBe(200);
+      }
       expectNoServiceCalls(
         service.stop,
         service.start,
@@ -429,6 +504,11 @@ it("refuses an admitted Scheduled Task after repeated probe timeouts", () =>
     });
 
     await expect(inspection).rejects.toThrow("Scheduled Task check timed out after 30000 ms");
+    for (const call of vi.mocked(spawnSync).mock.calls) {
+      expect(call[2]?.timeout).toBe(
+        call[1]?.some((arg) => arg.includes("Get-CimInstance Win32_Process")) ? 5_000 : 30_000,
+      );
+    }
     expectNoServiceCalls(service.stop, service.install);
   }));
 
@@ -447,7 +527,10 @@ it("preserves a silent Scheduled Task probe failure through update and Doctor wa
     const service = mockMaintenanceService(home, {
       readRuntime: readScheduledTaskRuntime,
     });
-    const inspection = await inspectService();
+    const inspection = await maybeStopManagedServiceBeforeMutableUpdate({
+      ...maintenanceDefaults,
+      phase: "inspect",
+    });
     expect(inspection).toMatchObject({
       stopped: false,
       serviceMutationAllowed: false,
@@ -456,7 +539,11 @@ it("preserves a silent Scheduled Task probe failure through update and Doctor wa
     const detail = "Scheduled Task check failed (exit 2): no output from PowerShell.";
     expect(inspection.blockMessage).toBeUndefined();
     expect(inspection.serviceMutationSkipMessage).toContain(detail);
-    const maintenance = await beginMaintenance();
+    const maintenance = await beginDoctorMaintenance({
+      root: process.cwd(),
+      options: { repair: true },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    });
     try {
       expect(maintenance?.warnings).toEqual([expect.stringContaining(detail)]);
       expect(maintenance?.warnings?.[0]).toContain("openclaw gateway stop");
@@ -465,6 +552,26 @@ it("preserves a silent Scheduled Task probe failure through update and Doctor wa
       await maintenance?.release();
     }
     expectNoServiceCalls(service.stop, service.install, service.restart);
+  }));
+
+it("refuses owned Linux admission without a native manager UID", () =>
+  withServiceHome(async (home) => {
+    mockProcessPlatform("linux");
+    const stop = vi.fn(async () => undefined);
+    mockMaintenanceService(home, {
+      readRuntime: async () => ({ status: "running" }),
+      stop,
+    });
+    await expect(
+      maybeStopManagedServiceBeforeMutableUpdate({
+        ...maintenanceDefaults,
+        phase: "inspect",
+      }),
+    ).resolves.toMatchObject({
+      serviceUpdateVerdict: { kind: "unavailable" },
+      serviceMutationAllowed: false,
+    });
+    expect(stop).not.toHaveBeenCalled();
   }));
 
 it.each(["before stop", "after stop"] as const)(
@@ -492,6 +599,7 @@ it.each(["before stop", "after stop"] as const)(
         }
       });
       mockMaintenanceService(home, {
+        readCommand: async () => gatewayCommand(home, root),
         readRuntime: async () => {
           reads += 1;
           await Promise.resolve();

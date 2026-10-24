@@ -1,9 +1,13 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../shared/worker-bundle-hash.js";
+import {
+  extractWorkerBundleArchive,
+  DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
+} from "../../shared/worker-bundle-archive.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -24,10 +28,24 @@ import { workerWorkspaceRsyncReceiverEntryPath } from "./workspace-sync-helpers.
 type WorkerBundleArtifact = Extract<WorkerInstallationArtifact, { install: "bundle" }>;
 
 const ARTIFACTS = {
-  ...Object.fromEntries(
-    WORKER_BUNDLE_ARTIFACT_PATHS.toSorted().map((name) => [name, `fixture: ${name}\n`]),
-  ),
+  "client-credential.worker.mjs": "export const clientCredentials = true;\n",
+  "code-mode-node.worker.mjs": "export const codeModeNode = true;\n",
+  "file-tool-planning.worker.mjs": "export const fileToolPlanning = true;\n",
+  "file-tool-read.worker.mjs": "export const fileToolRead = true;\n",
+  "fs-safe-darwin-arm64.node": "arm64-native-fixture",
+  "fs-safe-darwin-x64.node": "x64-native-fixture",
+  "gateway-state-owner-heartbeat.worker.mjs": "export const heartbeat = true;\n",
+  "github-exec-launcher.mjs": "export const launcher = true;\n",
+  "image-processor.worker.mjs": "export const imageProcessor = true;\n",
+  "openclaw-state-read.worker.mjs": "export const stateRead = true;\n",
+  "service-child-group-anchor.mjs": "export const anchor = true;\n",
+  "service-child-relay.mjs": "export const relay = true;\n",
+  "sqlite-source-revision.worker.mjs": "export const sqliteSourceRevision = true;\n",
+  "sqlite-store.worker.mjs": "export const sqliteStore = true;\n",
+  "windows-security-helper.exe": "MZ\0worker-permission-helper",
+  "worker-native-lifecycle.worker.mjs": "export const nativeLifecycle = true;\n",
   "worker.mjs": "export const worker = true;\n",
+  "workspace-rsync-receiver.mjs": "export const receiver = true;\n",
 };
 
 const artifactPath = (root: string, name = "worker.mjs") => path.join(root, "dist/worker", name);
@@ -119,7 +137,30 @@ function bundleArtifact(overrides: Partial<WorkerBundleArtifact> = {}): WorkerBu
 }
 
 describe("worker bundle producer", () => {
-  it("reuses a packaged worker graph through a package-root symlink without creating a cache", async () => {
+  it("stages many chunks deterministically", async () => {
+    await withBundleFixture(async ({ root, packageRoot, cacheDir }) => {
+      await writeFixture(packageRoot, 'export { value } from "./worker-chunk-0.mjs";', 48);
+      const chunk = path.join(packageRoot, "dist/worker/worker-chunk-0.mjs");
+      const first = await producer(packageRoot, cacheDir).prepare();
+      const second = await producer(packageRoot, path.join(root, "second-cache")).prepare();
+      expect(second.bundleHash).toBe(first.bundleHash);
+      expect(second.tarballSha256).toBe(first.tarballSha256);
+      expect(await listTarball(first.tarballPath)).toContain("worker-chunk-0.mjs");
+      const destination = path.join(root, "installed");
+      await extractWorkerBundleArchive({
+        tarballPath: first.tarballPath,
+        destination,
+        expectedBundleHash: first.bundleHash,
+        limits: DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
+      });
+      expect(await readText(destination, "worker-chunk-0.mjs")).toBe("export const value = 0;\n");
+      await fs.writeFile(chunk, "export const value = 2;");
+      const changed = await producer(packageRoot, cacheDir).prepare();
+      expect(changed.bundleHash).not.toBe(first.bundleHash);
+    });
+  });
+
+  it("reuses the sealed worker graph from an installed npm package", async () => {
     await withTestDir({ prefix: "openclaw-worker-packaged-" }, async (root) => {
       const sourceRoot = path.join(root, "source");
       await writeFixture(sourceRoot, 'export { value } from "./worker-chunk-runtime.mjs";');
@@ -132,21 +173,34 @@ describe("worker bundle producer", () => {
       const installedRoot = path.join(root, "installed");
       const archiveRoot = path.join(installedRoot, "dist/worker-artifacts");
       await fs.mkdir(archiveRoot, { recursive: true });
+      await fs.writeFile(
+        path.join(installedRoot, "package.json"),
+        `${JSON.stringify({ name: "openclaw", version: "1.2.3" })}\n`,
+      );
       const packagedArchive = path.join(archiveRoot, `${built.bundleHash}.tar.gz`);
       await fs.copyFile(built.tarballPath, packagedArchive);
+
+      const installed = await producer(installedRoot, path.join(root, "installed-cache")).prepare();
+      expect(installed).toMatchObject({
+        bundleHash: built.bundleHash,
+        tarballPath: packagedArchive,
+      });
+      expect(installed.tarballSha256).toBe(built.tarballSha256);
+      await expect(fs.stat(path.join(root, "installed-cache"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+
       const installedAlias = path.join(root, "installed-alias");
       await fs.symlink(installedRoot, installedAlias, "junction");
       const throughAlias = await producer(installedAlias, path.join(root, "alias-cache")).prepare();
       expect(throughAlias).toMatchObject({
         bundleHash: built.bundleHash,
-        tarballSha256: built.tarballSha256,
         tarballPath: path.join(
           installedAlias,
           "dist/worker-artifacts",
           `${built.bundleHash}.tar.gz`,
         ),
       });
-      await expectMissing(path.join(root, "alias-cache"));
     });
   });
 
@@ -154,8 +208,8 @@ describe("worker bundle producer", () => {
     await withTestDir({ prefix: "openclaw-worker-bundle-" }, async (root) => {
       const packageA = path.join(root, "package-a");
       const packageB = path.join(root, "package-b");
-      await writeFixture(packageA, "export const worker = true;\n", 48);
-      await writeFixture(packageB, "export const worker = true;\n", 48);
+      await writeFixture(packageA);
+      await writeFixture(packageB);
       await fs.mkdir(path.join(packageA, "dist", "control-ui"), { recursive: true });
       await fs.writeFile(path.join(packageA, "dist", "entry.js"), 'import "json5";\n');
       await fs.writeFile(
@@ -179,11 +233,13 @@ describe("worker bundle producer", () => {
       const second = await producer(packageB, path.join(root, "cache-b"), {
         openclawVersion: "1.2.3",
       }).prepare();
+      expect(first.bundleHash).toMatch(/^[a-f0-9]{64}$/u);
       expect(second.bundleHash).toBe(first.bundleHash);
-      expect(second.tarballSha256).toBe(first.tarballSha256);
+      const compressed = await fs.readFile(first.tarballPath);
+      expect(first.tarballSha256).toBe(createHash("sha256").update(compressed).digest("hex"));
+      expect(first.tarballBytes).toBe(compressed.byteLength);
       const entries = await listTarball(first.tarballPath);
-      expect(entries).toEqual(expect.arrayContaining(Object.keys(ARTIFACTS)));
-      expect(entries).toHaveLength(Object.keys(ARTIFACTS).length + 48);
+      expect(entries).toEqual(Object.keys(ARTIFACTS));
       const installPrefix = `.openclaw-worker/${first.bundleHash}/`;
       const receiverPath = workerWorkspaceRsyncReceiverEntryPath(first.bundleHash);
       expect(receiverPath.startsWith(installPrefix)).toBe(true);
@@ -191,7 +247,6 @@ describe("worker bundle producer", () => {
       const extractRoot = path.join(root, "extract");
       await fs.mkdir(extractRoot);
       await tar.extract({ file: first.tarballPath, cwd: extractRoot });
-      expect(await readText(extractRoot, "worker-chunk-0.mjs")).toBe("export const value = 0;\n");
       for (const [artifactName, expectedContents] of Object.entries(ARTIFACTS).filter(
         ([name]) => !["code-mode-node.worker.mjs", "windows-security-helper.exe"].includes(name),
       )) {
@@ -204,15 +259,31 @@ describe("worker bundle producer", () => {
       }
       await expect(fs.access(path.join(extractRoot, "package.json"))).rejects.toThrow();
       await expect(fs.access(path.join(extractRoot, "node_modules"))).rejects.toThrow();
-      await fs.writeFile(path.join(packageA, "dist/entry.js"), "unrelated change");
-      expect((await producer(packageA, path.join(root, "cache-a")).prepare()).bundleHash).toBe(
-        first.bundleHash,
+    });
+  });
+
+  it("changes identity only when the deploy artifact changes", async () => {
+    await withBundleFixture(async ({ packageRoot, cacheDir }) => {
+      await writeFixture(packageRoot, "export const value = 1;\n");
+      const first = await producer(packageRoot, cacheDir).prepare();
+
+      await fs.writeFile(
+        path.join(packageRoot, "dist", "entry.js"),
+        "export const unrelated = 2;\n",
       );
+      const unrelated = await producer(packageRoot, cacheDir).prepare();
+      expect(unrelated.bundleHash).toBe(first.bundleHash);
+
       let previousHash = first.bundleHash;
-      for (const name of ["worker.mjs", "worker-chunk-0.mjs"]) {
-        await fs.writeFile(artifactPath(packageA, name), "changed");
-        const changed = await producer(packageA, path.join(root, "cache-a")).prepare();
-        expect(changed.bundleHash).not.toBe(previousHash);
+      for (const artifactName of Object.keys(ARTIFACTS).filter(
+        (name) => name !== "code-mode-node.worker.mjs",
+      )) {
+        await fs.writeFile(
+          artifactPath(packageRoot, artifactName),
+          "export const changed = true;\n",
+        );
+        const changed = await producer(packageRoot, cacheDir).prepare();
+        expect(changed.bundleHash, artifactName).not.toBe(previousHash);
         previousHash = changed.bundleHash;
       }
     });
@@ -256,6 +327,24 @@ describe("worker bundle producer", () => {
       expect(readRetained).not.toHaveBeenCalled();
       expect((await fs.readdir(cacheDir)).toSorted()).toEqual(before);
       await expectPresent(current.tarballPath);
+    });
+  });
+
+  it("prunes only unretained bundles for an exclusive cache owner", async () => {
+    await withBundleFixture(async ({ packageRoot, cacheDir }) => {
+      await writeFixture(packageRoot, "export const value = 1;\n");
+      const retained = await producer(packageRoot, cacheDir).prepare();
+      await fs.writeFile(artifactPath(packageRoot), "export const value = 2;\n");
+      const owner = producer(packageRoot, cacheDir);
+      const current = await owner.prepare();
+      const removedPath = path.join(cacheDir, `${"c".repeat(64)}.tgz`);
+      await fs.writeFile(removedPath, "historical");
+
+      await owner.prune(() => [retained.bundleHash]);
+
+      await expectPresent(retained.tarballPath);
+      await expectPresent(current.tarballPath);
+      await expectMissing(removedPath);
     });
   });
 
@@ -341,48 +430,81 @@ describe("worker bundle producer", () => {
     },
   );
 
-  it("preserves every cleanup candidate when retention cannot be read", async () => {
+  it("reclaims recognized crash artifacts but preserves unknown cache entries", async () => {
     await withBundleFixture(async ({ packageRoot, cacheDir }) => {
       await writeFixture(packageRoot);
       const owner = producer(packageRoot, cacheDir);
       const current = await owner.prepare();
-      const unknown = path.join(cacheDir, "keep-me.txt");
-      await fs.writeFile(unknown, "operator-owned");
-      const historical = path.join(cacheDir, `${"b".repeat(64)}.tgz`);
       const staging = path.join(cacheDir, ".staging-stale");
       const temporary = path.join(
         cacheDir,
-        `${current.bundleHash}.tgz.123.123e4567-e89b-12d3-a456-426614174000.tmp`,
+        `${"b".repeat(64)}.tgz.123.123e4567-e89b-12d3-a456-426614174000.tmp`,
       );
-      const candidates = [historical, staging, temporary];
-      await fs.writeFile(historical, "historical");
+      const unknown = path.join(cacheDir, "keep-me.txt");
       await fs.mkdir(staging);
-      await fs.writeFile(path.join(staging, "partial"), "staged");
       await fs.writeFile(temporary, "partial");
-      const failure = new Error("Retention records are unavailable");
-
-      await expect(
-        owner.prune(() => {
-          throw failure;
-        }),
-      ).rejects.toBe(failure);
-
-      for (const candidate of candidates) {
-        const file = candidate === staging ? path.join(staging, "partial") : candidate;
-        const contents =
-          candidate === historical ? "historical" : candidate === staging ? "staged" : "partial";
-        await expect(fs.readFile(file, "utf8")).resolves.toBe(contents);
-      }
-      await expectPresent(current.tarballPath);
+      await fs.writeFile(unknown, "operator-owned");
 
       await owner.prune(() => []);
-      for (const removed of candidates) {
-        await expectMissing(removed);
-      }
+
+      await expectMissing(staging);
+      await expectMissing(temporary);
       await expect(fs.readFile(unknown, "utf8")).resolves.toBe("operator-owned");
       await expectPresent(current.tarballPath);
     });
   });
+
+  it.each(["all", "staging", "temporary"] as const)(
+    "preserves cleanup candidates when retention cannot be read (%s)",
+    async (kind) => {
+      await withBundleFixture(async ({ packageRoot, cacheDir }) => {
+        await writeFixture(packageRoot);
+        const owner = producer(packageRoot, cacheDir);
+        const current = await owner.prepare();
+        const historical = path.join(cacheDir, `${"b".repeat(64)}.tgz`);
+        const staging = path.join(cacheDir, ".staging-stale");
+        const temporary = path.join(
+          cacheDir,
+          `${current.bundleHash}.tgz.123.123e4567-e89b-12d3-a456-426614174000.tmp`,
+        );
+        const candidates =
+          kind === "all"
+            ? [historical, staging, temporary]
+            : [kind === "staging" ? staging : temporary];
+        if (candidates.includes(historical)) {
+          await fs.writeFile(historical, "historical");
+        }
+        if (candidates.includes(staging)) {
+          await fs.mkdir(staging);
+          await fs.writeFile(path.join(staging, "partial"), "staged");
+        }
+        if (candidates.includes(temporary)) {
+          await fs.writeFile(temporary, "partial");
+        }
+        const failure = new Error("Retention records are unavailable");
+
+        await expect(
+          owner.prune(() => {
+            throw failure;
+          }),
+        ).rejects.toBe(failure);
+
+        for (const candidate of candidates) {
+          const file = candidate === staging ? path.join(staging, "partial") : candidate;
+          const contents =
+            candidate === historical ? "historical" : candidate === staging ? "staged" : "partial";
+          await expect(fs.readFile(file, "utf8")).resolves.toBe(contents);
+        }
+        await expectPresent(current.tarballPath);
+
+        await owner.prune(() => []);
+        for (const removed of candidates) {
+          await expectMissing(removed);
+        }
+        await expectPresent(current.tarballPath);
+      });
+    },
+  );
 
   it("reads retention when queued pruning runs", async () => {
     await withBundleFixture(async ({ packageRoot, cacheDir }) => {
@@ -519,7 +641,18 @@ describe("worker bundle producer", () => {
   });
 
   it.skipIf(process.platform === "win32")("rejects symlinked deploy artifacts", async () => {
-    for (const artifactName of ["worker.mjs", "worker-chunk-symlink.mjs"]) {
+    for (const artifactName of [
+      "worker-chunk-symlink.mjs",
+      ...Object.keys(ARTIFACTS).filter(
+        (name) =>
+          ![
+            "code-mode-node.worker.mjs",
+            "fs-safe-darwin-arm64.node",
+            "fs-safe-darwin-x64.node",
+            "windows-security-helper.exe",
+          ].includes(name),
+      ),
+    ]) {
       await withBundleFixture(async ({ packageRoot, cacheDir }) => {
         await writeFixture(packageRoot);
         const artifact = artifactPath(packageRoot, artifactName);
