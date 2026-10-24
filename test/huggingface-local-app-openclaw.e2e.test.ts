@@ -2,11 +2,15 @@ import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import { expect, it, onTestFinished } from "vitest";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import { listenLoopback, readRequestText } from "./helpers/gateway-integration-fixtures.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+  readRequestText,
+  respondJson,
+} from "./helpers/gateway-integration-fixtures.js";
 import { createOpenClawTestInstance } from "./helpers/openclaw-test-instance.js";
 
 type CapturedChatRequest = {
-  path: string;
   model?: string;
   messages?: Array<{ role?: string; content?: unknown }>;
   stream?: boolean;
@@ -73,13 +77,7 @@ it.each(HF_LOCAL_APP_CASES)(
 
     expect(agent.code, agent.stderr).toBe(0);
     expect(agent.stdout).toContain(`hf local app ok: ${providerId}`);
-    expect(fakeServer.requests).toMatchObject([
-      {
-        path: "/v1/chat/completions",
-        model: modelId,
-        stream: true,
-      },
-    ]);
+    expect(fakeServer.requests).toMatchObject([{ model: modelId, stream: true }]);
     expect(fakeServer.requests[0]?.messages?.some(messageContainsHello)).toBe(true);
   },
   180_000,
@@ -106,21 +104,17 @@ async function startFakeOpenAiServer(params: { modelId: string }) {
   const server = createServer((req, res) => {
     void (async () => {
       if (req.method === "GET" && req.url === "/v1/models") {
-        res.writeHead(200, { "content-type": "application/json" });
-        res.end(
-          JSON.stringify({ object: "list", data: [{ id: params.modelId, object: "model" }] }),
-        );
+        respondJson(res, { object: "list", data: [{ id: params.modelId, object: "model" }] });
         return;
       }
       if (req.method !== "POST" || req.url !== "/v1/chat/completions") {
-        res.writeHead(404, { "content-type": "application/json" });
-        res.end(JSON.stringify({ error: { message: `unexpected ${req.method} ${req.url}` } }));
+        respondJson(res, { error: { message: `unexpected ${req.method} ${req.url}` } }, 404);
         return;
       }
-      const { messages, model, stream }: Omit<CapturedChatRequest, "path"> = JSON.parse(
+      const { messages, model, stream }: CapturedChatRequest = JSON.parse(
         await readRequestText(req),
       );
-      requests.push({ path: req.url, messages, model, stream });
+      requests.push({ messages, model, stream });
       res.writeHead(200, {
         "cache-control": "no-cache",
         connection: "keep-alive",
@@ -142,13 +136,9 @@ async function startFakeOpenAiServer(params: { modelId: string }) {
       res.end("data: [DONE]\n\n");
     })();
   });
-  const close = () =>
-    new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
   return {
     baseUrl: `${await listenLoopback(server)}/v1`,
     requests,
-    close,
+    close: () => closeHttpServer(server),
   };
 }
