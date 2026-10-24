@@ -6,7 +6,9 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
+import { AcpRuntimeError } from "../acp/runtime/errors.js";
 import { seedCanonicalAcpSessionMeta } from "../acp/runtime/session-meta-fixture.test-support.js";
+import { createAcpMeta } from "../acp/runtime/session-meta-lifecycle.test-support.js";
 import { readAcpSessionEntry } from "../acp/runtime/session-meta.js";
 import { listRegisteredAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
@@ -708,6 +710,7 @@ test("sessions.reset directly unbinds thread bindings when hooks are unavailable
   expectThreadUnbound();
 });
 
+// Explicit delete proceeds past owner repair. A retained close still keeps the row.
 describe("acp-authority", () => {
   test.each(["already retired", "caller retired"] as const)(
     "ACP reset preserves its row and resume state when %s before metadata commit",
@@ -767,4 +770,53 @@ describe("acp-authority", () => {
       }
     },
   );
+
+  test("session delete removes local ACP metadata when owner repair blocks backend cleanup", async () => {
+    const { closeAcpRuntimeForSession } = await import("./session-reset-acp.js");
+    const { storePath } = await seedActiveMainSession();
+    const sessionKey = "agent:main:main";
+    seedCanonicalAcpSessionMeta({
+      sessionKey,
+      meta: createAcpMeta({
+        backend: "acpx",
+        agent: "codex",
+        runtimeSessionName: "legacy-unqualified",
+        identity: {
+          state: "resolved",
+          acpxRecordId: sessionKey,
+          acpxSessionId: "original-backend",
+          source: "ensure",
+          lastUpdatedAt: Date.now(),
+        },
+      }),
+    });
+    const repairError = new AcpRuntimeError("ACP_SESSION_INIT_FAILED", "owner repair required", {
+      detailCode: "SESSION_OWNER_MIGRATION_REQUIRED",
+    });
+    acpManagerMocks.cancelSession.mockRejectedValue(repairError);
+    try {
+      const cfg = { session: { store: storePath } };
+      const before = readAcpSessionEntry({ sessionKey })?.acp;
+
+      const reset = await closeAcpRuntimeForSession({
+        cfg,
+        agentId: "main",
+        sessionKey,
+        reason: "session-reset",
+      });
+      expect(reset).toMatchObject({ message: expect.stringContaining("owner repair required") });
+      expect(readAcpSessionEntry({ sessionKey })?.acp).toEqual(before);
+
+      const deleted = await closeAcpRuntimeForSession({
+        cfg,
+        agentId: "main",
+        sessionKey,
+        reason: "session-delete",
+      });
+      expect(deleted).toBeUndefined();
+      expect(readAcpSessionEntry({ sessionKey })?.acp).toBeUndefined();
+    } finally {
+      acpManagerMocks.cancelSession.mockImplementation(async () => {});
+    }
+  });
 });

@@ -109,7 +109,16 @@ export async function closeAcpRuntimeForSession(params: {
       }
       if (outcome.status === "error") {
         if (isAcpOwnerRepairRequired(outcome.error)) {
-          return errorShape(ErrorCodes.UNAVAILABLE, String(outcome.error));
+          // Reset must keep the repair verdict and the retained row. Explicit
+          // deletion only removes local metadata; it does not continue into
+          // backend close or fresh-session preparation.
+          if (params.reason !== "session-delete") {
+            return errorShape(ErrorCodes.UNAVAILABLE, String(outcome.error));
+          }
+          logVerbose(
+            `sessions.session-delete: ACP ${step} owner-repair verdict for ${params.sessionKey}; deleting local metadata without further backend effects`,
+          );
+          break;
         }
         logVerbose(
           `sessions.${params.reason}: ACP ${step} failed for ${params.sessionKey}: ${String(outcome.error)}`,
