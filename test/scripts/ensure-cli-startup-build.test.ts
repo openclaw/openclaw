@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ensureCliStartupBuild,
-  hasCliStartupBuild,
   resolveCliStartupBuildTimeoutMs,
 } from "../../scripts/ensure-cli-startup-build.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -28,17 +27,21 @@ function makeTempRoot(entry?: string): string {
 }
 
 describe("ensure-cli-startup-build", () => {
-  it.each(["entry.js", "entry.mjs"])("detects and reuses an existing %s build", (entry) => {
+  it.each(["entry.js", "entry.mjs"])("validates an existing %s build before reuse", (entry) => {
     const rootDir = makeTempRoot(entry);
-    expect(hasCliStartupBuild({ rootDir })).toBe(true);
+    const spawnSync = vi.fn(() => ({ status: 0 }));
     expect(
       ensureCliStartupBuild({
         rootDir,
-        spawnSync: () => {
-          throw new Error("unexpected build");
-        },
+        spawnSync,
+        stdio: "pipe",
       }),
-    ).toEqual({ built: false });
+    ).toEqual({ built: true });
+    expect(spawnSync).toHaveBeenCalledWith(
+      process.execPath,
+      ["--import", "tsx", path.join(rootDir, "scripts", "build-all.mts"), "cliStartup"],
+      expect.objectContaining({ cwd: rootDir }),
+    );
   });
 
   it("uses the configured cliStartup build timeout", () => {
@@ -60,7 +63,7 @@ describe("ensure-cli-startup-build", () => {
   ] as const)("reports build failure %j", (result, message) => {
     expect(() =>
       ensureCliStartupBuild({
-        rootDir: makeTempRoot(),
+        rootDir: makeTempRoot("entry.mjs"),
         spawnSync: () => result,
         stdio: "pipe",
       }),

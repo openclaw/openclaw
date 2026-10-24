@@ -2,19 +2,15 @@
 
 // Ensures CLI startup benchmark assets are built before checks.
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { readPositiveEnvInt } from "./lib/numeric-options.mjs";
 import { resolveRepoRoot } from "./lib/repo-root.mjs";
 const repoRoot = resolveRepoRoot(import.meta.url);
-const entryCandidates = ["dist/entry.js", "dist/entry.mjs"];
-const startupMetadataPath = "dist/cli-startup-metadata.json";
 const DEFAULT_BUILD_TIMEOUT_MS = 10 * 60 * 1000;
 
 type StartupBuildParams = Partial<{
   env: NodeJS.ProcessEnv;
-  existsSync: typeof existsSync;
   killSignal: NodeJS.Signals;
   nodeExecPath: string;
   rootDir: string;
@@ -27,26 +23,14 @@ export function resolveCliStartupBuildTimeoutMs(env: NodeJS.ProcessEnv = process
   return readPositiveEnvInt("OPENCLAW_CLI_STARTUP_BUILD_TIMEOUT_MS", env, DEFAULT_BUILD_TIMEOUT_MS);
 }
 
-export function hasCliStartupBuild(params: StartupBuildParams = {}) {
-  const rootDir = params.rootDir ?? repoRoot;
-  const exists = params.existsSync ?? existsSync;
-  const hasEntry = entryCandidates.some((relativePath) => exists(path.join(rootDir, relativePath)));
-  return hasEntry && exists(path.join(rootDir, startupMetadataPath));
-}
-
 export function ensureCliStartupBuild(params: StartupBuildParams = {}) {
   const rootDir = params.rootDir ?? repoRoot;
-  if (hasCliStartupBuild({ rootDir, existsSync: params.existsSync })) {
-    return { built: false };
-  }
-
   const nodeExecPath = params.nodeExecPath ?? process.execPath;
   const spawn = params.spawnSync ?? spawnSync;
   const buildScript = path.join(rootDir, "scripts", "build-all.mts");
 
-  console.error(
-    "[cli-startup-build] dist startup entry or metadata missing; running cliStartup build profile",
-  );
+  // The build owner validates cached inputs; existing outputs alone may be stale.
+  console.error("[cli-startup-build] ensuring current assets with cliStartup build profile");
   const result = spawn(nodeExecPath, ["--import", "tsx", buildScript, "cliStartup"], {
     cwd: rootDir,
     env: params.env ?? process.env,
