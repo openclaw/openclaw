@@ -24,6 +24,87 @@ import {
   type TestContentRow,
 } from "./chat-transcript.test-support.ts";
 
+function threadFixture(props: ReturnType<typeof threadProps>) {
+  const transcript = createTestTranscript();
+  const container = document.body.appendChild(document.createElement("div"));
+  const view = mountThread(container, transcript);
+  return {
+    transcript,
+    container,
+    view,
+    rerender: () => {
+      view.render(props);
+      transcript.update();
+    },
+  };
+}
+
+function railFixture(sessionKey: string, count = 80, initialId = "message-79") {
+  const flushFrame = stubSettledAnimationFrames();
+  const publishVisibility = stubRailVisibility();
+  const transcript = createTestTranscript();
+  const container = document.body.appendChild(document.createElement("div"));
+  const activeMessage = vi.fn(() => initialId);
+  const markers = Array.from({ length: count }, (_, index) => ({
+    id: `message-${index}`,
+    anchorId: `message-${index}`,
+    role: "user" as const,
+    message: message(`message-${index}`, "user", `Checkpoint ${index}`, index + 1),
+  }));
+  const positions = { markers, markerIdsByMessageId: new Map(markers.map(({ id }) => [id, id])) };
+  const [current, setPositions] = createSignal(positions);
+  const view = mountSolid(
+    () =>
+      transcript.renderSession(sessionKey, (session) => {
+        vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
+        return (
+          <div class="chat-thread" tabindex="0">
+            <div
+              ref={session.messageElements.forKey("message-79")}
+              class="chat-bubble"
+              data-entry-id="message-79"
+            >
+              Latest message
+            </div>
+            <ChatPositionRail positions={current()} transcript={session} />
+          </div>
+        );
+      }),
+    { container },
+  );
+  return {
+    transcript,
+    container,
+    view,
+    activeMessage,
+    flushFrame,
+    publishVisibility,
+    root: container.querySelector<HTMLElement>(".chat-thread")!,
+    marks: container.querySelector<HTMLElement>(".chat-position-rail__marks")!,
+    renderRail: () => {
+      setPositions({ ...positions });
+      flush();
+    },
+  };
+}
+
+function observeBubbles() {
+  const observed = new Set<Element>();
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class {
+      observe = (element: Element) => observed.add(element);
+      unobserve = (element: Element) => observed.delete(element);
+      disconnect = () => observed.clear();
+    },
+  );
+  return observed;
+}
+const settleFrames = () =>
+  new Promise<void>((resolve) => {
+    requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+  });
+
 describe("conversation position rail", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
@@ -84,44 +165,8 @@ describe("conversation position rail", () => {
   it.each(["mounted", "off-window", "focused"] as const)(
     "publishes current position and keyboard entry together for a %s observer target",
     (scenario) => {
-      const flushFrame = stubSettledAnimationFrames();
-      const publishVisibility = stubRailVisibility();
-      const transcript = createTestTranscript();
-      const container = document.body.appendChild(document.createElement("div"));
-      const activeMessage = vi.fn(() => "message-79");
-      const markers = Array.from({ length: 80 }, (_, index) => ({
-        id: `message-${index}`,
-        anchorId: `message-${index}`,
-        role: "user" as const,
-        message: message(`message-${index}`, "user", `Checkpoint ${index}`, index + 1),
-      }));
-      const view = mountSolid(
-        () =>
-          transcript.renderSession("agent:main:rail-publication", (session) => {
-            vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
-            return (
-              <div class="chat-thread" tabindex="0">
-                <div
-                  ref={session.messageElements.forKey("message-79")}
-                  class="chat-bubble"
-                  data-entry-id="message-79"
-                >
-                  Latest message
-                </div>
-                <ChatPositionRail
-                  positions={{
-                    markers,
-                    markerIdsByMessageId: new Map(markers.map(({ id }) => [id, id])),
-                  }}
-                  transcript={session}
-                />
-              </div>
-            );
-          }),
-        { container },
-      );
-      const root = container.querySelector<HTMLElement>(".chat-thread")!;
-      const marks = container.querySelector<HTMLElement>(".chat-position-rail__marks")!;
+      const { flushFrame, publishVisibility, transcript, activeMessage, view, root, marks } =
+        railFixture("agent:main:rail-publication");
       Object.defineProperty(marks, "clientHeight", { configurable: true, value: 240 });
       for (const observer of resizeObservers) {
         observer.emitTarget(marks, 44, 240);
@@ -285,52 +330,23 @@ describe("conversation position rail", () => {
     "keeps the reader's rail position through %s updates",
     (scenario) => {
       const navigatesBeforeResize = scenario === "composer-resize-reversal-navigation";
-      const flushFrame = stubSettledAnimationFrames();
-      const publishVisibility = stubRailVisibility();
-      const transcript = createTestTranscript();
-      const container = document.body.appendChild(document.createElement("div"));
-      const count = 80;
       const startsAtTop = scenario === "resize-jump";
-      const activeMessage = vi.fn((): string =>
-        scenario === "resize-jump" ? "message-0" : "message-79",
+      const count = 80;
+      const {
+        flushFrame,
+        publishVisibility,
+        transcript,
+        container,
+        activeMessage,
+        view,
+        root,
+        marks,
+        renderRail,
+      } = railFixture(
+        "agent:main:rail-scroll-policy",
+        count,
+        startsAtTop ? "message-0" : "message-79",
       );
-      const positions = {
-        markers: Array.from({ length: count }, (_, index) => ({
-          id: `message-${index}`,
-          anchorId: `message-${index}`,
-          role: "user" as const,
-          message: message(`message-${index}`, "user", `Checkpoint ${index}`, index + 1),
-        })),
-        markerIdsByMessageId: new Map(
-          Array.from({ length: count }, (_, index) => [`message-${index}`, `message-${index}`]),
-        ),
-      };
-      const [currentPositions, setPositions] = createSignal(positions);
-      const view = mountSolid(
-        () =>
-          transcript.renderSession("agent:main:rail-scroll-policy", (session) => {
-            vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
-            return (
-              <div class="chat-thread" tabindex="0">
-                <div
-                  ref={session.messageElements.forKey("message-79")}
-                  class="chat-bubble"
-                  data-entry-id="message-79"
-                >
-                  Latest message
-                </div>
-                <ChatPositionRail positions={currentPositions()} transcript={session} />
-              </div>
-            );
-          }),
-        { container },
-      );
-      const renderRail = () => {
-        setPositions({ ...positions });
-        flush();
-      };
-      const root = container.querySelector<HTMLElement>(".chat-thread")!;
-      const marks = container.querySelector<HTMLElement>(".chat-position-rail__marks")!;
       const marker = (index: number) =>
         marks.querySelector<HTMLButtonElement>(`[data-position-marker-id="message-${index}"]`)!;
       let height = 597;
@@ -535,15 +551,7 @@ describe("conversation position rail", () => {
   );
 
   it("keeps stream edits off target scans while reconciling registered bubble mounts", async () => {
-    const observed = new Set<Element>();
-    vi.stubGlobal(
-      "IntersectionObserver",
-      class {
-        observe = (element: Element) => observed.add(element);
-        unobserve = (element: Element) => observed.delete(element);
-        disconnect = () => observed.clear();
-      },
-    );
+    const observed = observeBubbles();
     const props = {
       ...threadProps("rail-mutations", "agent:main:rail-mutations", [
         message("question", "user", "Earlier question", 1),
@@ -553,17 +561,8 @@ describe("conversation position rail", () => {
       stream: "Live **start**",
       streamStartedAt: 3_000,
     };
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const view = mountThread(container, transcript);
-    const rerender = () => {
-      view.render(props);
-      transcript.update();
-    };
-    const settleFrames = () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-      });
+    const { transcript, container, view, rerender } = threadFixture(props);
+
     try {
       rerender();
       transcript.start();
@@ -690,13 +689,7 @@ describe("conversation position rail", () => {
     const props = threadProps("rail-interaction", "agent:main:first", messages);
     const historyIntent = vi.fn();
     props.onHistoryIntent = historyIntent;
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const view = mountThread(container, transcript);
-    const rerender = () => {
-      view.render(props);
-      transcript.update();
-    };
+    const { transcript, container, view, rerender } = threadFixture(props);
     const markers = () => [
       ...container.querySelectorAll<HTMLButtonElement>(".chat-position-rail__marker"),
     ];
@@ -823,13 +816,7 @@ describe("conversation position rail", () => {
       if (role === "assistant") {
         props.assistantAvatar = "🦞";
       }
-      const transcript = createTestTranscript();
-      const container = document.body.appendChild(document.createElement("div"));
-      const view = mountThread(container, transcript);
-      const rerender = () => {
-        view.render(props);
-        transcript.update();
-      };
+      const { transcript, container, view, rerender } = threadFixture(props);
       try {
         rerender();
         transcript.start();
@@ -910,13 +897,7 @@ describe("conversation position rail", () => {
       ...threadProps("rail-partial-run", "agent:main:main", messages),
       showToolCalls: true,
     };
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const view = mountThread(container, transcript);
-    const renderCurrent = () => {
-      view.render(props);
-      transcript.update();
-    };
+    const { transcript, container, view, rerender: renderCurrent } = threadFixture(props);
     try {
       renderCurrent();
       transcript.start();
@@ -937,19 +918,8 @@ describe("conversation position rail", () => {
   });
 
   it("keeps the focused run marker through streaming and retargets its persisted answer", async () => {
-    const observed = new Set<Element>();
-    vi.stubGlobal(
-      "IntersectionObserver",
-      class {
-        observe = (element: Element) => observed.add(element);
-        unobserve = (element: Element) => observed.delete(element);
-        disconnect = () => observed.clear();
-      },
-    );
-    const settleFrames = () =>
-      new Promise<void>((resolve) => {
-        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-      });
+    const observed = observeBubbles();
+
     const user = message("question", "user", "Review the card", 1, "stream-run");
     const props = threadProps("rail-stream-handoff", "agent:main:main", [user]);
     Object.assign(props, {
@@ -959,13 +929,7 @@ describe("conversation position rail", () => {
       stream: "<thinking>Private planning</thinking>",
       streamStartedAt: 2_000,
     });
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const view = mountThread(container, transcript);
-    const rerender = () => {
-      view.render(props);
-      transcript.update();
-    };
+    const { transcript, container, view, rerender } = threadFixture(props);
     const marker = () =>
       container.querySelector<HTMLButtonElement>('[data-position-marker-id="run:stream-run"]')!;
     try {
