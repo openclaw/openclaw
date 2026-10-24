@@ -1,10 +1,10 @@
+import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types.js";
-import type { normalizeMessagesForLlmBoundary } from "../agents/embedded-agent-runner/run/attempt-llm-boundary.js";
+import type { LlmBoundaryOptions } from "../agents/embedded-agent-runner/run/attempt-llm-boundary.types.js";
 import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.types.js";
 import type { RequesterOrigin } from "../agents/requester-origin.js";
-import type { AgentMessage } from "../agents/runtime/index.js";
 import type { resolveAgentTurnExecutionStatus } from "../auto-reply/reply/agent-runner-execution-status.js";
 import type { FollowupQueueDisposition } from "../auto-reply/reply/queue-policy.js";
 import type { FollowupRunPayload } from "../auto-reply/reply/queue/followup-run-payload.types.js";
@@ -739,7 +739,7 @@ export type EmbeddedAgentQueueHandle = {
         tools: Context["tools"];
         messages: AgentMessage[];
         sessionVersion?: number;
-        boundary?: Parameters<typeof normalizeMessagesForLlmBoundary>[1];
+        boundary?: LlmBoundaryOptions;
         promptCacheKey?: string;
       }
     | undefined;

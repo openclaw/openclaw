@@ -33,7 +33,7 @@ import { createGatewaySubagentRuntime } from "./server-plugin-subagent-runtime.j
 
 const PLUGIN_ID = "test-session-fork-transport";
 const SESSION_ID = "fork-transport-parent";
-const SESSION_KEY = "agent:research:fork-transport-parent";
+const SESSION_KEY = "agent:research:telegram:direct:fork-transport-parent";
 const API_KEY = "synthetic-fork-transport-key";
 
 type RecordedRequest = {
@@ -120,6 +120,7 @@ describe("plugin session fork visibility transport", () => {
               maxTokens: 1024,
             } satisfies Model<"openai-completions">;
             const config: OpenClawConfig = {
+              channels: { telegram: { enabled: false, dmHistoryLimit: 1 } },
               agents: {
                 defaults: {
                   workspace: state.workspaceDir,
@@ -207,6 +208,16 @@ describe("plugin session fork visibility transport", () => {
                 retainedId,
                 100,
               );
+              await transcript.appendMessageAsync({
+                role: "user",
+                content: "OUTSIDE_HISTORY_WINDOW_1672",
+                timestamp: 2,
+              });
+              await transcript.appendMessageAsync({
+                role: "user",
+                content: "Parent question",
+                timestamp: 3,
+              });
               await transcript.appendCustomEntryAsync("openclaw.system-prompt", {
                 prefix: "Stable parent instructions",
                 renderedPrefix: "Stable parent instructions",
@@ -250,6 +261,10 @@ describe("plugin session fork visibility transport", () => {
               expect(JSON.stringify(requests[0]?.body)).not.toContain(
                 "DISCARDED_PRE_COMPACTION_1672",
               );
+              expect(JSON.stringify(requests[0]?.body)).not.toContain(
+                "OUTSIDE_HISTORY_WINDOW_1672",
+              );
+              expect(requests[0]?.body).not.toHaveProperty("prompt_cache_key");
               expect(requests[0]).toMatchObject({
                 url: "/v1/chat/completions",
                 authorization: `Bearer ${API_KEY}`,

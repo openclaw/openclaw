@@ -87,7 +87,7 @@ Timing never forces collections. There is no promotion or provider-cache claim.
 Use concurrent guarded pairs on the benchmark host, counterbalance launch order,
 and swap the slot's interleaved CPUs. `--warm-ready-file`/`--warm-start-file` and
 `--ready-file`/`--start-file` provide separate warmup and measurement barriers;
-write a future Unix epoch in milliseconds after both sides are ready. A missed
+atomically publish a future Unix epoch in milliseconds after both sides are ready. A missed
 start rejects the run. Acceptance is zero fork-specific capture/publication/expiry
 work on ordinary candidate turns, identical parent request counts and encoded
 bytes, reduced allocation/CPU, and removal of the retained snapshot data. Apply

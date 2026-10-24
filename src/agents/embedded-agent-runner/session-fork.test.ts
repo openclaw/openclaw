@@ -48,7 +48,7 @@ function apiModel(api: WireApi): Model {
 }
 async function complete(
   streamFn: StreamFn,
-  requestModel = model,
+  requestModel: Model = model,
   requestContext = context,
   options: Parameters<StreamFn>[2] = sseOptions,
 ) {
@@ -73,7 +73,7 @@ function toolResult(
     details,
   };
 }
-function assistant(calls: ReturnType<typeof toolCall>[], requestModel = model): Message {
+function assistant(calls: ReturnType<typeof toolCall>[], requestModel: Model = model): Message {
   return makeAgentAssistantMessage({
     api: requestModel.api,
     provider: requestModel.provider,
@@ -89,7 +89,7 @@ const history = (...messages: Message[]): Context => ({
 });
 function fork(
   streamFn: StreamFn,
-  requestModel = model,
+  requestModel: Model = model,
   requestContext = context,
   assertCurrent = () => {},
 ) {

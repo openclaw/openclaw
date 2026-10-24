@@ -50,7 +50,7 @@ import {
   requiresCompletionRequiredAsyncTaskWait,
   type AsyncStartedToolMeta,
 } from "./attempt-async-tasks.js";
-import type { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
+import type { LlmBoundaryOptions } from "./attempt-llm-boundary.types.js";
 import {
   readAttemptNestedToolActivity,
   type AttemptNestedToolActivityState,
@@ -105,7 +105,7 @@ type PrepareEmbeddedAttemptStreamInput = {
     revokeApprovals: () => void,
   ) => Promise<void>;
   onModelUsage?: Parameters<typeof subscribeEmbeddedAgentSession>[0]["onModelUsage"];
-  readSessionForkBoundary?: () => Parameters<typeof normalizeMessagesForLlmBoundary>[1];
+  readSessionForkBoundary?: () => LlmBoundaryOptions;
   runtimeChannel?: string;
   hookAgentId: string;
   diagnosticTrace: DiagnosticTraceContext;

@@ -380,7 +380,7 @@ const report = {
     ]),
   ),
   loop: {
-    samples: Number(loop.count),
+    samples: loop.count,
     p95Ms: loop.percentile(95) / 1e6,
     p99Ms: loop.percentile(99) / 1e6,
     maxMs: loop.max / 1e6,

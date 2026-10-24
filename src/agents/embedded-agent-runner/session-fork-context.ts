@@ -15,10 +15,10 @@ import { convertToLlm } from "../sessions/messages.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { resolveTranscriptPolicy } from "../transcript-policy.js";
+import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { isCurrentEmbeddedRunAttachment } from "./run-state.js";
 import { normalizeMessagesForLlmBoundary } from "./run/attempt-llm-boundary.js";
 import { applyRuntimeContextCarrierRetention } from "./run/runtime-context-prompt.js";
-import { resolveSessionBoundaryPromptCacheKey } from "./run/session-boundary-prompt-cache-key.js";
 import { resolveActiveEmbeddedRunBySessionFile } from "./runs.js";
 
 function matchesModelRoute(routeKey: unknown, model: Model): boolean {
@@ -50,6 +50,8 @@ export async function prepareEmbeddedSessionForkContext(params: {
   agentId: string;
   bootstrapUserProfileId?: string;
   chatType?: ChatType;
+  accountId?: string;
+  peerId?: string;
   directApiKey?: boolean;
   signal?: AbortSignal;
   assertCurrent: () => void;
@@ -59,7 +61,10 @@ export async function prepareEmbeddedSessionForkContext(params: {
     params.assertCurrent();
   };
   assertCurrent();
-  const attachment = resolveActiveEmbeddedRunBySessionFile(params.sessionFile);
+  // SQLite-backed runs register under the canonical key, not the legacy transcript path.
+  const attachment = resolveActiveEmbeddedRunBySessionFile(
+    params.target.sessionKey ?? params.sessionFile,
+  );
   const live =
     attachment &&
     attachment.sessionId === params.target.sessionId &&
@@ -151,10 +156,11 @@ export async function prepareEmbeddedSessionForkContext(params: {
     !entries.slice(markerIndex + 1).some((entry) => entry.type === "model_change")
       ? data
       : undefined;
-  // This is the tool-surface owner's persisted definition list, never executable tools.
-  const tools = Array.isArray(checkpoint?.tools)
-    ? (checkpoint.tools as Context["tools"])
-    : undefined;
+  let tools: Context["tools"];
+  if (Array.isArray(checkpoint?.tools)) {
+    // SAFETY: session-prompt-state writes this route/history-matched list as tool definitions, never executors.
+    tools = checkpoint.tools as Context["tools"];
+  }
   // Updates to renderedPrefix are already appended to history; replay the stable prefix.
   let systemPrompt = typeof checkpoint?.prefix === "string" ? checkpoint.prefix : undefined;
   if (systemPrompt === undefined) {
@@ -193,21 +199,25 @@ export async function prepareEmbeddedSessionForkContext(params: {
     directApiKey: params.directApiKey,
   });
   const messages = convertToLlm(
-    normalizeMessagesForLlmBoundary(manager.buildSessionContext().messages, {
-      sessionVersion: manager.getHeader()?.version,
-      appendOnlyRuntimeContext: policy.appendOnlyRuntimeContext,
-      inHistorySystemUpdates: policy.inHistorySystemUpdates,
-      timezone: resolveUserTimezone(params.config?.agents?.defaults?.userTimezone),
-    }),
+    normalizeMessagesForLlmBoundary(
+      limitHistoryTurns(
+        manager.buildSessionContext().messages,
+        getHistoryLimitFromSessionKey(sessionKey, params.config, {
+          accountId: params.accountId,
+          peerId: params.peerId,
+          chatType: params.chatType,
+        }),
+      ),
+      {
+        sessionVersion: manager.getHeader()?.version,
+        appendOnlyRuntimeContext: policy.appendOnlyRuntimeContext,
+        inHistorySystemUpdates: policy.inHistorySystemUpdates,
+        timezone: resolveUserTimezone(params.config?.agents?.defaults?.userTimezone),
+      },
+    ),
   );
   applyRuntimeContextCarrierRetention(messages, policy.appendOnlyRuntimeContext);
   return {
     context: { systemPrompt, tools, messages },
-    // Explicit run-only affinity is unavailable after completion; use the session owner's key.
-    promptCacheKey: resolveSessionBoundaryPromptCacheKey({
-      api: params.model.api,
-      boundaryCount: manager.getBoundaryCount(),
-      sessionId: target.sessionId,
-    }),
   };
 }

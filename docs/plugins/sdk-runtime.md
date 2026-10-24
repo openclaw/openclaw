@@ -149,6 +149,9 @@ model context, including compaction and the pinned system prompt and tool schema
 Sessions with history can be forked after a restart without sending another normal
 message first. Routes without a persisted prompt pin rebuild their configured
 system prompt at fork time.
+Completed-session forks apply the configured channel history window and preserve
+compaction summaries. Only a fork sharing live request preparation carries its
+parent's prompt-cache identity; independently reconstructed requests omit it.
 
 The fork uses the same provider payload builders as a normal request. Unchanged
 prompt and tool prefixes can reuse the provider's prompt cache. Cache reuse is

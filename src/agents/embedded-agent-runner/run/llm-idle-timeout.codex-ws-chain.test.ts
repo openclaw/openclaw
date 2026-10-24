@@ -202,11 +202,12 @@ function runFork(
   question: string,
   streamFn: StreamFn,
   assertCurrent = () => {},
+  promptCacheKey?: string,
 ) {
   return runEmbeddedSessionFork({
     context,
     streamFn,
-    options: { sessionId: identity.sessionId, transport: "auto" },
+    options: { sessionId: identity.sessionId, transport: "auto", promptCacheKey },
     model,
     apiKey,
     question,
@@ -289,54 +290,57 @@ describe("codex websocket idle watchdog through the embedded runner chain", () =
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("isolates a native session fork without consuming or replacing the parent's cached continuation", async () => {
-    const fetchMock = vi.fn();
-    vi.stubGlobal("fetch", fetchMock);
-    const requests: Frame[] = [];
-    ControlledWebSocket.onSend = (socket, payload) => {
-      requests.push(JSON.parse(payload) as Frame);
-      const id = `resp_native_${requests.length}`;
-      const isFork = requests.length === 2;
-      queueMicrotask(() => {
-        socket.deliver({ type: "response.created", response: { id } });
-        if (isFork) {
-          for (const frame of textFrames(id, "msg_native_fork", "Independent review")) {
-            socket.deliver(frame);
+  it.each([undefined, "live-parent-key"])(
+    "isolates a native session fork without replacing the parent's continuation (affinity=%s)",
+    async (promptCacheKey) => {
+      const fetchMock = vi.fn();
+      vi.stubGlobal("fetch", fetchMock);
+      const requests: Frame[] = [];
+      ControlledWebSocket.onSend = (socket, payload) => {
+        requests.push(JSON.parse(payload) as Frame);
+        const id = `resp_native_${requests.length}`;
+        const isFork = requests.length === 2;
+        queueMicrotask(() => {
+          socket.deliver({ type: "response.created", response: { id } });
+          if (isFork) {
+            for (const frame of textFrames(id, "msg_native_fork", "Independent review")) {
+              socket.deliver(frame);
+            }
+          } else {
+            socket.deliver(completedFrame(id));
           }
-        } else {
-          socket.deliver(completedFrame(id));
-        }
+        });
+      };
+      const { identity, parent } = forkParent("native-fork-independent");
+      const options = {
+        apiKey,
+        sessionId: identity.sessionId,
+        transport: "websocket-cached" as const,
+      };
+      expect((await (await parent(model, context, options)).result()).stopReason).toBe("stop");
+      await expect(
+        runFork(identity, "Review independently", parent, undefined, promptCacheKey),
+      ).resolves.toBe("Independent review");
+      expect((await (await parent(model, followupContext, options)).result()).stopReason).toBe(
+        "stop",
+      );
+      expect(ControlledWebSocket.instances.map((socket) => socket.sent.length)).toEqual([2, 1]);
+      expect(ControlledWebSocket.instances[1]?.closeCalls).toHaveLength(1);
+      expect(requests[1]).not.toHaveProperty("previous_response_id");
+      expect(requests[1]).toMatchObject({
+        input: [
+          { role: "user", content: [{ type: "input_text", text: "hi" }] },
+          { role: "user", content: [{ type: "input_text", text: "Review independently" }] },
+        ],
       });
-    };
-    const { identity, parent } = forkParent("native-fork-independent");
-    const options = {
-      apiKey,
-      sessionId: identity.sessionId,
-      transport: "websocket-cached" as const,
-    };
-    expect((await (await parent(model, context, options)).result()).stopReason).toBe("stop");
-    await expect(runFork(identity, "Review independently", parent)).resolves.toBe(
-      "Independent review",
-    );
-    expect((await (await parent(model, followupContext, options)).result()).stopReason).toBe(
-      "stop",
-    );
-    expect(ControlledWebSocket.instances.map((socket) => socket.sent.length)).toEqual([2, 1]);
-    expect(ControlledWebSocket.instances[1]?.closeCalls).toHaveLength(1);
-    expect(requests[1]).not.toHaveProperty("previous_response_id");
-    expect(requests[1]).toMatchObject({
-      prompt_cache_key: identity.sessionId,
-      input: [
-        { role: "user", content: [{ type: "input_text", text: "hi" }] },
-        { role: "user", content: [{ type: "input_text", text: "Review independently" }] },
-      ],
-    });
-    expect(requests[2]).toMatchObject({
-      previous_response_id: "resp_native_1",
-      input: [{ role: "user", content: [{ type: "input_text", text: "Continue parent" }] }],
-    });
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
+      expect(requests[1]?.prompt_cache_key).toBe(promptCacheKey);
+      expect(requests[2]).toMatchObject({
+        previous_response_id: "resp_native_1",
+        input: [{ role: "user", content: [{ type: "input_text", text: "Continue parent" }] }],
+      });
+      expect(fetchMock).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps the parent's native auto transport after an independent fork falls back to SSE", async () => {
     const fetchMock = vi.fn(async () => {
