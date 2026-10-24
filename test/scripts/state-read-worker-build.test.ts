@@ -131,11 +131,7 @@ it.each([
           hasModule(registry.modules, handlersModule, "/src/state/backup-run-records.kernel.ts"),
         ).toBe(false);
       }
-      expect(
-        [...startup.modules].filter((id) =>
-          [mixedStoreModule, ...streamModules].some((module) => id.endsWith(module)),
-        ),
-      ).toEqual([]);
+      expect(hasModule(startup.modules, mixedStoreModule, ...streamModules)).toBe(false);
       for (const streamModule of streamModules) {
         // Manual chunks identify contained modules; facades identify an owner
         // whose rendered body can live in a static dependency.
@@ -160,28 +156,23 @@ it.each([
           ...streamModules.filter((module) => module !== streamModule),
         ];
         expect(
-          [...stream.modules].filter((id) =>
-            unrelatedModules.some((module) => id.endsWith(module)),
-          ),
+          hasModule(stream.modules, ...unrelatedModules),
           `${entryName}: ${streamModule}`,
-        ).toEqual([]);
+        ).toBe(false);
       }
       if (entryName === "worker/openclaw-state-read.worker") {
         const workerUrl = pathToFileURL(path.join(outDir, `${entryName}${extension}`)).href;
         // Each cold process must initialize its selected owner through the emitted continuation.
         for (const mode of ["restore", "export"] as const) {
-          const stdout: Buffer[] = [];
-          const stderr: Buffer[] = [];
-          let stdoutBytes = 0;
-          let stderrBytes = 0;
+          const output: Record<"stdout" | "stderr", { chunks: Buffer[]; bytes: number }> = {
+            stdout: { chunks: [], bytes: 0 },
+            stderr: { chunks: [], bytes: 0 },
+          };
           const closed = new Set<string>();
           const required = [
             "exit",
             "close",
-            "stdout-end",
-            "stdout-close",
-            "stderr-end",
-            "stderr-close",
+            ...["stdout", "stderr"].flatMap((name) => [`${name}-end`, `${name}-close`]),
           ];
           childrenJoined = false;
           let code: number;
@@ -208,24 +199,19 @@ it.each([
               requireProcessTreeExit: process.platform !== "win32",
               waitForCleanupRelease: true,
               onReady(child) {
-                child.stdout!.on("data", (bytes: Buffer) => {
-                  stdoutBytes += bytes.length;
-                  if (stdoutBytes <= 1024 * 1024) {
-                    stdout.push(bytes);
-                  }
-                });
-                child.stderr!.on("data", (bytes: Buffer) => {
-                  stderrBytes += bytes.length;
-                  if (stderrBytes <= 1024 * 1024) {
-                    stderr.push(bytes);
-                  }
-                });
+                for (const name of ["stdout", "stderr"] as const) {
+                  const capture = output[name];
+                  child[name]!.on("data", (bytes: Buffer) => {
+                    capture.bytes += bytes.length;
+                    if (capture.bytes <= 1024 * 1024) {
+                      capture.chunks.push(bytes);
+                    }
+                  });
+                  child[name]!.once("end", () => closed.add(`${name}-end`));
+                  child[name]!.once("close", () => closed.add(`${name}-close`));
+                }
                 child.once("exit", () => closed.add("exit"));
                 child.once("close", () => closed.add("close"));
-                child.stdout!.once("end", () => closed.add("stdout-end"));
-                child.stdout!.once("close", () => closed.add("stdout-close"));
-                child.stderr!.once("end", () => closed.add("stderr-end"));
-                child.stderr!.once("close", () => closed.add("stderr-close"));
               },
             });
           } catch (error) {
@@ -235,10 +221,11 @@ it.each([
           }
           childrenJoined = required.every((event) => closed.has(event));
           expect(childrenJoined, `${mode}: child and streams joined`).toBe(true);
-          expect(stdoutBytes).toBeLessThanOrEqual(1024 * 1024);
-          expect(stderrBytes).toBeLessThanOrEqual(1024 * 1024);
-          expect(code, Buffer.concat(stderr).toString("utf8")).toBe(0);
-          expect(JSON.parse(Buffer.concat(stdout).toString("utf8"))).toEqual({
+          for (const capture of Object.values(output)) {
+            expect(capture.bytes).toBeLessThanOrEqual(1024 * 1024);
+          }
+          expect(code, Buffer.concat(output.stderr.chunks).toString("utf8")).toBe(0);
+          expect(JSON.parse(Buffer.concat(output.stdout.chunks).toString("utf8"))).toEqual({
             mode,
             workerUrl,
             values:
