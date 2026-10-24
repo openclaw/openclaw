@@ -2324,6 +2324,7 @@ packages/ai/src/transports/json-unsafe-integers.ts
 packages/ai/src/transports/model-request-body.ts
 packages/ai/src/transports/model-transport-debug.ts
 packages/ai/src/transports/model-transport-url.ts
+packages/ai/src/transports/openai-reasoning-compat.ts
 packages/ai/src/transports/openai-responses-contracts.ts
 packages/ai/src/transports/openai-responses-service-tier.ts
 packages/ai/src/transports/openai-responses-stream-errors.ts
