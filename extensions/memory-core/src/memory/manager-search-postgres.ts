@@ -254,8 +254,9 @@ function calibrateTextRank(
   rank: RawBuilder<number>,
   tokenizer?: "unicode61" | "trigram",
 ): RawBuilder<number> {
-  // Native rank has no corpus IDF. Saturation preserves hybrid weighting.
-  return tokenizer === "trigram" ? rank : sql<number>`${rank} / (${rank} + 0.1)`;
+  // Fixed median/p90 least-squares fit to the old cover-density scale using
+  // 28,100 PGSEARCHPATH body scores, rounded to two significant digits.
+  return tokenizer === "trigram" ? rank : sql<number>`${rank} / (${rank} + 0.0027)`;
 }
 
 function pathSpecificity(query: string): RawBuilder<ExactPathSpecificity> {

@@ -156,8 +156,8 @@ SQLite remains the default. PostgreSQL memory search is supported on the
 [qualified runtime](/gateway/postgresql#support-matrix). Text ranking is
 engine-local, so result ordering and scores can differ from SQLite. PostgreSQL
 uses the faster native `ts_rank` function and calibrates its unnormalized rank
-`r` as `r / (r + 0.1)` before the
-shared hybrid merge. This gives keywords a useful weight without penalizing
+`r` as `r / (r + 0.0027)` before the shared hybrid merge. The calibration is fitted to
+the previous keyword score scale, giving keywords a useful weight without penalizing
 long chunks by their full length. It is not BM25: PostgreSQL's native rank lacks
 corpus-wide inverse document frequency (IDF), so common and mixed-frequency
 queries can still rank differently. Hybrid search retains the same vector/text

@@ -381,7 +381,7 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
     expect(keyword.body.error).toBeUndefined();
     expect(keyword.path.error).toBeUndefined();
     expect(keyword.body.rows.map((row) => row.path)).toEqual(["memory/lexical.md"]);
-    expect(keyword.body.rows[0]!.textScore).toBeCloseTo(0.431788756, 6);
+    expect(keyword.body.rows[0]!.textScore).toBeCloseTo(0.965688529, 6);
     const vector = await regular.vector();
     const merged = await mergeHybridResults({
       vector: vector.rows.map((row) => Object.assign({}, row, { vectorScore: row.score })),
@@ -392,16 +392,44 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
       temporalDecay: { enabled: false, halfLifeDays: 30 },
     });
     expect(merged.map((row) => row.path)).toEqual([
-      "memory/semantic.md",
       "memory/lexical.md",
+      "memory/semantic.md",
       "memory/orthogonal.md",
     ]);
-    expect(merged[0]!.score).toBeCloseTo(0.56, 6);
-    expect(merged[1]!.score).toBeCloseTo(0.549536627, 6);
+    expect(merged[0]!.score).toBeCloseTo(0.709706559, 6);
+    expect(merged[1]!.score).toBeCloseTo(0.56, 6);
     const exact = await regular.keyword(keywordQuery("semantic"));
     expect(exact.path.rows).toMatchObject([
       { path: "memory/semantic.md", exactPathSpecificity: 1 },
     ]);
+  });
+
+  it("keeps a rare fallback hit ahead of vector neighbors with weak lexical evidence", async () => {
+    const fixture = admitted(() => createFixture(root, "rare-hybrid", connection!));
+    try {
+      admitted(() => {
+        fixture.ensureVector();
+        fixture.publish("rare-target", "rareanchor", [-0.04, Math.sqrt(1 - 0.04 ** 2), 0]);
+        fixture.publish("vector-neighbor", "unrelated", [0.1, Math.sqrt(1 - 0.1 ** 2), 0]);
+      });
+      const keyword = await fixture.keyword(keywordQuery("rareanchor absentword", { limit: 200 }));
+      expect(keyword.body.rows.map((row) => row.path)).toEqual(["memory/rare-target.md"]);
+      const vector = await fixture.vector(vectorQuery({ limit: 200 }));
+      expect(vector.rows.find((row) => row.path === "memory/rare-target.md")!.score).toBeLessThan(
+        0,
+      );
+      const merged = await mergeHybridResults({
+        vector: vector.rows.map((row) => Object.assign({}, row, { vectorScore: row.score })),
+        keyword: keyword.body.rows,
+        vectorWeight: 0.7,
+        textWeight: 0.3,
+        mmr: { enabled: true, lambda: 0.7 },
+        temporalDecay: { enabled: false, halfLifeDays: 30 },
+      });
+      expect(merged[0]!.path).toBe("memory/rare-target.md");
+    } finally {
+      admitted(() => fixture.close());
+    }
   });
 
   it.each([
@@ -504,7 +532,7 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
           db
             .prepare(`
           SELECT id, ts_rank(openclaw_search, to_tsquery('simple', ?), 0) /
-            (ts_rank(openclaw_search, to_tsquery('simple', ?), 0) + 0.1) AS score
+            (ts_rank(openclaw_search, to_tsquery('simple', ?), 0) + 0.0027) AS score
           FROM memory_index_chunks
           WHERE openclaw_search @@ to_tsquery('simple', ?)
           ORDER BY score DESC, id LIMIT 3
@@ -544,8 +572,8 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
       expect(result.body.rows).toMatchObject([
         {
           path: "body-hit.md",
-          score: expect.closeTo(0.431788753, 6),
-          textScore: expect.closeTo(0.431788753, 6),
+          score: expect.closeTo(0.965688529, 6),
+          textScore: expect.closeTo(0.965688529, 6),
         },
       ]);
       expect(result.path.rows.map((row) => [row.path, row.exactPathSpecificity])).toEqual([
@@ -555,15 +583,15 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
       ]);
       expect(result.path.rows).toMatchObject([
         {
-          score: expect.closeTo(0.378081258, 6),
-          pathScore: expect.closeTo(0.378081258, 6),
+          score: expect.closeTo(0.957475433, 6),
+          pathScore: expect.closeTo(0.957475433, 6),
           textScore: 0,
           hasBodyMatch: false,
         },
         { score: 0, pathScore: 0, textScore: 0, hasBodyMatch: false },
         {
-          score: expect.closeTo(0.378081258, 6),
-          pathScore: expect.closeTo(0.378081258, 6),
+          score: expect.closeTo(0.957475433, 6),
+          pathScore: expect.closeTo(0.957475433, 6),
           textScore: 0,
           hasBodyMatch: false,
         },
