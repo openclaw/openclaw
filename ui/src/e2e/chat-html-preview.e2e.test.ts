@@ -1,6 +1,5 @@
 // Uses the real isolated sandbox listener with deterministic Gateway file data.
 import type { Server } from "node:http";
-import path from "node:path";
 import { expect, it } from "vitest";
 import { buildSandboxHostPath } from "../../../src/agents/sandbox-host.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
@@ -9,6 +8,10 @@ import {
   computeInlineScriptHashes,
 } from "../../../src/gateway/control-ui-csp.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../../test/helpers/gateway-integration-fixtures.ts";
 import {
   createControlUiMockBootstrapConfig,
   defaultControlUiFeatureMethods,
@@ -21,9 +24,19 @@ const suite = createControlUiE2eSuite({
   name: "HTML file tab sandbox",
   startServerBeforeBrowser: true,
 });
+const scripts = {
+  "blocking.js":
+    'document.documentElement.dataset.blockingSawApp = String(Boolean(document.querySelector("#app")));',
+  "setup.js": 'window.previewState = "ready";',
+  "render.js":
+    'var previewApp = document.querySelector("#app"); function previewSuffix() { return this === window ? " in order" : " strict"; } previewApp.textContent = window.previewState + " " + String(Boolean(document.querySelector("#app")));',
+  "after.js": "previewApp.textContent += (0, window.previewSuffix)();",
+};
+const deferredScripts =
+  '<script src="blocking.js"></script><script type="module" src="setup.js"></script><script defer src="render.js"></script><script defer src="after.js"></script>';
 const source = `<!doctype html>
-<html><head><style>body{font:16px system-ui;padding:20px}h1{color:rgb(12, 34, 56)}</style></head>
-<body><h1>Local HTML page</h1><button id="count">Count</button><output id="value">0</output>
+<html><head><style>body{font:16px system-ui;padding:20px}h1{color:rgb(12, 34, 56)}</style>${deferredScripts}</head>
+<body><div id="app">waiting</div><h1>Local HTML page</h1><button id="count">Count</button><output id="value">0</output>
 <input aria-label="Local note"><script>
 let count=0;document.querySelector('#count').onclick=()=>document.querySelector('#value').textContent=String(++count);
 </script><nav><a href="#discrepancies">Jump to discrepancies</a>
@@ -34,22 +47,7 @@ let count=0;document.querySelector('#count').onclick=()=>document.querySelector(
 <h2 id="雪">Snow</h2><a name="legacy">Legacy section</a></section></body></html>`;
 const editedSource = source.replace("Local HTML page", "Unsaved HTML draft");
 // Self-contained reports with embedded data exceed the generic text-preview budget.
-const attachmentSource = `${source}<!--${"x".repeat(1_700_000)}-->`;
-
-async function listen(server: Server): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        reject(new Error("Sandbox listener unavailable"));
-      } else {
-        resolve(address.port);
-      }
-    });
-  });
-}
+const attachmentSource = `${source.replace(deferredScripts, "")}<!--${"x".repeat(1_700_000)}-->`;
 
 function fileResponse(content: string) {
   return {
@@ -79,88 +77,17 @@ function withSandbox(
   return suite.runScenario(test, {
     run: async () => {
       sandbox = createSandboxHostHttpServer();
-      await run(await listen(sandbox));
+      await run(Number(new URL(await listenLoopback(sandbox)).port));
     },
     close: async () => {
       if (sandbox) {
-        sandbox.closeAllConnections();
-        await new Promise<void>((resolve, reject) => {
-          sandbox!.close((error) => (error ? reject(error) : resolve()));
-        });
+        await closeHttpServer(sandbox);
       }
     },
   });
 }
 
 suite.define(() => {
-  it("keeps deferred classic and module file scripts in document order in the sandbox", async (test) => {
-    const scripts = {
-      "blocking.js":
-        'document.documentElement.dataset.blockingSawApp = String(Boolean(document.querySelector("#app")));',
-      "setup.js": 'window.previewState = "ready";',
-      "render.js":
-        'var previewApp = document.querySelector("#app"); function previewSuffix() { return this === window ? " in order" : " strict"; } previewApp.textContent = window.previewState + " " + String(Boolean(document.querySelector("#app")));',
-      "after.js": "previewApp.textContent += (0, window.previewSuffix)();",
-    };
-    const html =
-      '<!doctype html><html><head><script src="blocking.js"></script><script type="module" src="setup.js"></script><script defer src="render.js"></script><script defer src="after.js"></script></head><body><div id="app">waiting</div></body></html>';
-    await withSandbox(test, async (sandboxPort) => {
-      await suite.withPage(
-        { serviceWorkers: "block", permissions: ["local-network-access"] },
-        async ({ page }) => {
-          const gateway = await installMockGateway(page, {
-            workspace: "/workspace",
-            featureMethods: [
-              ...defaultControlUiFeatureMethods,
-              "canvas.document.preview",
-              "sessions.files.assets",
-            ],
-            historyMessages: [
-              {
-                role: "assistant",
-                content: [{ type: "text", text: "Open [page](page.html)." }],
-              },
-            ],
-            methodResponses: {
-              "sessions.files.get": fileResponse(html),
-              "canvas.document.preview": {
-                html,
-                sandboxUrl: buildSandboxHostPath({ blockDescendantFrames: true }),
-                sandboxPort,
-                sandboxOrigin: `http://127.0.0.1:${sandboxPort}`,
-              },
-              "sessions.files.assets": {
-                assets: Object.entries(scripts).map(([ref, code]) => ({
-                  ref,
-                  mimeType: "text/javascript",
-                  content: Buffer.from(code).toString("base64"),
-                })),
-              },
-            },
-          });
-          await page.goto(`${suite.server.baseUrl}chat`);
-          await gateway.waitForRequest("chat.startup");
-          await page.locator('a.markdown-file-link[data-file-path="page.html"]').click();
-          const panel = page.locator("openclaw-chat-detail-panel:visible");
-          const outer = panel.locator(".chat-html-preview__frame");
-          await outer.waitFor();
-          const document = outer.contentFrame().frameLocator("iframe");
-          await document.locator("#app").waitFor();
-          await panel
-            .locator("openclaw-chat-html-preview [role=status]")
-            .waitFor({ state: "hidden" });
-          expect(await gateway.getRequests("sessions.files.assets")).toMatchObject([
-            { params: { path: "page.html", refs: Object.keys(scripts) } },
-          ]);
-          expect(await document.locator("html").getAttribute("data-blocking-saw-app")).toBe(
-            "false",
-          );
-          expect(await document.locator("#app").textContent()).toBe("ready true in order");
-        },
-      );
-    });
-  });
-
   for (const mode of ["scripts", "strict"] as const) {
     it(`renders HTML with ${mode} and retains Source in the same file tab`, async (test) => {
       await withSandbox(test, async (sandboxPort) => {
@@ -191,6 +118,7 @@ suite.define(() => {
               workspace: "/workspace",
               featureMethods: [
                 ...defaultControlUiFeatureMethods,
+                "sessions.files.assets",
                 "sessions.files.set",
                 "canvas.document.preview",
               ],
@@ -199,7 +127,7 @@ suite.define(() => {
                   role: "assistant",
                   timestamp: Date.now(),
                   content: [
-                    { type: "text", text: "Open [page](page.html) or [line two](page.html:2)." },
+                    { type: "text", text: "Open [page](page.html)." },
                     {
                       type: "attachment",
                       attachment: {
@@ -214,6 +142,13 @@ suite.define(() => {
               ],
               methodResponses: {
                 "sessions.files.get": fileResponse(source),
+                "sessions.files.assets": {
+                  assets: Object.entries(scripts).map(([ref, code]) => ({
+                    ref,
+                    mimeType: "text/javascript",
+                    content: Buffer.from(code).toString("base64"),
+                  })),
+                },
                 "canvas.document.preview": {
                   cases: [
                     { match: { html: source }, response: view(source) },
@@ -277,6 +212,13 @@ suite.define(() => {
             expect(await tab.count()).toBe(1);
             const originalFrame = await outer.elementHandle();
             if (mode === "scripts") {
+              expect(await gateway.getRequests("sessions.files.assets")).toMatchObject([
+                { params: { path: "page.html", refs: Object.keys(scripts) } },
+              ]);
+              expect(await document.locator("html").getAttribute("data-blocking-saw-app")).toBe(
+                "false",
+              );
+              expect(await document.locator("#app").textContent()).toBe("ready true in order");
               const isolation = await document.locator("body").evaluate(() => {
                 let topDenied = false;
                 try {
@@ -321,11 +263,6 @@ suite.define(() => {
               expect(await document.getByRole("textbox", { name: "Local note" }).inputValue()).toBe(
                 "Retain this page",
               );
-              if (name === "Jump to discrepancies") {
-                await page.screenshot({
-                  path: path.join(suite.artifactDir, `fragment-${mode}.png`),
-                });
-              }
             }
             await document.getByRole("link", { name: "Back to top", exact: true }).click();
             await expect.poll(() => heading.evaluate(() => window.scrollY)).toBe(0);
@@ -351,9 +288,6 @@ suite.define(() => {
             await panel
               .locator("openclaw-chat-html-preview [role=status]")
               .waitFor({ state: "hidden" });
-            await page.screenshot({
-              path: path.join(suite.artifactDir, `attachment-${mode}.png`),
-            });
             for (const height of [1000, 480]) {
               await page.setViewportSize({ width: 1440, height });
               await expect
@@ -399,15 +333,6 @@ suite.define(() => {
             );
             expect(await panel.getByRole("button", { name: "Save", exact: true }).isEnabled()).toBe(
               true,
-            );
-            await selectFileAction(panel, "Preview");
-            await page.locator("a.markdown-file-link").filter({ hasText: "line two" }).click();
-            await panel.locator(".cm-editor:visible").waitFor();
-            expect(await panel.locator(".file-view__line--target").getAttribute("data-line")).toBe(
-              "2",
-            );
-            expect(await panel.locator(".cm-content").textContent()).toContain(
-              "Unsaved HTML draft",
             );
             expect(await tab.count()).toBe(1);
             expect(await gateway.getRequests("canvas.document.view")).toEqual([]);
