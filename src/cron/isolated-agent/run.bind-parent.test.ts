@@ -26,6 +26,7 @@ import {
   SESSION_ID,
   stateDir,
 } from "../../gateway/server-methods/requester-cron-authority.test-support.js";
+import { persistDevicePairingStoreState } from "../../infra/device-pairing-store.js";
 import type { PairedDevice } from "../../infra/device-pairing.types.js";
 import {
   bindGatewayContextResolver,
@@ -193,7 +194,12 @@ async function bindFromParent(params: {
 }
 
 /** Runs one occurrence and reports the parent memory the run was admitted with. */
-async function runOccurrence(config: OpenClawConfig, job: CronStoredJob, context: never) {
+async function runOccurrence(
+  config: OpenClawConfig,
+  job: CronStoredJob,
+  context: never,
+  expectedStatus: "ok" | "error" = "ok",
+) {
   let operatorAdmitted = false;
   let memoryParent: ReturnType<typeof readScheduledMemoryParent>;
   runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) => {
@@ -223,121 +229,133 @@ async function runOccurrence(config: OpenClawConfig, job: CronStoredJob, context
     await onTimer(state);
     await execution.waitForIdle();
     const after = expectDefined(execution.getJob(job.id), "settled job");
-    expect(after.state.lastRunStatus, after.state.lastError).toBe("ok");
-    return { operatorAdmitted, memoryParent };
+    expect(after.state.lastRunStatus, after.state.lastError).toBe(expectedStatus);
+    return { operatorAdmitted, memoryParent, lastError: after.state.lastError };
   } finally {
     execution.stop();
     await execution.waitForIdle();
   }
 }
 
-it.each(["unbound", "control ui owner binds", "channel owner binds"] as const)(
-  "a key-only automation that is %s",
-  async (scenario) => {
-    const config = await prepareAuthorityConfig({ tools: { allow: [AUTOMATIONS_TOOL_NAME] } });
-    const fixture = createCronFixture(undefined, config);
-    const { context } = fixture;
-    context.resolveGatewayContext = () => context;
-    const profile = ensureProfileForEmail("bind-operator@example.test");
-    const recovery = await createOperatorRecoveryFixture({
-      stateDir,
-      context,
-      config,
-      profileId: profile.id,
+it.each([
+  "unbound",
+  "control ui owner binds",
+  "control ui owner binds, then the device is revoked",
+  "channel owner binds",
+] as const)("a key-only automation that is %s", async (scenario) => {
+  const config = await prepareAuthorityConfig({ tools: { allow: [AUTOMATIONS_TOOL_NAME] } });
+  const fixture = createCronFixture(undefined, config);
+  const { context } = fixture;
+  context.resolveGatewayContext = () => context;
+  const profile = ensureProfileForEmail("bind-operator@example.test");
+  const recovery = await createOperatorRecoveryFixture({
+    stateDir,
+    context,
+    config,
+    profileId: profile.id,
+    sessionKey: SESSION,
+    sessionId: SESSION_ID,
+    device: DEVICE,
+  });
+  recovery.entry.status = "done";
+  recovery.entry.abortedLastRun = false;
+  await accessor.replaceSessionEntry(recovery.target, recovery.entry);
+  const seeded = await seedKeyOnlyJob(context.cron);
+  expect(resolveScheduledPrincipal(seeded, { trigger: "cron", agentId: "main" })).toEqual({
+    kind: "unbound-parent",
+    parentSessionKey: SESSION,
+  });
+  try {
+    if (scenario.startsWith("control ui owner binds")) {
+      const original = expectDefined(
+        await captureGatewayOperatorRunAuthority({
+          client: recovery.client,
+          context,
+          sourceAuthority: null,
+        }),
+        "Control UI operator authority",
+      );
+      try {
+        await withPluginRuntimeGatewayRequestScope(
+          { client: recovery.client, context, isWebchatConnect: () => false },
+          () =>
+            bindFromParent({
+              config,
+              context,
+              runId: "control-ui-binds",
+              jobId: seeded.id,
+              admitted: admission("control-ui-binds", recovery.client),
+              operatorAuthority: original.authority,
+            }),
+        );
+      } finally {
+        original.release();
+      }
+    } else if (scenario === "channel owner binds") {
+      await bindFromParent({
+        config,
+        context,
+        runId: "channel-owner-binds",
+        jobId: seeded.id,
+        admitted: channelOwnerTurn("channel-owner-binds"),
+      });
+    }
+  } finally {
+    context.cron.stop();
+    await creatorCron.waitForIdle();
+  }
+  const job = expectDefined(
+    (await fixture.read()).find((entry) => entry.id === seeded.id),
+    "stored automation",
+  );
+  // Binding never rewrites the job's requester attribution or tool policy.
+  expect(job.createdActor).toEqual(CREATOR);
+  expect(job.scheduledToolPolicy).toEqual(seeded.scheduledToolPolicy);
+  if (scenario === "unbound") {
+    expect(job.sourceConversation).toBeUndefined();
+  } else {
+    expect(job.sourceConversation).toEqual({
       sessionKey: SESSION,
       sessionId: SESSION_ID,
-      device: DEVICE,
+      lifecycleRevision: recovery.entry.lifecycleRevision,
     });
-    recovery.entry.status = "done";
-    recovery.entry.abortedLastRun = false;
-    await accessor.replaceSessionEntry(recovery.target, recovery.entry);
-    const seeded = await seedKeyOnlyJob(context.cron);
-    expect(resolveScheduledPrincipal(seeded, { trigger: "cron", agentId: "main" })).toEqual({
-      kind: "unbound-parent",
-      parentSessionKey: SESSION,
+  }
+  if (scenario.startsWith("control ui owner binds")) {
+    expect(job.operatorSource?.source).toMatchObject({
+      agentId: "main",
+      sessionKey: SESSION,
+      sessionId: SESSION_ID,
+      snapshot: { profileId: profile.id, device: { deviceId: DEVICE.deviceId } },
     });
-    try {
-      if (scenario === "control ui owner binds") {
-        const original = expectDefined(
-          await captureGatewayOperatorRunAuthority({
-            client: recovery.client,
-            context,
-            sourceAuthority: null,
-          }),
-          "Control UI operator authority",
-        );
-        try {
-          await withPluginRuntimeGatewayRequestScope(
-            { client: recovery.client, context, isWebchatConnect: () => false },
-            () =>
-              bindFromParent({
-                config,
-                context,
-                runId: "control-ui-binds",
-                jobId: seeded.id,
-                admitted: admission("control-ui-binds", recovery.client),
-                operatorAuthority: original.authority,
-              }),
-          );
-        } finally {
-          original.release();
-        }
-      } else if (scenario === "channel owner binds") {
-        await bindFromParent({
-          config,
-          context,
-          runId: "channel-owner-binds",
-          jobId: seeded.id,
-          admitted: channelOwnerTurn("channel-owner-binds"),
-        });
-      }
-    } finally {
-      context.cron.stop();
-      await creatorCron.waitForIdle();
-    }
-    const job = expectDefined(
-      (await fixture.read()).find((entry) => entry.id === seeded.id),
-      "stored automation",
-    );
-    // Binding never rewrites the job's requester attribution or tool policy.
-    expect(job.createdActor).toEqual(CREATOR);
-    expect(job.scheduledToolPolicy).toEqual(seeded.scheduledToolPolicy);
-    if (scenario === "unbound") {
-      expect(job.sourceConversation).toBeUndefined();
-    } else {
-      expect(job.sourceConversation).toEqual({
-        sessionKey: SESSION,
-        sessionId: SESSION_ID,
-        lifecycleRevision: recovery.entry.lifecycleRevision,
-      });
-    }
-    if (scenario === "control ui owner binds") {
-      expect(job.operatorSource?.source).toMatchObject({
-        agentId: "main",
-        sessionKey: SESSION,
-        sessionId: SESSION_ID,
-        snapshot: { profileId: profile.id, device: { deviceId: DEVICE.deviceId } },
-      });
-    } else {
-      expect(job.operatorSource).toBeUndefined();
-    }
+  } else {
+    expect(job.operatorSource).toBeUndefined();
+  }
 
-    const occurrence = await runOccurrence(config, job, context as never);
-    if (scenario === "unbound") {
-      // Unbound jobs keep the run-session decisions: no parent memory, no operator source.
-      expect(occurrence.memoryParent).toBeUndefined();
-      expect(occurrence.operatorAdmitted).toBe(false);
-    } else if (scenario === "control ui owner binds") {
-      expect(occurrence.operatorAdmitted).toBe(true);
-      expect(occurrence.memoryParent).toMatchObject({ sessionKey: SESSION, senderIsOwner: true });
-    } else {
-      // The stored profile requester still decides owner status; the fixture's
-      // attributed profile is not resident, so the bound child is not the owner.
-      expect(occurrence.operatorAdmitted).toBe(false);
-      expect(occurrence.memoryParent).toMatchObject({ sessionKey: SESSION, senderIsOwner: false });
-    }
-  },
-);
+  if (scenario === "control ui owner binds, then the device is revoked") {
+    persistDevicePairingStoreState({ pendingById: {}, pairedByDeviceId: {} }, stateDir, "both");
+    // The bound occurrence rechecks the stored operator source and refuses before any effect.
+    const refused = await runOccurrence(config, job, context as never, "error");
+    expect(refused.lastError).toMatch(
+      /operator authority that created this automation was refused/,
+    );
+    expect(runEmbeddedAgentMock).not.toHaveBeenCalled();
+    return;
+  }
+  const occurrence = await runOccurrence(config, job, context as never);
+  if (scenario === "unbound") {
+    // Unbound jobs keep the run-session decisions: no parent memory, no operator source.
+    expect(occurrence.memoryParent).toBeUndefined();
+    expect(occurrence.operatorAdmitted).toBe(false);
+  } else if (scenario === "control ui owner binds") {
+    expect(occurrence.operatorAdmitted).toBe(true);
+    expect(occurrence.memoryParent).toMatchObject({ sessionKey: SESSION, senderIsOwner: true });
+  } else {
+    // The stored profile requester still decides owner status; the fixture's
+    // attributed profile is not resident, so the bound child is not the owner.
+    expect(occurrence.operatorAdmitted).toBe(false);
+    expect(occurrence.memoryParent).toMatchObject({ sessionKey: SESSION, senderIsOwner: false });
+  }
+});
 
 it.each([
   "a group member turn",
@@ -416,4 +434,40 @@ it.each([
     await creatorCron.waitForIdle();
   }
   expect((await fixture.read()).find((entry) => entry.id === jobId)).toEqual(before);
+});
+
+it("refuses the stored write when the owner loses authority while bind waits for the store", async () => {
+  const config = await prepareAuthorityConfig({ tools: { allow: [AUTOMATIONS_TOOL_NAME] } });
+  const fixture = createCronFixture(undefined, config);
+  const { context } = fixture;
+  context.resolveGatewayContext = () => context;
+  const seeded = await seedKeyOnlyJob(context.cron);
+  const before = (await fixture.read()).find((entry) => entry.id === seeded.id);
+  let ownerCurrent = true;
+  const update = context.cron.updateWithPrecondition.bind(context.cron);
+  // Revoke between the handler's checks and the commit under the cron lock.
+  vi.spyOn(context.cron, "updateWithPrecondition").mockImplementation(async (...args) => {
+    ownerCurrent = false;
+    return await update(...args);
+  });
+  try {
+    await expect(
+      bindFromParent({
+        config,
+        context,
+        runId: "revoked-bind",
+        jobId: seeded.id,
+        admitted: {
+          runId: "revoked-bind",
+          callerOrigin: { kind: "unknown" },
+          managementEntitlement: { source: "channel-owner", isCurrent: () => ownerCurrent },
+        },
+      }),
+    ).rejects.toThrow(/admin grant is missing, expired, or already used/);
+  } finally {
+    context.cron.stop();
+    await creatorCron.waitForIdle();
+  }
+  expect(context.cron.updateWithPrecondition).toHaveBeenCalledTimes(1);
+  expect((await fixture.read()).find((entry) => entry.id === seeded.id)).toEqual(before);
 });
