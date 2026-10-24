@@ -111,7 +111,7 @@ extensions/codex/src/app-server/native-mcp-app.ts	9
 extensions/codex/src/app-server/plugin-activation.ts	1
 extensions/codex/src/app-server/plugin-inventory.ts	6
 extensions/codex/src/app-server/plugin-metadata-cache.ts	5
-extensions/codex/src/app-server/run-attempt-resources.ts	12
+extensions/codex/src/app-server/run-attempt-resources.ts	9
 extensions/codex/src/app-server/run-attempt-runtime.ts	1
 extensions/codex/src/app-server/run-attempt-server-requests.ts	2
 extensions/codex/src/app-server/runtime-artifact.ts	1

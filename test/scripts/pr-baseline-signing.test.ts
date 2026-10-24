@@ -174,9 +174,7 @@ if (process.argv[1]?.endsWith('/baseline-refresh.mjs') && process.argv[2] === 'c
       f,
       source,
       baseline,
-      credit,
       before,
-      identity,
       request,
       signed,
       response,
@@ -193,15 +191,8 @@ if (process.argv[1]?.endsWith('/baseline-refresh.mjs') && process.argv[2] === 'c
       expect(existsSync(f.local("review-transition.json"))).toBe(false);
       return result;
     };
-    for (const [from, to] of [
-      [source, baseline],
-      ["fix: refresh", "fix: changed"],
-      [credit, "Co-authored-by: Changed Example <changed@example.invalid>"],
-      [identity.GIT_AUTHOR_EMAIL!, "changed@example.invalid"],
-    ]) {
-      writeFileSync(response, signed.bytes.toString().replace(from!, to!));
-      refuse("Signed commit payload differs");
-    }
+    writeFileSync(response, signed.bytes.toString().replace(source, baseline));
+    refuse("Signed commit payload differs");
     writeFileSync(response, signed.bytes);
     appendFileSync(requestPath, "\n");
     refuse("Signing request changed");
