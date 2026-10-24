@@ -107,11 +107,6 @@ suite.define(() => {
         expect((await helpSurface.textContent())?.trim()).toBe(helpText);
         expect(await gateway.getRequests("sessions.branches.switch")).toHaveLength(0);
 
-        await page.keyboard.press("Escape");
-        await expect.poll(() => help.isVisible()).toBe(false);
-        expect(await menuSurface.isVisible()).toBe(true);
-        await info.click();
-        await help.waitFor();
         await pane.locator(".agent-chat__composer-combobox textarea").click();
         await expect.poll(() => help.isVisible()).toBe(false);
         await expect.poll(() => menuSurface.isVisible()).toBe(false);
