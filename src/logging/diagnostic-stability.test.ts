@@ -68,6 +68,12 @@ const tool = {
 const talk = {
   type: "talk.event",
   talkEventType: "latency.metrics",
+  mode: "realtime",
+  transport: "gateway-relay",
+  brain: "agent-consult",
+  provider: "openai",
+  final: true,
+  durationMs: 12,
 } as const;
 const failure = {
   failureKind: "terminated" as const,
@@ -132,7 +138,11 @@ describe("diagnostic stability recorder", () => {
 
   it.each<[DiagnosticEventInput, Record<string, unknown>, string[]?]>([
     [
-      makeEvent("message.processed", { outcome: "error", reason: "raw error with user content" }),
+      makeEvent("message.processed", {
+        channel: "telegram",
+        outcome: "error",
+        reason: "raw error with user content",
+      }),
       { outcome: "error" },
       ["reason"],
     ],
