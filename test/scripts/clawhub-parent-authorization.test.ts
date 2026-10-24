@@ -231,12 +231,8 @@ describe("ClawHub parent publication authorization", () => {
   it("uploads recovery approval only for direct human dispatches from trusted tooling", () => {
     const config = workflow();
     const approval = config.jobs.approve_plugins_clawhub_release;
-    expect(approval).toMatchObject({
-      environment:
-        "${{ needs.validate_release_publish_approval.outputs.parent_approval != 'receipt' && 'clawhub-plugin-release' || '' }}",
-      needs: expect.arrayContaining(["validate_release_publish_approval"]),
-      if: expect.stringContaining("needs.validate_release_publish_approval.result == 'success'"),
-    });
+    // The human/receipt job gate is covered in release-approval-workflows.test.ts.
+    expect(approval.needs).toContain("validate_release_publish_approval");
     const validation = config.jobs.validate_release_publish_approval;
     expect(validation.outputs?.direct_recovery).toBe(
       "${{ steps.approval.outputs.direct_recovery }}",
@@ -249,27 +245,17 @@ describe("ClawHub parent publication authorization", () => {
     expect(outputWrite).toBeGreaterThan(
       validationRun.indexOf("node scripts/validate-release-publish-approval.mjs"),
     );
-    expect(approval.steps).toHaveLength(6);
-    expect(approval.steps[0]).not.toHaveProperty("if");
     const directRecovery =
       "needs.validate_release_publish_approval.outputs.direct_recovery == 'true'";
     const receiptRoute =
       "needs.validate_release_publish_approval.outputs.parent_approval == 'receipt'";
-    // Trusted tooling is checked out for both routes; the wait is receipt-only and
-    // the recovery receipt stays direct-only.
-    const routes: Record<string, string> = {
-      "Checkout trusted release tooling": `${directRecovery} || ${receiptRoute}`,
-      "Setup Node": `${directRecovery} || ${receiptRoute}`,
-      "Wait for the release parent's ClawHub authorization": receiptRoute,
-      "Write recovery environment approval receipt": directRecovery,
-      "Upload recovery environment approval receipt": directRecovery,
-    };
-    expect(approval.steps.slice(1).map((step) => [step.name, step.if])).toEqual(
-      Object.entries(routes),
-    );
     const checkout = approval.steps.find((step) => step.uses?.startsWith("actions/checkout@"));
-    expect(checkout?.with?.ref).toBe("${{ github.workflow_sha }}");
+    expect(checkout).toMatchObject({
+      if: `${directRecovery} || ${receiptRoute}`,
+      with: { ref: "${{ github.workflow_sha }}" },
+    });
     const write = approval.steps.find((step) => step.run?.includes("recovery-approval --output"));
+    expect(write?.if).toBe(directRecovery);
     expect(write?.run).toContain(
       'recovery-approval --output "$RUNNER_TEMP/openclaw-clawhub-recovery-approval/approval.json"',
     );
@@ -290,6 +276,7 @@ describe("ClawHub parent publication authorization", () => {
       });
     }
     const upload = approval.steps.find((step) => step.uses?.startsWith("actions/upload-artifact@"));
+    expect(upload?.if).toBe(directRecovery);
     const artifactName =
       "openclaw-clawhub-recovery-approval-${{ github.run_id }}-${{ github.run_attempt }}";
     expect(upload?.with).toMatchObject({

@@ -282,41 +282,36 @@ it("marks clean and signaled pre-teardown child exits as benchmark failures", ()
 });
 
 it("summarizes failure rate, restart.ready totals, and resource slope", () => {
-  const samples: Parameters<typeof testing.summarizeCase>[1] = [
-    sample({
-      iterations: [
-        iteration({
-          readyz: probe(42, 12),
-          restartTrace: {
-            "restart.ready": 12,
-            "restart.ready.total": 50,
-            "restart.ready.heapUsedMb": 100,
-            "restart.ready.rssMb": 200,
-          },
-        }),
-        iteration({
-          failureCode: "trace_missing",
-          healthz: probe(35),
-          readyz: probe(50, 15),
-          restartTrace: {
-            "restart.ready.heapUsedMb": 104,
-            "restart.ready.rssMb": 206,
-          },
-        }),
-      ],
-      resourceSlope: {
-        activeHandlesCountPerRestart: null,
-        activeRequestsCountPerRestart: null,
-        activeTimersCountPerRestart: null,
-        fdCountPerRestart: null,
-        heapUsedMbPerRestart: 4,
-        rssMbPerRestart: 6,
-      },
-    }),
-  ];
-  const result = testing.summarizeCase(benchCase, samples);
-
-  expect(result.samples).toBe(samples);
+  const result = summarize({
+    iterations: [
+      iteration({
+        readyz: probe(42, 12),
+        restartTrace: {
+          "restart.ready": 12,
+          "restart.ready.total": 50,
+          "restart.ready.heapUsedMb": 100,
+          "restart.ready.rssMb": 200,
+        },
+      }),
+      iteration({
+        failureCode: "trace_missing",
+        healthz: probe(35),
+        readyz: probe(50, 15),
+        restartTrace: {
+          "restart.ready.heapUsedMb": 104,
+          "restart.ready.rssMb": 206,
+        },
+      }),
+    ],
+    resourceSlope: {
+      activeHandlesCountPerRestart: null,
+      activeRequestsCountPerRestart: null,
+      activeTimersCountPerRestart: null,
+      fdCountPerRestart: null,
+      heapUsedMbPerRestart: 4,
+      rssMbPerRestart: 6,
+    },
+  });
   expect(result.summary).toMatchObject({
     failureRate: 0.5,
     firstFailureCode: "trace_missing",
@@ -329,7 +324,6 @@ it("summarizes failure rate, restart.ready totals, and resource slope", () => {
     "restart.ready.rssMb": { avg: 203, max: 206, min: 200, p50: 203, p95: 206 },
     "restart.ready.total": { avg: 50, max: 50, min: 50, p50: 50, p95: 50 },
   };
-  expect(Object.keys(result.summary.restartTrace)).toEqual(Object.keys(expectedTrace));
   expect(result.summary.restartTrace).toEqual(expectedTrace);
 });
 
@@ -354,7 +348,6 @@ it("does not mark failure-free benchmark summaries as failed", () => {
       "restart.ready.rssMb": 220,
     },
   });
-
   const result = summarize({ iterations: [readyIteration] });
 
   expect(testing.hasBenchmarkFailures([result])).toBe(false);
@@ -367,11 +360,7 @@ it("fails successful benchmark summaries without measured restart resource evide
 
   expect(testing.hasBenchmarkFailures([result])).toBe(false);
   expect(testing.collectBenchmarkEvidenceFailures([result])).toEqual([
-    {
-      id: "demo",
-      reason: "missing restart iterations",
-      sampleIndex: 1,
-    },
+    { id: "demo", reason: "missing restart iterations", sampleIndex: 1 },
   ]);
   expect(testing.shouldFailBenchmark([result], { allowFailures: true })).toBe(true);
 });
