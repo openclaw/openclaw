@@ -134,6 +134,7 @@ it.each([
   const requestFacts: Array<{ url: string; authorization: string | undefined }> = [];
   const arrivals = [createDeferred(), createDeferred(), createDeferred()];
   let finishing = false;
+  const sse = (event: unknown) => `data: ${JSON.stringify(event)}\n\n`;
   const finish = (response: ServerResponse, index: number) => {
     if (response.writableEnded || response.destroyed) {
       return;
@@ -165,9 +166,9 @@ it.each([
         { type: "message_stop" },
       ];
       if (index === 0 && !finishing) {
-        response.write(`data: ${JSON.stringify(events[0])}\n\n`);
+        response.write(sse(events[0]));
       } else {
-        response.end(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
+        response.end(events.map(sse).join(""));
       }
       return;
     }
@@ -177,12 +178,12 @@ it.each([
       return;
     }
     response.end(
-      `data: ${JSON.stringify({
+      sse({
         id: "completion-lease-response",
         object: "chat.completion.chunk",
         model: "lease-model",
         choices: [{ index: 0, delta: { content: text }, finish_reason: "stop" }],
-      })}\n\ndata: [DONE]\n\n`,
+      }) + "data: [DONE]\n\n",
     );
   };
   const server = await startCompletionServer((request, response) => {
@@ -244,7 +245,6 @@ it.each([
       const workStarted = createDeferred();
       let acceptedWorkStarted = false;
       let nestedPreparationCompleted = false;
-      let nestedPreparationFailure: string | undefined;
       const finishWork = createDeferred();
       const workSettled = createDeferred();
       const parentWork = new AsyncWorkScope();
@@ -289,13 +289,7 @@ it.each([
                     return;
                   }
                   if (mode === "nested-prepare") {
-                    const nested = await prepareSimpleCompletionModelForAgent(
-                      completionInput,
-                    ).catch((error: unknown) => {
-                      nestedPreparationFailure =
-                        error instanceof Error ? error.message : "Non-Error preparation failure";
-                      throw error;
-                    });
+                    const nested = await prepareSimpleCompletionModelForAgent(completionInput);
                     assertPrepared(nested);
                     nestedPreparationCompleted = true;
                     return;
@@ -741,7 +735,6 @@ it.each([
           expect(parentDrained).toBe(true);
         } else {
           await finishResult(0, first);
-          expect(nestedPreparationFailure).toBeUndefined();
         }
         if (mode === "nested-prepare") {
           expect(nestedPreparationCompleted).toBe(true);

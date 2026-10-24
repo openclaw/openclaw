@@ -53,6 +53,9 @@ const harnessInitial = (
   modelSelectionLocked: true,
   ...(pluginExtensions ? { pluginExtensions } : {}),
 });
+const recoveryInitial = (sourceThreadId = "source-1") =>
+  harnessInitial(supervision({ sourceThreadId, initializing: true }));
+
 type Create = Parameters<PluginRuntime["agent"]["session"]["createSessionEntry"]>[0];
 type CreateOptions<T extends Create = Create> = T extends Create
   ? Omit<T, "cfg" | "key" | "initialEntry"> & { initialEntry?: T["initialEntry"] }
@@ -60,6 +63,13 @@ type CreateOptions<T extends Create = Create> = T extends Create
 function sessionFixture(key: string) {
   const runtime = createRuntimeAgent();
   const storePath = runtime.session.resolveStorePath(undefined, { agentId: "main" });
+  const create = (options: CreateOptions = {}) =>
+    runtime.session.createSessionEntry({
+      cfg: {},
+      key,
+      initialEntry: harnessInitial(),
+      ...options,
+    });
   return {
     runtime,
     key,
@@ -69,13 +79,21 @@ function sessionFixture(key: string) {
         sessionKey: key,
         ...(latest ? { readConsistency: "latest" as const } : {}),
       }),
-    create: (options: CreateOptions = {}) =>
-      runtime.session.createSessionEntry({
-        cfg: {},
-        key,
-        initialEntry: harnessInitial(),
+    create,
+    beginInitialization: async (options: CreateOptions = {}) => {
+      const started = createDeferred();
+      const release = createDeferred();
+      const creation = create({
         ...options,
-      }),
+        afterCreate: async () => {
+          started.resolve();
+          await release.promise;
+          return { pluginExtensions: supervision({ modelLocked: true }) };
+        },
+      });
+      await started.promise;
+      return { creation, release };
+    },
     seed: (entry: SessionEntry) =>
       runtime.session.upsertSessionEntry({ storePath, sessionKey: key, entry }),
   };
@@ -244,13 +262,9 @@ describe("plugin runtime session creation", () => {
         await expect(
           create({
             initialEntry: harnessInitial(supervision({ initializing: true })),
-            afterCreate: async () => {
-              return {
-                pluginExtensions: {
-                  codex: { supervision: { invalidJsonValue: 1n as never } },
-                },
-              };
-            },
+            afterCreate: async () => ({
+              pluginExtensions: { codex: { supervision: { invalidJsonValue: 1n as never } } },
+            }),
           }),
         ).rejects.toThrow();
 
@@ -262,21 +276,11 @@ describe("plugin runtime session creation", () => {
   it("fences work admission until trusted initialization completes", async () => {
     await withSessionFixture(
       "agent:main:dashboard:codex-binding-fence",
-      async ({ runtime, key, storePath, read, create }) => {
+      async ({ runtime, key, storePath, read, beginInitialization }) => {
         setRuntimeConfigSnapshot({});
-        const callbackStarted = createDeferred();
-        const releaseCallback = createDeferred();
-        const creation = create({
+        const { creation, release } = await beginInitialization({
           initialEntry: harnessInitial(supervision({ initializing: true })),
-          afterCreate: async () => {
-            callbackStarted.resolve();
-            await releaseCallback.promise;
-            return {
-              pluginExtensions: supervision({ modelLocked: true }),
-            };
-          },
         });
-        await callbackStarted.promise;
         expect(isSessionMutationActive(storePath, [key])).toBe(true);
         expect(read()).toMatchObject({
           initializationPending: true,
@@ -295,7 +299,7 @@ describe("plugin runtime session creation", () => {
         });
         expect(workRan).toBe(false);
 
-        releaseCallback.resolve();
+        release.resolve();
         const created = await creation;
         await work;
         expect(workRan).toBe(true);
@@ -310,24 +314,14 @@ describe("plugin runtime session creation", () => {
   it("rejects an ordinary same-key create while trusted initialization is pending", async () => {
     await withSessionFixture(
       "agent:main:dashboard:codex-initialization-race",
-      async ({ key, read, create }) => {
-        const callbackStarted = createDeferred();
-        const releaseCallback = createDeferred();
-        const creation = create({
+      async ({ key, read, beginInitialization }) => {
+        const { creation, release } = await beginInitialization({
           label: "Trusted initializer",
           initialEntry: {
             agentHarnessId: "codex",
             pluginExtensions: supervision({ initializing: true }),
           },
-          afterCreate: async () => {
-            callbackStarted.resolve();
-            await releaseCallback.promise;
-            return {
-              pluginExtensions: supervision({ modelLocked: true }),
-            };
-          },
         });
-        await callbackStarted.promise;
 
         const raced = await createGatewaySession({
           cfg: {},
@@ -346,7 +340,7 @@ describe("plugin runtime session creation", () => {
           pluginExtensions: supervision({ initializing: true }),
         });
 
-        releaseCallback.resolve();
+        release.resolve();
         const created = await creation;
         expect(created.entry.initializationPending).toBeUndefined();
         expect(created.entry).toMatchObject({
@@ -397,10 +391,7 @@ describe("plugin runtime session creation", () => {
           sourceThreadId: "source-1",
           initializing: true,
         });
-        const persistedPluginExtensions = supervision({
-          initializing: true,
-          sourceThreadId: "source-1",
-        });
+
         fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
         fs.writeFileSync(
           sessionFile,
@@ -417,7 +408,7 @@ describe("plugin runtime session creation", () => {
             initializationPending: true,
             agentHarnessId: "codex",
             modelSelectionLocked: true,
-            pluginExtensions: persistedPluginExtensions,
+            pluginExtensions: supervision({ initializing: true, sourceThreadId: "source-1" }),
             spawnedCwd: "/workspace/project",
             sessionRoot: "/workspace",
             permissionMode: "guarded",
@@ -456,68 +447,49 @@ describe("plugin runtime session creation", () => {
   it.each([
     {
       name: "spawned workspace",
-      spawnedCwd: "/workspace/other",
-      requestedCwd: "/workspace/project",
-      sourceThreadId: "source-1",
+      stored: {
+        ...recoveryInitial(),
+        spawnedCwd: "/workspace/other",
+      },
+      requested: {
+        initialEntry: recoveryInitial(),
+        spawnedCwd: "/workspace/project",
+      },
     },
     {
       name: "trusted ownership",
-      spawnedCwd: undefined,
-      requestedCwd: undefined,
-      sourceThreadId: "different-source",
+      stored: recoveryInitial("different-source"),
+      requested: {
+        initialEntry: recoveryInitial(),
+      },
     },
-  ])(
-    "does not recover an initializer with different $name",
-    async ({ spawnedCwd, requestedCwd, sourceThreadId }) => {
-      await withSessionFixture(
-        "agent:main:dashboard:codex-recovery-mismatch",
-        async ({ read, create, seed }) => {
-          const existing: SessionEntry = {
-            sessionId: "foreign-initializer",
-            updatedAt: Date.now(),
-            delivery: { kind: "none" },
-            initializationPending: true,
-            ...harnessInitial(supervision({ sourceThreadId, initializing: true })),
-            ...(spawnedCwd ? { spawnedCwd } : {}),
-          };
-          await seed(existing);
-          await expect(
-            create({
-              ...(requestedCwd ? { spawnedCwd: requestedCwd } : {}),
-              recoverMatchingInitialEntry: true,
-              initialEntry: harnessInitial(
-                supervision({ sourceThreadId: "source-1", initializing: true }),
-              ),
-              afterCreate: async () => ({ pluginExtensions: {} }),
-            }),
-          ).rejects.toThrow("does not match its trusted recovery state");
-          expect(read()).toEqual(existing);
-        },
-      );
+    {
+      name: "CLI plugin owner",
+      stored: {
+        modelSelectionLocked: true,
+        pluginOwnerId: "other-plugin",
+        providerOverride: "claude-cli",
+        modelOverride: "claude-opus-4-8",
+        cliSessionBindings: { "claude-cli": cliSessionBinding },
+      },
+      requested: { initialEntry: cliInitial },
     },
-  );
-
-  it("does not recover or roll back a locked CLI row owned by another plugin", async () => {
-    await withSessionFixture(
-      "agent:main:catalog-adopt:claude:foreign",
+  ])("does not recover or roll back an initializer with different $name", ({ stored, requested }) =>
+    withSessionFixture(
+      "agent:main:dashboard:codex-recovery-mismatch",
       async ({ read, create, seed }) => {
-        const existing = {
+        const existing: SessionEntry = {
           sessionId: "foreign-initializer",
           updatedAt: Date.now(),
-          delivery: { kind: "none" as const },
-          initializationPending: true as const,
-          modelSelectionLocked: true,
-          pluginOwnerId: "other-plugin",
-          providerOverride: "claude-cli",
-          modelOverride: "claude-opus-4-8",
-          cliSessionBindings: { "claude-cli": cliSessionBinding },
+          delivery: { kind: "none" },
+          initializationPending: true,
+          ...stored,
         };
         await seed(existing);
-
         await expect(
           create({
+            ...requested,
             recoverMatchingInitialEntry: true,
-            initialEntry: cliInitial,
             afterCreate: async () => {
               throw new Error("must not run");
             },
@@ -525,8 +497,8 @@ describe("plugin runtime session creation", () => {
         ).rejects.toThrow("does not match its trusted recovery state");
         expect(read()).toEqual(existing);
       },
-    );
-  });
+    ),
+  );
 
   it("rejects work for a persisted initializer without an active process fence", async () => {
     await withSessionFixture(
@@ -620,6 +592,22 @@ describe("plugin runtime session work admission", () => {
     });
   });
 
+  async function queueMutation(run: () => Promise<void>) {
+    const started = createDeferred();
+    const releaseMutation = createDeferred();
+    const mutation = runSessionMutation({
+      scope: storePath,
+      identities: [sessionKey, sessionId],
+      prepare: async () => {
+        started.resolve();
+        await releaseMutation.promise;
+      },
+      run,
+    });
+    await started.promise;
+    return { mutation, releaseMutation };
+  }
+
   it("refuses plugin work and session creation while the agent is draining", async () => {
     const runtime = createRuntimeAgent();
     const reason = new Error("agent deletion began");
@@ -644,24 +632,13 @@ describe("plugin runtime session work admission", () => {
 
   it("waits for a queued archive mutation and rejects the stale start", async () => {
     const runtime = createRuntimeAgent();
-    const mutationStarted = createDeferred();
-    const releaseMutation = createDeferred();
-    const mutation = runSessionMutation({
-      scope: storePath,
-      identities: [sessionKey, sessionId],
-      prepare: async () => {
-        mutationStarted.resolve();
-        await releaseMutation.promise;
-      },
-      run: async () => {
-        await runtime.session.patchSessionEntry({
-          storePath,
-          sessionKey,
-          update: () => ({ archivedAt: Date.now() }),
-        });
-      },
+    const { mutation, releaseMutation } = await queueMutation(async () => {
+      await runtime.session.patchSessionEntry({
+        storePath,
+        sessionKey,
+        update: () => ({ archivedAt: Date.now() }),
+      });
     });
-    await mutationStarted.promise;
 
     let ran = false;
     const work = runtime.session.runWithWorkAdmission({ storePath, sessionKey }, async () => {
@@ -676,24 +653,13 @@ describe("plugin runtime session work admission", () => {
 
   it("rejects a session replaced while work waits for lifecycle admission", async () => {
     const runtime = createRuntimeAgent();
-    const mutationStarted = createDeferred();
-    const releaseMutation = createDeferred();
-    const mutation = runSessionMutation({
-      scope: storePath,
-      identities: [sessionKey, sessionId],
-      prepare: async () => {
-        mutationStarted.resolve();
-        await releaseMutation.promise;
-      },
-      run: async () => {
-        await runtime.session.upsertSessionEntry({
-          storePath,
-          sessionKey,
-          entry: { sessionId: "replacement-session", updatedAt: Date.now() },
-        });
-      },
+    const { mutation, releaseMutation } = await queueMutation(async () => {
+      await runtime.session.upsertSessionEntry({
+        storePath,
+        sessionKey,
+        entry: { sessionId: "replacement-session", updatedAt: Date.now() },
+      });
     });
-    await mutationStarted.promise;
 
     const snapshotRead = createDeferred();
     const readEntry = sessionEntryRead.withSessionEntryReadOnlyInWorker;
