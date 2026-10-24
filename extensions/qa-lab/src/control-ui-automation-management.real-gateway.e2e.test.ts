@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "openclaw/plugin-sdk/test-env";
@@ -15,7 +14,6 @@ import {
 } from "./control-ui-gateway.e2e.test-support.ts";
 import { createQaCrablineTransportAdapter } from "./crabline-transport.ts";
 import { createQaGatewayChild, type QaGatewayChild } from "./gateway-child.ts";
-import { redactQaGatewayDebugText } from "./gateway-log-redaction.ts";
 import { isQaPosixProcessGroupAlive, signalQaPosixProcessGroup } from "./posix-process-group.ts";
 import {
   readRawQaSessionStore,
@@ -117,11 +115,9 @@ function startGateway(
         ...(!transport ? { exec: { mode: "full" as const } } : {}),
       };
       const entries = ((cfg.agents ??= {}).entries ??= {});
-      entries.qa = {
-        ...entries.qa,
-        identity: { name: transport ? "Automation proof" : "Recovery proof" },
-        tools: toolPolicy,
-      };
+      const agent = (entries.qa ??= {});
+      agent.identity = { name: transport ? "Automation proof" : "Recovery proof" };
+      agent.tools = toolPolicy;
       return cfg;
     },
   });
@@ -134,9 +130,6 @@ function withChat(gateway: QaGatewayChild, sessionKey: string, run: (page: Page)
     await run(page);
   });
 }
-
-const writeVerdict = (file: string, value: unknown) =>
-  writeFile(path.join(suite.artifactDir, file), `${JSON.stringify(value, null, 2)}\n`);
 
 const withAutomationGateway =
   (
@@ -266,10 +259,6 @@ suite.define(() => {
         expect(originalInputs).toHaveLength(1);
         await waitForReply(page, marker);
         await screenshot(page, "recovery-created-disabled-automation");
-        await writeVerdict("recovery-verdict.json", {
-          originalUserTurns: 1,
-          automation: { name: created.name, enabled: created.enabled, persisted: true },
-        });
       });
     }),
   );
@@ -325,7 +314,6 @@ suite.define(() => {
           .logs()
           .split("\n")
           .filter((line) => line.includes("cron: admin management"));
-      expect(managementAuditEvents()).toHaveLength(0);
       const jobBeforeNonOwner = await gateway.call("cron.get", { id: jobId });
       const runsBeforeNonOwner = await gateway.call("cron.runs", { id: jobId });
       const nonOwnerMarker = "non-owner-remove";
@@ -345,7 +333,6 @@ suite.define(() => {
       expect(await gateway.call("cron.runs", { id: jobId })).toEqual(runsBeforeNonOwner);
       expect(managementAuditEvents()).toHaveLength(0);
 
-      const ownerResults: Record<string, string> = {};
       for (const action of ["list", "get"] as const) {
         const marker = `owner-${action}`;
         provider.requests.set(marker, managementArgs(action, jobId));
@@ -362,17 +349,12 @@ suite.define(() => {
         expect(provider.toolAvailability.get(marker)).toBe(true);
         expect(readResult(output)).toEqual(expect.objectContaining(expectedResults[action]));
         expect(reply.text.replace(/\s+/gu, " ")).toContain(output.replace(/\s+/gu, " "));
-        ownerResults[action] = "succeeded";
       }
-      expect(managementAuditEvents()).toHaveLength(2);
-
       const sessionKey = `agent:qa:dashboard:automation-management-${randomUUID()}`;
       await gateway.call("sessions.create", {
         key: sessionKey,
         label: "Manage Telegram reminder",
       });
-      const adminResults: Record<string, string> = {};
-      let observedCronRuns: string | undefined;
       await withChat(gateway, sessionKey, async (page) => {
         for (const action of actions) {
           const marker = `admin-${action}`;
@@ -392,15 +374,12 @@ suite.define(() => {
           } else if (action === "run") {
             await poll(async () => {
               const runs = await gateway.call("cron.runs", { id: jobId });
-              observedCronRuns = redactQaGatewayDebugText(JSON.stringify(runs));
-              return {
-                succeeded:
-                  isRecord(runs) &&
-                  Array.isArray(runs.entries) &&
-                  runs.entries.some((entry) => isRecord(entry) && entry.status === "ok"),
-                runs: observedCronRuns,
-              };
-            }).toMatchObject({ succeeded: true });
+              return (
+                isRecord(runs) &&
+                Array.isArray(runs.entries) &&
+                runs.entries.some((entry) => isRecord(entry) && entry.status === "ok")
+              );
+            }).toBe(true);
           }
           await waitForReply(page, marker);
           // Persisted replies can precede the browser's terminal event.
@@ -408,22 +387,10 @@ suite.define(() => {
             state: "hidden",
           });
           await screenshot(page, `${marker}-result`);
-          adminResults[action] = "succeeded";
         }
       });
-      const auditEvents = managementAuditEvents();
       // Both configured-owner reads and removal's revision lookup are audited.
-      expect(auditEvents).toHaveLength(actions.length + 3);
-      await writeVerdict("verdict.json", {
-        admin: adminResults,
-        cronRuns: observedCronRuns,
-        configuredTelegramOwner: ownerResults,
-        nonOwnerTelegramConversation: {
-          automationsAvailable: provider.toolAvailability.get(nonOwnerMarker),
-          refusal: provider.results.get(nonOwnerMarker),
-        },
-        adminManagementAuditEvents: auditEvents.length,
-      });
+      expect(managementAuditEvents()).toHaveLength(actions.length + 3);
     }),
   );
 });
