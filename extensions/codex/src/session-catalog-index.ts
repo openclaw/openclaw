@@ -82,6 +82,7 @@ export class CodexCatalogIndex {
   private currencyWork: Promise<void> | undefined;
   private safetyRefresh: Promise<void> | undefined;
   private nativeDirty = false;
+  private terminalDirty = false;
   private nextNativeAt = 0;
   private nextFilesAt = 0;
   private readonly runBackground: NonNullable<CodexCatalogIndexOptions["runBackground"]>;
@@ -134,6 +135,7 @@ export class CodexCatalogIndex {
       options.homeId,
       (event, readThread, source) => this.events.handle(event, readThread, source),
       {
+        onTerminalExit: () => (this.terminalDirty = true),
         onEphemeralThread: (id) => this.remove(id),
         onClose: (source) => {
           this.liveStatus.invalidate(source);
@@ -144,13 +146,11 @@ export class CodexCatalogIndex {
           return this.upsertThread(setCodexCatalogSource(response.thread, source));
         },
         onRemoteReady: () => {
-          if (this.closed || options.localSessionsRoot) {
+          if (this.closed || options.localSessionsRoot || this.initializing) {
             return;
           }
-          if (!this.initializing) {
-            this.initialized = false;
-            this.scheduleHydration();
-          }
+          this.initialized = false;
+          this.scheduleHydration();
         },
       },
     );
@@ -555,12 +555,9 @@ export class CodexCatalogIndex {
   }
 
   reconcile(): Promise<void> {
-    if (!this.reconciling) {
-      this.reconciling = this.reconcileFiles().finally(() => {
-        this.reconciling = undefined;
-      });
-    }
-    return this.reconciling;
+    return (this.reconciling ??= this.reconcileFiles().finally(() => {
+      this.reconciling = undefined;
+    }));
   }
 
   private async reconcileFiles(): Promise<void> {
@@ -698,6 +695,11 @@ export class CodexCatalogIndex {
       await this.availability.until(this.restore(), expiresAt);
       this.assertCurrent();
       this.scheduleHydration();
+      if (this.terminalDirty) {
+        await this.availability.until(this.reconciling ?? Promise.resolve(), expiresAt);
+        this.terminalDirty = false;
+        await this.availability.until(this.reconcile(), expiresAt);
+      }
       for (;;) {
         this.assertCurrent();
         const ordered = this.ordering.read();
