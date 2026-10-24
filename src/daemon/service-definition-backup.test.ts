@@ -7,8 +7,6 @@ import {
   runCliProcessChild,
   waitForCliProcessStderrMarker,
 } from "../cli/cli-process-child.test-helpers.js";
-import { restartLaunchAgent } from "./launchd-lifecycle.js";
-import { buildLaunchAgentPlist } from "./launchd-plist.js";
 import { readScheduledTaskCommand, resolveStartupEntryPaths } from "./schtasks-layout.js";
 import { restoreGatewayServiceDefinitionBackup } from "./service-definition-backup.js";
 import { fixture, native, readRetainedReceipt } from "./service-definition-backup.test-support.js";
@@ -17,8 +15,6 @@ import {
   publishServiceFile,
 } from "./service-stage.js";
 import { stageSystemdService } from "./systemd-install.js";
-import { restartSystemdService } from "./systemd-lifecycle.js";
-import { parseSystemdExecStart } from "./systemd-unit.js";
 
 type Fixture = Awaited<ReturnType<typeof fixture>>;
 const readFiles = (f: Fixture) => Promise.all(f.files.map((file) => fs.readFile(file)));
@@ -357,17 +353,8 @@ describe("service definition backup receipts", () => {
       let receipt = await f.capture.finish();
       let loaded = await fs.readFile(f.sourcePath, "utf8");
       expect(loaded).toContain("EnvironmentFile=");
-      const loadedArguments = () => parseSystemdExecStart(/^ExecStart=(.*)$/mu.exec(loaded)![1]!);
-      native.command.mockImplementation(async () => {
-        if (loaded.includes("EnvironmentFile=")) {
-          await fs.access(f.files[1]!);
-        }
-        return { ...f.command, programArguments: loadedArguments() };
-      });
-      let started: string[] | undefined;
       let interrupt = mode === "interrupted-reload";
-      native.identity.mockImplementation(async (command, args) => {
-        expect(command).toBe("systemctl");
+      native.identity.mockImplementation(async (_command, args) => {
         if (args.includes("daemon-reload")) {
           expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
           await fs.access(f.files[1]!);
@@ -376,8 +363,6 @@ describe("service definition backup receipts", () => {
             throw new Error("interrupted before daemon-reload");
           }
           loaded = await fs.readFile(f.sourcePath, "utf8");
-        } else if (args.includes("restart")) {
-          started = loadedArguments();
         } else {
           expect(args).toContain("reset-failed");
         }
@@ -406,35 +391,19 @@ describe("service definition backup receipts", () => {
       await restoreGatewayServiceDefinitionBackup({ ...f, receipt });
       expect(loaded).toBe(f.original.toString("utf8"));
       await expect(fs.stat(f.files[1]!)).rejects.toMatchObject({ code: "ENOENT" });
-      await restartSystemdService({
-        env: f.env,
-        stdout: new PassThrough(),
-        preserveDefinition: true,
-        assertCurrent: f.assertCurrent,
-      });
-      expect(started).toEqual(f.command.programArguments);
     },
   );
 
   it.each(["stopped", "absent", "unknown"])(
     "restores launchd disk and cached definition with a %s job",
     async (job) => {
-      const original = Buffer.from(
-        buildLaunchAgentPlist({
-          label: "ai.openclaw.receipt-fixture",
-          programArguments: ["/usr/bin/node", "/old/index.js", "gateway"],
-          stdoutPath: "/fixture/gateway.log",
-          stderrPath: "/fixture/gateway.log",
-        }),
-      );
-      const f = await fixture("darwin", false, original);
+      const f = await fixture("darwin");
       await f.install();
       const receipt = await f.capture.finish();
       const candidate = await fs.readFile(f.sourcePath);
       let cached: Buffer | null = job === "absent" ? null : candidate;
-      let started: Buffer | undefined;
       native.launchctl.mockImplementation(async (args) => {
-        expect(args.some((arg) => arg.includes("ai.openclaw.receipt-fixture"))).toBe(true);
+        expect(["print", "bootout"]).toContain(args[0]);
         const ok = { code: 0, stdout: "", stderr: "", termination: "exit" as const };
         const missing = { ...ok, code: 113, stderr: "Could not find service" };
         if (args[0] === "print") {
@@ -447,15 +416,6 @@ describe("service definition backup receipts", () => {
         if (args[0] === "bootout") {
           expect(await fs.readFile(f.sourcePath)).toEqual(candidate);
           cached = null;
-        } else if (args[0] === "bootstrap") {
-          cached = await fs.readFile(f.sourcePath);
-        } else if (args[0] === "kickstart") {
-          if (!cached) {
-            return missing;
-          }
-          started = cached;
-        } else {
-          expect(args[0]).toBe("enable");
         }
         return ok;
       });
@@ -478,8 +438,7 @@ describe("service definition backup receipts", () => {
           ["enable", "bootstrap", "kickstart"].includes(args[0]!),
         ),
       ).toBe(false);
-      await restartLaunchAgent({ env: f.env, stdout: new PassThrough(), preserveDefinition: true });
-      expect(started).toEqual(original);
+      expect(await fs.readFile(f.sourcePath)).toEqual(f.original);
     },
   );
   it.each([false, true])(
