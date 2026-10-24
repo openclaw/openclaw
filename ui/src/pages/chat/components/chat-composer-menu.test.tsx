@@ -13,11 +13,50 @@ import {
   makeCapabilities,
   makeMenu,
 } from "./chat-composer-menu.test-support.ts";
-import { renderComposerMenuOption as ComposerMenuOption } from "./chat-composer-menu.tsx";
+import {
+  ComposerMenuLoadingRows,
+  renderComposerMenuOption as ComposerMenuOption,
+} from "./chat-composer-menu.tsx";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import type { ChatComposerPlusMenuProps as Menu } from "./chat-composer-plus-menu.types.ts";
 import { createSlashMenu, type SlashMenuHost } from "./chat-composer-slash-menu-state.ts";
 import { SlashMenu } from "./chat-composer-slash-menu.tsx";
+
+it("keeps loading suggestions named, selected and actionable", () => {
+  const select = vi.fn();
+  const [activeId, setActiveId] = createSignal("pending-status");
+  const view = mountSolid(() => (
+    <div role="listbox" aria-label="Suggestions">
+      <ComposerMenuLoadingRows
+        activeId={activeId()}
+        rows={[
+          {
+            id: "pending-status",
+            name: "/status",
+            description: "Show status",
+            select,
+            hover: () => setActiveId("pending-status"),
+          },
+          {
+            id: "pending-help",
+            name: "/help",
+            description: "Show help",
+            select,
+            hover: () => setActiveId("pending-help"),
+          },
+        ]}
+      />
+    </div>
+  ));
+  const status = view.getByRole("option", { name: "/status Show status", selected: true });
+  const help = view.getByRole("option", { name: "/help Show help", selected: false });
+  help.dispatchEvent(new MouseEvent("pointermove", { bubbles: true }));
+  flush();
+  expect(view.getByRole("option", { selected: true })).toBe(help);
+  expect(status.getAttribute("aria-selected")).toBe("false");
+  help.click();
+  expect(select).toHaveBeenCalledOnce();
+});
 
 it("keeps current editing state when suggestion rows load after dismissal", async () => {
   let menu!: ReturnType<typeof createSlashMenu>;

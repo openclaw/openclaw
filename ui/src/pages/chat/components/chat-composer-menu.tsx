@@ -5,29 +5,44 @@ import { registerChatComposerInvocationMenu } from "./chat-picker-overlay.ts";
 
 export { handleComposerMenuKeydown } from "../../../components/composer-menu.ts";
 
-/** Keep pending rows at the same height and intrinsic text width as their options. */
-export function ComposerMenuLoadingRows(props: { rows: readonly { id: string; name: string }[] }) {
+/** Keep option semantics and geometry while their visual renderer loads. */
+export function ComposerMenuLoadingRows(props: {
+  rows: readonly {
+    id: string;
+    name: string;
+    description?: string;
+    select: () => void;
+    hover: () => void;
+  }[];
+  activeId: string | null | undefined;
+  preserveFocus?: boolean;
+}) {
+  const Option = renderComposerMenuOption;
   return (
     <div aria-busy="true">
       <For each={props.rows} keyed={false}>
         {(row) => (
-          <div
+          <Option
             id={row().id}
-            class="slash-menu-item"
-            aria-hidden="true"
-            onMouseDown={(event: MouseEvent) => event.preventDefault()}
-          >
-            <span class="slash-menu-icon">
+            active={row().id === props.activeId}
+            preserveFocus={props.preserveFocus}
+            select={() => row().select()}
+            hover={() => row().hover()}
+            iconHidden={true}
+            icon={
               <span class="skeleton" style={{ display: "block", width: "100%", height: "100%" }} />
-            </span>
-            <span class="slash-menu-copy">
-              <span class="slash-menu-name">
-                <span class="skeleton" style={{ display: "block" }}>
-                  <span style={{ visibility: "hidden" }}>{row().name}</span>
-                </span>
+            }
+            name={
+              <span class="skeleton" style={{ display: "block" }}>
+                <span style={{ opacity: 0 }}>{row().name}</span>
               </span>
-            </span>
-          </div>
+            }
+            description={
+              <span class="skeleton" style={{ display: "block" }}>
+                <span style={{ opacity: 0 }}>{row().description}</span>
+              </span>
+            }
+          />
         )}
       </For>
     </div>
@@ -102,7 +117,7 @@ export function renderComposerMenuOption(options: {
         {options.icon}
       </span>
       <span class="slash-menu-copy">
-        <span class="slash-menu-name">{options.name}</span>
+        <span class="slash-menu-name">{options.name}</span>{" "}
         <span class="slash-menu-desc">{options.description}</span>
       </span>
     </div>

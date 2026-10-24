@@ -65,10 +65,14 @@ export function HumanMentionMenuView(props: { args: [HumanMentionMenu, HumanMent
             <ChatLazyBoundary
               fallback={
                 <ComposerMenuLoadingRows
+                  activeId={menu().activeId(host().paneId)}
                   rows={
                     result()?.users.map((person, index) => ({
                       id: paneDomId(host().paneId, `mention-option-${index}`),
                       name: person.displayName,
+                      description: person.online ? t("chat.mentions.online") : undefined,
+                      select: () => menu().select(person, host()),
+                      hover: () => menu().hover(index, person.profileId),
                     })) ?? []
                   }
                 />

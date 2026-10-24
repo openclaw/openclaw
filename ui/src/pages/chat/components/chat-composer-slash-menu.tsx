@@ -65,13 +65,18 @@ export function SlashMenu(props: { menu: SlashMenuState; host: SlashMenuHost; dr
               <ChatLazyBoundary
                 fallback={
                   <ComposerMenuLoadingRows
-                    rows={state().slashMenuArgItems.map((arg) => ({
+                    activeId={getActiveSlashMenuOptionId(state(), props.host.paneId)}
+                    preserveFocus={false}
+                    rows={state().slashMenuArgItems.map((arg, index) => ({
                       id: getSlashArgOptionId(
                         props.host.paneId,
                         state().slashMenuCommand?.name ?? "",
                         arg,
                       ),
                       name: arg,
+                      description: `/${state().slashMenuCommand?.name} ${arg}`,
+                      select: () => props.menu.selectArg(arg, props.host),
+                      hover: () => props.menu.hover(index),
                     }))}
                   />
                 }
@@ -100,9 +105,13 @@ export function SlashMenu(props: { menu: SlashMenuState; host: SlashMenuHost; dr
                     <ChatLazyBoundary
                       fallback={
                         <ComposerMenuLoadingRows
-                          rows={group()[1].map(({ command }) => ({
+                          activeId={getActiveSlashMenuOptionId(state(), props.host.paneId)}
+                          rows={group()[1].map(({ command, index }) => ({
                             id: getSlashCommandOptionId(props.host.paneId, command),
                             name: `/${command.name}${command.args ? ` ${command.args}` : ""}`,
+                            description: getSlashCommandDescription(command),
+                            select: () => props.menu.selectCommand(command, props.host),
+                            hover: () => props.menu.hover(index),
                           }))}
                         />
                       }

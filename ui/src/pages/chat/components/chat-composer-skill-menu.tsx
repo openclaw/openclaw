@@ -1,5 +1,5 @@
 import { lazy, Show } from "solid-js";
-import { getSkillDisplayName } from "../../../lib/chat/commands.ts";
+import { getSkillDisplayName, getSlashCommandDescription } from "../../../lib/chat/commands.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { paneDomId } from "./chat-composer-dom.ts";
 import { ComposerMenu, ComposerMenuLoadingRows } from "./chat-composer-menu.tsx";
@@ -37,9 +37,13 @@ export function SkillMenu(props: { menu: SkillMenuState; host: SkillMenuHost }) 
             <ChatLazyBoundary
               fallback={
                 <ComposerMenuLoadingRows
-                  rows={state().skillMenuItems.map((command) => ({
+                  activeId={getActiveSkillMenuOptionId(state(), props.host.paneId)}
+                  rows={state().skillMenuItems.map((command, index) => ({
                     id: skillOptionId(props.host.paneId, command),
                     name: getSkillDisplayName(command),
+                    description: getSlashCommandDescription(command),
+                    select: () => props.menu.select(command, props.host),
+                    hover: () => props.menu.hover(index),
                   }))}
                 />
               }

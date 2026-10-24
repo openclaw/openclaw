@@ -67,9 +67,12 @@ function EmojiPopup(props: {
         <ChatLazyBoundary
           fallback={
             <ComposerMenuLoadingRows
+              activeId={props.menu.activeId(props.paneId)}
               rows={props.menu.state.items.map((name, index) => ({
                 id: paneDomId(props.paneId, `emoji-option-${index}`),
                 name: `:${name}:`,
+                select: () => props.menu.select(props.textarea, index),
+                hover: () => props.menu.hover(index),
               }))}
             />
           }
