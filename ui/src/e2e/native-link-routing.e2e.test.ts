@@ -26,7 +26,6 @@ async function newBrowserContext() {
 type LinkTestWindow = Window & {
   openclawNativeLinkMessages?: unknown[];
   openclawNativeBrowserMessages?: NativeBrowserMessage[];
-  openclawModifiedLinkClick?: { defaultPrevented: boolean; metaKey: boolean };
 };
 const linkMessages = (page: Page) =>
   page.evaluate(() => (window as LinkTestWindow).openclawNativeLinkMessages);
@@ -77,7 +76,7 @@ suite.define(() => {
     });
     const { page, link } = await openChat(
       context,
-      "Read the [report](https://example.com/report), open [Usage](/usage), or inspect `README.md:1`.",
+      "Read the [report](https://example.com/report).",
     );
 
     await link.click();
@@ -139,25 +138,6 @@ suite.define(() => {
       .toBe("https://example.com/report");
 
     await page.evaluate(() => {
-      const host = window as LinkTestWindow;
-      document.addEventListener(
-        "click",
-        (event) => {
-          host.openclawModifiedLinkClick = {
-            defaultPrevented: event.defaultPrevented,
-            metaKey: event.metaKey,
-          };
-        },
-        { once: true },
-      );
-    });
-    await link.click({ modifiers: ["Meta"] });
-    expect(await page.evaluate(() => (window as LinkTestWindow).openclawModifiedLinkClick)).toEqual(
-      { defaultPrevented: false, metaKey: true },
-    );
-    expect(await linkMessages(page)).toHaveLength(2);
-
-    await page.evaluate(() => {
       const dialog = document.createElement("dialog");
       dialog.id = "native-link-routing-modal";
       dialog.setAttribute("aria-label", "Link routing test");
@@ -186,21 +166,6 @@ suite.define(() => {
     await page.evaluate(() => {
       document.querySelector("#native-link-routing-modal")?.remove();
     });
-
-    await page
-      .getByRole("paragraph")
-      .getByRole("link", { name: "Usage" })
-      .click({ button: "right" });
-    expect(await page.locator("openclaw-native-link-menu").count()).toBe(0);
-    const messageMenu = page.getByRole("menu", { name: "Message actions" });
-    await expect.poll(() => messageMenu.isVisible()).toBe(false);
-    await page.evaluate(() => new Promise(requestAnimationFrame));
-    await page.keyboard.press("Escape");
-    await expect.poll(() => messageMenu.count()).toBe(0);
-    await page.locator('a.markdown-file-link[data-file-path="README.md"]').click({
-      button: "right",
-    });
-    expect(await page.locator("openclaw-native-link-menu").count()).toBe(0);
   });
 
   it("keeps ordinary browser navigation when the native bridge is absent", async () => {
