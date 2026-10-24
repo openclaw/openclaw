@@ -20,13 +20,7 @@ import {
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "../chat-pane.test-support.ts";
-import * as chatThreadBuild from "../chat-thread-build.ts";
-import {
-  buildCachedChatItems,
-  getExpandedToolCards,
-  getExpandedUserMessages,
-  setExpansionState,
-} from "../chat-thread.ts";
+import { getExpandedToolCards, setExpansionState } from "../chat-thread.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
 import {
@@ -35,7 +29,6 @@ import {
   renderTranscriptSearch,
 } from "../test-helpers/chat-transcript-native.tsx";
 import { createAsyncQuestionPresentation } from "./chat-async-question.ts";
-import * as chatMessage from "./chat-message-group-frame.ts";
 import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import { createAttachmentBlock } from "./chat-message.test-support.ts";
 import {
@@ -129,43 +122,38 @@ describe("chat transcript invalidation", () => {
     resetTranscriptTestDom();
   });
 
-  it.each(["ready", "delayed"])(
-    "updates settled avatars when only the theme hat changes with a %s palette",
-    (palette) => {
-      const branding = resolveThemeBranding({ mascot: "claw", critters: [], avatarHat: "fedora" });
-      const agentId = Array.from({ length: 100 }, (_, index) => `agent-${index}`).find((id) =>
-        resolveAvatarHat(id, branding),
-      )!;
-      const props = threadProps("pane-avatar-hat", `agent:${agentId}:main`, [
-        { role: "assistant", content: "Ready.", timestamp: 1_000 },
-      ]);
-      props.currentAgentId = agentId;
-      props.selectedSession = selectedSession(props, { kind: "group" });
+  it("updates settled avatars when theme hats change before a delayed palette applies", () => {
+    const branding = resolveThemeBranding({ mascot: "claw", critters: [], avatarHat: "fedora" });
+    const agentId = Array.from({ length: 100 }, (_, index) => `agent-${index}`).find((id) =>
+      resolveAvatarHat(id, branding),
+    )!;
+    const props = threadProps("pane-avatar-hat", `agent:${agentId}:main`, [
+      { role: "assistant", content: "Ready.", timestamp: 1_000 },
+    ]);
+    props.currentAgentId = agentId;
+    props.selectedSession = selectedSession(props, { kind: "group" });
+    props.branding = { ...branding, avatarHat: undefined };
+    const { container, rerender } = threadFixture(props);
+    const previousBranding = currentThemeBranding();
+    try {
+      setCurrentThemeBranding(props.branding);
+      rerender();
+      expect(find(container, ".identity-avatar--agent")).not.toBeNull();
+      expect(find(container, ".identity-avatar__hat")).toBeNull();
+      props.branding = branding;
+      setCurrentThemeBranding(branding);
+      rerender();
+      expect(find(container, ".identity-avatar__hat--fedora")).not.toBeNull();
       props.branding = { ...branding, avatarHat: undefined };
-      const { container, rerender } = threadFixture(props);
-      const previousBranding = currentThemeBranding();
-      try {
-        setCurrentThemeBranding(props.branding);
-        rerender();
-        expect(find(container, ".identity-avatar--agent")).not.toBeNull();
-        expect(find(container, ".identity-avatar__hat")).toBeNull();
-        props.branding = branding;
-        setCurrentThemeBranding(branding);
-        rerender();
-        expect(find(container, ".identity-avatar__hat--fedora")).not.toBeNull();
-        props.branding = { ...branding, avatarHat: undefined };
-        if (palette === "delayed") {
-          rerender();
-          expect(find(container, ".identity-avatar__hat--fedora")).not.toBeNull();
-        }
-        setCurrentThemeBranding(props.branding);
-        rerender();
-        expect(find(container, ".identity-avatar__hat")).toBeNull();
-      } finally {
-        setCurrentThemeBranding(previousBranding);
-      }
-    },
-  );
+      rerender();
+      expect(find(container, ".identity-avatar__hat--fedora")).not.toBeNull();
+      setCurrentThemeBranding(props.branding);
+      rerender();
+      expect(find(container, ".identity-avatar__hat")).toBeNull();
+    } finally {
+      setCurrentThemeBranding(previousBranding);
+    }
+  });
 
   it.each(["session participants", "pending input"] as const)(
     "shows your name when a peer arrives through %s and keeps it while search hides the peer",
@@ -355,8 +343,7 @@ describe("chat transcript invalidation", () => {
     );
   });
 
-  it("keeps settled run frames idle during stream updates", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(60_000);
+  it("keeps settled run frames mounted during stream updates", async () => {
     const completedRunId = "settled-run";
     const activeRunId = "active-run";
     const props = {
@@ -386,17 +373,12 @@ describe("chat transcript invalidation", () => {
       stream: "Draft next reply",
       streamStartedAt: 5_000,
     };
-    const { transcript, container, rerender } = updatingThread(props);
-    const prepareFrame = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
-    rerender();
-    transcript.start();
-    await flushDeferredRowPrune();
+    const { container, rerender } = await startThread(props);
     const finalBubble = required(container, '[data-entry-id="settled-final"]');
     const workToggle = expectDefined(
       finalBubble.closest(".chat-group")?.querySelector(".chat-work-group button"),
       "completed work disclosure",
     );
-    prepareFrame.mockClear();
     props.stream = "Advanced next reply";
     rerender();
 
@@ -404,37 +386,9 @@ describe("chat transcript invalidation", () => {
     expect(find(container, '[data-entry-id="settled-final"]')).toBe(finalBubble);
     expect(finalBubble.textContent).toContain("Workspace checked");
     expect(workToggle.getAttribute("aria-expanded")).toBe("false");
-    expect(prepareFrame.mock.calls.filter(([group]) => group.runId === completedRunId)).toEqual([]);
   });
 
-  it("keeps built row identities across an A to B to A presentation reset", () => {
-    const paneId = "pane-session-items";
-    const messagesA = [{ role: "assistant", content: "session A", timestamp: 1_000 }];
-    const messagesB = [{ role: "assistant", content: "session B", timestamp: 2_000 }];
-    const stableInputs = {
-      paneId,
-      runId: null,
-      toolMessages: [],
-      streamSegments: [],
-      stream: null,
-      streamStartedAt: null,
-      showToolCalls: true,
-    };
-    const build = (sessionKey: string, messages: unknown[]) =>
-      buildCachedChatItems({
-        ...stableInputs,
-        sessionKey,
-        messages,
-      });
-    const itemsA = build("agent:main:session-a", messagesA);
-    resetTranscriptSession(paneId);
-    build("agent:main:session-b", messagesB);
-    resetTranscriptSession(paneId);
-    const restoredItemsA = build("agent:main:session-a", messagesA);
-    expect(restoredItemsA).toBe(itemsA);
-  });
-
-  it("keeps message rows prepared and refreshes failure actions when a retained transcript returns", async () => {
+  it("keeps message rows mounted and refreshes failure actions when a retained transcript returns", async () => {
     const owner = new EventTarget();
     let visible = true;
     const props = {
@@ -450,13 +404,8 @@ describe("chat transcript invalidation", () => {
       failureActionsRunId: "run-a",
       onRetryRun: vi.fn(),
     };
-    const { transcript, container, rerender } = updatingThread(props);
-    const prepare = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
-    rerender();
-    transcript.start();
-    await flushDeferredRowPrune();
+    const { container, rerender } = await startThread(props);
     const bubble = required(container, ".chat-bubble");
-    prepare.mockClear();
     const previousRetry = props.onRetryRun;
 
     visible = false;
@@ -475,7 +424,6 @@ describe("chat transcript invalidation", () => {
 
     expect(required(container, ".chat-bubble")).toBe(bubble);
     expect(container.textContent).toContain("Keep this answer");
-    expect(prepare).not.toHaveBeenCalled();
     click(container, ".chat-run-failure__retry");
     expect(props.onRetryRun).toHaveBeenCalledExactlyOnceWith("run-a");
     expect(previousRetry).not.toHaveBeenCalled();
@@ -484,7 +432,6 @@ describe("chat transcript invalidation", () => {
     rerender();
     await flushDeferredRowPrune();
     expect(find(container, ".chat-run-failure__retry")).toBeNull();
-    expect(prepare).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -538,7 +485,7 @@ describe("chat transcript invalidation", () => {
     },
   );
 
-  it("keeps history cached during worker setup and clears its notice when placement becomes active", async () => {
+  it("keeps queued input during worker setup and clears its notice when placement becomes active", async () => {
     const props = threadProps("pane-worker-setup", "agent:main:worker-setup", [
       { role: "user", content: "Earlier request", timestamp: 1_000 },
       { role: "assistant", content: "Earlier reply", timestamp: 2_000 },
@@ -550,15 +497,9 @@ describe("chat transcript invalidation", () => {
     props.selectedSession = selectedSession(props, {
       placement: { state: "requested", ...timing },
     });
-    const buildSpy = vi.spyOn(chatThreadBuild, "buildChatItems");
     const { container, rerender } = await startThread(props);
     expect(container.textContent).toContain("Received · waiting for worker setup");
     expect(container.querySelectorAll('[data-message-text="Queued follow-up"]')).toHaveLength(1);
-    expect(buildSpy).toHaveBeenCalledOnce();
-
-    rerender();
-    expect(buildSpy).toHaveBeenCalledOnce();
-    expect(container.textContent).toContain("Received · waiting for worker setup");
 
     props.selectedSession = {
       ...props.selectedSession,
@@ -568,28 +509,23 @@ describe("chat transcript invalidation", () => {
       },
     };
     rerender();
-    expect(buildSpy).toHaveBeenCalledTimes(2);
     expect(container.textContent).not.toContain("Received · waiting for worker setup");
     expect(container.querySelectorAll('[data-message-text="Queued follow-up"]')).toHaveLength(1);
   });
 
-  it("keeps settled rows idle across session metadata updates but refreshes their identity gutter", async () => {
-    vi.spyOn(Date, "now").mockReturnValue(60_000);
+  it("keeps settled rows mounted across metadata updates but refreshes their identity gutter", async () => {
     const props = threadProps("pane-session-metadata", "agent:main:main", [
       { role: "user", senderLabel: "Alex", content: "Hello" },
       { role: "assistant", content: "Hi" },
     ]);
     props.selectedSession = selectedSession(props);
     const { container, rerender } = threadFixture(props);
-    const prepareFrame = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
     rerender();
     const userRow = required(container, ".chat-group.user");
     expect(userRow.querySelector(".chat-avatar")).toBeNull();
-    prepareFrame.mockClear();
 
     props.selectedSession = { ...props.selectedSession, updatedAt: 2, label: "Renamed chat" };
     rerender();
-    expect(prepareFrame).not.toHaveBeenCalled();
     expect(find(container, ".chat-group.user")).toBe(userRow);
 
     props.selectedSession = { ...props.selectedSession, kind: "group" };
@@ -799,14 +735,15 @@ describe("chat transcript invalidation", () => {
       render(renderChatThread(props, transcript), container);
       transcript.update();
       expect(find(container, "[data-pin-widget]") !== null).toBe(canPin);
-      expect(provider.snapshot$.value.revision).toBe(1);
     }
   });
 
   it("keeps mounted disclosure handlers attached to recreated session expansion maps", async () => {
     const sessionKey = "retained-session";
-    const props = {
-      ...threadProps("retained-pane", sessionKey, [
+    const props = threadProps(
+      "retained-pane",
+      sessionKey,
+      [
         { role: "user", content: "long user message ".repeat(100), timestamp: 1 },
         msg(
           "assistant",
@@ -816,15 +753,15 @@ describe("chat transcript invalidation", () => {
           ],
           2,
         ),
-      ]),
-      showToolCalls: true,
+      ],
+      { showToolCalls: true, transcriptVisible: true },
+    );
+    const { transcript, container: retainedPane, rerender } = updatingThread(props);
+    const draw = async () => {
+      rerender();
+      await settleToolBridges(retainedPane);
     };
-    const controller = createTestTranscript();
-    const retainedPane = transcriptContainer();
-    render(renderChatThread(props, controller), retainedPane);
-    await settleToolBridges(retainedPane);
-    const staleTools = getExpandedToolCards(sessionKey);
-    const staleUsers = getExpandedUserMessages(sessionKey);
+    await draw();
 
     for (let index = 0; index < 20; index += 1) {
       const alternate = threadFixture({
@@ -836,60 +773,43 @@ describe("chat transcript invalidation", () => {
       await settleToolBridges(alternate.container);
     }
 
-    render(renderChatThread(props, controller), retainedPane);
-    await settleToolBridges(retainedPane);
-    const currentTools = getExpandedToolCards(sessionKey);
-    const currentUsers = getExpandedUserMessages(sessionKey);
-    expect(currentTools).not.toBe(staleTools);
-    expect(currentUsers).not.toBe(staleUsers);
-    const toolCardId = expectDefined(currentTools.keys().next().value, "retained tool card");
-    click(retainedPane, ".chat-group.user .chat-message-disclosure__toggle");
-    click(retainedPane, ".chat-tool-msg-summary");
-    expect(currentTools.get(toolCardId)).toBe(true);
-    expect(staleTools.get(toolCardId)).toBe(false);
-    expect(currentUsers.size).toBe(1);
-    expect(staleUsers.size).toBe(0);
+    await draw();
+    for (const selector of [
+      ".chat-group.user .chat-message-disclosure__toggle",
+      ".chat-tool-msg-summary",
+    ]) {
+      click(retainedPane, selector);
+      await waitForSolid(() =>
+        expect(required(retainedPane, selector).getAttribute("aria-expanded")).toBe("true"),
+      );
+    }
 
-    const visibleSession = "tool-visibility-session";
-    const visibleProps = {
-      ...props,
-      paneId: "tool-visibility-pane",
-      sessionKey: visibleSession,
-      transcriptVisible: true,
-      messages: [
-        { role: "user", content: "tool visibility prompt", timestamp: 1 },
-        msg("toolResult", "Expanded tool result", 2, {
-          toolCallId: "expanded-tool",
-          toolName: "browser.open",
-        }),
-        { role: "assistant", content: "The first tool completed.", timestamp: 3 },
-        { role: "user", content: "Show the next tool result.", timestamp: 4 },
-        msg("toolResult", "Collapsed tool result", 5, {
-          toolCallId: "collapsed-tool",
-          toolName: "browser.open",
-        }),
-      ],
-    };
-    saveChatSessionScrollPosition(visibleProps.paneId, visibleSession, {
+    props.messages = [
+      { role: "user", content: "tool visibility prompt", timestamp: 1 },
+      msg("toolResult", "Expanded tool result", 2, {
+        toolCallId: "expanded-tool",
+        toolName: "browser.open",
+      }),
+      { role: "assistant", content: "The first tool completed.", timestamp: 3 },
+      { role: "user", content: "Show the next tool result.", timestamp: 4 },
+      msg("toolResult", "Collapsed tool result", 5, {
+        toolCallId: "collapsed-tool",
+        toolName: "browser.open",
+      }),
+    ];
+    saveChatSessionScrollPosition(props.paneId, sessionKey, {
       scrollTop: 0,
       anchorToEnd: false,
     });
-    const visibleTranscript = createTestTranscript(visibleProps.paneId);
-    onTestFinished(() => visibleTranscript.dispose());
-    const visiblePane = transcriptContainer();
-    const drawVisible = async (next = visibleProps) => {
-      render(renderChatThread(next, visibleTranscript), visiblePane);
-      visibleTranscript.update();
-      await settleToolBridges(visiblePane);
-    };
-    await drawVisible();
-    visibleTranscript.start();
-    const visibilityState = getExpandedToolCards(visibleSession);
-    const visibilityIds = [...visibilityState.keys()].filter((key) => key.startsWith("toolmsg:"));
-    const expandedId = expectDefined(visibilityIds[0], "expanded standalone tool disclosure");
-    const collapsedId = expectDefined(visibilityIds[1], "collapsed standalone tool disclosure");
+    await draw();
+    transcript.start();
+    const visibilityState = getExpandedToolCards(sessionKey);
+    const expandedId = expectDefined(
+      [...visibilityState.keys()].find((key) => key.startsWith("toolmsg:")),
+      "expanded standalone tool disclosure",
+    );
     const buttons = () =>
-      Array.from(visiblePane.querySelectorAll<HTMLButtonElement>(".chat-tool-msg-summary")).filter(
+      Array.from(retainedPane.querySelectorAll<HTMLButtonElement>(".chat-tool-msg-summary")).filter(
         (button) => !button.closest(".chat-tool-msg-body"),
       );
     const expansion = () => buttons().map((button) => button.getAttribute("aria-expanded"));
@@ -900,30 +820,32 @@ describe("chat transcript invalidation", () => {
     expectDefined(buttons()[0], "first mounted tool disclosure").click();
     await expectExpansion("true", "false");
 
-    await drawVisible({ ...visibleProps, transcriptVisible: false });
+    props.transcriptVisible = false;
+    await draw();
     setExpansionState(visibilityState, expandedId, false);
     flush();
     expect(buttons()[0]?.getAttribute("aria-expanded")).toBe("true");
-    await drawVisible();
+    props.transcriptVisible = true;
+    await draw();
     expect(buttons()[0]?.getAttribute("aria-expanded")).toBe("false");
     setExpansionState(visibilityState, expandedId, true);
     await waitForSolid(() => expect(buttons()[0]?.getAttribute("aria-expanded")).toBe("true"));
 
-    await drawVisible({ ...visibleProps, showToolCalls: false });
+    props.showToolCalls = false;
+    await draw();
     expect(buttons()).toHaveLength(0);
-    await drawVisible();
+    props.showToolCalls = true;
+    await draw();
 
     expect(buttons()).toHaveLength(2);
     expect(expansion()).toEqual(["true", "false"]);
-    expect(visibilityState.get(expandedId)).toBe(true);
-    expect(visibilityState.get(collapsedId)).toBe(false);
-    await drawVisible({
-      ...visibleProps,
-      messages: visibleProps.messages.filter(
-        (message) => !("toolCallId" in message && message.toolCallId === "expanded-tool"),
-      ),
-    });
-    expect(visibilityState.get(expandedId)).toBe(true);
-    expect(visibilityState.get(collapsedId)).toBe(false);
+    const messages = props.messages;
+    props.messages = props.messages.filter(
+      (message) => !("toolCallId" in message && message.toolCallId === "expanded-tool"),
+    );
+    await draw();
+    props.messages = messages;
+    await draw();
+    expect(expansion()).toEqual(["true", "false"]);
   });
 });

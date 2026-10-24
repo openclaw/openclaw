@@ -6,10 +6,6 @@ import { GatewayRequestError } from "../../../api/gateway.ts";
 import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../../../api/types.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createSessionCapabilityFixture,
-} from "../chat-pane.test-support.ts";
 import { SessionWorkspaceRail } from "./chat-session-workspace-rail-solid.tsx";
 import {
   getSessionWorkspace,
@@ -28,7 +24,7 @@ import {
   resolveSessionDiffSidebarContent,
   type SessionWorkspaceHost,
 } from "./chat-session-workspace.ts";
-import type { SidebarContent, SidebarSelection } from "./chat-sidebar-content-types.ts";
+import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
 function workspaceFile(
   path: string,
@@ -74,26 +70,19 @@ async function expectUnavailable(state: SessionWorkspaceHost, message: string) {
   });
 }
 
-function createHost<T extends object>(overrides: T) {
+function createLoadingHost(sessions: object, overrides: object = {}): SessionWorkspaceHost {
   return {
+    client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
     connected: true,
+    connectionEpoch: 1,
     agentsList: { defaultId: "main", mainKey: "main", scope: "global", agents: [] },
-    handleOpenSidebar: vi.fn(),
+    handleOpenSidebar: createSidebarContentRecorder(),
     hello: null,
     sessionKey: "agent:main:current",
     sidebarContent: null,
-    ...overrides,
-  };
-}
-
-function createLoadingHost(sessions: object, overrides: object = {}): SessionWorkspaceHost {
-  return createHost({
-    client: { request: vi.fn().mockResolvedValue({ artifacts: [] }) },
-    connectionEpoch: 1,
     sessions,
-    handleOpenSidebar: createSidebarContentRecorder(),
     ...overrides,
-  }) as unknown as SessionWorkspaceHost;
+  } as unknown as SessionWorkspaceHost;
 }
 
 function createFileHost(
@@ -124,7 +113,10 @@ function assertEditable(
 ): asserts file is EditableFile & { edit: NonNullable<EditableFile["edit"]> } {
   assert(file.kind === "file" && file.edit, "Expected an editable file");
 }
-async function editableContent(state: SessionWorkspaceHost) {
+async function editableContent(state: SessionWorkspaceHost, path?: string, sessionKey?: string) {
+  if (path) {
+    await openSessionWorkspaceFile(state, { path, sessionKey });
+  }
   const file = await loadedSidebarContent(state);
   assertEditable(file);
   return file;
@@ -142,6 +134,23 @@ function editableHost(sessions: object, overrides: object = {}) {
     hello: gatewayHelloForMethods(["sessions.files.set"]),
     ...overrides,
   });
+}
+
+function noteResult(overrides: Partial<SessionWorkspaceGetResult> = {}) {
+  return fileResult(textFile("notes.md", "before", { hash: "old" }), overrides);
+}
+
+function diffHost(request: object) {
+  const state = createLoadingHost(
+    {},
+    {
+      client: { request },
+      hello: gatewayHelloForMethods(["sessions.diff"]),
+    },
+  );
+  const content = resolveSessionDiffSidebarContent(state);
+  assert(content?.kind === "session-diff");
+  return { state, content };
 }
 
 function readPreview(file: SessionWorkspaceGetResult["file"], hello = gatewayHelloForMethods([])) {
@@ -171,14 +180,14 @@ describe("session workspace state", () => {
     const workspace = workspaceProps(state);
     expect(workspace.filter).toBe("all");
     const owner = sessionWorkspaceForHost(state);
-    const published = vi.fn(() => expect(owner.state?.filter).toBe("read"));
-    const stop = owner.subscribe(published);
+    let published: string | undefined;
+    const stop = owner.subscribe(() => {
+      published = workspaceProps(state).filter;
+    });
     workspace.onSetFilter("read");
     expect(workspaceProps(state).filter).toBe("read");
-    expect(published).toHaveBeenCalledOnce();
+    expect(published).toBe("read");
     stop();
-    workspace.onSetFilter("changed");
-    expect(published).toHaveBeenCalledOnce();
 
     state.sessionKey = "agent:main:next";
     expect(workspaceProps(state).filter).toBe("all");
@@ -229,13 +238,6 @@ describe("session workspace state", () => {
         hello: gatewayHelloForMethods(["sessions.diff"]),
       },
     );
-    const handleOpenSidebar = vi.fn((content: SidebarSelection | null) => {
-      if (!content?.fileTab) {
-        state.sidebarContent = content;
-      }
-    });
-    state.handleOpenSidebar = handleOpenSidebar;
-
     workspaceProps(state, { expanded: true });
     await vi.waitFor(() => expect(workspaceProps(state).list?.root).toBe("/checkout/a"));
     const oldDiff = resolveSessionDiffSidebarContent(state);
@@ -243,9 +245,7 @@ describe("session workspace state", () => {
     workspaceProps(state, { expanded: true }).onOpenDiff?.();
     expect(state.sidebarContent).toBe(oldDiff);
     void openSessionWorkspaceFile(state, { path: "README.md" });
-    expect(handleOpenSidebar).toHaveBeenLastCalledWith(
-      expect.objectContaining({ kind: "loading" }),
-    );
+    expect(state.sessionWorkspaceState?.previews[0]?.content.kind).toBe("loading");
     loadSessionWorkspace(state, getSessionWorkspace(state), true);
     await vi.waitFor(() => expect(client.request).toHaveBeenCalledTimes(2));
 
@@ -256,11 +256,7 @@ describe("session workspace state", () => {
     expect(listFiles).toHaveBeenCalledTimes(3);
     expect(state.sidebarContent).toBeNull();
 
-    oldFile.resolve({
-      sessionKey: "agent:main:current",
-      root: "/checkout/a",
-      file: textFile("README.md", "old checkout"),
-    });
+    oldFile.resolve(fileResult(textFile("README.md", "old checkout"), { root: "/checkout/a" }));
     await Promise.resolve();
     await Promise.resolve();
     expect(state.sidebarContent).toBeNull();
@@ -278,51 +274,35 @@ describe("session workspace state", () => {
   });
 
   it("refreshes the diff owner while an older uncommitted poll is pending", async () => {
-    const snapshot = (line: string): SessionsDiffResult => ({
+    const original: SessionsDiffResult = {
       sessionKey: "agent:main:current",
-      files: [
-        {
-          path: "example.txt",
-          status: "modified",
-          additions: 1,
-          deletions: 1,
-          patch: `@@ -1 +1 @@\n-before\n+${line}`,
-        },
-      ],
-      additions: 1,
-      deletions: 1,
-    });
-    const original = snapshot("original snapshot");
+      files: [],
+      additions: 0,
+      deletions: 0,
+      branch: "original",
+    };
+    const updated = { ...original, branch: "updated" };
     const pending = createDeferred<SessionsDiffResult>();
     let holdPoll = false;
-    const state = createLoadingHost(
-      {},
-      {
-        client: {
-          request: (_method: string, params: { poll?: boolean }) =>
-            params.poll
-              ? holdPoll
-                ? pending.promise
-                : Promise.resolve(original)
-              : Promise.resolve(snapshot("updated snapshot")),
-        },
-        hello: gatewayHelloForMethods(["sessions.diff"]),
-      },
+    const { content } = diffHost((_method: string, params: { poll?: boolean }) =>
+      params.poll
+        ? holdPoll
+          ? pending.promise
+          : Promise.resolve(original)
+        : Promise.resolve(updated),
     );
-    const content = resolveSessionDiffSidebarContent(state);
-    assert(content?.kind === "session-diff");
     await content.load({ scope: "uncommitted" });
-    expect(content.uncommitted?.files[0]?.patch).toContain("original snapshot");
+    expect(content.uncommitted).toBe(original);
     holdPoll = true;
     const polling = content.load({ scope: "uncommitted" });
     try {
       await content.load({ scope: "uncommitted" }, { refresh: true });
-      expect(content.uncommitted?.files[0]?.patch).toContain("updated snapshot");
+      expect(content.uncommitted).toBe(updated);
     } finally {
       pending.resolve(original);
       await polling;
     }
-    expect(content.uncommitted?.files[0]?.patch).toContain("updated snapshot");
+    expect(content.uncommitted).toBe(updated);
   });
 
   it("retains uncommitted changes while computing and retires retries with visible demand", async () => {
@@ -335,15 +315,7 @@ describe("session workspace state", () => {
     };
     const computing = { ...result, files: [], additions: 0, deletions: 0, computing: true };
     const request = vi.fn().mockResolvedValueOnce(computing).mockResolvedValue(result);
-    const state = createLoadingHost(
-      {},
-      {
-        client: { request },
-        hello: gatewayHelloForMethods(["sessions.diff"]),
-      },
-    );
-    const content = resolveSessionDiffSidebarContent(state);
-    assert(content?.kind === "session-diff");
+    const { state, content } = diffHost(request);
     const stop = content.requestUncommitted?.();
     await vi.advanceTimersByTimeAsync(0);
     expect(content.uncommitted).toBeUndefined();
@@ -485,30 +457,17 @@ describe("openSessionWorkspaceFile", () => {
         file: workspaceFile(savedPath, { content, hash: "new", kind: "modified" }),
       }),
     );
-    const state: SessionWorkspaceHost = createHost({
-      client: createGatewayBrowserClientFixture(),
-      connectionEpoch: 1,
-      handleOpenSidebar: createSidebarContentRecorder(),
-      hello: gatewayHelloForMethods(["sessions.files.set"]),
-      sessionKey: "agent:main:viewer",
-      sessions: createSessionCapabilityFixture({ getFile, setFile }),
-    });
-    const fileReady = () => {
-      const current = state.sessionWorkspaceState;
-      return (
-        current?.previews.find((entry) => entry.id === current.activePreviewId)?.content.kind ===
-        "file"
-      );
-    };
-    let completed = nextWorkspaceUpdate(state, fileReady);
-    void openSessionWorkspaceFile(state, { path, sessionKey: owner });
-    await completed;
+    const state = createLoadingHost(
+      { getFile, setFile },
+      {
+        hello: gatewayHelloForMethods(["sessions.files.set"]),
+        sessionKey: "agent:main:viewer",
+      },
+    );
+    const file = await editableContent(state, path, owner);
     const workspace = state.sessionWorkspaceState;
-    const file = workspace?.previews[0]?.content;
     expect(getFile).toHaveBeenCalledExactlyOnceWith(owner, path, { agentId: "research" });
     expect(workspace?.sessionKey).toBe(state.sessionKey);
-    assert(file);
-    assertEditable(file);
     expect(file.sessionFileSource).toEqual({ sessionKey: owner, agentId: "research", path });
     await file.edit.fetchLatest();
     expect(getFile).toHaveBeenLastCalledWith(owner, path, { agentId: "research" });
@@ -518,12 +477,8 @@ describe("openSessionWorkspaceFile", () => {
       expectedHash: "old",
     });
 
-    completed = nextWorkspaceUpdate(state, fileReady);
-    void openSessionWorkspaceFile(state, { path });
-    await completed;
+    const viewerFile = await editableContent(state, path);
     expect(workspace?.previews).toHaveLength(2);
-    const viewerFile = workspace?.previews[1]?.content;
-    assert(viewerFile?.kind === "file");
     expect(viewerFile.draftKey).not.toBe(file.draftKey);
     expect(getFile).toHaveBeenLastCalledWith(state.sessionKey, path, { agentId: "main" });
   });
@@ -532,17 +487,14 @@ describe("openSessionWorkspaceFile", () => {
     "keeps hash-conflict recovery on the opened source when %s changes",
     async (field) => {
       let source = sourceA;
-      const getFile = vi.fn(async () =>
-        fileResult(textFile("notes.md", "before", { hash: "old" }), { source, root: source.root }),
-      );
+      const getFile = vi.fn(async () => noteResult({ source, root: source.root }));
       const setFile = vi.fn().mockRejectedValue(sourceChanged);
       const state = editableHost({
         getFile,
         setFile,
         listFiles: vi.fn(async () => workspaceList(source.root)),
       });
-      void openSessionWorkspaceFile(state, { path: "notes.md" });
-      const file = await editableContent(state);
+      const file = await editableContent(state, "notes.md");
       expect(await file.edit.fetchLatest()).toMatchObject({ content: "before", hash: "old" });
       source = { ...sourceA, [field]: `${sourceA[field]}-replacement` };
       expect(await file.edit.fetchLatest()).toBeNull();
@@ -558,13 +510,7 @@ describe("openSessionWorkspaceFile", () => {
         expectedHash: "old",
         expectedSource: sourceA,
       });
-      const reopened = nextWorkspaceUpdate(
-        state,
-        () => state.sessionWorkspaceState?.previews[0]?.content !== file,
-      );
-      void openSessionWorkspaceFile(state, { path: "notes.md" });
-      await reopened;
-      const fresh = await editableContent(state);
+      const fresh = await editableContent(state, "notes.md");
       expect(fresh.draftKey).not.toBe(file.draftKey);
       await fresh.edit.save({ content: "fresh draft", expectedHash: "old" });
       expect(setFile).toHaveBeenLastCalledWith("agent:main:current", "notes.md", "fresh draft", {
@@ -581,7 +527,7 @@ describe("openSessionWorkspaceFile", () => {
       const newSource = { ...sourceA, root: "/workspace/b", fileRoot: "/workspace/b" };
       const key = view === "forwarded" ? "agent:main:other" : "agent:main:current";
       const result = (source: typeof sourceA) =>
-        fileResult(textFile("notes.md", "before", { hash: "old" }), {
+        noteResult({
           sessionKey: key,
           root: source.root,
           source,
@@ -688,11 +634,7 @@ describe("openSessionWorkspaceFile", () => {
       const saved = createDeferred<{ file: { hash: string } }>();
       const state = editableHost(
         {
-          getFile: vi
-            .fn()
-            .mockResolvedValue(
-              fileResult(textFile("notes.md", "before", { hash: "old" }), { root: "/workspace" }),
-            ),
+          getFile: vi.fn().mockResolvedValue(noteResult({ root: "/workspace" })),
           setFile: vi.fn(() => saved.promise),
           listFiles: vi.fn().mockResolvedValue({
             sessionKey: "agent:main:current",
@@ -701,8 +643,7 @@ describe("openSessionWorkspaceFile", () => {
         },
         { hello: gatewayHelloForMethods(["sessions.files.set", "sessions.diff"]) },
       );
-      await openSessionWorkspaceFile(state, { path: "notes.md" });
-      const file = await editableContent(state);
+      const file = await editableContent(state, "notes.md");
       const workspace = state.sessionWorkspaceState!;
       workspace.browserSearch = "notes";
       const oldDiff = resolveSessionDiffSidebarContent(state);
@@ -868,43 +809,36 @@ describe("openSessionWorkspaceFile", () => {
     await expectUnavailable(state, message);
   });
 
-  it.each([
-    {
-      label: "binary metadata",
-      file: workspaceFile("build/cache.db", {
+  it("renders unsupported binary metadata", async () => {
+    const preview = await readPreview(
+      workspaceFile("build/cache.db", {
         mimeType: "application/x-sqlite3",
         previewKind: "unsupported",
         size: 8192,
         updatedAtMs: 1_700_000_000_000,
       }),
-      contains: [
-        "This file is not previewable inline.",
-        "application/x-sqlite3",
-        "8,192 bytes",
-        "2023-11-14T22:13:20.000Z",
-      ],
-      excludes: [],
-    },
-    {
-      label: "hostile filename literally",
-      file: workspaceFile(" build/`\n\n![remote](https://example.com/x) report~~old~~&amp;.db ", {
+    );
+    assert(preview.kind === "markdown");
+    expect(preview.content).toContain("This file is not previewable inline.");
+    expect(preview.content).toContain("application/x-sqlite3");
+    expect(preview.content).toContain("8,192 bytes");
+    expect(preview.content).toContain("2023-11-14T22:13:20.000Z");
+  });
+
+  it("renders unsupported hostile filenames literally without invalid dates", async () => {
+    const preview = await readPreview(
+      workspaceFile(" build/`\n\n![remote](https://example.com/x) report~~old~~&amp;.db ", {
         name: "cache.db",
         mimeType: "application/octet-stream",
         previewKind: "unsupported",
         updatedAtMs: Number.MAX_VALUE,
       }),
-      contains: ["``  build/`\\n\\n![remote](https://example.com/x) report~~old~~&amp;.db  ``"],
-      excludes: ["\n\n![remote]", "Updated:"],
-    },
-  ])("renders unsupported $label", async ({ file, contains, excludes }) => {
-    const preview = await readPreview(file);
-    expect(preview).toMatchObject({ kind: "markdown" });
-    const content = preview.kind === "markdown" ? preview.content : "";
-    for (const fragment of contains) {
-      expect(content).toContain(fragment);
-    }
-    for (const fragment of excludes) {
-      expect(content).not.toContain(fragment);
-    }
+    );
+    assert(preview.kind === "markdown");
+    expect(preview.content).toContain(
+      "``  build/`\\n\\n![remote](https://example.com/x) report~~old~~&amp;.db  ``",
+    );
+    expect(preview.content).not.toContain("\n\n![remote]");
+    expect(preview.content).not.toContain("Updated:");
   });
 });

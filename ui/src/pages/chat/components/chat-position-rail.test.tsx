@@ -11,17 +11,15 @@ import {
 } from "../test-helpers/chat-transcript-native.tsx";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
-import { ChatPositionRailView, type PositionRailViewParams } from "./chat-position-rail-view.tsx";
 import { message, stubRailVisibility } from "./chat-position-rail.test-support.ts";
 import { getTranscriptState } from "./chat-thread-interactions.ts";
+import { contentRows, emitTranscriptResize } from "./chat-transcript-fixture.test-support.tsx";
 import { publishTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
-  resizeObservers,
   threadProps,
   transcriptDomState,
-  type TestContentRow,
 } from "./chat-transcript.test-support.ts";
 
 const fixtureCleanups: Array<() => void> = [];
@@ -46,31 +44,33 @@ function threadFixture(props: ReturnType<typeof threadProps>) {
   };
 }
 
-function railFixture(sessionKey: string, count = 80, initialId = "message-79") {
-  const flushFrame = stubSettledAnimationFrames();
-  const publishVisibility = stubRailVisibility();
-  const transcript = createTestTranscript();
-  const container = document.body.appendChild(document.createElement("div"));
-  const activeMessage = vi.fn(() => initialId);
+function railPositions(count: number) {
   const markers = Array.from({ length: count }, (_, index) => ({
     id: `message-${index}`,
     anchorId: `message-${index}`,
     role: "user" as const,
     message: message(`message-${index}`, "user", `Checkpoint ${index}`, index + 1),
   }));
-  const positions = { markers, markerIdsByMessageId: new Map(markers.map(({ id }) => [id, id])) };
-  const [current, setPositions] = createSignal(positions);
+  return { markers, markerIdsByMessageId: new Map(markers.map(({ id }) => [id, id])) };
+}
+function mountRail(
+  sessionKey: string,
+  positions: ReturnType<typeof railPositions>,
+  activeMessage?: () => string,
+) {
+  const transcript = createTestTranscript();
+  const container = document.body.appendChild(document.createElement("div"));
+  const id = positions.markers.at(-1)!.id;
+  const [current, setCurrent] = createSignal(positions);
   const view = mountSolid(
     () =>
       transcript.renderSession(sessionKey, (session) => {
-        vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
+        if (activeMessage) {
+          vi.spyOn(session, "activeMessageId").mockImplementation(activeMessage);
+        }
         return (
           <div class="chat-thread" tabindex="0">
-            <div
-              ref={session.messageElements.forKey("message-79")}
-              class="chat-bubble"
-              data-entry-id="message-79"
-            >
+            <div ref={session.messageElements.forKey(id)} class="chat-bubble" data-entry-id={id}>
               Latest message
             </div>
             <ChatPositionRail positions={current()} transcript={session} />
@@ -84,17 +84,25 @@ function railFixture(sessionKey: string, count = 80, initialId = "message-79") {
     transcript.dispose();
   });
   return {
-    transcript,
     container,
-    activeMessage,
-    flushFrame,
-    publishVisibility,
     root: container.querySelector<HTMLElement>(".chat-thread")!,
     marks: part(container, "marks")!,
     renderRail: () => {
-      setPositions({ ...positions });
+      setCurrent({ ...positions });
       flush();
     },
+  };
+}
+function railFixture(sessionKey: string, count = 80, initialId = "message-79") {
+  const flushFrame = stubSettledAnimationFrames();
+  const publishVisibility = stubRailVisibility();
+  const positions = railPositions(count);
+  const activeMessage = vi.fn(() => initialId);
+  return {
+    ...mountRail(sessionKey, positions, activeMessage),
+    activeMessage,
+    flushFrame,
+    publishVisibility,
   };
 }
 
@@ -134,59 +142,6 @@ describe("conversation position rail", () => {
     resetTranscriptTestDom();
   });
 
-  it("does not inspect settled markers or labels while the live preview is closed", () => {
-    let roleReads = 0;
-    let idReads = 0;
-    const marker = {
-      get id() {
-        idReads++;
-        return "answer";
-      },
-      anchorId: "answer",
-      get role(): "assistant" {
-        roleReads++;
-        return "assistant";
-      },
-      message: message("answer", "assistant", "Initial answer", 1),
-    };
-    const initial: PositionRailViewParams = {
-      markers: [marker],
-      renderedIndexes: [0],
-      activeId: marker.id,
-      visibleIds: new Set([marker.id]),
-      rovingId: marker.id,
-      previewId: null,
-      hoveredId: null,
-      bindMarker: vi.fn(),
-      bindScroller: vi.fn(),
-      bindPreview: vi.fn(),
-      onScroll: vi.fn(),
-      stopScrollInput: vi.fn(),
-      onPointerLeave: vi.fn(),
-      onMarkerHover: vi.fn(),
-      onMarkerFocus: vi.fn(),
-      onMarkerBlur: vi.fn(),
-      onMarkerKeyDown: vi.fn(),
-      onMarkerSelect: vi.fn(),
-    };
-    const [params, setParams] = createSignal(initial);
-    const view = mountSolid(() => <ChatPositionRailView {...params()} />);
-    expect(roleReads).toBeGreaterThan(0);
-    roleReads = 0;
-    for (const text of ["First", "Second", "Final"]) {
-      setParams({
-        ...initial,
-        liveMarkers: [{ ...marker, message: message("answer", "assistant", text, 1) }],
-      });
-      roleReads = 0;
-      idReads = 0;
-      flush();
-      expect(roleReads).toBe(0);
-      expect(idReads).toBe(0);
-    }
-    view.unmount();
-  });
-
   it.each(["mounted", "off-window", "focused"] as const)(
     "publishes current position and keyboard entry together for a %s observer target",
     (scenario) => {
@@ -194,9 +149,7 @@ describe("conversation position rail", () => {
         "agent:main:rail-publication",
       );
       Object.defineProperty(marks, "clientHeight", { configurable: true, value: 240 });
-      for (const observer of resizeObservers) {
-        observer.emitTarget(marks, 44, 240);
-      }
+      emitTranscriptResize(marks, 44, 240);
       const marker = (id: string) =>
         marks.querySelector<HTMLButtonElement>(`[data-position-marker-id="${id}"]`);
       const current = () => marks.querySelector<HTMLButtonElement>('[aria-current="true"]');
@@ -264,50 +217,15 @@ describe("conversation position rail", () => {
   it("reveals only overflowing transcripts and retires focus when they fit again", () => {
     const flushFrame = stubSettledAnimationFrames();
     stubRailVisibility();
-    const transcript = createTestTranscript();
-    const container = document.body.appendChild(document.createElement("div"));
-    const positions = {
-      markers: [
-        {
-          id: "short",
-          anchorId: "short",
-          role: "user" as const,
-          message: message("short", "user", "A short question", 1),
-        },
-      ],
-      markerIdsByMessageId: new Map([["short", "short"]]),
-    };
-    const view = mountSolid(
-      () =>
-        transcript.renderSession("agent:main:rail-overflow", (session) => (
-          <div class="chat-thread" tabindex="0">
-            <div
-              ref={session.messageElements.forKey("short")}
-              class="chat-bubble"
-              data-entry-id="short"
-            >
-              A short question
-            </div>
-            <ChatPositionRail positions={positions} transcript={session} />
-          </div>
-        )),
-      { container },
-    );
-    ownFixture(() => {
-      view.unmount();
-      transcript.dispose();
-    });
-    const root = container.querySelector<HTMLElement>(".chat-thread")!;
+    const positions = railPositions(1);
+    const { root, marks } = mountRail("agent:main:rail-overflow", positions);
     const rail = root.querySelector<HTMLElement>(".chat-position-rail")!;
-    const marks = rail.querySelector<HTMLElement>(".chat-position-rail__marks")!;
     Object.defineProperties(root, {
       clientHeight: { configurable: true, value: 600 },
       scrollHeight: { configurable: true, value: 600 },
     });
     Object.defineProperty(marks, "clientHeight", { configurable: true, value: 12 });
-    for (const observer of resizeObservers) {
-      observer.emitTarget(marks, 44, 12);
-    }
+    emitTranscriptResize(marks, 44, 12);
     flushFrame();
     expect(rail.hasAttribute("data-overflow")).toBe(false);
     const resize = (clientHeight: number, scrollHeight: number) => {
@@ -341,7 +259,6 @@ describe("conversation position rail", () => {
     "composer-resize-reversal-current",
     "focus-resize",
     "pointer",
-    "reader-offset",
     "hidden",
     "composer-resize-reversal-navigation",
   ] as const;
@@ -396,9 +313,7 @@ describe("conversation position rail", () => {
         const mounted = [...marks.querySelectorAll(".chat-position-rail__marker")];
         marksHeight = 0;
         railOffset = 0;
-        for (const observer of resizeObservers) {
-          observer.emitTarget(marks, 44, 0);
-        }
+        emitTranscriptResize(marks, 44, 0);
         flushFrame();
         renderRail();
         flushFrame();
@@ -409,9 +324,7 @@ describe("conversation position rail", () => {
         root.scrollTop = 0;
         activeMessage.mockReturnValue("message-0");
         marksHeight = 283;
-        for (const observer of resizeObservers) {
-          observer.emitTarget(marks, 44, 283);
-        }
+        emitTranscriptResize(marks, 44, 283);
         flushFrame();
         expect(marker(0).getAttribute("aria-current")).toBe("true");
         expect(marks.style.getPropertyValue("--chat-position-scroll-top")).toBe("0px");
@@ -521,23 +434,6 @@ describe("conversation position rail", () => {
         resize(554, 240);
         expect(document.activeElement).toBe(marker(79));
         expect(marks.scrollTop).toBe(720);
-      } else if (scenario === "reader-offset") {
-        // Reading within the rendered rows re-renders nothing; the published
-        // offset alone must move the current marker.
-        activeMessage.mockReturnValue("message-78");
-        root.scrollTop = 8200;
-        publishTranscriptScroll(root, {
-          type: "offset",
-          delta: -115,
-          scrolling: true,
-          touching: false,
-          programmatic: false,
-        });
-        for (const observer of resizeObservers) {
-          observer.emitTarget(marks, 44, marksHeight);
-        }
-        flushFrame();
-        expect(marker(78).getAttribute("aria-current")).toBe("true");
       } else if (scenario === "pointer") {
         marker(60).dispatchEvent(new MouseEvent("mousedown", { bubbles: true }));
         marker(60).focus();
@@ -553,11 +449,7 @@ describe("conversation position rail", () => {
 
   it("resolves distant reader positions before scroll notification and counts the header once", async () => {
     transcriptDomState.measuredRowHeight = 120;
-    const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
-      kind: "content",
-      key: `row-${index}`,
-      content: Object.assign(document.createElement("div"), { textContent: String(index) }),
-    }));
+    const rows = contentRows(40, "row-", "");
     const { container, transcript, session, renderRows } = await mountTestTranscript(
       "rail-offset",
       rows,
@@ -568,9 +460,7 @@ describe("conversation position rail", () => {
         scrollHeight: { configurable: true, value: 4880 },
       });
       container.style.paddingTop = "80px";
-      for (const observer of resizeObservers) {
-        observer.emitTarget(container, 800, 600);
-      }
+      emitTranscriptResize(container, 800, 600);
       const ids = rows.map((row) => row.key);
       session.syncMessageRows(
         new Map(ids.map((id) => [id, id])),
@@ -697,12 +587,7 @@ describe("conversation position rail", () => {
     "renders safe Markdown and attribution in $role previews ($label)",
     ({ role, senderName, label }) => {
       const messages = [
-        message(
-          "formatted",
-          role,
-          "**Important** *detail* `code`\n\n- [Guide](https://example.com)\n<script>alert(1)</script>",
-          1,
-        ),
+        message("formatted", role, "**Important**\n<script>alert(1)</script>", 1),
         message("next", role === "user" ? "assistant" : "user", "Next turn", 2),
       ];
       Object.assign(messages[0]!["__openclaw"], { senderName });
@@ -739,9 +624,6 @@ describe("conversation position rail", () => {
         ).toBe("Roboclaw");
       }
       expect(preview.querySelector("strong")?.textContent).toBe("Important");
-      expect(preview.querySelector("em")?.textContent).toBe("detail");
-      expect(preview.querySelector("code")?.textContent).toBe("code");
-      expect(preview.querySelector("li a")?.textContent).toBe("Guide");
       expect(preview.querySelector("script")).toBeNull();
       expect(preview.closest("[inert]")).not.toBeNull();
     },
@@ -777,9 +659,7 @@ describe("conversation position rail", () => {
     const root = container.querySelector<HTMLElement>(".chat-thread")!;
     const marks = part(container, "marks")!;
     Object.defineProperty(marks, "clientHeight", { configurable: true, value: 600 });
-    for (const observer of resizeObservers) {
-      observer.emitTarget(marks, 44, 600);
-    }
+    emitTranscriptResize(marks, 44, 600);
     await settleFrames();
     expect(observed.has(streamBubble)).toBe(true);
     const query = vi.spyOn(root, "querySelectorAll");

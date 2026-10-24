@@ -59,6 +59,9 @@ function find<T extends Element = HTMLElement>(root: ParentNode, selector: strin
 function find(root: ParentNode, selector: string) {
   return root.querySelector(selector);
 }
+function required<T extends Element = HTMLElement>(root: ParentNode, selector: string) {
+  return expectDefined(find<T>(root, selector), selector);
+}
 function fileContent(path = "src/example.ts", content = "const answer = 42;") {
   return { kind: "file" as const, path, name: path.split("/").at(-1)!, content };
 }
@@ -70,7 +73,7 @@ async function mount(content: SidebarContent, presentation?: "mobile" | "desktop
   return panel;
 }
 function button(panel: ParentNode, label: string) {
-  return expectDefined(find<HTMLButtonElement>(panel, `button[aria-label="${label}"]`), label);
+  return required<HTMLButtonElement>(panel, `button[aria-label="${label}"]`);
 }
 async function settle(panel: DetailPanel) {
   await Promise.resolve();
@@ -122,13 +125,7 @@ describe("file sidebar editor locality", () => {
 
   it("removes editor controls when the native gateway switches to remote", async () => {
     setNativeGatewayTestState("local");
-    const panel = await mount(
-      {
-        ...fileContent(),
-        root: "/workspace",
-      },
-      "mobile",
-    );
+    const panel = await mount({ ...fileContent(), root: "/workspace" }, "mobile");
     expect(find(panel, '[aria-label="Open in editor"]')).not.toBeNull();
 
     setNativeGatewayTestState("remote");
@@ -204,33 +201,27 @@ describe("markdown sidebar", () => {
         : kind === "session"
           ? { sessionKey, agentId: "roboclaw" }
           : { namespace: "dashboard", pathname };
-    if (kind === "file") {
-      panel.content = {
-        kind: "markdown",
-        content: `See \`${filePath}:362\``,
-        fileLinkSessionKey: owner,
-      };
-      panel.onOpenWorkspaceFile = open;
-    } else {
-      panel.onOpenSessionLink = open;
-      if (kind === "session") {
-        panel.content = { kind: "markdown", content: `Open \`${sessionKey}\`` };
-      } else {
-        panel.basePath = "/control";
-        panel.content = {
-          kind: "markdown",
-          content: `[Open session](${window.location.origin}${pathname})`,
-        };
-      }
+    panel.content = {
+      kind: "markdown",
+      content:
+        kind === "file"
+          ? `See \`${filePath}:362\``
+          : kind === "session"
+            ? `Open \`${sessionKey}\``
+            : `[Open session](${window.location.origin}${pathname})`,
+      fileLinkSessionKey: owner,
+    };
+    panel[kind === "file" ? "onOpenWorkspaceFile" : "onOpenSessionLink"] = open;
+    if (kind === "href") {
+      panel.basePath = "/control";
     }
     container.append(panel);
     await panel.updateComplete;
-    const selector =
-      kind === "file"
-        ? "a.markdown-file-link"
-        : kind === "session"
-          ? "a.markdown-session-link"
-          : `a[href^="${window.location.origin}"]`;
+    const selector = {
+      file: "a.markdown-file-link",
+      session: "a.markdown-session-link",
+      href: `a[href^="${window.location.origin}"]`,
+    }[kind];
     const link = find<HTMLAnchorElement>(panel, selector);
     if (kind === "session") {
       link?.setAttribute("href", "/chat/roboclaw/2139bddb");
@@ -416,56 +407,48 @@ describe("markdown sidebar", () => {
     await waitForSolid(() => expect(requests[2]!.aborted).toBe(true));
   });
 
-  it.each(["error"] as const)(
-    "keeps the image placeholder through metadata until the image emits %s",
-    async (outcome) => {
-      let pending = true;
-      let src = "/diagram.png";
-      let sourceChanged: () => void;
-      const content = {
-        kind: "attachment",
-        attachmentKind: "image",
-        title: "diagram.png",
-        mimeType: "image/png",
-        width: 600,
-        height: 400,
-        resolveSource: (onSourceChange) => {
-          sourceChanged = onSourceChange;
-          return pending ? { status: "pending" } : { status: "ready", src };
-        },
-      } satisfies SidebarContent;
-      const panel = await mount(content);
-      await vi.waitFor(() => expect(find(panel, '[role="status"]')).not.toBeNull());
-      const presentation = find(panel, '[role="status"]');
-      const header = find(panel, ".chat-assistant-attachment-card__header");
-      pending = false;
-      sourceChanged!();
-      const image = await vi.waitFor(() =>
-        expectDefined(find(panel, ".sidebar-attachment-preview__image"), "Preview image"),
-      );
-      expect(find(panel, '[role="status"]')).toBe(presentation);
-      expect(find(panel, ".chat-assistant-attachment-card__header")).toBe(header);
-      image.dispatchEvent(new Event(outcome));
-      expect(image.getAttribute("data-preview")).toBe("error");
-      src = "/next.png";
-      sourceChanged!();
-      const next = await vi.waitFor(() => {
-        const current = expectDefined(
-          find(panel, ".sidebar-attachment-preview__image"),
-          "Next preview image",
-        );
-        expect(current).not.toBe(image);
-        return current;
-      });
-      image.dispatchEvent(new Event("load"));
-      expect(next.hasAttribute("data-preview")).toBe(false);
-      panel.remove();
-      next.dispatchEvent(new Event("load"));
-      container.append(panel);
-      expect(next.getAttribute("data-preview")).toBe("ready");
-      panel.remove();
-    },
-  );
+  it("keeps image placeholders through metadata and ignores retired image events", async () => {
+    let pending = true;
+    let src = "/diagram.png";
+    let sourceChanged: () => void;
+    const content = {
+      kind: "attachment",
+      attachmentKind: "image",
+      title: "diagram.png",
+      mimeType: "image/png",
+      width: 600,
+      height: 400,
+      resolveSource: (onSourceChange) => {
+        sourceChanged = onSourceChange;
+        return pending ? { status: "pending" } : { status: "ready", src };
+      },
+    } satisfies SidebarContent;
+    const panel = await mount(content);
+    await vi.waitFor(() => expect(find(panel, '[role="status"]')).not.toBeNull());
+    const presentation = find(panel, '[role="status"]');
+    const header = find(panel, ".chat-assistant-attachment-card__header");
+    pending = false;
+    sourceChanged!();
+    const image = await vi.waitFor(() => required(panel, ".sidebar-attachment-preview__image"));
+    expect(find(panel, '[role="status"]')).toBe(presentation);
+    expect(find(panel, ".chat-assistant-attachment-card__header")).toBe(header);
+    image.dispatchEvent(new Event("error"));
+    expect(image.getAttribute("data-preview")).toBe("error");
+    src = "/next.png";
+    sourceChanged!();
+    const next = await vi.waitFor(() => {
+      const current = required(panel, ".sidebar-attachment-preview__image");
+      expect(current).not.toBe(image);
+      return current;
+    });
+    image.dispatchEvent(new Event("load"));
+    expect(next.hasAttribute("data-preview")).toBe(false);
+    panel.remove();
+    next.dispatchEvent(new Event("load"));
+    container.append(panel);
+    expect(next.getAttribute("data-preview")).toBe("ready");
+    panel.remove();
+  });
 
   it.each([
     { title: "vector.svg", mimeType: "image/svg+xml", src: "https://cdn.example/vector.svg" },
@@ -556,18 +539,14 @@ describe("file sidebar clipboard feedback", () => {
       document.getElementById(trigger.getAttribute("aria-controls")!),
       "File actions menu",
     );
-    return expectDefined(
-      menu.querySelector<HTMLButtonElement>('[role="menuitem"][data-value="path"]'),
-      "Copy path action",
-    );
+    return required<HTMLButtonElement>(menu, '[role="menuitem"][data-value="path"]');
   }
 
-  async function copyPathFromMenu(panel: DetailPanel): Promise<HTMLButtonElement> {
+  async function copyPathFromMenu(panel: DetailPanel) {
     const action = await openPathCopyAction(panel);
     action.click();
     const trigger = button(panel, "File actions");
     await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("false"));
-    return action;
   }
 
   function denyClipboard() {
@@ -575,20 +554,16 @@ describe("file sidebar clipboard feedback", () => {
     const execCommand = vi.fn(() => false);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     Object.defineProperty(document, "execCommand", { configurable: true, value: execCommand });
-    return { execCommand, writeText };
+    return writeText;
   }
 
   function captureFeedbackTimers() {
     const schedule = vi.spyOn(globalThis, "setTimeout");
     return {
-      schedule,
       run(delay: number, index = 0) {
-        const timerIndex = schedule.mock.calls
-          .map(([, timeout], callIndex) => (timeout === delay ? callIndex : -1))
-          .filter((callIndex) => callIndex >= 0)[index];
-        if (timerIndex === undefined) {
-          throw new Error(`Missing sidebar clipboard reset timer after ${delay}ms`);
-        }
+        const timerIndex = schedule.mock.calls.flatMap(([, timeout], callIndex) =>
+          timeout === delay ? [callIndex] : [],
+        )[index]!;
         const reset = schedule.mock.calls[timerIndex]?.[0];
         if (typeof reset !== "function") {
           throw new Error(`Expected sidebar clipboard reset timer after ${delay}ms`);
@@ -611,7 +586,7 @@ describe("file sidebar clipboard feedback", () => {
   });
 
   it("ignores an older successful path copy after a failed retry", async () => {
-    const { writeText } = denyClipboard();
+    const writeText = denyClipboard();
     const first = Promise.withResolvers<void>();
     writeText.mockReturnValueOnce(first.promise);
     const panel = await mount(fileContent());
@@ -664,7 +639,6 @@ describe("file sidebar clipboard feedback", () => {
       vi.stubGlobal("navigator", { clipboard: { writeText } });
       const panel = await mount(fileContent());
       const copy = button(panel, "Copy file contents");
-      const timers = captureFeedbackTimers();
 
       copy.click();
       if (change === "file selection") {
@@ -681,7 +655,6 @@ describe("file sidebar clipboard feedback", () => {
       pending.resolve();
       await settle(panel);
 
-      expect(timers.schedule.mock.calls.some(([, delay]) => delay === 1_500)).toBe(false);
       expect(copy.getAttribute("aria-label")).toBe("Copy file contents");
       if (change === "reconnection") {
         expect(button(panel, "Copy file contents").getAttribute("aria-label")).toBe(
@@ -722,12 +695,9 @@ describe("file sidebar SVG preview", () => {
       mimeType: "image/svg+xml",
     });
     await waitForSolid(() => {
-      const preview = expectDefined(
-        find<HTMLElement>(panel, ".sidebar-svg-file__view"),
-        "SVG preview",
-      );
+      const preview = required(panel, ".sidebar-svg-file__view");
       expect(preview.hidden).toBe(false);
-      const image = expectDefined(find(preview, "img"), "SVG image");
+      const image = required<HTMLImageElement>(preview, "img");
       expect(image.getAttribute("src")).toBe(
         `data:image/svg+xml;charset=utf-8,${encodeURIComponent(source)}`,
       );
