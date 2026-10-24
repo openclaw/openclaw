@@ -21,6 +21,10 @@ let targetOrigin: string;
 function handleSourceRequest(request: IncomingMessage, response: ServerResponse): void {
   sourceRequests.push(request.headers);
   switch (request.url) {
+    case "/private":
+      response.writeHead(200, { "content-type": "text/plain" });
+      response.end("private media");
+      return;
     case "/redirect":
       response.writeHead(302, { location: `${targetOrigin}/payload` });
       response.end();
@@ -72,6 +76,26 @@ describe("media guarded fetch product boundaries", () => {
 
   afterAll(async () => {
     await Promise.all([sourceServer.stop(), targetServer.stop()]);
+  });
+
+  it("rejects private targets before the network or media store is reached", async () => {
+    const stateDir = tempDirs.make("openclaw-media-private-fetch-");
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const error = await saveRemoteMedia({
+        url: `${sourceOrigin}/private`,
+        maxBytes: 64,
+        subdir: "private-target",
+      }).catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(MediaFetchError);
+      expect(error).toMatchObject({
+        code: "fetch_failed",
+        cause: { name: "SsrFBlockedError" },
+      });
+      expect(sourceRequests).toHaveLength(0);
+      await expectNoPublishedMediaFiles(stateDir);
+    });
   });
 
   it("revalidates redirect targets and strips sensitive cross-origin headers", async () => {

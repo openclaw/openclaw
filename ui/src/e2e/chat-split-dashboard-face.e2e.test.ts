@@ -42,9 +42,9 @@ suite.define(() => {
           boardFace,
           updatedAt,
         });
-        const rows: [GatewaySessionRow, GatewaySessionRow] = [
-          makeRow("Alpha", sourceFace, 20),
-          makeRow("Beta", targetFace, 10),
+        const rows = [makeRow("Alpha", sourceFace, 20), makeRow("Beta", targetFace, 10)] satisfies [
+          GatewaySessionRow,
+          GatewaySessionRow,
         ];
         await seedChatSettings(page, suite.server.baseUrl, {
           chatSplitLayout: splitColumns(rows, revisitChat ? 1 : 0),

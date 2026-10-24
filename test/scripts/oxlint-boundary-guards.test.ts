@@ -81,21 +81,24 @@ beforeAll(() => {
   diagnostics = report.diagnostics;
 });
 
-it.each(cases)("reports expected violations for %s in %s", (rule, file, violations, lines) => {
-  // A fixture can trigger sibling rules; match both its file and its owning rule.
-  const matching = diagnostics.filter(
-    (diagnostic) =>
-      diagnostic.filename.replaceAll("\\", "/") === posix.join(FIXTURES, file) &&
-      diagnostic.code === `openclaw-boundaries(${rule})`,
-  );
-  expect(matching.map((diagnostic) => diagnostic.severity)).toEqual(
-    Array(violations).fill("error"),
-  );
-  if (lines) {
-    expect(
-      matching
-        .map((diagnostic) => diagnostic.labels[0]?.span.line)
-        .toSorted((a, b) => (a ?? 0) - (b ?? 0)),
-    ).toEqual(lines);
-  }
-});
+it.each(cases)(
+  "reports expected violations for %s in %s",
+  (rule, file, violations, lines = undefined) => {
+    // A fixture can trigger sibling rules; match both its file and its owning rule.
+    const matching = diagnostics.filter(
+      (diagnostic) =>
+        diagnostic.filename.replaceAll("\\", "/") === posix.join(FIXTURES, file) &&
+        diagnostic.code === `openclaw-boundaries(${rule})`,
+    );
+    expect(matching.map((diagnostic) => diagnostic.severity)).toEqual(
+      Array(violations).fill("error"),
+    );
+    if (lines) {
+      expect(
+        matching
+          .map((diagnostic) => diagnostic.labels[0]?.span.line)
+          .toSorted((a, b) => (a ?? 0) - (b ?? 0)),
+      ).toEqual(lines);
+    }
+  },
+);

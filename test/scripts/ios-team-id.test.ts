@@ -32,7 +32,7 @@ it.each([
       "plutil",
       `if [[ "$2" == IDEProvisioningTeamByIdentifier ]]; then\nprintf '%s\\n' '${metadata}'\nelse\necho '{}'\nfi`,
     ],
-  ]) {
+  ] as const) {
     writeFileSync(path.join(bin, name), `#!/usr/bin/env bash\n${body}`, { mode: 0o755 });
   }
   const args = process.platform === "win32" ? [] : ["--noprofile", "--norc"];
