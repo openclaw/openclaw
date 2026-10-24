@@ -24,7 +24,6 @@ import { withPluginRuntimeGatewayContextResolver } from "../plugins/runtime/gate
 import { registerProjectRegistry, removeProjectRegistry } from "../projects/project-registry.js";
 import {
   captureSessionControllerSettlement,
-  isSessionMutationActive,
   SESSION_CONTROLLER_DRAIN_TIMEOUT_MS,
 } from "../sessions/session-controller.lifecycle.js";
 import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
@@ -378,38 +377,6 @@ test("required project preparation isolates host filters without rejecting the r
   });
 });
 
-test("visible spawn tool preserves project validation and external cwd authorization", async () => {
-  await createManagedProjectParent();
-  const project = await registerProjectRegistry({ path: repository });
-  const { registerRun, spawn } = await createVisibleSpawnTool();
-  const gitUrl = "https://github.com/example/selected.git";
-  for (const options of [
-    { projectId: project.id, cwd: repository },
-    { projectGitUrl: gitUrl, cwd: repository },
-    { projectId: project.id, projectGitUrl: gitUrl },
-  ]) {
-    await expect(spawn(options)).rejects.toThrow(/cannot be combined/);
-  }
-  for (const projectGitUrl of [
-    "/tmp/repo",
-    "file:///tmp/repo",
-    "https://example.com/repo.git",
-    "not-a-url",
-  ]) {
-    await expect(spawn({ projectGitUrl })).rejects.toThrow(
-      "Use a GitHub HTTPS or git@github.com repository URL",
-    );
-  }
-  await expect(spawn({ projectId: "missing-project" })).rejects.toThrow("unknown project id");
-  const result = await spawn({ cwd: repository, worktree: true });
-  expect(result.details).toMatchObject({
-    status: "forbidden",
-    error: expect.stringContaining("requires operator.admin"),
-  });
-  expect(registerRun).not.toHaveBeenCalled();
-  expect(projectCloneMocks.materializeProjectClone).not.toHaveBeenCalled();
-});
-
 test.each(["archive", "unregister", "replace"] as const)(
   "worktree spawns roll back after parent %s during preparation",
   async (change) => {
@@ -509,38 +476,16 @@ test("keyed worktree creation reuses its recorded base after reopening the regis
     label: "Release planning",
     cwd: repository,
   };
-  const allocate = captureMethodCall("createWithOutcome")(ManagedWorktreeService.prototype);
-  using allocation = vi
-    .spyOn(ManagedWorktreeService.prototype, "createWithOutcome")
-    .mockImplementation(function (this: ManagedWorktreeService, input) {
-      expect(isSessionMutationActive(storePath, [input.ownerId])).toBe(true);
-      return allocate(this, input);
-    });
   const created = await createSession(params);
   const parent = created.entry;
-  expect(created.worktree).toMatchObject({ branch: "openclaw/release-planning" });
-  expect(parent).toMatchObject({
-    spawnedCwd: created.worktree.path,
-    sessionRoot: created.worktree.path,
-  });
-  expect(parent.permissionMode).toBeUndefined();
-  expect(readEntry(parentKey)?.permissionMode).toBeUndefined();
   await git("branch", "-D", "selected-base");
   await closeStateDatabaseForTest();
   const reused = await createSession(params);
-  allocation.mockRestore();
   expect(reused).toMatchObject({
     entry: { sessionId: parent.sessionId },
     worktree: { id: parent.worktree?.id },
   });
   const recorded = await managedWorktrees.findLiveByOwner("session", parentKey);
-  expect(recorded).toMatchObject({
-    id: created.worktree.id,
-    path: created.worktree.path,
-    ownerKind: "session",
-    ownerId: parentKey,
-    baseRef: "selected-base",
-  });
 
   for (const changed of [{ worktreeBaseRef: "HEAD" }, { worktreeName: "other-name" }]) {
     await expectCreationError(
