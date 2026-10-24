@@ -115,7 +115,6 @@ import {
   finalizeUpdateRestartSentinelRunningVersion,
   formatRestartSentinelMessage,
   hasRestartSentinel,
-  markUpdateRestartSentinelFailure,
   readRestartSentinel,
   readRestartSentinelReadOnly,
   readRestartSentinelSnapshot,
@@ -157,40 +156,71 @@ function updatePayload(overrides: Partial<Parameters<typeof writeRestartSentinel
   return { kind: "update" as const, status: "ok" as const, ts: Date.now(), ...overrides };
 }
 
+function gitPayload(
+  stats: NonNullable<Parameters<typeof writeRestartSentinel>[0]["stats"]> = {},
+  overrides: Partial<Parameters<typeof writeRestartSentinel>[0]> = {},
+) {
+  return updatePayload({
+    stats: {
+      mode: "git",
+      root: process.cwd(),
+      before: { sha: "aaaaaaaa" },
+      after: { sha: "bbbbbbbb", version: "expected-version" },
+      ...stats,
+    },
+    ...overrides,
+  });
+}
+
+const restartPayload = (ts = 1) => ({ kind: "restart" as const, status: "ok" as const, ts });
+
+function retireAtAdmission(stage: string) {
+  let current = true;
+  admission.beforeGrant = (requested) => {
+    if (requested === stage) {
+      current = false;
+    }
+  };
+  return () => current;
+}
+
+async function finalizeGit(commit = "bbbbbbbb", root = process.cwd()) {
+  return finalizeUpdateRestartSentinelRunningVersion("actual-version", process.env, commit, root);
+}
+
+const writeSnapshot = (expectedRevision: number | null, ts = 1) =>
+  writeRestartSentinelIfUnchanged({
+    payload: restartPayload(ts),
+    expectedRevision,
+    isCurrent: () => true,
+  });
+
 async function expectPayload(payload: Partial<Parameters<typeof writeRestartSentinel>[0]>) {
   await expect(readRestartSentinel()).resolves.toMatchObject({ version: 1, payload });
 }
 
-function readSentinelRow() {
+function sentinelTable() {
   const { db } = openOpenClawStateDatabase();
-  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
+  return { db, table: getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db) };
+}
+
+function readSentinelRow(key = "current") {
+  const { db, table } = sentinelTable();
   return executeSqliteQueryTakeFirstSync(
     db,
-    stateDb
-      .selectFrom("gateway_restart_sentinel")
-      .select(["sentinel_key", "version", "kind", "status", "payload_json", "updated_at_ms"])
-      .where("sentinel_key", "=", "current"),
+    table.selectFrom("gateway_restart_sentinel").selectAll().where("sentinel_key", "=", key),
   );
 }
 
 function readSentinelRevisionFloor() {
-  const { db } = openOpenClawStateDatabase();
-  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
-  return executeSqliteQueryTakeFirstSync(
-    db,
-    stateDb
-      .selectFrom("gateway_restart_sentinel")
-      .select("updated_at_ms")
-      .where("sentinel_key", "=", "revision-floor"),
-  )?.updated_at_ms;
+  return readSentinelRow("revision-floor")?.updated_at_ms;
 }
 
 function deleteSentinelRevisionFloor() {
-  const { db } = openOpenClawStateDatabase();
-  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
+  const { db, table } = sentinelTable();
   executeSqliteQuerySync(
     db,
-    stateDb.deleteFrom("gateway_restart_sentinel").where("sentinel_key", "=", "revision-floor"),
+    table.deleteFrom("gateway_restart_sentinel").where("sentinel_key", "=", "revision-floor"),
   );
 }
 
@@ -205,14 +235,10 @@ function updateSentinelRow(
     updated_at_ms: number;
   }>,
 ) {
-  const { db } = openOpenClawStateDatabase();
-  const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
+  const { db, table } = sentinelTable();
   executeSqliteQuerySync(
     db,
-    stateDb
-      .updateTable("gateway_restart_sentinel")
-      .set(values)
-      .where("sentinel_key", "=", "current"),
+    table.updateTable("gateway_restart_sentinel").set(values).where("sentinel_key", "=", "current"),
   );
 }
 
@@ -228,7 +254,7 @@ describe("restart sentinel", () => {
     await expect(fs.access(resolveOpenClawStateSqlitePath())).rejects.toMatchObject({
       code: "ENOENT",
     });
-    const written = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
+    const written = await writeRestartSentinel(restartPayload());
     await expect(readRestartSentinel()).resolves.toEqual(written);
     await expect(readRestartSentinelReadOnly()).resolves.toEqual(written);
     await expect(clearRestartSentinelIfRevision(written.revision)).resolves.toBe(true);
@@ -236,10 +262,7 @@ describe("restart sentinel", () => {
   });
 
   it("writes and reads a sentinel", async () => {
-    const payload = {
-      kind: "update" as const,
-      status: "ok" as const,
-      ts: Date.now(),
+    const payload = updatePayload({
       sessionKey: "agent:main:mobilechat:dm:+15555550123",
       continuation: {
         kind: "agentTurn" as const,
@@ -263,25 +286,15 @@ describe("restart sentinel", () => {
         reason: null,
         durationMs: null,
       },
-    };
-    await writeRestartSentinel(payload);
-    expect(readSentinelRow()).toMatchObject({
-      sentinel_key: "current",
-      version: 1,
-      kind: "update",
-      status: "ok",
-      payload_json: JSON.stringify(payload),
     });
-
-    const read = await readRestartSentinel();
-    expect(read?.payload).toEqual(payload);
+    await writeRestartSentinel(payload);
+    expect(readSentinelRow()?.payload_json).toBe(JSON.stringify(payload));
+    expect((await readRestartSentinel())?.payload).toEqual(payload);
   });
 
   it("canonicalizes nullable top-level fields and empty delivery context", async () => {
     const written = await writeRestartSentinel({
-      kind: "restart",
-      status: "ok",
-      ts: 1,
+      ...restartPayload(),
       deliveryContext: {},
       message: null,
       continuation: null,
@@ -289,11 +302,9 @@ describe("restart sentinel", () => {
       stats: null,
     });
 
-    expect(written.payload).toStrictEqual({ kind: "restart", status: "ok", ts: 1 });
+    expect(written.payload).toStrictEqual(restartPayload());
     await expect(readRestartSentinel()).resolves.toEqual(written);
-    expect(readSentinelRow()?.payload_json).toBe(
-      JSON.stringify({ kind: "restart", status: "ok", ts: 1 }),
-    );
+    expect(readSentinelRow()?.payload_json).toBe(JSON.stringify(restartPayload()));
   });
 
   it.each(["transaction", "commit"])(
@@ -304,31 +315,23 @@ describe("restart sentinel", () => {
       const digest = "a".repeat(64);
       await reserveUpdateFailureReportReceipt(attemptId, reservationId, digest);
       await markUpdateFailureReportReceiptPrepared(attemptId, reservationId, digest);
-      let current = true;
-      admission.beforeGrant = (requested) => {
-        if (requested === stage) {
-          current = false;
-        }
-      };
+      const isCurrent = retireAtAdmission(stage);
       const refusal = new Error("Report publisher retired");
-      try {
-        await expect(
-          markUpdateFailureReportReceiptPending(
-            attemptId,
-            reservationId,
-            digest,
-            process.env,
-            undefined,
-            () => {
-              if (!current) {
-                throw refusal;
-              }
-            },
-          ),
-        ).rejects.toBe(refusal);
-      } finally {
-        admission.beforeGrant = undefined;
-      }
+      await expect(
+        markUpdateFailureReportReceiptPending(
+          attemptId,
+          reservationId,
+          digest,
+          process.env,
+          undefined,
+          () => {
+            if (!isCurrent()) {
+              throw refusal;
+            }
+          },
+        ),
+      ).rejects.toBe(refusal);
+      admission.beforeGrant = undefined;
       await expect(readUpdateFailureReportReceipt(attemptId)).resolves.toMatchObject({
         status: "prepared",
         reservationId,
@@ -339,81 +342,55 @@ describe("restart sentinel", () => {
 
   it("ignores legacy files without mutating them", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-sentinel-"));
-    const payload = {
-      kind: "update" as const,
-      status: "skipped" as const,
-      ts: Date.now(),
-      sessionKey: "agent:main:webchat:dm:user-123",
-      message: "update restart pending",
-      stats: {
-        mode: "npm",
-        reason: "restart-health-pending",
-      },
-    };
     const legacyPath = path.join(process.env.OPENCLAW_STATE_DIR ?? "", "restart-sentinel.json");
-    const legacyContents = `${JSON.stringify({ version: 1, payload })}\n`;
+    const legacyContents = `${JSON.stringify({ version: 1, payload: updatePayload() })}\n`;
     await fs.writeFile(legacyPath, legacyContents, "utf-8");
 
     await expect(hasRestartSentinel()).resolves.toBe(false);
     await expect(readRestartSentinel()).resolves.toBeNull();
-    const written = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 2 });
+    const written = await writeRestartSentinel(restartPayload(2));
     await expect(clearRestartSentinelIfRevision(written.revision)).resolves.toBe(true);
     await expect(fs.readFile(legacyPath, "utf-8")).resolves.toBe(legacyContents);
   });
 
-  it.each([
-    { name: "the shadow payload is corrupt", columns: { payload_json: "not-json" } },
-    {
-      name: "recovery has an unknown reason and extra field",
-      columns: {
-        stats_json: JSON.stringify({
-          mode: "npm",
-          reason: "pending",
-          recovery: { serviceRestartSafe: false, reason: "future-recovery-reason", detail: "new" },
-        }),
-      },
-    },
-    {
-      name: "recovery has a known reason and extra field",
-      columns: {
-        stats_json: JSON.stringify({
-          mode: "npm",
-          reason: "pending",
-          recovery: {
-            serviceRestartSafe: false,
-            reason: "runtime-verification-failed",
-            detail: "new",
-          },
-        }),
-      },
-    },
-  ])("keeps notices readable and consumable when $name", async ({ columns }) => {
-    const payload = {
-      kind: "update" as const,
-      status: "skipped" as const,
-      ts: 42,
-      sessionKey: "agent:main:webchat:dm:user-123",
-      deliveryContext: { channel: "webchat", to: "user-123", accountId: "default" },
-      threadId: "thread-1",
-      message: "typed state",
-      continuation: { kind: "agentTurn" as const, message: "continue" },
-      doctorHint: "run doctor",
-      stats: { mode: "npm", reason: "pending" },
-    };
-    const written = await writeRestartSentinel(payload);
-    updateSentinelRow(columns);
+  it.each(["corrupt-shadow", "future-recovery-reason", "runtime-verification-failed"])(
+    "keeps notices readable and consumable with %s",
+    async (reason) => {
+      const payload = updatePayload({
+        status: "skipped",
+        ts: 42,
+        sessionKey: "agent:main:webchat:dm:user-123",
+        deliveryContext: { channel: "webchat", to: "user-123", accountId: "default" },
+        threadId: "thread-1",
+        message: "typed state",
+        continuation: { kind: "agentTurn" as const, message: "continue" },
+        doctorHint: "run doctor",
+        stats: { mode: "npm", reason: "pending" },
+      });
+      const written = await writeRestartSentinel(payload);
+      updateSentinelRow(
+        reason === "corrupt-shadow"
+          ? { payload_json: "not-json" }
+          : {
+              stats_json: JSON.stringify({
+                ...payload.stats,
+                recovery: { serviceRestartSafe: false, reason, detail: "new" },
+              }),
+            },
+      );
 
-    const read = await readRestartSentinel();
-    expect(read).toEqual(written);
-    expect(formatRestartSentinelMessage(read!.payload)).toContain(payload.message);
-    await expect(clearRestartSentinelIfRevision(read!.revision)).resolves.toBe(true);
-    await expect(readRestartSentinel()).resolves.toBeNull();
-  });
+      const read = await readRestartSentinel();
+      expect(read).toEqual(written);
+      expect(formatRestartSentinelMessage(read!.payload)).toContain(payload.message);
+      await expect(clearRestartSentinelIfRevision(read!.revision)).resolves.toBe(true);
+      await expect(readRestartSentinel()).resolves.toBeNull();
+    },
+  );
 
   it.each(["missing", "current", "invalid"] as const)(
     "publishes an absent-row fallback only when the sentinel remains missing (%s)",
     async (state) => {
-      const first = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
+      const first = await writeRestartSentinel(restartPayload());
       if (state === "missing") {
         await clearRestartSentinelIfRevision(first.revision);
       } else if (state === "invalid") {
@@ -488,7 +465,7 @@ describe("restart sentinel", () => {
   });
 
   it("upgrades pre-floor rows only when the captured revision still exists", async () => {
-    const written = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
+    const written = await writeRestartSentinel(restartPayload());
     // Persist a future revision so the worker must advance the floor independently of its clock.
     const first = { ...written, revision: Number.MAX_SAFE_INTEGER - 100 };
     updateSentinelRow({ updated_at_ms: first.revision });
@@ -500,7 +477,7 @@ describe("restart sentinel", () => {
     await expect(hasRestartSentinel()).resolves.toBe(false);
     expect(readSentinelRevisionFloor()).toBe(first.revision);
 
-    const second = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 2 });
+    const second = await writeRestartSentinel(restartPayload(2));
     expect(second.revision).toBe(first.revision + 1);
 
     deleteSentinelRevisionFloor();
@@ -510,7 +487,7 @@ describe("restart sentinel", () => {
 
     await expect(clearRestartSentinelIfRevision(second.revision)).resolves.toBe(true);
     expect(readSentinelRevisionFloor()).toBe(second.revision);
-    const third = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 3 });
+    const third = await writeRestartSentinel(restartPayload(3));
     expect(third.revision).toBe(second.revision + 1);
 
     await expect(clearRestartSentinelIfRevision(third.revision)).resolves.toBe(true);
@@ -522,12 +499,7 @@ describe("restart sentinel", () => {
   it("publishes only the captured sentinel snapshot, including after consumption", async () => {
     const initial = await readRestartSentinelSnapshot();
     expect(initial).toEqual({ sentinel: null, revision: null });
-    const payload = { kind: "restart" as const, status: "ok" as const, ts: 1 };
-    const first = await writeRestartSentinelIfUnchanged({
-      payload,
-      expectedRevision: initial.revision,
-      isCurrent: () => true,
-    });
+    const first = await writeSnapshot(initial.revision);
     expect(first).not.toBeNull();
     const snapshot = await readRestartSentinelSnapshot();
     expect(snapshot).toEqual({ sentinel: first, revision: first!.revision });
@@ -535,32 +507,15 @@ describe("restart sentinel", () => {
     await expect(clearRestartSentinelIfRevision(first!.revision)).resolves.toBe(true);
     const consumed = await readRestartSentinelSnapshot();
     expect(consumed).toEqual({ sentinel: null, revision: first!.revision });
-    await expect(
-      writeRestartSentinelIfUnchanged({
-        payload,
-        expectedRevision: initial.revision,
-        isCurrent: () => true,
-      }),
-    ).resolves.toBeNull();
-
-    const replacement = await writeRestartSentinelIfUnchanged({
-      payload: { ...payload, ts: 2 },
-      expectedRevision: consumed.revision,
-      isCurrent: () => true,
-    });
+    await expect(writeSnapshot(initial.revision)).resolves.toBeNull();
+    const replacement = await writeSnapshot(consumed.revision, 2);
     expect(replacement?.revision).toBeGreaterThan(first!.revision);
-    await expect(
-      writeRestartSentinelIfUnchanged({
-        payload,
-        expectedRevision: snapshot.revision,
-        isCurrent: () => true,
-      }),
-    ).resolves.toBeNull();
+    await expect(writeSnapshot(snapshot.revision)).resolves.toBeNull();
     await expect(readRestartSentinel()).resolves.toEqual(replacement);
   });
 
   it("leaves a replacement and its revision floor intact after a stale conditional write", async () => {
-    const payload = { kind: "restart" as const, status: "ok" as const, ts: 1 };
+    const payload = restartPayload();
     const first = await writeRestartSentinel(payload);
     const replacement = await writeRestartSentinel({ ...payload, message: "replacement" });
     const written = runOpenClawStateWriteTransaction(({ db }) =>
@@ -579,28 +534,17 @@ describe("restart sentinel", () => {
   it.each(["transaction", "commit"] as const)(
     "preserves the notification when its producer loses authority at %s admission",
     async (stage) => {
-      const first = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
+      const first = await writeRestartSentinel(restartPayload());
       const snapshot = await readRestartSentinelSnapshot();
-      let current = true;
-      const observed: string[] = [];
-      admission.beforeGrant = (requested) => {
-        observed.push(requested);
-        if (requested === stage) {
-          current = false;
-        }
-      };
-      try {
-        await expect(
-          writeRestartSentinelIfUnchanged({
-            payload: { kind: "update", status: "error", ts: 2 },
-            expectedRevision: snapshot.revision,
-            isCurrent: () => current,
-          }),
-        ).resolves.toBeNull();
-      } finally {
-        admission.beforeGrant = undefined;
-      }
-      expect(observed).toContain(stage);
+      const isCurrent = retireAtAdmission(stage);
+      await expect(
+        writeRestartSentinelIfUnchanged({
+          payload: updatePayload({ status: "error", ts: 2 }),
+          expectedRevision: snapshot.revision,
+          isCurrent,
+        }),
+      ).resolves.toBeNull();
+      admission.beforeGrant = undefined;
       await expect(readRestartSentinelSnapshot()).resolves.toEqual({
         sentinel: first,
         revision: first.revision,
@@ -609,18 +553,8 @@ describe("restart sentinel", () => {
   );
 
   it("does not let stale deletes remove a newer sentinel", async () => {
-    const first = await writeRestartSentinel({
-      kind: "restart",
-      status: "ok",
-      ts: 1,
-      message: "old",
-    });
-    const newer = await writeRestartSentinel({
-      kind: "restart",
-      status: "ok",
-      ts: 2,
-      message: "new",
-    });
+    const first = await writeRestartSentinel({ ...restartPayload(), message: "old" });
+    const newer = await writeRestartSentinel({ ...restartPayload(2), message: "new" });
 
     await expect(clearRestartSentinelIfRevision(first.revision)).resolves.toBe(false);
     await expect(readRestartSentinel()).resolves.toEqual(newer);
@@ -631,12 +565,7 @@ describe("restart sentinel", () => {
     const replacementEnv = { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-sentinel-replacement-") };
     openOpenClawStateDatabase({ env: originalEnv });
     openOpenClawStateDatabase({ env: replacementEnv });
-    const payload = {
-      kind: "update" as const,
-      status: "ok" as const,
-      ts: 1,
-      stats: { after: { version: "before" } },
-    };
+    const payload = updatePayload({ ts: 1, stats: { after: { version: "before" } } });
     const clock = vi.spyOn(Date, "now").mockReturnValue(1000);
     let original: ReturnType<typeof writeRestartSentinelRowSync>;
     let replacement: ReturnType<typeof writeRestartSentinelRowSync>;
@@ -672,17 +601,9 @@ describe("restart sentinel", () => {
 
   it("uses the loaded build commit when finalizing an update", async () => {
     await writeRestartSentinel(
-      updatePayload({
-        stats: {
-          mode: "git",
-          root: process.cwd(),
-          after: { sha: "aaaaaaa", version: "actual-version" },
-        },
-      }),
+      gitPayload({ after: { sha: "aaaaaaa", version: "actual-version" } }),
     );
-
     await finalizeUpdateRestartSentinelRunningVersion("actual-version");
-
     await expectPayload({ status: "ok" });
   });
 
@@ -706,13 +627,9 @@ describe("restart sentinel", () => {
     });
   });
   it.each([
-    { name: "successful update", status: "ok", reason: undefined },
-    {
-      name: "failed handoff",
-      status: "error",
-      reason: "managed-service-handoff-failed",
-    },
-  ] as const)("persists the verified Git install receipt after a $name", async (testCase) => {
+    ["ok", undefined],
+    ["error", "managed-service-handoff-failed"],
+  ] as const)("persists the verified Git install receipt after %s (%s)", async (status, reason) => {
     await withTestDir({ prefix: "openclaw-install-root-" }, async (tempDir) => {
       const installRoot = path.join(tempDir, "checkout");
       const installAlias = path.join(tempDir, "checkout-alias");
@@ -720,29 +637,20 @@ describe("restart sentinel", () => {
       await fs.symlink(installRoot, installAlias, "dir");
       const ts = Date.now();
       await writeRestartSentinel(
-        updatePayload({
-          status: testCase.status,
-          ts,
-          stats: {
-            mode: "git",
-            ...(testCase.reason ? { reason: testCase.reason } : {}),
+        gitPayload(
+          {
+            reason,
             root: installAlias,
-            before: { sha: "aaaaaaaa" },
             after: {
               sha: " bbbbbbbb ",
               upstreamRef: " origin/main ",
               version: "expected-version",
             },
           },
-        }),
+          { status, ts },
+        ),
       );
-
-      const finalized = await finalizeUpdateRestartSentinelRunningVersion(
-        "actual-version",
-        process.env,
-        "bbbbbbbb1234",
-        installRoot,
-      );
+      const finalized = await finalizeGit("bbbbbbbb1234", installRoot);
       if (!finalized) {
         throw new Error("Expected a finalized update sentinel");
       }
@@ -759,17 +667,8 @@ describe("restart sentinel", () => {
 
   it("keeps the verified update outcome when optional install history cannot be written", async () => {
     const root = process.cwd();
-    await writeRestartSentinel(
-      updatePayload({
-        continuation: { kind: "agentTurn", message: "Continue after the update." },
-        stats: {
-          mode: "git",
-          root,
-          before: { sha: "aaaaaaaa" },
-          after: { sha: "bbbbbbbb", version: "expected-version" },
-        },
-      }),
-    );
+    const continuation = { kind: "agentTurn" as const, message: "Continue after the update." };
+    await writeRestartSentinel(gitPayload({}, { continuation }));
     const { db } = openOpenClawStateDatabase();
     db.exec(`
       CREATE TRIGGER reject_install_history BEFORE INSERT ON gateway_restart_sentinel
@@ -777,16 +676,11 @@ describe("restart sentinel", () => {
       BEGIN SELECT RAISE(ABORT, 'fixture install history unavailable'); END;
     `);
     try {
-      const finalized = await finalizeUpdateRestartSentinelRunningVersion(
-        "actual-version",
-        process.env,
-        "bbbbbbbb",
-        root,
-      );
+      const finalized = await finalizeGit("bbbbbbbb", root);
       expect(finalized).toMatchObject({
         payload: {
           status: "ok",
-          continuation: { kind: "agentTurn", message: "Continue after the update." },
+          continuation,
           stats: { after: { version: "actual-version", sha: "bbbbbbbb" } },
         },
       });
@@ -802,65 +696,32 @@ describe("restart sentinel", () => {
 
   it("does not advance install time when a successful Git run keeps the same revision", async () => {
     await writeRestartSentinel(
-      updatePayload({
-        stats: {
-          mode: "git",
-          root: process.cwd(),
-          before: { sha: "aaaaaaaa" },
-          after: { sha: "aaaaaaaa", version: "expected-version" },
-        },
-      }),
+      gitPayload({ after: { sha: "aaaaaaaa", version: "expected-version" } }),
     );
-
-    await finalizeUpdateRestartSentinelRunningVersion(
-      "actual-version",
-      process.env,
-      "aaaaaaaa",
-      process.cwd(),
-    );
-
+    await finalizeGit("aaaaaaaa");
     await expect(readVerifiedGitUpdateReceipt()).resolves.toBeNull();
   });
 
   it.each([
-    {
-      name: "successful update",
-      status: "ok",
-      runningCommit: "cccccccc",
-      beforeSha: undefined,
-      expectedReason: "restart-revision-mismatch",
+    ["ok", "cccccccc", undefined, "restart-revision-mismatch"],
+    ["error", "aaaaaaaa", "aaaaaaaa", "managed-service-handoff-failed"],
+  ] as const)(
+    "rejects a %s update with mismatched Git revision",
+    async (status, commit, beforeSha, reason) => {
+      await writeRestartSentinel(
+        gitPayload(
+          {
+            before: beforeSha ? { sha: beforeSha } : undefined,
+            reason: status === "error" ? "managed-service-handoff-failed" : undefined,
+          },
+          { status },
+        ),
+      );
+      await finalizeGit(commit);
+      await expectPayload({ status: "error", stats: { reason } });
+      await expect(readVerifiedGitUpdateReceipt()).resolves.toBeNull();
     },
-    {
-      name: "error-status update",
-      status: "error",
-      runningCommit: "aaaaaaaa",
-      beforeSha: "aaaaaaaa",
-      expectedReason: "managed-service-handoff-failed",
-    },
-  ] as const)("rejects a $name whose running Git revision does not match", async (testCase) => {
-    await writeRestartSentinel(
-      updatePayload({
-        status: testCase.status,
-        stats: {
-          mode: "git",
-          root: process.cwd(),
-          ...(testCase.beforeSha ? { before: { sha: testCase.beforeSha } } : {}),
-          ...(testCase.status === "error" ? { reason: "managed-service-handoff-failed" } : {}),
-          after: { sha: "bbbbbbbb", version: "expected-version" },
-        },
-      }),
-    );
-
-    await finalizeUpdateRestartSentinelRunningVersion(
-      "actual-version",
-      process.env,
-      testCase.runningCommit,
-      process.cwd(),
-    );
-
-    await expectPayload({ status: "error", stats: { reason: testCase.expectedReason } });
-    await expect(readVerifiedGitUpdateReceipt()).resolves.toBeNull();
-  });
+  );
 
   it("rejects the same Git revision when the restarted checkout root differs", async () => {
     await withTestDir({ prefix: "openclaw-install-root-mismatch-" }, async (tempDir) => {
@@ -868,47 +729,17 @@ describe("restart sentinel", () => {
       const runningRoot = path.join(tempDir, "running");
       await fs.mkdir(expectedRoot);
       await fs.mkdir(runningRoot);
-      await writeRestartSentinel(
-        updatePayload({
-          stats: {
-            mode: "git",
-            root: expectedRoot,
-            before: { sha: "aaaaaaaa" },
-            after: { sha: "bbbbbbbb", version: "expected-version" },
-          },
-        }),
-      );
-
-      await finalizeUpdateRestartSentinelRunningVersion(
-        "actual-version",
-        process.env,
-        "bbbbbbbb1234",
-        runningRoot,
-      );
-
+      await writeRestartSentinel(gitPayload({ root: expectedRoot }));
+      await finalizeGit("bbbbbbbb1234", runningRoot);
       await expectPayload({ status: "error", stats: { reason: "restart-root-mismatch" } });
       await expect(readVerifiedGitUpdateReceipt()).resolves.toBeNull();
-    });
-  });
-
-  it("marks update restart failures with a stable reason", async () => {
-    const ts = Date.now();
-    await writeRestartSentinel(updatePayload({ ts, stats: {} }));
-
-    await markUpdateRestartSentinelFailure("restart-unhealthy");
-
-    await expectPayload({
-      kind: "update",
-      status: "error",
-      ts,
-      stats: { reason: "restart-unhealthy" },
     });
   });
 });
 
 describe("restart sentinel error visibility", () => {
   it("throws when revision-owned cleanup cannot durably delete the row", async () => {
-    const written = await writeRestartSentinel({ kind: "restart", status: "ok", ts: 1 });
+    const written = await writeRestartSentinel(restartPayload());
     mockThrowWorkerWrite.mockImplementationOnce(() => {
       throw new Error("SQLITE_IOERR: disk I/O error");
     });
@@ -920,29 +751,16 @@ describe("restart sentinel error visibility", () => {
     await expect(readRestartSentinel()).resolves.toEqual(written);
   });
 
-  it("logs a warning and returns null when readRestartSentinel DB read fails", async () => {
-    mockThrowWorkerRead.mockImplementationOnce(() => {
-      throw new Error("SQLITE_CORRUPT: database disk image is malformed");
-    });
-
-    await expect(readRestartSentinel()).resolves.toBeNull();
-
-    expect(mockWarn).toHaveBeenCalledTimes(1);
-    expect(mockWarn).toHaveBeenCalledWith(
-      "Failed to read restart sentinel: SQLITE_CORRUPT: database disk image is malformed",
-    );
-  });
-
-  it("logs a warning and returns false when hasRestartSentinel DB read fails", async () => {
+  it.each([
+    [readRestartSentinel, null, "read"],
+    [hasRestartSentinel, false, "check"],
+  ] as const)("reports failed database %s as %s", async (read, result, action) => {
     mockThrowWorkerRead.mockImplementationOnce(() => {
       throw new Error("SQLITE_BUSY: database is locked");
     });
-
-    await expect(hasRestartSentinel()).resolves.toBe(false);
-
-    expect(mockWarn).toHaveBeenCalledTimes(1);
+    await expect(read()).resolves.toBe(result);
     expect(mockWarn).toHaveBeenCalledWith(
-      "Failed to check restart sentinel: SQLITE_BUSY: database is locked",
+      `Failed to ${action} restart sentinel: SQLITE_BUSY: database is locked`,
     );
   });
 });

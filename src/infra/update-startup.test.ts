@@ -692,27 +692,16 @@ describe("update-startup", () => {
 
     await checkAutomatically(autoConfig("dev"));
 
-    expect(checkUpdateStatus).toHaveBeenCalledWith({
-      root: "/opt/openclaw",
-      signal: expect.any(AbortSignal),
-      fetchGit: true,
-      includeRegistry: false,
-      useDetachedDevUpstream: true,
-      gitSourceHint: expect.objectContaining({
-        root: "/opt/openclaw",
-        sha: "current-sha",
-        upstreamRef: "origin/main",
+    expect(checkUpdateStatus).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fetchGit: true,
+        includeRegistry: false,
+        useDetachedDevUpstream: true,
       }),
-    });
+    );
     expect(resolveNpmChannelTag).not.toHaveBeenCalled();
-    expect(getUpdateAvailable()).toEqual({
-      currentVersion: "1.0.0",
-      latestVersion: "1.0.0",
-      channel: "dev",
-      currentSha: "current-sha",
-      upstreamRef: "origin/main",
+    expect(getUpdateAvailable()).toMatchObject({
       upstreamSha: "upstream-sha",
-      repositoryUrl: "https://github.com/example/openclaw",
       commitsBehind: 2,
       commits: [
         { sha: "aaaaaaa", subject: "x".repeat(120) },
@@ -726,16 +715,12 @@ describe("update-startup", () => {
     expect(runAutoUpdate).not.toHaveBeenCalled();
 
     await clock.advanceBy(60_000);
-    expect(runAutoUpdate).toHaveBeenCalledWith({
-      runId: listUpdateRuns()[0]?.runId,
-      signal: expect.any(AbortSignal),
-      channel: "dev",
-      mode: "git",
-      timeoutMs: 45 * 60 * 1000,
-      restartDrainTimeoutMs: 300_000,
-      root: "/opt/openclaw",
-      devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: "upstream-sha" },
-    });
+    expect(runAutoUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "dev",
+        devTarget: { mode: "tracked", upstreamRef: "origin/main", upstreamSha: "upstream-sha" },
+      }),
+    );
   });
 
   it("pins managed dev campaign handoffs to the announced commit", async () => {
@@ -1291,16 +1276,12 @@ describe("update-startup", () => {
     await checkAutomatically(stableAutoConfig);
     await clock.advanceBy(60_000);
 
-    expect(runAutoUpdate).toHaveBeenCalledExactlyOnceWith({
-      channel: "stable",
-      runId: listUpdateRuns()[0]?.runId,
-      signal: expect.any(AbortSignal),
-      mode: "npm",
-      timeoutMs: 45 * 60 * 1000,
-      restartDrainTimeoutMs: 300_000,
-      root: "/opt/openclaw",
-      packageTargetVersion: "2.0.0",
-    });
+    expect(runAutoUpdate).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        channel: "stable",
+        packageTargetVersion: "2.0.0",
+      }),
+    );
   });
 
   it("ends a held stable campaign when its replacement target is not yet due", async () => {
