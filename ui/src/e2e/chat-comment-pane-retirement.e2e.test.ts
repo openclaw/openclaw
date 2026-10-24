@@ -36,7 +36,6 @@ suite.define(() => {
           const beta = createControlUiSessionRow("agent:main:comment-beta", "Beta", 2);
           const rows = [alpha, beta];
           const betaPassage = "Beta review is complete.";
-          // Persisted split layout is the public setup boundary used by sibling split tests.
           await page.addInitScript(
             ({ storageKey, chatSplitLayout }) =>
               localStorage.setItem(storageKey, JSON.stringify({ chatSplitLayout })),
@@ -113,22 +112,12 @@ suite.define(() => {
             sessionKey: target.key,
             reason: "patch",
           });
-          const targetPane = archivedPane === "own" ? paneA : paneB;
-          await targetPane.locator(".agent-chat__disabled-banner").waitFor({ state: "visible" });
-          const observations = await page.evaluate(() => {
-            const input = document.querySelector<HTMLTextAreaElement>(
-              ".chat-annotation-editor textarea",
-            );
-            const focus = document.activeElement;
-            return {
-              editorPresent: Boolean(input),
-              editorText: input?.value ?? null,
-              editorFocused: Boolean(input && focus === input),
-            };
-          });
+          await (archivedPane === "own" ? paneA : paneB)
+            .locator(".agent-chat__disabled-banner")
+            .waitFor({ state: "visible" });
           expect(errors).toEqual([]);
           if (archivedPane === "own") {
-            expect(observations.editorPresent).toBe(false);
+            expect(await page.locator(".chat-annotation-editor textarea").count()).toBe(0);
             expect(await menu.count()).toBe(0);
             expect(await hasFocus(paneA.locator(".chat-thread"))).toBe(true);
           } else if (editorKind === "reply-menu") {
@@ -138,19 +127,16 @@ suite.define(() => {
             expect(await menu.count()).toBe(0);
             expect(await hasFocus(composer)).toBe(true);
           } else {
-            expect
-              .soft(observations)
-              .toEqual({ editorPresent: true, editorText: unsaved, editorFocused: true });
-            if (observations.editorPresent) {
-              await page.keyboard.type(" Continue reviewing.");
-              expect(await textbox.inputValue()).toBe(`${unsaved} Continue reviewing.`);
-              await textbox.press("Enter");
-              expect(
-                await paneA.locator(".chat-selection-annotations__chip").textContent(),
-              ).toContain("1 comment");
-              await pin.click();
-              await expect.poll(() => textbox.inputValue()).toBe(`${unsaved} Continue reviewing.`);
-            }
+            expect(await textbox.inputValue()).toBe(unsaved);
+            expect(await hasFocus(textbox)).toBe(true);
+            await page.keyboard.type(" Continue reviewing.");
+            expect(await textbox.inputValue()).toBe(`${unsaved} Continue reviewing.`);
+            await textbox.press("Enter");
+            expect(
+              await paneA.locator(".chat-selection-annotations__chip").textContent(),
+            ).toContain("1 comment");
+            await pin.click();
+            await expect.poll(() => textbox.inputValue()).toBe(`${unsaved} Continue reviewing.`);
           }
           if (archivedPane === "other") {
             expect(await composer.inputValue()).toBe("Preserve Alpha draft.");
