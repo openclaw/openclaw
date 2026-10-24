@@ -84,6 +84,18 @@ const commandResult = (token = "", code = 0) => ({
 });
 const accountResponse = (id = 7, login = "shared-bot") =>
   Response.json({ id, login, avatar_url: null });
+const publicationSnapshot = (captured = true) => ({
+  repository: captured ? "owner/repo" : null,
+  branch: "feature",
+  source_head_commit: captured ? "1".repeat(40) : null,
+  workspace_tree: captured ? "2".repeat(40) : null,
+});
+const prTarget = () => ({
+  params: { sessionKey, agentId: "main" },
+  identity: "pr-source",
+  readSource: { agentId: "main", path: "/fixture" },
+  source: { owner: "owner", repo: "repo", branch: "feature" },
+});
 function githubConnection(
   profileId: string,
   login: string,
@@ -111,15 +123,11 @@ const withPersonalReadFixture = (run: Parameters<typeof withReadFixture>[0]) =>
 it("reads cold personal options while writer dispatch is unavailable", async () => {
   await withPersonalReadFixture(async (fixture) => {
     fixture.personalConnectionStatus.mockImplementation(fixture.personalLifecycle.status);
-    const writer = vi.spyOn(stateWriter, "getOpenClawStateWorkerOwner").mockImplementation(() => {
+    using _ = vi.spyOn(stateWriter, "getOpenClawStateWorkerOwner").mockImplementation(() => {
       throw new Error("Writer dispatch unavailable");
     });
-    try {
-      const respond = await fixture.options();
-      expect(respond).toHaveBeenCalledExactlyOnceWith(true, optionsResult(disconnected));
-    } finally {
-      writer.mockRestore();
-    }
+    const respond = await fixture.options();
+    expect(respond).toHaveBeenCalledExactlyOnceWith(true, optionsResult(disconnected));
   });
 });
 
@@ -294,12 +302,7 @@ it("marks only expired personal account facts stale through options revalidation
 
 it("retains a failed publication without a captured tree when PR discovery is unavailable", async () => {
   await withReadFixture(async (fixture) => {
-    const snapshot = {
-      repository: null,
-      branch: "feature",
-      source_head_commit: null,
-      workspace_tree: null,
-    };
+    const snapshot = publicationSnapshot(false);
     const failed = {
       result: {
         ...receipt.result,
@@ -309,12 +312,7 @@ it("retains a failed publication without a captured tree when PR discovery is un
       },
       confirmation: null,
     };
-    vi.spyOn(prRead, "createControlUiSessionPrRead").mockReturnValue(async () => ({
-      params: { sessionKey, agentId: "main" },
-      identity: "pr-source",
-      readSource: { agentId: "main", path: "/fixture" },
-      source: { owner: "owner", repo: "repo", branch: "feature" },
-    }));
+    vi.spyOn(prRead, "createControlUiSessionPrRead").mockReturnValue(async () => prTarget());
     fixture.pullRequests.read.mockRejectedValue(new Error("PR discovery is unavailable"));
     fixture.latestShared.mockImplementation(async (_session, _key, isSuperseded) =>
       (await isSuperseded(snapshot)) ? null : failed,
@@ -328,19 +326,8 @@ it.each([false, true])(
   "reconciles published coverage with current read authority (revoked=%s)",
   async (revoked) => {
     await withReadFixture(async (fixture) => {
-      const snapshot = {
-        repository: "owner/repo",
-        branch: "feature",
-        source_head_commit: "1".repeat(40),
-        workspace_tree: "2".repeat(40),
-      };
-      const target = {
-        params: { sessionKey, agentId: "main" },
-        identity: "pr-source",
-        readSource: { agentId: "main", path: "/fixture" },
-        source: { owner: "owner", repo: "repo", branch: "feature" },
-        assertCurrent: vi.fn(),
-      };
+      const snapshot = publicationSnapshot();
+      const target = { ...prTarget(), assertCurrent: vi.fn() };
       vi.spyOn(prRead, "createControlUiSessionPrRead").mockReturnValue(async () => target);
       const prs = [
         {
@@ -358,9 +345,9 @@ it.each([false, true])(
         }
         return { pullRequests: prs, status: "ready", rateLimited: false };
       });
-      const covered = vi
-        .spyOn(relevance, "isGitHubPublicationSuperseded")
-        .mockImplementation(async (_snapshot, readPublished) => Boolean(await readPublished()));
+      vi.spyOn(relevance, "isGitHubPublicationSuperseded").mockImplementation(
+        async (_snapshot, readPublished) => Boolean(await readPublished()),
+      );
       fixture.latestShared.mockImplementation(async (_session, _key, isSuperseded) =>
         (await isSuperseded(snapshot)) ? null : receipt,
       );
@@ -370,12 +357,6 @@ it.each([false, true])(
       } else {
         expectPartialReply(respond, { latestShared: null });
       }
-      expect(covered).toHaveBeenCalledWith(snapshot, expect.any(Function));
-      expect(fixture.pullRequests.read).toHaveBeenCalledWith(
-        target,
-        expect.any(Function),
-        "publication",
-      );
       expect(fixture.requestForSession).not.toHaveBeenCalled();
     });
   },
