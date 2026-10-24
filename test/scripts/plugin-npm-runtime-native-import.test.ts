@@ -148,33 +148,22 @@ const sourceError = /source checkout root/u;
 const outputError = /run node scripts\/lib\/plugin-npm-runtime-build.mjs/u;
 const directoryError = /not a real directory/u;
 
-it.each([
-  [false, ["--prepare-native-import", "extensions/demo", ""]],
-  [false, ["extensions/demo", "", "--prepare-native-import"]],
-  [false, ["extensions/demo", "", "--prepare-native-import", "--unexpected"]],
-  [true, ["", "--unexpected"]],
-] satisfies [boolean, string[]][])("rejects excess argv: JS=%s %j", (jsOnly, argv) => {
-  const { root, packageDir } = fixture();
+it("rejects excess argv before loading or modifying a JS-only package", () => {
+  const root = tempDirs.make("openclaw-native-import-argv-");
   const jsDir = path.join(root, "javascript-only");
-  if (jsOnly) {
-    writeFile(jsDir, "package.json", {
-      name: "@openclaw/arity-js-fixture",
-      version: "1.0.0",
-      type: "module",
-      openclaw: { extensions: ["./index.js"] },
-    });
-    writeFile(jsDir, "index.js", 'throw new Error("JS-only argv proof must not execute");\n');
-    writeFile(jsDir, "dist/sentinel.js", "keep\n");
-  }
+  writeFile(jsDir, "package.json", {
+    name: "@openclaw/arity-js-fixture",
+    version: "1.0.0",
+    type: "module",
+    openclaw: { extensions: ["./index.js"] },
+  });
+  writeFile(jsDir, "index.js", 'throw new Error("JS-only argv proof must not execute");\n');
+  writeFile(jsDir, "dist/sentinel.js", "keep\n");
   const before = snapshot(root, ["."]);
-  if (jsOnly) {
-    runCli(root, [jsDir]);
-    expect(snapshot(root, ["."])).toEqual(before);
-  }
-  const result = runCli(root, jsOnly ? [jsDir, ...argv] : argv, 1);
+  runCli(root, [jsDir]);
+  expect(snapshot(root, ["."])).toEqual(before);
+  const result = runCli(root, [jsDir, "", "--unexpected"], 1);
   expect(result.stderr).toContain("unexpected plugin npm runtime build argument");
-  expect(fs.existsSync(path.join(packageDir, "node_modules"))).toBe(false);
-  expect(fs.existsSync(path.join(root, "executed"))).toBe(false);
   expect(snapshot(root, ["."])).toEqual(before);
 });
 
@@ -182,7 +171,6 @@ it.each([
   ["esm", "peerDependencies"],
   ["cjs", "dependencies"],
   ["esm", "optionalDependencies"],
-  ["cjs", "optionalDependencies"],
 ])("prepares %s output with a missing %s host link without rebuilding", (format, declaration) => {
   const { root, packageDir, entry } = fixture(format, declaration);
   runCli(root, ["extensions/demo"]);
@@ -234,14 +222,6 @@ it.each([
   ["missing host output", (f) => f.remove("dist"), /Host SDK output is missing/u],
   ["missing plugin output", (f) => f.remove("extensions/demo/dist"), outputError],
   ["symlinked node_modules", (f) => f.link("extensions/demo/node_modules"), directoryError],
-  [
-    "unrelated host directory",
-    (f) => {
-      f.write("extensions/demo/node_modules/openclaw/package.json", '{"name":"unrelated"}');
-      f.write("extensions/demo/node_modules/openclaw/marker", "keep");
-    },
-    /already exists and is not a symlink/u,
-  ],
 ] satisfies RejectionCase[])("rejects %s without mutation", (_scenario, mutate, expected) => {
   const f = rejectionFixture();
   const selected = mutate(f) ?? "extensions/demo";

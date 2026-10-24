@@ -37,15 +37,15 @@ function CodePointCount(value) {
 }
 var isChatTranscriptMetadata = (() => {
     let External = [
-        new RegExp("(^actor$|^assignedBy$|^assignedAt$)", "u"),
-        new RegExp("(^type$|^id$|^label$|^avatarUrl$|^identity$)", "u"),
-        new RegExp("(^type$|^id$)", "u"),
-        new RegExp("(^type$|^id$)", "u"),
-        new RegExp("(^type$|^pluginId$|^domain$|^idKind$|^id$)", "u"),
-        new RegExp("(^type$|^pluginId$|^accountId$|^senderKind$|^id$)", "u"),
-        new RegExp("(^type$|^actorType$|^source$|^id$)", "u"),
-        new RegExp("(^type$|^id$|^label$|^avatarUrl$|^identity$)", "u"),
-        new RegExp("(^identity$|^label$|^avatarUrl$)", "u"),
+        /(^actor$|^assignedBy$|^assignedAt$)/u,
+        /(^type$|^id$|^label$|^avatarUrl$|^identity$)/u,
+        /(^type$|^id$)/u,
+        /(^type$|^id$)/u,
+        /(^type$|^pluginId$|^domain$|^idKind$|^id$)/u,
+        /(^type$|^pluginId$|^accountId$|^senderKind$|^id$)/u,
+        /(^type$|^actorType$|^source$|^id$)/u,
+        /(^type$|^id$|^label$|^avatarUrl$|^identity$)/u,
+        /(^identity$|^label$|^avatarUrl$)/u,
       ],
       check_0 = (value) => check_1(value),
       check_1 = (value) =>
@@ -250,7 +250,7 @@ var isChatTranscriptMetadata = (() => {
     return (value) => check_0(value);
   })(),
   isProgressCard = (() => {
-    let External = [new RegExp("(^sessionKey$|^revision$|^updatedAt$|^markdown$|^steps$)", "u")],
+    let External = [/(^sessionKey$|^revision$|^updatedAt$|^markdown$|^steps$)/u],
       check_0 = (value) =>
         typeof value == "object" &&
         value !== null &&

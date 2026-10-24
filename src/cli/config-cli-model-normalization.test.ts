@@ -81,7 +81,7 @@ function agentModelFields(ref: string) {
     mediaModels: { image: selection, video: selection, music: selection },
     heartbeat: { model: ref },
     subagents: { model: selection },
-    compaction: { model: ref, memoryFlush: { model: ref } },
+    compaction: { model: ref },
     models: { [ref]: { alias: "test" } },
   };
 }

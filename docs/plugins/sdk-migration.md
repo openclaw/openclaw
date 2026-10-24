@@ -18,6 +18,20 @@ guide](/plugins/sdk-migration/sqlite-async). The final compatibility day is
 a Plugin SDK major version. The tables cover every affected member and its
 awaited or prepared replacement.
 
+## Memory flush model selection
+
+Remove `model` from plans returned by `flushPlanResolver` or
+`providerFlushPlanResolver`. `MemoryFlushPlan`, `MemoryFlushFilePlanDraft`, and
+`MemoryFlushToolsPlan` no longer expose a model override. Existing JavaScript
+plans that still return `model` have that field ignored. All memory flushes
+use the active session model and its normal fallback chain.
+
+This intentional removal gives the session ownership of model selection.
+To keep memory extraction local, select a local session model and local
+fallbacks. Doctor removes the corresponding retired
+`agents.defaults.compaction.memoryFlush.model` setting with a warning; see
+[Config migrations](/gateway/doctor/config-migrations#memory-flush-model-selection).
+
 ## Prompt hook history is read-only
 
 `before_prompt_build` and `agent_turn_prepare` now share frozen transcript payload

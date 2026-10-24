@@ -232,7 +232,7 @@ describe("prepareModelForSimpleCompletion", () => {
       api: "openai-completions",
       provider: "llama-cpp",
       baseUrl: "local://llama-cpp",
-      headers: { Authorization: null } as never,
+      headers: { Authorization: null },
     });
 
     const result = prepare({ model });

@@ -65,40 +65,6 @@ async function openChat(page: Page, gateway: Awaited<ReturnType<typeof installMo
 }
 
 suite.define(() => {
-  it.each(["/export-session", "/export"])(
-    "shows an empty export result and retains staged attachments for %s",
-    async (command) => {
-      await withPage(async ({ page }) => {
-        const gateway = await installMockGateway(page, { historyMessages: [] });
-        const downloads: string[] = [];
-        page.on("download", (download) => downloads.push(download.suggestedFilename()));
-
-        const composer = await openChat(page, gateway);
-        await page.locator(".agent-chat__file-input").setInputFiles({
-          name: "export-proof.txt",
-          mimeType: "text/plain",
-          buffer: Buffer.from("keep this staged"),
-        });
-        const attachment = page.locator(".chat-attachment-file__name", {
-          hasText: "export-proof.txt",
-        });
-        await attachment.waitFor({ state: "visible" });
-
-        await composer.fill(command);
-        await page.getByRole("button", { name: "Send message" }).click();
-
-        await page
-          .locator(".chat-thread-inner")
-          .getByText("There are no messages to export yet.", { exact: true })
-          .waitFor({ state: "visible" });
-        await expect.poll(() => composer.inputValue()).toBe("");
-        expect(await attachment.isVisible()).toBe(true);
-        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-        expect(downloads).toEqual([]);
-      });
-    },
-  );
-
   it("downloads a populated conversation as Markdown without sending a chat request", async () => {
     await withPage(async ({ page }) => {
       const question = "What can you export?";

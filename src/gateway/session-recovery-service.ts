@@ -18,6 +18,7 @@ import {
 } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import { commitMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-store.js";
 import { resolveMainSessionResumePolicy } from "../agents/main-session-recovery/main-session-restart-recovery-resume-policy.js";
+import { readInterruptedRunId } from "../agents/main-session-recovery/main-session-restart-recovery-shared.js";
 import { isCliProvider } from "../agents/model-selection-cli.js";
 import { createAgentRunDirectAbortError } from "../agents/run-termination.js";
 import type { SessionRestartResume } from "../config/sessions/restart-resume.js";
@@ -154,6 +155,18 @@ export async function recoverGatewaySession(params: {
   ) {
     return { ok: false, error: recoveryConflictError("source-changed") };
   }
+  const { getPrivateRequesterSettleRecoveryOwner } =
+    await import("../agents/subagents/registry/subagent-registry.js");
+  const privateOwner = await getPrivateRequesterSettleRecoveryOwner(
+    { ...sourceTarget, entry: initialSource },
+    initialSource.restartRecoveryDeliverySourceRunId ?? readInterruptedRunId(initialSource),
+  );
+  params.commitGuard?.();
+  if (privateOwner === "owned") {
+    return invalidSessionRequest(
+      "This interrupted turn is queued for automatic recovery. Wait for its result before resuming it manually.",
+    );
+  }
   if (isMainSessionRecoveryReconciliationCandidate(initialSource)) {
     const repaired = await reconcileOrphanedGatewaySessionRecovery({
       ...params,
@@ -165,13 +178,6 @@ export async function recoverGatewaySession(params: {
         "Session recovery is unavailable while the source still has active work.",
       );
     }
-    const continuation = await params.launchContinuation({
-      agentId: sourceTarget.agentId,
-      idempotencyKey: `restart-recovery-reconcile:${repaired.sessionId}:${repaired.mainRestartRecovery?.cycleId}`,
-      sessionId: repaired.sessionId,
-      sessionKey: sourceTarget.canonicalKey,
-      storePath: sourceTarget.storePath,
-    });
     return {
       ok: true,
       agentId: sourceTarget.agentId,
@@ -179,7 +185,13 @@ export async function recoverGatewaySession(params: {
       sourceKey: sourceTarget.canonicalKey,
       successorEntry: repaired,
       successorKey: sourceTarget.canonicalKey,
-      continuation,
+      continuation: await params.launchContinuation({
+        agentId: sourceTarget.agentId,
+        idempotencyKey: `restart-recovery-reconcile:${repaired.sessionId}:${repaired.mainRestartRecovery?.cycleId}`,
+        sessionId: repaired.sessionId,
+        sessionKey: sourceTarget.canonicalKey,
+        storePath: sourceTarget.storePath,
+      }),
     };
   }
   if (!subagentRecovery && (!recovery || (!pendingRecovery && !recovery.tombstone))) {

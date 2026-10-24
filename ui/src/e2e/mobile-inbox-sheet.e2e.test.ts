@@ -72,6 +72,9 @@ suite.define(() => {
           await page.locator('.nav-drawer[aria-hidden="true"]').waitFor({ state: "attached" });
         };
         await openInbox();
+        expect(await panel.evaluate((element) => getComputedStyle(element).animationName)).toBe(
+          "none",
+        );
         await panel.getByRole("tab", { name: /Mentions/ }).click();
         expect(await drawer.getAttribute("aria-hidden")).toBeNull();
         await panel.getByRole("button", { name: "Close", exact: true }).click();
@@ -239,29 +242,5 @@ suite.define(() => {
         }
       }
     }
-  });
-
-  it("removes sheet movement when reduced motion is requested", async () => {
-    await suite.withPage(
-      {
-        colorScheme: "dark",
-        locale: "en-US",
-        reducedMotion: "reduce",
-        serviceWorkers: "block",
-        viewport,
-      },
-      async ({ page }) => {
-        await installMockGateway(page, { operatorScopes: ["operator.read", "operator.write"] });
-        await page.goto(`${suite.server.baseUrl}activity`);
-        await page.getByRole("button", { name: "Expand sidebar" }).click();
-        await page.locator(".nav-drawer").waitFor();
-        await page.locator(".sidebar-issues-button:visible").click();
-        const panel = page.locator("#sidebar-issues-panel");
-        await panel.waitFor();
-        expect(await panel.evaluate((element) => getComputedStyle(element).animationName)).toBe(
-          "none",
-        );
-      },
-    );
   });
 });

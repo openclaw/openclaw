@@ -1,5 +1,5 @@
 import { expect, it } from "vitest";
-import { createOpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
+import type { OpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
 import {
@@ -8,6 +8,7 @@ import {
 } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { startScrollInferenceFixture } from "./chat-collaborator-scroll.real-gateway.test-support.ts";
 import { exactButton, requireString } from "./chat-flow.test-support.ts";
+import { callGateway, createChatGatewayInstance } from "./chat-real-gateway.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -32,7 +33,7 @@ type Frame = {
   };
 };
 
-let instance: Awaited<ReturnType<typeof createOpenClawTestInstance>>;
+let instance: OpenClawTestInstance;
 let provider: Awaited<ReturnType<typeof startScrollInferenceFixture>>;
 
 const suite = createControlUiE2eSuite({
@@ -47,30 +48,15 @@ const suite = createControlUiE2eSuite({
         () => provider.close(),
       );
     try {
-      instance = await createOpenClawTestInstance({
+      instance = await createChatGatewayInstance({
         name: "control-ui-reconnect-continuity",
-        env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined, VITEST: undefined },
-        config: {
-          gateway: { controlUi: { enabled: true } },
-          cron: { enabled: false },
-          agents: {
-            ownership: "explicit",
-            defaults: { model: "reconnect/echo", modelPolicy: { allow: ["reconnect/*"] } },
-            entries: { main: { identity: { name: "Reconnect fixture" } } },
-          },
-          models: {
-            catalogRefresh: { enabled: false },
-            providers: {
-              reconnect: {
-                api: "openai-responses",
-                apiKey: "synthetic-fixture-key",
-                baseUrl: `http://127.0.0.1:${provider.port}/v1`,
-                models: [{ id: "echo", name: "Reconnect fixture" }],
-              },
-            },
-          },
-          plugins: { allow: [] },
-        },
+        provider: "reconnect",
+        identity: "Reconnect fixture",
+        model: "echo",
+        apiKey: "synthetic-fixture-key",
+        baseUrl: `http://127.0.0.1:${provider.port}/v1`,
+        models: [{ id: "echo", name: "Reconnect fixture" }],
+        agents: { ownership: "explicit" },
       });
       await instance.startGateway();
       return { baseUrl: `http://127.0.0.1:${instance.port}/`, close };
@@ -84,12 +70,8 @@ const suite = createControlUiE2eSuite({
 
 const occurrences = (value: string, marker: string) => value.split(marker).length - 1;
 
-async function call(method: string, params: Record<string, unknown>) {
-  const args = ["gateway", "call", method, "--json", "--params", JSON.stringify(params)];
-  const result = await instance.cli(args);
-  expect(result.code, result.stderr).toBe(0);
-  return result.stdout;
-}
+const call = (method: string, params: Record<string, unknown>) =>
+  callGateway(instance, method, params);
 
 suite.define(() => {
   it("reconstructs one streamed turn after browser socket loss, then aborts and follows up cleanly", async () => {

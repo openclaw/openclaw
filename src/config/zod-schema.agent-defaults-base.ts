@@ -180,8 +180,6 @@ export const AgentDefaultsBaseSchema = z.strictObject({
         .strictObject({
           /** Enable the pre-compaction memory flush (default: true). */
           enabled: z.boolean().optional(),
-          /** Optional provider/model override used only for pre-compaction memory flush turns. */
-          model: z.string().optional(),
           /** Run the memory flush when context is within this many tokens of the compaction threshold. */
           softThresholdTokens: z.number().int().nonnegative().optional(),
           /**

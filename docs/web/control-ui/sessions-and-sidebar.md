@@ -187,7 +187,7 @@ explicit confirmation because unsynced files and in-flight work may be lost.
 If an accepted move fails with a draining source,
 **Retry move** resumes its saved destination and original source. It does not
 open another destination picker or replay the interrupted turn. The same retry
-is available from the **Move failed** chip. An offline-device abandonment retry
+is available from the **Move failed** chip and the failure banner above the composer. The composer stays blocked until the move recovers; a failed move shows its error rather than an ongoing progress indicator. An offline-device abandonment retry
 requires the destructive confirmation again. Wait for that move to finish before
 choosing a different destination.
 

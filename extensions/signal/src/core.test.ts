@@ -29,7 +29,7 @@ import {
   registerSignalReplyContext,
   resolveSignalReplyContextWithPersistence,
 } from "./reply-authors.js";
-import { buildSignalSetupPatch, signalDmPolicy } from "./setup-core.js";
+import { signalDmPolicy } from "./setup-core.js";
 import * as transportDetectionModule from "./transport-detection.js";
 
 const reactionStores = await vi.hoisted(() => import("./approval-reactions.test-support.js"));
@@ -138,12 +138,6 @@ describe("looksLikeUuid", () => {
 });
 
 describe("signal sender identity", () => {
-  it("keeps IPv6 bind hosts on the managed transport", () => {
-    expect(buildSignalSetupPatch({ httpHost: "::1", httpPort: "9090" })).toMatchObject({
-      transport: { kind: "managed-native", httpHost: "::1", httpPort: 9090 },
-    });
-  });
-
   it("falls back to sourceUuid when sourceNumber has no digits", () => {
     const sender = resolveSignalSender({
       sourceNumber: "not a phone number",

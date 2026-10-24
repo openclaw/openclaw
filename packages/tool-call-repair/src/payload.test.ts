@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   projectPlainTextToolCallBlocks,
-  scanPlainTextJsonToolCall,
+  scanPlainTextToolCall,
   stripPlainTextToolCallBlocks,
 } from "./payload.js";
 
@@ -40,10 +40,10 @@ function projection(raw: string, settleBefore?: number) {
   return [text, retainStart, retainedOutputStart];
 }
 
-describe("scanPlainTextJsonToolCall", () => {
+describe("scanPlainTextToolCall JSON branch", () => {
   it("returns the complete Harmony call before a visible suffix", () => {
     const raw = '<|channel|>commentary to=read code<|message|>{"path":"/tmp/file"}<|call|>visible';
-    expect(scanPlainTextJsonToolCall(raw)).toMatchObject({
+    expect(scanPlainTextToolCall(raw).json).toMatchObject({
       kind: "complete",
       end: raw.indexOf("visible"),
       name: { start: raw.indexOf("read"), end: raw.indexOf("read") + 4 },
@@ -52,7 +52,7 @@ describe("scanPlainTextJsonToolCall", () => {
   });
 
   it("classifies the streaming Harmony prefix", () => {
-    expect(scanPlainTextJsonToolCall("commentary to=read co")).toMatchObject({
+    expect(scanPlainTextToolCall("commentary to=read co").json).toMatchObject({
       kind: "prefix",
       candidate: { syntax: "harmony", nameComplete: true, name: { start: 14, end: 18 } },
     });
@@ -66,12 +66,12 @@ describe("scanPlainTextJsonToolCall", () => {
     "accepts 120-character names and rejects the 121st character at offset %s",
     (nameStart, build) => {
       const prefix = "Visible\n";
-      expect(scanPlainTextJsonToolCall(prefix + build("x".repeat(120)), prefix.length).kind).toBe(
+      expect(scanPlainTextToolCall(prefix + build("x".repeat(120)), prefix.length).json.kind).toBe(
         "complete",
       );
       for (const length of [121, 1024]) {
         expect(
-          scanPlainTextJsonToolCall(prefix + build("x".repeat(length)), prefix.length),
+          scanPlainTextToolCall(prefix + build("x".repeat(length)), prefix.length).json,
         ).toEqual({
           kind: "invalid",
           at: prefix.length + nameStart + 120,
@@ -136,7 +136,7 @@ describe("stripPlainTextToolCallBlocks", () => {
 
   it("preserves a long repeated incomplete JSON candidate in one scan", () => {
     const raw = "[tool:read] {\n".repeat(20_000);
-    expect(scanPlainTextJsonToolCall(raw)).toMatchObject({
+    expect(scanPlainTextToolCall(raw).json).toMatchObject({
       kind: "prefix",
       candidate: { payload: { end: raw.length } },
     });

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { pauseVirtualClock } from "../test-helpers/control-ui-e2e.ts";
+import { twoFrames } from "./chat-presentation.test-support.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -40,12 +41,7 @@ suite.define(() => {
       await modelTrigger.click();
       const input = page.locator(".new-session-page__message");
       await input.fill("Warmup ");
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
-          }),
-      );
+      await twoFrames(page);
       const sessionKey = "agent:main:dashboard:typing-0";
       const sidebarRow = page.locator(`aside.sidebar [data-session-key="${sessionKey}"]`).first();
       await expect.poll(() => sidebarRow.textContent()).toContain("Research session 0");

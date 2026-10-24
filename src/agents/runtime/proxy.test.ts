@@ -2,6 +2,7 @@ import { once } from "node:events";
 import http from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Context, Model, Usage } from "../../llm/types.js";
+import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
 import { streamProxy } from "./proxy.js";
 
 const usage: Usage = {
@@ -13,18 +14,15 @@ const usage: Usage = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-const model: Model = {
+const model: Model = makeProviderModelFixture({
   id: "test-model",
   name: "Test Model",
   provider: "test",
   api: "openai-responses",
   baseUrl: "https://example.test",
-  reasoning: false,
-  input: ["text"],
-  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
   contextWindow: 1024,
   maxTokens: 1024,
-};
+});
 
 const context: Context = { messages: [{ role: "user", content: "hello", timestamp: 1 }] };
 

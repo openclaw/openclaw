@@ -27,9 +27,13 @@ resolveApiKeyForProviderMock.mockResolvedValue({ apiKey: "openrouter-key" });
 waitProviderOperationPollIntervalMock.mockResolvedValue(undefined);
 resolveProviderHttpRequestConfigMock.mockImplementation((params) => {
   const request = params.request;
-  const headers = new Headers(params.defaultHeaders);
+  const headers = new Headers(omitNullRequestHeaders(params.defaultHeaders));
   for (const [key, value] of Object.entries(request?.headers ?? {})) {
-    headers.set(key, value);
+    if (value === null) {
+      headers.delete(key);
+    } else {
+      headers.set(key, value);
+    }
   }
   if (request?.auth?.mode === "authorization-bearer") {
     headers.set("Authorization", `Bearer ${request.auth.token}`);
@@ -1043,3 +1047,4 @@ describe("openrouter generated video download", () => {
     },
   );
 });
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";

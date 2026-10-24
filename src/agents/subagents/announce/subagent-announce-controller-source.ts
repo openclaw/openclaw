@@ -99,10 +99,18 @@ export async function reserveSubagentControllerSource(
   if (!requester.entry?.sessionId || !requester.storePath) {
     return undefined;
   }
+  const privateSourceRunId =
+    protocolRunId ??
+    requester.entry.restartRecoveryDeliverySourceRunId ??
+    readInterruptedRunId(requester.entry);
+  const { resolvePrivateRequesterSettleRecoveryOwner } =
+    await import("../registry/subagent-registry-restart-recovery.js");
+  const privateOwner = resolvePrivateRequesterSettleRecoveryOwner(requester, privateSourceRunId);
   // Recover the interrupted requester before another completion wave reserves its mailbox.
   // An exact recovered receipt may still reconcile without starting replacement work.
   if (
     requester.entry.abortedLastRun === true &&
+    privateOwner !== "owned" &&
     hasMainSessionRecoveryClaim(requester.entry) &&
     !requester.entry.mainRestartRecovery?.tombstone &&
     (!protocolRunId ||
@@ -282,13 +290,17 @@ export async function reserveRestoredSubagentControllerSources(
           entry.requesterSessionKey,
           entry.requesterAgentId,
         );
+        const { resolvePrivateRequesterSettleRecoveryOwner } =
+          await import("../registry/subagent-registry-restart-recovery.js");
+        const privateOwner = resolvePrivateRequesterSettleRecoveryOwner(requester, identity.runId);
         if (
+          privateOwner !== "owned" &&
           !(wake.status === "pending" && wake.nextAttemptAt !== undefined) &&
           resolveRequesterSettleRecoveryCustody(requester.entry, identity)
         ) {
           return undefined;
         }
-        if (!(await prepareRestoredRequester(requester))) {
+        if (privateOwner !== "owned" && !(await prepareRestoredRequester(requester))) {
           return undefined;
         }
         // Recheck after requester recovery preparation; the same frozen cohort still owns FIFO.

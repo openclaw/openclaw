@@ -77,7 +77,7 @@ it("enforces HTTP and complete-context replay after caller/provider payload tran
     },
   );
   expect(options).toMatchObject({ transport: "sse", replayResponsesItemIds: false });
-  expect(Object.fromEntries(new Headers(options?.headers))).toMatchObject({
+  expect(Object.fromEntries(new Headers(omitNullRequestHeaders(options?.headers)))).toMatchObject({
     "x-openai-chatpass-test": "codex-direct",
     "x-custom": "preserved",
   });
@@ -114,7 +114,7 @@ it.each([
     if (completion && !sharing) {
       expect(wrapped).toBeUndefined();
     }
-    const headers = new Headers(options?.headers);
+    const headers = new Headers(omitNullRequestHeaders(options?.headers));
     expect(headers.get("x-openai-chatpass-test")).toBe(sharing ? "codex-direct" : null);
     expect(headers.get("x-custom")).toBe("preserved");
     if (completion) {
@@ -136,3 +136,4 @@ it("rejects an unsupported SIWC service tier", async () => {
     "Sign in with ChatGPT does not support this service tier",
   );
 });
+import { omitNullRequestHeaders } from "openclaw/plugin-sdk/provider-request-headers";

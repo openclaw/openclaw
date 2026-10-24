@@ -643,8 +643,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       gateway: this.context.gateway.snapshot,
       isConnected: () => this.isConnected,
       isPresented: () => this.presented && this.visuallyPresented,
-      commit: (layout, automaticResource) =>
-        this.commitSidebarLayout(layout, { persist: false, automaticResource }),
+      commit: (layout, options) => this.commitSidebarLayout(layout, { ...options, persist: false }),
     });
     if (this.state) {
       const layout = this.initializeBrowserSidebarLayout(this.state.sidebarLayout);

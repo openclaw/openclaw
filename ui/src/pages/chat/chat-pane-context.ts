@@ -107,6 +107,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
         row.placement.workspaceResultReconciling === true,
       onRecover: () => row && void this.changeHeaderPlacement(row, "recover"),
       onReclaim: () => row && void this.changeHeaderPlacement(row, "reclaim"),
+      onRetryMove: () => row && void this.changeHeaderPlacement(row, "move"),
     });
   }
 

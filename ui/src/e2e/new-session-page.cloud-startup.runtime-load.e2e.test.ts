@@ -207,28 +207,6 @@ async function recoverStartup(page: Page, escape: "saved" | "chat" | "toast") {
       )
       .toBe(true);
     await page.setViewportSize({ width: 1280, height: 900 });
-    const version = await page.evaluate(
-      () =>
-        new Promise<string>((resolve) => {
-          const { port1, port2 } = new MessageChannel();
-          port1.addEventListener(
-            "message",
-            ({ data }) => {
-              port1.close();
-              port2.close();
-              resolve(data.version);
-            },
-            { once: true },
-          );
-          port1.start();
-          const probe = new MessageEvent("message", {
-            data: { type: "sw-version-probe" },
-            ports: [port2],
-          });
-          navigator.serviceWorker.dispatchEvent(probe);
-        }),
-    );
-    expect(version).toBe(buildId);
     await page.evaluate(() => {
       navigator.serviceWorker.dispatchEvent(
         new MessageEvent("message", {

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { omitNullRequestHeaders } from "../../packages/llm-core/src/utils/request-headers.js";
 import type { ConfiguredProviderRequest } from "../config/types.provider-request.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
@@ -377,7 +378,7 @@ describe("provider request config", () => {
     expect(
       Object.keys(resolved ?? {}).filter((key) => key.toLowerCase() === "user-agent"),
     ).toHaveLength(1);
-    expect(new Headers(resolved).get("user-agent")).toMatch(/^openclaw\//);
+    expect(new Headers(omitNullRequestHeaders(resolved)).get("user-agent")).toMatch(/^openclaw\//);
   });
 
   it("drops forbidden header keys while merging", () => {

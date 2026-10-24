@@ -384,11 +384,18 @@ function searchIndependentBranches(database: EngineConnection, query: MemoryKeyw
     statements.map((statement) => sql`(${statement})`),
     sql` UNION ALL `,
   )})`;
+  const fallback = bodyStatement(database, query.body, true);
+  // Relax the body query only if every primary branch is empty in this snapshot.
+  const matches = fallback
+    ? sql<KeywordBranchRow>`(WITH primary_matches AS MATERIALIZED ${union}
+        SELECT * FROM primary_matches
+        UNION ALL (${fallback.where(sql<boolean>`NOT EXISTS (SELECT 1 FROM primary_matches)`)}))`
+    : union;
   const rows = statements.length
     ? executeSqliteQuerySync<KeywordBranchRow>(
         database,
         getNodeSqliteKysely<SearchDatabase>(database)
-          .selectFrom(union.as("matches"))
+          .selectFrom(matches.as("matches"))
           .selectAll()
           .orderBy("branch")
           .orderBy(sql`CASE WHEN branch = 1 THEN specificity ELSE rank END`, "desc")
@@ -428,7 +435,7 @@ export async function searchPostgresMemoryKeyword(
     path: { rows: PathResult[]; error?: string };
   };
   try {
-    result = searchIndependentBranches(database, query);
+    return searchIndependentBranches(database, query);
   } catch {
     // Recover independent results and errors if only one branch is unavailable.
     result = {

@@ -405,3 +405,11 @@ The lightweight `decisions` subpath exports
 `ModelInferenceCapabilitiesSchema` for provider-owned catalog augmentation using
 the canonical capability schema rather than a competing normalizer. Static
 capability declarations do not confer account entitlement.
+
+## Runtime request headers
+
+`openclaw/plugin-sdk/provider-request-headers` exports the `ModelRequestHeaders`
+type and `omitNullRequestHeaders`. Runtime headers can contain `null` deletion
+markers; preserve them through header merges and OpenAI SDK calls. Use the helper
+after the final merge when a direct HTTP client needs a string-only header map.
+This entrypoint loads no provider policy, transport host, or credential runtime.

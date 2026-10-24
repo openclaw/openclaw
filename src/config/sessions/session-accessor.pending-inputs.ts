@@ -133,6 +133,23 @@ export function withSessionPendingInputPersistence<T>(
   return owner ? runWithSessionPendingInputPersistence(owner, persist) : receipt.run(persist);
 }
 
+function finishPendingInputSources(
+  sources: readonly SessionPendingInputOwner[],
+  disposition: "cancelled" | "interrupted",
+): void {
+  const failures: unknown[] = [];
+  for (const source of sources) {
+    try {
+      source.finish(disposition);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) {
+    throw new AggregateError(failures, "Failed to finish collected input custody");
+  }
+}
+
 /** Bind one collected message to its private admitted sources without creating another durable queue. */
 export function bindSessionPendingInputSources(
   receipts: readonly SessionPendingInputReceipt[],
@@ -185,25 +202,16 @@ export function bindSessionPendingInputSources(
   const aggregateInputId = randomUUID();
   const aggregate = ownerReceipt({
     ...first,
+    // Source owners release their admission closures when settlement completes.
+    assertCurrent: assertSessionPendingInputLifetimeCurrent.bind(undefined, first),
+    authority: undefined,
     requesterOrigin: undefined,
     inputId: aggregateInputId,
     transcriptInputId: aggregateInputId,
     idempotencyKey,
     messageJson,
     sources,
-    finish: (disposition) => {
-      const failures: unknown[] = [];
-      for (const source of sources) {
-        try {
-          source.finish(disposition);
-        } catch (error) {
-          failures.push(error);
-        }
-      }
-      if (failures.length) {
-        throw new AggregateError(failures, "Failed to finish collected input custody");
-      }
-    },
+    finish: finishPendingInputSources.bind(undefined, sources),
   });
   aggregate.settled = async () => {
     const results = await Promise.allSettled(receipts.map(async (receipt) => receipt.settled?.()));

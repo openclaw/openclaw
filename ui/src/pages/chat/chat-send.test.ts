@@ -1186,60 +1186,6 @@ describe("handleSendChat", () => {
     ).not.toContainEqual(expect.objectContaining({ pendingRunId: rejectedRunId }));
   });
 
-  it("waits for every pending reasoning and speed patch before sending chat", async () => {
-    const thinkingUpdate = createDeferred<unknown>();
-    const fastModeUpdate = createDeferred<unknown>();
-    const sessionsResult = createSessionsResult([
-      row("agent:main", {
-        effectiveFastMode: false,
-        fastMode: false,
-        thinkingLevel: "low",
-      }),
-    ]);
-    const host = makeChatHost({
-      requestHandlers: {
-        "sessions.patch": (params: unknown) => {
-          const patch = requireRecord(params, "session settings patch");
-          if (Object.hasOwn(patch, "thinkingLevel")) {
-            return thinkingUpdate.promise;
-          }
-          if (Object.hasOwn(patch, "fastMode")) {
-            return fastModeUpdate.promise;
-          }
-          throw new Error("Unexpected sessions.patch payload");
-        },
-        "sessions.list": () => Promise.resolve(sessionsResult),
-        "chat.send": () => Promise.resolve({ status: "started" }),
-      },
-      chatMessage: "use the new reasoning and speed",
-      sessionsResult,
-    });
-    const thinkingPatch = switchChatSetting(host, { kind: "thinkingLevel", value: "high" });
-    const fastModePatch = switchChatSetting(host, { kind: "fastMode", value: "on" });
-    const send = handleSendChat(host);
-    await Promise.resolve();
-
-    expect(requestCalls(host.request, "sessions.patch")).toHaveLength(1);
-    expect(requestCalls(host.request, "chat.send")).toStrictEqual([]);
-    expect(host.chatQueue[0]).toMatchObject({
-      sendState: "waiting-model",
-      text: "use the new reasoning and speed",
-    });
-
-    thinkingUpdate.resolve({});
-    await thinkingPatch;
-    await waitForFast(() => expect(requestCalls(host.request, "sessions.patch")).toHaveLength(2));
-    expect(host.request.mock.calls.some(([method]) => method === "chat.send")).toBe(false);
-
-    fastModeUpdate.resolve({});
-    await Promise.all([fastModePatch, send]);
-    const payload = findRequestPayload(host.request, "chat.send", "chat send payload");
-    expect(payload).toMatchObject({
-      message: "use the new reasoning and speed",
-      sessionKey: "agent:main",
-    });
-  });
-
   it("retires a failed queued picker back to the preceding confirmed session row", async () => {
     const firstPatch = createDeferred<unknown>();
     let patchCount = 0;

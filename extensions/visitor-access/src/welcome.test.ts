@@ -12,6 +12,7 @@ import {
   staffRole,
   useVisitorFixtures,
   visitorFixture,
+  visitorGate,
   visitorGrant,
 } from "./visitors.test-support.js";
 import { VisitorWelcome } from "./welcome.js";
@@ -42,7 +43,13 @@ function welcomeHarness(grants: VisitorGrant[], config: OpenClawConfig = gateway
   const messages = new Map<string, Parameters<PluginRuntime["gateway"]["appendAgentMessage"]>[0]>();
   const gateway = {
     request: vi.fn(async (method: string, params?: Record<string, unknown>) => {
-      if (method !== "sessions.create" || typeof params?.key !== "string") {
+      if (typeof params?.key !== "string") {
+        throw new Error(`Unexpected Gateway request ${method}`);
+      }
+      if (method === "sessions.describe") {
+        return { session: sessions.has(params.key) ? { key: params.key } : null };
+      }
+      if (method !== "sessions.create") {
         throw new Error(`Unexpected Gateway request ${method}`);
       }
       if (!sessions.has(params.key)) {
@@ -61,7 +68,9 @@ function welcomeHarness(grants: VisitorGrant[], config: OpenClawConfig = gateway
   };
   const logger = { warn: vi.fn() };
   const restart = () => new VisitorWelcome(fixture.service, gateway, () => config, logger);
-  return { fixture, sessions, messages, gateway, welcome: restart(), restart };
+  const creates = () =>
+    vi.mocked(gateway.request).mock.calls.filter(([method]) => method === "sessions.create");
+  return { fixture, sessions, messages, gateway, creates, welcome: restart(), restart };
 }
 
 describe("visitor-access.welcome.ensure", () => {
@@ -112,11 +121,9 @@ describe("visitor-access.welcome.ensure", () => {
     });
     const sessionKey = result.status === "ready" ? result.sessionKey : "";
     // The caller-bound request is the guest's own sessions.create.
-    expect(h.gateway.request).toHaveBeenCalledExactlyOnceWith("sessions.create", {
-      key: sessionKey,
-      agentId: "main",
-      displayName: "Welcome, Sam Rivera",
-    });
+    expect(h.creates()).toEqual([
+      ["sessions.create", { key: sessionKey, agentId: "main", displayName: "Welcome, Sam Rivera" }],
+    ]);
     const text = [
       "Welcome to OpenClaw, Sam Rivera.",
       "",
@@ -155,7 +162,7 @@ describe("visitor-access.welcome.ensure", () => {
       ...result,
       created: false,
     });
-    expect(h.gateway.request).toHaveBeenCalledOnce();
+    expect(h.creates()).toHaveLength(1);
     expect(h.gateway.appendAgentMessage).toHaveBeenCalledOnce();
   });
 
@@ -301,6 +308,121 @@ describe("visitor-access.welcome.ensure", () => {
         "- read other people's sessions",
       ].join("\n"),
       idempotencyKey: `visitor-welcome:${legacy.grantId}`,
+    });
+  });
+
+  it("keeps one welcome session when access is renewed during setup or after a failure", async () => {
+    const grant = visitorGrant(EMAIL, {
+      invitedBy: JOSH,
+      onboarding: { state: "pending", updatedAt: NOW },
+    });
+    const h = welcomeHarness([grant]);
+    await h.fixture.service.initialize();
+    const gate = visitorGate();
+    h.gateway.appendAgentMessage.mockImplementationOnce(async () => {
+      await gate.wait();
+      throw new Error("transcript write failed: disk");
+    });
+
+    const setup = h.welcome.ensure(guestClient(grant.grantId!));
+    await gate.entered;
+    const reserved = h.fixture.grants.get(EMAIL)?.onboarding;
+    expect(reserved).toMatchObject({ state: "pending", welcomeSessionKey: expect.any(String) });
+    // Renewal mid-setup keeps the reservation, so the in-flight setup can still record it.
+    await h.fixture.invite({ email: EMAIL, days: 30 });
+    expect(h.fixture.grants.get(EMAIL)).toMatchObject({
+      grantId: grant.grantId,
+      onboarding: reserved,
+    });
+    gate.release();
+    await expect(setup).resolves.toMatchObject({ status: "failed" });
+    const failed = h.fixture.grants.get(EMAIL)?.onboarding;
+    expect(failed).toMatchObject({
+      state: "failed",
+      welcomeSessionKey: reserved?.welcomeSessionKey,
+    });
+
+    await h.fixture.invite({ email: EMAIL, days: 60 });
+    expect(h.fixture.grants.get(EMAIL)?.onboarding).toEqual(failed);
+    await expect(h.welcome.ensure(guestClient(grant.grantId!))).resolves.toEqual({
+      status: "ready",
+      sessionKey: reserved?.welcomeSessionKey,
+      agentId: "main",
+      created: true,
+    });
+    expect(h.sessions.size).toBe(1);
+    expect(h.messages.size).toBe(1);
+  });
+
+  it.each(["append", "ready commit"] as const)(
+    "ends setup cleanly when access is revoked before the %s",
+    async (step) => {
+      const grant = visitorGrant(EMAIL, {
+        invitedBy: JOSH,
+        onboarding: { state: "pending", updatedAt: NOW },
+      });
+      const h = welcomeHarness([grant]);
+      await h.fixture.service.initialize();
+      const gate = visitorGate();
+      const append = h.gateway.appendAgentMessage.getMockImplementation()!;
+      h.gateway.appendAgentMessage.mockImplementationOnce(async (message) => {
+        await gate.wait();
+        if (step === "append") {
+          // The Gateway refuses the guest's writes once the admitted grant ends.
+          throw new Error("Visitor access ended. Ask a maintainer to renew access.");
+        }
+        return await append(message);
+      });
+
+      const setup = h.welcome.ensure(guestClient(grant.grantId!));
+      await gate.entered;
+      await h.fixture.revoke({ email: EMAIL });
+      gate.release();
+
+      await expect(setup).resolves.toEqual({ status: "not_applicable" });
+      expect(h.fixture.grants.has(EMAIL)).toBe(false);
+      await h.fixture.invite({ email: EMAIL, days: 7 });
+      const reinvited = h.fixture.grants.get(EMAIL)!;
+      expect(reinvited.grantId).not.toBe(grant.grantId);
+      expect(reinvited.onboarding).toEqual({ state: "pending", updatedAt: NOW });
+      await expect(h.welcome.ensure(guestClient(reinvited.grantId!))).resolves.toMatchObject({
+        status: "ready",
+        created: true,
+      });
+      // The session created before revocation stays the guest's; the new invitation gets its own.
+      expect(h.sessions.size).toBe(2);
+      expect(h.messages.size).toBe(step === "append" ? 1 : 2);
+    },
+  );
+
+  it("does not recreate a deleted welcome session or send the guest to it", async () => {
+    const grant = visitorGrant(EMAIL, {
+      invitedBy: JOSH,
+      onboarding: { state: "pending", updatedAt: NOW },
+    });
+    const h = welcomeHarness([grant]);
+    await h.fixture.service.initialize();
+    const first = await h.welcome.ensure(guestClient(grant.grantId!));
+    expect(first).toMatchObject({ status: "ready", created: true });
+
+    h.sessions.clear();
+    await expect(h.welcome.ensure(guestClient(grant.grantId!))).resolves.toEqual({
+      status: "not_applicable",
+    });
+    // The guest role holds only session scopes; the read it implies must be requested.
+    expect(h.gateway.request).toHaveBeenLastCalledWith(
+      "sessions.describe",
+      { key: first.status === "ready" ? first.sessionKey : "", agentId: "main" },
+      { scopes: ["operator.sessions.read"] },
+    );
+    await h.fixture.invite({ email: EMAIL, days: 30 });
+    await expect(h.restart().ensure(guestClient(grant.grantId!))).resolves.toEqual({
+      status: "not_applicable",
+    });
+    expect(h.creates()).toHaveLength(1);
+    expect(h.fixture.grants.get(EMAIL)?.onboarding).toMatchObject({
+      state: "ready",
+      welcomeSessionKey: first.status === "ready" ? first.sessionKey : "",
     });
   });
 
