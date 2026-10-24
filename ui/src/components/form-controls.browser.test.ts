@@ -715,7 +715,6 @@ describeBrowserLayout("form controls and app chrome styles", () => {
           <div class="settings-card">App chrome tile</div>
           <div style="height: 200px"></div>
         </main>
-        <section class="chat-thread" style="height: 100px"><div class="chat-text">Selectable transcript</div></section>
         <div class="board-tabs__track">Hidden horizontal rail</div>`,
       );
 
@@ -735,8 +734,6 @@ describeBrowserLayout("form controls and app chrome styles", () => {
           return getComputedStyle(node, "::-webkit-scrollbar").width;
         };
         return {
-          chatSelection: style(".chat-thread").userSelect,
-          chatTextSelection: style(".chat-text").userSelect,
           chromeSelection: style(".settings-card").userSelect,
           contentScrollbar: scrollbarWidth(".content"),
           inputSelection: style(".settings-sidebar__search-input").userSelect,
@@ -753,8 +750,6 @@ describeBrowserLayout("form controls and app chrome styles", () => {
       });
 
       expect(metrics).toEqual({
-        chatSelection: "none",
-        chatTextSelection: "text",
         chromeSelection: "auto",
         contentScrollbar: "12px",
         hiddenRailScrollbarWidth: "none",

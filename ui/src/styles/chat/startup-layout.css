@@ -84,9 +84,6 @@
   overflow-y: auto;
   overflow-x: hidden;
   overflow-anchor: none;
-  /* Only message text opts in; selecting across turns must not paint layout or media. */
-  -webkit-user-select: none;
-  user-select: none;
   scrollbar-gutter: stable both-edges;
   /* The pane header owns the titlebar and native drag surface. No horizontal
      padding: macOS overlay scrollbars render inside the
@@ -191,6 +188,15 @@
   margin-inline: var(--chat-composer-side-inset, 16px);
 }
 
+/* Exclude chrome and media from selection; header text would fight native window dragging. */
+.chat-pane__header,
+.chat-thread :is(.chat-group-footer, .chat-avatar, .chat-avatar-slot, img, audio, video, iframe) {
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+/* Leave content and blank space native so outside clicks collapse selection. */
+.chat-thread,
 .chat-text,
 .chat-thinking {
   -webkit-user-select: text;
@@ -370,10 +376,6 @@
   min-height: var(--rail-header-height);
   padding: 0 6px 0 12px;
   background: var(--chat-surface);
-  /* Chrome row, not content: a selectable title would fight the native
-     window drag the macOS app starts from this row. */
-  user-select: none;
-  -webkit-user-select: none;
 }
 
 /* Desktop composition; mobile keeps its own presenter and touch targets. */

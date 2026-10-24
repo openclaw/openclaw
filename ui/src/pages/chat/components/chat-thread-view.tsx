@@ -70,9 +70,29 @@ export function ChatThread(input: {
 }) {
   const mobile = useContext(ChatConversationMobile);
   let root: HTMLDivElement | undefined;
+  let selectionGesture: { pointerId: number; range: Range | null } | undefined;
+  let stopSelectionGesture: (() => void)[] = [];
+  const clearSelectionGesture = () => {
+    selectionGesture = undefined;
+    stopSelectionGesture.splice(0).forEach((stop) => stop());
+  };
+  const finishSelectionGesture = (event: PointerEvent) => {
+    if (selectionGesture?.pointerId === event.pointerId) {
+      clearSelectionGesture();
+    }
+  };
   const historyIntent = (event: Event) => input.props.onHistoryIntent?.(event);
   const paneId = createMemo(() => input.props.paneId);
-  onSettled(() => root && registerTranscriptElement(paneId(), root));
+  onSettled(() => {
+    if (!root) {
+      return undefined;
+    }
+    const initialRegistration = registerTranscriptElement(paneId(), root);
+    return () => {
+      clearSelectionGesture();
+      initialRegistration();
+    };
+  });
   const search = createMemo(() =>
     projectOwner(getTranscriptState(paneId()).search, (owner) => owner.snapshot, Object.is),
   );
@@ -272,13 +292,39 @@ export function ChatThread(input: {
             presentation().session.messageElements.elements.values(),
           )
         }
-        onPointerUp={(event) =>
+        onPointerDown={(event) => {
+          if (selectionGesture && selectionGesture.pointerId !== event.pointerId) {
+            return;
+          }
+          const selection = event.currentTarget.ownerDocument.getSelection();
+          selectionGesture = {
+            pointerId: event.pointerId,
+            range: selection?.rangeCount ? selection.getRangeAt(0) : null,
+          };
+          const view = event.currentTarget.ownerDocument.defaultView;
+          if (view) {
+            // Ends bubble after the transcript consumes them, including releases outside it.
+            stopSelectionGesture = [
+              listen(view, "pointerdown", finishSelectionGesture, true),
+              listen(view, "pointerup", finishSelectionGesture),
+              listen(view, "pointercancel", finishSelectionGesture),
+              listen(view, "blur", clearSelectionGesture),
+            ];
+          }
+        }}
+        onPointerUp={(event) => {
+          const gesture = selectionGesture;
+          const ownsGesture = gesture !== undefined && gesture.pointerId === event.pointerId;
+          if (ownsGesture) {
+            clearSelectionGesture();
+          }
           handleTranscriptPointerUp(
             event,
             input.props,
+            ownsGesture ? gesture.range : undefined,
             presentation().session.messageElements.elements.values(),
-          )
-        }
+          );
+        }}
       >
         <span
           ref={[elementRef(input.props.onTranscriptAnnouncementRef)]}

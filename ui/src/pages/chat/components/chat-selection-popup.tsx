@@ -318,6 +318,7 @@ export function showChatAnnotationEditor(options: {
 export function handleChatSelectionPointerUp(
   event: PointerEvent,
   actions: ChatSelectionPopupActions,
+  previousSelection: Range | null,
 ) {
   const threadRoot = event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
   if (!threadRoot) {
@@ -333,6 +334,11 @@ export function handleChatSelectionPointerUp(
         return;
       }
       const range = selection.getRangeAt(0);
+      // Native user selection replaces the associated Range, even when the
+      // selected words are unchanged. A control click retains the old Range.
+      if (range === previousSelection) {
+        return;
+      }
       const container = range.commonAncestorContainer;
       const selectionElement = container instanceof Element ? container : container.parentElement;
       const bubble = selectionElement?.closest<HTMLElement>(".chat-bubble");
