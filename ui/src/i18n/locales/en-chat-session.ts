@@ -484,6 +484,7 @@ const enChatSession = {
       showEarlier: "Show earlier",
       loadingEarlier: "Loading earlier…",
       noMatches: "No matching messages",
+      transcriptLabel: "Conversation transcript",
       positionRail: "Conversation position",
       positionMarker: "{label}, marker {position} of {count}",
       positionUserMessage: "User message",

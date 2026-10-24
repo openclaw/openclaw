@@ -860,6 +860,24 @@ describe("chat transcript rendering", () => {
     },
   );
 
+  it("transcript log region has an accessible name (aria-label) on its role=log element", async () => {
+    const paneId = "transcript-aria-label";
+    const props = threadProps(paneId, "agent:main:main", [
+      message("user", "Hello", 1_000),
+      message("assistant", "Hi there!", 2_000),
+    ]);
+    const { container, transcript, rerender, dispose } = threadFixture(props);
+    transcript.start();
+    rerender();
+    await flush();
+
+    const log = container.querySelector('[role="log"]');
+    expect(log).not.toBeNull();
+    expect(log?.getAttribute("aria-label")).toBe("Conversation transcript");
+
+    dispose();
+  });
+
   it.each([true, false])(
     "keeps completed commentary a turn block only outside search results (search %s)",
     async (search) => {
