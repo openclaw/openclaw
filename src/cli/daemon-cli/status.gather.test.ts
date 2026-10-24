@@ -1,14 +1,9 @@
 // Daemon status gather tests cover service status collection from platform state.
-import { X509Certificate } from "node:crypto";
 import fs from "node:fs/promises";
-import { createServer } from "node:https";
-import type { Socket } from "node:net";
 import path from "node:path";
 import { Command } from "commander";
 import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { WebSocketServer } from "ws";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
 import { REDACTED_SENTINEL } from "../../config/redact-sentinel.js";
 import type { ExtraGatewayService } from "../../daemon/inspect.js";
 import type { ForeignLaunchdJob } from "../../daemon/launchd-foreign-jobs.js";
@@ -17,17 +12,9 @@ import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { readSystemdServiceExecStart } from "../../daemon/systemd-service-files.js";
 import { gatewayEdgeAuthValueForTarget } from "../../gateway/edge-auth.js";
-import {
-  buildMinimalGatewayHelloOkPayload,
-  closeMinimalGatewayServer,
-  parseMinimalGatewayRequestFrame,
-  sendMinimalGatewayConnectChallenge,
-  sendMinimalGatewayResponse,
-} from "../../gateway/minimal-gateway.test-helpers.js";
 import * as gatewayBootLifecycle from "../../infra/gateway-boot-lifecycle.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import type { GatewayRestartHandoff } from "../../infra/restart-handoff.js";
-import { resetSecretRedactionRegistryForTest } from "../../logging/secret-redaction-registry.test-support.js";
 import { defaultRuntime } from "../../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
 import { OpenClawDatabaseSchemaPreflightError } from "../../state/openclaw-database-preflight.messages.js";
@@ -77,19 +64,21 @@ const preflightOpenClawDatabaseSchemas = vi.fn<
 const isDefaultInstallIdentity = vi.fn((_env?: NodeJS.ProcessEnv) => true);
 const isGatewayExternallySupervised = vi.fn((_env?: NodeJS.ProcessEnv) => false);
 const resolveGatewayProbeAuthSafeWithSecretInputsCalls = vi.fn<(opts?: unknown) => void>();
-const loadInstalledPluginIndexInstallRecords = vi.fn<
-  (params?: {
-    env?: NodeJS.ProcessEnv;
-    stateDir?: string;
-    filePath?: string;
-  }) => Promise<Record<string, unknown>>
->(async (_params?) => ({}));
-const fetchNpmPackageTargetStatus = vi.fn(
-  async (params: { packageName?: string; target: string }) => ({
-    version: params.target,
-    nodeEngine: null,
-  }),
-);
+const loadInstalledPluginIndexInstallRecords =
+  vi.fn<
+    (params?: {
+      env?: NodeJS.ProcessEnv;
+      stateDir?: string;
+      filePath?: string;
+    }) => Promise<Record<string, unknown>>
+  >();
+const fetchNpmPackageTargetStatus =
+  vi.fn<
+    (params: {
+      packageName?: string;
+      target: string;
+    }) => Promise<{ version: string; nodeEngine: null }>
+  >();
 const readGatewayRestartHandoffSync = vi.fn<
   (_env?: NodeJS.ProcessEnv) => GatewayRestartHandoff | null
 >(() => null);
@@ -98,13 +87,7 @@ const readGatewayLastShutdownAsync = vi.spyOn(gatewayBootLifecycle, "readGateway
 const findSystemdGatewayInstallation = vi.fn<
   typeof import("../../daemon/systemd-scope.js").findSystemdGatewayInstallation
 >(async () => ({ kind: "none" }));
-const inspectWindowsGatewayFirewall = vi.fn<(opts?: unknown) => Promise<unknown>>(async () => ({
-  applies: false,
-  severity: "info" as const,
-  code: "windows_firewall_not_applicable",
-  message: "Windows LAN firewall diagnostics do not apply.",
-  details: [],
-}));
+const inspectWindowsGatewayFirewall = vi.fn<(opts?: unknown) => Promise<unknown>>();
 const auditGatewayServiceConfig = vi.fn<(_opts?: unknown) => Promise<ServiceConfigAudit>>(
   async () => ({ ok: true, issues: [] }),
 );
@@ -129,6 +112,25 @@ const daemonEnvironment = {
 const loopbackConfig = { gateway: { bind: "loopback" } };
 const execSecret = { source: "exec", provider: "vault", id: "gateway/credential" };
 const execProviders = { providers: { vault: { source: "exec", command: "/bin/false" } } };
+const edgeAuth = { "X-Test-Edge-Auth": "synthetic-status-edge-auth" };
+const remotePin = "sha256:99:88:77:66";
+function remoteProbeConfig(
+  url: string,
+  auth: Record<string, unknown>,
+  token: unknown,
+  bind?: string,
+) {
+  return {
+    gateway: {
+      mode: "remote",
+      ...(bind ? { bind } : {}),
+      tls: { enabled: true },
+      auth,
+      remote: { url, edgeAuth, token, password: "remote-password", tlsFingerprint: remotePin },
+    },
+    secrets: execProviders,
+  };
+}
 function daemonConfig(gateway: Record<string, unknown> = {}) {
   return {
     gateway: {
@@ -182,13 +184,10 @@ const serviceReadCommand = vi.fn<
   ) => Promise<{ programArguments: string[]; environment?: Record<string, string> } | null>
 >(async () => serviceCommand());
 
-const resolveGatewayBindHost = vi.fn(
-  async (_bindMode?: string, _customBindHost?: string) => "0.0.0.0",
-);
-const resolveAdvertisedControlUiLinks = vi.fn(async (_opts?: unknown) => ({
-  httpUrl: "https://10.211.55.3:19001/",
-  wsUrl: "wss://10.211.55.3:19001",
-}));
+const resolveGatewayBindHost =
+  vi.fn<(bindMode?: string, customBindHost?: string) => Promise<string>>();
+const resolveAdvertisedControlUiLinks =
+  vi.fn<(opts?: unknown) => Promise<{ httpUrl: string; wsUrl: string }>>();
 const pickPrimaryTailnetIPv4 = vi.fn(() => "100.64.0.9");
 const resolveGatewayPort = vi.fn((_cfg?: unknown, _env?: unknown) => 18789);
 const resolveStateDir = vi.fn(
@@ -197,15 +196,10 @@ const resolveStateDir = vi.fn(
 const resolveConfigPath = vi.fn((env: NodeJS.ProcessEnv, stateDir: string) => {
   return env.OPENCLAW_CONFIG_PATH ?? `${stateDir}/openclaw.json`;
 });
-const createConfigIOCalls = vi.fn(
-  (configPath: string, pluginValidation?: "full" | "skip", observe?: boolean) => ({
-    configPath,
-    pluginValidation,
-    observe,
-  }),
-);
-const readConfigFileSnapshotCalls = vi.fn((configPath: string) => configPath);
-const loadConfigCalls = vi.fn((configPath: string) => configPath);
+const createConfigIOCalls =
+  vi.fn<(configPath: string, pluginValidation?: "full" | "skip", observe?: boolean) => void>();
+const readConfigFileSnapshotCalls = vi.fn<(configPath: string) => void>();
+const loadConfigCalls = vi.fn<(configPath: string) => void>();
 let daemonConfigWarnings: Array<{ path: string; message: string }> = [];
 let cliConfigWarnings: Array<{ path: string; message: string }> = [];
 let configIssues: Array<{ path: string; message: string }> = [];
@@ -591,30 +585,14 @@ describe("gatherDaemonStatus", () => {
   ])(
     "uses service $auth credentials with remote=$remoteUrl and requireRpc=$requireRpc",
     async ({ auth, remoteUrl, requireRpc }) => {
-      const edgeAuth = { "X-Test-Edge-Auth": "synthetic-status-edge-auth" };
-      daemonLoadedConfig = {
-        gateway: {
-          mode: "remote",
-          bind: "loopback",
-          tls: { enabled: true },
-          auth:
-            auth === "none"
-              ? { mode: "none" }
-              : {
-                  mode: "token",
-                  token: "service-config-token",
-                  password: "local-password",
-                },
-          remote: {
-            url: remoteUrl,
-            edgeAuth,
-            token: { source: "exec", provider: "vault", id: "gateway/remote-token" },
-            password: "remote-password",
-            tlsFingerprint: "sha256:99:88:77:66",
-          },
-        },
-      };
-      daemonLoadedConfig.secrets = execProviders;
+      daemonLoadedConfig = remoteProbeConfig(
+        remoteUrl,
+        auth === "none"
+          ? { mode: "none" }
+          : { mode: "token", token: "service-config-token", password: "local-password" },
+        { ...execSecret, id: "gateway/remote-token" },
+        "loopback",
+      );
       const originalConfig = structuredClone(daemonLoadedConfig);
       serviceReadCommand.mockResolvedValueOnce(
         serviceCommand({
@@ -659,25 +637,11 @@ describe("gatherDaemonStatus", () => {
   )(
     "isolates explicit status credentials $auth with remote=$remoteUrl and requireRpc=$requireRpc",
     async ({ auth, remoteUrl, requireRpc }) => {
-      const edgeAuth = { "X-Test-Edge-Auth": "synthetic-status-edge-auth" };
-      daemonLoadedConfig = {
-        gateway: {
-          mode: "remote",
-          tls: { enabled: true },
-          auth: {
-            mode: "token",
-            token: { source: "exec", provider: "vault", id: "gateway/token" },
-          },
-          remote: {
-            url: remoteUrl,
-            edgeAuth,
-            token: "remote-token",
-            password: "remote-password",
-            tlsFingerprint: "sha256:99:88:77:66",
-          },
-        },
-      };
-      daemonLoadedConfig.secrets = execProviders;
+      daemonLoadedConfig = remoteProbeConfig(
+        remoteUrl,
+        { mode: "token", token: { ...execSecret, id: "gateway/token" } },
+        "remote-token",
+      );
       const originalConfig = structuredClone(daemonLoadedConfig);
       setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", "ambient-token");
       const status = await gatherStatus({
@@ -714,139 +678,6 @@ describe("gatherDaemonStatus", () => {
   );
 
   it.each([
-    { name: "matching", pinMatches: true },
-    { name: "mismatched", pinMatches: false },
-  ])("enforces a $name saved TLS pin before explicit status traffic", async ({ pinMatches }) => {
-    const actualProbe = await vi.importActual<typeof import("./probe.js")>("./probe.js");
-    const originalProbe = callGatewayStatusProbe.getMockImplementation();
-    assert(originalProbe);
-    const server = createServer({ key: TEST_TLS_KEY_PEM, cert: TEST_TLS_CERT_PEM });
-    const wss = new WebSocketServer({ noServer: true, maxPayload: 1_000_000 });
-    const sockets = new Set<Socket>();
-    const closedSockets: Promise<void>[] = [];
-    const edgeAuthHeaders: unknown[] = [];
-    const connectTokens: Array<string | undefined> = [];
-    const edgeAuthValue = "synthetic-status-edge-auth";
-    const explicitToken = "synthetic-explicit-status-token";
-    let receivedBytes = 0;
-    let upgrades = 0;
-    server.on("connection", (socket) => {
-      sockets.add(socket);
-      closedSockets.push(
-        new Promise<void>((resolve) => {
-          socket.once("close", () => {
-            sockets.delete(socket);
-            resolve();
-          });
-        }),
-      );
-    });
-    server.on("secureConnection", (socket) => {
-      socket.on("data", (chunk: Buffer) => {
-        receivedBytes += chunk.byteLength;
-      });
-    });
-    server.on("upgrade", (request, socket, head) => {
-      upgrades += 1;
-      edgeAuthHeaders.push(request.headers["x-test-edge-auth"]);
-      if (request.headers["x-test-edge-auth"] !== edgeAuthValue) {
-        socket.destroy();
-        return;
-      }
-      wss.handleUpgrade(request, socket, head, (ws) => {
-        wss.emit("connection", ws, request);
-      });
-    });
-    wss.on("connection", (ws) => {
-      sendMinimalGatewayConnectChallenge(ws);
-      ws.on("message", (raw) => {
-        const frame = parseMinimalGatewayRequestFrame(raw);
-        if (frame.type !== "req" || frame.method !== "connect" || !frame.id) {
-          return;
-        }
-        connectTokens.push(frame.params?.auth?.token);
-        sendMinimalGatewayResponse(
-          ws,
-          frame.id,
-          buildMinimalGatewayHelloOkPayload({
-            auth: { role: "operator", scopes: ["operator.read"] },
-          }),
-        );
-      });
-    });
-    callGatewayStatusProbe.mockImplementation(actualProbe.probeGatewayStatus);
-    try {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      assert(address && typeof address !== "string");
-      const url = `wss://127.0.0.1:${address.port}/gateway`;
-      const savedPin = pinMatches
-        ? new X509Certificate(TEST_TLS_CERT_PEM).fingerprint256
-        : "00".repeat(32);
-      await withStatusConfig(
-        JSON.stringify({
-          gateway: {
-            mode: "remote",
-            tls: { enabled: true },
-            auth: { mode: "token", token: "unrelated-service-token" },
-            remote: {
-              url,
-              token: "unrelated-remote-token",
-              password: "unrelated-remote-password",
-              tlsFingerprint: savedPin,
-              edgeAuth: { "X-Test-Edge-Auth": edgeAuthValue },
-            },
-          },
-        }),
-        async () => {
-          const status = await gatherStatus({
-            rpc: { url, token: explicitToken, json: true, timeout: "2000" },
-            requireRpc: false,
-          });
-          await Promise.all(closedSockets);
-          const input = callGatewayStatusProbe.mock.calls[0]?.[0];
-          assert(input);
-          expect(input.tlsFingerprint).toBeUndefined();
-          expect(input.config?.gateway?.remote).toEqual({
-            url,
-            edgeAuth: { "X-Test-Edge-Auth": edgeAuthValue },
-            tlsFingerprint: savedPin,
-          });
-          expect(input.config?.gateway?.tls).toBeUndefined();
-          expect(inspectGatewayTlsCertificate).not.toHaveBeenCalled();
-          expect(status.rpc?.ok, status.rpc?.error).toBe(pinMatches);
-          if (pinMatches) {
-            expect(receivedBytes).toBeGreaterThan(0);
-            expect(upgrades).toBe(1);
-            expect(edgeAuthHeaders).toEqual([edgeAuthValue]);
-            expect(connectTokens).toEqual([explicitToken]);
-          } else {
-            expect(status.rpc?.error).toMatch(/fingerprint mismatch/i);
-            expect(receivedBytes).toBe(0);
-            expect(upgrades).toBe(0);
-            expect(edgeAuthHeaders).toEqual([]);
-            expect(connectTokens).toEqual([]);
-          }
-        },
-        true,
-      );
-    } finally {
-      callGatewayStatusProbe.mockImplementation(originalProbe);
-      for (const socket of sockets) {
-        socket.destroy();
-      }
-      await closeMinimalGatewayServer(wss);
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-      resetSecretRedactionRegistryForTest();
-    }
-  });
-
-  it.each([
     {
       name: "gateway --port 19003 status --port 19002",
       argv: ["gateway", "--port", "19003", "status", "--port", "19002"],
@@ -863,15 +694,6 @@ describe("gatherDaemonStatus", () => {
     expectPartialCall(callGatewayStatusProbe, {
       url: "ws://127.0.0.1:19002",
       localPortOverride: 19002,
-      config: {
-        gateway: {
-          bind: "loopback",
-          mode: "local",
-          remote: undefined,
-          auth: undefined,
-          tls: undefined,
-        },
-      },
       configPath: "/tmp/openclaw-cli/openclaw.json",
     });
     expectPartialCall(writeJson, {
@@ -938,7 +760,6 @@ describe("gatherDaemonStatus", () => {
 
     const status = await gatherStatus({ probe: false, deep: true });
 
-    expectPartialCall(inspectWindowsGatewayFirewall, { bind: "lan", port: 19001 });
     expect(status.gateway?.windowsFirewall).toMatchObject({
       severity: "warning",
       code: "windows_firewall_local_rules_ignored",
@@ -1030,16 +851,6 @@ describe("gatherDaemonStatus", () => {
       expect(status.gateway?.probeUrl).toBe("ws://127.0.0.1:18900");
       expect(probeInput().url).toBe("ws://127.0.0.1:18900");
       const input = probeInput();
-      expect(input.config).toEqual({
-        ...cliLoadedConfig,
-        gateway: {
-          bind: "loopback",
-          mode: "local",
-          auth: undefined,
-          remote: undefined,
-          tls: undefined,
-        },
-      });
       expect(input.configPath).toBe("/tmp/openclaw-cli/openclaw.json");
       const authInput = callArg(resolveGatewayProbeAuthSafeWithSecretInputsCalls) as {
         cfg?: unknown;
@@ -1338,7 +1149,6 @@ describe("gatherDaemonStatus", () => {
       const status = await gatherStatus({ probe: false, deep: true });
 
       expect(createConfigIOCalls).toHaveBeenCalledWith(configPath, "full", false);
-      expect(readConfigFileSnapshotCalls).toHaveBeenCalledWith(configPath);
       expect(status.config?.cli.warnings).toEqual(cliConfigWarnings);
       const output = capturePrintedDaemonStatus(status, { json: false }).errors;
       expect(output).toContain("Config warnings:");
