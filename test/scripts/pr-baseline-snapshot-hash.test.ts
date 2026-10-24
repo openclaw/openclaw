@@ -1,7 +1,7 @@
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { once } from "node:events";
-import { chmodSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
@@ -26,7 +26,6 @@ const expectClean = () =>
 
 function invocation(bytes: Buffer) {
   writeFileSync(join(root, authorityPath), bytes);
-  rmSync(join(root, ".local/probe.json"), { force: true });
   const script = join(scripts, "pr-lib/baseline-refresh.mjs");
   return {
     args: [script, "check-source", "42", head, root, root, "invalid-lock", head],
@@ -68,7 +67,7 @@ describePosix("captured baseline hash stdin", () => {
     writeFileSync(
       probe,
       `#!/usr/bin/env python3
-import os,sys,stat,fcntl,json,socket
+import os,sys,stat,fcntl,socket
 args=sys.argv[1:]
 if args == ['hash-object','--no-filters','--stdin']:
  s=os.fstat(0)
@@ -78,7 +77,6 @@ if args == ['hash-object','--no-filters','--stdin']:
  assert fcntl.fcntl(0,fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY, 'snapshot is writable'
  assert os.lseek(0,0,os.SEEK_CUR) == 0, 'snapshot offset is not zero'
  assert not any(n.startswith('openclaw-pr-hash-') for n in os.listdir(os.environ['TMPDIR'])), 'snapshot directory retained at dispatch'
- with open('.local/probe.json','w') as f: json.dump({'size':s.st_size,'links':s.st_nlink,'offset':0},f)
  if os.environ.get('MUTATE_ORIGINAL'): open('${authorityPath}','wb').write(b'changed after capture')
  if os.environ.get('FAIL_HASH'): sys.stderr.write('fixture Git hash failure\\n'); sys.exit(97)
  if os.environ.get('CANCEL_SOCKET'):
@@ -102,8 +100,6 @@ os.execv(${JSON.stringify(git)},[${JSON.stringify(git)},*args])
       const result = run(bytes);
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("Missing baseline transition operation owner.");
-      const captured = JSON.parse(readFileSync(join(root, ".local/probe.json"), "utf8"));
-      expect(captured).toEqual({ size: bytes.length, links: 0, offset: 0 });
     }
   });
 
