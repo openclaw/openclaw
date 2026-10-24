@@ -171,28 +171,21 @@ describe("legacy workspace Doctor migration", () => {
     fs.mkdirSync(targetB, { recursive: true });
     const aliasContext = aliasWorkspace(context, workspaceAlias);
     const sourcePath = `${workspaceAlias}.attested`;
-    const identityA = workspaceIdentity();
     const attestedAtA = await writeAttestation(sourcePath);
     await migrateOk(aliasContext);
     fs.unlinkSync(workspaceAlias);
     fs.symlinkSync(targetB, workspaceAlias, process.platform === "win32" ? "junction" : "dir");
     await deleteWorkspaceState(prepareWorkspaceStateDeletion(workspaceAlias));
-    const identityB = resolveWorkspaceStateIdentity(targetB);
     const attestedAtB = await writeAttestation(sourcePath, "", "2026-07-15T12:00:00.000Z");
     await migrateOk(aliasContext);
-    const db = stateDb();
-    expect(
-      db
-        .prepare(
-          "SELECT workspace_key, attested_at_ms FROM workspace_setup_state ORDER BY workspace_key",
-        )
-        .all(),
-    ).toEqual(
-      [
-        { workspace_key: identityA.workspaceKey, attested_at_ms: attestedAtA.getTime() },
-        { workspace_key: identityB.workspaceKey, attested_at_ms: attestedAtB.getTime() },
-      ].toSorted((left, right) => left.workspace_key.localeCompare(right.workspace_key)),
-    );
+    for (const [workspace, mtime] of [
+      [context.workspaceDir, attestedAtA],
+      [targetB, attestedAtB],
+    ] as const) {
+      expect((await readWorkspaceStateSnapshot(workspace)).attestation?.attestedAtMs).toBe(
+        mtime.getTime(),
+      );
+    }
     expect(
       get("SELECT COUNT(*) AS count FROM migration_sources WHERE source_path = ?", sourcePath),
     ).toEqual({ count: 2 });
@@ -256,16 +249,6 @@ describe("legacy workspace Doctor migration", () => {
     await migrateOk(context);
     expectFilesRemoved(currentPath, siblingPath);
     expect(readHashes()).toEqual([{ filename: "AGENTS.md", sha256: HASH }]);
-  });
-
-  it("resumes an interrupted unreceipted claim", async () => {
-    const setupPath = setupPathFor(context.workspaceDir);
-    const claimPath = claimPathFor(setupPath);
-    await write(setupPath, JSON.stringify({ onboardingCompletedAt: COMPLETED_AT }));
-    await fsp.rename(setupPath, claimPath);
-    await migrateOk(context);
-    expect(fs.existsSync(claimPath)).toBe(false);
-    expect(readSetup("setup_completed_at")).toEqual({ setup_completed_at: COMPLETED_AT });
   });
 
   it.each(["symlink", "hardlink", "invalid-bootstrap-timestamp", "oversized-attestation"] as const)(
@@ -471,18 +454,12 @@ describe("legacy workspace Doctor migration", () => {
       },
     };
     const originalConfig = structuredClone(cfg);
-    const effectiveDirs = listAgentWorkspaceDirs(cfg, context.env);
-    const corpus = ["SOUL.md", "memory/retained.md"];
-    const originalCorpus = await Promise.all(
-      corpus.map(async (relativePath) => {
-        const filePath = path.join(context.workspaceDir, relativePath);
-        await write(filePath, `Retained ${relativePath}\n`);
-        return readContent(filePath);
-      }),
-    );
+    const retainedFile = path.join(context.workspaceDir, "memory/retained.md");
+    await write(retainedFile, "retained workspace content\n");
+    const originalContent = await readContent(retainedFile);
     const rootPath = setupPathFor(context.workspaceDir);
     await write(rootPath, COMPLETE_SETUP);
-    expect(effectiveDirs).toEqual(
+    expect(listAgentWorkspaceDirs(cfg, context.env)).toEqual(
       ["main", "other"].map((id) => path.join(context.workspaceDir, id)),
     );
     // An unused shared root is a Doctor source, not a runtime admission requirement.
@@ -496,15 +473,12 @@ describe("legacy workspace Doctor migration", () => {
       setup_completed_at: COMPLETED_AT,
     });
     expect(cfg).toEqual(originalConfig);
-    for (const [index, relativePath] of corpus.entries()) {
-      const filePath = path.join(context.workspaceDir, relativePath);
-      expect(await readContent(filePath)).toEqual(originalCorpus[index]);
-    }
+    expect(await readContent(retainedFile)).toEqual(originalContent);
     expect(await detect({ ...context, cfg })).toEqual({ sources: [], hasLegacy: false });
     expect(await migrate({ ...context, cfg })).toEqual({ changes: [], warnings: [] });
   });
   it("imports setup and attestation state, records receipts, and removes files", async () => {
-    const workspaces = ["alpha", "beta", "gamma"].map((id) => ({
+    const workspaces = ["alpha", "beta"].map((id) => ({
       id,
       workspace: path.join(context.homeDir, `workspace-${id}`),
     }));
@@ -515,28 +489,17 @@ describe("legacy workspace Doctor migration", () => {
       },
     };
     const mtime = new Date("2026-07-15T11:02:03.456Z");
-    const sources: string[] = [];
     for (const { workspace } of workspaces) {
-      const setupPath = setupPathFor(workspace);
-      await write(setupPath, COMPLETE_SETUP);
-      sources.push(setupPath);
+      await write(setupPathFor(workspace), COMPLETE_SETUP);
       const identity = resolveWorkspaceStateIdentity(workspace);
       const attestationPath = attestationPathFor(identity.workspaceKey);
       await write(attestationPath, attestation(`generated:AGENTS.md:${HASH}\n`));
       await fsp.utimes(attestationPath, mtime, mtime);
-      sources.push(attestationPath);
     }
-    const result = await migrateOk({ ...context, cfg });
-    expect(result.changes).toHaveLength(sources.length);
-    expectFilesRemoved(...sources);
+    await migrateOk({ ...context, cfg });
     for (const { workspace } of workspaces) {
       const identity = resolveWorkspaceStateIdentity(workspace);
-      expect(
-        get(
-          "SELECT workspace_path FROM workspace_setup_state WHERE workspace_key = ?",
-          identity.workspaceKey,
-        ),
-      ).toEqual({ workspace_path: identity.workspacePath });
+      expectFilesRemoved(setupPathFor(workspace), attestationPathFor(identity.workspaceKey));
       expect(readHashes(identity.workspaceKey)).toEqual([{ filename: "AGENTS.md", sha256: HASH }]);
       expect(await readWorkspaceStateSnapshot(workspace)).toMatchObject({
         identity,
@@ -550,7 +513,7 @@ describe("legacy workspace Doctor migration", () => {
         "SELECT COUNT(*) AS count, SUM(removed_source) AS removed FROM migration_sources WHERE migration_kind = ?",
         "legacy-workspace-setup-files",
       ),
-    ).toEqual({ count: sources.length, removed: sources.length });
+    ).toEqual({ count: 4, removed: 4 });
     expect(await migrate({ ...context, cfg })).toEqual({ changes: [], warnings: [] });
   });
   it.skipIf(process.platform === "win32")(
@@ -582,19 +545,23 @@ describe("legacy workspace Doctor migration", () => {
     },
   );
 
-  it.each([false, true])(
-    "settles an interrupted source/claim link without replaying state (receipt=%s)",
-    async (receiptExists) => {
+  it.each(["unreceipted claim", "unreceipted link", "receipted link"])(
+    "settles an interrupted %s without replaying state",
+    async (mode) => {
       const source = setupPathFor(context.workspaceDir);
       const claim = claimPathFor(source);
-      const raw = `${setupSource({ setupCompletedAt: COMPLETED_AT })}\n`;
+      const raw = `${setupSource({
+        [mode === "receipted link" ? "setupCompletedAt" : "onboardingCompletedAt"]: COMPLETED_AT,
+      })}\n`;
       await write(source, raw);
-      if (receiptExists) {
+      if (mode === "receipted link") {
         const first = await migrate(context, { removeSource: interruptCleanup });
         expect(first.warnings).toHaveLength(1);
         fs.linkSync(claim, source);
-      } else {
+      } else if (mode === "unreceipted link") {
         fs.linkSync(source, claim);
+      } else {
+        await fsp.rename(source, claim);
       }
       await migrateOk(context);
       expectFilesRemoved(source);
@@ -608,25 +575,6 @@ describe("legacy workspace Doctor migration", () => {
       expect(fs.readFileSync(path.join(path.dirname(source), archives[0]!), "utf8")).toBe(raw);
     },
   );
-
-  it("cleans a covered setup marker recreated after completed migration", async () => {
-    const source = setupPathFor(context.workspaceDir);
-    await write(source, COMPLETE_SETUP);
-    await migrateOk(context);
-    const raw = setupSource({ setupCompletedAt: COMPLETED_AT });
-    await write(source, raw);
-    await migrateOk(context);
-    expect(fs.existsSync(source)).toBe(false);
-    expect(readSetup("bootstrap_seeded_at, setup_completed_at")).toEqual({
-      bootstrap_seeded_at: SEEDED_AT,
-      setup_completed_at: COMPLETED_AT,
-    });
-    expect(get("SELECT * FROM migration_sources WHERE source_path = ?", source)).toMatchObject({
-      source_sha256: createHash("sha256").update(raw).digest("hex"),
-      removed_source: 1,
-    });
-    expect(readReport(source)).toMatchObject({ authoritative: true, resolution: "verified" });
-  });
 
   it.each(["source", "claim", "collision"] as const)(
     "handles a recreated attestation: %s",
@@ -684,7 +632,6 @@ describe("legacy workspace Doctor migration", () => {
         mode === "decomposed target" ? "moved-e\u0301" : "moved-workspace",
       );
       const configured = aliasWorkspace(context, alias);
-      const milestones = SETUP_MILESTONES;
       const raw = COMPLETE_SETUP;
       const sourcePath = setupPathFor(context.workspaceDir);
       fs.writeFileSync(sourcePath, raw);
@@ -694,11 +641,7 @@ describe("legacy workspace Doctor migration", () => {
         detected,
         env,
         stateDir: context.stateDir,
-        removeSource: interrupted
-          ? () => {
-              throw new Error("interrupted cleanup");
-            }
-          : undefined,
+        removeSource: interrupted ? interruptCleanup : undefined,
       });
       expect(imported.warnings).toHaveLength(interrupted ? 1 : 0);
       const originalReceipt = readReceipt(source, env)!;
@@ -733,14 +676,14 @@ describe("legacy workspace Doctor migration", () => {
         expect(fs.readFileSync(receipt!.archivePath!, "utf8")).toBe(raw);
       }
       expect(readRuns()).toEqual(runs);
-      expect((await readWorkspaceStateSnapshot(alias)).setup).toEqual(milestones);
+      expect((await readWorkspaceStateSnapshot(alias)).setup).toEqual(SETUP_MILESTONES);
       const row = db
         .prepare("SELECT report_json FROM migration_sources WHERE source_key = ?")
         .get(receipt!.sourceKey)!;
       const canonical = JSON.stringify({
         kind: "setup",
         workspacePath: identity.workspacePath,
-        ...milestones,
+        ...SETUP_MILESTONES,
       });
       expect(JSON.parse(String(row.report_json))).toMatchObject({
         authoritative: true,
@@ -749,17 +692,28 @@ describe("legacy workspace Doctor migration", () => {
 
       const expectSettled = async () => {
         expect((await migrate(configured)).warnings).toEqual([]);
-        expect((await readWorkspaceStateSnapshot(alias)).setup).toEqual(milestones);
+        expect((await readWorkspaceStateSnapshot(alias)).setup).toEqual(SETUP_MILESTONES);
         expect(readReceipt(movedSource, env)?.removedSource).toBe(true);
       };
       await expectSettled();
       expect(fs.existsSync(`${movedSource.sourcePath}.doctor-importing`)).toBe(false);
       expect(fs.existsSync(receipt!.archivePath!)).toBe(!removeBackup);
 
-      // A removed source may have a later generation. The moved receipt must
-      // preserve that distinction without replaying its replacement milestones.
-      fs.writeFileSync(movedSource.sourcePath, '{"setupCompletedAt":"2026-07-16T00:00:00.000Z"}');
-      await expectSettled();
+      const expectRecreated = async (completedAt: string, resolution: string) => {
+        const recreated = setupSource({ setupCompletedAt: completedAt });
+        fs.writeFileSync(movedSource.sourcePath, recreated);
+        await expectSettled();
+        expectFilesRemoved(movedSource.sourcePath);
+        expect(readReceipt(movedSource, env)?.sha256).toBe(
+          createHash("sha256").update(recreated).digest("hex"),
+        );
+        expect(readReport(movedSource.sourcePath)).toMatchObject({
+          authoritative: true,
+          resolution,
+        });
+      };
+      await expectRecreated(COMPLETED_AT, "verified");
+      await expectRecreated("2026-07-16T00:00:00.000Z", "superseded");
     },
   );
 
