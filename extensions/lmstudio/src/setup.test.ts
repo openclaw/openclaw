@@ -14,7 +14,6 @@ import type {
   ProviderAuthMethodNonInteractiveContext,
 } from "openclaw/plugin-sdk/provider-setup";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import type { WizardPrompter } from "openclaw/plugin-sdk/setup";
 import { createTempHomeEnv } from "openclaw/plugin-sdk/test-env";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -46,6 +45,11 @@ const modelId = "qwen3-8b-instruct";
 const modelRef = "lmstudio/qwen3-8b-instruct";
 const baseUrl = "http://localhost:1234/v1";
 const keyAuth = { api: "openai-completions" as const, apiKey: authEnv };
+const staleHeaders = { Authorization: "Bearer stale-token", "X-Proxy-Auth": "proxy-token" };
+const staleAuth = { ...keyAuth, auth: "api-key" as const, apiKey: "stale-config-key" };
+const endpoint = "http://localhost:1234/api/v1/";
+const llama = "llama3.3-70b-instruct";
+const qwen = "qwen3.5-4b-instruct";
 
 // mock-isolation: setup fixtures control model discovery and loading without HTTP requests.
 vi.mock("./models.fetch.js", () => ({
@@ -106,48 +110,42 @@ function listOnce(models: LmstudioModelWire[]): void {
   fetchModels.mockResolvedValueOnce({ reachable: true, status: 200, models });
 }
 
-async function nonInteractive(
-  params: {
-    config?: OpenClawConfig;
-    customBaseUrl?: string;
-    customApiKey?: string;
-    lmstudioApiKey?: string;
-    customModelId?: string;
-    resolvedApiKey?: string | null;
-    resolvedApiKeySource?: "flag" | "env" | "profile";
-  } = {},
-) {
+type NonInteractiveOptions = {
+  config?: OpenClawConfig;
+  customApiKey?: string;
+  lmstudioApiKey?: string;
+  customModelId?: string;
+  resolvedApiKey?: string | null;
+  resolvedApiKeySource?: "flag" | "env" | "profile";
+};
+async function nonInteractive(params: NonInteractiveOptions = {}) {
   const config = params.config ?? buildConfig();
   return await configureNonInteractive({
     authChoice: "lmstudio",
     config,
     baseConfig: config,
     opts: {
-      customBaseUrl: params.customBaseUrl ?? "http://localhost:1234/api/v1/",
+      customBaseUrl: endpoint,
       customModelId: "customModelId" in params ? params.customModelId : modelId,
-      customApiKey: params?.customApiKey ?? "lmstudio-test-key",
-      lmstudioApiKey: params?.lmstudioApiKey,
+      customApiKey: params.customApiKey ?? "lmstudio-test-key",
+      lmstudioApiKey: params.lmstudioApiKey,
     },
     runtime: createNonExitingRuntimeEnv(),
-    resolveApiKey: vi.fn(
-      async (_options: Parameters<ProviderAuthMethodNonInteractiveContext["resolveApiKey"]>[0]) =>
-        params?.resolvedApiKey === null
-          ? null
-          : {
-              key: params?.resolvedApiKey ?? "lmstudio-test-key",
-              source: params?.resolvedApiKeySource ?? "flag",
-            },
-    ),
+    resolveApiKey: async () =>
+      params.resolvedApiKey === null
+        ? null
+        : {
+            key: params.resolvedApiKey ?? "lmstudio-test-key",
+            source: params.resolvedApiKeySource ?? "flag",
+          },
     toApiKeyCredential: vi.fn(),
   } satisfies ProviderAuthMethodNonInteractiveContext);
 }
 
-function promptText(apiKey = "lmstudio-test-key", endpoint = "http://localhost:1234/api/v1/") {
+function promptText(apiKey = "lmstudio-test-key") {
   return vi.fn().mockResolvedValueOnce(endpoint).mockResolvedValueOnce(apiKey);
 }
 
-// `promptText` is the public callback-based setup API. Keep its non-wizard
-// coverage next to the wizard prompter cases.
 function interactive(
   params: Omit<Parameters<typeof configureInteractive>[0], "config"> & {
     config?: OpenClawConfig;
@@ -171,7 +169,7 @@ type WizardPromptValues = {
 function wizard(values: WizardPromptValues = {}, confirmValues: boolean[] = []) {
   return createQueuedWizardPrompter({
     textValues: [
-      values.baseUrl ?? "http://localhost:1234/api/v1/",
+      values.baseUrl ?? endpoint,
       values.apiKey ?? "lmstudio-test-key",
       ...(values.context === undefined ? [] : [values.context]),
     ],
@@ -181,36 +179,27 @@ function wizard(values: WizardPromptValues = {}, confirmValues: boolean[] = []) 
 
 function boundWizard(values: WizardPromptValues = {}) {
   const { prompter, note, text } = wizard(values);
-
-  class MethodBoundWizardPrompter implements WizardPrompter {
-    intro = prompter.intro;
-    outro = prompter.outro;
-    select = prompter.select;
-    multiselect = prompter.multiselect;
-    confirm = prompter.confirm;
-    progress = prompter.progress;
-
-    private recordNote = note;
-    private readText = text;
-    async note(message: string, title?: string) {
-      await this.recordNote(message, title);
-    }
-    async text() {
-      return (await this.readText()) as string;
-    }
-  }
-
-  return { prompter: new MethodBoundWizardPrompter(), note, text };
+  return {
+    note,
+    text,
+    prompter: {
+      ...prompter,
+      recordNote: note,
+      readText: text,
+      async note(message: string, title?: string) {
+        await this.recordNote(message, title);
+      },
+      async text() {
+        return (await this.readText()) as string;
+      },
+    },
+  };
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
 
-function expectFields(
-  value: unknown,
-  expected: Record<string, unknown>,
-  label = "LM Studio provider",
-) {
-  const record = requireRecord(value, label);
+function expectFields(value: unknown, expected: Record<string, unknown>) {
+  const record = requireRecord(value, "LM Studio provider");
   for (const [key, expectedValue] of Object.entries(expected)) {
     expect(record[key]).toEqual(expectedValue);
   }
@@ -231,10 +220,10 @@ function expectAuthProfilesRemoved() {
 function expectDiscoveryRequest(
   apiKey?: string,
   headers?: Record<string, string>,
-  endpoint = LMSTUDIO_DEFAULT_INFERENCE_BASE_URL,
+  discoveryBaseUrl = LMSTUDIO_DEFAULT_INFERENCE_BASE_URL,
 ) {
   expect(fetchModels).toHaveBeenCalledWith({
-    baseUrl: endpoint,
+    baseUrl: discoveryBaseUrl,
     apiKey,
     ...(headers ? { headers } : {}),
     timeoutMs: 5000,
@@ -246,6 +235,19 @@ function expectModels(
   models: Record<string, unknown>[] = [{ id: modelId }],
 ) {
   expect(provider.models).toEqual(models.map((model) => expect.objectContaining(model)));
+}
+
+function expectProvider(config: Parameters<typeof providerOf>[0], fields: Record<string, unknown>) {
+  const provider = providerOf(config);
+  expectFields(provider, { baseUrl, api: "openai-completions", ...fields });
+  expectModels(provider);
+  return provider;
+}
+
+function expectKeyless(result: ProviderAuthResult) {
+  expectAuthProfilesRemoved();
+  expect(result.profiles).toStrictEqual([]);
+  expect(providerOf(result.configPatch)).not.toHaveProperty("auth");
 }
 
 function loadedToolModel(key: string, context = 32_768): LmstudioModelWire {
@@ -275,9 +277,7 @@ describe("lmstudio setup", () => {
         providerId: string;
         ctx: ProviderAuthMethodNonInteractiveContext;
       }) => {
-        const selectedId =
-          (typeof ctx.opts.customModelId === "string" ? ctx.opts.customModelId.trim() : "") ||
-          modelId;
+        const selectedId = ctx.opts.customModelId?.trim() || modelId;
         return {
           agents: { defaults: { model: { primary: `${providerId}/${selectedId}` } } },
           models: {
@@ -324,27 +324,20 @@ describe("lmstudio setup", () => {
   it.each<[string, LmstudioModelWire[], string | undefined]>([
     [
       "prefers the strongest loaded family",
-      [
-        loadedToolModel("llama3.3-70b-instruct"),
-        loadedToolModel("qwen3.5-4b-instruct"),
-        loadedToolModel("nomic-embed-text"),
-      ],
-      "lmstudio/qwen3.5-4b-instruct",
+      [loadedToolModel(llama), loadedToolModel(qwen), loadedToolModel("nomic-embed-text")],
+      `lmstudio/${qwen}`,
     ],
     [
       "ignores a preferred downloaded model",
-      [
-        { key: "qwen3.5-4b-instruct", max_context_length: 65_536, loaded_instances: [] },
-        loadedToolModel("llama3.3-70b-instruct"),
-      ],
-      "lmstudio/llama3.3-70b-instruct",
+      [{ key: qwen, max_context_length: 65_536, loaded_instances: [] }, loadedToolModel(llama)],
+      `lmstudio/${llama}`,
     ],
     [
       "skips a preferred model below 16k context",
-      [loadedToolModel("llama3.3-70b-instruct"), loadedToolModel("qwen3.5-4b-instruct", 8_192)],
-      "lmstudio/llama3.3-70b-instruct",
+      [loadedToolModel(llama), loadedToolModel(qwen, 8_192)],
+      `lmstudio/${llama}`,
     ],
-    ["rejects unmeasured context", [{ key: "qwen3.5-4b-instruct" }], undefined],
+    ["rejects unmeasured context", [{ key: qwen }], undefined],
   ])("%s", async (_name, models, expectedModel) => {
     listModels(
       models.map((model) => ({
@@ -380,13 +373,7 @@ describe("lmstudio setup", () => {
     const result = await nonInteractive({ resolvedApiKey: null });
 
     expectDiscoveryRequest(localKey);
-    const provider = providerOf(result);
-    expectFields(provider, {
-      baseUrl: "http://localhost:1234/v1",
-      api: "openai-completions",
-      apiKey: localKey,
-    });
-    expectModels(provider);
+    expectProvider(result, { apiKey: localKey });
   });
 
   it.each<[string | null, "profile" | "env" | undefined, boolean]>([
@@ -396,14 +383,13 @@ describe("lmstudio setup", () => {
   ])(
     "non-interactive header auth clears key %s from %s",
     async (resolvedApiKey, resolvedApiKeySource, withProfile) => {
-      const headers = customHeaders;
       const result = await nonInteractive({
         config: buildConfig(
           {
+            api: "openai-completions",
             ...(withProfile ? { apiKey: "stale-config-key" } : {}),
             auth: "api-key",
-            api: "openai-completions",
-            headers,
+            headers: customHeaders,
           },
           withProfile
             ? {
@@ -420,49 +406,30 @@ describe("lmstudio setup", () => {
       });
 
       expectAuthProfilesRemoved();
-      expectDiscoveryRequest(undefined, headers);
+      expectDiscoveryRequest(undefined, customHeaders);
       expect(configureProvider).not.toHaveBeenCalled();
       expect(resolveAgentModelPrimaryValue(result?.agents?.defaults?.model)).toBe(modelRef);
-      const provider = providerOf(result);
-      expectFields(provider, {
-        baseUrl: "http://localhost:1234/v1",
-        api: "openai-completions",
-        headers,
-      });
-      expectModels(provider);
+      const provider = expectProvider(result, { headers: customHeaders });
       expect(provider).not.toHaveProperty("apiKey");
       expect(provider).not.toHaveProperty("auth");
       expect(result?.auth).toBeUndefined();
     },
   );
 
-  it.each<[string, NonNullable<Parameters<typeof nonInteractive>[0]>]>([
-    [
-      "a stale literal key",
-      {
-        config: buildConfig({
-          auth: "api-key",
-          apiKey: "stale-config-key",
-          api: "openai-completions",
-          headers: { Authorization: "Bearer stale-token", "X-Proxy-Auth": "proxy-token" },
-        }),
-        lmstudioApiKey: "fresh-cli-key",
-        resolvedApiKey: "fresh-cli-key",
-      },
-    ],
-    [
-      "a local auth marker",
-      {
-        config: buildConfig({ apiKey: CUSTOM_LOCAL_AUTH_MARKER, api: "openai-completions" }),
-      },
-    ],
-  ])("non-interactive setup replaces %s during re-auth", async (_name, params) => {
-    const result = await nonInteractive(params);
-
+  it.each([
+    { ...staleAuth, headers: staleHeaders },
+    { ...keyAuth, apiKey: CUSTOM_LOCAL_AUTH_MARKER },
+  ])("non-interactive setup replaces $apiKey during re-auth", async (existing) => {
+    const result = await nonInteractive({
+      config: buildConfig(existing),
+      ...("headers" in existing
+        ? { lmstudioApiKey: "fresh-cli-key", resolvedApiKey: "fresh-cli-key" }
+        : {}),
+    });
     const provider = providerOf(result);
     expectFields(provider, { auth: "api-key", apiKey: keyAuth.apiKey });
     expect(provider.apiKey).not.toBe("stale-config-key");
-    expect(provider.headers).toEqual(params.config?.models?.providers?.lmstudio?.headers);
+    expect(provider.headers).toEqual("headers" in existing ? existing.headers : undefined);
   });
 
   it("interactive setup applies an optional preferred context length to all discovered LM Studio models", async () => {
@@ -481,20 +448,30 @@ describe("lmstudio setup", () => {
     ]);
   });
 
-  it("interactive setup preserves gateway wizard note binding on discovery failure", async () => {
-    fetchModels.mockResolvedValueOnce({ reachable: false, models: [] });
-    const { prompter, note, text } = boundWizard();
-
-    await expect(configureInteractive({ config: buildConfig(), prompter })).rejects.toThrow(
+  it.each([
+    [
+      false,
+      undefined,
       "LM Studio not reachable",
-    );
-
-    expect(text).toHaveBeenCalledTimes(2);
-    expect(note).toHaveBeenCalledWith(
-      "LM Studio could not be reached at http://localhost:1234/v1.\nStart LM Studio (or run lms server start) and re-run setup.",
-      "LM Studio",
-    );
-  });
+      `LM Studio could not be reached at ${baseUrl}.\nStart LM Studio (or run lms server start) and re-run setup.`,
+    ],
+    [
+      true,
+      401,
+      "LM Studio discovery failed (401)",
+      `LM Studio returned HTTP 401 while listing models at ${baseUrl}.\nCheck the base URL and API key, then re-run setup.`,
+    ],
+  ] as const)(
+    "reports discovery failure with bound wizard methods (remote=%s, status=%s)",
+    async (isRemote, status, reason, message) => {
+      fetchModels.mockResolvedValueOnce({ reachable: isRemote, status, models: [] });
+      const { prompter, note, text } = boundWizard();
+      await expect(interactive({ prompter, isRemote })).rejects.toThrow(reason);
+      expect(text).toHaveBeenCalledTimes(2);
+      expect(note).toHaveBeenCalledWith(message, "LM Studio");
+      expect(prompter.confirm).not.toHaveBeenCalled();
+    },
+  );
 
   it("remote interactive setup retries discovery without asking for context tuning", async () => {
     fetchModels.mockResolvedValueOnce({ reachable: false, models: [] });
@@ -522,21 +499,6 @@ describe("lmstudio setup", () => {
     expect(result.defaultModel).toBe(modelRef);
   });
 
-  it("remote interactive setup does not retry immutable HTTP failures", async () => {
-    fetchModels.mockResolvedValueOnce({ reachable: true, status: 401, models: [] });
-    const { prompter, note, confirm } = wizard();
-
-    await expect(
-      configureInteractive({ config: buildConfig(), prompter, isRemote: true }),
-    ).rejects.toThrow("LM Studio discovery failed (401)");
-
-    expect(note).toHaveBeenCalledWith(
-      "LM Studio returned HTTP 401 while listing models at http://localhost:1234/v1.\nCheck the base URL and API key, then re-run setup.",
-      "LM Studio",
-    );
-    expect(confirm).not.toHaveBeenCalled();
-  });
-
   it("remote interactive setup stops when cancelled during retry discovery", async () => {
     const controller = new AbortController();
     const retry = createDeferred<{ reachable: true; status: 200; models: never[] }>();
@@ -555,78 +517,47 @@ describe("lmstudio setup", () => {
 
   it("interactive Docker setup hints the host LM Studio endpoint and uses it for blank input", async () => {
     vi.stubEnv("OPENCLAW_DOCKER_SETUP", "1");
-    const { prompter, text } = wizard({
-      baseUrl: "",
-      apiKey: "",
-      context: "",
-    });
+    const { prompter, text } = wizard({ baseUrl: "", apiKey: "", context: "" });
 
     const result = await interactive({ prompter });
 
-    const firstTextCall = requireRecord(text.mock.calls[0]?.[0], "first text prompt");
-    expectFields(
-      firstTextCall,
-      {
-        initialValue: undefined,
-        placeholder: "http://host.docker.internal:1234",
-      },
-      "first text prompt",
-    );
+    expectFields(text.mock.calls[0]?.[0], {
+      initialValue: undefined,
+      placeholder: "http://host.docker.internal:1234",
+    });
     expectDiscoveryRequest(localKey, undefined, "http://host.docker.internal:1234/v1");
     expectFields(providerOf(result.configPatch), {
       baseUrl: "http://host.docker.internal:1234/v1",
       apiKey: localKey,
     });
-    expect(result.profiles).toStrictEqual([]);
-    expect(providerOf(result.configPatch)).not.toHaveProperty("auth");
-    expectAuthProfilesRemoved();
+    expectKeyless(result);
   });
 
   it("interactive setup uses existing Authorization headers when the API key is blank", async () => {
-    const config = buildConfig({
-      api: "openai-completions",
-      apiKey: "stale-config-key",
-      auth: "api-key",
-      headers: { Authorization: "Bearer proxy-token" },
-    });
+    const headers = { Authorization: "Bearer proxy-token" };
+    const config = buildConfig({ ...staleAuth, headers });
     const { prompter } = wizard({ apiKey: "", context: "" });
 
     const result = await interactive({ config, prompter });
 
-    expectDiscoveryRequest(undefined, { Authorization: "Bearer proxy-token" });
-    expectAuthProfilesRemoved();
-    expect(result.profiles).toStrictEqual([]);
-    const provider = providerOf(result.configPatch);
-    expectFields(provider, {
-      baseUrl: "http://localhost:1234/v1",
-      api: "openai-completions",
-      headers: { Authorization: "Bearer proxy-token" },
-    });
-    expectModels(provider);
+    expectDiscoveryRequest(undefined, headers);
+    expectKeyless(result);
+    const provider = expectProvider(result.configPatch, { headers });
     expect(provider).not.toHaveProperty("apiKey");
-    expect(provider).not.toHaveProperty("auth");
   });
 
   it("interactive setup without a wizard accepts a blank API key for local LM Studio", async () => {
     const result = await interactive({ promptText: promptText("") });
 
     expectDiscoveryRequest(localKey);
-    expectAuthProfilesRemoved();
-    expect(result.profiles).toStrictEqual([]);
-    const provider = providerOf(result.configPatch);
-    expectFields(provider, { apiKey: localKey });
-    expect(provider).not.toHaveProperty("auth");
+    expectKeyless(result);
+    expectFields(providerOf(result.configPatch), { apiKey: localKey });
   });
 
   it("interactive setup overwrites existing config apiKey during re-auth", async () => {
     const result = await interactive({
       config: buildConfig(
-        {
-          auth: "api-key",
-          apiKey: "stale-config-key",
-          api: "openai-completions",
-          headers: { Authorization: "Bearer stale-token", "X-Proxy-Auth": "proxy-token" },
-        },
+        { ...staleAuth, headers: staleHeaders },
         {
           agents: { defaults: { models: { "anthropic/claude-sonnet-4-6": { alias: "Sonnet" } } } },
         },
@@ -634,22 +565,17 @@ describe("lmstudio setup", () => {
       promptText: promptText("fresh-prompt-key"),
     });
     expect(result.configPatch?.models?.mode).toBe("merge");
-    const provider = providerOf(result.configPatch);
-    expectFields(provider, {
-      baseUrl: "http://localhost:1234/v1",
-      api: "openai-completions",
+    const provider = expectProvider(result.configPatch, {
+      auth: "api-key",
+      apiKey: keyAuth.apiKey,
     });
-    expectFields(provider, { auth: "api-key", apiKey: keyAuth.apiKey });
     expect(provider.apiKey).not.toBe("stale-config-key");
     expect(result.defaultModel).toBe(modelRef);
     expectFields(result.profiles[0], {
       profileId: "lmstudio:default",
       credential: { type: "api_key", provider: "lmstudio", key: "fresh-prompt-key" },
     });
-    expect(provider.headers).toEqual({
-      Authorization: "Bearer stale-token",
-      "X-Proxy-Auth": "proxy-token",
-    });
+    expect(provider.headers).toEqual(staleHeaders);
     expect(result.configPatch?.agents?.defaults?.models).toEqual({
       "anthropic/claude-sonnet-4-6": { alias: "Sonnet" },
       [modelRef]: {},
