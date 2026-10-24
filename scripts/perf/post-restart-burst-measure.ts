@@ -279,7 +279,7 @@ if (isMainThread) {
       process.stdout.write('COLD_ROWS_OWNER ' + JSON.stringify({ path: rowOwnerPath, sha256: rowOwnerSha256 }) + '\\n');
     }
     if (url.endsWith('/src/gateway/session-utils-list.ts')) {
-      let source = typeof loaded.source === 'string' ? loaded.source : new TextDecoder().decode(loaded.source);
+      let source = stripTypeScriptTypes(readFileSync(new URL(url), 'utf8'));
       const selection = /const selectPage\\s*=\\s*\\(\\)\\s*=>\\s*\\{/;
       if (!selection.test(source)) throw new Error('Missing selectPage source counter hook');
       source = source.replace(selection, '$&if (globalThis[Symbol.for("openclaw.bench.cold-row-counts")].active) globalThis[Symbol.for("openclaw.bench.cold-row-counts")].selectPage++;');
@@ -287,7 +287,7 @@ if (isMainThread) {
       return { ...loaded, source };
     }
     if (url.endsWith('/src/infra/main-thread-stall.ts')) {
-      let source = typeof loaded.source === 'string' ? loaded.source : new TextDecoder().decode(loaded.source);
+      let source = stripTypeScriptTypes(readFileSync(new URL(url), 'utf8'));
       const task = /function runWithMainThreadTask\\s*\\([^)]*\\)\\s*\\{/;
       if (!task.test(source)) throw new Error('Missing runWithMainThreadTask source hook');
       source = source.replace(task, '$&const probe = globalThis[Symbol.for("openclaw.bench.cold-row-counts")]; if (probe.active) { const originalRun = run; run = () => { const at = performance.now(); try { return originalRun(); } finally { const ms = performance.now() - at; probe.taskSamples++; if (ms > probe.taskMaxMs) { probe.taskMaxMs = ms; probe.taskName = name.slice(0, 160); probe.taskPhase = phase?.slice(0, 160) ?? null; } } }; }');
