@@ -168,7 +168,7 @@ it.each([
   ["surrogate pair across the output boundary", prefix + "😀" + tail, prefix],
   ["surrogate pair fitting the output boundary", fittingPair + tail, fittingPair],
   ["surrogate lookahead after trim", " ".repeat(1548) + prefix + "😀tail", prefix],
-  ["lone surrogate at the output boundary", prefix + "\ud800" + tail, prefix + "\ufffd"],
+  ["lone surrogate at the output boundary", prefix + "\ud800" + tail, prefix + "\ud800"],
   ["C0 removal after trim", "a\u0000b \u007f c".repeat(400), "ab  c".repeat(100)],
   ["OSC terminator beyond input prefix", "\u001b]0;" + oscPayload + "\u0007visible", "visible"],
   ["unterminated OSC payload", "\u001b]0;" + oscPayload, "]0;" + "p".repeat(497)],

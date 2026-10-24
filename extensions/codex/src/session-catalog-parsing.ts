@@ -98,7 +98,7 @@ export function truncateCodexCatalogPreview(
     MAX_SESSION_PREVIEW_LENGTH,
     "truncate",
   );
-  return Buffer.from(preview ?? "", "utf8").toString("utf8");
+  return detachCodexCatalogString(preview ?? "");
 }
 
 function normalizeInteractiveThreadSource(source: unknown) {
