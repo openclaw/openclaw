@@ -123,7 +123,7 @@ describe("memory manager FTS-only reindex", () => {
     providerBatchCalls = 0;
     workspaceDir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
-    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Alpha topic\n\nKeep this note.");
+    await writeMemory("Alpha topic\n\nKeep this note.");
     setFtsOnlyStateDir(path.join(workspaceDir, "state"));
     indexPath = resolveOpenClawAgentSqlitePath({ agentId: "main" });
   });
@@ -198,6 +198,8 @@ describe("memory manager FTS-only reindex", () => {
     managers.push(manager);
     return manager;
   }
+
+  const writeMemory = (text: string) => fs.writeFile(path.join(workspaceDir, "MEMORY.md"), text);
 
   function expectBootstrap(debug: unknown[], bootstrap: Record<string, unknown>) {
     expect(debug).toEqual(
@@ -298,10 +300,7 @@ describe("memory manager FTS-only reindex", () => {
       });
       providerEmbeddingError = quotaError;
       providerQueryError = quotaError;
-      await fs.writeFile(
-        path.join(workspaceDir, "MEMORY.md"),
-        "Alpha topic\n\nPending quota update.",
-      );
+      await writeMemory("Alpha topic\n\nPending quota update.");
       // The observation fixture leaves dirty notification to the test.
       Reflect.set(memoryManager, "dirty", true);
       if (origin === "watch") {
@@ -358,7 +357,7 @@ describe("memory manager FTS-only reindex", () => {
       [29_999, "Delta keyword update"],
     ] as const) {
       clock.mockReturnValue(now + elapsed);
-      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), `${marker}\n\nKeep this note.`);
+      await writeMemory(`${marker}\n\nKeep this note.`);
       Reflect.set(memoryManager, "dirty", true);
       await memoryManager.search(marker);
       await idle.awaitManagerIdle();
@@ -566,17 +565,13 @@ describe("memory manager FTS-only reindex", () => {
     expect(JSON.stringify(debug)).not.toContain("No API key resolved");
     expect(memoryManager.status().custom?.indexIdentity).toEqual({ status: "valid" });
 
-    await fs.writeFile(
-      path.join(workspaceDir, "MEMORY.md"),
-      "Gamma fallback refresh\n\nIndexed while embeddings remain degraded.",
-    );
+    await writeMemory("Gamma fallback refresh\n\nIndexed while embeddings remain degraded.");
     await expect(memoryManager.sync({ reason: "watch", force: true })).resolves.toBeUndefined();
     await expect(memoryManager.search("Gamma fallback refresh")).resolves.toHaveLength(1);
     expect(providerQueryCalls).toBe(queryCallsAfterProbe);
 
     nowSpy.mockReturnValue(now + 62_000);
-    await fs.writeFile(
-      path.join(workspaceDir, "MEMORY.md"),
+    await writeMemory(
       "Delta fallback refresh\n\nRetry remains keyword-only while embeddings still fail.",
     );
     await expect(memoryManager.sync({ reason: "watch", force: true })).resolves.toBeUndefined();
@@ -674,13 +669,6 @@ describe("memory manager FTS-only reindex", () => {
     expect(memoryManager.status().provider).toBe("openai");
   });
 
-  function indexIdentityStatus(memoryManager: MemoryIndexManager): string | undefined {
-    const identity = memoryManager.status().custom?.indexIdentity as
-      | { status?: string }
-      | undefined;
-    return identity?.status;
-  }
-
   function seedChunksWithNoMeta(model = "fts-only"): void {
     const db = openOpenClawAgentDatabase({ agentId: "main" }).db;
     db.exec(`
@@ -691,32 +679,25 @@ describe("memory manager FTS-only reindex", () => {
     `);
   }
 
-  it("self-heals missing identity on non-forced gateway sync when all chunks are FTS-only and provider is unavailable", async () => {
-    seedChunksWithNoMeta();
-    const memoryManager = await createManager({ provider: "auto", vectorEnabled: false });
-
-    expect(indexIdentityStatus(memoryManager)).toBe("missing");
-
-    // Non-forced sync simulates the gateway's periodic sync loop
-    await memoryManager.sync();
-
-    const statusAfter = memoryManager.status();
-    expect(indexIdentityStatus(memoryManager)).toBe("valid");
-    expect(statusAfter.chunks).toBeGreaterThan(0);
-    expect(statusAfter.dirty).toBe(false);
-  });
-
-  it("does not rebuild missing-identity semantic chunks when the provider is unavailable", async () => {
-    seedChunksWithNoMeta("text-embedding-3-small");
-    const memoryManager = await createManager({ provider: "auto", vectorEnabled: false });
-
-    await memoryManager.sync();
-
-    const statusAfter = memoryManager.status();
-    expect(indexIdentityStatus(memoryManager)).toBe("missing");
-    expect(statusAfter.chunks).toBe(1);
-    expect(statusAfter.dirty).toBe(true);
-  });
+  it.each([
+    ["fts-only", "valid", false],
+    ["text-embedding-3-small", "missing", true],
+  ] as const)(
+    "reconciles missing %s identity without a provider",
+    async (model, identity, dirty) => {
+      seedChunksWithNoMeta(model);
+      const memoryManager = await createManager({ provider: "auto", vectorEnabled: false });
+      expect(memoryManager.status().custom?.indexIdentity).toMatchObject({ status: "missing" });
+      await memoryManager.sync();
+      const statusAfter = memoryManager.status();
+      expect(statusAfter).toMatchObject({ dirty, custom: { indexIdentity: { status: identity } } });
+      if (dirty) {
+        expect(statusAfter.chunks).toBe(1);
+      } else {
+        expect(statusAfter.chunks).toBeGreaterThan(0);
+      }
+    },
+  );
 
   it("removes chunks and FTS rows when the dirty source file is already deleted", async () => {
     const seedDb = requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);

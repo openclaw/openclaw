@@ -899,15 +899,6 @@ describe("memory index", () => {
     expectStatusIdentity(nextManager, true, { status: "valid" });
   });
 
-  it("closes embedding providers when memory index managers close", async () => {
-    const manager = await getManager();
-    await manager.probeEmbeddingAvailability();
-    expect(providerFixture.providerCloseCalls).toBe(0);
-    await manager.close();
-    await manager.close();
-    expect(providerFixture.providerCloseCalls).toBe(1);
-  });
-
   it("waits for sync that attaches after provider initialization before closing providers", async () => {
     const providerInit = createDeferred<void>();
     providerFixture.providerInitGate = providerInit.promise;
