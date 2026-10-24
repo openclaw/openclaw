@@ -60,11 +60,14 @@ const evidence: Array<{
   completed: boolean;
 }> = [];
 let phase = "boot";
-let imageRequests = 0;
-let modelRequests = 0;
-let generationRequested = false;
-let imageResponseFinishedAt: number | undefined;
-let detachedResultsBeforeImageCompletion = 0;
+type SampleState = {
+  imageRequests: number;
+  modelRequests: number;
+  generationRequested: boolean;
+  imageResponseFinishedAt?: number;
+  detachedResultsBeforeImageCompletion: number;
+};
+const sampleStates = new Map<string, SampleState>();
 let gatewayClient: ReturnType<typeof createGatewayWsClient> | undefined;
 const setPhase = (next: string) => {
   phase = next;
@@ -87,40 +90,47 @@ const mockPort = await getFreePort();
 // Delay only image work. The ordinary mock owns model/tool-call response generation.
 const proxy = createServer((req, res) => {
   void (async () => {
-    if (req.url === "/v1/images/generations") {
-      imageRequests++;
-      await delay(imageDelayMs);
-    }
     let body: Buffer | undefined;
-    if (req.url === "/v1/chat/completions") {
-      modelRequests++;
+    let sample: SampleState | undefined;
+    if (req.url === "/v1/chat/completions" || req.url === "/v1/images/generations") {
       const chunks: Buffer[] = [];
       for await (const chunk of req) {
         chunks.push(Buffer.from(chunk));
       }
-      const request = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
-        model: string;
-        messages: Array<{ role: string; content: unknown }>;
-      };
-      if (
-        imageResponseFinishedAt === undefined &&
-        request.messages.some(
-          (message) =>
-            message.role === "tool" &&
-            JSON.stringify(message.content).includes(
-              "Background task started for image generation",
-            ),
-        )
-      ) {
-        detachedResultsBeforeImageCompletion++;
+      body = Buffer.concat(chunks);
+      const token = body.toString("utf8").match(/MEDIA_COMPLETION_BENCH_GENERATE_\d+/)?.[0];
+      assert(token, "provider request did not carry its synthetic sample marker");
+      sample = sampleStates.get(token);
+      assert(sample, "unknown synthetic sample marker");
+      if (req.url === "/v1/images/generations") {
+        sample.imageRequests++;
+        await delay(imageDelayMs);
+      } else {
+        sample.modelRequests++;
+        const request = JSON.parse(body.toString("utf8")) as {
+          model: string;
+          messages: Array<{ role: string; content: unknown }>;
+        };
+        if (
+          sample.imageResponseFinishedAt === undefined &&
+          request.messages.some(
+            (message) =>
+              message.role === "tool" &&
+              JSON.stringify(message.content).includes(
+                "Background task started for image generation",
+              ),
+          )
+        ) {
+          sample.detachedResultsBeforeImageCompletion++;
+        }
+        // A previous sample can still be delivering its completion. Its own marker
+        // keeps that request from consuming the next sample's tool call.
+        request.model = sample.generationRequested
+          ? "synthetic-media-completion"
+          : `synthetic-media-generation-${token}`;
+        sample.generationRequested = true;
+        body = Buffer.from(JSON.stringify(request));
       }
-      // Runtime context can follow the user prompt. Script one tool call per cron run
-      // independently of those provider-visible context messages.
-      request.model = generationRequested
-        ? "synthetic-media-completion"
-        : "synthetic-media-generation";
-      generationRequested = true;
-      body = Buffer.from(JSON.stringify(request));
     }
     const headers = { ...req.headers };
     if (body) {
@@ -138,7 +148,7 @@ const proxy = createServer((req, res) => {
       (reply) => {
         if (req.url === "/v1/images/generations") {
           res.once("finish", () => {
-            imageResponseFinishedAt = performance.now();
+            sample!.imageResponseFinishedAt = performance.now();
           });
         }
         res.writeHead(reply.statusCode ?? 502, reply.headers);
@@ -166,16 +176,27 @@ try {
     responseControl,
     JSON.stringify({
       models: {
-        "synthetic-media-generation": {
-          text: marker,
-          toolCall: {
-            name: "dispatch_action",
-            arguments: {
-              id: "image_generate",
-              args: { prompt: "Synthetic single blue pixel", model: "openai/gpt-image-1" },
-            },
-          },
-        },
+        ...Object.fromEntries(
+          Array.from({ length: samples + 1 }, (_, sample) => {
+            const token = `${requestMarker}_${sample}`;
+            return [
+              `synthetic-media-generation-${token}`,
+              {
+                text: marker,
+                toolCall: {
+                  name: "dispatch_action",
+                  arguments: {
+                    id: "image_generate",
+                    args: {
+                      prompt: `${token}: Synthetic single blue pixel`,
+                      model: "openai/gpt-image-1",
+                    },
+                  },
+                },
+              },
+            ];
+          }),
+        ),
         "synthetic-media-completion": { text: marker },
       },
     }),
@@ -340,26 +361,33 @@ try {
     },
     caps: [],
   });
-  const job = await rpc<{ id: string }>("cron.add", {
-    name: "synthetic-media-completion",
-    agentId: "main",
-    enabled: false,
-    schedule: { kind: "every", everyMs: 86_400_000 },
-    sessionTarget: "isolated",
-    wakeMode: "now",
-    payload: {
-      kind: "agentTurn",
-      message: `${requestMarker}: Generate the synthetic image, then confirm completion.`,
-      toolsAllow: ["image_generate"],
-      timeoutSeconds: 60,
-    },
-    delivery: { mode: "none" },
-  });
   for (let sample = 0; sample <= samples; sample++) {
     setPhase(sample === 0 ? "cold" : `warm-${sample}`);
-    const before = { imageRequests, modelRequests, detachedResultsBeforeImageCompletion };
-    imageResponseFinishedAt = undefined;
-    generationRequested = false;
+    const token = `${requestMarker}_${sample}`;
+    const state: SampleState = {
+      imageRequests: 0,
+      modelRequests: 0,
+      generationRequested: false,
+      detachedResultsBeforeImageCompletion: 0,
+    };
+    sampleStates.set(token, state);
+    // Independent cron identities prevent a still-delivering completion from
+    // colliding with admission of the following sample.
+    const job = await rpc<{ id: string }>("cron.add", {
+      name: `synthetic-media-completion-${sample}`,
+      agentId: "main",
+      enabled: false,
+      schedule: { kind: "every", everyMs: 86_400_000 },
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: {
+        kind: "agentTurn",
+        message: `${token}: Generate the synthetic image, then confirm completion.`,
+        toolsAllow: ["image_generate"],
+        timeoutSeconds: 60,
+      },
+      delivery: { mode: "none" },
+    });
     const startedAt = performance.now();
     const result = await rpc<{ run?: { status?: string; error?: string; summary?: string } }>(
       "cron.run",
@@ -367,31 +395,23 @@ try {
     );
     const finishedAt = performance.now();
     assert.equal(result.run?.status, "ok", `cron did not finish: ${JSON.stringify(result)}`);
-    assert.equal(
-      imageRequests - before.imageRequests,
-      1,
-      "expected one actual image generation per cron run",
-    );
-    assert(
-      modelRequests - before.modelRequests >= 2,
-      "expected image tool call then final response",
-    );
+    assert.equal(state.imageRequests, 1, "expected one actual image generation per cron run");
+    assert(state.modelRequests >= 2, "expected image tool call then final response");
     assert(result.run?.summary?.includes(marker), "missing synthetic final response marker");
-    assert(imageResponseFinishedAt !== undefined, "image proxy response did not finish");
+    assert(state.imageResponseFinishedAt !== undefined, "image proxy response did not finish");
     assert(
-      detachedResultsBeforeImageCompletion > before.detachedResultsBeforeImageCompletion,
+      state.detachedResultsBeforeImageCompletion > 0,
       "tool did not return detached work before the image completed; this did not exercise completion waiting",
     );
     evidence.push({
       sample,
       phase,
-      imageRequests: imageRequests - before.imageRequests,
-      modelRequests: modelRequests - before.modelRequests,
-      detachedResultsBeforeImageCompletion:
-        detachedResultsBeforeImageCompletion - before.detachedResultsBeforeImageCompletion,
+      imageRequests: state.imageRequests,
+      modelRequests: state.modelRequests,
+      detachedResultsBeforeImageCompletion: state.detachedResultsBeforeImageCompletion,
       elapsedMs: finishedAt - startedAt,
       // Proxy response timing includes transport and post-image work, not exact owner settlement.
-      proxyImageResponseToCronFinishMs: finishedAt - imageResponseFinishedAt,
+      proxyImageResponseToCronFinishMs: finishedAt - state.imageResponseFinishedAt,
       completed: true,
     });
   }
@@ -408,7 +428,15 @@ try {
 const result = {
   workload: "media-completion-gateway",
   imageDelayMs,
-  evidence,
+  // Final counters include late completion requests that arrived after cron.run.
+  evidence: evidence.map((item) => {
+    const state = sampleStates.get(`${requestMarker}_${item.sample}`)!;
+    return {
+      ...item,
+      modelRequests: state.modelRequests,
+      imageRequests: state.imageRequests,
+    };
+  }),
   ...(values["count-waits"]
     ? {
         waitTimers: JSON.parse(
