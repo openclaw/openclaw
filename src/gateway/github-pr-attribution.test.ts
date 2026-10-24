@@ -3,7 +3,7 @@
 import { githubPublicationTestMocks, installGitHubPublicationTestHarness } from "./github-publication.test-support.js";
 import { describe, expect, it, vi } from "vitest";
 import {
-  OPENCLAW_PR_ATTRIBUTION_FOOTER,
+  PR_ATTRIBUTION_FOOTER,
   PR_ATTRIBUTION_PREFERENCE_KEY,
   GIT_COAUTHOR_PREFERENCE_KEY,
 } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
@@ -84,7 +84,7 @@ describe("managed PR attribution", () => {
     const inputBody =
       "Keep human credit and work-session links." +
       (state === "optout" ? "\n\n<!-- openclaw:attribution=off -->" : "") +
-      (state === "existing-footer" ? `\n\n${OPENCLAW_PR_ATTRIBUTION_FOOTER}` : "");
+      (state === "existing-footer" ? `\n\n${PR_ATTRIBUTION_FOOTER}` : "");
     const transport = mocks.runCommand.getMockImplementation()!;
     const postedBodies: string[] = [];
     mocks.runCommand.mockImplementation(async (argv, options) => {
@@ -109,7 +109,7 @@ describe("managed PR attribution", () => {
     expect(body).toContain("Keep human credit and work-session links.");
     expect(body).toContain(`<!-- openclaw-publication:${result.requestId} -->`);
     const enabled = state === "on" || state === "existing-footer";
-    expect(body.split(OPENCLAW_PR_ATTRIBUTION_FOOTER).length - 1).toBe(enabled ? 1 : 0);
+    expect(body.split(PR_ATTRIBUTION_FOOTER).length - 1).toBe(enabled ? 1 : 0);
     if (state === "optout") {
       expect(body).toContain("<!-- openclaw:attribution=off -->");
     }
