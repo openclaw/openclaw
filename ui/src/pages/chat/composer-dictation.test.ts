@@ -11,15 +11,12 @@ import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { renderComposerVoiceButtonSolid } from "./components/chat-composer-controls.tsx";
 import { ComposerDictationSession } from "./composer-dictation-session.ts";
 import { ComposerDictationOwner, insertComposerDictation } from "./composer-dictation.ts";
+import { MockDictationAudioContext, type MockAudioProcessor } from "./talk/input.test-support.ts";
 
 type GatewayListener = (event: GatewayEventFrame) => void;
-type MockProcessor = ReturnType<typeof connection> & {
-  onaudioprocess: ((event: { inputBuffer: { getChannelData: () => Float32Array } }) => void) | null;
-};
-
 const listeners = new Set<GatewayListener>();
 const controllers: ComposerDictationOwner[] = [];
-const processors: MockProcessor[] = [];
+const processors: MockAudioProcessor[] = [];
 const audios: MockAudio[] = [];
 let speechStarted = createDeferred();
 let request: ReturnType<
@@ -43,37 +40,14 @@ class MockAudio extends EventTarget {
   }
 }
 
-const connection = () => ({ connect: vi.fn(), disconnect: vi.fn() });
 const microphone = (stop = vi.fn()) => ({
   getTracks: () => [Object.assign(new EventTarget(), { stop })],
 });
-class MockAudioContext {
-  readonly destination = {};
-  readonly sampleRate = 8000;
-  readonly close = vi.fn(async () => undefined);
-
-  createMediaStreamSource = connection;
-
-  createScriptProcessor() {
-    const processor: MockProcessor = {
-      ...connection(),
-      onaudioprocess: null,
-    };
+class MockAudioContext extends MockDictationAudioContext {
+  override createScriptProcessor() {
+    const processor = super.createScriptProcessor();
     processors.push(processor);
     return processor;
-  }
-
-  createGain() {
-    return { ...connection(), gain: { value: 1 } };
-  }
-
-  createAnalyser() {
-    return {
-      fftSize: 0,
-      smoothingTimeConstant: 0,
-      ...connection(),
-      getFloatTimeDomainData: (samples: Float32Array) => samples.fill(0),
-    };
   }
 }
 

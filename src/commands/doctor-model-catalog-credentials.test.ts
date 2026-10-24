@@ -41,6 +41,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { maybeMigrateModelCatalogCredentials } from "./doctor-model-catalog-credentials.js";
 import { createDoctorPrompter, type DoctorPrompter } from "./doctor-prompter.js";
+import { createTestModelDefinition } from "./test-runtime-config-helpers.js";
 
 const note = vi.hoisted(() => vi.fn());
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
@@ -67,15 +68,11 @@ function provider(apiKey: string) {
     apiKey,
     baseUrl: "https://models.example/v1",
     models: [
-      {
-        id: "example-model",
+      createTestModelDefinition("example-model", {
         name: "Example model",
-        reasoning: false,
-        input: ["text" as const],
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
         contextWindow: 128_000,
         maxTokens: 16_384,
-      },
+      }),
     ],
   };
 }

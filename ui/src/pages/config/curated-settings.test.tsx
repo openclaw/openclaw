@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { getQueriesForElement } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
+import { configSnapshot } from "../../lib/config/config-snapshot.test-support.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
@@ -210,7 +211,7 @@ it("submits edited values and removals through the shared config owner without m
   });
   const request = vi.fn(async (method: string, params?: unknown) => {
     if (method === "config.get") {
-      return { config, raw: JSON.stringify(config), hash: "current", valid: true, issues: [] };
+      return configSnapshot(config, "current", JSON.stringify(config));
     }
     if (method === "config.set") {
       config = JSON.parse((params as { raw: string }).raw);
