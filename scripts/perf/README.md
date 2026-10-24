@@ -1964,8 +1964,9 @@ or change production worker limits. These are sampled lower bounds, not an exact
 allocation total; per-parse sampling adds overhead, so compare equally instrumented
 pairs and keep uninstrumented RPC acceptance timing separate.
 
-The same observer records constructor-to-ready startup milliseconds for each
-transcript isolate. Add `--worker-snapshots` only in a separate diagnostic pass
+The same observer records constructor-to-first-task startup milliseconds for each
+transcript isolate, including host dispatch delay, with the first task kind. Direct
+parent-port pools do not emit a separate ready reply. Add `--worker-snapshots` only in a separate diagnostic pass
 lasting at least 120 seconds. After 90 seconds it captures one idle isolate per
 observed history, context, usage, and other task category, serializing snapshots
 across workers. Each `snapshot-<category>.json` records the thread, last task,

@@ -119,6 +119,7 @@ if (
     "usage-cost",
   ]);
   let lastKind = "";
+  let observedFirstTask = false;
   const diagnosticStarted = Date.now();
   if (process.env.OPENCLAW_BENCH_WORKER_SNAPSHOTS === "1") {
     // Heap snapshots force GC and block the isolate; never use this pass for latency gates.
@@ -220,6 +221,16 @@ if (
       ) {
         return;
       }
+      if (!observedFirstTask) {
+        observedFirstTask = true;
+        // Direct-parent pools have no ready reply; first dispatch proves the entry loaded.
+        write({
+          kind: "startup",
+          startupElapsedMs: Date.now() - Number(process.env.OPENCLAW_BENCH_WORKER_STARTED_AT),
+          firstTaskKind: input.kind,
+          memory: sample(),
+        });
+      }
       drainGc();
       const before = sample();
       active = {
@@ -240,18 +251,6 @@ if (
       ]
     ) => {
       const message: unknown = args[0];
-      if (
-        message &&
-        typeof message === "object" &&
-        "status" in message &&
-        message.status === "ready"
-      ) {
-        write({
-          kind: "ready",
-          startupElapsedMs: Date.now() - Number(process.env.OPENCLAW_BENCH_WORKER_STARTED_AT),
-          memory: sample(),
-        });
-      }
       if (
         active &&
         message &&
