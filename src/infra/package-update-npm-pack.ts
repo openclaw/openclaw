@@ -75,44 +75,54 @@ export async function prepareNpmGitSourceInstallSpec(params: {
 
   const packDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-update-pack-"));
   result.packDir = packDir;
-  const packStep = await params.runStep({
-    name: "package-pack",
-    argv: [
-      params.installTarget.command,
-      "pack",
-      params.installSpec,
-      "--pack-destination",
-      packDir,
-      ...NPM_PACK_QUIET_FLAGS,
-    ],
-    cwd: params.installCwd,
-    env: params.env,
-    timeoutMs: params.timeoutMs,
-  });
-  result.steps.push(packStep);
-  if (isFailedUpdateStep(packStep)) {
-    result.failedStep = packStep;
-    return result;
-  }
+  try {
+    const packStep = await params.runStep({
+      name: "package-pack",
+      argv: [
+        params.installTarget.command,
+        "pack",
+        params.installSpec,
+        "--pack-destination",
+        packDir,
+        ...NPM_PACK_QUIET_FLAGS,
+      ],
+      cwd: params.installCwd,
+      env: params.env,
+      timeoutMs: params.timeoutMs,
+    });
+    result.steps.push(packStep);
+    if (isFailedUpdateStep(packStep)) {
+      result.failedStep = packStep;
+      return result;
+    }
 
-  const entries = await fs.readdir(packDir).catch((): string[] => []);
-  const tarballs = entries.filter((entry) => entry.endsWith(".tgz"));
-  if (tarballs.length !== 1) {
-    const failedStep: UpdateStepResult = {
-      name: "package-pack-verify",
-      command: `find packed tarball in ${packDir}`,
-      cwd: packDir,
-      durationMs: 0,
-      exitCode: 1,
-      stdoutTail: null,
-      stderrTail: `expected exactly one .tgz from npm pack ${params.installSpec}`,
-    };
-    result.steps.push(failedStep);
-    result.failedStep = failedStep;
-    return result;
-  }
+    const entries = await fs.readdir(packDir).catch((): string[] => []);
+    const tarballs = entries.filter((entry) => entry.endsWith(".tgz"));
+    if (tarballs.length !== 1) {
+      const failedStep: UpdateStepResult = {
+        name: "package-pack-verify",
+        command: `find packed tarball in ${packDir}`,
+        cwd: packDir,
+        durationMs: 0,
+        exitCode: 1,
+        stdoutTail: null,
+        stderrTail: `expected exactly one .tgz from npm pack ${params.installSpec}`,
+      };
+      result.steps.push(failedStep);
+      result.failedStep = failedStep;
+      return result;
+    }
 
-  result.installSpec = path.join(packDir, tarballs[0] ?? "");
-  result.installCwd = packDir;
-  return result;
+    result.installSpec = path.join(packDir, tarballs[0] ?? "");
+    result.installCwd = packDir;
+    return result;
+  } catch (error) {
+    // A thrown step (a command launch/observation failure or a progress callback
+    // that throws) never reaches the caller, whose cleanup is return-value based:
+    // it only removes result.packDir once the helper returns. Remove the freshly
+    // created pack directory here so an exceptional update does not orphan it in
+    // the OS temp directory, then let the original error propagate unchanged.
+    await fs.rm(packDir, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
 }
