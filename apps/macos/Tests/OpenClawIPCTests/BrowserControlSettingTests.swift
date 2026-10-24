@@ -119,6 +119,31 @@ struct BrowserControlSettingTests {
         }
     }
 
+    @Test func `a click made on the replacement Gateway while the old save settles is saved there`() async throws {
+        let gatewayA = RevisionedConfig(enabled: true)
+        let gatewayB = RevisionedConfig(enabled: false)
+        let selected = SelectedGateway(gatewayA)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let env = ["OPENCLAW_CONFIG_PATH": directory.appendingPathComponent("a.json").path]
+        try await self.withConfig(selected, env: env) {
+            let setting = BrowserControlSetting()
+            await setting.load()
+            gatewayA.holdWrites = true
+            setting.toggle()
+            try await self.waitUntil { gatewayA.held.count == 1 }
+
+            // Select Gateway B, then click on it while A's save is still in flight.
+            setenv("OPENCLAW_CONFIG_PATH", directory.appendingPathComponent("b.json").path, 1)
+            selected.config = gatewayB
+            setting.toggle()
+            gatewayA.release()
+
+            try await self.waitUntil { gatewayB.revision == 1 }
+            #expect(gatewayB.enabled)
+            #expect(setting.enabled)
+        }
+    }
+
     @MainActor
     final class SelectedGateway {
         var config: RevisionedConfig

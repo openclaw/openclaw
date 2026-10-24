@@ -323,10 +323,16 @@ final class BrowserControlSetting {
     /// Bumped by every click; reads publish only when no newer click arrived meanwhile.
     @ObservationIgnored private var intent = 0
     @ObservationIgnored private var isSaving = false
+    /// The document the running save started from. Queued clicks belong to its Gateway and
+    /// replay only while it is still the selected source.
+    @ObservationIgnored private var source: ConfigStore.Document?
+    /// Set when a click lands after `source` was replaced: the newest choice is the new Gateway's.
+    @ObservationIgnored private var clickedOnReplacement = false
 
     func toggle() {
         self.enabled.toggle()
         self.intent += 1
+        if let source = self.source, !source.isCurrent { self.clickedOnReplacement = true }
         // The running save picks up this click after its current write settles. Claim the
         // save before the task starts: AppKit can deliver queued clicks in one turn.
         guard !self.isSaving else { return }
@@ -343,22 +349,26 @@ final class BrowserControlSetting {
     }
 
     private func save() async {
-        defer { self.isSaving = false }
-        // Queued clicks belong to the Gateway they were made on; replay them only while
-        // the document this save started from is still the selected source.
-        var source: ConfigStore.Document?
+        defer {
+            self.isSaving = false
+            self.source = nil
+            self.clickedOnReplacement = false
+        }
         var intent: Int
         repeat {
             var config = await ConfigStore.load()
             intent = self.intent
-            if let origin = source, !origin.isCurrent {
-                // A replacement Gateway shows its own value and never receives them.
-                // Clicks after this reload start the next pass on the new source.
-                source = nil
-                await self.load()
-                continue
+            if let source = self.source, !source.isCurrent {
+                self.source = nil
+                // Clicks made only on the replaced Gateway never reach its replacement, which
+                // shows its own value instead. Clicks after this reload start the next pass.
+                guard self.clickedOnReplacement else {
+                    await self.load()
+                    continue
+                }
+                self.clickedOnReplacement = false
             }
-            source = source ?? config
+            self.source = self.source ?? config
             var browser = config.root["browser"] as? [String: Any] ?? [:]
             browser["enabled"] = self.enabled
             config.root["browser"] = browser
