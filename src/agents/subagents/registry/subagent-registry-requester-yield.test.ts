@@ -596,11 +596,9 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     if (kind === "valid delete receipt") {
       expect(runs.has(entry.runId)).toBe(false);
     } else if (kind === "valid receipt") {
-      expect(runs.get(entry.runId)).toMatchObject({
-        requesterSettleWake: undefined,
-        requesterTurnRunId: undefined,
-        delivery: { requesterVisibleFinal: undefined },
-      });
+      expect(runs.get(entry.runId)!.requesterSettleWake).toBeUndefined();
+      expect(runs.get(entry.runId)!.requesterTurnRunId).toBeUndefined();
+      expect(runs.get(entry.runId)!.delivery?.requesterVisibleFinal).toBeUndefined();
       expect(schedule).not.toHaveBeenCalled();
     } else {
       expect(runs.get(entry.runId)!.requesterSettleWake?.requesterYieldBatch).toBe(true);
