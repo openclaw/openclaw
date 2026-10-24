@@ -58,6 +58,8 @@ function searchTools(runtime: ReturnType<typeof rawRuntime>, withExecutor = fals
   });
 }
 const toolNames = (items: ReturnType<typeof tools>) => items.map((tool) => tool.name);
+const catalogNames = (runtime: ReturnType<typeof rawRuntime>) =>
+  runtime.toolSearchCatalogRef?.current?.entries.map((entry) => entry.name);
 const searchControlNames = ["tool_search", "tool_describe", "dispatch_action"];
 const getTool = (items: ReturnType<typeof tools>, name: string) =>
   expectDefined(
@@ -99,12 +101,7 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           },
         },
       };
-      const presentation = prepareAgentToolSurfacePresentation({
-        config,
-        toolsEnabled: true,
-        isRawModelRun: false,
-        forceDirectMessageTool: false,
-      });
+      const presentation = preparePresentation({ config });
       for (const supportsDeferredToolCalls of [true, false]) {
         const runtime = createAgentHarnessToolSurfaceRuntimeCore({
           presentation: structuredClone(presentation),
@@ -119,16 +116,12 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
           const surface = runtime.compactTools([...tools(["native_direct"]), ...remote], {
             prepared: { preserveToolNames: [] },
           });
-          expect(surface.tools.map((tool) => tool.name)).toEqual([
-            "tool_search",
-            "tool_describe",
-            "dispatch_action",
+          expect(toolNames(surface.tools)).toEqual([
+            ...searchControlNames,
             "native_direct",
             "remote_frequent",
           ]);
-          expect(runtime.toolSearchCatalogRef?.current?.entries.map((entry) => entry.name)).toEqual(
-            ["remote_deferred"],
-          );
+          expect(catalogNames(runtime)).toEqual(["remote_deferred"]);
           const policy = surface.promptToolPolicy.apply();
           expect(policy.callableToolNames).toEqual(
             expect.arrayContaining(["native_direct", "remote_frequent", "remote_deferred"]),
@@ -150,16 +143,9 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     const runtime = createRuntime({
       tools: { codeMode: true, toolSearch: { include: [], exclude: [{ name: "*" }] } },
     });
-    try {
-      const surface = runtime.compactTools(tools(["read", "native_target"]));
-      expect(surface.tools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
-      expect(runtime.toolSearchCatalogRef?.current?.entries.map((entry) => entry.name)).toEqual([
-        "native_target",
-        "read",
-      ]);
-    } finally {
-      runtime.cleanup();
-    }
+    const surface = runtime.compactTools(tools(["read", "native_target"]));
+    expect(toolNames(surface.tools)).toEqual(["exec", "wait"]);
+    expect(catalogNames(runtime)).toEqual(["native_target", "read"]);
   });
 
   it.each([

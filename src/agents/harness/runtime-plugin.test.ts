@@ -31,6 +31,8 @@ function runtimePlan(overrides: Partial<Parameters<typeof loadPlan>[0]>) {
   });
 }
 
+const codexSelection = { provider: "openai", modelId: "gpt-5.5", runtime: "codex" };
+
 function ensureHarness(overrides: Partial<Parameters<typeof ensurePlugin>[0]>) {
   return ensurePlugin({
     provider: "custom-provider",
@@ -376,7 +378,7 @@ describe("harness runtime plugins", () => {
       }),
       config,
       basePluginIds,
-      selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
+      selections: [codexSelection],
       purpose: "model-catalog",
     });
     expect(plan.pluginIds).toEqual(expected);
@@ -384,57 +386,31 @@ describe("harness runtime plugins", () => {
     expect(plan.config?.plugins?.slots).toEqual(config.plugins?.slots);
   });
 
-  it("loads only the declared owner for a differently named engine", () => {
-    const originalSnapshot = createMemoryPlanMetadataSnapshot();
-    const index = originalSnapshot.registryIndex;
-    const template = index.plugins[0];
-    if (!template) {
-      throw new Error("Missing installed-plugin fixture");
-    }
-    const registryIndex = {
-      ...index,
-      plugins: [
-        ...index.plugins,
-        { ...template, pluginId: "vendor-plugin", contextEngineIds: ["Canonical-Engine"] },
-      ],
-    };
-    const plan = loadPlan({
-      metadataSnapshot: { ...originalSnapshot, registryIndex },
-      config: {
-        plugins: { allow: ["vendor-plugin"], slots: { contextEngine: "Canonical-Engine" } },
-      },
-      workspaceDir: "/tmp/workspace",
-      basePluginIds: [],
-      selections: [],
-    });
-    expect(plan.pluginIds).toEqual(["vendor-plugin"]);
-    expect(plan.config?.plugins?.entries?.["vendor-plugin"]).toEqual({ enabled: true });
-  });
-
-  it("scopes a mixed-case context-engine owner by its exact runtime ID", () => {
+  it.each([
+    ["vendor-plugin", "vendor-plugin", "Canonical-Engine"],
+    ["MiXeD-demo", "mixed-demo", "canonical-engine"],
+  ])("loads exact context-engine owner %s allowed as %s", (pluginId, allowed, engine) => {
     const metadataSnapshot = createMemoryPlanMetadataSnapshot();
     const template = metadataSnapshot.registryIndex.plugins[0];
     if (!template) {
       throw new Error("Missing installed-plugin fixture");
     }
-    const plan = loadPlan({
+    const plan = runtimePlan({
       metadataSnapshot: {
         ...metadataSnapshot,
         registryIndex: {
           ...metadataSnapshot.registryIndex,
           plugins: [
             ...metadataSnapshot.registryIndex.plugins,
-            { ...template, pluginId: "MiXeD-demo", contextEngineIds: ["canonical-engine"] },
+            { ...template, pluginId, contextEngineIds: [engine] },
           ],
         },
       },
-      config: { plugins: { allow: ["mixed-demo"], slots: { contextEngine: "canonical-engine" } } },
-      workspaceDir: "/tmp/workspace",
+      config: { plugins: { allow: [allowed], slots: { contextEngine: engine } } },
       basePluginIds: [],
-      selections: [],
     });
-    expect(plan.pluginIds).toEqual(["MiXeD-demo"]);
-    expect(plan.config?.plugins?.entries?.["MiXeD-demo"]).toEqual({ enabled: true });
+    expect(plan.pluginIds).toEqual([pluginId]);
+    expect(plan.config?.plugins?.entries?.[pluginId]).toEqual({ enabled: true });
   });
 
   it.each<[OpenClawConfig["plugins"], string[]]>([
@@ -482,7 +458,7 @@ describe("harness runtime plugins", () => {
   it("keeps standalone activation unrestricted when no complete startup base exists", () => {
     const plan = runtimePlan({
       config: { plugins: { entries: { "custom-context-engine": { enabled: true } } } },
-      selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
+      selections: [codexSelection],
     });
 
     expect(plan.config?.plugins?.allow).toBeUndefined();
@@ -516,7 +492,7 @@ describe("harness runtime plugins", () => {
     const plan = runtimePlan({
       config: { plugins },
       basePluginIds: ["telegram"],
-      selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
+      selections: [codexSelection],
     });
     expect(plan).toMatchObject({ pluginIds, config: { plugins: { allow } } });
   });
@@ -526,7 +502,7 @@ describe("harness runtime plugins", () => {
     mocks.resolveActivatableProviderOwnerPluginIds.mockReturnValueOnce(["openai"]);
     const plan = runtimePlan({
       config: { plugins: { allow: ["codex"] } },
-      selections: [{ provider: "openai", modelId: "gpt-5.5", runtime: "codex" }],
+      selections: [codexSelection],
     });
     expect(plan.pluginIds).toEqual(["codex", "openai"]);
     expect(plan.config?.plugins?.allow).toEqual(["codex", "openai"]);
