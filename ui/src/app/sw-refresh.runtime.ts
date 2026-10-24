@@ -3,6 +3,36 @@ import { controlUiWorkerActivationRetires } from "../build-info.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 
+const observedConnections = new WeakSet<EventTarget>();
+
+function probeWorker(worker: ServiceWorker, ports: MessagePort[] = []) {
+  const connection = (
+    navigator as Navigator & {
+      connection?: EventTarget & { saveData?: boolean; effectiveType?: string };
+    }
+  ).connection;
+  if (connection && !observedConnections.has(connection)) {
+    observedConnections.add(connection);
+    // Document-lifetime listener: changing network class need not fire "online".
+    connection.addEventListener("change", () => {
+      const controller = navigator.serviceWorker?.controller;
+      if (controller) {
+        probeWorker(controller);
+      }
+    });
+  }
+  worker.postMessage(
+    {
+      type: "sw-version-probe",
+      offlinePrecache: {
+        saveData: connection?.saveData === true,
+        effectiveType: connection?.effectiveType,
+      },
+    },
+    ports,
+  );
+}
+
 function waitForReplacementWorker(worker: ServiceWorker): Promise<boolean> {
   if (worker.state === "activated" || worker.state === "redundant") {
     return Promise.resolve(true);
@@ -33,7 +63,7 @@ async function readWorkerBuild(worker: ServiceWorker): Promise<unknown> {
       timeout = setTimeout(() => resolve(null), 1_000);
       stopMessage = listen(channel.port1, "message", (event) => resolve(event.data));
       channel.port1.start();
-      worker.postMessage({ type: "sw-version-probe" }, [channel.port2]);
+      probeWorker(worker, [channel.port2]);
     });
   } finally {
     clearTimeout(timeout);

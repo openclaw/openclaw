@@ -28,6 +28,28 @@ it("refreshes cached identity without changing compressed assets", async ({ onTe
     { fileName: assetName, source: Buffer.from(source) },
     ...(await createControlUiPrecompressedAssetVariants(assetName, source)),
   ];
+  const deferredFiles = [
+    "assets/session-actions-AbCd1234.js",
+    "assets/session-organizer-operations.runtime-AbCd1234.js",
+    "assets/session-actions-AbCd1234.css",
+    "assets/en-settings-AbCd1234.js",
+  ];
+  const excludedFiles = [
+    "assets/de-AbCd1234.js",
+    "assets/locale-config-hints-zh-CN-AbCd1234.js",
+    "assets/locale-namespace-fr-settings-AbCd1234.js",
+    "assets/mermaid.min-AbCd1234.js",
+    "assets/unhashed.js",
+    "assets/session-actions-AbCd1234.js.map",
+    "plugins/example/assets/plugin-AbCd1234.js",
+  ];
+  for (const fileName of [...deferredFiles, ...excludedFiles]) {
+    await mkdir(path.dirname(path.join(output, fileName)), { recursive: true });
+    assets.push(
+      { fileName, source: Buffer.from(source) },
+      ...(await createControlUiPrecompressedAssetVariants(fileName, source)),
+    );
+  }
   for (const asset of assets) {
     await writeFile(path.join(output, asset.fileName), asset.source);
   }
@@ -66,6 +88,9 @@ it("refreshes cached identity without changing compressed assets", async ({ onTe
     html,
     csp: expect.stringContaining(digest(identityScript!)),
     assets: expect.arrayContaining([{ path: assetName, integrity: digest(source) }]),
+    deferredAssets: deferredFiles
+      .toSorted()
+      .map((file) => ({ path: file, integrity: digest(source) })),
   });
   expect(offline.routes).not.toContain("/api");
   expect(offline.routePrefixes).not.toContain("/plugins/");
