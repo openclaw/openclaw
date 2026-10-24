@@ -230,35 +230,56 @@ it.each([
   },
 );
 
-it.each([
-  ["lf", "\n"],
-  ["crlf", "\r\n"],
-] as const)(
-  "keeps Markdown ownership reusable across nonblank tool-call lines with %s",
-  (_label, lineEnding) => {
-    let text = `[tool:write]${lineEnding}{"items":[${lineEnding}`;
-    let ownership = findCodeOwnership(text);
-    let refreshes = 0;
+it("bounds completed plain-list reprojection work", () => {
+  const items = Array.from({ length: 420 }, (_, index) => `- Step ${index}: verify the result`);
+  const source = `\`\`\`json\n{"enabled":true}\n\`\`\`\n\n${items.join("\n")}\n`;
+  const expected = sanitizeAssistantVisibleStreamText(source, "final_answer");
+  const stream = createAssistantVisibleStreamText("final_answer");
+  plainToolCallWork.projectedCharacters = 0;
 
-    for (let index = 0; index < 512; index++) {
-      const next = `${text}  "item${index}": "ordinary value",${lineEnding}`;
-      if (!canReuseMarkdownOwnership(text, next, ownership)) {
-        refreshes += 1;
-        ownership = findCodeOwnership(next);
-      }
-      text = next;
+  for (let offset = 0; offset < source.length; offset += 4) {
+    stream.append(source.slice(offset, offset + 4));
+  }
+
+  expect(stream.text).toBe(expected);
+  expect(projectedCharacters()).toBeLessThan(source.length * 28);
+}, 20_000);
+
+it("bounds prefix line searches for an unfinished plain tool call", () => {
+  const source = `[tool:write]\n{"path":"notes.txt","content":"${"x".repeat(16_384)}`;
+  const stream = createTextProjection(assistantVisibleTextFilters("delivery", true));
+  const probe = vi.spyOn(String.prototype, "lastIndexOf");
+  let searchedCharacters = 0;
+  try {
+    for (let offset = 0; offset < source.length; offset += 4) {
+      stream.append(source.slice(offset, offset + 4));
     }
+    searchedCharacters = probe.mock.calls.reduce((total, [search], index) => {
+      const receiver = probe.mock.contexts[index];
+      return receiver.length >= 4_096 && (search === "\n" || search === "\r")
+        ? total + receiver.length
+        : total;
+    }, 0);
+  } finally {
+    probe.mockRestore();
+  }
 
-    expect(refreshes).toBe(0);
-  },
-);
+  expect(stream.text).toBe(source);
+  expect(searchedCharacters).toBeLessThan(source.length * 16);
+});
 
-it("treats a CRLF split across appends as one line ending", () => {
-  const previousText = "[tool:write]\r";
-  const nextText = `${previousText}\n  "item": "ordinary value",\r\n`;
-  const ownership = findCodeOwnership(previousText);
+it("streams a CRLF split through the checkpoint path", () => {
+  const chunks = ["[tool:write]\r", '\n{"path":"notes.txt"}\r', "\nDone."];
+  const source = chunks.join("");
+  const stream = createTextProjection(assistantVisibleTextFilters("delivery", true));
+  const expected = createTextProjection(assistantVisibleTextFilters("delivery", true));
 
-  expect(canReuseMarkdownOwnership(previousText, nextText, ownership)).toBe(true);
+  for (const chunk of chunks) {
+    stream.append(chunk);
+  }
+  expected.append(source);
+
+  expect(stream.text).toBe(expected.text);
 });
 
 it("refreshes ownership when streamed link and container syntax changes Markdown ownership", () => {

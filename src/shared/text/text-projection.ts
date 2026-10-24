@@ -5,12 +5,7 @@ import {
   createProtectionScanState,
 } from "../../../packages/tool-call-repair/src/protection-fast-path.js";
 import { escapeRegExp } from "../regexp.js";
-import {
-  canReuseMarkdownOwnership,
-  completesBlankLine,
-  findCodeOwnership,
-  findCodeRegions,
-} from "./code-regions.js";
+import { canReuseMarkdownOwnership, findCodeOwnership, findCodeRegions } from "./code-regions.js";
 
 export type TextProjection = { text: string; delta: string | null };
 type TextProjector = (input: TextProjection) => TextProjection;
@@ -84,11 +79,11 @@ function findTextCheckpoint(
       const ownership = resolveOwnership(text);
       const retain = ownership.retainStart;
       const start = retain === 0 ? 0 : text.lastIndexOf("\n", retain - 1) + 1;
-      const completeEnd = text.lastIndexOf("\n") + 1;
       if (
         !/\r(?!\n)/.test(text) &&
         ownership.regions.some((region) => region.block && region.start === retain)
       ) {
+        const completeEnd = text.lastIndexOf("\n") + 1;
         const fence = scanFenceSpans(text.slice(start, completeEnd)).state.open;
         if (fence) {
           return {
@@ -111,6 +106,86 @@ function findTextCheckpoint(
   return { offset: closedFence ? cursor : lastLineStart, context: "" };
 }
 
+function createCheckpointLineState() {
+  let currentLineBlank = true;
+  let previousEndedCR = false;
+  const reset = (text: string) => {
+    currentLineBlank = true;
+    for (let index = text.length - 1; index >= 0; index -= 1) {
+      const character = text[index];
+      if (character === "\r" || character === "\n") {
+        break;
+      }
+      if (character !== " " && character !== "\t") {
+        currentLineBlank = false;
+      }
+    }
+    previousEndedCR = text.endsWith("\r");
+  };
+  const advance = (appended: string) => {
+    let completedLine = false;
+    let completedBlankLine = false;
+    for (const character of appended) {
+      if (character === "\n" && previousEndedCR) {
+        previousEndedCR = false;
+        continue;
+      }
+      if (character === "\r" || character === "\n") {
+        completedLine = true;
+        completedBlankLine ||= currentLineBlank;
+        currentLineBlank = true;
+        previousEndedCR = character === "\r";
+        continue;
+      }
+      previousEndedCR = false;
+      if (character !== " " && character !== "\t") {
+        currentLineBlank = false;
+      }
+    }
+    return { completedLine, completedBlankLine };
+  };
+  return { advance, reset };
+}
+
+function startsMarkdownListItem(text: string, offset: number): boolean {
+  const limit = Math.min(text.length, offset + 256);
+  let cursor = offset;
+  while (cursor < limit) {
+    let spaces = 0;
+    while (spaces < 3 && text[cursor] === " ") {
+      cursor += 1;
+      spaces += 1;
+    }
+    if (text[cursor] !== ">") {
+      break;
+    }
+    cursor += 1;
+    if (text[cursor] === " " || text[cursor] === "\t") {
+      cursor += 1;
+    }
+  }
+  const first = text[cursor];
+  if (first === "-" || first === "+" || first === "*") {
+    cursor += 1;
+  } else if (first !== undefined && first >= "0" && first <= "9") {
+    const digitsStart = cursor;
+    while (cursor < limit && cursor - digitsStart < 9) {
+      const character = text[cursor];
+      if (character === undefined || character < "0" || character > "9") {
+        break;
+      }
+      cursor += 1;
+    }
+    if (text[cursor] !== "." && text[cursor] !== ")") {
+      return false;
+    }
+    cursor += 1;
+  } else {
+    return false;
+  }
+  return cursor >= text.length || /[ \t\r\n]/u.test(text[cursor] ?? "");
+}
+
 function createCheckpointTransform(
   project: CheckpointTransform,
 ): (source: string, delta: string | null, previous: string) => TextProjection {
@@ -124,13 +199,21 @@ function createCheckpointTransform(
   let previousVisible: string | undefined;
   let ownershipSource = "";
   let ownership: ReturnType<typeof findCodeOwnership> | undefined;
+  let retentionStartsList = false;
+  const lineState = createCheckpointLineState();
   const resolveOwnership = (text: string) => {
-    const appended = text.slice(ownershipSource.length);
-    // Completing a blank line closes the paragraph whose inline ownership the cached ranges
-    // describe.
+    const extendsOwnershipSource = text.startsWith(ownershipSource);
+    const appended = extendsOwnershipSource ? text.slice(ownershipSource.length) : undefined;
+    const lineCompletion = appended === undefined ? undefined : lineState.advance(appended);
+    if (appended === undefined) {
+      lineState.reset(text);
+    }
+    // Blank lines close paragraphs. Completed list lines advance the canonical item whose
+    // settlement metadata must be refreshed even when the code ranges themselves are stable.
     if (
       ownership &&
-      !completesBlankLine(ownershipSource, appended) &&
+      !lineCompletion?.completedBlankLine &&
+      !(lineCompletion?.completedLine && retentionStartsList) &&
       canReuseMarkdownOwnership(ownershipSource, text, ownership)
     ) {
       ownershipSource = text;
@@ -138,6 +221,7 @@ function createCheckpointTransform(
     }
     ownership = findCodeOwnership(text);
     ownershipSource = text;
+    retentionStartsList = startsMarkdownListItem(text, ownership.retainStart);
     return ownership;
   };
   return (source, inputDelta, previousOutput) => {

@@ -162,46 +162,6 @@ export function canReuseMarkdownOwnership(
   return !unresolvedCandidate;
 }
 
-/** Whether an append completes a blank line that settles the current Markdown paragraph. */
-export function completesBlankLine(previousText: string, appended: string): boolean {
-  const lastLineStart =
-    Math.max(previousText.lastIndexOf("\n"), previousText.lastIndexOf("\r")) + 1;
-  let currentLineBlank = /^[ \t]*$/u.test(previousText.slice(lastLineStart));
-  let index = 0;
-
-  // A CR in the previous chunk and LF in this chunk are one line ending, not a blank line.
-  if (previousText.endsWith("\r") && appended.startsWith("\n")) {
-    const lineBeforeCrStart =
-      Math.max(
-        previousText.lastIndexOf("\n", previousText.length - 2),
-        previousText.lastIndexOf("\r", previousText.length - 2),
-      ) + 1;
-    if (/^[ \t]*$/u.test(previousText.slice(lineBeforeCrStart, -1))) {
-      return true;
-    }
-    currentLineBlank = true;
-    index = 1;
-  }
-
-  for (; index < appended.length; index++) {
-    const character = appended[index];
-    if (character !== "\r" && character !== "\n") {
-      if (character !== " " && character !== "\t") {
-        currentLineBlank = false;
-      }
-      continue;
-    }
-    if (currentLineBlank) {
-      return true;
-    }
-    if (character === "\r" && appended[index + 1] === "\n") {
-      index += 1;
-    }
-    currentLineBlank = true;
-  }
-  return false;
-}
-
 function invalidatesGfmTableDelimiter(previousText: string, appended: string) {
   const appendedLineEnd = findLineEnd(appended, 0);
   if (appendedLineEnd === 0 || /^[ \t]*$/u.test(appended.slice(0, appendedLineEnd))) {
