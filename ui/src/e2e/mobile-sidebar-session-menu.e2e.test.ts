@@ -1,5 +1,8 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
@@ -15,6 +18,7 @@ import {
   sessionsListResponse,
   sessionMenuLabels,
   waitForMobileSidebarDrawerOpen,
+  waitForSessionRosterHydration,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite(true);
@@ -97,6 +101,88 @@ async function expectSessionGeometry(row: Locator, multiline = false) {
 }
 
 suite.define(() => {
+  it.each([false, true])(
+    "keeps two-line session titles beside their actions during hover and focus (touch: %s)",
+    async (hasTouch) => {
+      await suite.withPage(
+        { hasTouch, viewport: { width: 1280, height: 800 }, reducedMotion: "reduce" },
+        async ({ page }) => {
+          const activeKey = "agent:main:main";
+          const targetKey = "agent:main:dashboard:release-review";
+          await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
+          await page.addInitScript(
+            ({ key, gatewayUrl }) => {
+              localStorage.setItem(`openclaw.control.currentGateway.v1:${gatewayUrl}`, gatewayUrl);
+              localStorage.setItem(
+                key,
+                JSON.stringify({ sidebarAgentsMode: "chip", navWidth: 320 }),
+              );
+              localStorage.setItem("openclaw:sidebar:sessions:show-preview", "true");
+            },
+            {
+              key: controlUiBundledSettingsStorageKey(suite.server.baseUrl),
+              gatewayUrl: controlUiBundledGatewayUrl(suite.server.baseUrl),
+            },
+          );
+          await installMockGateway(page, {
+            sessionKey: activeKey,
+            sessions: [
+              sessionRow(activeKey, "Home", Date.now()),
+              sessionRow(targetKey, "Tracking release readiness for the next update", Date.now(), {
+                category: "Research",
+                lastMessagePreview: "Review the deployment checklist and remaining work",
+              }),
+            ],
+          });
+          await page.goto(controlUiSessionUrl(suite.server.baseUrl, activeKey));
+          await waitForSessionRosterHydration(page);
+          const row = page.locator(`.sidebar-recent-session[data-session-key="${targetKey}"]`);
+          const name = row.locator(".sidebar-recent-session__name");
+          await name.waitFor();
+          expect(await row.getAttribute("class")).not.toContain("--single-line");
+          const proofDir =
+            process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
+              ? createControlUiE2eArtifactDir("sidebar-title-space")
+              : undefined;
+          for (const state of ["hover", "focus"] as const) {
+            if (state === "hover") {
+              await row.hover({ position: { x: 12, y: 4 } });
+            } else {
+              await page.mouse.move(1100, 700);
+              await row.locator(".sidebar-recent-session__link").focus();
+            }
+            const geometry = await row.evaluate((element) => {
+              const label = element.querySelector(".sidebar-recent-session__name")!;
+              const actions = element.querySelector(".session-row-actions")!;
+              return {
+                titleWidth: label.getBoundingClientRect().width,
+                gap: actions.getBoundingClientRect().left - label.getBoundingClientRect().right,
+              };
+            });
+            console.log(JSON.stringify({ hasTouch, state, ...geometry }));
+            if (proofDir) {
+              const surface = page.locator(".shell-nav");
+              const frame = await takeControlUiScreenshotFrame(page, surface, [row], {
+                elements: [surface],
+                animations: "disabled",
+              });
+              await writeFile(
+                path.join(proofDir, `${hasTouch}-${state}.png`),
+                frame.elements[0]!.png,
+              );
+            }
+            expect.soft(geometry.titleWidth).toBeGreaterThan(100);
+            // Leave the normal small gutter, without losing another action area's width.
+            expect
+              .soft(geometry.gap, JSON.stringify({ hasTouch, state, ...geometry }))
+              .toBeLessThanOrEqual(12);
+            expect.soft(geometry.gap).toBeGreaterThanOrEqual(-1);
+          }
+        },
+      );
+    },
+  );
+
   it.each(["coarse", "fine"] as const)(
     "keeps shortcut menus, colored session glyphs, and section labels usable in a %s pointer layout",
     async (pointer) => {
