@@ -96,6 +96,10 @@ to start work is not a suggestion request.
 
 `sessions_list` is a metadata inventory, not a transcript search. Rows include session key and ID, agent, kind, channel, title/label, sidebar group, current owner and original creator, stored project/workspace associations, visible parent/child links, archive/pin state, state version, model/token counts, and run status. Unknown associations remain absent; a stored worktree association does not prove that its checkout still exists.
 
+`hasBoard` optionally filters and reports saved dashboard presence without loading or revealing dashboard content. `true` means persisted tabs exist, even without widgets; `false` means no persisted tabs. A saved dashboard face preference alone is not a dashboard. An omitted result is unknown, not proof of absence. The filter uses the same authorized Gateway inventory and runs before pagination.
+
+For conservative cleanup, combine explicit `hasBoard: false` with `updatedAt`, pin/archive state, visible parent/child links, and current run status. Confirm the session actually completed the associated work through permitted history/search and verify any PR is merged at its source; a title or PR mention alone is not proof. Preserve running or queued sessions, active descendants, pending inputs, and ambiguous work. Inventory rows and `activeOnly` are observations, not atomic archival preconditions: refresh candidates and active work immediately before archiving with the listed `sessionId` as `expectedSessionId`. This metadata does not grant archival permission or change existing session access checks.
+
 Use the filters together to narrow the inventory before paging:
 
 - `relationship`: `owned`, `created`, or `involving`, relative to the authenticated requesting user. Ownership is current responsibility; creation is original provenance; involvement means current ownership or retained prompt participation. This is not the agent's owner and does not infer identity from a session label. Without a trusted requesting-user identity, the tool rejects this filter; use an explicit `ownerId` or `creatorId` instead.

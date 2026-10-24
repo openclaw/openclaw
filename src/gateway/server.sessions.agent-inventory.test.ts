@@ -9,6 +9,7 @@ import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { boardStore } from "./board-store.js";
 import { observeSessionRowBackfill } from "./session-row-backfill.test-support.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
@@ -63,6 +64,10 @@ test.each(inventorySizes)(
       };
     }
     await writeSessionStore({ entries, storePath, agentId: "main" });
+    const boardKey = expectedKeys[0]!;
+    await boardStore.applyOps({ sessionKey: boardKey }, [
+      { kind: "tab_create", tabId: "saved", title: "Saved dashboard without widgets" },
+    ]);
     const { getRuntimeConfig } = await getGatewayConfigModule();
     const current = getRuntimeConfig();
     const cfg: OpenClawConfig = {
@@ -143,6 +148,7 @@ test.each(inventorySizes)(
           expect(row).toMatchObject({
             owner: { actor: { id: selected.id } },
             group: SELECTED_GROUP,
+            hasBoard: row.key === boardKey,
           });
           for (const field of ["messages", "derivedTitle", "lastMessagePreview"]) {
             expect(row).not.toHaveProperty(field);
@@ -150,6 +156,25 @@ test.each(inventorySizes)(
           return row.key;
         });
         expect(returnedKeys).toEqual(expectedKeys);
+        for (const spy of spies) {
+          expect(spy).not.toHaveBeenCalled();
+        }
+      }
+      for (const hasBoard of [true, false]) {
+        const result = await tool.execute("dashboard-inventory", {
+          relationship: "owned",
+          projectId: SELECTED_PROJECT,
+          workspaceDir: SELECTED_WORKSPACE,
+          group: SELECTED_GROUP,
+          hasBoard,
+          limit: 2,
+        });
+        const keys = hasBoard ? [boardKey] : expectedKeys.slice(1, 3);
+        expect(result.details).toMatchObject({
+          count: keys.length,
+          hasMore: !hasBoard,
+          sessions: keys.map((key) => ({ key, hasBoard })),
+        });
         for (const spy of spies) {
           expect(spy).not.toHaveBeenCalled();
         }

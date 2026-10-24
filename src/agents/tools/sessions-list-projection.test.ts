@@ -35,6 +35,7 @@ describe("sessions-list inventory projection", () => {
       contextTokens: 1_000_000,
       totalTokens: 1_200,
       status: "queued",
+      hasBoard: true,
       abortedLastRun: false,
       childSessions: ["agent:main:subagent:grandchild"],
       createdActor: {
