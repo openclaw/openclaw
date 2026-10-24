@@ -4973,7 +4973,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "ui/src/e2e/session-management.rename-composition.e2e.test.ts",
   "ui/src/e2e/session-management.rename-identity.e2e.test.ts",
   "ui/src/e2e/session-management.trailing-state.e2e.test.ts",
-  "ui/src/e2e/session-owner-warm-refresh.e2e.test.ts",
   "ui/src/e2e/session-person-grouping-presence.e2e.test.ts",
   "ui/src/e2e/session-progress-preference.e2e.test.ts",
   "ui/src/e2e/session-progress-widget.e2e.test.ts",
