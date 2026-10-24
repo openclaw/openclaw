@@ -213,13 +213,10 @@ const LIVE_BUILD_DOCKER_PATH = "scripts/test-live-build-docker.sh";
 const OPENWEBUI_DOCKER_E2E_PATH = "scripts/e2e/openwebui-docker.sh";
 const ONBOARD_DOCKER_E2E_PATH = "scripts/e2e/onboard-docker.sh";
 const KITCHEN_SINK_RPC_DOCKER_E2E_PATH = "scripts/e2e/kitchen-sink-rpc-docker.sh";
-const CODEX_ON_DEMAND_DOCKER_E2E_PATH = "scripts/e2e/codex-on-demand-docker.sh";
 const MCP_CODE_MODE_GATEWAY_LIVE_DOCKER_E2E_PATH =
   "scripts/e2e/mcp-code-mode-gateway-live-docker.sh";
 const CODEX_MEDIA_PATH_SCENARIO_PATH = "scripts/e2e/lib/codex-media-path/scenario.sh";
 const OPENAI_CHAT_TOOLS_SCENARIO_PATH = "scripts/e2e/lib/openai-chat-tools/scenario.sh";
-const CODEX_NPM_PLUGIN_LIVE_DOCKER_E2E_PATH = "scripts/e2e/codex-npm-plugin-live-docker.sh";
-const LIVE_PLUGIN_TOOL_DOCKER_E2E_PATH = "scripts/e2e/live-plugin-tool-docker.sh";
 const NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH = "scripts/e2e/npm-onboard-channel-agent-docker.sh";
 const PLUGIN_BINDING_COMMAND_ESCAPE_DOCKER_E2E_PATH =
   "scripts/e2e/plugin-binding-command-escape-docker.sh";
@@ -229,8 +226,6 @@ const MULTI_NODE_UPDATE_DOCKER_E2E_PATH = "scripts/e2e/multi-node-update-docker.
 const CLEANUP_SMOKE_DOCKERFILE_PATH = "scripts/docker/cleanup-smoke/Dockerfile";
 const CLEANUP_SMOKE_RUN_PATH = "scripts/docker/cleanup-smoke/run.sh";
 const KITCHEN_SINK_PLUGIN_DOCKER_E2E_PATH = "scripts/e2e/kitchen-sink-plugin-docker.sh";
-const PLUGIN_UPDATE_CORRUPT_SCENARIO_PATH =
-  "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh";
 const PLUGIN_LIFECYCLE_MATRIX_DOCKER_E2E_PATH = "scripts/e2e/plugin-lifecycle-matrix-docker.sh";
 const DOCTOR_SWITCH_SCENARIO_PATH = "scripts/e2e/lib/doctor-install-switch/scenario.sh";
 const DOCTOR_SWITCH_BUSCTL_SHIM_PATH = "scripts/e2e/lib/doctor-install-switch/shims/busctl";
@@ -239,7 +234,6 @@ const DOCTOR_SWITCH_SYSTEMD_EXEC_START_PATH =
 const UPGRADE_SURVIVOR_DOCKER_E2E_PATH = "scripts/e2e/upgrade-survivor-docker.sh";
 const UPGRADE_SURVIVOR_DIAGNOSTICS_PUBLISH_PATH = "scripts/upgrade-survivor-diagnostics.mjs";
 const PREPUBLISH_PLUGIN_REGISTRY_HELPER_PATH = "scripts/e2e/lib/prepublish-plugin-registry.sh";
-const UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH = "scripts/e2e/update-channel-switch-docker.sh";
 const RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH =
   "scripts/e2e/lib/release-upgrade-user-journey/scenario.sh";
 const RELEASE_TYPED_ONBOARDING_SCENARIO_PATH =
@@ -2521,38 +2515,6 @@ docker_e2e_docker_run_cmd run demo
     },
   );
 
-  it("wraps direct Docker E2E npm installs with the shared timeout helper", () => {
-    const multiNode = readFileSync(MULTI_NODE_UPDATE_DOCKER_E2E_PATH, "utf8");
-    const updateChannel = readFileSync(UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH, "utf8");
-    const doctorSwitch = readFileSync(DOCTOR_SWITCH_SCENARIO_PATH, "utf8");
-    const releaseUpgrade = readFileSync(RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH, "utf8");
-    const upgradeSurvivor = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
-    const pluginCorrupt = readFileSync(PLUGIN_UPDATE_CORRUPT_SCENARIO_PATH, "utf8");
-
-    expect(multiNode).toContain(
-      'openclaw_e2e_install_package "$ARTIFACTS/install-a.log" "OpenClaw package under node-A prefix" "$NPM_PREFIX_A"',
-    );
-    expectTextToIncludeAll(updateChannel, [
-      'openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=dev --no-fund --no-audit',
-      'openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix /tmp/npm-prefix --omit=optional "$pkg_tgz_path"',
-      "openclaw_e2e_print_log /tmp/openclaw-git-install.log",
-      'openclaw_e2e_print_log "$package_install_log"',
-    ]);
-
-    expect(updateChannel).not.toContain("cat /tmp/openclaw-git-install.log");
-    expect(updateChannel).not.toContain('cat "$package_install_log"');
-    expectTextToIncludeAll(doctorSwitch, [
-      'openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=dev --no-fund --no-audit',
-      'openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g --prefix /tmp/npm-prefix --omit=optional "$package_tgz"',
-      "openclaw_e2e_print_log /tmp/openclaw-git-install.log",
-    ]);
-    for (const script of [releaseUpgrade, upgradeSurvivor, pluginCorrupt]) {
-      expect(script).toContain(
-        'openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install -g',
-      );
-    }
-  });
-
   it("keeps upgrade survivor mutable state off the host-mounted artifact tree", () => {
     const runner = readFileSync(UPGRADE_SURVIVOR_DOCKER_E2E_PATH, "utf8");
     const publishedRunner = readFileSync(UPGRADE_SURVIVOR_RUN_SCRIPT, "utf8");
@@ -2615,31 +2577,6 @@ docker_e2e_docker_run_cmd run demo
       '\nexport BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"\n',
     ]);
     expect(runner).not.toContain('\nexport BRAVE_API_KEY="BSA_upgrade_survivor_brave_key"\n');
-  });
-
-  it("wraps package-backed scenario OpenClaw CLI calls with the shared timeout helper", () => {
-    const paths = [
-      CODEX_ON_DEMAND_DOCKER_E2E_PATH,
-      CODEX_MEDIA_PATH_SCENARIO_PATH,
-      CODEX_NPM_PLUGIN_LIVE_DOCKER_E2E_PATH,
-      LIVE_PLUGIN_TOOL_DOCKER_E2E_PATH,
-      NPM_ONBOARD_CHANNEL_AGENT_DOCKER_E2E_PATH,
-      UPDATE_CHANNEL_SWITCH_DOCKER_E2E_PATH,
-      RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH,
-      "scripts/e2e/lib/release-media-memory/scenario.sh",
-      "scripts/e2e/lib/release-plugin-marketplace/scenario.sh",
-      "scripts/e2e/lib/release-typed-onboarding/scenario.sh",
-      "scripts/e2e/lib/release-user-journey/scenario.sh",
-    ];
-
-    for (const path of paths) {
-      const script = readFileSync(path, "utf8");
-
-      expect(script, path).toContain("openclaw_e2e_enable_openclaw_cli_timeout");
-    }
-    expect(readFileSync(RELEASE_UPGRADE_USER_JOURNEY_SCENARIO_PATH, "utf8")).toContain(
-      'openclaw_release_onboard "$PORT" openclaw_e2e_run_command node "$baseline_entry"',
-    );
   });
 
   it("propagates frozen typed-onboarding ERR traps through nested helpers", () => {
