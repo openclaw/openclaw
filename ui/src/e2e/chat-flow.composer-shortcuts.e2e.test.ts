@@ -1,3 +1,4 @@
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   chatFixture,
@@ -19,6 +20,9 @@ import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const defaultSessionKey = "agent:main:main";
+const exactText = (root: Locator | Page, value: string) => root.getByText(value, { exact: true });
+const focused = (composer: Locator) =>
+  composer.evaluate((element) => document.activeElement === element);
 
 async function openChat(options: Parameters<typeof installMockGateway>[1] = {}, route = "chat") {
   const { page, gateway } = await chatFixture(suite, options);
@@ -91,10 +95,9 @@ suite.define(() => {
       runId: requireString(defaultParams.idempotencyKey, "default send idempotency key"),
       text: "Default shortcut received.",
     });
-    await page
-      .locator(".chat-thread-inner")
-      .getByText("Default shortcut received.")
-      .waitFor({ timeout: 10_000 });
+    await exactText(page.locator(".chat-thread-inner"), "Default shortcut received.").waitFor({
+      timeout: 10_000,
+    });
 
     await page.goto(`${suite.server.baseUrl}settings/appearance`);
     const shortcutSelect = page.locator("[data-settings-send-shortcut]");
@@ -160,10 +163,7 @@ suite.define(() => {
       runId: requireString(requireRecord(request.params).idempotencyKey, "quoted run"),
       text: "The checklist is ready.",
     });
-    await pane
-      .locator(".chat-group.assistant")
-      .getByText("The checklist is ready.", { exact: true })
-      .waitFor();
+    await exactText(pane.locator(".chat-group.assistant"), "The checklist is ready.").waitFor();
     await button("Stop generating").waitFor({ state: "detached" });
     const unquotedDraft = "Keep the text without a quote.";
     await composer.fill(unquotedDraft);
@@ -212,10 +212,7 @@ suite.define(() => {
       state: "delta",
       message: chatMessage("assistant", streamingText),
     });
-    await pane
-      .locator(".chat-bubble.streaming")
-      .getByText(streamingText, { exact: true })
-      .waitFor();
+    await exactText(pane.locator(".chat-bubble.streaming"), streamingText).waitFor();
     await menu.getByRole("menuitem", { name: "Reply to message", exact: true }).click();
     await menu.waitFor({ state: "detached" });
     const preview = pane.locator(".chat-reply-preview");
@@ -223,14 +220,14 @@ suite.define(() => {
       expect(await preview.locator(".chat-reply-preview__text").textContent()).toBe(quote);
     const expectDraft = async (text: string, aborts = 0) => {
       expect(await composer.inputValue()).toBe(text);
-      expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
+      expect(await focused(composer)).toBe(true);
       await expectRequestCountStable(gateway, "chat.send", 1);
       await expectRequestCountStable(gateway, "chat.abort", aborts);
     };
     await preview.waitFor({ state: "visible" });
     await expectQuote();
 
-    expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
+    expect(await focused(composer)).toBe(true);
     const draft = "Preserve this unsent reply draft.";
     await composer.fill(draft);
 
@@ -278,7 +275,7 @@ suite.define(() => {
     expect(await primary.isEnabled()).toBe(true);
     await stop.waitFor({ state: "detached" });
     expect(await composer.inputValue()).toBe(composingDraft);
-    expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
+    expect(await focused(composer)).toBe(true);
     await page.keyboard.press("Escape");
     await expectQuote();
     await expectDraft(composingDraft);
