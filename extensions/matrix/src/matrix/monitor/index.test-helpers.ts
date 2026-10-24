@@ -202,6 +202,8 @@ vi.mock("../../resolve-targets.js", () => ({
 }));
 
 vi.mock("../../runtime.js", () => ({
+  // Read lazily by the approval-reaction state the media hold's reaction preflight imports.
+  getOptionalMatrixRuntime: () => undefined,
   getMatrixRuntime: () => ({
     config: {
       current: () => ({
