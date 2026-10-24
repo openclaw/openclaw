@@ -290,6 +290,8 @@ export async function registerChannelsCli(
     .description("Show recent channel logs from the gateway log file")
     .option("--channel <name>", `Channel (${formatCliChannelOptions(["all"])}; default: all)`)
     .option("--lines <n>", "Number of lines (default: 200)", "200")
+    .option("--follow", "Follow new channel log entries", false)
+    .option("--interval <ms>", "Polling interval in ms when following", "1000")
     .option("--json", "Output JSON", false)
     .action(async (opts) => {
       await runCommandWithRuntime(defaultRuntime, async () => {
