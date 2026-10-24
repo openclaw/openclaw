@@ -5,6 +5,7 @@ import type {
   WorkerLiveEventResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { normalizeToolPolicyName } from "../../agents/tool-policy.js";
+import type { ResolvedTrajectoryRetentionConfig } from "../../config/sessions/store-maintenance.js";
 import { projectAgentToolActivity } from "../../infra/agent-activity-events.js";
 import {
   emitAgentEventIfCurrent,
@@ -60,6 +61,11 @@ type WorkerLiveEventReceiverOptions = {
   maxActiveRuns?: number;
   maxSessions?: number;
   windowSize?: number;
+  /**
+   * Resolves the operator-configured trajectory runtime retention thresholds at
+   * recorder-creation time so config reloads apply to subsequent runs.
+   */
+  resolveTrajectoryRetentionConfig?: () => ResolvedTrajectoryRetentionConfig;
 };
 
 function invalidEvent(): WorkerLiveEventFailure {
@@ -299,7 +305,11 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       controlUiVisible,
       emissionMode,
       lifecycleGeneration,
-      trajectoryRecorder: createWorkerLiveTrajectoryRecorder({ runId, source: window.source }),
+      trajectoryRecorder: createWorkerLiveTrajectoryRecorder({
+        runId,
+        source: window.source,
+        retention: options.resolveTrajectoryRetentionConfig?.(),
+      }),
       toolArgsByCallId: new Map<string, unknown>(),
     };
     window.activeRuns.set(runId, claimed);

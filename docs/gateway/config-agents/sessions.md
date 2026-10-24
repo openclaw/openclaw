@@ -79,6 +79,10 @@ of tool and session policy.
       resetArchiveRetention: "30d", // duration or false
       maxDiskBytes: "500mb", // physical disk budget; default "10gb"
       highWaterBytes: "400mb", // optional cleanup target
+      trajectoryRetention: {
+        maxAge: "14d", // trajectory runtime age cutoff; default "14d"
+        maxBytes: "512mb", // global trajectory runtime byte cap; default "512mb"
+      },
       coldStorage: {
         enabled: false, // opt in to compressed inactive transcripts
         afterDays: 30,
@@ -135,6 +139,10 @@ of tool and session policy.
   - `resetArchiveRetention`: age-based retention for reset/deleted transcript archives. By default, archives remain until disk-budget eviction; set a duration to opt into wall-clock deletion, or `false` to disable it explicitly.
   - `maxDiskBytes`: per-agent physical disk budget (default `10gb`), counting the SQLite main file, its `-wal` file, and counted files in the agent sessions directory. In `warn` mode it logs warnings. In `enforce` mode it first reclaims checkpointable database space, then removes old reset/delete artifacts, unreferenced historical generations, and finally the oldest sessions explicitly marked as archived by the active-session cap. Manual, legacy, age-retention, stale-dashboard, and recovery archives remain protected. Protected history and database pages that cannot yet be reclaimed can keep usage above the cleanup target; this is not a guaranteed physical ceiling. Set `false`, `0`, or `"0"` to disable the budget entirely.
   - `highWaterBytes`: optional target after budget cleanup. Defaults to `80%` of `maxDiskBytes`. A value that resolves to zero falls back to the default; negative values are invalid. Disable the budget with `maxDiskBytes`, not with a zero high-water mark.
+  - `trajectoryRetention`: operator-controlled thresholds for the trajectory runtime retention sweep that removes raw tool-call input/output rows from `trajectory_runtime_events`.
+    - `maxAge`: age cutoff for a complete run to become eligible for removal (duration, default `14d`).
+    - `maxBytes`: global byte cap on retained trajectory runtime events across the agent's sessions (byte size, default `512mb`). Once the cap is reached, the oldest eligible runs are removed first.
+    - Both are optional; omitted values keep the existing internal defaults. Age and byte pressure each make a run eligible for removal independently: a run newer than `maxAge` can still be removed when retained bytes exceed `maxBytes`, and an under-budget store still removes runs older than `maxAge`. Cleanup stays best-effort: it is scheduled after an eligible append and rate-limited to at most once per hour, so an idle agent can retain payloads older than `maxAge` until the next append. The triggering session's own rolling window is always protected. This does not change transcript (`transcript_events`) retention, which is controlled by `maxDiskBytes`/`pruneAfter`.
   - `coldStorage.enabled`: opt-in background extraction of inactive transcripts to compressed JSONL files (default `false`). Current and historical windows can qualify; active runs, admitted work, and recovery-owned sessions stay protected. This is independent of dashboard archiving and reset/deletion archive retention. See [cold transcript storage](/reference/session-management-compaction/maintenance#cold-transcript-storage).
   - `coldStorage.afterDays`: positive integer number of inactive days before a transcript becomes eligible (default `30`). Recent session activity protects the current window; historical windows use their own activity timestamps. Active work, recovery, and explicit history references still protect the transcripts they need. A worker applies the current policy without requiring new chat activity. Changing these settings takes effect without a Gateway restart; disabling extraction leaves already archived history readable.
 - **`threadBindings`**: global defaults for thread-bound session features.

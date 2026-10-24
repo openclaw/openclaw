@@ -2,6 +2,7 @@ import type { WorkerLiveEventParams } from "../../../packages/gateway-protocol/s
 import { isDefinitiveRunLifecycle } from "../../agents/agent-run-terminal-outcome.js";
 import { capLiveExecResult, sanitizeToolResult } from "../../agents/embedded-agent-tool-results.js";
 import { normalizeToolPolicyName } from "../../agents/tool-policy.js";
+import type { ResolvedTrajectoryRetentionConfig } from "../../config/sessions/store-maintenance.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { createTrajectoryRuntimeRecorder } from "../../trajectory/runtime.js";
@@ -42,6 +43,7 @@ export function isDefinitiveWorkerTerminalEvent(event: WorkerLiveEventParams["ev
 export function createWorkerLiveTrajectoryRecorder(params: {
   runId: string;
   source: WorkerTurnTranscriptSource;
+  retention?: ResolvedTrajectoryRetentionConfig;
 }): WorkerLiveTrajectoryRecorder {
   const target = params.source.sessionTarget;
   return createTrajectoryRuntimeRecorder({
@@ -51,6 +53,8 @@ export function createWorkerLiveTrajectoryRecorder(params: {
     sessionId: target.sessionId,
     sessionKey: target.sessionKey,
     sessionTarget: target,
+    maxGlobalRuntimeBytes: params.retention?.maxBytes,
+    maxAgeMs: params.retention?.maxAgeMs,
     assertCommitAllowed: params.source.receiptAuthority,
   }).catch((error: unknown) => {
     log.warn(`Trajectory preparation failed for run ${params.runId}: ${formatErrorMessage(error)}`);

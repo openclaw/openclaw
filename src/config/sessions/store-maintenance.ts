@@ -10,6 +10,10 @@ import {
   parseAgentSessionKey,
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
+import {
+  TRAJECTORY_RUNTIME_RETENTION_MAX_AGE_MS,
+  TRAJECTORY_RUNTIME_RETENTION_MAX_BYTES,
+} from "../../trajectory/paths.js";
 import { sessionDeliveryOrigin } from "../../utils/delivery-context.read.js";
 import type { SessionMaintenanceConfig, SessionMaintenanceMode } from "../types.base.js";
 import { hasMainSessionRecoveryClaim } from "./restart-recovery-state.js";
@@ -162,6 +166,45 @@ export function normalizeResolvedMaintenanceConfigInput(
         : maintenance.archiveDashboardAfterMs,
     modelRunPruneAfterMs: maintenance.modelRunPruneAfterMs ?? DEFAULT_MODEL_RUN_PRUNE_AFTER_MS,
     preserveRecentMs: maintenance.preserveRecentMs ?? null,
+  };
+}
+
+export type ResolvedTrajectoryRetentionConfig = {
+  maxAgeMs: number;
+  maxBytes: number;
+};
+
+function resolveTrajectoryRetentionMaxBytes(maintenance?: SessionMaintenanceConfig): number {
+  const raw = maintenance?.trajectoryRetention?.maxBytes;
+  const normalized = normalizeStringifiedOptionalString(raw);
+  if (!normalized) {
+    return TRAJECTORY_RUNTIME_RETENTION_MAX_BYTES;
+  }
+  try {
+    const bytes = parseByteSize(normalized);
+    // A non-positive cap cannot stop retention; keep the default so operators
+    // never accidentally disable the global trajectory budget.
+    return bytes > 0 ? bytes : TRAJECTORY_RUNTIME_RETENTION_MAX_BYTES;
+  } catch {
+    return TRAJECTORY_RUNTIME_RETENTION_MAX_BYTES;
+  }
+}
+
+/**
+ * Resolves the operator-controlled trajectory runtime retention thresholds from
+ * the shared `session.maintenance` block. Missing or invalid values keep the
+ * existing internal defaults so configured transcript retention cannot silently
+ * disable trajectory cleanup.
+ */
+export function resolveTrajectoryRetentionConfigFromMaintenance(
+  maintenance?: SessionMaintenanceConfig,
+): ResolvedTrajectoryRetentionConfig {
+  return {
+    maxAgeMs: resolveMaintenanceDuration(
+      maintenance?.trajectoryRetention?.maxAge,
+      TRAJECTORY_RUNTIME_RETENTION_MAX_AGE_MS,
+    ),
+    maxBytes: resolveTrajectoryRetentionMaxBytes(maintenance),
   };
 }
 

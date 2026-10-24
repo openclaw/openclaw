@@ -193,6 +193,22 @@ it.each([
   expect(result.error?.issues[0]?.path).toContain(key);
 });
 
+it("accepts configured trajectory runtime retention thresholds", () => {
+  expect(
+    SessionSchema.safeParse({
+      maintenance: { trajectoryRetention: { maxAge: "7d", maxBytes: "200mb" } },
+    }).success,
+  ).toBe(true);
+});
+
+it("reports an invalid trajectory retention byte size", () => {
+  const result = SessionSchema.safeParse({
+    maintenance: { trajectoryRetention: { maxBytes: "big" } },
+  });
+  expect(result.success).toBe(false);
+  expect(result.error?.issues[0]?.path).toEqual(["maintenance", "trajectoryRetention", "maxBytes"]);
+});
+
 it("rejects inherited realtime provider keys", () => {
   const realtime = { provider: "constructor", providers: { elevenlabs: { voiceId: "voice-123" } } };
   const result = OpenClawSchema.safeParse({ talk: { realtime } });

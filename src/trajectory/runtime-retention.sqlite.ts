@@ -18,14 +18,16 @@ import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js"
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db-contract.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import type { AgentDatabaseExecutionFileIdentity } from "../state/openclaw-agent-execution-contract.js";
-import { TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES } from "./paths.js";
+import {
+  TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
+  TRAJECTORY_RUNTIME_RETENTION_MAX_AGE_MS,
+  TRAJECTORY_RUNTIME_RETENTION_MAX_BYTES,
+} from "./paths.js";
 import type {
   TrajectoryRuntimeRetentionInput,
   TrajectoryRuntimeRetentionPlan,
 } from "./runtime-retention.contract.js";
 
-const RETENTION_MAX_AGE_MS = 14 * 24 * 60 * 60 * 1_000;
-const GLOBAL_MAX_BYTES = 512 * 1024 * 1024;
 const SWEEP_INTERVAL_MS = 60 * 60 * 1_000;
 const DELETE_RUN_BATCH_SIZE = 16;
 type Run = TrajectoryRuntimeRetentionPlan["runs"][number];
@@ -122,8 +124,11 @@ export function prepareTrajectoryRuntimeRetention(
 ): TrajectoryRuntimeRetentionPlan {
   return {
     sessionId: input.sessionId,
-    cutoff: now - RETENTION_MAX_AGE_MS,
-    maxBytes: Math.max(1, Math.floor(input.maxGlobalRuntimeBytes ?? GLOBAL_MAX_BYTES)),
+    cutoff: now - (input.maxAgeMs ?? TRAJECTORY_RUNTIME_RETENTION_MAX_AGE_MS),
+    maxBytes: Math.max(
+      1,
+      Math.floor(input.maxGlobalRuntimeBytes ?? TRAJECTORY_RUNTIME_RETENTION_MAX_BYTES),
+    ),
     runs: readRuns(database),
   };
 }

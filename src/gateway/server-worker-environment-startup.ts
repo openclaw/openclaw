@@ -3,6 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { resolveDefaultAgentId } from "../agents/agent-scope.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { resolveTrajectoryRetentionConfigFromMaintenance } from "../config/sessions/store-maintenance.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../infra/device-identity-async.js";
 import { getPairedDevice } from "../infra/device-pairing.js";
@@ -240,7 +241,10 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
       });
     return await workerNpmArtifact;
   };
-  const workerLiveEvents = createWorkerLiveEventReceiver();
+  const workerLiveEvents = createWorkerLiveEventReceiver({
+    resolveTrajectoryRetentionConfig: () =>
+      resolveTrajectoryRetentionConfigFromMaintenance(getRuntimeConfig().session?.maintenance),
+  });
   const workerTunnelManager = createWorkerTunnelManager({
     desktopSessionRegistry: params.desktopSessionRegistry,
   });

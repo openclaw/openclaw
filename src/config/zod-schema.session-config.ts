@@ -87,6 +87,12 @@ export const SessionSchema = z
         resetArchiveRetention: z.union([PositiveDurationSchema, z.literal(false)]).optional(),
         maxDiskBytes: z.union([z.string(), z.number(), z.literal(false)]).optional(),
         highWaterBytes: z.union([z.string(), z.number()]).optional(),
+        trajectoryRetention: z
+          .strictObject({
+            maxAge: PositiveDurationSchema.optional(),
+            maxBytes: z.union([z.string(), z.number()]).optional(),
+          })
+          .optional(),
       })
       .superRefine((val, ctx) => {
         for (const key of ["maxDiskBytes", "highWaterBytes"] as const) {
@@ -100,6 +106,18 @@ export const SessionSchema = z
             ctx.addIssue({
               code: z.ZodIssueCode.custom,
               path: [key],
+              message: "invalid size (use b, kb, mb, gb, tb)",
+            });
+          }
+        }
+        const trajectoryMaxBytes = val.trajectoryRetention?.maxBytes;
+        if (trajectoryMaxBytes !== undefined) {
+          try {
+            parseByteSize(normalizeStringifiedOptionalString(trajectoryMaxBytes) ?? "");
+          } catch {
+            ctx.addIssue({
+              code: z.ZodIssueCode.custom,
+              path: ["trajectoryRetention", "maxBytes"],
               message: "invalid size (use b, kb, mb, gb, tb)",
             });
           }

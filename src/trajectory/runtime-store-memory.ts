@@ -17,6 +17,8 @@ export function createMemoryTrajectoryRuntimeSink(
     sessionId: string;
     sessionKey?: string;
     maxRuntimeFileBytes: number;
+    maxGlobalRuntimeBytes?: number;
+    maxAgeMs?: number;
     assertCommitAllowed?: () => void;
   },
 ) {
@@ -95,6 +97,8 @@ export function createMemoryTrajectoryRuntimeSink(
       events: [...batch.keys()],
       discardPrevious: batchDiscard,
       maxRuntimeBytes: params.maxRuntimeFileBytes,
+      maxGlobalRuntimeBytes: params.maxGlobalRuntimeBytes,
+      maxAgeMs: params.maxAgeMs,
     })
       .then((result) => {
         committed = result.kind === "committed";

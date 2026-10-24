@@ -17,6 +17,7 @@ import {
   pruneStaleModelRunEntries,
   resolveMaintenanceConfigFromInput,
   resolveQuotaSuspensionEntryMaintenance,
+  resolveTrajectoryRetentionConfigFromMaintenance,
   shouldPreserveMaintenanceEntry,
   shouldRunModelRunPrune,
   shouldRunSessionEntryMaintenance,
@@ -384,6 +385,36 @@ describe("resolveMaintenanceConfigFromInput", () => {
       shouldRunModelRunPrune({ maintenance, entryCount: 60, force: true }),
       shouldRunModelRunPrune({ maintenance, entryCount: 50, force: true }),
     ]).toEqual([false, true, false]);
+  });
+});
+
+describe("resolveTrajectoryRetentionConfigFromMaintenance", () => {
+  it("defaults to the internal 14-day / 512 MiB thresholds", () => {
+    expect(resolveTrajectoryRetentionConfigFromMaintenance()).toEqual({
+      maxAgeMs: 14 * DAY_MS,
+      maxBytes: 512 * MiB,
+    });
+  });
+
+  it("resolves configured trajectory age and byte thresholds", () => {
+    expect(
+      resolveTrajectoryRetentionConfigFromMaintenance({
+        trajectoryRetention: { maxAge: "7d", maxBytes: "200mb" },
+      }),
+    ).toEqual({ maxAgeMs: 7 * DAY_MS, maxBytes: 200 * MiB });
+  });
+
+  it("keeps the defaults for invalid or non-positive trajectory retention values", () => {
+    expect(
+      resolveTrajectoryRetentionConfigFromMaintenance({
+        trajectoryRetention: { maxAge: "forever", maxBytes: "big" },
+      }),
+    ).toEqual({ maxAgeMs: 14 * DAY_MS, maxBytes: 512 * MiB });
+    expect(
+      resolveTrajectoryRetentionConfigFromMaintenance({
+        trajectoryRetention: { maxBytes: 0 },
+      }),
+    ).toEqual({ maxAgeMs: 14 * DAY_MS, maxBytes: 512 * MiB });
   });
 });
 

@@ -39,6 +39,7 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
   const input = {
     sessionId: params.input.sessionId,
     maxGlobalRuntimeBytes: params.input.maxGlobalRuntimeBytes,
+    maxAgeMs: params.input.maxAgeMs,
   };
   // The executor reuses this receipt object until its physical owner retires.
   const state = trajectoryRuntimeRetentionState(identity);

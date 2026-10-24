@@ -1,6 +1,10 @@
 import { parseDateStringTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import { SqliteJsonlReadBudgetExceededError } from "../../infra/sqlite-jsonl-budget-error.js";
-import { TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES } from "../../trajectory/paths.js";
+import {
+  TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES,
+  TRAJECTORY_RUNTIME_RETENTION_MAX_AGE_MS,
+  TRAJECTORY_RUNTIME_RETENTION_MAX_BYTES,
+} from "../../trajectory/paths.js";
 import type { TrajectoryRuntimeRetentionInput } from "../../trajectory/runtime-retention.contract.js";
 import type { SqliteTrajectoryRuntimeAppend } from "../../trajectory/runtime-store.contract.js";
 import type { TrajectoryEvent } from "../../trajectory/types.js";
@@ -95,8 +99,11 @@ function retainSessionActorMemoryTrajectory(
       }
     }
   }
-  const cutoff = input.now - 14 * 24 * 60 * 60 * 1000;
-  const maxBytes = Math.max(1, Math.floor(input.maxGlobalRuntimeBytes ?? 512 * 1024 * 1024));
+  const cutoff = input.now - (input.maxAgeMs ?? TRAJECTORY_RUNTIME_RETENTION_MAX_AGE_MS);
+  const maxBytes = Math.max(
+    1,
+    Math.floor(input.maxGlobalRuntimeBytes ?? TRAJECTORY_RUNTIME_RETENTION_MAX_BYTES),
+  );
   runs.sort(
     (a, b) =>
       a.newest - b.newest ||

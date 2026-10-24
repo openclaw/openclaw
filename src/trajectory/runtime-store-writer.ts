@@ -51,6 +51,8 @@ import type { TrajectoryEvent } from "./types.js";
 type TrajectoryRuntimeSinkParams = {
   env: NodeJS.ProcessEnv;
   maxRuntimeFileBytes: number;
+  maxGlobalRuntimeBytes?: number;
+  maxAgeMs?: number;
   sessionFile?: string;
   sessionId: string;
   sessionKey?: string;
@@ -245,6 +247,8 @@ function buildSqliteTrajectoryRuntimeSink(
               events,
               discardPrevious: batch.discardPrevious,
               maxRuntimeBytes: params.maxRuntimeFileBytes,
+              maxGlobalRuntimeBytes: params.maxGlobalRuntimeBytes,
+              maxAgeMs: params.maxAgeMs,
               sessionId: marker.sessionId,
             },
             params.assertCommitAllowed,

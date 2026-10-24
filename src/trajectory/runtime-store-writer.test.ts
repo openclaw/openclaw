@@ -196,7 +196,7 @@ async function createRecorder(
   target: Target,
   options: Pick<
     Parameters<typeof createTrajectoryRuntimeRecorder>[0],
-    "maxRuntimeFileBytes" | "assertCommitAllowed"
+    "maxRuntimeFileBytes" | "maxAgeMs" | "maxGlobalRuntimeBytes" | "assertCommitAllowed"
   > = {},
 ) {
   const recorder = await createTrajectoryRuntimeRecorder({
@@ -434,6 +434,68 @@ it("settles retention during concurrent appends and worker session patches", asy
     await retention.accepted;
     expect(retention.reads).toBe(completedReads);
     expect(await eventTypes(target)).toEqual(["first", "while-retention-reads", "same-window"]);
+  });
+});
+
+it("evicts a sibling run older than a configured retention age through the shipped recorder", async () => {
+  await withTrajectoryState("trajectory-configured-age", async ({ target }) => {
+    await replaceSessionEntry(
+      { ...target, sessionKey: "agent:main:old-trajectory" },
+      { sessionId: "old-trajectory", updatedAt: 1 },
+    );
+    const database = openOpenClawAgentDatabase({
+      agentId: target.agentId,
+      path: target.storePath,
+    });
+    const configuredAgeMs = 3 * 24 * 60 * 60 * 1_000;
+    database.db
+      .prepare(`INSERT INTO trajectory_runtime_events
+      (session_id, seq, run_id, event_json, created_at) VALUES (?, 0, 'old-run', ?, ?)`)
+      .run(
+        "old-trajectory",
+        JSON.stringify({ type: "old" }),
+        Date.now() - 7 * 24 * 60 * 60 * 1_000,
+      );
+    const recorder = await createRecorder(target, { maxAgeMs: configuredAgeMs });
+    recorder.recordEvent("first");
+    await recorder.flush();
+    await retention.accepted;
+    expect(
+      await loadSqliteTrajectoryRuntimeEvents({ ...target, sessionId: "old-trajectory" }),
+    ).toEqual([]);
+    expect(await eventTypes(target)).toEqual(["first"]);
+  });
+});
+
+it("retains a sibling run younger than a configured retention age beyond the 14-day default", async () => {
+  await withTrajectoryState("trajectory-configured-retain", async ({ target }) => {
+    await replaceSessionEntry(
+      { ...target, sessionKey: "agent:main:old-trajectory" },
+      { sessionId: "old-trajectory", updatedAt: 1 },
+    );
+    const database = openOpenClawAgentDatabase({
+      agentId: target.agentId,
+      path: target.storePath,
+    });
+    const configuredAgeMs = 21 * 24 * 60 * 60 * 1_000;
+    database.db
+      .prepare(`INSERT INTO trajectory_runtime_events
+      (session_id, seq, run_id, event_json, created_at) VALUES (?, 0, 'old-run', ?, ?)`)
+      .run(
+        "old-trajectory",
+        JSON.stringify({ type: "old" }),
+        Date.now() - 16 * 24 * 60 * 60 * 1_000,
+      );
+    const recorder = await createRecorder(target, { maxAgeMs: configuredAgeMs });
+    recorder.recordEvent("first");
+    await recorder.flush();
+    await retention.accepted;
+    expect(
+      (await loadSqliteTrajectoryRuntimeEvents({ ...target, sessionId: "old-trajectory" })).map(
+        (event) => event.type,
+      ),
+    ).toEqual(["old"]);
+    expect(await eventTypes(target)).toEqual(["first"]);
   });
 });
 

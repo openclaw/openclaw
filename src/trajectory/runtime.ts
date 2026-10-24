@@ -6,6 +6,7 @@ import { createDiagnosticArray, createDiagnosticRecord } from "@openclaw/ai/inte
 import { getPublishedRuntimeToolInputSchema } from "@openclaw/ai/internal/tool-schema";
 import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SessionTranscriptRuntimeTarget } from "../config/sessions/session-accessor.js";
+import { resolveTrajectoryRetentionConfigFromMaintenance } from "../config/sessions/store-maintenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseBooleanValue } from "../utils/boolean.js";
 import { safeJsonStringify } from "../utils/safe-json.js";
@@ -21,6 +22,10 @@ type TrajectoryRuntimeInit = {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   maxRuntimeFileBytes?: number;
+  /** Global trajectory byte budget override; defaults to the configured maintenance cap. */
+  maxGlobalRuntimeBytes?: number;
+  /** Trajectory max-age override (ms); defaults to the configured maintenance age. */
+  maxAgeMs?: number;
   runId?: string;
   sessionId: string;
   sessionKey?: string;
@@ -357,9 +362,14 @@ export async function createTrajectoryRuntimeRecorder(input: TrajectoryRuntimeIn
     1,
     Math.floor(params.maxRuntimeFileBytes ?? TRAJECTORY_RUNTIME_CAPTURE_MAX_BYTES),
   );
+  const trajectoryRetention = resolveTrajectoryRetentionConfigFromMaintenance(
+    params.cfg?.session?.maintenance,
+  );
   const sink = await createSqliteTrajectoryRuntimeSink({
     env,
     maxRuntimeFileBytes,
+    maxGlobalRuntimeBytes: params.maxGlobalRuntimeBytes ?? trajectoryRetention.maxBytes,
+    maxAgeMs: params.maxAgeMs ?? trajectoryRetention.maxAgeMs,
     sessionFile: params.sessionFile,
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,

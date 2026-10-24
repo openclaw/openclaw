@@ -1,6 +1,10 @@
 import type { DatabaseFileIdentity } from "../infra/sqlite-worker-identity.js";
 
-export type TrajectoryRuntimeRetentionInput = { sessionId: string; maxGlobalRuntimeBytes?: number };
+export type TrajectoryRuntimeRetentionInput = {
+  sessionId: string;
+  maxGlobalRuntimeBytes?: number;
+  maxAgeMs?: number;
+};
 
 export function readTrajectoryRuntimeRetentionLease(attachment: unknown): Int32Array {
   if (

@@ -145,6 +145,30 @@ and rechecks the selection before each deletion. Cleanup continues through
 bounded batches; concurrent changes defer a stale selection until a later
 append.
 
+Operators can shorten either threshold with `session.maintenance.trajectoryRetention`:
+
+```json
+{
+  "session": {
+    "maintenance": {
+      "trajectoryRetention": { "maxAge": "7d", "maxBytes": "200mb" }
+    }
+  }
+}
+```
+
+`maxAge` is the run age cutoff (duration, default `14d`) and `maxBytes` is the
+global retained-byte cap (byte size, default `512mb`). Both are optional and
+preserve the defaults when omitted. Age and byte pressure each make a run
+eligible for removal independently: a run newer than `maxAge` can still be
+removed when retained bytes exceed `maxBytes`, and an under-budget store still
+removes runs older than `maxAge`. Cleanup stays best-effort: it is scheduled
+after an eligible append and rate-limited to at most once per hour, so an idle
+agent can retain payloads older than `maxAge` until the next append. The
+triggering session's own rolling window is always protected. Transcript
+retention is separate and configured by `session.maintenance` disk and age
+settings.
+
 Runtime export reads the SQLite capture. Pre-July 2026 `.trajectory.jsonl` and
 `.trajectory-path.json` sidecars are no longer read or followed. Existing files
 can be removed after retaining any needed diagnostic data.

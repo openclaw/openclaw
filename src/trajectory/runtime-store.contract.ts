@@ -5,6 +5,7 @@ export type SqliteTrajectoryRuntimeScope = {
   env?: NodeJS.ProcessEnv;
   maxGlobalRuntimeBytes?: number;
   maxRuntimeBytes?: number;
+  maxAgeMs?: number;
   sessionId: string;
   storePath: string;
   assertCommitAllowed?: () => void;
@@ -21,7 +22,7 @@ export type TrajectoryRuntimeWindowFacts = {
 
 export type SqliteTrajectoryRuntimeAppend = Pick<
   SqliteTrajectoryRuntimeScope,
-  "sessionId" | "maxRuntimeBytes" | "maxGlobalRuntimeBytes"
+  "sessionId" | "maxRuntimeBytes" | "maxGlobalRuntimeBytes" | "maxAgeMs"
 > & {
   events: readonly SerializedTrajectoryEvent[];
   /** Facts supplied by the host inside the existing physical-store writer FIFO. */
