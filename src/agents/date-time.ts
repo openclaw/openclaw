@@ -13,7 +13,7 @@ let userTimeFormatter:
   | { timeZone: string; format: ResolvedTimeFormat; formatter: Intl.DateTimeFormat }
   | undefined;
 
-/** Resolve a valid IANA timezone from config or the host. */
+/** Resolve a valid IANA timezone from config, host preferences, or UTC. */
 export function resolveUserTimezone(configured?: string): string {
   const trimmed = configured?.trim();
   if (trimmed) {
@@ -22,7 +22,8 @@ export function resolveUserTimezone(configured?: string): string {
       return trimmed;
     } catch {}
   }
-  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const host = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  return host?.trim() || "UTC";
 }
 
 /** Resolve 12/24-hour display preference, detecting the host for `auto`. */
