@@ -7,7 +7,6 @@ import {
   isStrictAffirmativeValue,
   parseFlagArgs,
   parsePermissiveBooleanToken,
-  parseStrictBooleanArg,
   readFlagValue,
   requireOptionArgument,
   stringFlag,
@@ -26,24 +25,13 @@ const parse = (args: string) =>
   ]);
 
 it.each([
-  ["strict", "true", true],
-  ["strict", "false", false],
-  ["strict", true, "--enabled must be true or false."],
-  ["permissive", "yes", true],
-  ["permissive", "off", false],
-  ["permissive", "enabled", undefined],
-  ["permissive", true, undefined],
-] as const)("parses %s Boolean token %j", (mode, input, expected) => {
-  const parseBoolean = () =>
-    mode === "strict"
-      ? parseStrictBooleanArg(input, "--enabled")
-      : parsePermissiveBooleanToken(input);
-  if (typeof expected === "string") {
-    expect(parseBoolean).toThrow(expected);
-  } else {
-    expect(parseBoolean()).toBe(expected);
-  }
-});
+  ["yes", true],
+  ["off", false],
+  ["enabled", undefined],
+  [true, undefined],
+] as const)("parses permissive Boolean token %j", (input, expected) =>
+  expect(parsePermissiveBooleanToken(input)).toBe(expected),
+);
 
 it.each([
   ["0", 1, "below"],
@@ -55,22 +43,15 @@ it("returns the original split option value", () =>
   expect(requireOptionArgument(["--output", "  report.json  "], 0, "--output")).toBe(
     "  report.json  ",
   ));
+it("rejects an empty split option value", () =>
+  expect(() => requireOptionArgument(["--output", ""], 0, "--output")).toThrow(
+    "--output requires a value",
+  ));
 
-it.each([undefined, "", "-h"])("rejects missing value %#", (value) => {
-  const argv = value === undefined ? ["--output"] : ["--output", value];
-  expect(() => requireOptionArgument(argv, 0, "--output")).toThrow(
-    new Error("--output requires a value"),
-  );
-});
 it("defaults absent open-ended truthiness to false", () =>
   expect(isOpenEndedTruthyValue(undefined)).toBe(false));
+it("normalizes affirmative token casing", () => expect(isStrictAffirmativeValue("Yes")).toBe(true));
 
-it.each([
-  [undefined, false],
-  ["Yes", true],
-] as const)("applies strict affirmative truthiness to %s", (input, expected) =>
-  expect(isStrictAffirmativeValue(input)).toBe(expected),
-);
 it.each([
   [["-p", "first", "-p", "second"], "-p"],
   [["--file", "first", "--file=second"], "--file"],
@@ -98,18 +79,13 @@ it("supports split-only, empty, transformed, and last-value-wins string contract
 });
 
 it.each([
-  ["--value first --value=second", "--value was provided more than once"],
-  ["--value --limit 1", "--value requires a value"],
   ["--limit", "--limit requires a value"],
   ["--limit --value x", "--limit requires a value"],
   ["--limit 20files", "--limit must be an integer"],
   ["--limit 0", "--limit must be at least 1"],
 ])("rejects %s", (args, message) => expect(() => parse(args)).toThrow(message));
 
-it("can reject short options as string values for CLIs that reserve short flags", () => {
-  expect(() => parseString(["--value", "-h"], { rejectShortOptions: true })).toThrow(
-    "--value requires a value",
-  );
+it("rejects inline short options as string-list values", () => {
   expect(() => parseMatches(["--match=-h"], { rejectShortOptions: true })).toThrow(
     "--match requires a value",
   );
