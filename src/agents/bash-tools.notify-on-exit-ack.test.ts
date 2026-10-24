@@ -31,7 +31,8 @@ vi.mock("../auto-reply/reply/session-event-handoff.js", async (importOriginal) =
 });
 // mock-isolation: Force deferred dispatch to test occurrence acknowledgment without model turns.
 vi.mock("../auto-reply/dispatch.js", async () => {
-  const { createDeferredExecDispatchMock } = await import("./bash-tools.lifecycle.test-support.js");
+  const { createDeferredExecDispatchMock } =
+    await import("./bash-tools.exec-runtime.test-support.js");
   return createDeferredExecDispatchMock();
 });
 vi.mock("../infra/secure-random.js", async (importOriginal) => ({

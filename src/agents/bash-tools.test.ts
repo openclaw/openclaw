@@ -29,7 +29,8 @@ import { getBashShellConfig } from "./shell-utils.js";
 
 // mock-isolation: Hold normal follow-up admission so factory tests can inspect exact queued routing.
 vi.mock("../auto-reply/dispatch.js", async () => {
-  const { createDeferredExecDispatchMock } = await import("./bash-tools.lifecycle.test-support.js");
+  const { createDeferredExecDispatchMock } =
+    await import("./bash-tools.exec-runtime.test-support.js");
   return createDeferredExecDispatchMock();
 });
 

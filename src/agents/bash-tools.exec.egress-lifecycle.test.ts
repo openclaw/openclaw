@@ -44,7 +44,8 @@ import {
 
 // mock-isolation: Keep completion admission deferred while the real process and egress owners settle.
 vi.mock("../auto-reply/dispatch.js", async () => {
-  const { createDeferredExecDispatchMock } = await import("./bash-tools.lifecycle.test-support.js");
+  const { createDeferredExecDispatchMock } =
+    await import("./bash-tools.exec-runtime.test-support.js");
   return createDeferredExecDispatchMock("completion");
 });
 
