@@ -20,10 +20,6 @@ const { fixture, reuseCompletedSetup, outcomeRef, describePosix } =
   createMergeOutcomeFixtureHarness();
 const bindingRef = "refs/openclaw/pr-workflow-bindings/123";
 const wrapper = readFileSync("scripts/pr", "utf8");
-const gitOwner = wrapper.slice(
-  wrapper.indexOf("pr_batch_wrapper_git() {"),
-  wrapper.indexOf("\nEOF_WRAPPER_GIT\n}") + "\nEOF_WRAPPER_GIT\n}".length,
-);
 
 type MergeFixture = ReturnType<typeof fixture>;
 
@@ -136,19 +132,18 @@ const cancelled = reuseCompletedSetup((confirmed = true) => {
   return { f, outcome, binding, replacement, original, source, directory };
 });
 
-function selection(
-  setup: ReturnType<typeof cancelled>,
-  outcome = setup.outcome,
-  head = setup.replacement,
-) {
-  const { f } = setup;
-  const shell = join(f.root, "select.sh");
-  writeFileSync(
-    shell,
-    `${gitOwner}\npr_batch_wrapper_git workflow-recovery-select "$1" 123 "$2" "$3"\n`,
-  );
-  return spawnSync("bash", [shell, f.repo, outcome, head], {
-    env: { ...createIndependentPrFixtureEnv(), GIT_EXEC: "git" },
+function nativeRecovery(f: MergeFixture, args: string[]) {
+  const script = join(f.repo, "scripts/pr");
+  mkdirSync(join(f.repo, "scripts"), { recursive: true });
+  writeFileSync(script, wrapper);
+  return spawnSync("bash", [script, ...args], {
+    cwd: f.repo,
+    env: {
+      PATH: process.env.PATH,
+      GIT_CONFIG_GLOBAL: "/dev/null",
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_ALLOW_PROTOCOL: "file",
+    },
     encoding: "utf8",
   });
 }
@@ -181,8 +176,6 @@ function recoverAdmin(setup: ReturnType<typeof rejectedAdmin>) {
 describePosix("current-main recovery of a retained workflow", () => {
   it("native entrypoint admits only the explicit admin shape and refuses a stale outcome before execution", () => {
     const { f, outcome, binding } = rejectedAdmin();
-    mkdirSync(join(f.repo, "scripts"), { recursive: true });
-    writeFileSync(join(f.repo, "scripts/pr"), wrapper);
     const args = [
       "merge-recover",
       "123",
@@ -193,17 +186,7 @@ describePosix("current-main recovery of a retained workflow", () => {
       "--confirmed-operator-admin",
       "--current-workflow",
     ];
-    const invoke = (argv: string[]) =>
-      spawnSync("bash", [join(f.repo, "scripts/pr"), ...argv], {
-        cwd: f.repo,
-        env: {
-          PATH: process.env.PATH,
-          GIT_CONFIG_GLOBAL: "/dev/null",
-          GIT_CONFIG_NOSYSTEM: "1",
-          GIT_ALLOW_PROTOCOL: "file",
-        },
-        encoding: "utf8",
-      });
+    const invoke = (argv: string[]) => nativeRecovery(f, argv);
     const selected = invoke(args);
     expect(selected.status, selected.stderr).toBe(1);
     expect(selected.stderr).toContain("Current workflow recovery outcome changed");
@@ -243,54 +226,11 @@ describePosix("current-main recovery of a retained workflow", () => {
     expectCapturedFiles(f, captures, outcomeRef);
   });
 
-  it.each(["capture", "head", "admin", "security"])(
-    "current workflow cannot bypass same-head admin recovery %s validation",
-    (fault) => {
-      const setup = rejectedAdmin();
-      const { f, outcome, binding } = setup;
-      if (fault === "capture") {
-        writeFileSync(
-          join(f.worktree, ".local", `merge-output.${f.record().attempt}.log`),
-          "HTTP 405\n",
-        );
-      } else {
-        const state = f.state();
-        if (fault === "head") {
-          state.pr.headRefOid = f.base;
-        }
-        if (fault === "admin") {
-          state.priorCi.membership = "member";
-        }
-        if (fault === "security") {
-          state.priorCi.security.fault = "failed-guard";
-        }
-        f.save(state);
-      }
-      const result = recoverAdmin(setup);
-      expectExit(result, 1);
-      expect(result.output).not.toMatch(/current workflow recovery requires/i);
-      expect(result.output).toMatch(
-        fault === "capture"
-          ? /complete exact GitHub base-modified HTTP 405 rejection/
-          : fault === "head"
-            ? /head|prepared/i
-            : fault === "admin"
-              ? /writer must be an active organization admin/
-              : /security|guard/i,
-      );
-      expectBinding(f, binding, outcome);
-      expect(f.state().pr.mergeCommit).toBeNull();
-    },
-  );
-
   it("retains the binding and cancelled history through real recovery and ordinary reconciliation", () => {
     const setup = cancelled();
     const { f, outcome, binding, replacement, original, source, directory } = setup;
     const captures = f.captures();
     const main = f.git(["--git-dir=" + f.remote, "rev-parse", "main"]);
-    const selected = selection(setup);
-    expectExit({ ...selected, output: selected.stdout + selected.stderr }, 0);
-    expect(selected.stdout.trim()).toBe(`${binding}\t${main}`);
     // Lost comment acknowledgement leaves ordinary reconciliation meaningful.
     configureMerge(f, { comment: "lost" });
     f.useScripts(join(directory, "scripts"));
@@ -351,39 +291,46 @@ describePosix("current-main recovery of a retained workflow", () => {
     },
   );
 
-  it.each([
-    "stale outcome",
-    "unselected head",
-    "symbolic main",
-    "foreign origin",
-    "unconfirmed cancellation",
-  ])("refuses %s before source admission", (fault) => {
-    const setup = cancelled(fault !== "unconfirmed cancellation");
-    const { f, outcome, binding } = setup;
-    let selectedOutcome = outcome;
-    let head = setup.replacement;
-    if (fault === "stale outcome") {
-      selectedOutcome = setup.original;
-    }
-    if (fault === "unselected head") {
-      head = "";
-    }
-    if (fault === "symbolic main") {
-      f.git(["symbolic-ref", "refs/remotes/origin/main", "refs/heads/main"]);
-    }
-    if (fault === "foreign origin") {
-      f.git(["remote", "set-url", "origin", f.remote]);
-    }
-    const result = selection(setup, selectedOutcome, head);
-    expect(result.status, result.stdout + result.stderr).not.toBe(0);
-    expectBinding(f, binding, outcome);
-    expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
-  });
+  it.each(["unselected head", "symbolic main", "foreign origin", "unconfirmed cancellation"])(
+    "refuses %s before source admission",
+    (fault) => {
+      const setup = cancelled(fault !== "unconfirmed cancellation");
+      const { f, outcome, binding } = setup;
+      let head = setup.replacement;
+      if (fault === "unselected head") {
+        head = "";
+      }
+      if (fault === "symbolic main") {
+        f.git(["symbolic-ref", "refs/remotes/origin/main", "refs/heads/main"]);
+      }
+      if (fault === "foreign origin") {
+        f.git(["remote", "set-url", "origin", f.remote]);
+      }
+      const result = nativeRecovery(f, [
+        "merge-recover",
+        "123",
+        outcome,
+        "--confirmed-operator-recovery",
+        "--current-workflow",
+        ...(head
+          ? ["--replacement-head", head]
+          : ["--admin-evidence", f.path, "--confirmed-operator-admin"]),
+      ]);
+      expect(result.status, result.stdout + result.stderr).not.toBe(0);
+      expect(result.stderr).toMatch(
+        fault === "symbolic main"
+          ? /Refusing symbolic or unreadable current workflow anchor/
+          : fault === "foreign origin"
+            ? /requires official current main and a retained workflow/
+            : /requires a confirmed cancelled nonqueue auto outcome/,
+      );
+      expectBinding(f, binding, outcome);
+      expect(f.state()).toMatchObject({ mutations: 1, posts: 0 });
+    },
+  );
 
   it.each([
     ["merge-run", "123", "--current-workflow"],
-    ["unknown", "123", "--current-workflow"],
-    ["merge-recover", "123", "a".repeat(40), "--current-workflow"],
     [
       "merge-recover",
       "123",

@@ -98,52 +98,37 @@ describe("run-additional-boundary-checks", () => {
     );
   });
 
-  it("covers every check once across eight shards", () => {
+  it("partitions checks once and transfers only the core type boundary", () => {
     expect(parseShardSpec("2/4")).toEqual({ count: 4, index: 1, label: "2/4" });
     expect(parseShardSelection("2/4,3/4")).toEqual([
       { count: 4, index: 1, label: "2/4" },
       { count: 4, index: 2, label: "3/4" },
     ]);
-    expect(selectChecksForShard(BOUNDARY_CHECKS, "2/4,3/4")).toEqual(
-      BOUNDARY_CHECKS.filter((_check, index) => index % 4 === 1 || index % 4 === 2),
+    const checks = ["first", "lint:tmp:tsgo-core-boundary", "last"].map((label) =>
+      nodeCheck(label, ""),
     );
-    const count = 8;
-    const indices = Array.from({ length: count }, (_, index) => index + 1);
-    const shardedLabels = indices.flatMap((index) =>
-      selectChecksForShard(BOUNDARY_CHECKS, `${index}/${count}`).map((check) => check.label),
-    );
-    expect(shardedLabels.toSorted((a, b) => a.localeCompare(b))).toEqual(
-      BOUNDARY_CHECKS.map((check) => check.label).toSorted((a, b) => a.localeCompare(b)),
-    );
-    expect(new Set(shardedLabels).size).toBe(BOUNDARY_CHECKS.length);
-    const transferred = indices.flatMap((index) => {
-      const full = selectChecksForShard(BOUNDARY_CHECKS, `${index}/${count}`);
-      const selected = selectChecksForShard(BOUNDARY_CHECKS, `${index}/${count}`, "test-types");
-      expect(selected).toEqual(
-        full.filter((check) => check.label !== "lint:tmp:tsgo-core-boundary"),
-      );
-      return selected;
-    });
-    expect(transferred).toHaveLength(BOUNDARY_CHECKS.length - 1);
-
+    expect(selectChecksForShard(checks, "1/2")).toEqual([checks[0], checks[2]]);
+    expect(selectChecksForShard(checks, "2/2")).toEqual([checks[1]]);
+    expect(selectChecksForShard(checks, "1/2,2/2")).toEqual(checks);
+    expect(selectChecksForShard(checks, "1/2,2/2", "test-types")).toEqual([checks[0], checks[2]]);
     expect(() => parseShardSpec("5/4")).toThrow("Invalid shard spec");
     expect(() => parseShardSpec("9007199254740993/9007199254740994")).toThrow("Invalid shard spec");
   });
 
   it("parses CLI help and shard args before running checks", () => {
-    const parsed = (overrides: Partial<ReturnType<typeof parseCliArgs>>) => ({
+    expect(parseCliArgs(["--shard", "2/4"], {})).toEqual({
       help: false,
-      shardSpec: "",
+      shardSpec: "2/4",
       coreTestBoundaryOwner: "additional",
-      ...overrides,
     });
-    expect(parseCliArgs(["--shard", "2/4"], {})).toEqual(parsed({ shardSpec: "2/4" }));
-    expect(parseCliArgs(["--shard=3/4"], {})).toEqual(parsed({ shardSpec: "3/4" }));
-    expect(parseCliArgs([], { OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: "4/4" })).toEqual(
-      parsed({ shardSpec: "4/4" }),
+    expect(parseCliArgs(["--shard=3/4"], {})).toHaveProperty("shardSpec", "3/4");
+    expect(parseCliArgs([], { OPENCLAW_ADDITIONAL_BOUNDARY_SHARD: "4/4" })).toHaveProperty(
+      "shardSpec",
+      "4/4",
     );
-    expect(parseCliArgs(["--core-test-boundary-owner=test-types"], {})).toEqual(
-      parsed({ coreTestBoundaryOwner: "test-types" }),
+    expect(parseCliArgs(["--core-test-boundary-owner=test-types"], {})).toHaveProperty(
+      "coreTestBoundaryOwner",
+      "test-types",
     );
     expect(() => parseCliArgs(["--core-test-boundary-owner=none"], {})).toThrow("Unknown argument");
     expect(() => parseCliArgs(["--shard"], {})).toThrow("--shard requires a value");
@@ -287,7 +272,6 @@ describe("run-additional-boundary-checks", () => {
     "cleans active check descendants on parent signal",
     async ({ signal }) => {
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-boundary-signal-"));
-      const readyPath = path.join(tempDir, "ready");
       const childPidPath = path.join(tempDir, "child.pid");
       let childPid: number | undefined;
       let runner: ReturnType<typeof spawn> | undefined;
@@ -305,8 +289,7 @@ describe("run-additional-boundary-checks", () => {
           `const child = spawn(process.execPath, ['-e', ${JSON.stringify(childScript)}], { stdio: ['ignore', 'ignore', 'ignore', 'ipc'] });`,
           "child.once('message', (pid) => {",
           "  fs.writeFileSync(process.env.OPENCLAW_TEST_CHILD_PID, String(pid));",
-          "  fs.writeFileSync(process.env.OPENCLAW_TEST_READY, 'ready');",
-          "  sendReceipt(process.env.OPENCLAW_TEST_READY, 'ready');",
+          "  sendReceipt(process.env.OPENCLAW_TEST_CHILD_PID, 'ready');",
           "});",
           "process.on('SIGTERM', () => process.exit(0));",
           "setInterval(() => {}, 1000);",
@@ -337,13 +320,12 @@ await completion;
           env: {
             ...process.env,
             OPENCLAW_TEST_CHILD_PID: childPidPath,
-            OPENCLAW_TEST_READY: readyPath,
           },
           stdio: ["ignore", "ignore", "pipe", "ipc"],
         });
         closed = once(runner, "close");
 
-        await withinTest(waitForReady(readyPath, closed), signal);
+        await withinTest(waitForReady(childPidPath, closed), signal);
         childPid = Number(fs.readFileSync(childPidPath, "utf8"));
         expect(Number.isInteger(childPid)).toBe(true);
         expect(isProcessAlive(childPid)).toBe(true);

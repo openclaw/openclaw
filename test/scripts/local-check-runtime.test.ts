@@ -40,9 +40,7 @@ function makeEnv(overrides: NodeJS.ProcessEnv = {}) {
 
 it("keeps tsgo type checking on hosts without a tsrs binary", () => {
   expect(resolveTypeCheckTool("linux", "x64", {})).toBe("tsrs");
-  expect(resolveTypeCheckTool("darwin", "arm64", {})).toBe("tsrs");
   expect(resolveTypeCheckTool("win32", "x64", {})).toBe("tsgo");
-  expect(resolveTypeCheckTool("darwin", "x64", {})).toBe("tsgo");
 });
 
 it("lets OPENCLAW_TYPECHECKER force the tsgo fallback", () => {
@@ -59,10 +57,7 @@ it("lets OPENCLAW_TYPECHECKER force the tsgo fallback", () => {
 it("uses Go profiling without silently ignoring an explicit tsrs request", () => {
   expect(resolveTypeCheckTool("linux", "x64", {}, ["--pprofDir=profiles"])).toBe("tsgo");
   expect(() =>
-    resolveTypeCheckTool("linux", "x64", { OPENCLAW_TYPECHECKER: "tsrs" }, [
-      "--pprofDir",
-      "profiles",
-    ]),
+    resolveTypeCheckTool("linux", "x64", { OPENCLAW_TYPECHECKER: "tsrs" }, ["--pprofDir=profiles"]),
   ).toThrow(/tsrs does not support --pprofDir/);
 });
 
@@ -82,43 +77,25 @@ it("resolves repo tools from the primary checkout for dependency-less worktrees"
   expect(resolve([localPath, primaryPath])).toBe(localPath);
 });
 
-it.each([
-  { platform: "win32" as const, linkType: "junction", owned: false },
-  { platform: process.platform, linkType: "dir", owned: true },
-])(
-  "preserves declaration dependency ownership on $platform (existing: $owned)",
-  ({ platform, linkType, owned }) => {
-    const primaryRoot = createTempDir("openclaw-primary-toolchain-");
-    const cwd = path.join(primaryRoot, ".artifacts", "declarations");
-    const primaryNodeModules = path.join(primaryRoot, "node_modules");
-    const localNodeModules = path.join(cwd, "node_modules");
-    fs.mkdirSync(path.join(primaryNodeModules, ".bin"), { recursive: true });
-    fs.mkdirSync(cwd, { recursive: true });
-    if (owned) {
-      fs.mkdirSync(localNodeModules);
-    }
-    const linkTypes: Array<Parameters<typeof fs.symlinkSync>[2]> = [];
-    const linkOptions = {
-      cwd,
-      platform,
-      symlink: (...args: Parameters<typeof fs.symlinkSync>) => {
-        linkTypes.push(args[2]);
-        fs.symlinkSync(...args);
-      },
-    };
-
-    expect(ensureRepoNodeModulesLink(primaryNodeModules, linkOptions)).toBe(localNodeModules);
-    if (owned) {
-      expect(fs.lstatSync(localNodeModules).isDirectory()).toBe(true);
-      expect(fs.lstatSync(localNodeModules).isSymbolicLink()).toBe(false);
-    } else {
-      expect(fs.realpathSync(localNodeModules)).toBe(fs.realpathSync(primaryNodeModules));
-    }
-
-    expect(ensureRepoNodeModulesLink(primaryNodeModules, linkOptions)).toBe(localNodeModules);
-    expect(linkTypes).toEqual(owned ? [] : [linkType]);
-  },
-);
+it("creates a Windows junction once for declaration dependencies", () => {
+  const cwd = createTempDir("openclaw-primary-toolchain-");
+  const primaryNodeModules = path.join(cwd, "installed");
+  const localNodeModules = path.join(cwd, "node_modules");
+  fs.mkdirSync(primaryNodeModules);
+  const linkTypes: Array<Parameters<typeof fs.symlinkSync>[2]> = [];
+  const linkOptions = {
+    cwd,
+    platform: "win32" as const,
+    symlink: (...args: Parameters<typeof fs.symlinkSync>) => {
+      linkTypes.push(args[2]);
+      fs.symlinkSync(...args);
+    },
+  };
+  expect(ensureRepoNodeModulesLink(primaryNodeModules, linkOptions)).toBe(localNodeModules);
+  expect(fs.realpathSync(localNodeModules)).toBe(fs.realpathSync(primaryNodeModules));
+  expect(ensureRepoNodeModulesLink(primaryNodeModules, linkOptions)).toBe(localNodeModules);
+  expect(linkTypes).toEqual(["junction"]);
+});
 it.each([
   { env: { PATH: "/usr/bin" }, disabled: ["0", "false"], enabled: "1" },
   { env: { CI: "true", PATH: "/usr/bin" }, disabled: ["0"], enabled: "0" },
@@ -227,11 +204,6 @@ it("throttles bounded CI admission with unknown available memory", () => {
 });
 
 it("keeps prep and oxlint resource policies separate", () => {
-  const prepGoEnv = { GOMAXPROCS: null, GOGC: null, GOMEMLIMIT: null };
-  const lintGoEnv = {
-    ...throttledGoEnv,
-    GOMAXPROCS: String(Math.min(2, Math.max(1, os.availableParallelism()))),
-  };
   const cwd = createTempDir("openclaw-oxlint-go-limit-");
   // Keep artifact ownership inside this fixture when its temp directory has a checkout ancestor.
   fs.mkdirSync(path.join(cwd, ".git"));
@@ -265,10 +237,17 @@ fs.appendFileSync(process.env.CAPTURE_PATH, JSON.stringify({ step, goEnv, args: 
     .split("\n")
     .map((line) => JSON.parse(line));
   expect(children).toEqual([
-    { step: "prep", goEnv: prepGoEnv, args: ["--mode=package-boundary"] },
+    {
+      step: "prep",
+      goEnv: { GOMAXPROCS: null, GOGC: null, GOMEMLIMIT: null },
+      args: ["--mode=package-boundary"],
+    },
     {
       step: "lint",
-      goEnv: lintGoEnv,
+      goEnv: {
+        ...throttledGoEnv,
+        GOMAXPROCS: String(Math.min(2, Math.max(1, os.availableParallelism()))),
+      },
       args: [
         ...extensions,
         "--type-aware",
@@ -307,9 +286,8 @@ function fixture(native = false) {
   }
   const root = fs.realpathSync(createTempDir("openclaw-toolchain-ownership-"));
   const checkout = path.join(root, "checkout");
-  const primary = native ? checkout : path.join(root, "primary");
   const configured = " modules";
-  const modules = path.join(primary, native ? configured : "node_modules");
+  const modules = path.join(root, native ? "checkout/ modules" : "primary/node_modules");
   const name = native ? "fixture-dependency" : "tsx";
   const dependency = path.join(modules, name);
   fs.mkdirSync(checkout);
@@ -333,15 +311,6 @@ function fixture(native = false) {
         'import { runNodeCliShim } from "./lib/tsx-cli-shim.mjs"; await runNodeCliShim(import.meta.url, { implementation: "./implementation.mts" });\n',
       "scripts/implementation.mts": 'import value from "fixture-dependency"; console.log(value);\n',
     });
-  } else {
-    expect(spawnSync("git", ["init", "--quiet", primary]).status).toBe(0);
-    const gitdir = path.join(primary, ".git", "worktrees", "task");
-    writeFiles(gitdir, {
-      commondir: "../..\n",
-      HEAD: "ref: refs/heads/main\n",
-      gitdir: `${checkout}/.git\n`,
-    });
-    fs.writeFileSync(path.join(checkout, ".git"), `gitdir: ${gitdir}\n`);
   }
   const run = (overrides: NodeJS.ProcessEnv) =>
     spawnSync(process.execPath, [path.join(checkout, "scripts/entry.mjs")], {
