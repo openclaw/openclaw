@@ -120,6 +120,43 @@ function toolResult(
 }
 
 describe("submitEmbeddedAttemptPrompt", () => {
+  it.each(["pending", "blocked", "empty", "persisted-key", "persisted-no-key"] as const)(
+    "does not reclassify suppressed canonical user state as a runtime control: %s",
+    async (state) => {
+      const message = userMessage(
+        "canonical human input",
+        1,
+        state === "persisted-key" ? "human:user" : undefined,
+      );
+      const recorder = createUserTurnTranscriptRecorder({
+        ...(state === "empty" ? {} : { message }),
+        target: () => undefined,
+      });
+      if (state === "blocked") {
+        recorder.markBlocked();
+      }
+      if (state.startsWith("persisted")) {
+        recorder.markRuntimePersisted(message);
+      }
+      const input = createBaseInput();
+      const promptActiveSession = vi.fn(async () => {});
+      const setNextUserMessagePersistence = vi.fn();
+      await submitEmbeddedAttemptPrompt({
+        ...input,
+        attempt: {
+          ...input.attempt,
+          suppressNextUserMessagePersistence: true,
+          userTurnTranscriptRecorder: recorder,
+        },
+        activeSession: createSession().activeSession,
+        promptActiveSession,
+        setNextUserMessagePersistence,
+      });
+      expect(promptActiveSession).toHaveBeenCalledWith("transcript prompt", expect.any(Object));
+      expect(setNextUserMessagePersistence).not.toHaveBeenCalled();
+    },
+  );
+
   it("refreshes review source authority before continuing a model request and refuses revocation", async () => {
     const { activeSession } = createSession();
     let revision = 0;
