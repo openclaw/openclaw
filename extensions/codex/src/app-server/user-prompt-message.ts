@@ -2,6 +2,7 @@ import type {
   AgentMessage,
   EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { projectAgentHarnessTranscriptMessageForDisplay } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   attachCodexMirrorIdentity,
@@ -96,4 +97,30 @@ export async function resolveFinalCodexMirrorMessages(params: {
   const messages = params.messagesSnapshot.slice();
   messages[firstUserIndex] = resolvedPrompt;
   return messages;
+}
+
+/** Restore host-persisted input to observers without adding a second transcript write. */
+export function buildCodexAgentEndMessages(
+  params: EmbeddedRunAttemptParams,
+  messagesSnapshot: AgentMessage[],
+): AgentMessage[] {
+  if (
+    !params.suppressNextUserMessagePersistence ||
+    !params.userTurnTranscriptRecorder ||
+    messagesSnapshot.some((message) => message.role === "user")
+  ) {
+    return messagesSnapshot;
+  }
+  const persisted = params.userTurnTranscriptRecorder.getPersistedMessage?.();
+  if (!persisted) {
+    return messagesSnapshot;
+  }
+  return [
+    projectAgentHarnessTranscriptMessageForDisplay({
+      hidden: params.privateCompletion === true || params.trigger === "memory",
+      inputProvenance: params.inputProvenance,
+      message: persisted,
+    }),
+    ...messagesSnapshot,
+  ];
 }

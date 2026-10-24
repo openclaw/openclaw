@@ -521,6 +521,36 @@ describe("runCodexAppServerAttempt hooks and model diagnostics", () => {
     expect(resolveActiveEmbeddedRunSessionId("agent:main:session-1")).toBeUndefined();
   });
 
+  it("keeps an already-persisted user request in agent_end observations", async () => {
+    const persistedUser = { role: "user" as const, content: "real user request", timestamp: 1 };
+    const { agentEnd, releaseAgentEnd, harness, run, turnSettled } = await heldAttempt({
+      prompt: "real user request",
+      suppressNextUserMessagePersistence: true,
+      userTurnTranscriptRecorder: {
+        message: persistedUser,
+        getAdmissionReceipt: () => undefined,
+        getPersistedMessage: () => persistedUser,
+      } as unknown as NonNullable<
+        ReturnType<typeof createTestParams>["userTurnTranscriptRecorder"]
+      >,
+    });
+    await run.waitForTurnAccepted();
+    await harness.notify(agentMessage("msg-final", "Done.", { status: "completed" }));
+    await complete(harness);
+    await vi.waitFor(() => expect(agentEnd).toHaveBeenCalledTimes(1), fastWait);
+
+    const event = mockCall(agentEnd, "agent_end")[0] as {
+      messages: Array<{ role: string; content: unknown }>;
+    };
+    const observedUsers = event.messages.filter((message) => message.role === "user");
+    expect(observedUsers).toEqual([expect.objectContaining(persistedUser)]);
+    expect(event.messages.filter((message) => message.role === "assistant")).toHaveLength(1);
+
+    releaseAgentEnd();
+    await run;
+    await turnSettled;
+  });
+
   it.each(["client close", "failed turn"])(
     "keeps %s cancellable during agent_end",
     async (failure) => {
