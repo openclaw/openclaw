@@ -155,7 +155,7 @@ describe("full release same-parent recovery workflow", () => {
               expect(runInNewContext(String(dispatch.if), context)).toBe(
                 attempt === 1 && reused !== "true",
               );
-              const recoveryCondition = recovery.if ?? "true";
+              const recoveryCondition: unknown = recovery.if ?? "true";
               assert(typeof recoveryCondition === "string");
               expect(runInNewContext(recoveryCondition, context)).toBe(reused !== "true");
             }

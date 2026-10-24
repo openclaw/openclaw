@@ -421,6 +421,8 @@ export function workerProbe(
     import {value} from '#fixture-value';
     import { runtimeProcessEntrypoints } from ${JSON.stringify(path.join(root, "src/infra/runtime-process-entrypoints.ts"))};
     import { scriptModuleEntrypoints } from ${JSON.stringify(path.join(root, "scripts/script-module-runtime.test-support.mjs"))};
+    import { runtimeProcessBuildEntries, runtimeProcessBuildEntrypoints } from ${JSON.stringify(path.join(root, "scripts/lib/runtime-process-build-entries.mts"))};
+    import { vitestWorkerBuildEntries } from ${JSON.stringify(path.join(root, "scripts/lib/vitest-worker-build-entries.mts"))};
     import { tuiPtyRuntimeEntrypoints } from ${JSON.stringify(path.join(root, "src/tui/tui-pty-runtime-test-support.ts"))};
     import { cliCompactionBackendEntrypoints } from ${JSON.stringify(path.join(root, "src/agents/command/cli-compaction-runtime.test-support.ts"))};
     import { pluginRuntimeRetentionEntrypoint } from ${JSON.stringify(path.join(root, "src/plugins/runtime-retention-entrypoint.test-support.ts"))};
@@ -447,7 +449,19 @@ export function workerProbe(
       const launcherArgv = inject('launcherArgv');
       expect(path.isAbsolute(launcherArgv[1])).toBe(true);
       expect(path.basename(launcherArgv[1])).toBe('vitest.mjs');
+      expect(Object.values(runtimeProcessBuildEntries)).toHaveLength(runtimeProcessBuildEntrypoints.length);
+      for (const source of Object.values(runtimeProcessBuildEntries)) {
+        expect(source).not.toContain('/dist/');
+        expect(source).toMatch(/\\.m?ts$/);
+        expect(fs.existsSync(source)).toBe(true);
+      }
       expect(entriesPresentAtCollection).toBe(true);
+      for (const entry of [...Object.values(tuiPtyRuntimeEntrypoints),...cliCompactionBackendEntrypoints,pluginRuntimeRetentionEntrypoint]) {
+        const source = vitestWorkerBuildEntries[entry.distWorkerPath.replace(/\\.js$/, '')];
+        expect(source).not.toContain('/dist/');
+        expect(source).toMatch(/\\.ts$/);
+        expect(fs.existsSync(source)).toBe(true);
+      }
       const dir = fs.mkdtempSync(${JSON.stringify(path.join(directory, "database-"))});
       const file = path.join(dir, 'probe.sqlite');
       const db = openNodeSqliteDatabase(file);
@@ -467,6 +481,8 @@ export function workerProbe(
           const [archiveUrl] = Worker.mock.calls.at(-1);
           expect(archiveUrl.href.endsWith(sourceMode ? '.ts' : '.js')).toBe(true);
           if (!sourceMode) expect(fileURLToPath(archiveUrl).startsWith(fileURLToPath(new URL('../', generation)))).toBe(true);
+          expect(tuiUrls).toHaveLength(5);
+          expect(setupUrls).toHaveLength(2);
           expect(scriptUrl.endsWith(sourceMode ? '.mts' : '.js')).toBe(true);
           for (const url of [...tuiUrls,...setupUrls,retentionUrl]) {
             expect(url.endsWith(sourceMode ? '.ts' : '.js')).toBe(true);
