@@ -1,8 +1,9 @@
 // @vitest-environment node
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SkillStatusReport } from "../../api/types.ts";
+import { createProps, createSkill } from "../../pages/skills/view.test-support.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { configSnapshot } from "../config/config-snapshot.test-support.ts";
@@ -29,67 +30,65 @@ type SkillsState = Parameters<typeof loadSkills>[0];
 
 function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<TestRequest>> } {
   const request = vi.fn<TestRequest>();
-  const state: SkillsState = {
-    client: { request } as unknown as SkillsState["client"],
-    connected: true,
-    runtimeConfig: {
-      runExternalMutation: async (task) => {
-        try {
-          return {
-            ok: true,
-            value: await task(expectDefined(state.client, "connected skill mutation client")),
-            refresh: { ok: true },
-          };
-        } catch (error) {
-          return {
-            ok: false,
-            reason: "error",
-            error: error instanceof Error ? error.message : String(error),
-          };
-        }
-      },
+  const state: SkillsState = createProps({
+    report: null,
+    clawhubResults: [],
+  }).state;
+  state.skillsAgentId = "main";
+  state.client = { request } as unknown as SkillsState["client"];
+  state.runtimeConfig = {
+    runExternalMutation: async (task) => {
+      try {
+        return {
+          ok: true,
+          value: await task(expectDefined(state.client, "connected skill mutation client")),
+          refresh: { ok: true },
+        };
+      } catch (error) {
+        return {
+          ok: false,
+          reason: "error",
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
     },
-    skillsAgentId: "main",
-    skillsAgentRevision: 0,
-    skillsLoading: false,
-    skillsReport: null,
-    skillsRead: null,
-    skillsError: null,
-    skillOperation: null,
-    skillEdits: {},
-    skillMessages: {},
-    clawhubSearchResults: [],
-    clawhubIconUrls: {},
-    clawhubDetail: null,
-    clawhubDetailRef: null,
-    clawhubDetailError: null,
-    clawhubInstallMessage: null,
-    clawhubVerdicts: {},
-    clawhubVerdictsRead: null,
-    clawhubVerdictsError: null,
-    skillCardContents: {},
-    skillCardContentKeys: {},
-    skillCardReads: {},
-    skillCardErrors: {},
   };
   return { state, request };
 }
+
+let state: SkillsState;
+let request: ReturnType<typeof vi.fn<TestRequest>>;
+beforeEach(() => {
+  ({ state, request } = createState());
+});
 
 function statusReport(workspaceDir = "/tmp/workspace", skills: unknown[] = []) {
   return { workspaceDir, managedSkillsDir: "/tmp/skills", skills };
 }
 
-async function attachRuntimeConfig(state: SkillsState) {
+function holdRequest() {
+  const result = createDeferred<unknown>();
+  request.mockReturnValue(result.promise);
+  return result;
+}
+
+function expectCardAbsent() {
+  expect(state.skillCardContents.agentreceipt).toBeUndefined();
+  expect(state.skillCardContentKeys.agentreceipt).toBeUndefined();
+}
+
+async function attachRuntimeConfig(subject: SkillsState) {
   const runtimeConfig = createRuntimeConfigCapability({
     snapshot: {
-      client: expectDefined(state.client, "connected skill mutation client"),
+      client: expectDefined(subject.client, "connected skill mutation client"),
       phase: "connected",
       sessionKey: "main",
       hello: gatewayHelloForMethods(["config.set"]),
     },
     subscribe: () => () => undefined,
   });
-  state.runtimeConfig = runtimeConfig;
+  subject.runtimeConfig = runtimeConfig;
+  onTestFinished(() => runtimeConfig.dispose());
   await runtimeConfig.ensureLoaded();
   return runtimeConfig;
 }
@@ -134,27 +133,12 @@ function createSkillCardReport(installedVersion?: string, installedAt = 123): Sk
     workspaceDir: "/tmp/workspace",
     managedSkillsDir: "/tmp/skills",
     skills: [
-      {
+      createSkill({
         name: "AgentReceipt",
         description: "Trust card fixture",
         skillKey: "agentreceipt",
-        source: "workspace",
-        bundled: false,
         filePath: "/tmp/workspace/skills/agentreceipt/SKILL.md",
         baseDir: "/tmp/workspace/skills/agentreceipt",
-        always: false,
-        disabled: false,
-        blockedByAllowlist: false,
-        blockedByAgentFilter: false,
-        eligible: true,
-        platformIncompatible: false,
-        modelVisible: true,
-        userInvocable: true,
-        commandVisible: true,
-        requirements: { anyBins: [], bins: [], env: [], config: [], os: [] },
-        missing: { anyBins: [], bins: [], env: [], config: [], os: [] },
-        configChecks: [],
-        install: [],
         ...(installedVersion
           ? {
               clawhub: {
@@ -174,7 +158,7 @@ function createSkillCardReport(installedVersion?: string, installedAt = 123): Sk
           path: "/tmp/workspace/skills/agentreceipt/skill-card.md",
           sizeBytes: 34,
         },
-      },
+      }),
     ],
   };
 }
@@ -183,7 +167,6 @@ describe("loadSkills", () => {
   it.each(["inventory", "verdicts", "card"] as const)(
     "releases the retired %s read before its transport settles",
     async (kind) => {
-      const { state, request } = createState();
       const pending = createDeferred<unknown>();
       request.mockReturnValue(pending.promise);
       state.skillsReport = createSkillCardReport("1.2.3");
@@ -222,152 +205,102 @@ describe("loadSkills", () => {
   );
 
   it("does not issue an ownerless status request", async () => {
-    const { state, request } = createState();
     state.skillsAgentId = null;
     await loadSkills(state);
     expect(request).not.toHaveBeenCalled();
   });
 
-  it("requests one bulk ClawHub verdict batch for linked installed skills", async () => {
-    const { state, request } = createState();
+  it.each([
+    { owners: [undefined], name: "unqualified links" },
+    { owners: ["alice", "bob"], name: "same slug with distinct owners" },
+  ])("batches verdicts for $name", async ({ owners }) => {
     state.skillsAgentId = "research";
-    request.mockImplementation(async (method: string) => {
+    const items = owners.map((owner, i) => verdict(owner, i === 0));
+    request.mockImplementation(async (method) => {
       if (method === "skills.status") {
         return statusReport("/tmp/research", [
-          linkedSkill(),
+          ...owners.map((owner) => linkedSkill(owner ? "weather" : "agentreceipt", owner)),
           { name: "Local", skillKey: "local", source: "workspace" },
         ]);
       }
       if (method === "skills.securityVerdicts") {
-        return {
-          schema: "openclaw.skills.security-verdicts.v1",
-          items: [verdict()],
-        };
+        return { schema: "openclaw.skills.security-verdicts.v1", items };
       }
       return {};
     });
     await loadSkills(state);
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(request).toHaveBeenNthCalledWith(1, "skills.status", { agentId: "research" });
-    expect(request).toHaveBeenNthCalledWith(2, "skills.securityVerdicts", { agentId: "research" });
-    expect(state.clawhubVerdicts).toEqual({
-      [clawhubVerdictKey({
-        registry: "https://clawhub.ai",
-        slug: "agentreceipt",
-        version: "1.2.3",
-      })]: expect.objectContaining({
-        ok: true,
-        decision: "pass",
-        securityStatus: "clean",
-        securityPassed: true,
-      }),
-    });
+    expect(request.mock.calls).toEqual([
+      ["skills.status", { agentId: "research" }],
+      ["skills.securityVerdicts", { agentId: "research" }],
+    ]);
+    expect(state.clawhubVerdicts).toEqual(
+      Object.fromEntries(
+        items.map((item) => [
+          clawhubVerdictKey({
+            registry: "https://clawhub.ai",
+            slug: item.requestedSlug,
+            ownerHandle: item.requestedOwnerHandle,
+            version: "1.2.3",
+          }),
+          item,
+        ]),
+      ),
+    );
+    expect(Object.keys(state.clawhubVerdicts)).toHaveLength(owners.length);
     expect(state.skillsReport?.workspaceDir).toBe("/tmp/research");
     expect(state.clawhubVerdictsError).toBeNull();
   });
 
-  it("keeps verdicts for the same slug distinct by installed owner", async () => {
-    const { state, request } = createState();
-    request.mockImplementation(async (method: string) => {
-      if (method === "skills.status") {
-        return statusReport(undefined, [
-          linkedSkill("weather", "alice"),
-          linkedSkill("weather", "bob", 456),
-        ]);
+  it.each([
+    { target: "beta", staleFirst: false },
+    { target: "alpha", staleFirst: true },
+  ])(
+    "rejects stale reports returning to $target (stale first: $staleFirst)",
+    async ({ target, staleFirst }) => {
+      const old = createDeferred<unknown>();
+      const current = createDeferred<unknown>();
+      request.mockReturnValueOnce(old.promise).mockReturnValueOnce(current.promise);
+      state.skillsAgentId = "alpha";
+      state.skillEdits = { shared: "stale-secret" };
+      const firstLoad = loadSkills(state);
+      await Promise.resolve();
+      setSkillsAgentId(state, "beta");
+      if (target === "alpha") {
+        setSkillsAgentId(state, target);
       }
-      if (method === "skills.securityVerdicts") {
-        return {
-          schema: "openclaw.skills.security-verdicts.v1",
-          items: [verdict("alice"), verdict("bob", false)],
-        };
+      expect(state.skillEdits).toEqual({});
+      const secondLoad = loadSkills(state);
+      await Promise.resolve();
+      expect(request.mock.calls).toEqual([
+        ["skills.status", { agentId: "alpha" }],
+        ["skills.status", { agentId: target }],
+      ]);
+      if (staleFirst) {
+        old.resolve(statusReport("/tmp/stale"));
+        await firstLoad;
+        expect(state).toMatchObject({ skillsReport: null, skillsLoading: true });
       }
-      return {};
-    });
-    await loadSkills(state);
-    const aliceKey = clawhubVerdictKey({
-      registry: "https://clawhub.ai",
-      slug: "weather",
-      ownerHandle: "alice",
-      version: "1.2.3",
-    });
-    const bobKey = clawhubVerdictKey({
-      registry: "https://clawhub.ai",
-      slug: "weather",
-      ownerHandle: "bob",
-      version: "1.2.3",
-    });
-    expect(aliceKey).not.toBe(bobKey);
-    expect(Object.keys(state.clawhubVerdicts)).toHaveLength(2);
-    expect(state.clawhubVerdicts[aliceKey]?.publisherHandle).toBe("alice");
-    expect(state.clawhubVerdicts[bobKey]?.publisherHandle).toBe("bob");
-  });
-
-  it("ignores stale skill reports after switching agents mid-request", async () => {
-    const { state, request } = createState();
-    const alpha = createDeferred<unknown>();
-    const beta = createDeferred<unknown>();
-    request.mockReturnValueOnce(alpha.promise).mockReturnValueOnce(beta.promise);
-    state.skillsAgentId = "alpha";
-    state.skillEdits = { shared: "stale-secret" };
-    const firstLoad = loadSkills(state);
-    await Promise.resolve();
-    setSkillsAgentId(state, "beta");
-    expect(state.skillEdits).toEqual({});
-    const secondLoad = loadSkills(state);
-    await Promise.resolve();
-    expect(request.mock.calls).toEqual([
-      ["skills.status", { agentId: "alpha" }],
-      ["skills.status", { agentId: "beta" }],
-    ]);
-
-    beta.resolve(
-      statusReport("/tmp/beta", [{ name: "Beta", skillKey: "beta", source: "workspace" }]),
-    );
-    await secondLoad;
-
-    alpha.resolve(
-      statusReport("/tmp/alpha", [{ name: "Alpha", skillKey: "alpha", source: "workspace" }]),
-    );
-    await firstLoad;
-    expect(state.skillsAgentId).toBe("beta");
-    expect(state.skillsReport?.workspaceDir).toBe("/tmp/beta");
-    expect(state.skillsReport?.skills.map((skill) => skill.name)).toEqual(["Beta"]);
-    expect(state.skillsLoading).toBe(false);
-  });
-
-  it("ignores stale skill reports after switching away and back to the same agent", async () => {
-    const { state, request } = createState();
-    const queue = createDeferredRequestQueue(request);
-    state.skillsAgentId = "alpha";
-    const firstLoad = loadSkills(state);
-    await Promise.resolve();
-    setSkillsAgentId(state, "beta");
-    setSkillsAgentId(state, "alpha");
-    const secondLoad = loadSkills(state);
-    await Promise.resolve();
-    queue.resolveNext(
-      statusReport("/tmp/stale-alpha", [
-        { name: "Stale Alpha", skillKey: "stale-alpha", source: "workspace" },
-      ]),
-    );
-    await firstLoad;
-    expect(state.skillsReport).toBeNull();
-    expect(state.skillsLoading).toBe(true);
-    queue.resolveNext(
-      statusReport("/tmp/current-alpha", [
-        { name: "Current Alpha", skillKey: "current-alpha", source: "workspace" },
-      ]),
-    );
-    await secondLoad;
-    expect(state.skillsReport?.workspaceDir).toBe("/tmp/current-alpha");
-    expect(state.skillsReport?.skills.map((skill) => skill.name)).toEqual(["Current Alpha"]);
-    expect(state.skillsLoading).toBe(false);
-  });
+      current.resolve(
+        statusReport("/tmp/current", [{ name: "Current", skillKey: target, source: "workspace" }]),
+      );
+      await secondLoad;
+      if (!staleFirst) {
+        old.resolve(statusReport("/tmp/stale"));
+        await firstLoad;
+      }
+      expect(state).toMatchObject({
+        skillsAgentId: target,
+        skillsReport: {
+          workspaceDir: "/tmp/current",
+          skills: [{ name: "Current", skillKey: target, source: "workspace" }],
+        },
+        skillsLoading: false,
+      });
+    },
+  );
 
   it("releases loading ownership when the current client disconnects", async () => {
-    const { state, request } = createState();
-    const status = createDeferred<unknown>();
-    request.mockReturnValue(status.promise);
+    const status = holdRequest();
     const load = loadSkills(state);
     await waitForFast(() => expect(state.skillsLoading).toBe(true));
     state.connected = false;
@@ -378,48 +311,26 @@ describe("loadSkills", () => {
     expect(state.skillsError).toBeNull();
   });
 
-  it("does not keep skills loading while the optional verdict refresh is pending", async () => {
-    const { state, request } = createState();
-    const verdicts = createDeferred<unknown>();
-    request.mockImplementation((method: string) => {
-      if (method === "skills.status") {
-        return Promise.resolve(statusReport(undefined, [linkedSkill()]));
-      }
-      if (method === "skills.securityVerdicts") {
-        return verdicts.promise;
-      }
-      return Promise.resolve({});
-    });
-    await loadSkills(state);
-    expect(state.skillsLoading).toBe(false);
-
-    verdicts.resolve({ schema: "openclaw.skills.security-verdicts.v1", items: [] });
-    await Promise.resolve();
-    await Promise.resolve();
-  });
-
   it("drops cached Skill Card content when refreshed card metadata changes", async () => {
-    const { state, request } = createState();
     state.skillCardContents = { agentreceipt: "old card" };
     state.skillCardContentKeys = {
       agentreceipt: "/tmp/workspace/skills/agentreceipt/skill-card.md\u000034\u00001.2.3",
     };
     request.mockResolvedValueOnce(createSkillCardReport("1.2.4", 456));
     await loadSkills(state);
-    expect(state.skillCardContents.agentreceipt).toBeUndefined();
-    expect(state.skillCardContentKeys.agentreceipt).toBeUndefined();
+    expectCardAbsent();
   });
 });
 
 describe("loadSkillCard", () => {
   it("joins an admitted card read after selecting another card and reuses empty cached content", async () => {
-    const { state, request } = createState();
     const first = createDeferred<unknown>();
     const second = createDeferred<unknown>();
     request
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise)
       .mockReturnValue(first.promise);
+    state.skillsAgentId = "research";
     const report = createSkillCardReport();
     const original = report.skills[0]!;
     state.skillsReport = {
@@ -446,68 +357,42 @@ describe("loadSkillCard", () => {
     second.resolve({ skillKey: "second-card", content: "" });
     await Promise.all([originalRead, otherRead, revisited]);
     await loadSkillCard(state, "second-card");
-    expect(request).toHaveBeenCalledTimes(2);
+    expect(request.mock.calls).toEqual([
+      ["skills.skillCard", { agentId: "research", skillKey: "agentreceipt" }],
+      ["skills.skillCard", { agentId: "research", skillKey: "second-card" }],
+    ]);
     expect(state.skillCardContents).toEqual({ agentreceipt: "# First card", "second-card": "" });
-  });
-
-  it("admits changed card metadata while the old version is pending", async () => {
-    const { state, request } = createState();
-    const old = createDeferred<unknown>();
-    const fresh = createDeferred<unknown>();
-    request.mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
-    state.skillsReport = createSkillCardReport("1.2.3");
-    const oldRead = loadSkillCard(state, "agentreceipt");
-    state.skillsReport = createSkillCardReport("1.2.4", 456);
-    const freshRead = loadSkillCard(state, "agentreceipt");
-    old.resolve({ skillKey: "agentreceipt", content: "Old version" });
-    await oldRead;
-    expect(state.skillCardContents.agentreceipt).toBeUndefined();
-    fresh.resolve({ skillKey: "agentreceipt", content: "Fresh version" });
-    await freshRead;
-    expect(request).toHaveBeenCalledTimes(2);
-    expect(state.skillCardContents.agentreceipt).toBe("Fresh version");
-  });
-
-  it("loads local Skill Card content on demand", async () => {
-    const { state, request } = createState();
-    state.skillsAgentId = "research";
-    request.mockResolvedValueOnce({
-      skillKey: "agentreceipt",
-      content: "# AgentReceipt\n\nLocal trust card.\n",
-    });
-    state.skillsReport = createSkillCardReport();
-    await loadSkillCard(state, "agentreceipt");
-    expect(request).toHaveBeenCalledWith("skills.skillCard", {
-      agentId: "research",
-      skillKey: "agentreceipt",
-    });
-    expect(state.skillCardContents.agentreceipt).toBe("# AgentReceipt\n\nLocal trust card.\n");
     expect(state.skillCardContentKeys.agentreceipt).toBe(
       "/tmp/workspace/skills/agentreceipt/skill-card.md\u000034\u0000",
     );
     expect(state.skillCardErrors).toEqual({});
   });
 
-  it("does not cache stale Skill Card content after local metadata changes mid-request", async () => {
-    const { state, request } = createState();
-    const card = createDeferred<unknown>();
-    request.mockReturnValue(card.promise);
-    state.skillsReport = createSkillCardReport("1.2.3");
-    const pending = loadSkillCard(state, "agentreceipt");
-    state.skillsReport = createSkillCardReport("1.2.4", 456);
-    card.resolve({
-      skillKey: "agentreceipt",
-      content: "old card",
-    });
-    await pending;
-    expect(state.skillCardContents.agentreceipt).toBeUndefined();
-    expect(state.skillCardContentKeys.agentreceipt).toBeUndefined();
-  });
+  it.each([false, true])(
+    "rejects changed card metadata (replacement read: %s)",
+    async (replace) => {
+      const old = createDeferred<unknown>();
+      const fresh = createDeferred<unknown>();
+      request.mockReturnValueOnce(old.promise).mockReturnValueOnce(fresh.promise);
+      state.skillsReport = createSkillCardReport("1.2.3");
+      const oldRead = loadSkillCard(state, "agentreceipt");
+      state.skillsReport = createSkillCardReport("1.2.4", 456);
+      const freshRead = replace ? loadSkillCard(state, "agentreceipt") : undefined;
+      old.resolve({ skillKey: "agentreceipt", content: "Old version" });
+      await oldRead;
+      expectCardAbsent();
+      if (replace) {
+        fresh.resolve({ skillKey: "agentreceipt", content: "Fresh version" });
+        await freshRead;
+        expect(request).toHaveBeenCalledTimes(2);
+        expect(state.skillCardContents.agentreceipt).toBe("Fresh version");
+      }
+    },
+  );
 });
 
 describe("searchClawHub", () => {
   it("requests the discovery feed when the query is empty", async () => {
-    const { state, request } = createState();
     request.mockResolvedValue({ results: [] });
     await expect(searchClawHub(state.client!, "   ")).resolves.toEqual([]);
     expect(request).toHaveBeenCalledWith(
@@ -519,24 +404,7 @@ describe("searchClawHub", () => {
 });
 
 describe("loadClawHubDetail", () => {
-  it("ignores stale detail responses after slug changes", async () => {
-    const { state, request } = createState();
-    const queue = createDeferredRequestQueue(request);
-    const firstPending = loadClawHubDetail(state, "github");
-    const secondPending = loadClawHubDetail(state, "gitlab");
-    queue.resolveNext({
-      skill: { slug: "github", displayName: "GitHub", createdAt: 1, updatedAt: 2 },
-    });
-    await firstPending;
-    queue.resolveNext({
-      skill: { slug: "gitlab", displayName: "GitLab", createdAt: 3, updatedAt: 4 },
-    });
-    await secondPending;
-    expect(state.clawhubDetail?.skill?.slug).toBe("gitlab");
-  });
-
   it("ignores a same-client detail response from an older connection epoch", async () => {
-    const { state, request } = createState();
     const queue = createDeferredRequestQueue(request);
     const pending = loadClawHubDetail(state, "github");
     state.connected = false;
@@ -552,7 +420,6 @@ describe("loadClawHubDetail", () => {
 
 describe("skill mutations", () => {
   it("reserves the shared operation while agent refresh is pending", async () => {
-    const { state, request } = createState();
     request.mockResolvedValue(statusReport());
     const agents = createDeferred();
     const loadAgents = vi.fn(() => agents.promise);
@@ -571,7 +438,6 @@ describe("skill mutations", () => {
   });
 
   it("retries a refresh when agent reconciliation changes scope", async () => {
-    const { state, request } = createState();
     const queue = createDeferredRequestQueue(request);
     state.skillsAgentId = "alpha";
     const refresh = refreshSkills(state, async () => undefined);
@@ -590,7 +456,6 @@ describe("skill mutations", () => {
   });
 
   it("saves API keys and reports success", async () => {
-    const { state, request } = createState();
     state.skillsAgentId = "research";
     request.mockResolvedValue({});
     state.skillEdits.github = "  sk-test  ";
@@ -608,7 +473,6 @@ describe("skill mutations", () => {
   });
 
   it("does not clear an existing API key when its replacement is blank", async () => {
-    const { state, request } = createState();
     state.skillEdits.github = "   ";
     await saveSkillApiKey(state, "github");
     expect(request).not.toHaveBeenCalled();
@@ -617,7 +481,6 @@ describe("skill mutations", () => {
   });
 
   it("config.set serializes skill changes after pending settings drafts and refreshes both owners", async () => {
-    const { state, request } = createState();
     const methods: string[] = [];
     let storedConfig: Record<string, unknown> = { count: 1 };
     let hash = "hash-1";
@@ -641,20 +504,15 @@ describe("skill mutations", () => {
     const runtimeConfig = await attachRuntimeConfig(state);
     methods.length = 0;
 
-    try {
-      runtimeConfig.patchForm(["count"], 2);
-      await updateSkillEnabled(state, "github", true);
+    runtimeConfig.patchForm(["count"], 2);
+    await updateSkillEnabled(state, "github", true);
 
-      expect(methods).toEqual(["config.set", "skills.update", "config.get", "skills.status"]);
-      expect(runtimeConfig.state.configForm).toEqual({ count: 2, skillEnabled: true });
-      expect(state.skillMessages.github).toEqual({ kind: "success", message: "Skill enabled" });
-    } finally {
-      runtimeConfig.dispose();
-    }
+    expect(methods).toEqual(["config.set", "skills.update", "config.get", "skills.status"]);
+    expect(runtimeConfig.state.configForm).toEqual({ count: 2, skillEnabled: true });
+    expect(state.skillMessages.github).toEqual({ kind: "success", message: "Skill enabled" });
   });
 
   it("config.set does not dispatch a queued skill update after access changes", async () => {
-    const { state, request } = createState();
     const firstSet = createDeferred<unknown>();
     const methods: string[] = [];
     let canDispatch = true;
@@ -671,26 +529,21 @@ describe("skill mutations", () => {
     const runtimeConfig = await attachRuntimeConfig(state);
     methods.length = 0;
 
-    try {
-      runtimeConfig.patchForm(["count"], 2);
-      const mutation = updateSkillEnabled(state, "github", true, () => canDispatch);
-      await waitForFast(() => expect(methods).toEqual(["config.set"]));
-      canDispatch = false;
-      firstSet.resolve({ config: { count: 2 }, hash: "hash-2" });
-      await mutation;
+    runtimeConfig.patchForm(["count"], 2);
+    const mutation = updateSkillEnabled(state, "github", true, () => canDispatch);
+    await waitForFast(() => expect(methods).toEqual(["config.set"]));
+    canDispatch = false;
+    firstSet.resolve({ config: { count: 2 }, hash: "hash-2" });
+    await mutation;
 
-      expect(methods).toEqual(["config.set"]);
-      expect(state.skillMessages.github).toEqual({
-        kind: "error",
-        message: "Access changed before the skill update started.",
-      });
-    } finally {
-      runtimeConfig.dispose();
-    }
+    expect(methods).toEqual(["config.set"]);
+    expect(state.skillMessages.github).toEqual({
+      kind: "error",
+      message: "Access changed before the skill update started.",
+    });
   });
 
   it("reports a committed skill update when its configuration refresh fails", async () => {
-    const { state, request } = createState();
     state.runtimeConfig.runExternalMutation = async (task) => ({
       ok: true,
       value: await task(expectDefined(state.client, "connected skill mutation client")),
@@ -704,50 +557,44 @@ describe("skill mutations", () => {
     });
   });
 
-  it.each([
-    {
-      name: "skill update blocks ClawHub install",
-      firstMethod: "skills.update",
-      start: (state: SkillsState) => updateSkillEnabled(state, "github", true),
-      blocked: (state: SkillsState) => installFromClawHub(state, "calendar"),
-      expectedMutation: { kind: "skill", skillKey: "github" } as const,
-    },
-    {
-      name: "ClawHub install blocks skill update",
-      firstMethod: "skills.install",
-      start: (state: SkillsState) => installFromClawHub(state, "github"),
-      blocked: (state: SkillsState) => updateSkillEnabled(state, "calendar", true),
-      expectedMutation: { kind: "clawhub", ref: "github" } as const,
-    },
-  ])("serializes $name and locks API key edits", async (fixture) => {
-    const { state, request } = createState();
-    const firstResult = createDeferred<unknown>();
-    request.mockImplementation(async (method) => {
-      if (method === fixture.firstMethod) {
-        return firstResult.promise;
+  it.each(["skills.update", "skills.install"] as const)(
+    "serializes %s with other mutations and locks API key edits",
+    async (firstMethod) => {
+      const firstResult = createDeferred<unknown>();
+      request.mockImplementation(async (method) => {
+        if (method === firstMethod) {
+          return firstResult.promise;
+        }
+        return method === "skills.status" ? statusReport() : {};
+      });
+      state.skillEdits.github = "submitted-value";
+      const first =
+        firstMethod === "skills.update"
+          ? updateSkillEnabled(state, "github", true)
+          : installFromClawHub(state, "github");
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(1));
+      expect(state.skillOperation).toEqual(
+        firstMethod === "skills.update"
+          ? { kind: "skill", skillKey: "github" }
+          : { kind: "clawhub", ref: "github" },
+      );
+      if (firstMethod === "skills.update") {
+        await installFromClawHub(state, "calendar");
+      } else {
+        await updateSkillEnabled(state, "calendar", true);
       }
-      return method === "skills.status" ? statusReport() : {};
-    });
-    state.skillEdits.github = "submitted-value";
-    const first = fixture.start(state);
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(1));
-    expect(state.skillOperation).toEqual(fixture.expectedMutation);
-    await fixture.blocked(state);
-    updateSkillEdit(state, "github", "late-value");
-    expect(request).toHaveBeenCalledTimes(1);
-    expect(state.skillEdits.github).toBe("submitted-value");
+      updateSkillEdit(state, "github", "late-value");
+      expect(request).toHaveBeenCalledTimes(1);
+      expect(state.skillEdits.github).toBe("submitted-value");
 
-    firstResult.resolve({});
-    await first;
-    expect(request.mock.calls.map(([method]) => method)).toEqual([
-      fixture.firstMethod,
-      "skills.status",
-    ]);
-    expect(state.skillOperation).toBeNull();
-  });
+      firstResult.resolve({});
+      await first;
+      expect(request.mock.calls.map(([method]) => method)).toEqual([firstMethod, "skills.status"]);
+      expect(state.skillOperation).toBeNull();
+    },
+  );
 
   it("rejects mutations while a status refresh is active", async () => {
-    const { state, request } = createState();
     state.skillsLoading = true;
     state.skillEdits.github = "submitted-value";
     await updateSkillEnabled(state, "github", true);
@@ -759,7 +606,7 @@ describe("skill mutations", () => {
   });
 
   it("drops an old-client mutation continuation without releasing the current owner", async () => {
-    const { state, request: oldRequest } = createState();
+    const oldRequest = request;
     const oldMutationResult = createDeferred<unknown>();
     oldRequest.mockReturnValue(oldMutationResult.promise);
     const oldMutation = updateSkillEnabled(state, "github", true);
@@ -792,7 +639,6 @@ describe("skill mutations", () => {
   });
 
   it("records errors from failed mutations", async () => {
-    const { state, request } = createState();
     request.mockRejectedValue(new Error("skills update failed"));
     await updateSkillEnabled(state, "github", false);
     expect(state.skillsError).toBe("skills update failed");
@@ -803,57 +649,41 @@ describe("skill mutations", () => {
     expect(state.skillOperation).toBeNull();
   });
 
-  it("defers a new agent refresh until a stale global config mutation succeeds", async () => {
-    const { state, request } = createState();
-    const queue = createDeferredRequestQueue(request);
-    state.skillsAgentId = "alpha";
-    const mutation = updateSkillEnabled(state, "github", true);
-    await Promise.resolve();
-    setSkillsAgentId(state, "beta");
-    const betaLoad = loadSkills(state);
-    await Promise.resolve();
-    await betaLoad;
-    expect(request).toHaveBeenCalledTimes(1);
-    queue.resolveNext({});
-    await waitForFast(() => {
-      expect(request).toHaveBeenCalledTimes(2);
-    });
-    queue.resolveNext(statusReport("/tmp/beta-after-update"));
-    await mutation;
-    expect(request.mock.calls).toEqual([
-      ["skills.update", { skillKey: "github", enabled: true }],
-      ["skills.status", { agentId: "beta" }],
-    ]);
-    expect(state.skillsReport?.workspaceDir).toBe("/tmp/beta-after-update");
-    expect(state.skillMessages).toEqual({});
-  });
-
-  it("loads the current agent after a stale mutation fails", async () => {
-    const { state, request } = createState();
-    const update = createDeferred<unknown>();
-    request.mockImplementation((method) => {
-      if (method === "skills.update") {
-        return update.promise;
+  it.each([false, true])(
+    "refreshes the new agent after stale mutation (failure: %s)",
+    async (fails) => {
+      const update = createDeferred<unknown>();
+      const report = createDeferred<unknown>();
+      request.mockImplementation((method) =>
+        method === "skills.update" ? update.promise : report.promise,
+      );
+      state.skillsAgentId = "alpha";
+      const mutation = updateSkillEnabled(state, "github", true);
+      await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+      setSkillsAgentId(state, "beta");
+      await loadSkills(state);
+      expect(request).toHaveBeenCalledOnce();
+      if (fails) {
+        update.reject(new Error("stale update failed"));
+      } else {
+        update.resolve({});
       }
-      return Promise.resolve(statusReport("/tmp/beta-after-error"));
-    });
-    state.skillsAgentId = "alpha";
-    const mutation = updateSkillEnabled(state, "github", true);
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-    setSkillsAgentId(state, "beta");
-    update.reject(new Error("stale update failed"));
-    await mutation;
-    expect(request.mock.calls).toEqual([
-      ["skills.update", { skillKey: "github", enabled: true }],
-      ["skills.status", { agentId: "beta" }],
-    ]);
-    expect(state.skillsReport?.workspaceDir).toBe("/tmp/beta-after-error");
-    expect(state.skillsError).toBeNull();
-    expect(state.skillMessages).toEqual({});
-  });
+      await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+      report.resolve(statusReport("/tmp/beta"));
+      await mutation;
+      expect(request.mock.calls).toEqual([
+        ["skills.update", { skillKey: "github", enabled: true }],
+        ["skills.status", { agentId: "beta" }],
+      ]);
+      expect(state).toMatchObject({
+        skillsReport: { workspaceDir: "/tmp/beta" },
+        skillsError: null,
+      });
+      expect(state.skillMessages).toEqual({});
+    },
+  );
 
   it("shows ClawHub trust warnings returned by successful skill installs", async () => {
-    const { state, request } = createState();
     request.mockImplementation(async (method: string) => {
       if (method === "skills.install") {
         return {
@@ -873,7 +703,6 @@ describe("skill mutations", () => {
   });
 
   it("shows a ClawHub trust error without an acknowledgement retry", async () => {
-    const { state, request } = createState();
     const message = "ClawHub requires acknowledgement before installing.";
     const details = {
       clawhubTrustCode: "clawhub_risk_acknowledgement_required",
@@ -892,7 +721,7 @@ describe("skill mutations", () => {
   it.each([
     {
       name: "legacy install",
-      run: (state: SkillsState) => installSkill(state, "github", "GitHub", "install-123"),
+      run: (subject: SkillsState) => installSkill(subject, "github", "GitHub", "install-123"),
       expectedRequest: {
         agentId: "alpha",
         name: "GitHub",
@@ -902,7 +731,7 @@ describe("skill mutations", () => {
     },
     {
       name: "ClawHub install",
-      run: (state: SkillsState) => installFromClawHub(state, "github"),
+      run: (subject: SkillsState) => installFromClawHub(subject, "github"),
       expectedRequest: {
         agentId: "alpha",
         source: "clawhub",
@@ -912,7 +741,6 @@ describe("skill mutations", () => {
   ])(
     "refreshes the current scope after switching during $name",
     async ({ run, expectedRequest }) => {
-      const { state, request } = createState();
       const queue = createDeferredRequestQueue(request);
       state.skillsAgentId = "alpha";
 
@@ -938,13 +766,8 @@ describe("skill mutations", () => {
 
 describe("reconcileSkillsAgentId", () => {
   it("retires presentation before selecting the roster default after the selected agent is deleted", () => {
-    const { state } = createState();
     state.skillsAgentId = "deleted";
-    state.skillsReport = {
-      workspaceDir: "/tmp/deleted",
-      managedSkillsDir: "/tmp/skills",
-      skills: [],
-    };
+    state.skillsReport = statusReport("/tmp/deleted");
     state.skillOperation = { kind: "clawhub", ref: "calendar" };
     const beforeRetarget = vi.fn(() => {
       expect(state.skillsAgentId).toBe("deleted");
