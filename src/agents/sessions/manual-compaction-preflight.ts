@@ -1,8 +1,10 @@
 import {
   prepareCompaction,
+  estimateTokens,
   type CompactionPreparation,
   type CompactionSettings,
 } from "../../../packages/agent-core/src/harness/compaction/compaction.js";
+import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
 import type { SessionEntry } from "./session-manager.js";
 
 type ManualCompactionPreflight =
@@ -14,11 +16,20 @@ export function preflightManualSessionCompaction(
   pathEntries: SessionEntry[],
   settings: CompactionSettings,
 ): ManualCompactionPreflight {
-  let result = prepareCompaction(pathEntries, settings);
+  const constraints = {
+    estimateTokens: (message: Parameters<typeof estimateTokens>[0]) =>
+      estimateTokens(projectRecordedModelPrompt(message)),
+  };
+  let result = prepareCompaction(pathEntries, settings, undefined, constraints);
   if (result.ok && !result.value) {
     // Explicit manual compaction uses the smallest valid history rather than
     // treating a session that fits the configured keep budget as a no-op.
-    result = prepareCompaction(pathEntries, { ...settings, keepRecentTokens: 0 });
+    result = prepareCompaction(
+      pathEntries,
+      { ...settings, keepRecentTokens: 0 },
+      undefined,
+      constraints,
+    );
   }
   if (!result.ok) {
     throw result.error;
