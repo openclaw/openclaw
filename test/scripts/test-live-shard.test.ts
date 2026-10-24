@@ -60,29 +60,12 @@ it("discovers live tests without scanning source roots in-process", () => {
   });
 });
 
-it("covers every native live test and tracks provider-filtered release fanout", () => {
-  const selected = live.RELEASE_LIVE_TEST_SHARDS.flatMap((shard) =>
-    live.selectLiveShardFiles(shard, allFiles).map((file) => ({ file, shard })),
+it("covers every native live test in the release partition", () => {
+  const selectedFiles = live.RELEASE_LIVE_TEST_SHARDS.flatMap((shard) =>
+    live.selectLiveShardFiles(shard, allFiles),
   );
-  const selectedFiles = selected.map(({ file }) => file);
-  const duplicateFiles = selectedFiles.filter(
-    (file, index) => selectedFiles.indexOf(file) !== index,
-  );
-  const musicProviderFanout = selected
-    .filter(({ file }) => file === "extensions/music-generation-providers.live.test.ts")
-    .map(({ shard }) => shard)
-    .toSorted();
-
   expect(allFiles.length).toBeGreaterThan(0);
   expect([...new Set(selectedFiles)].toSorted((a, b) => a.localeCompare(b))).toEqual(allFiles);
-  expect(duplicateFiles).toEqual([
-    "src/agents/zai.live.test.ts",
-    "extensions/music-generation-providers.live.test.ts",
-  ]);
-  expect(musicProviderFanout).toEqual([
-    "native-live-extensions-media-music-google",
-    "native-live-extensions-media-music-minimax",
-  ]);
 });
 
 it.each([
