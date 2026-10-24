@@ -99,7 +99,9 @@ describe("reply settlement observer isolation", () => {
   it("logs an idle observer failure and still runs settlement cleanup", async () => {
     const warnings = createWarnLogCapture("reply-dispatcher-idle-observer");
     try {
+      const secret = "sk-idleobserversecret1234567890abcdef"; // pragma: allowlist secret
       const observerFailure = new Error("idle observer failed");
+      observerFailure.stack = `Error: idle observer failed\n    at observer-stack-frame (Authorization: Bearer ${secret})`;
       const onSettled = vi.fn();
       const { dispatcher } = createReplyDispatcherWithTyping({
         deliver: async () => ({ visibleReplySent: true }),
@@ -118,6 +120,8 @@ describe("reply settlement observer isolation", () => {
       });
       await vi.waitFor(() => expect(onSettled).toHaveBeenCalledOnce());
       await expect(warnings.findText(observerFailure.message)).resolves.toBeDefined();
+      await expect(warnings.findText("observer-stack-frame")).resolves.toBeDefined();
+      await expect(warnings.findText(secret)).resolves.toBeUndefined();
     } finally {
       warnings.cleanup();
     }
