@@ -198,10 +198,11 @@ try {
     bursting = true;
     runaway.stdin!.write("burst\n");
     await exit;
-    assert.ok(burstAt && killedAt, "Runaway was not observed and killed within 10 seconds");
+    assert.ok(burstAt && killedAt, "Runaway request was not observed and killed within 10 seconds");
     assert.match(killDiagnostic, /Command killed for exceeding its host memory bound/);
     const kill = {
       concurrentTrees: trees,
+      scope: "allocation request to root exit, including page touching",
       latencyMs: killedAt - burstAt,
       diagnostic: killDiagnostic,
     };

@@ -5,8 +5,8 @@ const { Worker, isMainThread, parentPort } = require("node:worker_threads");
 if (process.argv[2] === "leaf") {
   const retained = [Buffer.alloc(16 * 1024 ** 2, 1)];
   process.stdin.on("data", () => {
-    retained.push(Buffer.alloc(768 * 1024 ** 2, 1));
     process.stdout.write(`${JSON.stringify({ event: "burst", at: Date.now() })}\n`);
+    retained.push(Buffer.alloc(768 * 1024 ** 2, 1));
   });
   process.stdout.write(`${JSON.stringify({ event: "leaf", pid: process.pid })}\n`);
   setInterval(() => void retained.length, 60_000);
