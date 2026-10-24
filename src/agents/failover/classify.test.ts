@@ -1,4 +1,6 @@
 import { describe, expect, it } from "vitest";
+import { classifyAssistantFailoverReason } from "../embedded-agent-helpers/assistant-message-failures.js";
+import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { isCloudCodeAssistFormatError } from "./classify-core.js";
 import {
   classifyFailoverReason,
@@ -180,5 +182,48 @@ describe("failover classification", () => {
     expect(renderRateLimitOrOverloadedCopy({ reason: "rate_limit", raw: message })).toBe(
       "⚠️ The AI service needs a short break. Please try again in a few minutes.",
     );
+  });
+});
+
+describe("provider deadline expiry", () => {
+  it.each(["deadline expired", "Deadline expired before operation could complete."])(
+    "classifies %j as a timeout",
+    (message) => {
+      expect(classifyFailoverReason(message)).toBe("timeout");
+    },
+  );
+
+  it("classifies a gRPC DEADLINE_EXCEEDED payload as a timeout", () => {
+    expect(
+      classifyFailoverSignal({
+        message: "Deadline expired before operation could complete.",
+        code: "DEADLINE_EXCEEDED",
+        provider: "google-vertex",
+      }),
+    ).toEqual({ kind: "reason", reason: "timeout" });
+  });
+
+  it("classifies the Google Interactions gateway deadline as a timeout", () => {
+    expect(
+      classifyAssistantFailoverReason(
+        makeAssistantMessageFixture({
+          api: "google-interactions",
+          provider: "google",
+          model: "gemini-3-flash-preview",
+          stopReason: "error",
+          errorMessage: "deadline expired",
+          errorCode: "gateway_timeout",
+          content: [],
+        }),
+      ),
+    ).toBe("timeout");
+  });
+
+  it.each([
+    "token has expired",
+    "API key expired. Please renew the API key.",
+    "Your session has expired",
+  ])("keeps credential expiry as auth: %j", (message) => {
+    expect(classifyFailoverReason(message)).toBe("auth");
   });
 });
