@@ -47,6 +47,11 @@ private struct ActivePushToTalk {
     let transcriptionOnly: Bool
 }
 
+private struct PushToTalkRelease {
+    let captureId: String
+    let task: Task<OpenClawTalkPTTStopPayload, Never>
+}
+
 private enum ChatCompletionState {
     case final
     case aborted
@@ -194,6 +199,9 @@ final class TalkModeManager {
     private var pttAutoStopEnabled: Bool = false
     private var pttOnceOperations: [String: TalkPushToTalkOnceOperation] = [:]
     private var pttTimeoutTask: Task<Void, Never>?
+    /// Set from release until Speech settles the audio captured before release.
+    private var pushToTalkRelease: PushToTalkRelease?
+    private let pushToTalkReleaseGrace: Duration
 
     private let allowSimulatorCapture: Bool
     private let gatewaySpeechSynthesizerOverride: (any TalkGatewaySpeechSynthesizing)?
@@ -206,6 +214,8 @@ final class TalkModeManager {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private var recognitionGeneration: UInt64 = 0
+    private var recognitionDeliveredFinal = false
+    private var recognitionSettled: CheckedContinuation<Void, Never>?
     private var silenceTask: Task<Void, Never>?
     private var realtimeSession: TalkRealtimeWebRTCSession?
     private var activeRealtimeVoiceSession: TalkRealtimeVoiceSessionOwner?
@@ -414,11 +424,13 @@ final class TalkModeManager {
     init(
         allowSimulatorCapture: Bool = false,
         gatewaySpeechSynthesizer: (any TalkGatewaySpeechSynthesizing)? = nil,
-        audioSessionDeactivationAction: (@MainActor () throws -> Void)? = nil)
+        audioSessionDeactivationAction: (@MainActor () throws -> Void)? = nil,
+        pushToTalkReleaseGrace: Duration = .milliseconds(1500))
     {
         // The Gateway owns speech language; discard the retired app preference.
         UserDefaults.standard.removeObject(forKey: "talk.speechLocale")
         self.allowSimulatorCapture = allowSimulatorCapture
+        self.pushToTalkReleaseGrace = pushToTalkReleaseGrace
         self.gatewaySpeechSynthesizerOverride = gatewaySpeechSynthesizer
         self.audioSessionDeactivationAction = audioSessionDeactivationAction
         self.preferredInputDeviceID = UserDefaults.standard.string(
@@ -519,8 +531,9 @@ final class TalkModeManager {
         sessionKey?.trimmedNonEmpty == self.mainSessionKey
     }
 
+    /// False once released: the microphone is closed while Speech settles the transcript.
     func isActivePushToTalkCapture(_ captureId: String) -> Bool {
-        self.activePTTCaptureId == captureId
+        self.activePTTCaptureId == captureId && self.pushToTalkRelease?.captureId != captureId
     }
 
     func pushToTalkPartialTranscript(captureId: String) -> String {
@@ -955,12 +968,7 @@ final class TalkModeManager {
         return OpenClawTalkPTTStartPayload(captureId: captureId)
     }
 
-    func endPushToTalk() -> OpenClawTalkPTTStopPayload {
-        let captureId = self.activePTTCaptureId ?? UUID().uuidString
-        return self.endPushToTalk(captureId: captureId)
-    }
-
-    func endPushToTalk(expectedTranscriptionOnly: Bool) -> OpenClawTalkPTTStopPayload {
+    func endPushToTalk(expectedTranscriptionOnly: Bool) async -> OpenClawTalkPTTStopPayload {
         guard let activePushToTalk,
               activePushToTalk.transcriptionOnly == expectedTranscriptionOnly
         else {
@@ -969,20 +977,68 @@ final class TalkModeManager {
                 transcript: nil,
                 status: "idle")
         }
-        return self.endPushToTalk(captureId: activePushToTalk.captureId)
+        return await self.endPushToTalk(captureId: activePushToTalk.captureId)
     }
 
-    func endPushToTalk(captureId: String) -> OpenClawTalkPTTStopPayload {
+    func endPushToTalk(captureId: String) async -> OpenClawTalkPTTStopPayload {
+        await self.releasePushToTalk(captureId: captureId).value
+    }
+
+    /// Closes the microphone now. Speech still owns words it heard before release,
+    /// so the transcript is read once it delivers its final result, reports an
+    /// error, or the grace ends (macOS waits the same 1.5 s).
+    @discardableResult
+    func releasePushToTalk(captureId: String) -> Task<OpenClawTalkPTTStopPayload, Never> {
+        if let release = pushToTalkRelease, release.captureId == captureId {
+            return release.task
+        }
         guard let activePushToTalk,
               activePushToTalk.captureId == captureId
         else {
-            return OpenClawTalkPTTStopPayload(captureId: captureId, transcript: nil, status: "idle")
+            return Self.settledRelease(
+                OpenClawTalkPTTStopPayload(captureId: captureId, transcript: nil, status: "idle"))
         }
         guard self.isPushToTalkActive else {
             self.stopPushToTalkRecognition()
-            return self.finishCapturedPushToTalk(captureId, transcript: nil, status: "idle")
+            return Self.settledRelease(self.finishCapturedPushToTalk(captureId, transcript: nil, status: "idle"))
         }
 
+        self.endPushToTalkInput()
+        guard self.recognitionRequest != nil,
+              !self.recognitionDeliveredFinal,
+              self.pushToTalkReleaseGrace > .zero
+        else {
+            return Self.settledRelease(self.finishReleasedPushToTalk(activePushToTalk))
+        }
+        let task = Task { @MainActor [weak self] () -> OpenClawTalkPTTStopPayload in
+            guard let self else {
+                return OpenClawTalkPTTStopPayload(captureId: captureId, transcript: nil, status: "cancelled")
+            }
+            // Cancel, stop, or backgrounding may finish this capture before or while Speech settles;
+            // check before waiting so a released capture never waits on a newer capture's recognition.
+            if self.activePTTCaptureId == captureId {
+                await self.waitForRecognitionToSettle()
+            }
+            if self.pushToTalkRelease?.captureId == captureId {
+                self.pushToTalkRelease = nil
+            }
+            guard self.activePTTCaptureId == captureId else {
+                return OpenClawTalkPTTStopPayload(captureId: captureId, transcript: nil, status: "cancelled")
+            }
+            return self.finishReleasedPushToTalk(activePushToTalk)
+        }
+        self.pushToTalkRelease = PushToTalkRelease(captureId: captureId, task: task)
+        return task
+    }
+
+    private static func settledRelease(
+        _ payload: OpenClawTalkPTTStopPayload) -> Task<OpenClawTalkPTTStopPayload, Never>
+    {
+        Task { payload }
+    }
+
+    private func finishReleasedPushToTalk(_ activePushToTalk: ActivePushToTalk) -> OpenClawTalkPTTStopPayload {
+        let captureId = activePushToTalk.captureId
         self.stopPushToTalkRecognition()
 
         let transcript = self.lastTranscript.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -1191,6 +1247,46 @@ final class TalkModeManager {
         self.pttAudioOwnershipEndHandler?(captureId)
     }
 
+    /// Stops feeding Speech but keeps its task, like macOS `finishAudio`, so audio
+    /// already captured can still finalize. The engine stops with the task later.
+    private func endPushToTalkInput() {
+        self.isPushToTalkActive = false
+        self.isListening = false
+        self.isUserSpeechDetected = false
+        self.pttTimeoutTask?.cancel()
+        self.pttTimeoutTask = nil
+        self.pttAutoStopEnabled = false
+        self.micLevel = 0
+        if self.inputTapInstalled {
+            self.audioEngine.inputNode.removeTap(onBus: 0)
+            self.inputTapInstalled = false
+        }
+        self.recognitionRequest?.endAudio()
+    }
+
+    private func waitForRecognitionToSettle() async {
+        // The final or teardown can land before this task first runs.
+        guard self.recognitionRequest != nil, !self.recognitionDeliveredFinal else { return }
+        let grace = self.pushToTalkReleaseGrace
+        let deadline = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(for: grace)
+            } catch {
+                return
+            }
+            self?.settleRecognition()
+        }
+        await withCheckedContinuation { continuation in
+            self.recognitionSettled = continuation
+        }
+        deadline.cancel()
+    }
+
+    private func settleRecognition() {
+        self.recognitionSettled?.resume()
+        self.recognitionSettled = nil
+    }
+
     private func stopPushToTalkRecognition() {
         self.isPushToTalkActive = false
         self.isListening = false
@@ -1312,6 +1408,7 @@ final class TalkModeManager {
 
     private func startRecognition(pttCaptureId: String? = nil) throws {
         self.stopRecognition()
+        self.recognitionDeliveredFinal = false
         let recognitionGeneration = self.recognitionGeneration
         #if targetEnvironment(simulator)
         if self.allowSimulatorCapture {
@@ -1416,7 +1513,16 @@ final class TalkModeManager {
         if let error, !self.handleRecognitionError(error) {
             return
         }
-        guard self.recognitionGeneration == recognitionGeneration, let result else { return }
+        guard self.recognitionGeneration == recognitionGeneration else { return }
+        if error != nil {
+            // Speech ended without a final. Hop like results do, so one delivered
+            // just before still applies before a released push-to-talk reads it.
+            Task { @MainActor [weak self] in
+                guard let self, self.recognitionGeneration == recognitionGeneration else { return }
+                self.settleRecognition()
+            }
+        }
+        guard let result else { return }
         let transcript = result.bestTranscription.formattedString
         Task { @MainActor [weak self] in
             guard let self, self.recognitionGeneration == recognitionGeneration else { return }
@@ -1508,6 +1614,7 @@ final class TalkModeManager {
         self.recognitionTask = nil
         self.recognitionRequest?.endAudio()
         self.recognitionRequest = nil
+        self.settleRecognition()
         self.micLevel = 0
         self.lastAudioActivity = nil
         self.noiseFloorSamples.removeAll(keepingCapacity: true)
@@ -1550,19 +1657,20 @@ final class TalkModeManager {
             return
         }
 
-        guard self.isListening else { return }
+        let isReleasedPushToTalk = pttCaptureId != nil && self.pushToTalkRelease?.captureId == pttCaptureId
+        guard self.isListening || isReleasedPushToTalk else { return }
         if !trimmed.isEmpty {
             self.lastTranscript = trimmed
             self.lastHeard = Date()
         }
         if isFinal {
             self.lastTranscript = trimmed
+            self.recognitionDeliveredFinal = true
+            self.settleRecognition()
             guard !trimmed.isEmpty else { return }
             if self.captureMode == .pushToTalk, self.pttAutoStopEnabled, self.isPushToTalkActive {
-                if let pttCaptureId {
-                    _ = self.endPushToTalk(captureId: pttCaptureId)
-                } else {
-                    _ = self.endPushToTalk()
+                if let captureId = pttCaptureId ?? self.activePTTCaptureId {
+                    self.releasePushToTalk(captureId: captureId)
                 }
                 return
             }
@@ -1606,10 +1714,8 @@ final class TalkModeManager {
         }
         if self.captureMode == .continuous {
             await self.processContinuousTranscript(transcript)
-        } else if let pttCaptureId {
-            _ = self.endPushToTalk(captureId: pttCaptureId)
-        } else {
-            _ = self.endPushToTalk()
+        } else if let captureId = pttCaptureId ?? self.activePTTCaptureId {
+            self.releasePushToTalk(captureId: captureId)
         }
     }
 
@@ -1633,7 +1739,7 @@ final class TalkModeManager {
               self.pttAutoStopEnabled,
               self.isPushToTalkActive
         else { return }
-        _ = self.endPushToTalk(captureId: captureId)
+        self.releasePushToTalk(captureId: captureId)
     }
 
     private func finishPTTOnce(_ payload: OpenClawTalkPTTStopPayload) {

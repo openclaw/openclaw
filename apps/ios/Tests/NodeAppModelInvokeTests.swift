@@ -640,7 +640,8 @@ private func makeWatchModel(
 
 @MainActor
 private func makeTalkModel() -> (TalkModeManager, NodeAppModel) {
-    let talkMode = TalkModeManager(allowSimulatorCapture: true)
+    // Tests inject partials without a final; skip the release grace that waits for one.
+    let talkMode = TalkModeManager(allowSimulatorCapture: true, pushToTalkReleaseGrace: .zero)
     return (talkMode, NodeAppModel(talkMode: talkMode))
 }
 
@@ -3440,7 +3441,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         await barrier.waitUntilEntered()
         let captureId = try #require(talkMode._test_activePushToTalkCaptureId())
 
-        let stopped = talkMode.endPushToTalk(captureId: captureId)
+        let stopped = await talkMode.endPushToTalk(captureId: captureId)
         #expect(stopped.status == "idle")
         #expect(talkMode._test_activePushToTalkCaptureId() == nil)
         #expect(talkMode._test_pushToTalkCaptureIsIdle())
@@ -3536,7 +3537,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         var ownershipEvents: [String] = []
         let talkMode = TalkModeManager(
             allowSimulatorCapture: true,
-            audioSessionDeactivationAction: { ownershipEvents.append("deactivate") })
+            audioSessionDeactivationAction: { ownershipEvents.append("deactivate") },
+            pushToTalkReleaseGrace: .zero)
         talkMode.setPushToTalkAudioOwnershipEndHandler {
             ownershipEvents.append("release:\($0)")
         }
@@ -3551,7 +3553,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             isFinal: false,
             captureId: first.captureId)
 
-        let finished = talkMode.endPushToTalk(captureId: first.captureId)
+        let finished = await talkMode.endPushToTalk(captureId: first.captureId)
 
         #expect(finished.status == "transcribed")
         #expect(finished.transcript == "transcription survives release")
@@ -3568,6 +3570,22 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             "deactivate",
             "release:\(replacement.captureId)",
         ])
+    }
+
+    @Test @MainActor func `PTT release falls back to the last partial when Speech never finalizes`() async throws {
+        let talkMode = TalkModeManager(allowSimulatorCapture: true, pushToTalkReleaseGrace: .milliseconds(20))
+        defer { talkMode.stop() }
+        let start = try await talkMode.beginPushToTalk(transcriptionOnly: true)
+        await talkMode._test_handlePushToTalkTranscript(
+            "partial before release",
+            isFinal: false,
+            captureId: start.captureId)
+
+        let stopped = await talkMode.endPushToTalk(captureId: start.captureId)
+
+        #expect(stopped.status == "transcribed")
+        #expect(stopped.transcript == "partial before release")
+        #expect(talkMode._test_activePushToTalkCaptureId() == nil)
     }
 
     @Test @MainActor func `standalone PTT deactivates audio before releasing ownership`() async throws {
@@ -4021,7 +4039,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         var ownershipEvents: [String] = []
         let talkMode = TalkModeManager(
             allowSimulatorCapture: true,
-            audioSessionDeactivationAction: { ownershipEvents.append("deactivate") })
+            audioSessionDeactivationAction: { ownershipEvents.append("deactivate") },
+            pushToTalkReleaseGrace: .zero)
         let barrier = TalkPreparationBarrier()
         talkMode.updateGatewayConnected(true)
         talkMode._test_setPTTFinalizerHandler { await barrier.suspendFirstPreparation() }
@@ -4037,7 +4056,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             "first turn",
             isFinal: false,
             captureId: first.captureId)
-        let queued = talkMode.endPushToTalk(captureId: first.captureId)
+        let queued = await talkMode.endPushToTalk(captureId: first.captureId)
         #expect(queued.status == "queued")
         await barrier.waitUntilEntered()
         #expect(talkMode._test_finishingPushToTalkCaptureId() == first.captureId)
@@ -4069,7 +4088,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `cancelled PTT finalizer keeps ownership until task exits`() async throws {
-        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let talkMode = TalkModeManager(allowSimulatorCapture: true, pushToTalkReleaseGrace: .zero)
         let barrier = TalkPreparationBarrier()
         var audioOwnershipEndCount = 0
         talkMode.updateGatewayConnected(true)
@@ -4086,7 +4105,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             "cancelled finalizer",
             isFinal: false,
             captureId: first.captureId)
-        #expect(talkMode.endPushToTalk(captureId: first.captureId).status == "queued")
+        #expect(await talkMode.endPushToTalk(captureId: first.captureId).status == "queued")
         await barrier.waitUntilEntered()
         #expect(audioOwnershipEndCount == 0)
 
@@ -4110,7 +4129,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `PTT finalizer cleanup ignores localized presentation text`() async throws {
-        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let talkMode = TalkModeManager(allowSimulatorCapture: true, pushToTalkReleaseGrace: .zero)
         talkMode.updateGatewayConnected(true)
         talkMode._test_setPTTFinalizerHandler {
             talkMode.statusText = "Generando voz…"
@@ -4125,7 +4144,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             "localized cleanup",
             isFinal: false,
             captureId: start.captureId)
-        #expect(talkMode.endPushToTalk(captureId: start.captureId).status == "queued")
+        #expect(await talkMode.endPushToTalk(captureId: start.captureId).status == "queued")
         await waitForTalkCondition { talkMode._test_finishingPushToTalkCaptureId() == nil }
 
         #expect(talkMode.statusText == "Ready")
@@ -4136,7 +4155,8 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
         var audioDeactivationCount = 0
         let talkMode = TalkModeManager(
             allowSimulatorCapture: true,
-            audioSessionDeactivationAction: { audioDeactivationCount += 1 })
+            audioSessionDeactivationAction: { audioDeactivationCount += 1 },
+            pushToTalkReleaseGrace: .zero)
         let barrier = TalkPreparationBarrier()
         talkMode.updateGatewayConnected(true)
         talkMode._test_setPTTFinalizerHandler { await barrier.suspendFirstPreparation() }
@@ -4151,7 +4171,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             "resume continuous Talk",
             isFinal: false,
             captureId: start.captureId)
-        #expect(talkMode.endPushToTalk(captureId: start.captureId).status == "queued")
+        #expect(await talkMode.endPushToTalk(captureId: start.captureId).status == "queued")
         await barrier.waitUntilEntered()
 
         talkMode.setEnabled(true)
@@ -4223,7 +4243,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
     }
 
     @Test @MainActor func `session switch cancellation clears finalizer status`() async throws {
-        let talkMode = TalkModeManager(allowSimulatorCapture: true)
+        let talkMode = TalkModeManager(allowSimulatorCapture: true, pushToTalkReleaseGrace: .zero)
         let barrier = TalkPreparationBarrier()
         talkMode.updateGatewayConnected(true)
         talkMode._test_setPTTFinalizerHandler {
@@ -4241,7 +4261,7 @@ private final class TimingOutDeviceStatusService: DeviceStatusServicing {
             "cancel old session",
             isFinal: false,
             captureId: start.captureId)
-        #expect(talkMode.endPushToTalk(captureId: start.captureId).status == "queued")
+        #expect(await talkMode.endPushToTalk(captureId: start.captureId).status == "queued")
         await barrier.waitUntilEntered()
         #expect(talkMode.statusText == "Aborted")
 

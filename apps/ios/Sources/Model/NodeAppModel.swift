@@ -2660,7 +2660,7 @@ final class NodeAppModel {
             // Interrupt commands invalidate suspended preparation before touching
             // capture state, then bypass the preparation queue entirely.
             self.talkPttCommandEpoch &+= 1
-            let payload = self.talkMode.endPushToTalk(expectedTranscriptionOnly: false)
+            let payload = await self.talkMode.endPushToTalk(expectedTranscriptionOnly: false)
             return try Self.successfulInvokeResponse(req, payload: payload)
         case OpenClawTalkCommand.pttCancel.rawValue:
             self.talkPttCommandEpoch &+= 1
@@ -2742,7 +2742,8 @@ final class NodeAppModel {
 
     func finishChatDictation() {
         guard let captureId = self.chatDictationCaptureId else { return }
-        _ = self.talkMode.endPushToTalk(captureId: captureId)
+        // transcribeChatDraft receives the settled transcript from its capture.
+        self.talkMode.releasePushToTalk(captureId: captureId)
     }
 
     func cancelChatDictation() {
