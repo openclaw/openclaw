@@ -607,6 +607,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
     [27, true],
     [30, false],
     [31, false],
+    [32, false],
   ] as const)(
     "keeps the real agent v%s→current rollback exact (foreign write: %s)",
     async (sourceVersion, foreignWrite) => {
@@ -636,6 +637,7 @@ describe.skipIf(!connection)("Doctor PostgreSQL version migration", () => {
         version: sourceVersion,
         ...migration.fromSchema,
         postgresVectorDecoderVersion: migration.fromSchema.postgresVectorDecoderVersion,
+        postgresVectorSearchVersion: migration.fromSchema.postgresVectorSearchVersion,
         postgresMigrations: [],
       };
       // Build the actual historical layout; dropping current columns would leave

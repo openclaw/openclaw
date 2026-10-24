@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import type { HeapSpaceInfo } from "node:v8";
 import * as v8 from "node:v8";
 import { isMainThread } from "node:worker_threads";
-import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
+import { parseNodeOptionsEnvVar } from "../../node-runtime-env.mjs";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 
 export const DIAGNOSTIC_PROFILE_MAX_BYTES = 1024 * 1024;
@@ -82,9 +82,9 @@ export function parseNativeCpuProfile(json: string): Profiler.Profile {
   };
   // The native serializer owns this shape; inspector consumers require string IDs.
   const nodes: Profiler.ProfileNode[] = [];
-  for (const { callFrame, ...node } of profile.nodes) {
-    const { scriptId, ...frame } = callFrame;
-    nodes.push({ ...node, callFrame: { ...frame, scriptId: String(scriptId) } });
+  for (const node of profile.nodes) {
+    const frame = node.callFrame;
+    nodes.push({ ...node, callFrame: { ...frame, scriptId: String(frame.scriptId) } });
   }
   return { ...profile, nodes };
 }

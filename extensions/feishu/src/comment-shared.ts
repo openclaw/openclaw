@@ -31,23 +31,13 @@ export type FeishuDriveCommentCard = {
 };
 
 export class FeishuReplyCommentError extends Error {
-  httpStatus?: number;
   feishuCode?: number | string;
-  feishuMsg?: string;
   feishuLogId?: string;
 
-  constructor(params: {
-    message: string;
-    httpStatus?: number;
-    feishuCode?: number | string;
-    feishuMsg?: string;
-    feishuLogId?: string;
-  }) {
+  constructor(params: { message: string; feishuCode?: number | string; feishuLogId?: string }) {
     super(params.message);
     this.name = "FeishuReplyCommentError";
-    this.httpStatus = params.httpStatus;
     this.feishuCode = params.feishuCode;
-    this.feishuMsg = params.feishuMsg;
     this.feishuLogId = params.feishuLogId;
   }
 }

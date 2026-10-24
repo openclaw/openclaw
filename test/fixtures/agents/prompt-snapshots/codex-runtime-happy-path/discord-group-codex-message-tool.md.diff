@@ -1,5 +1,5 @@
---- telegram-direct-codex-message-tool.md	sha256=487cbdc44b0e09bd2d4c0ebe7c0c9b62f1f17835928f1e78bb79434af5f496a2
-+++ discord-group-codex-message-tool.md	sha256=ac9cc5e0400ecc636e1a2153c14a63270c52be616848ac9dedeaea30f5b84a79
+--- telegram-direct-codex-message-tool.md	sha256=28cebf666983853adc4242deb91225e79b1371c86e0b01b8a545422d35b65b79
++++ discord-group-codex-message-tool.md	sha256=9c6d35a7b150303507d62f2d9910c3e553c1cc8d2b21c745f1a9389cf3333da3
 @@ -1,1 +1,1 @@
 -# Telegram Direct Codex Message Tool Turn
 +# Discord Group Codex Message Tool Turn
@@ -16,49 +16,49 @@
 @@ -30,1 +30,1 @@
 -  "toolSnapshot": "codex-dynamic-tools.telegram-direct.json",
 +  "toolSnapshot": "codex-dynamic-tools.discord-group.json",
-@@ -137,1 +137,1 @@
+@@ -139,1 +139,1 @@
 -  "threadId": "thread-telegram-direct-codex-message-tool"
 +  "threadId": "thread-discord-group-codex-message-tool"
-@@ -152,1 +152,1 @@
+@@ -154,1 +154,1 @@
 -      "value": "{\"sender\":{\"id\":\"1000001\",\"name\":\"Pash\",\"username\":\"pash\"}}"
 +      "value": "{\"sender\":{\"id\":\"424242\",\"name\":\"Pash\",\"username\":\"pash\"}}"
-@@ -187,1 +187,1 @@
+@@ -189,1 +189,1 @@
 -  "threadId": "thread-telegram-direct-codex-message-tool",
 +  "threadId": "thread-discord-group-codex-message-tool",
-@@ -227,1 +227,1 @@
+@@ -229,1 +229,1 @@
 -    "dynamicToolsFrom": "codex-dynamic-tools.telegram-direct.json",
 +    "dynamicToolsFrom": "codex-dynamic-tools.discord-group.json",
-@@ -240,2 +240,2 @@
+@@ -242,2 +242,2 @@
 -    "chars": 973,
 -    "roughTokens": 244
 +    "chars": 972,
 +    "roughTokens": 243
-@@ -260,2 +260,2 @@
+@@ -262,2 +262,2 @@
 -    "chars": 81154,
 -    "roughTokens": 20289
 +    "chars": 81788,
 +    "roughTokens": 20447
-@@ -264,2 +264,2 @@
+@@ -266,2 +266,2 @@
 -    "chars": 3490,
 -    "roughTokens": 873
 +    "chars": 4726,
 +    "roughTokens": 1182
-@@ -272,2 +272,2 @@
+@@ -274,2 +274,2 @@
 -    "chars": 27501,
 -    "roughTokens": 6876
 +    "chars": 29106,
 +    "roughTokens": 7277
-@@ -276,2 +276,2 @@
+@@ -278,2 +278,2 @@
 -    "chars": 108657,
 -    "roughTokens": 27165
 +    "chars": 110896,
 +    "roughTokens": 27724
-@@ -280,2 +280,2 @@
+@@ -282,2 +282,2 @@
 -    "chars": 879,
 -    "roughTokens": 220
 +    "chars": 1249,
 +    "roughTokens": 313
-@@ -508,4 +508,4 @@
+@@ -510,4 +510,4 @@
 -  "channel": "telegram",
 -  "provider": "telegram",
 -  "surface": "telegram",
@@ -67,33 +67,33 @@
 +  "provider": "discord",
 +  "surface": "discord",
 +  "chat_type": "group"
-@@ -516,1 +516,3 @@
+@@ -518,1 +518,3 @@
 -You are in a Telegram direct conversation. Normal final replies are private and are not automatically sent to this conversation. To post visible output here, use the message tool with action=send; the target defaults to this conversation. If no visible direct response is needed, do not call message(action=send). Your normal final answer stays private and will not be posted to the conversation.
 +You are in a Discord group chat. Normal final replies are private and are not automatically sent to this group chat. To post visible output here, use the message tool with action=send; the target defaults to this group chat. Be a good group participant: mostly lurk and follow the conversation; reply only when directly addressed or you can add clear value. Emoji reactions are welcome when available. Write like a human. Avoid Markdown tables. Minimize empty lines and use normal chat conventions, not document-style spacing. Don't type literal \n sequences; use real line breaks sparingly. If addressed to someone else, stay silent unless invited or correcting key facts. Discord: wrap bare URLs like <https://example.com> to suppress embeds. When subagent or session-spawn tools are available and a directly requested group-chat task will require several tool calls, prefer delegating bounded side investigations early so the channel gets a responsive path forward. Keep the critical path local, avoid subagents for simple one-step work, and only surface concise group-visible updates when they add value. If no visible group response is needed, do not call message(action=send). If no text reply is needed, including after a reaction or other action, reply with exactly "NO_REPLY" as the entire final answer, without commentary, punctuation, or formatting. NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently.
 +
 +Activation: trigger-only (you are invoked only when explicitly mentioned; recent context may be included). Address the specific sender noted in the message context.
-@@ -532,1 +534,1 @@
+@@ -534,1 +536,1 @@
 -<external_openclaw_current_sender>{"sender":{"id":"1000001","name":"Pash","username":"pash"}}</external_openclaw_current_sender>
 +<external_openclaw_current_sender>{"sender":{"id":"424242","name":"Pash","username":"pash"}}</external_openclaw_current_sender>
-@@ -558,1 +560,1 @@
+@@ -560,1 +562,1 @@
 -[OpenClaw conversation info: sender={"id":"1000001","name":"Pash","username":"pash"}]
 +[OpenClaw conversation info: sender={"id":"424242","name":"Pash","username":"pash"}]
-@@ -577,1 +579,1 @@
+@@ -579,1 +581,1 @@
 -{"chat_id":"user:1000001","message_id":"tg-msg-0001","sender":{"id":"1000001","name":"Pash","username":"pash"}}
 +{"chat_id":"channel:987654321","message_id":"discord-msg-0001","conversation_label":"OpenClaw/#agent-sandbox","sender":{"id":"424242","name":"Pash","username":"pash"},"group_subject":"OpenClaw maintainers","group_channel":"#agent-sandbox","group_space":"OpenClaw","is_group_chat":true,"was_mentioned":true,"history_count":2}
-@@ -580,1 +582,5 @@
+@@ -582,1 +584,5 @@
 -Can you check whether the nightly build finished and tell me what happened?
 +Chat history since last reply: ⟦openclaw:ctx⟧
 +Peter: I pushed the Discord-side message-tool bridge.
 +Pash: @OpenClaw please verify the Codex happy path too.
 +
 +can you audit whether this prompt path has conflicting silence instructions?
-@@ -585,1 +591,1 @@
+@@ -587,1 +593,1 @@
 -Full JSON: `codex-dynamic-tools.telegram-direct.json`
 +Full tool overrides: `codex-dynamic-tools.discord-group.json` (base: `codex-dynamic-tools.telegram-direct.json`)
-@@ -615,1 +621,1 @@
+@@ -617,1 +623,1 @@
 -    "description": "Send/manage channel messages. Supports actions: react, send. When the current WebChat prompt permits reactions, react with emoji (and optional remove:true) as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions.",
 +    "description": "Send/manage channel messages. Supports actions: broadcast, react, send. When the current WebChat prompt permits reactions, react with emoji (and optional remove:true) as the agent. Omit channel, target, and messageId. This stays local; use an explicit external channel and messageId for external reactions.",
-@@ -623,1 +629,1 @@
+@@ -625,1 +631,1 @@
 -          "enum": ["react", "send"],
 +          "enum": ["broadcast", "react", "send"],

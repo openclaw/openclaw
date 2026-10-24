@@ -269,6 +269,11 @@ export function summarizeColdLoadTrace(events: readonly ColdLoadTraceEvent[], du
     busyMs: unionDuration(tasks) / 1_000,
     longTasks: longTasks.length,
     longTaskMs: unionDuration(longTasks) / 1_000,
+    longTaskIntervals: longTasks.map((task) => ({
+      startUs: task.start,
+      endUs: task.end,
+      durationMs: (task.end - task.start) / 1_000,
+    })),
     longestTaskMs: Math.max(0, ...tasks.map((task) => (task.end - task.start) / 1_000)),
     layoutCount: layouts.length,
     layoutMs: unionDuration(layouts) / 1_000,

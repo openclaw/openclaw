@@ -66,7 +66,10 @@ describe("authenticated request completion", { concurrent: false }, () => {
     const harness = createDispatchTestHarness();
     const client = createOperatorWsClient();
     const calls = Array.from({ length: 8 }, (_, index) =>
-      harness.dispatcher.dispatch(requestFrame(String(index), "sessions.subscribe"), client),
+      harness.dispatcher.dispatch(
+        requestFrame(String(index), "sessions.subscribe", { limit: 100 }),
+        client,
+      ),
     );
     try {
       await full.promise;

@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { createSubsystemLogger } from "openclaw/plugin-sdk/logging-core";
 import {
   WorkerProviderError,
   type WorkerDesktopEndpoint,
@@ -30,6 +31,8 @@ import {
   resolveCrabboxLifecycleTimeoutMs,
   resolveCrabboxReadyPollIntervalMs,
 } from "./crabbox-worker-timeouts.js";
+
+const bootstrapLog = createSubsystemLogger("gateway/worker-environments");
 
 /** Allocation retains host and project authority independently of cancellation or cleanup. */
 export function createCrabboxProvisionAuthority(
@@ -317,6 +320,19 @@ export async function runProvisionSetup(
             }),
           );
     crabboxCommandOutput(params.phase, result);
+    const output = `${result.stdout}\n${result.stderr}`;
+    for (const match of output.matchAll(
+      /^CRABBOX_TIMING:(openclaw-bootstrap-[a-z-]+):(\d+)\r?$/gmu,
+    )) {
+      bootstrapLog.info(`Cloud worker ${params.inspect.id}: ${match[1]} ${match[2]}ms`);
+    }
+    for (const match of output.matchAll(
+      /^CRABBOX_WARNING:openclaw-bootstrap-unlocked-install:([a-zA-Z0-9 _-]+)\r?$/gmu,
+    )) {
+      bootstrapLog.warn(
+        `Cloud worker ${params.inspect.id}: using unlocked runtime install (${match[1]})`,
+      );
+    }
   } catch (error) {
     params.signal?.throwIfAborted();
     return await failProvisionAfterCleanup({ ...params, id: params.inspect.id }, error);
