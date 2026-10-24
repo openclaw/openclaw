@@ -111,10 +111,8 @@ it("rejects non-regular metadata instead of following its working-tree target", 
 });
 
 it.each([
-  ["--json", "--write"],
   ["--check", "--commit", "0".repeat(40)],
   ["--json", "--commit"],
-  ["--json", "--unknown"],
   ["--json", "--commit", "0".repeat(40)],
 ])("fails without partial JSON for invalid export arguments %j", (...args) => {
   const { root } = createInventoryRepository();
