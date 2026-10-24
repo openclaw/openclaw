@@ -173,6 +173,19 @@ describe("list preparation", () => {
       expect(projection.materializedCount).toBe(0);
       const context = bindSessionRowProjection(requestContext(cfg), () => projection);
       const before = projection.materializedCount;
+      let selections = 0;
+      const prepare = projection.withPreparedExactRows.bind(projection);
+      vi.spyOn(projection, "withPreparedExactRows").mockImplementation(
+        (queries, consume, options) =>
+          prepare(
+            (config) => {
+              selections++;
+              return queries(config);
+            },
+            consume,
+            options,
+          ),
+      );
       const reads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
       const sql = observeSqliteReadSql(StatementSync.prototype);
       const rendered: string[] = [];
@@ -222,6 +235,8 @@ describe("list preparation", () => {
         expect(await checkpoint).toBeLessThan(5);
         expect(rendered.toSorted()).toEqual(keys.slice(-10).toSorted());
         expect(Math.max(...materialized)).toBe(10);
+        // Each page selects initially and after preparation, never after every row slice.
+        expect(selections).toBeLessThanOrEqual(8);
         expect(reads).not.toHaveBeenCalled();
         expect(sql.queries).toEqual([]);
         await projection.ensureMaterialized();

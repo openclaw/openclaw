@@ -31,6 +31,9 @@ export function parseTeamShapeOptions(argv: string[]) {
       "long-transcript-entries": { type: "string" },
       "long-transcript-sessions": { type: "string" },
       "worktree-files": { type: "string" },
+      "worktree-file-bytes": { type: "string" },
+      "worktree-install-failure": { type: "boolean" },
+      "worktree-cold-commits": { type: "string" },
       "nested-repository": { type: "boolean" },
       "github-options-connected": { type: "boolean" },
       port: { type: "string" },
@@ -77,11 +80,22 @@ export function parseTeamShapeOptions(argv: string[]) {
   }
   const projects = integer("projects", 12);
   const worktreeFiles = integer("worktree-files", 0);
+  const worktreeFileBytes = integer("worktree-file-bytes", 0);
+  if (worktreeFiles * worktreeFileBytes > 256 * 1024 ** 2) {
+    throw new Error("Synthetic worktree contents must fit within 256 MiB");
+  }
+  const worktreeColdCommits = integer("worktree-cold-commits", 0);
   if (worktreeFiles > 500_000) {
     throw new Error("--worktree-files must not exceed 500000 files");
   }
-  if ((worktreeFiles > 0 || values["nested-repository"]) && projects === 0) {
-    throw new Error("--worktree-files and --nested-repository require at least one project");
+  if (
+    (worktreeFiles > 0 ||
+      worktreeColdCommits > 0 ||
+      values["nested-repository"] ||
+      values["worktree-install-failure"]) &&
+    projects === 0
+  ) {
+    throw new Error("Worktree fixture options require at least one project");
   }
   if (values["github-options-connected"] && projects === 0) {
     throw new Error("--github-options-connected requires at least one project");
@@ -101,6 +115,9 @@ export function parseTeamShapeOptions(argv: string[]) {
     longTranscriptEntries,
     longTranscriptSessions,
     worktreeFiles,
+    worktreeFileBytes,
+    worktreeColdCommits,
+    worktreeInstallFailure: values["worktree-install-failure"] ?? false,
     nestedRepository: values["nested-repository"] ?? false,
     githubOptionsConnected: values["github-options-connected"] ?? false,
     port,
@@ -214,13 +231,16 @@ async function main() {
   --cron-announce-last     Seed disabled isolated cron jobs with announce/last delivery.
   --seed 967 --now <epoch-ms> --transcript-mib 64
   --long-transcript-entries 0 --long-transcript-sessions 4
-  --worktree-files 0 --nested-repository
+  --worktree-files 0 --worktree-file-bytes 0 --nested-repository
+  --worktree-cold-commits 0  Add same-tree commits for cold dependency-template measurements.
+  --worktree-install-failure  Add a synthetic pnpm package that cannot install in the probe image.
   --github-options-connected  Register synthetic GitHub origins for dashboard measurements.
   --launch --port 40967    Start an isolated loopback dev Gateway after generation.
 State is synthetic and must not exist. Existing state is never overwritten.
 Transcript MiB is logical text before compression; actual database sizes are reported.
 Long transcript entries append 1 KiB messages with distinct 16 KiB assistant thinking signatures.
-Worktree files are unchanged, empty tracked files in the first project (maximum 500000).
+Worktree files are unchanged tracked files in the first project (maximum 500000).
+Optional deterministic distinct contents are capped at 256 MiB across that inventory.
 Linux generation pauses at 1 GiB of dirty pages and stops at 2 GiB.`);
     return;
   }

@@ -12,6 +12,7 @@ import {
 import { runWithGatewayDetachedWorkContinuation } from "../../../process/gateway-work-admission.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { removeInternalSessionEffectsSession } from "../../internal-session-effects.js";
+import { createOperatorInputRecoverySource } from "../../operator-run-recovery-source.js";
 import type { AgentRunSessionTarget } from "../../run-session-target.types.js";
 import { replaceRequesterCronAuthorityEntry } from "../requester-cron-authority.js";
 import {
@@ -456,15 +457,28 @@ export class SubagentRecoveryManager extends SubagentWaitManager {
                 }
               : {}),
           });
+          const childAuthority = preserveCompletedRun
+            ? resolveSubagentChildAuthority(source)
+            : undefined;
+          const followupRecoverySource =
+            childAuthority?.status === "verified"
+              ? createOperatorInputRecoverySource({
+                  authority: authority?.operatorAuthority,
+                  agentId: childAuthority.childAgentId,
+                  sessionKey: source.childSessionKey,
+                  entry: { ...childAuthority.sessionIdentity, updatedAt: now },
+                  sourceRunId: nextRunId,
+                })
+              : undefined;
           const next: SubagentRunRecord = normalizeSubagentRunState({
             ...source,
             runId: nextRunId,
             // Completed follow-ups start a new task; steer retains its task's lineage.
             taskRunId: preserveCompletedRun ? nextRunId : (source.taskRunId ?? source.runId),
             requesterTurnRunId: preserveCompletedRun ? undefined : source.requesterTurnRunId,
-            // A new task has a fresh caller; it cannot recover under the completed task's grant.
+            // Human follow-ups belong to this child, not the completed task's parent grant.
             operatorRecoverySource: preserveCompletedRun
-              ? undefined
+              ? followupRecoverySource
               : source.operatorRecoverySource,
             requesterTurnYielded: preserveCompletedRun ? undefined : source.requesterTurnYielded,
             retireAfterRequesterTurn: preserveCompletedRun

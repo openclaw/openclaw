@@ -707,6 +707,8 @@ export async function prepareBundledAiRuntimePackage(
       await fs.readFile(stagedPackageJsonPath, "utf8"),
     ) as MutableJsonRecord & {
       dependencies?: Record<string, unknown>;
+      peerDependencies?: Record<string, unknown>;
+      peerDependenciesMeta?: Record<string, unknown>;
       version?: unknown;
     };
     if (typeof stagedPackageJson.version !== "string" || !stagedPackageJson.version) {
@@ -723,6 +725,9 @@ export async function prepareBundledAiRuntimePackage(
     // Root owns these exact dependencies. Removing them from the staged copy keeps npm from
     // recursively bundling duplicate packages alongside the one private workspace runtime.
     delete stagedPackageJson.dependencies;
+    // npm skips extracting the SDK's required API when this bundled copy also declares it a peer.
+    delete stagedPackageJson.peerDependencies?.["@opentelemetry/api"];
+    delete stagedPackageJson.peerDependenciesMeta?.["@opentelemetry/api"];
     await fs.writeFile(stagedPackageJsonPath, `${JSON.stringify(stagedPackageJson, null, 2)}\n`);
 
     packageJson.dependencies![AI_RUNTIME_PACKAGE] = stagedPackageJson.version;

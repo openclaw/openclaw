@@ -2,14 +2,13 @@ import { textResult } from "openclaw/plugin-sdk/tool-results";
 import { Type } from "typebox";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "../api.js";
 import { VisitorAccessError } from "./errors.js";
-import { visitorRuntimeStore } from "./runtime.js";
+import { visitorRuntimeStore, type VisitorRuntime } from "./runtime.js";
 import {
   visitorInviteDetailsSchema,
   visitorListDetailsSchema,
   visitorRevokeDetailsSchema,
   visitorToolErrorSchema,
 } from "./tool-results.js";
-import type { VisitorAccessService } from "./visitors.js";
 
 const identityFields = {
   github: Type.Optional(
@@ -57,8 +56,12 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
         { additionalProperties: false, oneOf: [{ required: ["email"] }, { required: ["github"] }] },
       ),
       outputSchema: Type.Union([visitorInviteDetailsSchema, visitorToolErrorSchema]),
-      run: (service: VisitorAccessService, raw: unknown) =>
-        service.invite(raw, { assertCurrent, invitedVia: context.sessionKey ?? context.agentId }),
+      run: async ({ service, readInviter }: VisitorRuntime, raw: unknown) =>
+        service.invite(raw, {
+          assertCurrent,
+          invitedVia: context.sessionKey ?? context.agentId,
+          invitedBy: await readInviter(),
+        }),
     },
     {
       name: "visitor_revoke",
@@ -74,7 +77,7 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
         { additionalProperties: false },
       ),
       outputSchema: Type.Union([visitorRevokeDetailsSchema, visitorToolErrorSchema]),
-      run: (service: VisitorAccessService, raw: unknown) => service.revoke(raw, assertCurrent),
+      run: ({ service }: VisitorRuntime, raw: unknown) => service.revoke(raw, assertCurrent),
     },
     {
       name: "visitor_list",
@@ -83,7 +86,7 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
         "List recorded visitor grants, current verified GitHub identities, current Gateway access, invitation and expiry dates, and drift from the Access policy. Grant expiry does not describe independent staff access. Unmanaged policy targets are reported and retained; missing policy targets are never automatically restored.",
       parameters: Type.Object({}, { additionalProperties: false }),
       outputSchema: Type.Union([visitorListDetailsSchema, visitorToolErrorSchema]),
-      run: (service: VisitorAccessService) => service.list(assertCurrent),
+      run: ({ service }: VisitorRuntime) => service.list(assertCurrent),
     },
   ];
   return definitions.map(({ name, label, description, parameters, outputSchema, run }) => ({
@@ -105,7 +108,7 @@ export function createVisitorTools(context: OpenClawPluginToolContext<2>): AnyAg
       }
       try {
         assertCurrent();
-        const { text, details } = await run(runtime.service, raw);
+        const { text, details } = await run(runtime, raw);
         return textResult(text, details);
       } catch (error) {
         return {

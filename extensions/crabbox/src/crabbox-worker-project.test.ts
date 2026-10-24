@@ -490,7 +490,7 @@ exec "$CRABBOX_TEST_NODE" "$@"
     },
   );
 
-  it("waits beyond the submission deadline for a retained checkpoint before enrollment", async () => {
+  it("waits beyond the submission deadline for a retained reserve checkpoint before enrollment", async () => {
     const entered = createDeferred<void>();
     const available = createDeferred<void>();
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
@@ -519,10 +519,23 @@ exec "$CRABBOX_TEST_NODE" "$@"
       }
     });
     const { options, provider, calls } = f;
-    const provision = f.provision().then(
-      (lease) => ({ lease }),
-      (error: unknown) => ({ error }),
-    );
+    const provision = f
+      .provision({
+        project: {
+          ...options.project,
+          // Reserves still wait for upload; first session captures can use --wait=false.
+          preparation: {
+            key: "c".repeat(64),
+            cacheKey: "d".repeat(64),
+            purpose: "reserve",
+            demandAtMs: Date.now(),
+          },
+        },
+      })
+      .then(
+        (lease) => ({ lease }),
+        (error: unknown) => ({ error }),
+      );
     try {
       await entered.promise;
       // A provider can still be preparing its snapshot after the old 3m submission cap.

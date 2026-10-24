@@ -212,6 +212,8 @@ packageExtensionsChecksum: sha256-+aaViXQWMTYboC/2zljN8mTDYzt1x2ZpXFjRkJd9Eys=
 
 patchedDependencies:
   '@novnc/novnc@1.7.0': bfde0e1bda172da3525f9f5014d85ad28073325b74f09609084598a65d2f412d
+  '@solidjs/signals@2.0.0-rc.16': 0c4602444d885ba8daa74b081a10f2ccc845de3831ad11d5feea046188a2ce59
+  '@solidjs/web@2.0.0-rc.16': 0612db277d44b0b93cb93e5047ac67609474e5fb13d387936de4e6d57ab6f484
   baileys@7.0.0-rc14: c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded
   chrome-devtools-mcp@1.11.0: c2e391b196607620c519f04eb1563dc4a8f01aebed3b70bd77e6635ae03a5c9a
   ghostty-web@0.4.0: d4c6598b6840564dac4a469f3aa9b8df24fe6eab48a6744302707017e095a524
@@ -906,7 +908,7 @@ importers:
         version: 0.13.0
       '@solidjs/web':
         specifier: 2.0.0-rc.16
-        version: 2.0.0-rc.16(solid-js@2.0.0-rc.16)
+        version: 2.0.0-rc.16(patch_hash=0612db277d44b0b93cb93e5047ac67609474e5fb13d387936de4e6d57ab6f484)(solid-js@2.0.0-rc.16)
       dompurify:
         specifier: 3.4.17
         version: 3.4.17
@@ -943,7 +945,7 @@ importers:
     dependencies:
       '@solidjs/web':
         specifier: 2.0.0-rc.16
-        version: 2.0.0-rc.16(solid-js@2.0.0-rc.16)
+        version: 2.0.0-rc.16(patch_hash=0612db277d44b0b93cb93e5047ac67609474e5fb13d387936de4e6d57ab6f484)(solid-js@2.0.0-rc.16)
       solid-js:
         specifier: 2.0.0-rc.16
         version: 2.0.0-rc.16
@@ -1667,7 +1669,7 @@ importers:
         version: 0.26.11
       '@solidjs/web':
         specifier: 2.0.0-rc.16
-        version: 2.0.0-rc.16(solid-js@2.0.0-rc.16)
+        version: 2.0.0-rc.16(patch_hash=0612db277d44b0b93cb93e5047ac67609474e5fb13d387936de4e6d57ab6f484)(solid-js@2.0.0-rc.16)
       json5:
         specifier: 2.2.3
         version: 2.2.3
@@ -1909,7 +1911,7 @@ importers:
     dependencies:
       '@solidjs/web':
         specifier: 2.0.0-rc.16
-        version: 2.0.0-rc.16(solid-js@2.0.0-rc.16)
+        version: 2.0.0-rc.16(patch_hash=0612db277d44b0b93cb93e5047ac67609474e5fb13d387936de4e6d57ab6f484)(solid-js@2.0.0-rc.16)
       nostr-tools:
         specifier: 2.25.2
         version: 2.25.2(typescript@7.1.0-dev.20261016.1)
@@ -2586,7 +2588,7 @@ importers:
     dependencies:
       '@solidjs/web':
         specifier: 2.0.0-rc.16
-        version: 2.0.0-rc.16(solid-js@2.0.0-rc.16)
+        version: 2.0.0-rc.16(patch_hash=0612db277d44b0b93cb93e5047ac67609474e5fb13d387936de4e6d57ab6f484)(solid-js@2.0.0-rc.16)
       audio-decode:
         specifier: 3.12.0
         version: 3.12.0
@@ -2623,7 +2625,7 @@ importers:
         version: link:../../packages/workboard-contract
       '@solidjs/web':
         specifier: 2.0.0-rc.16
-        version: 2.0.0-rc.16(solid-js@2.0.0-rc.16)
+        version: 2.0.0-rc.16(patch_hash=0612db277d44b0b93cb93e5047ac67609474e5fb13d387936de4e6d57ab6f484)(solid-js@2.0.0-rc.16)
       solid-js:
         specifier: 2.0.0-rc.16
         version: 2.0.0-rc.16
@@ -2657,7 +2659,7 @@ importers:
     dependencies:
       '@solidjs/web':
         specifier: 2.0.0-rc.16
-        version: 2.0.0-rc.16(solid-js@2.0.0-rc.16)
+        version: 2.0.0-rc.16(patch_hash=0612db277d44b0b93cb93e5047ac67609474e5fb13d387936de4e6d57ab6f484)(solid-js@2.0.0-rc.16)
       linkify-it:
         specifier: 6.1.0
         version: 6.1.0
@@ -3106,10 +3108,10 @@ importers:
         version: 4.6.2
       '@solidjs/signals':
         specifier: 2.0.0-rc.16
-        version: 2.0.0-rc.16
+        version: 2.0.0-rc.16(patch_hash=0c4602444d885ba8daa74b081a10f2ccc845de3831ad11d5feea046188a2ce59)
       '@solidjs/web':
         specifier: 2.0.0-rc.16
-        version: 2.0.0-rc.16(solid-js@2.0.0-rc.16)
+        version: 2.0.0-rc.16(patch_hash=0612db277d44b0b93cb93e5047ac67609474e5fb13d387936de4e6d57ab6f484)(solid-js@2.0.0-rc.16)
       '@tanstack/virtual-core':
         specifier: 3.19.2
         version: 3.19.2
@@ -3167,10 +3169,10 @@ importers:
         version: 2.0.0-rc.16
       '@solidjs/testing-library':
         specifier: 1.0.0-beta.3
-        version: 1.0.0-beta.3(@solidjs/web@2.0.0-rc.16(solid-js@2.0.0-rc.16))(solid-js@2.0.0-rc.16)
+        version: 1.0.0-beta.3(@solidjs/web@2.0.0-rc.16(patch_hash=0612db277d44b0b93cb93e5047ac67609474e5fb13d387936de4e6d57ab6f484)(solid-js@2.0.0-rc.16))(solid-js@2.0.0-rc.16)
       '@solidjs/vite-plugin':
         specifier: 3.0.0-next.50
-        version: 3.0.0-next.50(@solidjs/web@2.0.0-rc.16(solid-js@2.0.0-rc.16))(solid-js@2.0.0-rc.16)(supports-color@10.2.2)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
+        version: 3.0.0-next.50(@solidjs/web@2.0.0-rc.16(patch_hash=0612db277d44b0b93cb93e5047ac67609474e5fb13d387936de4e6d57ab6f484)(solid-js@2.0.0-rc.16))(solid-js@2.0.0-rc.16)(supports-color@10.2.2)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))
       '@types/markdown-it':
         specifier: 14.2.0
         version: 14.2.0
@@ -14387,21 +14389,21 @@ snapshots:
       '@solidjs/compiler-wasm32-wasi': 2.0.0-rc.16
       '@solidjs/compiler-win32-x64-msvc': 2.0.0-rc.16
 
-  '@solidjs/signals@2.0.0-rc.16': {}
+  '@solidjs/signals@2.0.0-rc.16(patch_hash=0c4602444d885ba8daa74b081a10f2ccc845de3831ad11d5feea046188a2ce59)': {}
 
-  '@solidjs/testing-library@1.0.0-beta.3(@solidjs/web@2.0.0-rc.16(solid-js@2.0.0-rc.16))(solid-js@2.0.0-rc.16)':
+  '@solidjs/testing-library@1.0.0-beta.3(@solidjs/web@2.0.0-rc.16(patch_hash=0612db277d44b0b93cb93e5047ac67609474e5fb13d387936de4e6d57ab6f484)(solid-js@2.0.0-rc.16))(solid-js@2.0.0-rc.16)':
     dependencies:
-      '@solidjs/web': 2.0.0-rc.16(solid-js@2.0.0-rc.16)
+      '@solidjs/web': 2.0.0-rc.16(patch_hash=0612db277d44b0b93cb93e5047ac67609474e5fb13d387936de4e6d57ab6f484)(solid-js@2.0.0-rc.16)
       '@testing-library/dom': 10.4.2
       solid-js: 2.0.0-rc.16
 
-  '@solidjs/vite-plugin@3.0.0-next.50(@solidjs/web@2.0.0-rc.16(solid-js@2.0.0-rc.16))(solid-js@2.0.0-rc.16)(supports-color@10.2.2)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))':
+  '@solidjs/vite-plugin@3.0.0-next.50(@solidjs/web@2.0.0-rc.16(patch_hash=0612db277d44b0b93cb93e5047ac67609474e5fb13d387936de4e6d57ab6f484)(solid-js@2.0.0-rc.16))(solid-js@2.0.0-rc.16)(supports-color@10.2.2)(vite@8.3.4(@types/node@26.6.5)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.15)(yaml@2.9.1))':
     dependencies:
       '@ampproject/remapping': 2.3.0
       '@babel/core': 7.29.7(supports-color@10.2.2)
       '@solidjs/babel-plugin': 2.0.0-rc.16(@babel/core@7.29.7(supports-color@10.2.2))
       '@solidjs/compiler': 2.0.0-rc.16
-      '@solidjs/web': 2.0.0-rc.16(solid-js@2.0.0-rc.16)
+      '@solidjs/web': 2.0.0-rc.16(patch_hash=0612db277d44b0b93cb93e5047ac67609474e5fb13d387936de4e6d57ab6f484)(solid-js@2.0.0-rc.16)
       '@types/babel__core': 7.20.5
       merge-anything: 5.1.7
       solid-js: 2.0.0-rc.16
@@ -14411,7 +14413,7 @@ snapshots:
       - '@tsrx/core'
       - supports-color
 
-  '@solidjs/web@2.0.0-rc.16(solid-js@2.0.0-rc.16)':
+  '@solidjs/web@2.0.0-rc.16(patch_hash=0612db277d44b0b93cb93e5047ac67609474e5fb13d387936de4e6d57ab6f484)(solid-js@2.0.0-rc.16)':
     dependencies:
       seroval: 1.6.7
       seroval-plugins: 1.6.7(seroval@1.6.7)
@@ -18889,7 +18891,7 @@ snapshots:
 
   solid-js@2.0.0-rc.16:
     dependencies:
-      '@solidjs/signals': 2.0.0-rc.16
+      '@solidjs/signals': 2.0.0-rc.16(patch_hash=0c4602444d885ba8daa74b081a10f2ccc845de3831ad11d5feea046188a2ce59)
       csstype: 3.2.3
       seroval: 1.6.7
       seroval-plugins: 1.6.7(seroval@1.6.7)
