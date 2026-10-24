@@ -259,6 +259,49 @@ describe("createScopedChannelConfigAdapter", () => {
     }
   });
 
+  it("contextually types explicitly selected optional projection fields", () => {
+    type RuntimeAccount = { enabled: boolean; token: string };
+    type AccessorAccount = { enabled?: boolean; allowFrom?: string[]; defaultTo?: string };
+    const params = {
+      ...namedAccountBase,
+      resolveAccount: () => ({ enabled: true, token: "runtime" }),
+      formatAllowFrom: mapAllowFromEntries,
+    };
+    const adapters = [
+      createScopedChannelConfigAdapter<RuntimeAccount, AccessorAccount>({
+        ...params,
+        resolveAccessorAccount: ({ accountId }) => ({
+          allowFrom: [accountId ?? "projection"],
+          defaultTo: "target",
+        }),
+        resolveAllowFrom: (account) => account.allowFrom,
+        resolveDefaultTo: (account) => account.defaultTo,
+      }),
+      createHybridChannelConfigAdapter<RuntimeAccount, AccessorAccount>({
+        ...params,
+        resolveAccessorAccount: ({ accountId }) => ({
+          allowFrom: [accountId ?? "projection"],
+          defaultTo: "target",
+        }),
+        resolveAllowFrom: (account) => account.allowFrom,
+        resolveDefaultTo: (account) => account.defaultTo,
+      }),
+      createTopLevelChannelConfigAdapter<RuntimeAccount, AccessorAccount>({
+        ...params,
+        resolveAccessorAccount: ({ accountId }) => ({
+          allowFrom: [accountId ?? "projection"],
+          defaultTo: "target",
+        }),
+        resolveAllowFrom: (account) => account.allowFrom,
+        resolveDefaultTo: (account) => account.defaultTo,
+      }),
+    ];
+    for (const adapter of adapters) {
+      expect(adapter.resolveAllowFrom?.({ cfg: {} })).toEqual(["projection"]);
+      expect(adapter.resolveDefaultTo?.({ cfg: {} })).toBe("target");
+    }
+  });
+
   it("combines scoped CRUD and allowFrom accessors", () => {
     const adapter = createScopedChannelConfigAdapter({
       ...namedAccountBase,
