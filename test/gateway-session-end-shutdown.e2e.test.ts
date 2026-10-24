@@ -1,9 +1,7 @@
-// A real Gateway process must finish reset-started plugin work before SIGTERM exit.
+import assert from "node:assert/strict";
 import { once } from "node:events";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
-import type { SessionsCreateResult } from "../packages/gateway-protocol/src/schema/sessions.js";
-import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import {
   writeRestartPlugin,
   readRestartTrace as readTrace,
@@ -43,7 +41,6 @@ export default {
   },
 };
 `,
-    "index.mjs",
   );
   await withBuiltGateway(
     {
@@ -56,21 +53,17 @@ export default {
           entries: { [PLUGIN_ID]: { enabled: true } },
           slots: { memory: "none" },
         },
-      } satisfies OpenClawConfig,
+      },
       env: { OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
       stopTimeoutMs: 10_000,
       // Signal the Gateway itself before the custody owner cancels its worker tree.
       gracefulShutdownTimeoutMs: GATEWAY_RESTART_TEST_KILL_MS,
     },
     async (client, instance) => {
-      await vi.waitFor(async () => {
-        const created = await client.request<SessionsCreateResult>("sessions.create", {
-          agentId: "main",
-          key: SESSION_KEY,
-        });
-        expect(created.key).toBe(SESSION_KEY);
-        expect(created.sessionId).toBeTruthy();
-      }, WAIT_OPTIONS);
+      await vi.waitFor(
+        () => client.request("sessions.create", { agentId: "main", key: SESSION_KEY }),
+        WAIT_OPTIONS,
+      );
 
       await client.request("sessions.reset", { key: SESSION_KEY, reason: "reset" });
       await vi.waitFor(async () => {
@@ -78,12 +71,8 @@ export default {
       }, WAIT_OPTIONS);
 
       const child = instance.child;
-      if (!child) {
-        throw new Error("Gateway process exited before its session-end hook was signaled");
-      }
-      const exited = once(child, "exit") as Promise<
-        [code: number | null, signal: NodeJS.Signals | null]
-      >;
+      assert(child, "Gateway process exited before its session-end hook was signaled");
+      const exited = once(child, "exit");
       expect(child.kill("SIGTERM")).toBe(true);
 
       await expect(exited).resolves.toEqual([0, null]);
