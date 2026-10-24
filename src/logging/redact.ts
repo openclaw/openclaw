@@ -109,10 +109,21 @@ const FORM_BODY_CONTEXT_SINGLE_PAIR_RE = new RegExp(
   String.raw`(\b(?:body|form(?:[-_\s]?body)?)\s*[:=]\s*(["'\x60]?))(${FORM_BODY_KEY})=(${FORM_BODY_VALUE})(["'\x60]?)`,
   "giu",
 );
-const URL_QUERY_PAIR_RE = new RegExp(
-  String.raw`([?&])(${FORM_BODY_KEY})=(${URL_QUERY_VALUE})`,
-  "gu",
+// A nested URL carried inside a query value arrives percent-encoded, so its
+// separators are `%3F`/`%26` and its `=` is `%3D`. None of the assignment
+// grammars above match that, and net-policy's URL redactor -- which does decode
+// nested URLs -- is not on this path, so a credential in a `redirect_uri=`
+// callback reached the log in full. Stop the value at the next encoded
+// separator; the lookahead is checked per character, so the scan stays linear.
+const ENCODED_URL_QUERY_PAIR_RE = new RegExp(
+  String.raw`(%3F|%26|[?&])((?:(?!%3D|%26)[A-Za-z0-9_.%~-]){1,128})%3D((?:(?!%26)[^&\s"'<>])*)`,
+  "giu",
 );
+// Bound nested query scanning the way net-policy bounds nested decoding, so a
+// hostile chain of nested callbacks cannot grow the work it costs to scan one value.
+const MAX_NESTED_URL_QUERY_DEPTH = 8;
+const URL_QUERY_PAIR = String.raw`([?&])(${FORM_BODY_KEY})=(${URL_QUERY_VALUE})`;
+const URL_QUERY_PAIR_RE = new RegExp(URL_QUERY_PAIR, "gu");
 const FORM_BODY_LINE_BREAK_SPLIT_RE = /(\r\n|\r|\n)/u;
 const FORM_BODY_LINE_BREAK_SEGMENT_RE = /^(?:\r\n|\r|\n)$/u;
 const STRUCTURED_SECRET_FIELD_RE = new RegExp(
@@ -321,11 +332,31 @@ function visitSensitiveAssignments(
   if (kind === "context" && !/[=:]/u.test(text)) {
     return;
   }
-  const visitPair = (key: string, token: string, valueOffset: number): void => {
+  const visitPair = (key: string, token: string, valueOffset: number, depth = 0): void => {
     if (kind === "encoded" && !hasEncodedOrInvisibleFormKey(key)) {
       return;
     }
     if (!isSensitiveBodyKey(key)) {
+      // A nested URL carried in a query value (`?cb=https://in/?token=...`) is one
+      // value whose own name is not a credential, so the credential in its query was
+      // never classified. Only `?` can open an assignment inside a value; `&` cannot
+      // appear in one. A sensitive value is still masked whole below, so scanning
+      // only non-sensitive values keeps this additive -- nothing masked before stops
+      // being masked. A fresh regex per level keeps `lastIndex` out of the recursion.
+      if (kind !== "url" || depth >= MAX_NESTED_URL_QUERY_DEPTH || !token.includes("?")) {
+        return;
+      }
+      const nested = new RegExp(URL_QUERY_PAIR, "gu");
+      for (let match = nested.exec(token); match; match = nested.exec(token)) {
+        const nestedPrefix = match[1] ?? "";
+        const nestedKey = match[2] ?? "";
+        visitPair(
+          nestedKey,
+          match[3] ?? "",
+          valueOffset + match.index + nestedPrefix.length + nestedKey.length + 1,
+          depth + 1,
+        );
+      }
       return;
     }
     const { maskable, maskStart, maskEnd } = splitSecretValueForMask(token);
@@ -1025,6 +1056,41 @@ const preparationPatterns: ResolvedRedactPattern[] = [
       const edits: RedactionEdit[] = [];
       redactAssignmentValues(input, "url", (added) => edits.push(...added));
       yield* redactionEditMatches(input, edits);
+    },
+  },
+  {
+    source: "encoded URL query assignments",
+    *exec(input) {
+      if (!/%3d/iu.test(input)) {
+        return;
+      }
+      // Private synchronous sink; release the regex state on errors too.
+      ENCODED_URL_QUERY_PAIR_RE.lastIndex = 0;
+      try {
+        for (
+          let match = ENCODED_URL_QUERY_PAIR_RE.exec(input);
+          match;
+          match = ENCODED_URL_QUERY_PAIR_RE.exec(input)
+        ) {
+          const prefix = match[1] ?? "";
+          const name = match[2] ?? "";
+          const value = match[3] ?? "";
+          if (!value || !isSensitiveBodyKey(name)) {
+            continue;
+          }
+          // `%3D` is three characters; the value starts after it.
+          const offset = match.index + prefix.length + name.length + 3;
+          yield {
+            match: value,
+            groups: [],
+            input,
+            offset,
+            replacement: "***",
+          };
+        }
+      } finally {
+        ENCODED_URL_QUERY_PAIR_RE.lastIndex = 0;
+      }
     },
   },
   {

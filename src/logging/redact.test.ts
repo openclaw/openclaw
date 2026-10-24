@@ -183,6 +183,58 @@ describe("redactSensitiveText", () => {
     );
   });
 
+  // A URL nested inside a query value was taken as one value: the outer name
+  // (`cb`, `redirect_uri`) is not a credential, so the credential in the nested
+  // query was never classified. Values whose own name is not a credential are
+  // now scanned for a nested assignment; a sensitive value is still masked whole,
+  // so nothing that was masked before stops being masked.
+  it("masks a credential in a URL nested inside a query value", () => {
+    expectTextRedactions([
+      [
+        "https://x.test/?cb=https://y.test/?token=opaque-nested-token-secret",
+        undefined,
+        ["opaque-nested-token-secret"],
+        ["https://x.test/?cb=https://y.test/?token="],
+      ],
+      [
+        "fetching https://auth.test/a?redirect_uri=https://app.test/cb?access_token=opaque-nested-oauth-secret now",
+        undefined,
+        ["opaque-nested-oauth-secret"],
+        ["?redirect_uri=https://app.test/cb?access_token=", " now"],
+      ],
+      // A nested URL with no credential stays readable.
+      [
+        "https://x.test/?cb=https://y.test/?page=2&sort=asc",
+        "https://x.test/?cb=https://y.test/?page=2&sort=asc",
+      ],
+    ]);
+  });
+
+  // Nested scanning must not shorten a mask: a raw "?" can sit inside a value,
+  // so a sensitive value is still masked to the end of its run.
+  it("masks a sensitive query value whole when it contains a nested separator", () => {
+    expectTextRedactions([
+      ["https://x.test/?password=alpha?bravo", "https://x.test/?password=***"],
+      ["https://x.test/?password=alpha?bravo&page=2", "https://x.test/?password=***&page=2"],
+    ]);
+  });
+
+  // A nested value is masked exactly as the same value would be at the top level,
+  // including the length-dependent mask shape maskToken() already applies.
+  it("masks a nested credential the same way as a top-level one", () => {
+    for (const secret of ["opaque-short", "opaque-encoded-token-secret"]) {
+      const top = redactSensitiveText(`https://x.test/?access_token=${secret}`, { mode: "tools" });
+      const nested = redactSensitiveText(
+        `https://a.test/?cb=https://b.test/?access_token=${secret}`,
+        { mode: "tools" },
+      );
+      expect(nested.slice(nested.indexOf("?access_token="))).toBe(
+        top.slice(top.indexOf("?access_token=")),
+      );
+      expect(nested).not.toContain(secret);
+    }
+  });
+
   it("preserves shell references, option prose, and ordinary token-like identifiers", () => {
     for (const input of [
       [
@@ -792,6 +844,27 @@ describe("redactSensitiveLines", () => {
       ).toStrictEqual(expected);
     }
   });
+  // A nested URL arrives percent-encoded from OAuth-style callbacks, so its
+  // separators are `%3F`/`%26` and its `=` is `%3D`; none of the assignment
+  // grammars matched that shape and the credential reached the log in full.
+  it("masks a credential in a percent-encoded nested query", () => {
+    const resolved = resolveRedactOptions({ mode: "tools" });
+    expect(
+      redactSensitiveLines(
+        [
+          "GET https://x.test/?next=%3Ftoken%3Dopaque-encoded-token-secret",
+          "GET https://auth.test/a?redirect_uri=https%3A%2F%2Fapp.test%2Fcb%3Faccess_token%3Dopaque-encoded-oauth-secret%26page%3D2",
+          "GET https://x.test/?next=%3Fpage%3D2%26sort%3Dasc",
+        ],
+        resolved,
+      ),
+    ).toStrictEqual([
+      "GET https://x.test/?next=%3Ftoken%3D***",
+      "GET https://auth.test/a?redirect_uri=https%3A%2F%2Fapp.test%2Fcb%3Faccess_token%3D***%26page%3D2",
+      "GET https://x.test/?next=%3Fpage%3D2%26sort%3Dasc",
+    ]);
+  });
+
   it("returns lines unmodified when redaction is off", () => {
     const resolved = resolveRedactOptions({ mode: "off", patterns: defaults });
     const secret = "opaque-registry-value-1234567890";
@@ -826,6 +899,27 @@ describe("redactSensitiveLines", () => {
     expect(joined).toContain("…redacted…");
     expect(joined).not.toContain("ABCDEF1234567890");
   });
+});
+
+// A serialized capture is found in the JSON text, where `URL_QUERY_VALUE` and the
+// encoded form grammar both admit `"`, `:` and `,`. Without a trailing `&` to stop
+// it, such a value used to run past its own scalar and mask the next key and value
+// too, so a record lost its `level`. Masking must stay inside the scalar it started in.
+it("keeps a serialized nested-query mask inside its own scalar", () => {
+  for (const message of [
+    // No trailing `&`: the value reaches the end of the message scalar.
+    "https://x.test/?cb=https://y.test/?token=opaque-short",
+    "https://x.test/?token=opaque-short",
+    "client%5Fsecret=opaquevalue12345g7",
+    // A trailing `&` already bounded the run; it must stay bounded.
+    "https://x.test/?cb=https://y.test/?token=opaque-short&page=2",
+  ]) {
+    const redacted = redactLogRecordForTransport({ message, level: "info", subsystem: "gateway" });
+    expect(redacted.level).toBe("info");
+    expect(redacted.subsystem).toBe("gateway");
+    expect(redacted.message).not.toContain("opaque-short");
+    expect(redacted.message).not.toContain("opaquevalue12345g7");
+  }
 });
 
 it("reuses scalar probes only within the current log record", () => {
