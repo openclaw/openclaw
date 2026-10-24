@@ -538,6 +538,25 @@ describe("createFollowupRunner", () => {
     });
   });
 
+  it("completes the executing item's own typing, not the latest enqueuer's", async () => {
+    const ownTyping = createMockTypingController();
+    const laterTyping = createMockTypingController();
+    const controller = new AbortController();
+    controller.abort();
+    const queued = createQueuedRun({ abortSignal: controller.signal, typing: ownTyping });
+
+    await createFollowupRunner({
+      typing: laterTyping,
+      typingMode: "instant",
+      defaultModel: "claude",
+    })(queued);
+
+    expect(ownTyping.markRunComplete).toHaveBeenCalledOnce();
+    expect(ownTyping.markDispatchIdle).toHaveBeenCalledOnce();
+    expect(laterTyping.markRunComplete).not.toHaveBeenCalled();
+    expect(laterTyping.markDispatchIdle).not.toHaveBeenCalled();
+  });
+
   it("settles invalidated claimed input without executing or replaying", async () => {
     const typing = createMockTypingController();
     const endCorrelation = vi.fn();

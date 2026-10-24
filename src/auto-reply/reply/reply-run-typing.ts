@@ -2,6 +2,8 @@ import {
   runAfterReplyOperationClear,
   type ReplyOperation,
 } from "../../sessions/session-controller.js";
+import type { FollowupRun } from "./queue/types.js";
+import type { TypingSignaler } from "./typing-mode.js";
 import type { TypingController } from "./typing.js";
 
 const typingByReplyOperation = new WeakMap<ReplyOperation, TypingController>();
@@ -31,4 +33,38 @@ export async function refreshReplyOperationTyping(
     return;
   }
   await typing.startTypingLoop();
+}
+
+/**
+ * The queued item, not the dispatch that queued it, ends its wait: settlement covers
+ * execution, cancellation, and removal from the queue. Without a lifecycle nothing
+ * would settle typing, so the dispatch keeps it.
+ */
+export function bindQueuedFollowupTyping(
+  followupRun: FollowupRun,
+  typing: TypingController,
+  typingSignals: TypingSignaler,
+): (queuedBehindActiveRun: boolean, onHandoff?: () => void) => Promise<void> {
+  followupRun.typing = typing;
+  const lifecycle = followupRun.turnAdoptionLifecycle;
+  if (lifecycle) {
+    const onSettled = lifecycle.onSettled;
+    lifecycle.onSettled = () => {
+      try {
+        return onSettled?.();
+      } finally {
+        typing.cleanup();
+      }
+    };
+  }
+  return async (queuedBehindActiveRun, onHandoff) => {
+    if (!queuedBehindActiveRun) {
+      typing.cleanup();
+      return;
+    }
+    await typingSignals.signalToolStart();
+    if (lifecycle && typing.isActive()) {
+      onHandoff?.();
+    }
+  };
 }

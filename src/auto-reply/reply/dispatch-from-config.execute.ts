@@ -39,7 +39,7 @@ import { requireQueuedReplyDelivery } from "./dispatch-from-config.turn-ledger.j
 import { runWithCommandNativeSubagents } from "./dispatch-native-subagent.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
-import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
+import { waitForReplyDispatcherIdle } from "./reply-dispatcher-idle.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
 import { readReplySourceInput, readReplySourcePreparationRetry } from "./reply-source-binding.js";
 

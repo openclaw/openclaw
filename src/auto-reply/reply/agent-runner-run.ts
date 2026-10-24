@@ -70,7 +70,7 @@ import { refuseCollaborativeSteering } from "./queue/lifecycle.js";
 import { bindReplyOperationQueueDisposition, resolveFollowupAbortSignal } from "./queue/types.js";
 import { prepareReplyAgentTurn } from "./reply-agent-turn-preparation.js";
 import * as replyRunState from "./reply-operation-run-state.js";
-import { bindReplyOperationTyping } from "./reply-run-typing.js";
+import { bindQueuedFollowupTyping, bindReplyOperationTyping } from "./reply-run-typing.js";
 import { bindReplySourceToFollowup, retireUnadoptedReplySource } from "./reply-source-binding.js";
 import { prepareReplyRunToolAuthority } from "./reply-tool-authority.js";
 import { runWithReplyOperationLifecycleAdmission } from "./reply-turn-admission-lifecycle.js";
@@ -377,6 +377,7 @@ export async function runReplyAgent(
     });
     if (activeRunQueueAction === "enqueue-followup") {
       bindReplyOperationQueueDisposition(followupRun, replyOperationRunState);
+      const holdQueuedTyping = bindQueuedFollowupTyping(followupRun, typing, typingSignals);
       const enqueued = enqueueFollowupRun(
         queueKey,
         followupRun,
@@ -434,11 +435,7 @@ export async function runReplyAgent(
       }
       const queuedBehindActiveRun = (await isRunActive?.()) === true;
       await touchActiveSessionEntry();
-      if (queuedBehindActiveRun) {
-        await typingSignals.signalToolStart();
-      } else {
-        typing.cleanup();
-      }
+      await holdQueuedTyping(queuedBehindActiveRun, opts?.onTypingHandoff);
       return undefined;
     }
 

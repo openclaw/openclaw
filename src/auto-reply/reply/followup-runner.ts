@@ -516,8 +516,9 @@ export function createFollowupRunner(
         await admittedTurn?.releaseSourceAdmission?.();
       } finally {
         operation?.complete();
-        defaults.typing.markRunComplete();
-        defaults.typing.markDispatchIdle();
+        const typing = queued.typing ?? defaults.typing;
+        typing.markRunComplete();
+        typing.markDispatchIdle();
       }
     }
 
