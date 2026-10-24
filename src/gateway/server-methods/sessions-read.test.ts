@@ -268,7 +268,9 @@ test.each(["hidden", "revoked"] as const)(
     );
     if (visibility === "revoked") {
       expect(result).toMatchObject({
-        defaultId: "ops",
+        // The role narrowed to "research" while the response was being prepared, so the
+        // advertised default follows the surviving roster instead of the hidden agent.
+        defaultId: "research",
         ownership: "explicit",
         selectionRequired: true,
         mainKey: "main",
