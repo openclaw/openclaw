@@ -14,6 +14,7 @@ import {
   applyEmbeddedAttemptToolsAllow,
   buildEmbeddedAttemptToolRunContext,
   extractToolErrorMessage,
+  finalizeToolTerminalPresentation,
   getPluginToolMeta,
   getPluginToolSideEffectOwnerKey,
   isSubagentSessionKey,
@@ -457,54 +458,69 @@ function convertOpenClawToolToSdkTool(
       );
     }
 
-    let result: Awaited<ReturnType<AnyAgentTool["execute"]>>;
+    let acceptedResult: Awaited<ReturnType<AnyAgentTool["execute"]>> | undefined;
+    let acceptedResultIsError = true;
     try {
-      result = await sourceTool.execute(
-        invocation.toolCallId,
-        preparedArgs,
-        input.attemptParams.abortSignal,
-        undefined,
-      );
-    } catch (error: unknown) {
-      return failureResult(
-        preparedArgs,
-        invocation,
-        startedAt,
-        `[copilot-tool-bridge] tool '${sourceTool.name}' failed: ${toCopilotToolError(error).message}`,
-        error,
-        true,
-      );
-    }
+      let result: Awaited<ReturnType<AnyAgentTool["execute"]>>;
+      try {
+        result = await sourceTool.execute(
+          invocation.toolCallId,
+          preparedArgs,
+          input.attemptParams.abortSignal,
+          undefined,
+        );
+      } catch (error: unknown) {
+        return failureResult(
+          preparedArgs,
+          invocation,
+          startedAt,
+          `[copilot-tool-bridge] tool '${sourceTool.name}' failed: ${toCopilotToolError(error).message}`,
+          error,
+          true,
+        );
+      }
 
-    const sanitizedResult = sanitizeToolResult(result);
-    const resultIsError = isToolResultError(sanitizedResult);
-    // The SDK only marks fulfilled tool results as failures when isError is forwarded.
-    const sdkResult = convertMcpCallToolResult({
-      content: result.content,
-      isError: resultIsError,
-    });
-    const resultError = resultIsError ? extractToolErrorMessage(sanitizedResult) : undefined;
-    const terminal = input.attemptParams.observeToolTerminal?.({
-      toolCallId: invocation.toolCallId,
-      toolName: sourceTool.name,
-      result,
-      arguments: preparedArgs,
-      executionStarted: true,
-      outcome: resultIsError ? "failure" : "success",
-      ...(resultIsError ? { failure: { error: resultError ?? "tool returned an error" } } : {}),
-      ...(ownerMutation ? { ownerMutation } : {}),
-    });
-    notifyToolResult(sanitizedResult, resultIsError);
-    notifyToolCompleted({
-      toolName: sourceTool.name,
-      toolCallId: invocation.toolCallId,
-      args: toToolStartArgs(terminal?.executedArguments ?? preparedArgs),
-      result: sanitizedResult,
-      isError: resultIsError,
-      ...(resultError ? { error: resultError } : {}),
-      startedAt,
-    });
-    return sdkResult;
+      const sanitizedResult = sanitizeToolResult(result);
+      const resultIsError = isToolResultError(sanitizedResult);
+      // The SDK only marks fulfilled tool results as failures when isError is forwarded.
+      const sdkResult = convertMcpCallToolResult({
+        content: result.content,
+        isError: resultIsError,
+      });
+      const resultError = resultIsError ? extractToolErrorMessage(sanitizedResult) : undefined;
+      const terminal = input.attemptParams.observeToolTerminal?.({
+        toolCallId: invocation.toolCallId,
+        toolName: sourceTool.name,
+        result,
+        arguments: preparedArgs,
+        executionStarted: true,
+        outcome: resultIsError ? "failure" : "success",
+        ...(resultIsError ? { failure: { error: resultError ?? "tool returned an error" } } : {}),
+        ...(ownerMutation ? { ownerMutation } : {}),
+      });
+      notifyToolResult(sanitizedResult, resultIsError);
+      notifyToolCompleted({
+        toolName: sourceTool.name,
+        toolCallId: invocation.toolCallId,
+        args: toToolStartArgs(terminal?.executedArguments ?? preparedArgs),
+        result: sanitizedResult,
+        isError: resultIsError,
+        ...(resultError ? { error: resultError } : {}),
+        startedAt,
+      });
+      // The SDK accepts the source result; sanitization only shapes observer notifications.
+      acceptedResult = result;
+      acceptedResultIsError = resultIsError;
+      return sdkResult;
+    } finally {
+      // Only this direct handler owns acceptance; catalog targets finalize in Tool Search.
+      finalizeToolTerminalPresentation({
+        toolCallId: invocation.toolCallId,
+        runId: input.attemptParams.runId,
+        result: acceptedResult ?? { content: [], details: undefined },
+        isError: acceptedResultIsError,
+      });
+    }
   };
 
   return {
