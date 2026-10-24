@@ -41,7 +41,7 @@
     "build": {
       "openclawVersion": "2026.10.6",
       "workerEntries": [
-        "./lancedb-runtime.ts"
+        "./memory-stats.worker.ts"
       ]
     },
     "release": {
