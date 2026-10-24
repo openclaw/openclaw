@@ -560,7 +560,7 @@ it.each([true, false])(
       releaseCodexBoundLiveThread({
         client: client.client,
         threadId: "parent-thread",
-        lifecycleTiming: createCodexThreadLifecycleTimingTracker(),
+        lifecycleTiming: createCodexThreadLifecycleTimingTracker(false),
       });
     await expect(releaseForResume()).rejects.toThrow("claimed by active work; stop it first");
     const receipt = structuredClone(await submissionStore.read());
