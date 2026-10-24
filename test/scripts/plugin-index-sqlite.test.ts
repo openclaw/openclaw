@@ -41,60 +41,34 @@ function currentValueJson(installRecords: unknown) {
 
 function writeCurrentSqliteIndex(root: string, valueJson: string, schemaVersion = 13) {
   withSqlite(root, (db) => {
-    db.exec(`
-      PRAGMA user_version = ${schemaVersion};
-      CREATE TABLE IF NOT EXISTS config_machine_state (
-        state_key TEXT NOT NULL PRIMARY KEY,
-        value_json TEXT NOT NULL,
-        updated_at_ms INTEGER NOT NULL
-      );
-    `);
+    db.exec(`PRAGMA user_version = ${schemaVersion}`);
     db.prepare(
-      `
-        INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
-        VALUES (?, ?, ?)
-        ON CONFLICT(state_key) DO UPDATE SET value_json = excluded.value_json
-      `,
-    ).run("plugins.installedIndex", valueJson, Date.now());
+      `CREATE TABLE config_machine_state AS
+       SELECT 'plugins.installedIndex' AS state_key, ? AS value_json`,
+    ).run(valueJson);
   });
 }
 
 function writePreV13SqliteIndex(root: string, installRecordsJson: string, schemaVersion = 12) {
   withSqlite(root, (db) => {
-    db.exec(`
-      PRAGMA user_version = ${schemaVersion};
-      CREATE TABLE IF NOT EXISTS installed_plugin_index (
-        index_key TEXT NOT NULL PRIMARY KEY, version INTEGER NOT NULL,
-        host_contract_version TEXT NOT NULL, compat_registry_version TEXT NOT NULL,
-        migration_version INTEGER NOT NULL, policy_hash TEXT NOT NULL,
-        generated_at_ms INTEGER NOT NULL, refresh_reason TEXT,
-        install_records_json TEXT NOT NULL, plugins_json TEXT NOT NULL,
-        diagnostics_json TEXT NOT NULL, warning TEXT, updated_at_ms INTEGER NOT NULL
-      );
-    `);
+    db.exec(`PRAGMA user_version = ${schemaVersion}`);
     db.prepare(
-      `
-        INSERT INTO installed_plugin_index (
-          index_key, version, host_contract_version, compat_registry_version,
-          migration_version, policy_hash, generated_at_ms, refresh_reason,
-          install_records_json, plugins_json, diagnostics_json, warning, updated_at_ms
-        ) VALUES ('installed-plugin-index', 1, '1', '1', 1, 'hash', ?, NULL,
-          ?, '[]', '[]', NULL, ?)
-        ON CONFLICT(index_key) DO UPDATE SET
-          install_records_json = excluded.install_records_json
-      `,
-    ).run(Date.now(), installRecordsJson, Date.now());
+      `CREATE TABLE installed_plugin_index AS SELECT
+       'installed-plugin-index' AS index_key, 1 AS version, '1' AS host_contract_version,
+       '1' AS compat_registry_version, 1 AS migration_version, 'hash' AS policy_hash,
+       0 AS generated_at_ms, NULL AS refresh_reason, ? AS install_records_json,
+       '[]' AS plugins_json, '[]' AS diagnostics_json, NULL AS warning`,
+    ).run(installRecordsJson);
   });
 }
 
 function readTableNames(root: string) {
   const db = new DatabaseSync(sqlitePath(root), { readOnly: true });
   try {
-    return (
-      db
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
-        .all() as Array<{ name: string }>
-    ).map((row) => row.name);
+    return db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+      .all()
+      .map((row) => row.name);
   } finally {
     db.close();
   }

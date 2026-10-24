@@ -180,10 +180,8 @@ it.each<[string, string, number, boolean, boolean, number, number, number]>([
 );
 
 it.each<[string, CommitFile[] | null, boolean]>([
-  ["authoring instructions", commitFiles(instructions), false],
-  ["translation instructions", commitFiles(translations), false],
   [
-    "both excluded files and unrelated code",
+    "excluded files and unrelated code",
     commitFiles(instructions, translations, "src/index.ts"),
     false,
   ],

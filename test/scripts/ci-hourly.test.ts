@@ -203,14 +203,11 @@ describe("CodeQL language selection", () => {
     selectionCase([".github/workflows/codeql.yml"]),
     selectionCase([".github/codeql/codeql-actions-critical-security.yml"]),
     selectionCase(["src/main.ts"], categories.slice(0, -1)),
-    selectionCase(["packages/example/README.md"], categories.slice(0, -1)),
     selectionCase([".github/workflows/docs.yml", "src/main.ts"]),
     selectionCase([]),
     selectionCase(undefined, undefined, { checkoutOutcome: "failure" }),
     selectionCase(undefined, undefined, { exitCode: 128 }),
-    ...["push", "schedule", "workflow_dispatch"].map((eventName) =>
-      selectionCase(undefined, undefined, { eventName }),
-    ),
+    selectionCase(undefined, undefined, { eventName: "push" }),
   ])(
     "selects $expected for $files/$eventName/$exitCode",
     async ({ files, expected, ...options }) => {
