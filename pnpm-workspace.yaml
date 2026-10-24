@@ -61,6 +61,16 @@ minimumReleaseAgeExclude:
   - "@openclaw/proc-safe-linux-x64-musl@0.4.2"
   - "@openclaw/proc-safe-win32-arm64-msvc@0.4.2"
   - "@openclaw/proc-safe-win32-x64-msvc@0.4.2"
+  # Claude Agent SDK 0.3.308 embeds Bun with the brotli 1.2.1 fix (CVE-2026-111497); remove after 2026-10-29T04:23:02.595Z.
+  - "@anthropic-ai/claude-agent-sdk@0.3.308"
+  - "@anthropic-ai/claude-agent-sdk-darwin-arm64@0.3.308"
+  - "@anthropic-ai/claude-agent-sdk-darwin-x64@0.3.308"
+  - "@anthropic-ai/claude-agent-sdk-linux-arm64-musl@0.3.308"
+  - "@anthropic-ai/claude-agent-sdk-linux-arm64@0.3.308"
+  - "@anthropic-ai/claude-agent-sdk-linux-x64-musl@0.3.308"
+  - "@anthropic-ai/claude-agent-sdk-linux-x64@0.3.308"
+  - "@anthropic-ai/claude-agent-sdk-win32-arm64@0.3.308"
+  - "@anthropic-ai/claude-agent-sdk-win32-x64@0.3.308"
   # Draft tsrs type-check trial (obviyus); remove after 2026-10-23T16:59:18.996Z.
   - "tsrs@0.16.0-ts7.1.0-dev.20260929"
   - "@tsrs/darwin-arm64@0.16.0-ts7.1.0-dev.20260929"
@@ -86,6 +96,8 @@ overrides:
   "@chevrotain/cst-dts-gen>lodash-es": 4.18.1
   "@chevrotain/gast>lodash-es": 4.18.1
   "@agentclientprotocol/codex-acp@2.2.2>@openai/codex": 0.162.1
+  # claude-agent-acp 0.93.0 pins SDK 0.3.300, whose bundled Bun has the CVE-2026-111497 brotli decoder.
+  "@agentclientprotocol/claude-agent-acp@0.93.0>@anthropic-ai/claude-agent-sdk": 0.3.308
   "@codemirror/commands@6.11.1>@codemirror/view": 6.43.14
   "@codemirror/view@6.43.14>@codemirror/state": 6.7.6
   "@anthropic-ai/sdk": 0.135.0
