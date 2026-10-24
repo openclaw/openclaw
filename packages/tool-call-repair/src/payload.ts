@@ -513,110 +513,23 @@ export function stripPlainTextToolCallBlocks(
   return projectPlainTextToolCallBlocks(text, options).text;
 }
 
-const MAX_PLAIN_TEXT_TOOL_CALL_PROBE_LINE_CHARS = 4096;
+const MAX_PLAIN_TEXT_TOOL_CALL_PROBE_TAIL_CHARS = 512;
+const PLAIN_TEXT_TOOL_CALL_PROBE_TRIGGER_RE = /[[<{=]/u;
 
 /**
  * Detects a line-start plain-text tool-call candidate without rescanning the
- * complete streamed reply on every delta. A candidate can only begin after a
- * line break, so rejected lines are retired until the next line.
+ * complete streamed reply on every delta. The bounded tail keeps a line start,
+ * split tool name, and payload marker visible; the candidate regex requires a
+ * real JSON/XML payload opener, so citations and empty bodies do not activate.
  */
 export function createPlainTextToolCallProbe(): (delta: string) => boolean {
-  let active = false;
-  let line = "";
-  let lineStarted = false;
-  let lineRejected = false;
-  let previousOpening: string | undefined;
-  let previousCarriageReturn = false;
-
-  const isActivatingScan = (scan: ReturnType<typeof scanPlainTextToolCall>): boolean =>
-    scan.kind === "complete" || (scan.kind === "prefix" && scan.payloadStart !== undefined);
-
-  const scanLine = (text: string) => {
-    const start = skipLineIndentation(text, 0);
-    if (start === text.length) {
-      return undefined;
-    }
-    return scanPlainTextToolCall(text, start);
-  };
-
-  const finishLine = () => {
-    if (!lineRejected) {
-      const combined = previousOpening === undefined ? line : `${previousOpening}\n${line}`;
-      const scan = scanLine(combined);
-      if (scan && isActivatingScan(scan)) {
-        active = true;
-      } else {
-        const openingCandidate =
-          scan?.kind === "prefix"
-            ? scan.json.kind === "prefix"
-              ? scan.json.candidate
-              : scan.xmlish.kind === "prefix"
-                ? scan.xmlish.candidate
-                : undefined
-            : undefined;
-        previousOpening =
-          previousOpening === undefined &&
-          openingCandidate?.nameComplete &&
-          scan?.payloadStart === undefined
-            ? line
-            : undefined;
-      }
-    } else {
-      previousOpening = undefined;
-    }
-    line = "";
-    lineStarted = false;
-    lineRejected = false;
-  };
-
+  let tail = "";
   return (delta) => {
-    if (active) {
-      return true;
-    }
-    for (let index = 0; index < delta.length; index += 1) {
-      const char = delta.charAt(index);
-      if (previousCarriageReturn && char === "\n") {
-        previousCarriageReturn = false;
-        continue;
-      }
-      if (char === "\r" || char === "\n") {
-        const skipLineFeed = char === "\r" && delta[index + 1] === "\n";
-        if (skipLineFeed) {
-          index += 1;
-        }
-        finishLine();
-        previousCarriageReturn = char === "\r" && !skipLineFeed;
-        continue;
-      }
-      previousCarriageReturn = false;
-      if (lineRejected) {
-        continue;
-      }
-      if (!lineStarted && /[^\S\r\n]/u.test(char)) {
-        continue;
-      }
-      lineStarted = true;
-      if (line.length >= MAX_PLAIN_TEXT_TOOL_CALL_PROBE_LINE_CHARS) {
-        lineRejected = true;
-        previousOpening = undefined;
-        continue;
-      }
-      line += char;
-      const combined = previousOpening === undefined ? line : `${previousOpening}\n${line}`;
-      const scan = scanLine(combined);
-      if (!scan) {
-        continue;
-      }
-      if (isActivatingScan(scan)) {
-        active = true;
-        return true;
-      }
-      if (scan.kind === "invalid") {
-        lineRejected = true;
-        previousOpening = undefined;
-      }
-    }
-    return active;
+    tail = (tail + delta).slice(-MAX_PLAIN_TEXT_TOOL_CALL_PROBE_TAIL_CHARS);
+    return (
+      PLAIN_TEXT_TOOL_CALL_PROBE_TRIGGER_RE.test(delta) &&
+      PLAIN_TEXT_TOOL_CALL_CANDIDATE_RE.test(tail)
+    );
   };
 }
 

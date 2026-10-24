@@ -18,6 +18,7 @@ const samples = [
   " ```text\n[tool:read] {}\n ```\n[tool:read] {}\nDone.",
   " ```text\nbody\r ```\r\n[tool:read] {}\nDone.",
   "See sources.\n[1] A cited claim.\n[2] Another cited claim.\n[12] A third one.\n",
+  "[1] A cited claim.\n[tool:read] {}\nDone.\n",
   'Plain prose that mentions [read] {"path": "a.ts"} mid-line.\n',
   'Visible.\n[tool:read] {"path":"a.ts"}\nDone.\n',
   'Visible.\n[read]\n{"path": "a.ts"}\n[/read]\nDone.\n',

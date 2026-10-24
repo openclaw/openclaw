@@ -40,6 +40,10 @@ it.each([
     "pretty-printed JSON",
     () => `{\n${'  {"id":0,"label":"ordinary value"},\n'.repeat(1024)}  "done": true\n}`,
   ],
+  [
+    "empty citation opening",
+    () => `[1]\n\n${"ordinary prose continues without a tool payload. ".repeat(512)}`,
+  ],
 ])("bounds plain-tool-call checkpoint work for %s", (_name, buildSource) => {
   const source = buildSource().slice(0, 32 * 1024);
   const project = vi.spyOn(toolCallRepair, "projectPlainTextToolCallBlocks");

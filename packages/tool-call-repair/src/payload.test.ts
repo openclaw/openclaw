@@ -89,6 +89,7 @@ describe("createPlainTextToolCallProbe", () => {
     ["Harmony call", ["analysis to=read co", "de {}\n"]],
     ["XML-like call", ["<function=read>", "<parameter=x>x</parameter>"]],
     ["deeply indented call", [`${" ".repeat(5_000)}[tool:read] {`, "}"]],
+    ["call after a rejected citation opening", ["[1]\n[tool:read] {", "}\nDone."]],
   ])("activates for a split %s", (_name, chunks) => {
     const probe = createPlainTextToolCallProbe();
     expect(chunks.map((chunk) => probe(chunk))).toContain(true);
@@ -98,6 +99,7 @@ describe("createPlainTextToolCallProbe", () => {
     ['Configure the value as {"mode":"fast"} before starting.'],
     ['{\n  "items": [\n    {"id":0}\n  ]\n}'],
     ["[1] A cited claim.\n[2] Another cited claim.\n"],
+    [`[1]\n\n${"ordinary prose ".repeat(80)}`],
   ])("does not activate for ordinary brace or citation text: %s", (text) => {
     const probe = createPlainTextToolCallProbe();
     for (let offset = 0; offset < text.length; offset += 4) {
