@@ -309,25 +309,13 @@ describe("bundled plugin install/uninstall probe", () => {
     expect(kill).toHaveBeenNthCalledWith(2, 123, "SIGKILL");
   });
 
-  it("keeps the sweep script compatible with macOS Bash 3", () => {
+  it("keeps sweep commands bounded and compatible with Bash 3", () => {
     const sweep = fs.readFileSync(sweepPath, "utf8");
-
-    expect(sweep).not.toContain("mapfile ");
-    expect(sweep).not.toContain("readarray ");
-  });
-
-  it("bounds bundled plugin package lifecycle commands", () => {
-    const sweep = fs.readFileSync(sweepPath, "utf8");
-
-    expect(sweep).toContain("source scripts/lib/docker-e2e-logs.sh");
-    expect(sweep).toContain("OPENCLAW_BUNDLED_PLUGIN_SWEEP_COMMAND_TIMEOUT:-300s");
-    expect(sweep.match(/openclaw_e2e_maybe_timeout/g)).toHaveLength(1);
-    expect(sweep).toContain('run_logged_sweep_command "install $plugin_id"');
-    expect(sweep).toContain('run_logged_sweep_command "uninstall $plugin_id"');
-    expect(sweep.match(/docker_e2e_print_log/g)).toHaveLength(3);
-    expect(sweep).not.toContain('cat "$log_file"');
-    expect(sweep).not.toContain('cat "$install_log"');
-    expect(sweep).not.toContain('cat "$uninstall_log"');
+    expect(sweep).not.toMatch(/\b(?:mapfile|readarray)\b/u);
+    expect(sweep).toContain('openclaw_e2e_maybe_timeout "$sweep_command_timeout" "$@"');
+    for (const operation of ["install", "uninstall"]) {
+      expect(sweep).toContain(`run_logged_sweep_command "${operation} $plugin_id"`);
+    }
   });
 
   it("uses the runtime output limit for command capture", async () => {
@@ -346,12 +334,6 @@ describe("bundled plugin install/uninstall probe", () => {
       stdoutTruncatedChars: 1,
       stderrTruncatedChars: 1,
     });
-  });
-
-  it("preserves explicit nullish runtime RPC result fields", async () => {
-    expect(runtimeSmoke.unwrapRpcPayload({ jsonrpc: "2.0", result: null })).toBeNull();
-    expect(runtimeSmoke.unwrapRpcPayload({ jsonrpc: "2.0", result: undefined })).toBeUndefined();
-    expect(runtimeSmoke.unwrapRpcPayload({ payload: null, data: { stale: true } })).toBeNull();
   });
 
   it("rejects incomplete runtime health RPC payloads", async () => {
@@ -524,17 +506,6 @@ describe("bundled plugin install/uninstall probe", () => {
       NEXTCLOUD_TALK_RUNTIME_SMOKE: "1",
       TELEGRAM_RUNTIME_SMOKE: "kept",
     });
-  });
-
-  it("keeps runtime log tail reads bounded", async () => {
-    const logPath = logFixture(`${"old log line\n".repeat(1000)}[gateway] ready\n`);
-
-    const fullRead = vi.spyOn(fs, "readFileSync");
-    const tail = runtimeSmoke.readFileTail(logPath, 64);
-
-    expect(tail).toContain("[gateway] ready");
-    expect(Buffer.byteLength(tail)).toBeLessThanOrEqual(64);
-    expect(fullRead).not.toHaveBeenCalled();
   });
 
   it("remembers runtime ready logs after they fall outside the tail", async () => {

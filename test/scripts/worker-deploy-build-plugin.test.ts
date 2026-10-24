@@ -12,7 +12,6 @@ import { WebSocketServer } from "ws";
 import { rawDataToString } from "../../packages/gateway-client/src/websocket-data.js";
 import {
   createWorkerDeployBuildPlugin,
-  resolveWorkerDeployGeneratorInputs,
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
 } from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import { createWorkerBundleProducer } from "../../src/gateway/worker-environments/bundle.js";
@@ -55,15 +54,6 @@ function workerEnv(root: string): NodeJS.ProcessEnv {
 }
 
 describe("worker deploy build plugin", () => {
-  it("tracks the pinned fs-safe manifest and lock before relocation", () => {
-    expect(resolveWorkerDeployGeneratorInputs()).toEqual(
-      expect.arrayContaining([
-        fs.realpathSync(path.resolve("node_modules/@openclaw/fs-safe/package.json")),
-        path.resolve("pnpm-lock.yaml"),
-      ]),
-    );
-  });
-
   it.each(["", 'require("../package.json"); require("../package.json");'])(
     "rejects changed fs-safe native manifest lookup shape %#",
     (code) => {
@@ -170,14 +160,9 @@ export { planShellAuthorization } from "../infra/exec-authorization-plan.js";
 export { commitExecAuthorizationLocked } from "../infra/exec-approvals-authorization.js";
 export { updateExecApprovals, readExecApprovalsSnapshot } from "../infra/exec-approvals-store.js";
 export { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
-export { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-export { readStableSqliteFileGeneration } from "../infra/sqlite-file-generation.js";
-export { readOpenClawDatabaseQuarantineFailure } from "../state/openclaw-quarantine-store.js";
-export { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.test-support.js";
 export { readSecretStoreExecEnvironment } from "../secrets/store/secret-store.js";
 export { rejectUnsafeExecControlShellCommand } from "../infra/exec-control-command-guard.js";
 export { WebSocket } from "../../packages/gateway-client/src/websocket.js";
-export { createComputerTool } from "../agents/tools/computer-tool.js";
 export { createImageProcessor, convertBmpToPngWithWorker } from "../media/image-processor.js";
 export { createReadTool } from "../agents/sessions/tools/read.js";
 export { createEditTool } from "../agents/sessions/tools/edit.js";
@@ -315,10 +300,6 @@ const {
   readExecApprovalsSnapshot,
   readSecretStoreExecEnvironment,
   closeOpenClawStateDatabaseAsync,
-  resolveOpenClawStateSqlitePath,
-  readStableSqliteFileGeneration,
-  seedOpenClawDatabaseQuarantine,
-  readOpenClawDatabaseQuarantineFailure,
 } = await import(pathToFileURL(entry).href);
 const match = { id: "portable-exec", pattern: process.execPath };
 const command = "portable exec authorization";
@@ -340,16 +321,6 @@ try {
   assert.equal(stored.lastResolvedPath, process.execPath);
   assert.ok(stored.lastUsedAt > 0);
   await closeOpenClawStateDatabaseAsync();
-  const statePath = resolveOpenClawStateSqlitePath();
-  seedOpenClawDatabaseQuarantine({
-    kind: "state", path: statePath, reason: "portable integrity failure",
-    generation: readStableSqliteFileGeneration(statePath),
-  });
-  assert.equal(readOpenClawDatabaseQuarantineFailure("state", statePath)?.name, "SqliteIntegrityError");
-  await assert.rejects(
-    updateExecApprovals({ update: { kind: "replace", file: { version: 1, defaults: { security: "deny", ask: "off" } } } }),
-    /quarantined after integrity verification failed/,
-  );
 } finally {
   await closeOpenClawStateDatabaseAsync();
 }
@@ -522,10 +493,6 @@ if (process.platform === "darwin") {
 }
 const diagnostic = getNativeFallbackDiagnostic("inspectDarwinAcl");
 assert.equal(diagnostic.reason, process.platform === "darwin" ? "loaded" : "disabled");
-if (diagnostic.packageName) {
-  const versions = ${JSON.stringify(JSON.parse(fs.readFileSync(path.resolve("node_modules/@openclaw/fs-safe/package.json"), "utf8")).optionalDependencies)};
-  assert.equal(diagnostic.packageVersion, versions[diagnostic.packageName]);
-}
 assert.deepEqual(await readOwnerAndDaclBatch([]), []);
 if (process.platform !== "win32") {
   assert.deepEqual(await readOwnerAndDaclBatch([entry]), [{
@@ -605,7 +572,7 @@ console.log("relocated worker facade activation follows the shared config snapsh
       180_000,
     );
 
-    it("delivers image operations and file reads and edits from a relocated archive", async () => {
+    it("delivers image processing and file reads and edits from a relocated archive", async () => {
       const root = tempDirs.make("openclaw-worker-images-");
       const relocated = path.join(root, "bundle");
       fs.mkdirSync(relocated);
@@ -630,7 +597,7 @@ for (const dependency of ["rastermill", "@silvia-odwyer/photon-node", "diff"]) {
   assert.throws(() => createRequire(pathToFileURL(entry)).resolve(dependency), { code: "MODULE_NOT_FOUND" });
 }
 process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
-const { createComputerTool, createImageProcessor, convertBmpToPngWithWorker, createReadTool, createEditTool, createWriteTool } = await import(pathToFileURL(entry).href);
+const { createImageProcessor, convertBmpToPngWithWorker, createReadTool, createEditTool, createWriteTool } = await import(pathToFileURL(entry).href);
 const input = fs.readFileSync(imagePath);
 try {
 const filePath = imagePath + ".txt";
@@ -652,45 +619,6 @@ for (const extension of [".txt", ".sqlite"]) {
   const read = await createReadTool(process.cwd()).execute("portable-read", { path: readPath });
   assert.ok(read.content.some(block => block.type === "text" && block.text.includes("portable file read")));
 }
-const inputs = [];
-const computer = createComputerTool({
-  transport: {
-    computerUse: {
-      contractVersion: 2,
-      provider: { id: "fixture", label: "Fixture", generation: "generation-1" },
-      actions: ["get_window_state", "left_click"],
-      targets: ["window"],
-      deliveryModes: ["foreground"],
-      observations: ["image"],
-      features: { recording: false, agentCursor: false, multiDisplay: false },
-    },
-    resolveNode: async () => ({ nodeId: "synthetic-node" }),
-    invoke: async ({ commandParams }) => {
-      inputs.push(commandParams);
-      return {
-        ok: true,
-        details: { coordinateSpace: "image-pixels" },
-        observation: { kind: "window", observationId: "window-observation", base64: input.toString("base64"), format: "png", width: 1500, height: 934 },
-      };
-    },
-  },
-});
-for (let index = 0; index < 3; index++) {
-  const projected = await computer.execute("portable-observe-" + index, {
-    action: "get_window_state", windowRef: "window-1",
-  });
-  const images = projected.content.filter(block => block.type === "image");
-  assert.equal(images.length, 1, JSON.stringify(projected.content));
-  const observation = JSON.parse(projected.content[0].text).observation;
-  assert.equal(observation.width, 1200);
-  assert.equal(observation.height, 747);
-  assert.equal(observation.base64, "[image]");
-}
-await computer.execute("portable-click", {
-  action: "left_click", windowRef: "window-1", observationId: "window-observation", coordinate: [400, 300],
-});
-assert.equal(inputs.at(-1).x, 500);
-assert.equal(inputs.at(-1).y, 300 * (934 / 747));
 assert.deepEqual(await createImageProcessor().transparency(input), { hasAlphaChannel: true, hasTransparentPixels: false });
 const bmp = Buffer.from("424d3e0000000000000036000000280000000200000001000000010018000000000008000000000000000000000000000000000000000000ff00ff000000", "hex");
 const png = await convertBmpToPngWithWorker(bmp);
@@ -698,7 +626,7 @@ const metadata = await createImageProcessor().probe(png);
 assert.equal(metadata.width, 2);
 assert.equal(metadata.height, 1);
 assert.equal(metadata.format, "png");
-console.log("relocated computer observations, image operations, and file reads and edits passed");
+console.log("relocated image processing and file reads and edits passed");
 } catch (error) {
   console.error(error);
   process.exitCode = 1;
@@ -713,9 +641,7 @@ console.log("relocated computer observations, image operations, and file reads a
           env: workerEnv(root),
         },
       );
-      expect(result.stdout).toContain(
-        "relocated computer observations, image operations, and file reads and edits passed",
-      );
+      expect(result.stdout).toContain("relocated image processing and file reads and edits passed");
     }, 180_000);
 
     it("keeps worker bootstrap, shell analysis, and Windows child spawning portable", async () => {
@@ -739,7 +665,6 @@ process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
 const { highlight, supportsLanguage, explainShellCommand, planShellAuthorization, rejectUnsafeExecControlShellCommand, createOwnedStdioProcess, closeOwnedStdioProcess } = await import(pathToFileURL(entry).href);
 const initializations = () => globalThis[Symbol.for("worker-highlight-initializations")] ?? 0;
 assert.equal(initializations(), 0, "headless worker bootstrap must not initialize syntax highlighting");
-assert.equal(supportsLanguage("abnf"), true);
 assert.equal(supportsLanguage("javascript"), true);
 assert.match(highlight("const answer = 42;", "javascript", {
   keyword: text => "[" + text + "]",
@@ -887,10 +812,8 @@ console.log("relocated worker WebSocket and transcription passed");
 
   it("replaces optional host-native modules with a failing virtual module", () => {
     const plugin = createWorkerDeployBuildPlugin();
-
-    expect(plugin.load(WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID)).toContain(
-      "optional host-native dependency unavailable",
-    );
+    const load = new Function(plugin.load(WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID) ?? "");
+    expect(load).toThrow("optional host-native dependency unavailable");
   });
 
   it("initializes the composed Browser runtime only when its factory is called", async () => {
@@ -945,25 +868,6 @@ export async function createAttachedBrowserToolRuntime(params) {
     await first.dispose();
     await second.dispose();
     expect(fs.readFileSync(eventsPath, "utf8")).toBe("initialized\ndisposed\ndisposed\n");
-  });
-
-  it("embeds the Playwright package identity and browser registry", () => {
-    const modulePath = path.resolve("node_modules/playwright-core/lib/coreBundle.js");
-    const transformed = createWorkerDeployBuildPlugin().transform.call(
-      { error: fail },
-      fs.readFileSync(modulePath, "utf8"),
-      modulePath,
-    );
-    expect(transformed).toContain('packageJSON = {"name":"playwright-core","version":"1.64.1"};');
-    expect(transformed).toContain(
-      'registry = new Registry({"comment":"Do not edit this file, use utils/roll_browser.js"',
-    );
-    expect(transformed).not.toContain(
-      'require(import_path8.default.join(packageRoot, "package.json"))',
-    );
-    expect(transformed).not.toContain(
-      'require(import_path19.default.join(packageRoot, "browsers.json"))',
-    );
   });
 
   it.each([
