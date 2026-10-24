@@ -64,7 +64,6 @@ import { recoverInterruptedSubagentRow } from "./subagent-registry-restart-recov
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
 import {
   prepareSubagentRecoveryFixture,
-  holdSessionWrite,
   readSubagentSessionStore,
   removeSubagentSessionEntry,
 } from "./subagent-registry.persistence.test-support.js";
@@ -887,7 +886,18 @@ describe("subagent orphan recovery — faithful restart path", () => {
       if (!parent) {
         throw new Error("expected an admitted replacement parent");
       }
-      const { entered, released, blocker } = holdSessionWrite(visible);
+      const entered = createDeferred();
+      const released = createDeferred();
+      // Hold the real FIFO without leaving a SQLite transaction open.
+      const blocker = patchSessionEntryCore(
+        visible,
+        async () => {
+          entered.resolve();
+          await released.promise;
+          return null;
+        },
+        { skipMaintenance: true },
+      );
       try {
         await entered.promise;
         await parent.run(async () => {

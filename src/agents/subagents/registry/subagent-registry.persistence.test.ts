@@ -6,6 +6,7 @@ import "./subagent-registry.persistence.mocks.test-support.js";
 import { activateSubagentPersistenceRegistry, announceSpy, createSubagentPersistenceRuntime, useSubagentPersistenceFixture } from "./subagent-registry.persistence-fixture.test-support.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/config.js";
+import { patchSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { captureSessionEntryCurrentCheckAsyncInternal } from "../../../config/sessions/session-entry-current-check.js";
 import * as sessionReads from "../../../config/sessions/session-entry-read-runtime.js";
 import { callGateway } from "../../../gateway/call.js";
@@ -40,7 +41,6 @@ import {
   createCanonicalSubagentRunFixture,
   expectDeferredSubagentAnnouncement,
   gateSubagentRequesterSettlement,
-  holdSessionWrite,
   prepareSubagentRecoveryFixture,
   readSubagentSessionStore,
   removeSubagentSessionEntry,
@@ -229,7 +229,17 @@ describe("subagent registry persistence", () => {
         current.release();
         throw new Error("Expected native currency distinct from the logical controller scope");
       }
-      const { entered, released, blocker } = holdSessionWrite({ storePath, sessionKey: key });
+      const entered = createDeferred();
+      const released = createDeferred();
+      const blocker = patchSessionEntryCore(
+        { storePath, sessionKey: key },
+        async () => {
+          entered.resolve();
+          await released.promise;
+          return null;
+        },
+        { skipMaintenance: true },
+      );
       let timing: Promise<void> | undefined;
       try {
         await entered.promise;

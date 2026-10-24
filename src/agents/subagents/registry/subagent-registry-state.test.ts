@@ -9,10 +9,7 @@ import { buildSubagentRunReadIndexFromRuns } from "./subagent-registry-queries.j
 import * as readTopology from "./subagent-registry-read-topology.js";
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import { registerSubagentCollectorPublicationCases } from "./subagent-registry-state.collector.test-support.js";
-import {
-  publishRegistryFixture,
-  persistRegistryFixture,
-} from "./subagent-registry-state.fixture.test-support.js";
+import { persistRegistryFixture } from "./subagent-registry-state.fixture.test-support.js";
 import {
   clearSubagentRunsReadCacheForTest,
   getSubagentSessionListRunsSnapshotForRead,
@@ -21,9 +18,11 @@ import {
   getSubagentSessionListRunsSnapshotForChildSessions,
   prepareSubagentRunsSnapshotForRunIds,
   prepareSubagentSessionListReadCache,
+  publishSubagentRunsAfterAtomicStore,
 } from "./subagent-registry-state.js";
 import { registerSubagentRestoreCacheCases } from "./subagent-registry-state.restore.test-support.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
+import { copySubagentRunRuntimeOwner } from "./subagent-run-generation.js";
 
 const mocks = vi.hoisted(() => ({
   loadSubagentRunsForChildSessionFromSqlite:
@@ -54,7 +53,14 @@ vi.mock("./subagent-registry-state.fixture.test-support.js", async (importOrigin
       mocks.saveSubagentRegistryToSqlite(runs);
     }
 
-    publishRegistryFixture(runs, runIds);
+    const published = new Map(runs);
+    for (const id of runIds ?? runs.keys()) {
+      const entry = runs.get(id);
+      if (entry) {
+        published.set(id, copySubagentRunRuntimeOwner(entry, structuredClone(entry)));
+      }
+    }
+    publishSubagentRunsAfterAtomicStore(published, runIds)();
   },
 }));
 

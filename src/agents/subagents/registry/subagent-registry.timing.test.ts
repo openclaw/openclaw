@@ -18,7 +18,6 @@ import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixtur
 import { observeRootWork } from "./subagent-registry.browser-cleanup.test-support.js";
 import {
   cleanupSubagentRegistryPersistenceTest,
-  holdSessionWrite,
   readSubagentSessionStore,
   settleSubagentRegistryPersistenceWork,
 } from "./subagent-registry.persistence.test-support.js";
@@ -139,10 +138,18 @@ it("persists overlapping completion timing without warnings or duplicate announc
       listener(event);
     }
   };
-  const { entered, released, blocker } = holdSessionWrite({
-    storePath,
-    sessionKey: childSessionKey,
-  });
+  const entered = createDeferred();
+  const released = createDeferred();
+  // Hold the real FIFO without keeping a SQLite transaction open.
+  const blocker = patchSessionEntryCore(
+    { storePath, sessionKey: childSessionKey },
+    async () => {
+      entered.resolve();
+      await released.promise;
+      return null;
+    },
+    { skipMaintenance: true },
+  );
   try {
     await entered.promise;
     const queue = SQLITE_SESSION_WRITER_QUEUES.get(storePath);

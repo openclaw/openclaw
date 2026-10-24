@@ -1,9 +1,17 @@
 export * from "./subagent-registry.js";
 export {
+  buildSubagentSessionListReadIndex,
   countPendingDescendantRuns,
+  getLatestLiveSubagentRunByChildSessionKey,
+  getLatestSubagentRunByChildSessionKey,
   getSubagentSessionRuntimeMs,
   getSubagentSessionStartedAt,
+  isSubagentRunLive,
+  isSubagentSessionRunActive,
   listSubagentRunsForRequester,
+  resolveRequesterForChildSession,
+  resolveSubagentSessionStatus,
+  shouldIgnorePostCompletionAnnounceForSession,
 } from "./subagent-registry-read.js";
 
 import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";

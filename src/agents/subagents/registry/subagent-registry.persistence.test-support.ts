@@ -12,7 +12,6 @@ import {
   applySessionEntryLifecycleMutation,
   listSessionEntriesCore,
   loadSessionEntry,
-  patchSessionEntryCore,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import {
@@ -31,22 +30,6 @@ import type { createSubagentRegistryMockState } from "./subagent-registry.mock-s
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 type SessionStore = Record<string, Record<string, unknown>>;
-
-/** Hold the real FIFO without keeping a SQLite transaction open. */
-export function holdSessionWrite(target: Parameters<typeof patchSessionEntryCore>[0]) {
-  const entered = createDeferred();
-  const released = createDeferred();
-  const blocker = patchSessionEntryCore(
-    target,
-    async () => {
-      entered.resolve();
-      await released.promise;
-      return null;
-    },
-    { skipMaintenance: true },
-  );
-  return { entered, released, blocker };
-}
 
 /** Policy-owner stub for delivery bookkeeping; security restoration has separate real-owner proof. */
 export async function prepareSubagentRecoveryFixture(
