@@ -295,16 +295,23 @@ describe("config plugin validation", () => {
     const anthropic = "anthropic/claude-sonnet-4-6";
     const openai = "openai/gpt-5.6";
     const codex = "openai/gpt-5.3-codex-spark";
+    const decision = "openai/gpt-6-luna";
     const modelSelection = (primary: string, fallbacks: string[] = []) => ({ primary, fallbacks });
     const agentWithSubagent = (primary: string) => ({
       model: modelSelection(primary),
       subagents: { model: primary },
     });
+    const nativeChat = agentWithSubagent(anthropic);
     const withAgents = (
       defaults: Record<string, unknown>,
       entries: Record<string, unknown> = { openclaw: {} },
       rest: Record<string, unknown> = {},
     ) => ({ ...rest, agents: { defaults, entries } });
+    const chat = (primary: string) => ({ model: modelSelection(primary) });
+    const channelChat = (target: string, model: string) =>
+      withAgents(chat(anthropic), undefined, {
+        channels: { modelByChannel: { telegram: { [target]: model } } },
+      });
     const explicitAgents = (
       entries: Record<string, unknown>,
       defaults: Record<string, unknown> = { systemAgent: { agentId: "openclaw" } },
@@ -323,95 +330,72 @@ describe("config plugin validation", () => {
       },
     });
 
-    const validateMissingCodex = (
+    const expectCodexRequirement = (
       raw: Record<string, unknown>,
+      warns = true,
       env: NodeJS.ProcessEnv = suiteEnv(),
-    ) =>
-      validate(
+    ) => {
+      const result = validate(
         {
           agents: { entries: { openclaw: {} } },
           plugins: { entries: { codex: {} } },
           ...raw,
         },
-        {
-          env,
-          pluginMetadataSnapshot: { manifestRegistry: { plugins: [], diagnostics: [] } },
-        },
+        { env, pluginMetadataSnapshot: { manifestRegistry: { plugins: [], diagnostics: [] } } },
       );
-
-    const expectMissingCodexPluginWarning = (warnings: Diagnostics, expected = true) => {
+      expect(result.ok).toBe(true);
       expect(
-        (warnings ?? []).filter(
+        result.warnings.filter(
           ({ path: issuePath, message }) =>
             issuePath === "plugins.entries.codex" &&
             message.includes("plugin not installed: codex"),
         ),
-      ).toHaveLength(expected ? 1 : 0);
-    };
-    const expectCodexRequirement = (
-      config: Record<string, unknown>,
-      warns = true,
-      env: NodeJS.ProcessEnv = suiteEnv(),
-    ) => {
-      const result = validateMissingCodex(config, env);
-      expect(result.ok).toBe(true);
-      expectMissingCodexPluginWarning(result.warnings, warns);
+      ).toHaveLength(warns ? 1 : 0);
     };
 
     it.each([
       ["string harness primary", "openai/gpt-5.6", false],
       ["native Codex fallback", modelSelection(openai, [codex]), true],
     ] as const)("uses native plugin requirements for ACP %s", (_name, model, needsCodex) => {
-      const result = validateMissingCodex(
+      expectCodexRequirement(
         explicitAgents(
           { worker: { runtime: { type: "acp", acp: { agent: "cursor" } }, model } },
           { model: modelSelection(anthropic) },
         ),
+        needsCodex,
       );
-      expect(result.ok).toBe(true);
-      expectMissingCodexPluginWarning(result.warnings, needsCodex);
     });
 
     it.each([
       [
-        "does not require Codex for a default Decision model beside non-OpenAI chat",
-        withAgents({ ...agentWithSubagent(anthropic), decisionModel: "openai/gpt-6-luna" }),
+        "Decision default is not chat",
+        withAgents({ ...nativeChat, decisionModel: decision }),
         false,
       ],
       [
-        "does not require Codex for a per-agent pinned Decision model",
-        withAgents(agentWithSubagent(anthropic), {
-          openclaw: { decisionModel: "openai/gpt-6-luna@openai:fixture" },
+        "pinned agent Decision is not chat",
+        withAgents(nativeChat, {
+          openclaw: { decisionModel: `${decision}@openai:fixture` },
         }),
         false,
       ],
+      ["OpenAI chat requires Codex", withAgents(agentWithSubagent(decision)), true],
+      ["channel Decision-named target is chat", channelChat("decisionModel", decision), true],
       [
-        "still requires Codex for the same model selected for chat",
-        withAgents(agentWithSubagent("openai/gpt-6-luna")),
-        true,
-      ],
-      [
-        "keeps channel targets named decisionModel on the chat diagnostic path",
-        withAgents(agentWithSubagent(anthropic), undefined, {
-          channels: { modelByChannel: { telegram: { decisionModel: "openai/gpt-6-luna" } } },
-        }),
-        true,
-      ],
-      [
-        "scopes request-parameter diagnostics to the affected keyed agent",
+        "request parameters stay agent-scoped",
         explicitAgents({
-          openclaw: agentWithSubagent(anthropic),
+          openclaw: nativeChat,
           work: { ...agentWithSubagent(openai), params: { temperature: 0.4 } },
         }),
         false,
       ],
       [
-        "still warns when provider PI policy is overridden by an automatic OpenAI model route",
+        "automatic model overrides provider PI",
         { models: createPiProviderModels("https://api.openai.com/v1", "auto") },
         true,
       ],
       [
-        "does not inherit default fallbacks after a listed agent selects its own primary",
+        "agent primary replaces fallback inheritance",
         withAgents(
           { model: modelSelection(openai, [codex]) },
           { worker: { model: { primary: anthropic } } },
@@ -419,22 +403,16 @@ describe("config plugin validation", () => {
         false,
       ],
       [
-        "uses a listed-agent subagent model before the default subagent model",
+        "agent subagent model overrides default",
         withAgents(
           { model: modelSelection(anthropic), subagents: { model: codex } },
           { openclaw: { subagents: { model: anthropic } } },
         ),
         false,
       ],
+      ["channel override requires Codex", channelChat("default", codex), true],
       [
-        "warns when a channel model override needs Codex",
-        withAgents({ model: modelSelection(anthropic) }, undefined, {
-          channels: { modelByChannel: { telegram: { default: codex } } },
-        }),
-        true,
-      ],
-      [
-        "does not warn for a fully shadowed default exact Codex policy",
+        "agent PI shadows default Codex",
         withAgents(
           { model: modelSelection(openai), models: runtimePolicy(openai, "codex") },
           { openclaw: { models: runtimePolicy(openai, "pi") } },
@@ -443,15 +421,15 @@ describe("config plugin validation", () => {
         false,
       ],
       [
-        "does not attribute keyed agent model refs to another agent",
+        "model refs stay agent-scoped",
         explicitAgents({
-          openclaw: agentWithSubagent(anthropic),
-          ops: { ...agentWithSubagent(anthropic), models: runtimePolicy(openai, "pi") },
+          openclaw: nativeChat,
+          ops: { ...nativeChat, models: runtimePolicy(openai, "pi") },
         }),
         false,
       ],
       [
-        "warns when a default exact Codex policy remains reachable by another agent",
+        "default Codex remains reachable",
         {
           models: providerModels("pi"),
           ...explicitAgents(
@@ -462,12 +440,12 @@ describe("config plugin validation", () => {
         true,
       ],
       [
-        "does not warn when a custom OpenAI-compatible base URL uses automatic runtime policy",
+        "custom endpoint stays automatic",
         { models: createPiProviderModels("https://proxy.example.invalid/v1", "auto") },
         false,
       ],
       [
-        "does not warn when exact agent policy overrides an automatic OpenAI provider model route",
+        "exact PI overrides automatic route",
         withAgents(
           {
             models: {
@@ -481,7 +459,7 @@ describe("config plugin validation", () => {
         false,
       ],
       [
-        "still warns when the missing Codex plugin is explicitly enabled",
+        "explicit enable requires Codex",
         { models: providerModels("pi"), plugins: { entries: { codex: { enabled: true } } } },
         true,
       ],
