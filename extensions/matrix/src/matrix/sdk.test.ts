@@ -45,6 +45,7 @@ import {
   seedRecoveryKeyState,
 } from "./sdk/recovery-persistence.test-support.js";
 import type { MatrixRawEvent } from "./sdk/types.js";
+import { clearTestUndiciRuntimeDepsOverride, stubRuntimeFetch } from "./sdk/undici.test-support.js";
 
 const ROOM = "!room:example.org";
 const USER = "@bot:example.org";
@@ -108,21 +109,6 @@ function expectSomeMockCallOptions(
   expect(mock.mock.calls.map(([options]) => options)).toContainEqual(
     expect.objectContaining(fields),
   );
-}
-
-const TEST_UNDICI_RUNTIME_DEPS_KEY = "__OPENCLAW_TEST_UNDICI_RUNTIME_DEPS__";
-
-function clearTestUndiciRuntimeDepsOverride(): void {
-  Reflect.deleteProperty(globalThis as object, TEST_UNDICI_RUNTIME_DEPS_KEY);
-}
-
-function stubRuntimeFetch(fetchImpl: typeof fetch): void {
-  (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
-    Agent: function MockAgent() {},
-    EnvHttpProxyAgent: function MockEnvHttpProxyAgent() {},
-    ProxyAgent: function MockProxyAgent() {},
-    fetch: fetchImpl,
-  };
 }
 
 async function consumeMatrixSecretStorageKey(keyId = "SSSSKEY"): Promise<boolean> {
