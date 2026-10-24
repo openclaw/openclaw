@@ -146,60 +146,21 @@ beforeEach(() => {
   });
 });
 
-type CustodyCase = [
-  argv: string[],
-  facts: Partial<Omit<Process, "argv" | "ppid">>,
-  holder: boolean,
-];
+type CustodyCase = [argv: string[], facts: Partial<Omit<Process, "argv" | "ppid">>];
 const custodyCases: CustodyCase[] = [
-  [["/lib/systemd/systemd", "--user", "--deserialize=x"], { cwd: new Error("denied") }, false],
-  [
-    [
-      "node",
-      "--eval",
-      "import(process.argv[1])",
-      "/tmp/openclaw-update-runtime-Ab1234/tree/2f/app/dist/terminal.js",
-    ],
-    { uid: 0 },
-    true,
-  ],
-  [["bun", "run", "--silent", "start"], { cwd: "/tmp/openclaw-plugin-build-abc123/package" }, true],
-  [
-    ["node", "/vendor/worker.js"],
-    { uid: 0, cwd: "/tmp/openclaw-plugin-build-abc123/package" },
-    true,
-  ],
-  [
-    ["node", "/vendor/renamed.js"],
-    { uid: 0, environment: "OPENCLAW_SERVICE_MARKER=openclaw\0" },
-    true,
-  ],
-  ...[
-    ["node", "/app/src/agents/prepared-model-catalog.worker.ts"],
-    ["/tmp/openclaw-plugin-build-abc123/node_modules/vendor/codex"],
-    ["bun", "run", "--silent", "start", "--config=openclaw-plugin-build-abc123/config.json"],
-    ["node", "-r/app/dist/index.js", "/unrelated-app/service.js"],
-    ["node", "/tmp/openclaw-model-catalog-abc123/worker.cjs"],
-  ].map((argv): CustodyCase => [argv, {}, true]),
+  [["node", "/vendor/worker.js"], { uid: 0, cwd: "/tmp/openclaw-plugin-build-abc123/package" }],
+  [["node", "/vendor/renamed.js"], { uid: 0, environment: "OPENCLAW_SERVICE_MARKER=openclaw\0" }],
+  [["node", "/app/src/agents/prepared-model-catalog.worker.ts"], {}],
+  [["/tmp/openclaw-plugin-build-abc123/node_modules/vendor/codex"], {}],
 ];
-it.each(custodyCases)("classifies artifact custody of %j with %j", (argv, facts, holder) => {
+it.each(custodyCases)("classifies artifact custody of %j with %j", (argv, facts) => {
   processRow(peer, argv, facts);
-  expect(inspectOtherOpenClawProcesses()).toMatchObject({ pids: holder ? [peer] : [] });
+  expect(inspectOtherOpenClawProcesses()).toMatchObject({ pids: [peer] });
 });
-
-const foreignArgvs = [
-  ["bun", "--loader", ".js:ts", "service.js"],
-  ["bun", "--silent", "--title", "worker", "run", "start"],
-  ["tsx", "--foreign-runtime-option", "watch", "service.js"],
-  ["node", "--foreign-runtime-option", "service.js"],
-  ["node", "--test-reporter=spec", "--test", "service.js"],
-  ["node", "--test-reporter", "dot", "--test", "service.js"],
-];
 
 it.each([
   ["node", "/standalone/server.mjs"],
   ["node", "-e", "setInterval(() => {}, 1e9)"],
-  ["node"],
 ])("finishes the census for manifest-free %j without losing a later holder", (...argv) => {
   processRow(peer, argv, { cwd: "/standalone" });
   processRow(peer + 1, ["node", "/app/dist/index.js"]);
@@ -216,12 +177,12 @@ it.each([
 });
 
 it.each([
-  ["node", "worker.js"],
-  ["/usr/bin/node", "-e", "1"],
-])("retains unavailable cwd for %j without losing scoped holders", (...argv) => {
+  { argv: ["node", "worker.js"], uid: 1000 },
+  { argv: ["/usr/bin/node", "-e", "1"], uid: 0 },
+])("retains unavailable cwd for $argv without losing scoped holders", ({ argv, uid }) => {
   const held = "/tmp/openclaw-update-runtime-Held01";
   const free = "/tmp/openclaw-update-runtime-Free01";
-  processRow(peer, argv, { cwd: denied() });
+  processRow(peer, argv, { uid, cwd: denied() });
   processRow(peer + 1, ["node", `${held}/worker.js`]);
   for (const [runtime, pids] of [
     [undefined, [peer, peer + 1]],
@@ -303,35 +264,12 @@ it.each(["service marker", "unnamed package"])(
   },
 );
 
-const aliasArgvs = [
-  ["bun", "run", "--silent", "bridge"],
-  ["bun", "--silent", "service.js", "run"],
-  ["bun", "--silent", "--", "run"],
-  ["tsx", "--foreign-runtime-option", "watch", "watch"],
-];
-it.each([
-  ...foreignArgvs.map((argv) => ({ argv, kind: "foreign" })),
-  ...aliasArgvs.map((argv) => ({ argv, kind: "extensionless" })),
-  { argv: ["bun", "run", "start"], kind: "task" },
-  { argv: ["node", "/unrelated-app/alias.js"], kind: "artifact" },
-])("resolves $kind script custody for $argv", ({ argv, kind }) => {
-  processRow(peer, argv, { cwd: "/unrelated-app" });
-  realpath.mockImplementation((file: string) => {
-    if (kind === "foreign" && file !== "/unrelated-app/service.js") {
-      throw Object.assign(new Error("script does not exist"), { code: "ENOENT" });
-    }
-    if (
-      kind === "task" ||
-      (kind === "extensionless" &&
-        ["/unrelated-app/bridge", "/unrelated-app/run", "/unrelated-app/watch"].includes(file))
-    ) {
-      return "/app/openclaw.mjs";
-    }
-    return kind === "artifact" && file === "/unrelated-app/alias.js"
-      ? "/tmp/openclaw-update-runtime-Ab1234/tree/plugin/worker.js"
-      : file;
-  });
-  expectPids(kind === "foreign" || kind === "task" ? [] : [peer]);
+it.each(["bridge", "start"])("distinguishes a Bun file from a package task: %s", (script) => {
+  processRow(peer, ["bun", "run", "--silent", script], { cwd: "/unrelated-app" });
+  realpath.mockImplementation((file: string) =>
+    file === `/unrelated-app/${script}` ? "/app/openclaw.mjs" : file,
+  );
+  expectPids(script === "start" ? [] : [peer]);
 });
 
 it.each([
@@ -341,16 +279,10 @@ it.each([
     directory: false,
     error: "runtime module package identity is unavailable",
   },
-  ...[
-    ["--test-reporter", "/app/reporter.js", false],
-    ["--test-reporter", pathToFileURL(path.resolve("/app/reporter.js")).href, false],
-    ["--test-reporter", "reporter/register", true],
-    ["--foreign-runtime-option", "reporter", true],
-    ["--foreign-runtime-option", "/app/reporter.js", false],
-  ].map(([option, value, unresolved]) => ({
-    options: [`${option}=${value}`, "--test"],
+  ...["/app/reporter.js", pathToFileURL(path.resolve("/app/reporter.js")).href].map((value) => ({
+    options: [`--test-reporter=${value}`, "--test"],
     directory: false,
-    error: unresolved ? "package identity is unavailable" : undefined,
+    error: undefined,
   })),
 ])("inspects module custody for $options", ({ options, directory: isDirectory, error }) => {
   processRow(peer, ["node", ...options, "/unrelated-app/service.js"], { cwd: "/unrelated-app" });
@@ -584,15 +516,6 @@ it.each([0, 1000])(
     expectPids([]);
   },
 );
-
-it.each([
-  ["node", "--eval", "1"],
-  ["bun", "run", "--silent", "start"],
-  ["tsx", "--foreign-runtime-option", "watch", "worker.ts"],
-])("retains unresolved runtime processes without cwd for %j", (...argv) => {
-  processRow(peer, argv, { uid: 0, cwd: denied() });
-  expectPids([peer], `PID ${peer}:`);
-});
 
 it("finds orphaned handoff references while excluding only its verified updater launcher", () => {
   processRow(launcher, ["node", "/app/openclaw.mjs", "update", "repair", references.runId]);

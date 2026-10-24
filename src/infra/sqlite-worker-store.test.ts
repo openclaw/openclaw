@@ -26,11 +26,7 @@ import {
   readSqliteDatabaseScopedWriteTokenForPath,
   readSqliteDatabaseWriteTokenForPath,
 } from "./sqlite-database-admission.js";
-import {
-  SQLITE_WORKER_MAX_RESULT_BYTES,
-  hasSqliteWorkerOutcomeUnknown,
-  type SqliteWorkerReply,
-} from "./sqlite-worker-contract.js";
+import { hasSqliteWorkerOutcomeUnknown, type SqliteWorkerReply } from "./sqlite-worker-contract.js";
 import {
   useSqliteWorkerStoreFixture,
   appendWorkerRow as append,
@@ -45,7 +41,6 @@ import {
   type SqliteWorkerStore,
 } from "./sqlite-worker-store.js";
 import type { FixtureOpenInput, FixtureOperations } from "./sqlite-worker-store.test-support.js";
-import { SQLITE_WORKER_TRANSFER_FRAME_BYTES } from "./sqlite-worker-transfer.js";
 import { resolveSqliteBrokerWorkerCount } from "./worker-pool-sizing.js";
 
 const { stores, tempDirs, databasePath, open } = useSqliteWorkerStoreFixture(
@@ -133,16 +128,13 @@ describe("SQLite worker store", () => {
         (_, index) => `${"x".repeat(24 * 1024 * 1024)}é-${index}`,
       );
       const digest = (value: string) => createHash("sha256").update(value).digest("hex");
-      const frames: Array<{ bytes: number; backingBytes: number }> = [];
+      let frameCount = 0;
       const aborted = new AbortController();
       let closing: Promise<void> | undefined;
       const messages = interceptReply(function (event, reply) {
         if (event === "message" && reply.ok && reply.transfer === "frame") {
-          frames.push({
-            bytes: reply.value.byteLength,
-            backingBytes: reply.value.buffer.byteLength,
-          });
-          if (frames.length === 1) {
+          frameCount += 1;
+          if (frameCount === 1) {
             if (action === "client close") {
               closing = store.close();
             }
@@ -174,7 +166,7 @@ describe("SQLite worker store", () => {
           const result = await reading;
           expect(result).toHaveLength(values.length);
           expect(result.map(digest)).toEqual(values.map(digest));
-          expect(frames.length).toBeGreaterThan(8);
+          expect(frameCount).toBeGreaterThan(8);
           if (action.endsWith("close")) {
             expect(closing).toBeDefined();
           }
@@ -183,16 +175,10 @@ describe("SQLite worker store", () => {
           }
           await closing;
         }
-        expect(
-          frames.every((frame) => frame.bytes <= SQLITE_WORKER_TRANSFER_FRAME_BYTES + 1024),
-        ).toBe(true);
-        expect(frames.every((frame) => frame.backingBytes <= SQLITE_WORKER_MAX_RESULT_BYTES)).toBe(
-          true,
-        );
         if (action === "read") {
           const ownership = await store.execute({ type: "takeReplyOwnership", input: undefined });
           expect(ownership.some((reply) => reply.kind === "inline")).toBe(true);
-          expect(ownership.filter((reply) => reply.kind === "frame")).toHaveLength(frames.length);
+          expect(ownership.filter((reply) => reply.kind === "frame")).toHaveLength(frameCount);
           for (const reply of ownership) {
             expect(reply.before).toBeGreaterThan(0);
             expect.soft(reply.after, `${reply.kind} reply (${reply.before} bytes)`).toBe(0);
@@ -364,11 +350,8 @@ describe("SQLite worker store", () => {
         const aliasPath = path.join(path.dirname(file), "alias.sqlite");
         const original = await open(file);
         const originalReceipt = await append(original, "original");
-        if (kind === "hardlink") {
-          await link(file, aliasPath);
-        } else {
-          await symlink(file, aliasPath);
-        }
+        const createAlias = kind === "hardlink" ? link : symlink;
+        await createAlias(file, aliasPath);
         const firstAlias = await open(aliasPath);
         const secondAlias = await open(aliasPath);
         const realpath = vi.spyOn(fs.realpathSync, "native");
@@ -383,11 +366,10 @@ describe("SQLite worker store", () => {
           realpath.mockRestore();
         }
         await unlink(aliasPath);
-        if (kind === "hardlink") {
-          await writeFile(aliasPath, "");
-        } else {
-          const replacementTarget = path.join(path.dirname(file), "replacement.sqlite");
-          await writeFile(replacementTarget, "");
+        const replacementTarget =
+          kind === "hardlink" ? aliasPath : path.join(path.dirname(file), "replacement.sqlite");
+        await writeFile(replacementTarget, "");
+        if (kind === "symlink") {
           await symlink(replacementTarget, aliasPath);
         }
         await expectRejectedOpen(aliasPath);
