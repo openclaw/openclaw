@@ -15,7 +15,7 @@ describe("video-generation live-test helpers", () => {
     ["novita", "novita/wan2.6-t2v", "720P"],
     ["novita", "novita/minimax-hailuo-2.3-t2v", "768P"],
     ["pixverse", "pixverse/v6", "540P"],
-    ["google", "google/veo-3.1-fast-generate-preview", "480P"],
+    ["google", "google/gemini-omni-1.1-flash", "720P"],
   ] as const)("uses a supported %s live resolution", (providerId, modelRef, expected) => {
     expect(resolveLiveVideoResolution({ providerId, modelRef })).toBe(expected);
   });
@@ -26,7 +26,7 @@ describe("video-generation live-test helpers", () => {
         defaults: {
           mediaModels: {
             video: {
-              primary: "google/veo-3.1-fast-generate-preview",
+              primary: "google/gemini-omni-1.1-flash",
               fallbacks: ["xai/grok-imagine-video", "invalid"],
             },
           },
@@ -36,7 +36,7 @@ describe("video-generation live-test helpers", () => {
 
     expect(resolveConfiguredLiveVideoModels(cfg)).toEqual(
       new Map([
-        ["google", "google/veo-3.1-fast-generate-preview"],
+        ["google", "google/gemini-omni-1.1-flash"],
         ["xai", "xai/grok-imagine-video"],
       ]),
     );
@@ -44,7 +44,7 @@ describe("video-generation live-test helpers", () => {
 
   it("runs buffer-backed video-to-video only for supported providers/models", () => {
     for (const [providerId, modelRef, expected] of [
-      ["google", "google/veo-3.1-fast-generate-preview", false],
+      ["google", "google/gemini-omni-1.1-flash", true],
       ["runway", "runway/gen4_aleph", true],
       ["runway", "runway/gen4.5", false],
       ["alibaba", "alibaba/wan2.6-r2v", false],

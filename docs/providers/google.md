@@ -357,12 +357,21 @@ See [Image Generation](/tools/image-generation) for shared tool parameters, prov
 ## Video generation
 
 The bundled `google` plugin also registers video generation through the shared
-`video_generate` tool.
+`video_generate` tool. Video generation uses Gemini Omni Flash
+(`google/gemini-omni-1.1-flash`) through the Gemini API Interactions endpoint;
+the retired Veo 3.1 Preview models are no longer listed.
 
-- Default video model: `google/veo-3.1-fast-generate-preview`
-- Modes: text-to-video, image-to-video, and single-video reference flows
-- Supports `aspectRatio` (`16:9`, `9:16`) and `resolution` (`720P`, `1080P`); audio output is not supported by Veo today
-- Supported durations: **4, 6, or 8 seconds** (other values snap to the nearest allowed value)
+- Default video model: `google/gemini-omni-1.1-flash`
+- Modes: text-to-video, image-to-video (up to 2 reference images, including
+  first/last frame interpolation), and single-video reference flows (edit and
+  extend, with image references allowed alongside the video)
+- Supports `aspectRatio` (`16:9`, `9:16`) and `resolution` (`360P`, `720P`,
+  `1080P`, `4K`)
+- Generated videos include audio; the `audio` parameter has no effect
+- There is no duration parameter: the generated length is model-controlled
+  (request durations are validated but not forwarded)
+- Generated videos are retrieved through the Google Files API with bounded
+  response reads
 
 To use Google as the default video provider:
 
@@ -372,7 +381,7 @@ To use Google as the default video provider:
     defaults: {
       mediaModels: {
         video: {
-          primary: "google/veo-3.1-fast-generate-preview",
+          primary: "google/gemini-omni-1.1-flash",
         },
       },
     },
