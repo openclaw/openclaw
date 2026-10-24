@@ -459,6 +459,7 @@ export function createPreparedModelCatalogWorker(
     | { key: string; promise: ReturnType<PreparedModelCatalogWorker["loadAuth"]> }
     | undefined;
   const captures = new Map<AbortController, Promise<PreparedSyntheticAuthFacts>>();
+  const requestControllers = new Set<AbortController>();
   const tasks = new Map<
     Promise<PreparedModelWorkerResult>,
     { onRecovery?: (error: Error) => void }
@@ -504,7 +505,7 @@ export function createPreparedModelCatalogWorker(
   const stop = async (error: Error) => {
     stoppedError ??= error;
     params.retirementSignal.removeEventListener("abort", retire);
-    for (const controller of captures.keys()) {
+    for (const controller of requestControllers) {
       controller.abort(stoppedError);
     }
     // Native probes live in the parent; drain them before retiring the compute worker.
@@ -548,6 +549,17 @@ export function createPreparedModelCatalogWorker(
     let pending: Promise<PreparedModelWorkerResult> | undefined;
     const task: { onRecovery?: (error: Error) => void } = {};
     const controller = new AbortController();
+    requestControllers.add(controller);
+    const poolController = new AbortController();
+    let preparingInput = false;
+    const forwardAbort = () => {
+      // Before dispatch, the factory owns native cleanup. Let its rejection
+      // release this slot after cleanup instead of retiring a healthy pool.
+      if (!preparingInput) {
+        poolController.abort(controller.signal.reason);
+      }
+    };
+    controller.signal.addEventListener("abort", forwardAbort, { once: true });
     const timeout = setTimeout(
       () => controller.abort(new WorkerTaskError("worker task timed out", "timeout")),
       PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS,
@@ -563,40 +575,6 @@ export function createPreparedModelCatalogWorker(
         }
       }
       const { input } = workerInput;
-      // Worker reconstruction consumes startup auth facts even for a scoped catalog request.
-      const providerScope = [...workerInput.providerIds, ...(command.providerIds ?? [])];
-      const capture = withPluginRuntimeGenerationScope(
-        { metadataSnapshot, pluginRegistry: params.pluginRegistry },
-        () =>
-          captureProviderSyntheticAuthFacts({
-            config: input.config,
-            env: input.env,
-            workspaceDir: input.workspaceDir,
-            providerRefs:
-              command.kind === "catalog" && !command.providerIds
-                ? [
-                    ...listManifestSyntheticAuthProviderRefs(metadataSnapshot.index),
-                    ...workerInput.providerIds,
-                  ]
-                : [
-                    ...providerScope,
-                    ...scopeSyntheticAuthProviderRefs(
-                      listManifestSyntheticAuthProviderRefs(metadataSnapshot.index),
-                      providerScope,
-                    ),
-                  ],
-            signal: controller.signal,
-          }),
-      );
-      captures.set(controller, capture);
-      let syntheticAuth: PreparedSyntheticAuthFacts;
-      try {
-        syntheticAuth = await capture;
-      } finally {
-        captures.delete(controller);
-      }
-      controller.signal.throwIfAborted();
-      const value = { ...command, syntheticAuth };
       const shared = gatewayOwned
         ? await getGatewayCatalogPool(workerInput, metadataSnapshot, environmentFingerprint)
         : undefined;
@@ -607,20 +585,64 @@ export function createPreparedModelCatalogWorker(
       requestPool = pool =
         shared?.pool ?? pool ?? createCatalogPool(workerInput.input.env, validate);
       pending = requestPool.run(
-        () => {
+        async () => {
           assertCurrent();
+          controller.signal.throwIfAborted();
+          preparingInput = true;
           task.onRecovery = onRecovery;
+          // Native auth probes belong to this admitted catalog task, including
+          // their asynchronous cleanup before the slot serves another agent.
+          const providerScope = [...workerInput.providerIds, ...(command.providerIds ?? [])];
+          const capture = withPluginRuntimeGenerationScope(
+            { metadataSnapshot, pluginRegistry: params.pluginRegistry },
+            () =>
+              captureProviderSyntheticAuthFacts({
+                config: input.config,
+                env: input.env,
+                workspaceDir: input.workspaceDir,
+                providerRefs:
+                  command.kind === "catalog" && !command.providerIds
+                    ? [
+                        ...listManifestSyntheticAuthProviderRefs(metadataSnapshot.index),
+                        ...workerInput.providerIds,
+                      ]
+                    : [
+                        ...providerScope,
+                        ...scopeSyntheticAuthProviderRefs(
+                          listManifestSyntheticAuthProviderRefs(metadataSnapshot.index),
+                          providerScope,
+                        ),
+                      ],
+                signal: controller.signal,
+              }),
+          );
+          captures.set(controller, capture);
+          let syntheticAuth: PreparedSyntheticAuthFacts;
+          try {
+            syntheticAuth = await capture;
+          } finally {
+            captures.delete(controller);
+            preparingInput = false;
+          }
+          assertCurrent();
+          controller.signal.throwIfAborted();
           const workerRequest = {
-            ...value,
+            ...command,
+            syntheticAuth,
             clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: input.env }),
           };
           expectedFingerprint = fingerprintPreparedModelWorkerRequest(workerInput, workerRequest);
           if (shared) {
             shared.validate = validate;
           }
+          // Prepared input now belongs to the worker. Owner retirement drains it;
+          // the request deadline still aborts the worker if it fails to finish.
+          requestControllers.delete(controller);
           return { value: workerInput, request: workerRequest };
         },
-        { timeoutMs: PREPARED_MODEL_CATALOG_WORKER_TIMEOUT_MS, signal: controller.signal },
+        // The request controller owns the existing queue/preparation/execution deadline.
+        // A second pool timer could retire this slot while native cleanup is still pending.
+        { signal: poolController.signal },
       );
       tasks.set(pending, task);
       message = await pending;
@@ -664,6 +686,8 @@ export function createPreparedModelCatalogWorker(
       if (pending) {
         tasks.delete(pending);
       }
+      controller.signal.removeEventListener("abort", forwardAbort);
+      requestControllers.delete(controller);
       clearTimeout(timeout);
     }
     if (message.status === "failed") {
