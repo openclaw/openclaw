@@ -6626,7 +6626,6 @@
 ["src/projects/project-environment.test.ts","../state/openclaw-state-lease.js","6bb40f9c9b0190491a6d228d0ef6af75a02b0cba5945090acd85187f5579c744",1]
 ["src/projects/project-environment.test.ts","../state/openclaw-state-worker-store.js","b7d1121ef6ce8cd0b2398310f9c98570eb32101244e44f49591e4f3577a44615",1]
 ["src/projects/project-environment.test.ts","./project-checkout.js","97efcbd45258366a69c948e5703b6c643de79fd0aec622f69043b3385f07d950",1]
-["src/projects/project-environment.test.ts","./project-clone-runtime.js","4e09b115fb0e8105d2c044760a0a034c6194e4390457da62764b53ed248d2fa3",1]
 ["src/projects/project-environment.test.ts","./project-registry.kernel.js","ee29ccfee60eac8a9ebe0cd0bf8bf8403b0d3b4a1d5a1b7ece3d3a15722d7ea1",1]
 ["src/projects/project-registry.authority.test.ts","../agents/agent-scope-config.js","661edc85261266483fc0f4051f3277cd5265028d97ee6eb6cbd4a0f8754111aa",1]
 ["src/projects/project-registry.authority.test.ts","../agents/agent-scope.js","0d6e46b6c838f75d76ba40efce3f359ad142b446a7104d10d5dc24874c7add83",1]
