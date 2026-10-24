@@ -1,6 +1,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveCronJobEffectiveAgentId } from "../agent-id.js";
+import { assertCronBindApplies } from "../bind-parent.js";
 import {
   decodePluginCommandSchedule,
   isPluginCommandScheduleCapPeer,
@@ -195,6 +196,10 @@ export function planCronJobMutation(
       }
       nextJob = cloneCronJobForMutation(previousJob);
       applyJobPatch(nextJob, mutation.patch, { ...validation, scheduleValidationNowMs: now });
+      if (options.bindSourceConversation) {
+        assertCronBindApplies(previousJob, options.bindSourceConversation);
+        nextJob.sourceConversation = { ...options.bindSourceConversation };
+      }
       applyCronStreamSandboxTarget(nextJob, options.streamSandbox);
       finalizeUpdatedJob({
         job: previousJob,
@@ -241,7 +246,12 @@ export function planCronJobMutation(
     }
     reconcileCronChannelRequesterAuthority({
       job: nextJob,
-      previousJob,
+      // Bind only records the parent link; the authenticated requester stays bound to an
+      // unchanged executable definition, so compare against the same link.
+      previousJob:
+        previousJob && options.bindSourceConversation
+          ? { ...previousJob, sourceConversation: nextJob.sourceConversation }
+          : previousJob,
       toolsAllowProvenance: options.toolsAllowProvenance,
       reauthorize: mutation.kind === "add" || explicitlyMutatesToolsAllow,
       reauthorizeCallerOrigin: mutation.kind === "update" && explicitlyMutatesToolsAllow,

@@ -583,6 +583,8 @@ export type CronUpdateOptions = Pick<
   | "streamSandbox"
   | "sessionEntryCurrent"
 > & {
+  /** Parent incarnation recorded by `automations bind`; only fills an absent link. */
+  bindSourceConversation?: NonNullable<CronStoredJob["sourceConversation"]>;
   /** Null forbids policy adoption; undefined retains in-process operator defaults. */
   scheduledToolPolicy?: CronScheduledToolPolicy | null;
 };

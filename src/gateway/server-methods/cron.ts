@@ -33,6 +33,7 @@ import {
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import { cronAddHandler } from "./cron-add.js";
+import { cronBindHandler } from "./cron-bind.js";
 import {
   assertCronModelJobAllowed,
   cronCreateMatchesCallerScope,
@@ -96,6 +97,7 @@ export const cronHandlers: GatewayRequestHandlers = {
   ),
   ...cronScratchHandlers,
   "cron.add": cronAddHandler,
+  "cron.bind": cronBindHandler,
   "cron.update": async ({
     params,
     respond,

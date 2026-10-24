@@ -555,6 +555,7 @@ export {
   CronDeliveryPreviewSchema,
   CronUpdateParamsSchema,
   CronRemoveParamsSchema,
+  CronBindParamsSchema,
   CronRunParamsSchema,
   CronRunsParamsSchema,
   CronHistoryParamsSchema,

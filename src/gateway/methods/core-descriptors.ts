@@ -740,4 +740,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["exec.approvals.native.commit", "exec-approvals", "operator.admin", "2026.10"],
   ["update.recovery.cleanup", "update", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["diagnostics.capabilities", "diagnostics", "operator.read", "2026.10"],
+  ["cron.bind", "cron", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

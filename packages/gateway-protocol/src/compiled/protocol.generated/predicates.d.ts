@@ -1499,6 +1499,9 @@ export function isCronRemoveParams(
 export function isCronRunParams(
   value: unknown,
 ): value is import("typebox").Static<typeof import("../../schema-modules.js").CronRunParamsSchema>;
+export function isCronBindParams(
+  value: unknown,
+): value is import("typebox").Static<typeof import("../../schema-modules.js").CronBindParamsSchema>;
 export function isCronRunsParams(
   value: unknown,
 ): value is import("typebox").Static<typeof import("../../schema-modules.js").CronRunsParamsSchema>;

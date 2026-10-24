@@ -283,6 +283,7 @@ async function updateLoadedJob(params: {
       scheduledToolPolicy: opts?.scheduledToolPolicy,
       toolsAllowProvenance: opts?.toolsAllowProvenance,
       toolsAllowExecTarget: opts?.toolsAllowExecTarget,
+      bindSourceConversation: opts?.bindSourceConversation,
       captured: false,
     },
   };
