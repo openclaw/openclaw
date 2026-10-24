@@ -2004,14 +2004,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/pages/chat/chat-pane.ts"],
   ),
   pageWatch(
-    "ui/src/e2e/terminal-open.e2e.test.ts",
-    ["chat"],
-    [
-      "ui/src/components/terminal/terminal-panel-registration.tsx",
-      "ui/src/pages/chat/components/chat-header-session-menu.ts",
-    ],
-  ),
-  pageWatch(
     "ui/src/e2e/terminal-page.e2e.test.ts",
     ["new-session", "terminal"],
     ["ui/src/pages/terminal/terminal-page.ts"],

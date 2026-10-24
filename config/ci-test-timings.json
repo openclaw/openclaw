@@ -3799,7 +3799,6 @@
       "ui/src/e2e/task-pull-requests.real-gateway.e2e.test.ts": 58,
       "ui/src/e2e/task-review-reload.e2e.test.ts": 3,
       "ui/src/e2e/terminal-embedded.e2e.test.ts": 8,
-      "ui/src/e2e/terminal-open.e2e.test.ts": 9,
       "ui/src/e2e/terminal-page.e2e.test.ts": 3,
       "ui/src/e2e/terminal-panel-layout.e2e.test.ts": 4,
       "ui/src/e2e/terminal-repaint.e2e.test.ts": 3,

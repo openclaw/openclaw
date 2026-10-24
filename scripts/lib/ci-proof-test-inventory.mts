@@ -4995,7 +4995,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "ui/src/e2e/sidebar-transient-surfaces.e2e.test.ts",
   "ui/src/e2e/solo-widget-chrome.e2e.test.ts",
   "ui/src/e2e/terminal-embedded.e2e.test.ts",
-  "ui/src/e2e/terminal-open.e2e.test.ts",
   "ui/src/e2e/theme-boot.e2e.test.ts",
   "ui/src/e2e/theme-selection-defaults.e2e.test.ts",
   "ui/src/e2e/transcript-library.e2e.test.ts",

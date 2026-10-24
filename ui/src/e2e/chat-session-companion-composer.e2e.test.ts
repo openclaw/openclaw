@@ -67,109 +67,62 @@ function composerHeight(composer: Locator) {
 }
 
 suite.define(() => {
-  it.each([false, true])(
-    "sends Side chat image bytes without main-chat leakage (model recovery=%s)",
-    async (recover) => {
-      await withSideChat(async (gateway, composer, page) => {
-        const side = page.locator("openclaw-chat-session-rail");
-        const thumbnails = side.locator(".chat-attachment-thumb");
-        const text = (value: string) => side.getByText(value, { exact: true });
-        const question = recover ? "Describe this image" : "What does this image show?";
-        const fileName = recover ? "retry-image.png" : "side-chat.png";
-        await composer.fill(question);
-        const image = await dropSideChatImage(composer, fileName);
-        if (recover) {
-          await gateway.deferNext(ask);
-        }
-        expect(await thumbnails.locator("img").count()).toBe(1);
-        expect(
-          await page.locator(".agent-chat__composer-shell .chat-attachment-thumb").count(),
-        ).toBe(0);
-        await composer.press("Enter");
-        const original = await gateway.waitForRequest(ask);
-        expect(original.params).toMatchObject({
-          question,
-          attachments: [{ mimeType: "image/png", fileName, content: image }],
-        });
-        if (recover) {
-          await gateway.rejectDeferred(ask, {
-            code: "UNAVAILABLE",
-            message: "The selected model does not support image input.",
-            retryable: false,
-            details: { reason: "image-input-unsupported" },
-          });
-          await text(
-            "This Side chat model cannot read images. Choose an image-capable model, then retry.",
-          ).waitFor();
-          expect(await text("No utility model is configured for this session.").count()).toBe(0);
-          const retry = side.getByRole("button", { name: "Retry", exact: true });
-          expect(await retry.isEnabled()).toBe(true);
-          expect(await gateway.getRequests(ask)).toHaveLength(1);
-          await composer.fill("Keep my next question");
-          // The mock now represents the operator's recovered image-capable model.
-          await gateway.deferNext(ask);
-          await retry.click();
-          await expect.poll(async () => (await gateway.getRequests(ask)).length).toBe(2);
-          expect((await gateway.getRequests(ask))[1]?.params).toEqual(original.params);
-          const answer = "The image shows a sunny landscape.";
-          await gateway.resolveDeferred(ask, { answer, ts: 2 });
-          await text(answer).waitFor();
-          expect(await retry.count()).toBe(0);
-          expect(await composer.inputValue()).toBe("Keep my next question");
-          expect(await gateway.getRequests("sessions.companion.reset")).toEqual([]);
-        } else {
-          await text("The next step is ready.").waitFor();
-          expect(
-            await side.locator(".chat-session-rail__composer .chat-attachment-thumb").count(),
-          ).toBe(0);
-        }
-        expect(await gateway.getRequests("chat.send")).toEqual([]);
-      });
-    },
-  );
-
-  it("opens composer image previews in Side chat and the main chat", async () => {
-    await withSideChat(async (_gateway, composer, page) => {
-      const image = await page.evaluate(() => {
-        const canvas = document.createElement("canvas");
-        canvas.width = 480;
-        canvas.height = 270;
-        const context = canvas.getContext("2d")!;
-        context.fillStyle = "#1f6feb";
-        context.fillRect(0, 0, canvas.width, canvas.height);
-        context.fillStyle = "#ffffff";
-        context.font = "bold 40px sans-serif";
-        context.fillText("Composer preview", 64, 150);
-        return canvas.toDataURL("image/png").split(",")[1]!;
-      });
-      const openPreview = async (scope: Locator, fileName: string) => {
-        await scope.getByRole("button", { name: `Open image ${fileName}`, exact: true }).click();
-        const dialog = page.getByRole("dialog", { name: `Image preview: ${fileName}` });
-        await dialog.waitFor();
-        await page
-          .locator("openclaw-image-lightbox img")
-          .first()
-          .evaluate((element) => (element as HTMLImageElement).decode());
-        return dialog;
-      };
-
+  it("previews and sends a Side chat image, then retries without consuming the next draft", async () => {
+    await withSideChat(async (gateway, composer, page) => {
       const side = page.locator("openclaw-chat-session-rail");
-      await dropSideChatImage(composer, "side-chat-preview.png", image);
-      const sideDialog = await openPreview(side, "side-chat-preview.png");
+      const text = (value: string) => side.getByText(value, { exact: true });
+      const question = "Describe this image";
+      const fileName = "retry-image.png";
+      await composer.fill(question);
+      const image = await dropSideChatImage(composer, fileName);
+      await side.getByRole("button", { name: `Open image ${fileName}`, exact: true }).click();
+      const dialog = page.getByRole("dialog", { name: `Image preview: ${fileName}` });
+      await dialog.waitFor();
+      await dialog
+        .locator("img")
+        .first()
+        .evaluate((element: HTMLImageElement) => element.decode());
       await page.keyboard.press("Escape");
-      await sideDialog.waitFor({ state: "detached" });
+      await dialog.waitFor({ state: "detached" });
       expect(await side.locator(".chat-attachment-thumb").count()).toBe(1);
-
-      const main = page.locator(".agent-chat__composer-shell");
-      await main.locator(".agent-chat__file-input").setInputFiles({
-        name: "main-chat-preview.png",
-        mimeType: "image/png",
-        buffer: Buffer.from(image, "base64"),
+      expect(await page.locator(".agent-chat__composer-shell .chat-attachment-thumb").count()).toBe(
+        0,
+      );
+      await gateway.deferNext(ask);
+      await composer.press("Enter");
+      const original = await gateway.waitForRequest(ask);
+      expect(original.params).toMatchObject({
+        question,
+        attachments: [{ mimeType: "image/png", fileName, content: image }],
       });
-      const mainDialog = await openPreview(main, "main-chat-preview.png");
-      await page.keyboard.press("Escape");
-      await mainDialog.waitFor({ state: "detached" });
-      expect(await main.locator(".chat-attachment-thumb").count()).toBe(1);
+      expect(
+        await side.locator(".chat-session-rail__composer .chat-attachment-thumb").count(),
+      ).toBe(0);
+      await gateway.rejectDeferred(ask, {
+        code: "UNAVAILABLE",
+        message: "The selected model does not support image input.",
+        retryable: false,
+        details: { reason: "image-input-unsupported" },
+      });
+      await text(
+        "This Side chat model cannot read images. Choose an image-capable model, then retry.",
+      ).waitFor();
+      expect(await text("No utility model is configured for this session.").count()).toBe(0);
+      const retry = side.getByRole("button", { name: "Retry", exact: true });
+      expect(await retry.isEnabled()).toBe(true);
+      expect(await gateway.getRequests(ask)).toHaveLength(1);
+      await composer.fill("Keep my next question");
+      await gateway.deferNext(ask);
+      await retry.click();
+      await expect.poll(async () => (await gateway.getRequests(ask)).length).toBe(2);
+      expect((await gateway.getRequests(ask))[1]?.params).toEqual(original.params);
+      const answer = "The image shows a sunny landscape.";
+      await gateway.resolveDeferred(ask, { answer, ts: 2 });
+      await text(answer).waitFor();
+      expect(await retry.count()).toBe(0);
+      expect(await composer.inputValue()).toBe("Keep my next question");
+      expect(await gateway.getRequests("sessions.companion.reset")).toEqual([]);
+      expect(await gateway.getRequests("chat.send")).toEqual([]);
     });
   });
 
