@@ -1,7 +1,6 @@
 import type { ChannelIngressQueue } from "openclaw/plugin-sdk/channel-outbound";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { PersistentDedupeEntry } from "openclaw/plugin-sdk/persistent-dedupe";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { NextcloudTalkInboundAttachment } from "./types.js";
 
 export const NEXTCLOUD_TALK_INGRESS_PAYLOAD_VERSION = 1;
@@ -42,9 +41,8 @@ export function parseRawObject(rawEvent: string): Record<string, unknown> {
 }
 
 export function requiredString(value: unknown, field: string): string {
-  const normalized = normalizeOptionalString(value);
-  if (normalized) {
-    return normalized;
+  if (typeof value === "string" && value.trim()) {
+    return value.trim();
   }
   throw new NextcloudTalkWebhookPayloadError(`Nextcloud Talk webhook is missing ${field}.`);
 }
@@ -61,7 +59,7 @@ function parseDeclaredSizeBytes(value: unknown): number | undefined {
     typeof value === "number"
       ? value
       : typeof value === "string" && /^\d+$/u.test(value.trim())
-        ? Number(value)
+        ? Number(value.trim())
         : Number.NaN;
   return Number.isSafeInteger(parsed) && parsed >= 0 ? parsed : undefined;
 }
@@ -84,7 +82,7 @@ function parseFileAttachment(value: unknown): NextcloudTalkInboundAttachment | u
   ) {
     return undefined;
   }
-  const fileId = normalizeOptionalString(value.id);
+  const fileId = typeof value.id === "string" && value.id.trim() ? value.id.trim() : undefined;
   return {
     ...(fileId ? { fileId } : {}),
     name,
