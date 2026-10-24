@@ -87,21 +87,27 @@ function resolveFirecrawlFetchConfig(cfg?: OpenClawConfig): FirecrawlFetchConfig
   return asOptionalRecord(resolvePluginConfigObject(cfg, "firecrawl")?.webFetch);
 }
 
-function resolveFirecrawlApiKey(cfg?: OpenClawConfig): string | undefined {
+type FirecrawlConfigScope = "webSearch" | "webFetch";
+
+function resolveFirecrawlApiKey(
+  cfg: OpenClawConfig | undefined,
+  scope: FirecrawlConfigScope,
+): string | undefined {
   const fetch = resolveFirecrawlFetchConfig(cfg);
   const search = resolveProviderWebSearchPluginConfig(cfg, "firecrawl");
-  const configuredCandidates: Array<{ value: unknown; path: string }> = [
-    {
+  const configuredCandidates = {
+    webFetch: {
       value: fetch?.apiKey,
       path: "plugins.entries.firecrawl.config.webFetch.apiKey",
     },
-    {
+    webSearch: {
       value: search?.apiKey,
       path: "plugins.entries.firecrawl.config.webSearch.apiKey",
     },
-  ];
+  };
+  const fallbackScope = scope === "webSearch" ? "webFetch" : "webSearch";
   let blockedConfiguredSecret = false;
-  for (const candidate of configuredCandidates) {
+  for (const candidate of [configuredCandidates[scope], configuredCandidates[fallbackScope]]) {
     const resolved = resolveReadOnlyEnvSecretRef({
       value: candidate.value,
       path: candidate.path,
@@ -122,12 +128,17 @@ function resolveFirecrawlApiKey(cfg?: OpenClawConfig): string | undefined {
   return normalizeSecretInput(process.env[FIRECRAWL_API_KEY_ENV_VAR]) || undefined;
 }
 
-function resolveFirecrawlBaseUrl(cfg?: OpenClawConfig): string {
+function resolveFirecrawlBaseUrl(
+  cfg: OpenClawConfig | undefined,
+  scope: FirecrawlConfigScope,
+): string {
   const search = resolveProviderWebSearchPluginConfig(cfg, "firecrawl");
   const fetch = resolveFirecrawlFetchConfig(cfg);
+  const primary = scope === "webSearch" ? search : fetch;
+  const fallback = scope === "webSearch" ? fetch : search;
   const configured =
-    normalizeOptionalString(search?.baseUrl) ||
-    normalizeOptionalString(fetch?.baseUrl) ||
+    normalizeOptionalString(primary?.baseUrl) ||
+    normalizeOptionalString(fallback?.baseUrl) ||
     normalizeSecretInput(process.env.FIRECRAWL_BASE_URL) ||
     "";
   return configured || DEFAULT_FIRECRAWL_BASE_URL;
@@ -389,7 +400,7 @@ export async function runFirecrawlSearch(params: {
   params.signal?.throwIfAborted();
   const keyless = params.access === "keyless";
   const providerId = keyless ? "firecrawl-free" : "firecrawl";
-  const apiKey = keyless ? undefined : resolveFirecrawlApiKey(params.cfg);
+  const apiKey = keyless ? undefined : resolveFirecrawlApiKey(params.cfg, "webSearch");
   if (!apiKey && !keyless) {
     throw new Error(
       "web_search (firecrawl) needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure plugins.entries.firecrawl.config.webSearch.apiKey.",
@@ -411,7 +422,7 @@ export async function runFirecrawlSearch(params: {
   const tbs = normalizeOptionalString(params.tbs);
   const location = normalizeOptionalString(params.location);
   const country = normalizeOptionalString(params.country);
-  const baseUrl = resolveFirecrawlBaseUrl(params.cfg);
+  const baseUrl = resolveFirecrawlBaseUrl(params.cfg, "webSearch");
   const cacheKey = JSON.stringify({
     type: "firecrawl-search",
     provider: providerId,
@@ -522,7 +533,7 @@ export async function runFirecrawlScrape(params: {
   params.signal?.throwIfAborted();
   assertFirecrawlScrapeTargetAllowed(params.url);
 
-  const apiKey = resolveFirecrawlApiKey(params.cfg);
+  const apiKey = resolveFirecrawlApiKey(params.cfg, "webFetch");
   // Hosted v2/scrape accepts starter requests without a bearer token.
   // Only the selected web_fetch provider opts into that access mode.
   if (!apiKey && params.access !== "keyless") {
@@ -530,7 +541,7 @@ export async function runFirecrawlScrape(params: {
       "firecrawl_scrape needs a Firecrawl API key. Set FIRECRAWL_API_KEY in the Gateway environment, or configure plugins.entries.firecrawl.config.webFetch.apiKey.",
     );
   }
-  const baseUrl = resolveFirecrawlBaseUrl(params.cfg);
+  const baseUrl = resolveFirecrawlBaseUrl(params.cfg, "webFetch");
   const fetch = resolveFirecrawlFetchConfig(params.cfg);
   const timeoutSeconds = resolvePositiveTimeoutSeconds(
     params.timeoutSeconds,

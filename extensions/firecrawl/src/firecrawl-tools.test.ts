@@ -618,6 +618,64 @@ describe("firecrawl tools", () => {
   });
 
   it.each([
+    ["search", undefined],
+    ["scrape", undefined],
+    ["scrape", "keyless"],
+  ] as const)(
+    "prefers the operation configuration for %s (access: %s)",
+    async (operation, access) => {
+      vi.stubEnv("FIRECRAWL_API_KEY", "env-key");
+      vi.stubEnv("FIRECRAWL_BASE_URL", "http://127.0.0.1:8789");
+      ssrfMock?.mockRestore();
+      ssrfMock = mockPinnedHostnameResolution(["127.0.0.1"]);
+      const { fetchSpy, headers } = mockJsonResponse({
+        success: true,
+        data: operation === "search" ? [] : { markdown: "scraped content" },
+      });
+      const cfg = firecrawlConfig({
+        webSearch: { apiKey: "search-key", baseUrl: "http://127.0.0.1:8787" },
+        webFetch: { apiKey: "fetch-key", baseUrl: "http://127.0.0.1:8788" },
+      });
+
+      await runOperation(operation, cfg, { access });
+
+      const port = operation === "search" ? 8787 : 8788;
+      const key = operation === "search" ? "search-key" : "fetch-key";
+      expect(fetchSpy).toHaveBeenCalledExactlyOnceWith(
+        `http://127.0.0.1:${port}/v2/${operation}`,
+        expect.anything(),
+      );
+      expect(headers().get("authorization")).toBe(`Bearer ${key}`);
+    },
+  );
+
+  it.each(["search", "scrape"] as const)(
+    "falls back to the sibling configuration for %s",
+    async (operation) => {
+      vi.stubEnv("FIRECRAWL_API_KEY", "env-key");
+      vi.stubEnv("FIRECRAWL_BASE_URL", "http://127.0.0.1:8789");
+      ssrfMock?.mockRestore();
+      ssrfMock = mockPinnedHostnameResolution(["127.0.0.1"]);
+      const { fetchSpy, headers } = mockJsonResponse({
+        success: true,
+        data: operation === "search" ? [] : { markdown: "scraped content" },
+      });
+      const siblingScope = operation === "search" ? "webFetch" : "webSearch";
+      const cfg = firecrawlConfig({
+        [siblingScope]: { apiKey: "sibling-key", baseUrl: "http://127.0.0.1:8787" },
+      });
+
+      await runOperation(operation, cfg);
+
+      expect(fetchSpy).toHaveBeenCalledExactlyOnceWith(
+        `http://127.0.0.1:8787/v2/${operation}`,
+        expect.anything(),
+      );
+      expect(headers().get("authorization")).toBe("Bearer sibling-key");
+    },
+  );
+
+  it.each([
     ["search", 30_000],
     ["scrape", 60_000],
   ] as const)("uses environment and request defaults for %s", async (operation, timeoutMs) => {
