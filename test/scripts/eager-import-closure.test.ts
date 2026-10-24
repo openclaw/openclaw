@@ -27,6 +27,10 @@ const inventoryCheck =
   'pnpm test test/scripts/eager-import-closure.test.ts -t "PR wrapper inventory"';
 const wrapperFailure = (output: string) =>
   `${output}\nCheck the inventory first: ${inventoryCheck}`;
+const filesUnder = (root: string) =>
+  readdirSync(root, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => join(entry.parentPath, entry.name));
 
 function run(
   command: string,
@@ -99,11 +103,8 @@ it("keeps the PR wrapper inventory closed over runtime imports", () => {
   const stale = components.filter((file) => !existsSync(file)).toSorted();
   // scripts/pr archives all of pr-lib implicitly. Other inventory entries also
   // seed the graph: shell-launched helpers and workers are not ordinary imports.
-  const wrapperFiles = readdirSync("scripts/pr-lib", { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => join(entry.parentPath, entry.name));
   const closure = collectRuntimeImportClosure(process.cwd(), [
-    ...wrapperFiles,
+    ...filesUnder("scripts/pr-lib"),
     ...components.filter((file) => existsSync(file)),
   ]);
   // Forked children resolve through the process manifest, not an import edge. Wrapper
@@ -206,9 +207,7 @@ it("acquires wrapper leases and manages templates without the application comman
 it("resolves wrapper package exports and workspace aliases from the extracted dependency context", () => {
   const root = tempDirs.make("openclaw-pr-package-closure-");
   copyPrWrapperSources(root);
-  const files = readdirSync(root, { recursive: true, withFileTypes: true })
-    .filter((entry) => entry.isFile())
-    .map((entry) => relative(root, join(entry.parentPath, entry.name)));
+  const files = filesUnder(root).map((file) => relative(root, file));
   const pinned = run(process.execPath, [
     join(root, "scripts/pr-lib/materialize-dependencies.mjs"),
     join(process.cwd(), "node_modules"),
