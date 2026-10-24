@@ -9,6 +9,7 @@ import { parseArgs } from "node:util";
 import { projectAnthropicTools } from "../../packages/ai/src/providers/anthropic-tool-projection.js";
 import { convertResponsesToolPayload } from "../../packages/ai/src/providers/openai-responses-tools.js";
 import { getPublishedRuntimeToolInputSchema } from "../../packages/ai/src/providers/tool-schema-json-projection.js";
+import { expectDefined } from "../../packages/normalization-core/src/expect.js";
 import { finalizeAgentTools } from "../../src/agents/agent-tools.finalize.js";
 import type { AnyAgentTool } from "../../src/agents/agent-tools.types.js";
 import { createMessageTool } from "../../src/agents/tools/message-tool-execution.js";
@@ -32,16 +33,14 @@ const samples = integer(values.samples, "samples", 5);
 const samplingInterval = integer(values["sampling-interval"], "sampling-interval", 1);
 // Include the warm session within the finalizer's 64 retained snapshots.
 assert.ok(sessions <= 63, "--sessions must be <= 63 to avoid warm-snapshot eviction");
-const collect = globalThis.gc;
-assert.ok(collect, "Run with --expose-gc");
+const collect = expectDefined(globalThis.gc, "Run with --expose-gc");
 const configured = {};
 const factories: Record<string, () => AnyAgentTool[]> = {
   // No configured account, session store, credentials, or tool execution is involved.
   message: () => [createMessageTool()],
   "message-configured": () => [createMessageTool({ config: configured })],
 };
-const factory = factories[values.factory];
-assert.ok(factory, `Unknown --factory: ${values.factory}`);
+const factory = expectDefined(factories[values.factory], `Unknown --factory: ${values.factory}`);
 const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 const definitionJson = (tools: AnyAgentTool[]) =>
   JSON.stringify(
