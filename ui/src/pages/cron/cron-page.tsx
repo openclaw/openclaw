@@ -82,7 +82,7 @@ function CronPageBody(props: { routeSearch?: string; host: HTMLElement }) {
   return <CronPageContent page={page} />;
 }
 
-export function CronPage(props: { routeSearch?: string }) {
+function CronPage(props: { routeSearch?: string }) {
   let host!: HTMLElement;
   return (
     <openclaw-cron-page ref={(element) => (host = element)}>
