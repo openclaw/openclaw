@@ -25,6 +25,12 @@ snapshot on the first shared-state read.
 Each new report reads a fresh snapshot. Checks that need writable inspection state
 or independent database verification retain their own copies.
 
+Snapshot failures retain filesystem and SQLite error codes. Wait-and-retry guidance
+is reserved for active state admission or offline maintenance, not permission,
+temporary-directory, disk-capacity, or unreadable-database failures. Resolve the
+reported filesystem or source-access problem before rerunning; inspection never
+bypasses private-directory checks or writes to the source database.
+
 Read-only reports preserve existing SQLite database, WAL, and shared-memory files,
 including their modification times. An older shared-state schema produces a
 "migration pending" finding with `openclaw doctor --fix` guidance; inspection does

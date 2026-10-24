@@ -7,6 +7,7 @@ import {
   StateDatabaseOfflineMaintenanceError,
 } from "../infra/gateway-state-owner-record.js";
 import { readSqliteDatabaseCleanClose } from "../infra/sqlite-database-admission.js";
+import { formatSqliteReadOnlyInspectionFailure } from "../infra/sqlite-error-diagnostics.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { captureSqlitePrivateSnapshotFamily } from "../infra/sqlite-private-snapshot-fork.js";
 import {
@@ -226,8 +227,13 @@ export async function prepareOpenClawStateReadSnapshotSource({
           error,
         );
       }
+      const retry =
+        error instanceof StateDatabaseAdmissionPendingError ||
+        error instanceof StateDatabaseOfflineMaintenanceError
+          ? "Retry after the current state operation completes. "
+          : "";
       throw new Error(
-        `Cannot read shared state for discovery: ${pathname}. Retry after the current state operation completes. ${String(error)}`,
+        `Cannot read shared state for discovery: ${pathname}. ${retry}${formatSqliteReadOnlyInspectionFailure(error)}`,
         { cause: error },
       );
     }

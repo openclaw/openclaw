@@ -346,10 +346,8 @@ async function executeDoctorLint(
   if (snapshot.exists && !snapshot.valid && !projectedHeartbeatValidation?.ok) {
     const { collectNodeRuntimeFindings } = await import("./node-runtime-diagnostics.js");
     const runtimeFindings = await collectNodeRuntimeFindings(stateView.sourceEnv);
-    const findings = [
-      ...configValidationIssuesToHealthFindings(snapshot.issues),
-      ...runtimeFindings,
-    ];
+    const configFindings = configValidationIssuesToHealthFindings(snapshot.issues);
+    const findings = [...configFindings, ...runtimeFindings];
     const visible = findings.filter((finding) => healthFindingMeetsSeverity(finding, sevMin));
     return {
       checksRun: 1,
@@ -369,9 +367,8 @@ async function executeDoctorLint(
           return;
         }
         runtime.error("doctor --lint: config file exists but does not parse cleanly.");
-        for (const issue of snapshot.issues) {
-          const issuePath = issue.path || "<root>";
-          runtime.error(`- ${issuePath}: ${issue.message}`);
+        for (const finding of configFindings) {
+          runtime.error(`- ${finding.path}: ${finding.message}`);
         }
         for (const finding of runtimeFindings.filter((entry) =>
           healthFindingMeetsSeverity(entry, sevMin),
