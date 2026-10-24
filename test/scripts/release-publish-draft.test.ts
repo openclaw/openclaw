@@ -46,28 +46,21 @@ function publicationFixture(releaseVersion = "2026.9.4") {
   git("commit", "-qm", "historical release");
   const targetSha = git("rev-parse", "HEAD");
   io.write("CHANGELOG.md", "Working tree content must not be published.\n");
-  fs.mkdirSync(join(root, ".release-harness/scripts/lib"), { recursive: true });
+  fs.mkdirSync(join(root, ".release-harness/scripts"), { recursive: true });
   io.json(".release-harness/package.json", { version: "2026.9.5" });
-  for (const source of [
-    "scripts/render-github-release-notes.mts",
-    "scripts/tsx.mjs",
-    "scripts/lib/tsx-cli-shim.mjs",
-    "scripts/lib/local-check-runtime.mts",
-    "scripts/lib/managed-cleanup-handoff.mts",
-    "scripts/openclaw-npm-extended-stable-release.mjs",
-    "scripts/plugin-sdk-api-release-evidence.mjs",
-    "scripts/lib/release-changelog.mjs",
-    "scripts/lib/arg-utils.runtime.mjs",
-    "scripts/lib/release-notes-compaction.mjs",
-    "scripts/lib/release-version.mjs",
-    "scripts/lib/release-publish-children.sh",
-  ]) {
-    fs.copyFileSync(join(repository, source), join(root, ".release-harness", source));
-  }
-  fs.symlinkSync(
-    join(repository, "scripts/full-release-validation-policy.mjs"),
-    join(root, ".release-harness/scripts/full-release-validation-policy.mjs"),
+  fs.copyFileSync(
+    join(repository, "scripts/render-github-release-notes.mts"),
+    join(root, ".release-harness/scripts/render-github-release-notes.mts"),
   );
+  // Keep the CLI entry at its invoked path; support modules can use the current checkout.
+  for (const source of [
+    "scripts/lib",
+    "scripts/tsx.mjs",
+    "scripts/openclaw-npm-extended-stable-release.mjs",
+    "scripts/full-release-validation-policy.mjs",
+  ]) {
+    fs.symlinkSync(join(repository, source), join(root, ".release-harness", source));
+  }
   // Publication installs tooling in the harness, then links the frozen target cwd to it.
   fs.symlinkSync(
     join(repository, "node_modules"),

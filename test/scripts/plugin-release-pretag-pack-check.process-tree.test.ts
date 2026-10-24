@@ -14,7 +14,9 @@ import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
 } from "../../src/infra/runtime-worker-url.js";
+import { killPidIfAlive } from "../../src/test-utils/process-tree.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
+import { isProcessAlive } from "../helpers/process-wait.js";
 import { withinTest } from "../helpers/promise.js";
 import { writePublishablePluginFixture } from "../helpers/publishable-plugin-fixture.js";
 import { writeJsonFile } from "../helpers/temp-repo.js";
@@ -24,34 +26,6 @@ const fixtureLifetime = createFixtureLifetime();
 // Join timed-out bodies before releasing their inputs.
 afterEach(() => fixtureLifetime.cleanup());
 const posixIt = process.platform === "win32" ? it.skip : it;
-
-function isProcessAlive(pid: number): boolean {
-  if (!Number.isInteger(pid) || pid <= 1) {
-    return false;
-  }
-  try {
-    process.kill(pid, 0);
-    if (process.platform !== "linux") {
-      return true;
-    }
-    const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
-    // kill(pid, 0) also succeeds for a terminated process awaiting reaping.
-    return stat.charAt(stat.lastIndexOf(")") + 2) !== "Z";
-  } catch {
-    return false;
-  }
-}
-
-function killProcessIfAlive(pid: number): void {
-  if (!isProcessAlive(pid)) {
-    return;
-  }
-  try {
-    process.kill(pid, "SIGKILL");
-  } catch {
-    // The managed runner may have reaped the fixture between the liveness check and signal.
-  }
-}
 
 const readPid = (file: string): number =>
   existsSync(file) ? Number(readFileSync(file, "utf8")) : 0;
@@ -90,7 +64,10 @@ descendant.once("message", () => {
     repoDir,
     writeScript,
     pids,
-    cleanup: () => pids().forEach(killProcessIfAlive),
+    cleanup: () =>
+      pids()
+        .filter((pid) => pid > 1)
+        .forEach(killPidIfAlive),
   };
 }
 

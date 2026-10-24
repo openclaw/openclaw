@@ -10,7 +10,6 @@ import {
   findUnlocalizedAndroidUiLiterals,
   renderAndroidResourceValue as render,
   selectDeterministicTranslation,
-  verifyAndroidAppI18n,
 } from "../../scripts/android-app-i18n.ts";
 import { NATIVE_I18N_LOCALES } from "../../scripts/native-i18n-locales.ts";
 
@@ -40,28 +39,24 @@ const sortedMatches = (source: string, pattern: RegExp, group = 0) =>
   [...source.matchAll(pattern)].map((match) => match[group]!).toSorted();
 
 describe("Android app i18n resources", () => {
-  it("counts manual resources reached only through the generated native lookup", async () => {
+  it("checks locale alignment including manual resources reached only by native lookup", async () => {
     const shellPath = path.resolve(
       "apps/android/app/src/main/java/ai/openclaw/app/ui/ShellScreen.kt",
     );
     const shell = await readFile(shellPath, "utf8");
     try {
       generatedOverrides.set(shellPath, shell.replaceAll("R.string.cancel", "R.string.app_name"));
-      await expect(verifyAndroidAppI18n()).resolves.toBeUndefined();
+      await expect(checkAndroidAppI18n({ tolerateManagedPending: true })).resolves.toBeUndefined();
+      const catalog = await buildAndroidAppI18nCatalog();
+      const base = catalog.resources.get(
+        path.resolve("apps/android/app/build/generated/native-i18n/res/values/native_strings.xml"),
+      );
+      expect(base).toMatch(
+        /<string name="native_[a-f0-9]+"[^>]*tools:ignore="Typos,TypographyDashes,TypographyEllipsis">/u,
+      );
     } finally {
       generatedOverrides.clear();
     }
-  });
-
-  it("keeps generated resources, runtime coverage, and every locale aligned", async () => {
-    await expect(checkAndroidAppI18n({ tolerateManagedPending: true })).resolves.toBeUndefined();
-    const catalog = await buildAndroidAppI18nCatalog();
-    const base = catalog.resources.get(
-      path.resolve("apps/android/app/build/generated/native-i18n/res/values/native_strings.xml"),
-    );
-    expect(base).toMatch(
-      /<string name="native_[a-f0-9]+"[^>]*tools:ignore="Typos,TypographyDashes,TypographyEllipsis">/u,
-    );
   });
 
   it("builds complete Wear and third-party resources for every native locale", async () => {
@@ -109,42 +104,31 @@ describe("Android app i18n resources", () => {
     expect(selectDeterministicTranslation("Source", values)).toBe(expected);
   });
 
-  it.each([
-    {
-      name: "requires exact resource identifiers",
-      keys: ["native_status", "native_status_detail", "native_unused"],
-      source: "R.string.native_status_detail",
-      unused: ["native_status", "native_unused"],
-    },
-    {
-      name: "ignores references in comments",
-      keys: ["kotlin_comment", "block_comment", "xml_comment", "live"],
-      source: `
-              // R.string.kotlin_comment
-              /* R.string.block_comment */
-              val endpoint = "https://example.test"
-              val marker = "/* not a comment */"
-              R.string.live
-            `,
-      xml: "<!-- @string/xml_comment -->",
-      unused: ["kotlin_comment", "block_comment", "xml_comment"],
-    },
-    {
-      name: "ignores references inside Kotlin strings",
-      keys: ["regular_string", "raw_string", "live"],
-      source: `
-              val regular = "R.string.regular_string"
-              val raw = """R.string.raw_string"""
-              R.string.live
-            `,
-      unused: ["regular_string", "raw_string"],
-    },
-  ])("$name", ({ keys, source, xml, unused }) => {
+  it.each<[string, string[], string, string?]>([
+    ["R.string.native_status_detail", ["native_status"], "native_status_detail"],
+    [
+      `// R.string.kotlin_comment
+      /* R.string.block_comment */
+      val endpoint = "https://example.test"
+      val marker = "/* not a comment */"
+      R.string.live`,
+      ["kotlin_comment", "block_comment", "xml_comment"],
+      "live",
+      "<!-- @string/xml_comment -->",
+    ],
+    [
+      `val regular = "R.string.regular_string"
+      val raw = """R.string.raw_string"""
+      R.string.live`,
+      ["regular_string", "raw_string"],
+      "live",
+    ],
+  ])("keeps only exact live references in %s", (source, unused, live, xml) => {
     const files = [{ path: "Example.kt", source }];
     if (xml) {
       files.push({ path: "AndroidManifest.xml", source: xml });
     }
-    expect(findUnusedAndroidResourceKeys(keys, files)).toEqual(unused);
+    expect(findUnusedAndroidResourceKeys([...unused, live], files)).toEqual(unused);
   });
 
   it("decodes quoted Android resources for canonical translation inputs", () => {

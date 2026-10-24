@@ -1,30 +1,24 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  realpathSync,
-  writeFileSync,
-} from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import { copyPrWrapperSources, linkPrWrapperDependencies } from "./pr-wrapper.test-support.js";
+import { createMainRefreshFixture } from "./pr-main-refresh.test-support.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
-const outcomeRef = "refs/openclaw/pr-merge-outcomes/123";
-const lockRef = "refs/openclaw/pr-operation-locks/123";
+const outcomeRef = "refs/openclaw/pr-merge-outcomes/42";
+const lockRef = "refs/openclaw/pr-operation-locks/42";
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
 function fixture() {
-  const root = realpathSync(temps.make("pr-cross-checkout-"));
-  const owner = join(root, "owner");
+  const shared = createMainRefreshFixture(temps.make("pr-cross-checkout-"), {
+    precreateWorktree: false,
+    perWorktreeConfig: false,
+  });
+  const { root, canonical: owner, head, main: base, worktree } = shared;
   const caller = join(root, "caller");
-  const bin = join(root, "bin");
-  for (const dir of [owner, caller, bin]) {
-    mkdirSync(dir);
-  }
+  const bin = join(root, "cross-checkout-bin");
+  mkdirSync(bin);
   // Recovery and metadata checks need these preflight commands but must never execute them.
   for (const command of ["rg", "pnpm"]) {
     writeFileSync(
@@ -34,43 +28,23 @@ function fixture() {
     );
   }
   const env = {
-    HOME: root,
-    TMPDIR: root,
-    PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`,
-    GIT_CONFIG_GLOBAL: "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_ALLOW_PROTOCOL: "file",
-    GH_REPO: "fixture/repo",
+    ...shared.env,
+    PATH: `${bin}${delimiter}${shared.env.PATH}`,
+    OPENCLAW_GH_BIN: join(bin, "gh"),
   };
   const git = (repo: string, args: string[], input?: string) =>
-    execFileSync("git", ["-C", repo, ...args], {
+    execFileSync(shared.realGit, ["-C", repo, ...args], {
       env,
       input,
       encoding: "utf8",
       stdio: ["pipe", "pipe", "pipe"],
     }).trim();
-  for (const repo of [owner, caller]) {
-    git(repo, ["init", "-q", "-b", "main"]);
-    git(repo, ["config", "user.name", "Fixture"]);
-    git(repo, ["config", "user.email", "fixture@example.invalid"]);
-    git(repo, ["config", "core.hooksPath", "/dev/null"]);
-    git(repo, ["config", "commit.gpgsign", "false"]);
-    git(repo, ["commit", "--allow-empty", "-qm", "Base"]);
-  }
-  const components = copyPrWrapperSources(owner);
-  linkPrWrapperDependencies(owner);
-  git(owner, ["add", "--", ...components]);
-  git(owner, ["commit", "-qm", "Wrapper"]);
-  const base = git(owner, ["rev-parse", "HEAD"]);
-  writeFileSync(join(owner, "owner.txt"), "reviewed change\n");
-  git(owner, ["add", "owner.txt"]);
-  const tree = git(owner, ["write-tree"]);
-  const head = git(owner, ["commit-tree", tree, "-p", base], "Source\n");
+  git(root, ["clone", "-q", owner, caller]);
+  const tree = git(owner, ["rev-parse", `${head}^{tree}`]);
   const landed = git(owner, ["commit-tree", tree, "-p", base], "Landed\n");
   git(owner, ["update-ref", "refs/heads/main", landed]);
-  git(owner, ["remote", "add", "origin", owner]);
+  git(owner, ["push", "-q", "origin", "main"]);
   git(owner, ["update-ref", "refs/remotes/origin/main", landed]);
-  const worktree = join(owner, ".worktrees/pr-123");
   git(owner, ["worktree", "add", "-q", "--detach", worktree, head]);
   mkdirSync(join(worktree, ".local"));
   const capture = join(worktree, ".local/merge-output.log");
@@ -85,7 +59,7 @@ function fixture() {
   const record = {
     version: 1,
     repo,
-    pr: 123,
+    pr: 42,
     prId: "fixture-pr",
     base: "main",
     head,
@@ -109,17 +83,9 @@ function fixture() {
         databaseId: repo.id,
         ref: { target: { oid: landed } },
         pullRequest: {
-          id: record.prId,
-          number: 123,
-          url: `${repo.url}/pull/123`,
+          ...shared.metadata,
           state: "MERGED",
-          headRefOid: head,
-          baseRefName: "main",
-          isDraft: false,
           mergeCommit: { oid: landed },
-          autoMergeRequest: null,
-          isInMergeQueue: false,
-          isMergeQueueEnabled: false,
           mergeable: "UNKNOWN",
           mergeStateStatus: "UNKNOWN",
         },
@@ -128,8 +94,8 @@ function fixture() {
   };
   const pullResponse = (baseRef: string) =>
     JSON.stringify({
-      number: 123,
-      html_url: `${repo.url}/pull/123`,
+      number: 42,
+      html_url: `${repo.url}/pull/42`,
       base: { ref: baseRef, repo: repoAuthority },
       head: { sha: "" },
     });
@@ -144,13 +110,13 @@ case "$1 $2" in
   "api user") printf 'HTTP/2.0 200 OK\\n\\n{"login":"fixture"}\\n' ;;
   "api --hostname")
     case "$4" in
-      repos/fixture/repo/pulls/123)
+      repos/fixture/repo/pulls/42)
         if [ "$(git rev-parse --show-toplevel)" = '${owner}' ]; then
           printf '%s\\n' '${pullResponse("owner-release")}'
         else
           printf '%s\\n' '${pullResponse("caller-release")}'
         fi ;;
-      repos/fixture/repo/pulls/123/files?per_page=100) printf '%s\\n' '[[]]' ;;
+      repos/fixture/repo/pulls/42/files?per_page=100) printf '%s\\n' '[[]]' ;;
       *) echo "Unexpected GitHub operation: $*" >&2; exit 99 ;;
     esac ;;
   "api graphql")
@@ -161,7 +127,7 @@ esac
 `,
   );
   chmodSync(gh, 0o755);
-  const run = (cwd = caller, args = ["merge-run", "123"]) => {
+  const run = (cwd = caller, args = ["merge-run", "42"]) => {
     const result = spawnSync(join(owner, "scripts/pr"), args, {
       cwd,
       env,
@@ -252,7 +218,7 @@ describePosix("native PR wrapper repository ownership", () => {
     "uses owner repository metadata for early %s validation",
     (command) => {
       const f = fixture();
-      const result = f.run(f.caller, [command, "123"]);
+      const result = f.run(f.caller, [command, "42"]);
       expect(result.status, result.output).toBe(1);
       expect(result.output).toContain(
         command === "ci-dispatch"
