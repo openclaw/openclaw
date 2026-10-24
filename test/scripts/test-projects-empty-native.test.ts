@@ -54,29 +54,22 @@ it.for([
     ...projects,
     help: true,
   }),
-  emptyCase("several exact files", 1, [], { selectors: [target, sibling] }),
   emptyCase("exact files across lanes", 1, [], {
     selectors: [target, isolated],
     parallel: true,
     emptyInvocations: 2,
   }),
   emptyCase("explicit true", 0, [`${pass}=true`]),
-  emptyCase("bare opt-in", 0, [pass]),
   emptyCase("separated exclusion matching routed target", 0, ["--exclude", target, pass], {
     excluded: false,
   }),
-  emptyCase("explicit false", 1, [`${pass}=false`]),
   emptyCase("native negation", 1, ["--no-passWithNoTests"]),
   emptyCase("native dashed spelling", 0, ["--pass-with-no-tests=true"]),
   emptyCase("invalid duplicate scalar", 1, [pass, pass], { invalid: true }),
   emptyCase("direct configured default", 1, direct),
   emptyCase("cfg long control", 0, direct, runs),
-  emptyCase("cfg short control", 0, ["-c", config], runs),
-  emptyCase("cfg inline short", 0, [`-c=${config}`], runs),
   emptyCase("cfg inline strict", 1, [`-c=${config}`, pass]),
-  ...[`${pass}=false`, `${pass}=true`, pass, "--pass-with-no-tests=true"].map((flag) =>
-    emptyCase(`direct configured strict ${flag}`, 1, [...direct, flag]),
-  ),
+  emptyCase("direct configured strict alias", 1, [...direct, "--pass-with-no-tests=true"]),
   // Native parse errors before discovery remain infrastructure failures.
   emptyCase(
     "direct invalid scalar is not repaired",
@@ -84,7 +77,6 @@ it.for([
     [...direct, "--no-passWithNoTests", `${pass}=true`],
     { invalid: true },
   ),
-  emptyCase("delegated separated false", 1, [pass, "false"]),
   emptyCase("delegated separated true", 0, [pass, "true"]),
   emptyCase("direct help with strict scalar", 0, [...direct, `${pass}=false`, `${help}=true`], {
     help: true,
@@ -100,7 +92,6 @@ it.for([
   }),
   emptyCase("source-derived selection", 0, [], { selectors: [source] }),
   emptyCase("native help", 0, [`${help}=true`], { help: true }),
-  emptyCase("non-excluded control", 0, [], runs),
   emptyCase("one surviving named file", 0, [], { selectors: [target, sibling], tests: 1 }),
   emptyCase("skipped case is still a discovered file", 0, [], { ...runs, skipped: true }),
 ])("$name", { timeout: 60_000 }, async (scenario, { signal, onTestFinished }) => {

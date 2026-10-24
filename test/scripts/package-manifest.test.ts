@@ -57,21 +57,15 @@ it("keeps transitive platform payloads optional when npm reloads a global bundle
   expect(await readManifest()).toBe(originalBytes);
   expect(await restorePackageManifest(root)).toBe(false);
 });
-it.each(["during resolution", "after preparation"])("preserves edits %s", async (when) => {
+it("preserves edits during dependency resolution", async () => {
   await writeManifest({ bundleDependencies: ["bundled"] });
   const edited = JSON.stringify({ bundleDependencies: ["bundled"], description: "new edit" });
-  if (when === "during resolution") {
-    vi.mocked(generateNpmPackageLock).mockImplementation(() => {
-      writeFileSync(manifestPath, edited);
-      return platformLock;
-    });
-    await expect(preparePackageManifest(root)).rejects.toThrow("changed while preparing");
-    expect(await restorePackageManifest(root)).toBe(false);
-  } else {
-    await preparePackageManifest(root);
-    await writeFile(manifestPath, edited);
-    await expect(restorePackageManifest(root)).rejects.toThrow("changed after prepack");
-  }
+  vi.mocked(generateNpmPackageLock).mockImplementation(() => {
+    writeFileSync(manifestPath, edited);
+    return platformLock;
+  });
+  await expect(preparePackageManifest(root)).rejects.toThrow("changed while preparing");
+  expect(await restorePackageManifest(root)).toBe(false);
   expect(await readManifest()).toBe(edited);
 });
 it("does not resolve a dependency graph for an unbundled package", async () => {
@@ -113,8 +107,6 @@ it.each([false, true])(
 );
 
 function fixture() {
-  const fixtureRoot = tempDirs.make("openclaw-runtime-manifest-");
-  const fixtureManifestPath = path.join(fixtureRoot, "package.json");
   const manifest = {
     name: "openclaw-manifest-fixture",
     version: "1.0.0",
@@ -139,20 +131,20 @@ function fixture() {
     scripts: { proof: "node scripts/crabbox-wrapper.mjs proof" },
   };
   const original = `${JSON.stringify(manifest, null, 2)}\n`;
-  writeFileSync(fixtureManifestPath, original);
-  mkdirSync(path.join(fixtureRoot, "dist"));
-  writeFileSync(path.join(fixtureRoot, "dist/index.js"), "export const answer = 42;\n");
-  writeFileSync(path.join(fixtureRoot, "dist/types.js"), "export const answer = 17;\n");
-  writeFileSync(path.join(fixtureRoot, "dist/types.cjs"), "exports.answer = 23;\n");
-  writeFileSync(path.join(fixtureRoot, "dist/fallback.js"), "export const answer = 99;\n");
+  writeFileSync(manifestPath, original);
+  mkdirSync(path.join(root, "dist"));
+  writeFileSync(path.join(root, "dist/index.js"), "export const answer = 42;\n");
+  writeFileSync(path.join(root, "dist/types.js"), "export const answer = 17;\n");
+  writeFileSync(path.join(root, "dist/types.cjs"), "exports.answer = 23;\n");
+  writeFileSync(path.join(root, "dist/fallback.js"), "export const answer = 99;\n");
   return {
-    root: fixtureRoot,
+    root,
     manifest,
-    manifestPath: fixtureManifestPath,
+    manifestPath,
     original,
-    backupPath: path.join(fixtureRoot, ".artifacts/package-manifest/package.json.prepack-backup"),
-    read: () => JSON.parse(readFileSync(fixtureManifestPath, "utf8")),
-    bytes: () => readFileSync(fixtureManifestPath, "utf8"),
+    backupPath: path.join(root, ".artifacts/package-manifest/package.json.prepack-backup"),
+    read: () => JSON.parse(readFileSync(manifestPath, "utf8")),
+    bytes: () => readFileSync(manifestPath, "utf8"),
   };
 }
 

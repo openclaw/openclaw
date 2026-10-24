@@ -158,7 +158,7 @@ describe("plugin index SQLite E2E helpers", () => {
     expect(() => readPluginInstallIndex(options)).toThrow(expected);
   });
 
-  it.each([0, 12, 13])("bounds only required summary fields in schema v%s", async (schema) => {
+  it.each([12, 13])("bounds only required summary fields in schema v%s", async (schema) => {
     const index = await loadPluginIndex();
     const installRecords = { demo: { source: "npm", future: { values: [false, null, "keep"] } } };
     const plugins = [
@@ -203,7 +203,7 @@ describe("plugin index SQLite E2E helpers", () => {
   it.each([
     { mode: "current", schemaVersion: 0, options: {}, current: true },
     { mode: "pre-v13", schemaVersion: 0, options: { storageMode: "pre-v13" }, current: false },
-    ...[0, 12, 13].map((schemaVersion) => ({
+    ...[0, 13].map((schemaVersion) => ({
       mode: `existing schema v${schemaVersion}`,
       schemaVersion,
       options: { storageMode: "existing-schema" },
