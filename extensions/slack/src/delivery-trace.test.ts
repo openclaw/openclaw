@@ -16,6 +16,11 @@ import type { ReplyDispatchKind, ReplyPayload } from "openclaw/plugin-sdk/reply-
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { mergeSlackAccountConfig } from "./accounts.js";
 import {
+  assertSlackExpiredProgressTrace,
+  assertSlackOrdinaryFallbackCleanupTrace,
+  assertSlackRejectedRecoveryFinalTrace,
+} from "./delivery-trace-recovery.test-support.js";
+import {
   BLOCKS_FINAL_PRESENTATION,
   BLOCKS_FINAL_TEXT,
   SHORT_FINAL_TEXT,
@@ -51,8 +56,11 @@ type SlackTraceState = {
   turnOutcome: Deferred<{ queuedFinal: boolean; counts: TurnCounts }> | null;
   dispatchDone: Promise<void> | null;
   tsCounter: number;
+  counts: TurnCounts;
   /** Scripted benign rejection for the next chat.startStream call (scenario-owned). */
   rejectStartStreamCode: string | undefined;
+  /** Scripted expiry or fallback rejection for the next chat.appendStream call. */
+  rejectAppendStreamCode: string | undefined;
 };
 
 const traceRuntimeError = vi.fn();
@@ -65,7 +73,9 @@ const traceState = vi.hoisted((): SlackTraceState => ({
   turnOutcome: null,
   dispatchDone: null,
   tsCounter: 0,
+  counts: { tool: 0, block: 0, final: 0 },
   rejectStartStreamCode: undefined,
+  rejectAppendStreamCode: undefined,
 }));
 
 // Replace the agent turn, not the downstream delivery lifecycle.
@@ -129,6 +139,7 @@ afterEach(async () => {
   traceState.turnOutcome = null;
   traceState.dispatchDone = null;
   traceState.rejectStartStreamCode = undefined;
+  traceState.rejectAppendStreamCode = undefined;
 });
 
 const CHANNEL_ID = "C0TRACE";
@@ -294,7 +305,17 @@ function createRecordingSlackClient(): Record<string, unknown> {
         record("chat.startStream", args, args.channel, { ts });
         return { ok: true, ts };
       },
-      appendStream: acknowledge("chat.appendStream"),
+      appendStream: async (args: Record<string, unknown>) => {
+        const rejectCode = traceState.rejectAppendStreamCode;
+        if (rejectCode) {
+          traceState.rejectAppendStreamCode = undefined;
+          record("chat.appendStream", args, args.ts, { ok: false, error: rejectCode });
+          const error = new Error(`An API error occurred: ${rejectCode}`);
+          Object.assign(error, { data: { ok: false, error: rejectCode } });
+          throw error;
+        }
+        return acknowledge("chat.appendStream")(args);
+      },
       stopStream: acknowledge("chat.stopStream"),
     },
     users: {
@@ -424,9 +445,11 @@ async function setupSlackTrace(
   traceState.tsCounter = 0;
   traceRuntimeError.mockClear();
   const counts: TurnCounts = { tool: 0, block: 0, final: 0 };
+  traceState.counts = counts;
   traceState.turn = null;
   traceState.turnStarted = createDeferred<void>();
   traceState.turnOutcome = createDeferred<{ queuedFinal: boolean; counts: TurnCounts }>();
+  traceState.rejectAppendStreamCode = undefined;
   traceState.rejectStartStreamCode =
     scenario === "short-final-native-rejection"
       ? "method_not_supported_for_channel_type"
@@ -595,6 +618,15 @@ function wirePayloads(events: readonly TraceEvent[], method: string) {
     .filter((event) => event.kind === method)
     .map((event) => (event.data as { payload?: unknown } | undefined)?.payload);
 }
+
+const recoveryTraceParams = {
+  setup: setupSlackTrace,
+  state: traceState,
+  narration: NATIVE_PROGRESS_NARRATION,
+  channelId: CHANNEL_ID,
+  assertRuntimeErrorCount: (count: number) =>
+    expect(traceRuntimeError).toHaveBeenCalledTimes(count),
+};
 
 describe("slack delivery trace goldens", () => {
   it.each(["compact", "inferred-compact", "partial", "card"] as const)(
@@ -807,6 +839,19 @@ describe("slack delivery trace goldens", () => {
       }
     });
   }
+
+  it("recovers an expired native progress stream and acknowledges its final on the same message", async () =>
+    assertSlackExpiredProgressTrace(recoveryTraceParams));
+
+  it.each(["oversized", "invalid_blocks", "edit_window_closed", "cant_update_message"])(
+    "delivers a definitely rejected recovered final through normal delivery (%s)",
+    async (failure) => assertSlackRejectedRecoveryFinalTrace(recoveryTraceParams, failure),
+  );
+
+  it.each(["success", "message_not_in_streaming_state", "internal_error", "post_response_lost"])(
+    "does not replay ordinary fallback text during native cleanup (%s)",
+    async (cleanup) => assertSlackOrdinaryFallbackCleanupTrace(recoveryTraceParams, cleanup),
+  );
 
   it("discards a Slack-stopped native stream without a duplicate final or stop request", async () => {
     let streamTs: string | undefined;

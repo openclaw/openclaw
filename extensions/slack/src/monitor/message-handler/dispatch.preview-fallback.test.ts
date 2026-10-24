@@ -1677,6 +1677,32 @@ it("continues a buffered native progress stream with the final reply", async () 
   expectNativeStreamText(`\n${FINAL_REPLY_TEXT}`);
 });
 
+it("keeps custom authorship on expiry fallback without replaying acknowledged text", async () => {
+  mockedNativeStreaming = true;
+  const relayIdentity = { username: "Research Agent", iconEmoji: ":mag:" };
+  const acknowledgedPrefix = "already visible";
+  const pendingTail = "unacknowledged tail";
+  mockedDispatchSequence = [
+    { kind: "final", payload: { text: acknowledgedPrefix } },
+    { kind: "final", payload: { text: pendingTail } },
+  ];
+  const session = createNativeStreamSession();
+  startSlackStreamMock.mockResolvedValueOnce(session);
+  appendSlackStreamMock.mockImplementationOnce(async () => {
+    session.pendingText = pendingTail;
+    session.stopped = true;
+    throw new TestSlackStreamNotDeliveredError(pendingTail, "message_not_in_streaming_state");
+  });
+
+  await dispatch({ relayIdentity });
+
+  expectMockCallArgFields(startSlackStreamMock, 0, {
+    text: acknowledgedPrefix,
+    identity: relayIdentity,
+  });
+  expect(deliverRepliesMock).toHaveBeenCalledOnce();
+  expectDeliverReplyCall(0, pendingTail, { identity: relayIdentity });
+});
 it.each(["stop-delivered", "oversized-fallback"] as const)(
   "settles definitely rejected native text through %s",
   async (outcome) => {
