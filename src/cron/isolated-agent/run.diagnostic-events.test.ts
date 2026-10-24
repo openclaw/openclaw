@@ -1,9 +1,15 @@
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolvePreparedRunAdmission } from "../../agents/admitted-run-context.js";
+import { prepareAgentRunTerminalReply } from "../../agents/agent-run-terminal-reply.js";
+import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { derivePersistedSessionLifecyclePatch } from "../../config/sessions/session-run-lifecycle-projection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getAgentEventLifecycleGeneration, onAgentRuntimeEvent } from "../../infra/agent-events.js";
 import * as diagnostics from "../../infra/diagnostic-events.js";
 import * as trace from "../../infra/diagnostic-trace-context.js";
 import { resetDiagnosticStateForTest } from "../../logging/diagnostic.test-support.js";
+import { deriveSessionUnread } from "../../shared/session-unread.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 
 // mock-isolation: Cron diagnostics simulate missing auth sources without a credential-store owner.
@@ -143,6 +149,127 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       { type: "message.processed", sessionId: "persisted-run-session" },
     ]);
   });
+
+  it.each([
+    {
+      name: "visible report",
+      payloads: [{ text: "Report ready" }],
+      text: "Report ready",
+      visible: true,
+      capture: true,
+    },
+    {
+      name: "silent reply",
+      payloads: [{ text: "NO_REPLY" }],
+      text: "NO_REPLY",
+      visible: false,
+      capture: true,
+    },
+    { name: "empty reply", payloads: [], text: "", visible: false, capture: false },
+    {
+      name: "silent reply with media",
+      payloads: [{ text: "NO_REPLY", mediaUrl: "https://example.invalid/report.png" }],
+      text: "NO_REPLY",
+      visible: true,
+      capture: true,
+    },
+    {
+      name: "synthetic workflow error",
+      payloads: [{ text: "Delivery failed", isError: true }],
+      text: "",
+      visible: false,
+      capture: false,
+    },
+    {
+      name: "visible report without content capture",
+      payloads: [{ text: "Report ready" }],
+      text: "Report ready",
+      visible: true,
+      capture: false,
+    },
+    {
+      name: "reasoning-only reply",
+      payloads: [{ text: "Private reasoning", isReasoning: true }],
+      text: "",
+      visible: false,
+      capture: false,
+    },
+    {
+      name: "silent terminal with an earlier draft",
+      payloads: [{ text: "Earlier draft" }],
+      text: "NO_REPLY",
+      visible: false,
+      capture: false,
+    },
+    {
+      name: "heartbeat acknowledgement",
+      payloads: [{ text: "HEARTBEAT_OK" }],
+      text: "HEARTBEAT_OK",
+      visible: false,
+      capture: true,
+    },
+  ])(
+    "projects unread visibility before lifecycle end for $name",
+    async ({ payloads, text, visible, capture }) => {
+      const { resolveCronPayloadOutcome } =
+        await vi.importActual<typeof import("./helpers.js")>("./helpers.js");
+      harness.resolveCronPayloadOutcomeMock.mockImplementation(resolveCronPayloadOutcome);
+      harness.mockRunCronFallbackPassthrough();
+      harness.runEmbeddedAgentMock.mockImplementationOnce(
+        async (params: RunEmbeddedAgentParams) => {
+          await resolvePreparedRunAdmission({ ...params, runtimeKind: "embedded" });
+          await params.onExecutionStarted?.();
+          const reply = prepareAgentRunTerminalReply({ rawText: text });
+          return {
+            payloads,
+            meta: {
+              durationMs: 0,
+              agentMeta: {},
+              terminalReply: reply.terminalReply,
+              finalAssistantVisibleText: reply.text,
+              finalAssistantRawText: text,
+              finalAssistantMessageRawText: text,
+            },
+          };
+        },
+      );
+      const terminalVisibility: boolean[] = [];
+      const terminalUnread: boolean[] = [];
+      const capturedResponses: Array<string | undefined> = [];
+      const readState = { createdAt: 1, lastReadAt: 2, lastActivityAt: 2 };
+      const unsubscribeRun = onAgentRuntimeEvent((event) => {
+        if (event.stream === "lifecycle" && event.data.phase === "end") {
+          terminalVisibility.push(event.controlUiVisible === true);
+          const patch = derivePersistedSessionLifecyclePatch({
+            entry: readState,
+            event,
+            currentLifecycleGeneration: getAgentEventLifecycleGeneration(),
+          });
+          terminalUnread.push(deriveSessionUnread({ ...readState, ...patch }));
+        }
+      });
+      const unsubscribeDiagnostics = diagnostics.onTrustedInternalDiagnosticEvent(
+        (event, _metadata, privateData) => {
+          if (event.type === "message.processed") {
+            capturedResponses.push(privateData.messageContent?.finalResponse);
+          }
+        },
+      );
+      try {
+        await runWithEvents(
+          makeParams({
+            diagnostics: { enabled: true, otel: { enabled: true, captureContent: capture } },
+          }),
+        );
+        expect(terminalUnread).toEqual([visible]);
+        expect(terminalVisibility).toEqual([visible]);
+        expect(capturedResponses).toEqual([capture ? text : undefined]);
+      } finally {
+        unsubscribeRun();
+        unsubscribeDiagnostics();
+      }
+    },
+  );
 
   it("emits neither lifecycle nor usage events when diagnostics are disabled", async () => {
     const { result, events } = await runWithEvents(makeParams({ diagnostics: { enabled: false } }));

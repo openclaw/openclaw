@@ -5754,7 +5754,6 @@
 ["src/gateway/test-helpers.mocks.ts","../auto-reply/reply/get-reply-from-config.runtime.js","ff888b0875559f519b3d988271a831674879081b0c6dc3ffd823f5e170855e68",1]
 ["src/gateway/test-helpers.mocks.ts","../commands/agent.js","e23f296ac08a90243e85868167fd8e110425491443114965b044c238d5d0963c",1]
 ["src/gateway/test-helpers.mocks.ts","../config/config.js","c3c4235b26a8ddc2078028b19ec1738a6147ff57bcb5c9eebd7d0c48b5dbdf53",1]
-["src/gateway/test-helpers.mocks.ts","../cron/isolated-agent.js","6313c4fdf9cbe6408af572032b85738334958f57879ac425be8f604eb89ef9e0",1]
 ["src/gateway/test-helpers.mocks.ts","../infra/tailnet.js","c94b579f6d66a49cbee1836baeae71209235908f610dc31118d47bed888a91cf",1]
 ["src/gateway/test/server-sessions.test-helpers.ts","../../acp/control-plane/manager.js","5e7fa7dd60da60525fc04ec09d448e0654cac634caf5e362e63f4f3c34a92152",1]
 ["src/gateway/test/server-sessions.test-helpers.ts","../../plugin-sdk/browser-maintenance.js","d7427ec9030cf6d9b76ccdd0cd5fad828def4eccf5f91165064596bda10130fc",1]
