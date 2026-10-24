@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { createHash } from "node:crypto";
+import { createHmac, randomBytes } from "node:crypto";
 import { closeSync, openSync, readFileSync, readSync } from "node:fs";
 import { StringDecoder } from "node:string_decoder";
 
@@ -222,6 +222,8 @@ function readGraph(file, safeLabels = null, stringLimit = 1024, scriptAllowlist 
           identities: new Map(),
           edgeTags: new Map(),
           builtins: new Set(),
+          // Per-run key: identities group within one report but cannot confirm guessed paths.
+          identityKey: randomBytes(32),
         }
       : null;
     const codeNameIds = codeData ? new Set() : null;
@@ -258,7 +260,9 @@ function readGraph(file, safeLabels = null, stringLimit = 1024, scriptAllowlist 
             const normalized = value.split(/[?#]/u, 1)[0];
             const complete = normalized.length > 0 && value.length < stringLimit;
             codeData.identities.set(index, {
-              identityHash: complete ? createHash("sha256").update(normalized).digest("hex") : null,
+              identityHash: complete
+                ? createHmac("sha256", codeData.identityKey).update(normalized).digest("hex")
+                : null,
               name: complete && scriptAllowlist.has(normalized) ? normalized : "(redacted)",
             });
             if (/ builtin (?:code|instruction stream)\)$/u.test(value)) {

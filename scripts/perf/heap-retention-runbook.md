@@ -129,7 +129,8 @@ this allowlist from snapshot strings. Without an allowlist, all names are redact
 
 `topScripts` ranks retained bytes; `duplicateScripts` includes **every** complete
 normalized identity with multiple reachable V8 Script objects, regardless of
-`--top`. SHA-256 hashes distinguish redacted names without emitting them. Empty
+`--top`. HMAC-SHA-256 values keyed per run distinguish redacted names within one
+report without emitting them; they cannot confirm a guessed path or link runs. Empty
 and truncated names have null hashes and remain separate; match `--string-limit`
 to the capturing runtime. Instance counts measure compiled Script objects, not
 functions or proof of repeated module evaluation. Intentional VM/plugin isolation
