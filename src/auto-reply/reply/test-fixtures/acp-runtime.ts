@@ -16,6 +16,21 @@ const settledCounts = (delivered: number) => ({
   failedAfterSend: 0,
 });
 
+export function createAcpTestObservabilitySnapshot() {
+  return {
+    runtimeCache: { activeSessions: 0, idleTtlMs: 0, evictedTotal: 0 },
+    turns: {
+      active: 0,
+      queueDepth: 0,
+      completed: 0,
+      failed: 0,
+      averageLatencyMs: 0,
+      maxLatencyMs: 0,
+    },
+    errorsByCode: {},
+  };
+}
+
 export function createAcpTestReplyDispatcher(): ReplyDispatcher {
   const sendToolResult = vi.fn(() => true);
   const sendBlockReply = vi.fn(() => true);

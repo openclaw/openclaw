@@ -951,6 +951,8 @@ src/infra/diagnostics-timeline.ts
 src/infra/diff-read-timing.ts
 src/infra/directory-durability.ts
 src/infra/directory-watch-host.ts
+src/infra/directory-watch-host.worker.ts
+src/infra/directory-watch-parent.worker.ts
 src/infra/disk-space.ts
 src/infra/dispatch-wrapper-resolution.ts
 src/infra/device-identity-store.ts
@@ -1086,6 +1088,7 @@ src/infra/package-update-activation-settlement.ts
 src/infra/package-update-activation-status.ts
 src/infra/package-update-filesystem.ts
 src/infra/package-update-integrity-hasher.ts
+src/infra/package-update-integrity-hasher.worker.ts
 src/infra/package-update-integrity.ts
 src/infra/package-update-publication-tree.ts
 src/infra/package-update-refusal.ts

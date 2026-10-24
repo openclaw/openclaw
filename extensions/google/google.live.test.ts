@@ -8,7 +8,6 @@ import {
   type ProviderStreamFunction,
   type SimpleStreamOptions,
 } from "openclaw/plugin-sdk/llm";
-import { resolveFfmpegBin } from "openclaw/plugin-sdk/media-ffmpeg";
 import {
   createCapturedPluginRegistration,
   registerProviderPlugin,
@@ -18,6 +17,7 @@ import { normalizeTranscriptForMatch } from "openclaw/plugin-sdk/provider-test-c
 import type { RealtimeVoiceBridge } from "openclaw/plugin-sdk/realtime-voice";
 import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
+import { hasTrustedFfmpegForLiveVoiceNote } from "../test-support/generation-live-test-helpers.js";
 import { createLiveValueTool } from "../test-support/live-value-tool.test-support.js";
 import {
   makeTextToolResult,
@@ -85,20 +85,6 @@ function isTransientGeminiSearchError(error: unknown): boolean {
   }
   const message = error.message.toLowerCase();
   return message.includes("timeout") || message.includes("aborted");
-}
-
-function hasTrustedFfmpegForLiveVoiceNote(): boolean {
-  try {
-    resolveFfmpegBin();
-    return true;
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (message.includes("ffmpeg not found in trusted system directories")) {
-      console.warn("[google:live] skip voice-note transcode: ffmpeg unavailable");
-      return false;
-    }
-    throw error;
-  }
 }
 
 async function waitForGoogleLive(
@@ -339,7 +325,7 @@ describeLive("google plugin live", () => {
   }, 120_000);
 
   it("transcodes speech to Opus for voice-note targets", async () => {
-    if (!hasTrustedFfmpegForLiveVoiceNote()) {
+    if (!hasTrustedFfmpegForLiveVoiceNote("google")) {
       return;
     }
 

@@ -1307,12 +1307,12 @@ var External = [
     /(^kind$|^sessionKey$)/u,
     /(^kind$|^sessionKey$)/u,
     /(^kind$|^visible$)/u,
-    /(^kind$|^open$|^dock$|^panel$|^pluginId$|^panelId$)/u,
-    /(^kind$|^open$|^dock$|^panel$|^terminalSessionId$)/u,
-    /(^kind$|^open$|^dock$|^panel$)/u,
-    /(^kind$|^open$|^dock$|^panel$|^environmentId$)/u,
-    /(^kind$|^open$|^dock$|^panel$|^portalId$)/u,
-    /(^kind$|^open$|^dock$|^panel$|^environmentId$)/u,
+    /(^kind$|^open$|^expanded$|^dock$|^panel$|^pluginId$|^panelId$)/u,
+    /(^kind$|^open$|^expanded$|^dock$|^panel$|^terminalSessionId$)/u,
+    /(^kind$|^open$|^expanded$|^dock$|^panel$)/u,
+    /(^kind$|^open$|^expanded$|^dock$|^panel$|^environmentId$)/u,
+    /(^kind$|^open$|^expanded$|^dock$|^panel$|^portalId$)/u,
+    /(^kind$|^open$|^expanded$|^dock$|^panel$|^environmentId$)/u,
     /(^kind$|^sessionKey$)/u,
     /(^requestId$|^presentation$)/u,
     /(^portalId$|^status$|^reason$)/u,
@@ -13777,6 +13777,7 @@ var External = [
     ) &&
     check_2073(value.kind) &&
     check_97(value.open) &&
+    (value.expanded === void 0 || !("expanded" in value) || check_181(value.expanded)) &&
     (value.dock === void 0 || !("dock" in value) || check_2074(value.dock)) &&
     check_47(value.panel) &&
     check_6(value.pluginId) &&
@@ -13796,6 +13797,7 @@ var External = [
     ) &&
     check_2073(value.kind) &&
     check_97(value.open) &&
+    (value.expanded === void 0 || !("expanded" in value) || check_181(value.expanded)) &&
     (value.dock === void 0 || !("dock" in value) || check_2074(value.dock)) &&
     check_1343(value.panel) &&
     (value.terminalSessionId === void 0 ||
@@ -13813,6 +13815,7 @@ var External = [
     ) &&
     check_2073(value.kind) &&
     check_97(value.open) &&
+    (value.expanded === void 0 || !("expanded" in value) || check_181(value.expanded)) &&
     (value.dock === void 0 || !("dock" in value) || check_2074(value.dock)) &&
     check_1342(value.panel),
   check_2078 = (value) =>
@@ -13827,6 +13830,7 @@ var External = [
     ) &&
     check_2073(value.kind) &&
     check_97(value.open) &&
+    (value.expanded === void 0 || !("expanded" in value) || check_181(value.expanded)) &&
     (value.dock === void 0 || !("dock" in value) || check_2074(value.dock)) &&
     check_1284(value.panel) &&
     (value.environmentId === void 0 ||
@@ -13844,6 +13848,7 @@ var External = [
     ) &&
     check_2073(value.kind) &&
     check_97(value.open) &&
+    (value.expanded === void 0 || !("expanded" in value) || check_181(value.expanded)) &&
     (value.dock === void 0 || !("dock" in value) || check_2074(value.dock)) &&
     check_1285(value.panel) &&
     (value.portalId === void 0 || !("portalId" in value) || check_63(value.portalId)),
@@ -13860,6 +13865,7 @@ var External = [
     ) &&
     check_2073(value.kind) &&
     check_97(value.open) &&
+    (value.expanded === void 0 || !("expanded" in value) || check_181(value.expanded)) &&
     (value.dock === void 0 || !("dock" in value) || check_2074(value.dock)) &&
     check_1285(value.panel) &&
     check_6(value.environmentId),

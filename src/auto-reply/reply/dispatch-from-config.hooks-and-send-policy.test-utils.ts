@@ -57,6 +57,18 @@ function groupSilenceConfig(group: "allow" | "disallow"): OpenClawConfig {
   return { agents: { defaults: { silentReply: { group } } } };
 }
 
+function crossChannelGroupContext() {
+  return buildTestCtx({
+    ChatType: "group",
+    Surface: "slack",
+    Provider: "slack",
+    OriginatingChannel: "telegram",
+    OriginatingTo: "telegram:999",
+    SessionKey: "agent:main:slack:group:oc_group",
+    WasMentioned: true,
+  });
+}
+
 beforeAll(globalBeforeAll0);
 
 describe("before_dispatch hook", () => {
@@ -987,15 +999,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     );
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "" }));
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "slack",
-      Provider: "slack",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:999",
-      SessionKey: "agent:main:slack:group:oc_group",
-      WasMentioned: true,
-    });
+    const ctx = crossChannelGroupContext();
 
     const result = await dispatchReplyFromConfig({
       ctx,
@@ -1021,15 +1025,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     mocks.routeReply.mockResolvedValue({ ok: true, delivered: false, suppressed: true });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "" }));
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "slack",
-      Provider: "slack",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:999",
-      SessionKey: "agent:main:slack:group:oc_group",
-      WasMentioned: true,
-    });
+    const ctx = crossChannelGroupContext();
 
     const result = await dispatchReplyFromConfig({
       ctx,
@@ -1049,15 +1045,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     mocks.routeReply.mockResolvedValue({ ok: true, delivered: false, suppressed: true });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => undefined);
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "slack",
-      Provider: "slack",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:999",
-      SessionKey: "agent:main:slack:group:oc_group",
-      WasMentioned: true,
-    });
+    const ctx = crossChannelGroupContext();
 
     const result = await dispatchReplyFromConfig({
       ctx,
@@ -1083,15 +1071,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       await opts?.onBlockReply?.({ mediaUrl: "https://example.com/seatmap.png" });
       return undefined;
     });
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "slack",
-      Provider: "slack",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:999",
-      SessionKey: "agent:main:slack:group:oc_group",
-      WasMentioned: true,
-    });
+    const ctx = crossChannelGroupContext();
 
     const result = await dispatchReplyFromConfig({
       ctx,
@@ -1243,15 +1223,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     });
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn(async () => ({ text: "real answer" }));
-    const ctx = buildTestCtx({
-      ChatType: "group",
-      Surface: "slack",
-      Provider: "slack",
-      OriginatingChannel: "telegram",
-      OriginatingTo: "telegram:999",
-      SessionKey: "agent:main:slack:group:oc_group",
-      WasMentioned: true,
-    });
+    const ctx = crossChannelGroupContext();
 
     const result = await dispatchReplyFromConfig({
       ctx,

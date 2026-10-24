@@ -2,11 +2,11 @@ import path from "node:path";
 import { afterEach, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
+  isTestCliProvider,
   runInitialModelFallbackAttempt,
   type TestModelFallbackRunnerParams,
 } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import { clearRuntimeConfigSnapshot } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createReplyOperation as createRegisteredReplyOperation,
   type ReplyOperation,
@@ -80,14 +80,7 @@ vi.mock("../../agents/model-selection.js", async () => {
   );
   return {
     ...actual,
-    isCliProvider: (provider: string, _cfg?: OpenClawConfig) => {
-      const normalized = provider.trim().toLowerCase();
-      return (
-        normalized === "claude-cli" ||
-        normalized === "google-gemini-cli" ||
-        normalized === "codex-cli"
-      );
-    },
+    isCliProvider: isTestCliProvider,
   };
 });
 

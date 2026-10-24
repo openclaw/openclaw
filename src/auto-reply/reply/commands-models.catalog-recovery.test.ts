@@ -3,7 +3,10 @@ import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import { prepareSharedAuthStoreOwnership } from "../../agents/auth-profiles/path-resolve.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
+import {
+  createClaudeCliBackends,
+  testing as cliBackendsTesting,
+} from "../../agents/cli-backends.test-support.js";
 import type { ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
 import * as preparedCatalog from "../../agents/prepared-model-catalog.js";
 import {
@@ -144,14 +147,7 @@ it("keeps usable choices and clears the refresh warning after recovery for /mode
 it("lists bound models as unavailable when the native-auth plugin is disabled despite a provider key", async () => {
   vi.stubEnv("ANTHROPIC_API_KEY", "synthetic-provider-key");
   cliBackendsTesting.setDepsForTest({
-    resolveRuntimeCliBackends: () => [
-      {
-        id: "claude-cli",
-        modelProvider: "anthropic",
-        pluginId: "anthropic",
-        config: { command: "claude" },
-      },
-    ],
+    resolveRuntimeCliBackends: createClaudeCliBackends,
   });
   catalogMocks.authModes = { "claude-cli": "api_key" };
   const cfg: OpenClawConfig = {

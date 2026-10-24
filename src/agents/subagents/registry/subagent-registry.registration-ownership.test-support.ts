@@ -88,7 +88,10 @@ export function registerSubagentRegistrationOwnershipTests({
           expect(subagentRuns.has(runId)).toBe(false);
         } else {
           const accepted = subagentRuns.get(runId);
-          await registerSubagentRun(params, { acceptedRunReplay: true });
+          await registerSubagentRun(
+            { ...params, childAgentId: childAgentId.toUpperCase() },
+            { acceptedRunReplay: true },
+          );
           expect(subagentRuns.get(runId)).toBe(accepted);
         }
         expect(loadSubagentRegistryFromSqlite().get(runId)).toEqual(original);

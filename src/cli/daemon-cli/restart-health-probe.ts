@@ -301,8 +301,10 @@ export async function confirmGatewayReachable(params: {
   allowHttpVerification?: boolean;
   signal?: AbortSignal;
   timeoutMs?: number;
+  assertCurrent?: () => void;
 }): Promise<GatewayReachability> {
   params.signal?.throwIfAborted();
+  params.assertCurrent?.();
   const result: GatewayReachability = {
     reachable: false,
     gatewayVersion: null,
@@ -336,6 +338,8 @@ export async function confirmGatewayReachable(params: {
       ...controlAuth,
       tlsFingerprint: target.tlsFingerprint,
       method: "health",
+      assertConnectionCurrent: params.assertCurrent,
+      assertDispatchCurrent: params.assertCurrent,
       scopes: [READ_SCOPE],
       timeoutMs: params.timeoutMs ?? GATEWAY_RESTART_PROBE_TIMEOUT_MS,
       ...(params.signal ? { signal: params.signal } : {}),
@@ -356,6 +360,7 @@ export async function confirmGatewayReachable(params: {
     }
   } catch (error) {
     params.signal?.throwIfAborted();
+    params.assertCurrent?.();
     const reason = isGatewayProtocolResponseError(error)
       ? error.message
       : isGatewayTransportError(error) && error.code === 1008

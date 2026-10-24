@@ -11,6 +11,7 @@ import type {
   AcpRuntimeTurnInput,
 } from "../../plugin-sdk/acp-runtime.js";
 import { acpMocks } from "./dispatch-from-config.shared.test-harness.js";
+import { createAcpTestObservabilitySnapshot } from "./test-fixtures/acp-runtime.js";
 
 export function createDispatchConfig(diagnostics = true): OpenClawConfig {
   return {
@@ -37,18 +38,7 @@ export function createMockAcpSessionManager() {
       }
       return { kind: "none", ...target };
     },
-    getObservabilitySnapshot: () => ({
-      runtimeCache: { activeSessions: 0, idleTtlMs: 0, evictedTotal: 0 },
-      turns: {
-        active: 0,
-        queueDepth: 0,
-        completed: 0,
-        failed: 0,
-        averageLatencyMs: 0,
-        maxLatencyMs: 0,
-      },
-      errorsByCode: {},
-    }),
+    getObservabilitySnapshot: createAcpTestObservabilitySnapshot,
     runTurn: vi.fn(
       async (params: {
         cfg: OpenClawConfig;

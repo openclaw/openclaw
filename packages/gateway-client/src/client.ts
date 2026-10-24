@@ -174,6 +174,8 @@ export type GatewayClientOptions = GatewayWebSocketTargetOptions &
      * this to keep the connect-challenge watchdog aligned with the gateway.
      */
     preauthHandshakeTimeoutMs?: number;
+    /** Synchronously revalidate the caller's live authority before transport writes. */
+    assertConnectionCurrent?: () => void;
     tickWatchMinIntervalMs?: number;
     tickWatchTimeoutMs?: number;
     requestTimeoutMs?: number;
@@ -459,13 +461,14 @@ export class GatewayClient {
     // lifecycle and must remove it immediately after the socket is created.
     let unregisterGatewayLoopbackBypass: (() => void) | undefined;
     try {
-      unregisterGatewayLoopbackBypass = this.deps.registerGatewayLoopbackBypass(url);
-    } catch (error) {
-      throw new GatewayClientTransportPolicyError(
-        error instanceof Error ? error.message : String(error),
-      );
-    }
-    try {
+      try {
+        unregisterGatewayLoopbackBypass = this.deps.registerGatewayLoopbackBypass(url);
+        this.opts.assertConnectionCurrent?.();
+      } catch (error) {
+        throw new GatewayClientTransportPolicyError(
+          error instanceof Error ? error.message : String(error),
+        );
+      }
       ws = new WebSocket(url, transport.options);
       ws.binaryType = "nodebuffer";
     } finally {
@@ -536,7 +539,11 @@ export class GatewayClient {
     });
     return {
       isOpen: () => ws.readyState === WebSocket.OPEN,
-      send: (data) => ws.send(data),
+      send: (data) => {
+        // Authentication and startup retries can yield after connection admission.
+        this.opts.assertConnectionCurrent?.();
+        ws.send(data);
+      },
       close: (code, reason) => ws.close(code, reason),
     };
   }

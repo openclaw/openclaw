@@ -7,7 +7,6 @@ import {
 } from "../../../components/session-progress-card.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
 import { listSubagents } from "../chat-subagent-wait.ts";
 import {
   SessionAutomationMobileList,
@@ -239,10 +238,6 @@ function MobileRoot(
     <ChatDetailsMobileRoot
       {...props.content.entries}
       presented={props.presented}
-      sessionTitle={resolveSessionDisplayName(
-        props.details.selectedSession?.key ?? "",
-        props.details.selectedSession,
-      )}
       taskProgress={
         progress()?.counts || progressNote()
           ? {

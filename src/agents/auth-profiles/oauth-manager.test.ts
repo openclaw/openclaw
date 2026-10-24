@@ -10,14 +10,8 @@ import {
   hasSqliteWorkerOutcomeUnknown,
   SqliteWorkerError,
 } from "../../infra/sqlite-worker-contract.js";
-import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { createOAuthRefreshError } from "../../shared/oauth-refresh-outcome.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
-import { captureAuthProfileCredentialAuthority } from "../../state/user-model-account-authority.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import {
   connectUserModelAccount,
   readSelectedUserModelAccount,
@@ -26,6 +20,7 @@ import {
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { retainPersistedCredential } from "./credential-authority.test-support.js";
 import { createOAuthRefreshCredential as createCredential } from "./credential-fixtures.test-support.js";
 import * as externalCliSync from "./external-cli-sync.js";
 import { createOAuthManager } from "./oauth-manager.js";
@@ -45,23 +40,9 @@ import {
   ensureAuthProfileStoreWithoutExternalProfiles,
   saveAuthProfileStore,
 } from "./store-runtime.js";
-import { captureAuthProfileStorePersistenceSnapshot } from "./store.js";
 import type { AuthProfileStore, OAuthCredential } from "./types.js";
 
 const { testing: externalAuthTesting } = await import("./external-auth.test-support.js");
-
-function retainPersistedCredential(agentDir: string, selectedProfileId: string) {
-  const shared = openOpenClawStateDatabase();
-  const { databasePath } = captureAuthProfileStorePersistenceSnapshot(agentDir).owner;
-  const source = readDatabasePathIdentitySync(databasePath);
-  const authority = captureAuthProfileCredentialAuthority(
-    captureOpenClawStateWorkerContext({ path: shared.path }),
-    { databasePath, identity: `${source.key}:${source.birthtime ?? ""}` },
-    selectedProfileId,
-  );
-  authority.observe(loadPersistedAuthProfileStore(agentDir)?.profiles[selectedProfileId]);
-  return authority;
-}
 
 function createTestManager(overrides: NativeOAuthProviderFixture) {
   mockOAuthProviderOperations(overrides);
