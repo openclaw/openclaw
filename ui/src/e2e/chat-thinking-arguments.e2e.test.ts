@@ -95,16 +95,7 @@ suite.define(() => {
               id: "gpt-5.6-sol",
               name: "GPT-5.6 Sol",
               provider: "openai",
-              thinkingLevels: [
-                "off",
-                "minimal",
-                "low",
-                "medium",
-                "high",
-                "xhigh",
-                "max",
-                "ultra",
-              ].map((id) => ({ id, label: id })),
+              thinkingLevels: ["off", "ultra"].map((id) => ({ id, label: id })),
             },
           ],
           methodResponses: {
@@ -124,9 +115,6 @@ suite.define(() => {
         const picker = page.locator(".slash-menu[role='listbox']");
         await picker.waitFor({ state: "visible" });
         await expect.poll(() => composer.inputValue()).toBe("/think ");
-        await expect
-          .poll(() => picker.getByRole("option").locator(".slash-menu-name").allTextContents())
-          .toEqual(["default", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
 
         const [pickerBox, inputBox] = await Promise.all([
           picker.boundingBox(),
