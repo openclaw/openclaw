@@ -66,14 +66,16 @@ function methods() {
 function counts() {
   return [request.mock.calls.length, catalogRequest.mock.calls.length];
 }
-function autoRefresh() {
-  const refreshes: Promise<void>[] = [];
-  mount(retained, (update) => {
+function autoRefresh(scope: Scope = retained, read = () => refresh().completed) {
+  const reads: Promise<void>[] = [];
+  const updates: string[] = [];
+  mount(scope, (update) => {
+    updates.push(update.type);
     if (update.type === "invalidated") {
-      refreshes.push(refresh().completed);
+      reads.push(read());
     }
   });
-  return () => Promise.all(refreshes);
+  return { reads, updates, settled: () => Promise.all(reads) };
 }
 
 function pendingMetadata() {
@@ -132,7 +134,6 @@ afterEach(async () => {
 
 describe("chat metadata store", () => {
   it("invalidates subscribed catalogs with their aliases and detailed views after a session patch", async () => {
-    request.mockResolvedValue({ models: [] });
     const scope = { agentId: "main", sessionKey: "agent:main:main" };
     const alias = { ...scope, sessionKey: "main" };
     const detailed = { ...scope, includeDetails: true };
@@ -161,11 +162,9 @@ describe("chat metadata store", () => {
   it.each(["before", "after"])(
     "invalidates catalogs when the last subscriber leaves %s a patch",
     async (timing) => {
-      const oldModel = { id: "old", name: "Old", provider: "example" };
-      const newModel = { ...oldModel, id: "new", name: "New" };
       catalogRequest
-        .mockResolvedValueOnce({ models: [oldModel] })
-        .mockResolvedValue({ models: [newModel] });
+        .mockResolvedValueOnce({ models: [{ ...models[0], id: "old" }] })
+        .mockResolvedValue({ models });
       const scope = { agentId: "main", sessionKey: "agent:main:released" };
       const release = mount(scope);
       beginChatMetadataPublication(client, scope).publish(metadata("cached"));
@@ -177,7 +176,7 @@ describe("chat metadata store", () => {
       if (timing === "after") {
         release();
       }
-      expect(await loadModelCatalog(client, scope)).toEqual({ models: [newModel] });
+      expect(await loadModelCatalog(client, scope)).toEqual({ models });
       expect(catalogRequest).toHaveBeenCalledTimes(2);
     },
   );
@@ -192,7 +191,6 @@ describe("chat metadata store", () => {
   ])(
     "classifies $reason invalidation (catalogChanged=$catalogChanged) without discarding unrelated catalogs",
     async ({ reason, catalogChanged }) => {
-      request.mockResolvedValue({ models: [] });
       const scope = { agentId: "main", sessionKey: "agent:main:current" };
       const other = { agentId: "main", sessionKey: "agent:main:other" };
       const listener = vi.fn();
@@ -254,7 +252,7 @@ describe("chat metadata store", () => {
     beginChatMetadataPublication(client, scope).publish(metadata("locked"));
     mount(agentScope);
     await load();
-    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(metadata("neutral"));
+    expect(peek()).toEqual(metadata("neutral"));
     expect(peek(scope)).toEqual(metadata("locked"));
     first();
     expect(peek(scope)).toEqual(metadata("locked"));
@@ -262,7 +260,7 @@ describe("chat metadata store", () => {
     second();
     void lateStartup.publish(metadata("late"));
     expect(peek(scope)).toEqual(metadata("locked"));
-    expect(peekChatMetadata(client, { agentId: "main" })).toEqual(metadata("neutral"));
+    expect(peek()).toEqual(metadata("neutral"));
   });
 
   it("retries missing startup commands after a model-only publication", async () => {
@@ -289,14 +287,7 @@ describe("chat metadata store", () => {
       const replacement = metadata("current");
       request.mockReturnValueOnce(older.promise).mockResolvedValue(replacement);
       const scope = { agentId: "main", sessionKey: "agent:main:locked" };
-      const updates: string[] = [];
-      const refreshes: Promise<void>[] = [];
-      mount(scope, (update) => {
-        updates.push(update.type);
-        if (update.type === "invalidated") {
-          refreshes.push(load(scope));
-        }
-      });
+      const { updates, settled } = autoRefresh(scope, () => load(scope));
       const startup = beginChatMetadataPublication(client, scope);
       const oldRead = load(scope).catch(() => undefined);
       for (let index = 0; index < 8; index++) {
@@ -310,7 +301,7 @@ describe("chat metadata store", () => {
         older.resolve(metadata("obsolete-read"));
       }
       await oldRead;
-      await Promise.all(refreshes);
+      await settled();
       expect(request).toHaveBeenCalledTimes(2);
       expect(peek(scope)).toEqual(replacement);
       expect(updates).not.toContain("error");
@@ -421,10 +412,8 @@ describe("chat metadata store", () => {
       release();
     }
 
-    expect(peekChatMetadata(client, mounted)).toEqual(metadata("cached"));
-    expect(
-      peekChatMetadata(client, { agentId: "main", sessionKey: "agent:main:0" }),
-    ).toBeUndefined();
+    expect(peek(mounted)).toEqual(metadata("cached"));
+    expect(peek({ ...agentScope, sessionKey: "agent:main:0" })).toBeUndefined();
     const recent = { agentId: "main", sessionKey: "agent:main:69" };
     const release = mount(recent);
     await load(recent);
@@ -462,13 +451,8 @@ describe("chat metadata store", () => {
       .mockReturnValueOnce(first.promise)
       .mockReturnValueOnce(second.promise)
       .mockResolvedValue(current);
-    const reads: Promise<void>[] = [];
-    mount(agentScope, (update) => {
-      if (update.type === "invalidated") {
-        reads.push(load(agentScope));
-      }
-    });
-    reads.push(load(agentScope));
+    const { reads, settled } = autoRefresh(agentScope, load);
+    reads.push(load());
     invalidateChatMetadataStore(client);
     first.resolve(metadata("first"));
     await reads[0];
@@ -478,7 +462,7 @@ describe("chat metadata store", () => {
     }
     expect.soft(request).toHaveBeenCalledTimes(2);
     second.resolve(metadata("second"));
-    await Promise.all(reads);
+    await settled();
     expect(request).toHaveBeenCalledTimes(3);
     expect(peek(agentScope)).toEqual(current);
   });
@@ -558,9 +542,7 @@ describe("chat metadata store", () => {
       }),
     );
 
-    await expect(revalidateChatMetadata(client, { agentId: "main" })).rejects.toThrow(
-      "database temporarily unavailable",
-    );
+    await expect(revalidate()).rejects.toThrow("database temporarily unavailable");
     expect(request).toHaveBeenCalledOnce();
   });
 
@@ -598,7 +580,7 @@ describe("automatic metadata admission", () => {
     vi.useFakeTimers();
     let sessionModelRevision = "selection-1";
     catalogRequest.mockImplementation(async () => ({ models, sessionModelRevision }));
-    const settled = autoRefresh();
+    const { settled } = autoRefresh();
     const publish = (revision: string, catalogChanged = false) =>
       sessionEvent({
         reason: "patch",
@@ -619,7 +601,7 @@ describe("automatic metadata admission", () => {
     publish(sessionModelRevision);
     await vi.advanceTimersByTimeAsync(3_000);
     expect(wireRequest).toHaveBeenCalledOnce();
-    expect(peekChatMetadata(client, retained)).toEqual(empty);
+    expect(peek(retained)).toEqual(empty);
     expect(peekModelCatalog(client, retained)?.sessionModelRevision).toBe(sessionModelRevision);
   });
 
@@ -697,7 +679,7 @@ describe("automatic metadata admission", () => {
     expect(methods()).toEqual(["models.list", "chat.metadata"]);
     commandsRead.resolve(empty);
     await expect(commandsPublished.promise).resolves.toEqual(empty);
-    expect(peekChatMetadata(client, retained)).toEqual(empty);
+    expect(peek(retained)).toEqual(empty);
     const failure = new Error("Catalog unavailable");
     catalog.reject(failure);
     await read.completed;
@@ -714,15 +696,13 @@ describe("automatic metadata admission", () => {
     catalogRequest.mockReturnValue(catalog.promise);
     mount(retained);
     const display = loadModelCatalog(client, retained);
-    publishModelCatalogResult(beginModelCatalogRead(client, retained), retained, {
-      models,
-    });
+    publishModelCatalogResult(beginModelCatalogRead(client, retained), retained, { models });
     await expect(display).resolves.toEqual({ models });
 
     const read = refresh();
     await expect(read.catalog).resolves.toEqual({ models });
     await read.completed;
-    expect(peekChatMetadata(client, retained)).toEqual(empty);
+    expect(peek(retained)).toEqual(empty);
     expect(counts()).toEqual([1, 1]);
   });
 
@@ -750,11 +730,7 @@ describe("automatic metadata admission", () => {
     { reason: "delete", sessionKey: undefined },
     { reason: "cleanup", sessionKey: undefined },
   ])("retains agent commands before remount after $reason ($sessionKey)", async (event) => {
-    const retiredCommands: ChatMetadataResult = {
-      commands: [
-        { name: "old", description: "", source: "native", scope: "text", acceptsArgs: false },
-      ],
-    };
+    const retiredCommands = metadata("old");
     request.mockResolvedValueOnce(retiredCommands).mockResolvedValue(empty);
     const draft = { agentId: "main" };
     beginChatMetadataPublication(client, draft).publish(empty);
@@ -766,8 +742,8 @@ describe("automatic metadata admission", () => {
     mount(retained);
     await refresh().completed;
     expect(request).toHaveBeenCalledTimes(1);
-    expect(peekChatMetadata(client, retained)).toEqual(retiredCommands);
-    expect(peekChatMetadata(client, draft)).toEqual(empty);
+    expect(peek(retained)).toEqual(retiredCommands);
+    expect(peek(draft)).toEqual(empty);
   });
 
   it("preserves a hidden startup fallback until remounted demand returns", async () => {
