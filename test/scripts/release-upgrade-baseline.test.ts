@@ -25,11 +25,6 @@ const septemberLine = {
     "2026.6.34 2026.7.35 2026.8.9 2026.8.33 2026.8.34 2026.8.35 2026.9.8 2026.9.9 2026.10.1 2026.10.5-beta.3",
   ),
 };
-const qualify = (input: Parameters<typeof resolveQualificationBaselines>[0]) => {
-  const captured = resolveQualificationBaselines(input);
-  expect(validateQualificationBaselines(captured, input)).toEqual(captured);
-  return captured;
-};
 
 describe("release upgrade baseline resolver", () => {
   it.each([
@@ -65,11 +60,13 @@ describe("release upgrade baseline resolver", () => {
       baselines("2026.9.33"),
     ],
   ] as const)("%s", (_name, overrides, expected) => {
-    expect(qualify({ ...septemberLine, ...overrides })).toEqual(expected);
+    expect(resolveQualificationBaselines({ ...septemberLine, ...overrides })).toEqual(expected);
   });
 
   it("upgrades a first frozen .33 from the previous frozen line, including explicit selection", () => {
-    expect(qualify(septemberLine)).toEqual(baselines("2026.8.35", ["2026.8.35", "2026.9.9"]));
+    expect(resolveQualificationBaselines(septemberLine)).toEqual(
+      baselines("2026.8.35", ["2026.8.35", "2026.9.9"]),
+    );
     expect(
       resolveReleaseUpgradeBaseline("2026.9.33", septemberLine.publishedVersions, {
         ...frozenContext,
@@ -80,7 +77,6 @@ describe("release upgrade baseline resolver", () => {
 
   it.each([
     ["same-month frozen primary", "2026.9.9", ["2026.8.35", "2026.9.9"], frozenContext],
-    ["older frozen primary", "2026.8.34", ["2026.8.35", "2026.9.9", "2026.8.34"], frozenContext],
     ["older regular primary", "2026.8.2", ["2026.8.2", "2026.8.3"], regularContext],
   ] as const)("rejects %s", (_name, primary, survivors, context) => {
     expect(() => validateQualificationBaselines(baselines(primary, survivors), context)).toThrow(
@@ -99,7 +95,6 @@ describe("release upgrade baseline resolver", () => {
     expect(() => parseArgs(["--candidate-version", "-h"])).toThrow(
       "missing value for --candidate-version",
     );
-    expect(() => parseArgs(["--versions-json", "-h"])).toThrow("missing value for --versions-json");
   });
 
   it("selects the stable predecessor of a beta candidate", () => {

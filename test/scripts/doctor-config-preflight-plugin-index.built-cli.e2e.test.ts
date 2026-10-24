@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { resolveDefaultAgentWorkspaceDir } from "../../src/agents/workspace-default.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { hasActiveStartupMigrationLease } from "../../src/infra/startup-migration-checkpoint.js";
@@ -10,36 +10,24 @@ import { clearPluginMetadataLifecycleCaches } from "../../src/plugins/plugin-met
 import { loadPluginMetadataSnapshot } from "../../src/plugins/plugin-metadata-snapshot.js";
 import { writeManagedNpmPlugin } from "../../src/plugins/test-helpers/managed-npm-plugin.js";
 import { closeOpenClawStateDatabaseForTest } from "../../src/state/openclaw-state-db.js";
-import {
-  createOpenClawTestInstance,
-  type OpenClawTestInstance,
-} from "../helpers/openclaw-test-instance.js";
-
-const instances: OpenClawTestInstance[] = [];
-async function createInstance(name: string, env: NodeJS.ProcessEnv) {
-  const instance = await createOpenClawTestInstance({
-    name,
-    env: { OPENCLAW_TEST_FAST: "1", ...env },
-    startTimeoutMs: 90_000,
-  });
-  instances.push(instance);
-  return instance;
-}
+import { createOpenClawTestInstance } from "../helpers/openclaw-test-instance.js";
 function clearState() {
   clearPluginMetadataLifecycleCaches();
   closeOpenClawStateDatabaseForTest();
 }
 
-afterEach(async () => {
-  await Promise.all(instances.splice(0).map((instance) => instance.cleanup()));
-  clearState();
-});
-
 it("starts with current metadata and refreshes the stale persisted index after readiness", async ({
   signal,
+  onTestFinished,
 }) => {
-  const instance = await createInstance("doctor-plugin-index-persistence", {
-    OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+  const instance = await createOpenClawTestInstance({
+    name: "doctor-plugin-index-persistence",
+    env: { OPENCLAW_TEST_FAST: "1", OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
+    startTimeoutMs: 90_000,
+  });
+  onTestFinished(async () => {
+    await instance.cleanup();
+    clearState();
   });
 
   const config = JSON.parse(fs.readFileSync(instance.configPath, "utf8")) as OpenClawConfig;

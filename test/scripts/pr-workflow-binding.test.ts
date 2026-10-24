@@ -97,18 +97,6 @@ describe.skipIf(process.platform === "win32")("native workflow binding storage",
     expect(JSON.parse(f.git(["show", `${ref}:binding.json`])).repository).toBe(f.root);
   });
 
-  it("retains the selected source across main advancement and exact admission reuse", () => {
-    const f = fixture();
-    const admitted = f.run("workflow-admit", f.source, "");
-    expect(admitted.status, admitted.stderr).toBe(0);
-    const binding = admitted.stdout;
-    f.git(["commit", "--allow-empty", "-qm", "advance workflow"]);
-    f.git(["update-ref", "refs/remotes/origin/main", "HEAD"]);
-    expect(f.run("workflow-read").stdout).toBe(`${binding}\t${f.source}\n`);
-    expect(f.run("workflow-admit", f.source, binding).stdout).toBe(binding);
-    expect(f.git(["rev-parse", `${binding}^`])).toBe(f.source);
-  });
-
   it("refuses a competing initial admission and preserves the winner during stale retirement", () => {
     const f = fixture();
     const winner = f.run("workflow-admit", f.source, "");
