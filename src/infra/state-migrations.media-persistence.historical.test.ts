@@ -42,6 +42,8 @@ import { repairDoctorSessionWindowsBeforeMigration } from "./state-migrations.se
 const tempDirs: string[] = [];
 const get = (db: Pick<SqlConnection, "prepare">, sql: string) => db.prepare(sql).get();
 const all = (db: Pick<SqlConnection, "prepare">, sql: string) => db.prepare(sql).all();
+const expectQuery = (db: Pick<SqlConnection, "prepare">, sql: string, expected: unknown) =>
+  expect(get(db, sql)).toEqual(expected);
 const schemaVersionSql = "SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'";
 const routeColumnSql =
   "SELECT name FROM pragma_table_info('session_conversations') WHERE name = 'route_context_json'";
@@ -60,8 +62,8 @@ function createAgentPaths(prefix: string) {
 }
 
 function expectVersion(db: DatabaseSync, version: number) {
-  expect(get(db, "PRAGMA user_version")).toEqual({ user_version: version });
-  expect(get(db, schemaVersionSql)).toEqual({ schema_version: version });
+  expectQuery(db, "PRAGMA user_version", { user_version: version });
+  expectQuery(db, schemaVersionSql, { schema_version: version });
 }
 
 function openFixtureDatabase(pathname: string, readOnly = false) {
@@ -96,15 +98,10 @@ function seedOrphanSessionWindows(pathname: string, schemaVersion: number) {
     } else {
       createTranscriptEventInserter(db, sessionId)({ seq: 0, eventJson, createdAt: 1 });
     }
-    const insertSearch = transcriptFts.createSessionTranscriptFtsInserter(db, sessionId);
-    insertSearch([
-      {
-        messageId: `message-${sessionId}`,
-        text: sessionId,
-        role: "user",
-        timestamp: 1,
-      },
-    ]);
+    transcriptFts.createSessionTranscriptFtsInserter(
+      db,
+      sessionId,
+    )([{ messageId: `message-${sessionId}`, text: sessionId, role: "user", timestamp: 1 }]);
   }
   db.exec("UPDATE session_windows SET rowid = 9007199254740993 WHERE session_id = 'orphan-one';");
   db.exec("DELETE FROM session_nodes WHERE current_session_id != 'retained';");
@@ -154,7 +151,7 @@ it.each([
           );
         }
         original = readRows(damaged);
-        expect(get(damaged, "SELECT count(*) AS count FROM pragma_foreign_key_check")).toEqual({
+        expectQuery(damaged, "SELECT count(*) AS count FROM pragma_foreign_key_check", {
           count: scenario === "unrelated violation" ? 3 : 2,
         });
       }
@@ -196,10 +193,10 @@ it.each([
         expect(result.changes).toContain(
           `Removed 2 orphan session window(s) from ${pathname}; their dependent history remains in the backup.`,
         );
-        expect(repaired.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-        expect(repaired.prepare("PRAGMA user_version").get()?.user_version).toBe(
-          OPENCLAW_AGENT_SCHEMA_VERSION,
-        );
+        expect(all(repaired, "PRAGMA foreign_key_check")).toEqual([]);
+        expectQuery(repaired, "PRAGMA user_version", {
+          user_version: OPENCLAW_AGENT_SCHEMA_VERSION,
+        });
         const retained = readRows(repaired);
         for (const key of ["windows", "events", "search"] as const) {
           const expected = original[key]
@@ -230,7 +227,7 @@ it.each([
         { readOnly: true },
       );
       expect(readRows(backup)).toEqual(original);
-      expect(get(backup, "SELECT count(*) AS count FROM pragma_foreign_key_check")).toEqual({
+      expectQuery(backup, "SELECT count(*) AS count FROM pragma_foreign_key_check", {
         count: scenario === "unrelated violation" ? 3 : 2,
       });
     }),
@@ -308,13 +305,12 @@ it("migrates the exact v2026.7.2-beta.4 schema without losing its session or med
   using migrated = openFixtureDatabase(dbPath, true);
   expectVersion(migrated, OPENCLAW_AGENT_SCHEMA_VERSION);
   expect(all(migrated, "SELECT * FROM session_transcript_cold_archives")).toEqual([]);
-  expect(
-    get(
-      migrated,
-      "SELECT entry_valid FROM session_nodes WHERE session_key = 'agent:main:historical-v14'",
-    ),
-  ).toEqual({ entry_valid: 1 });
-  expect(get(migrated, "SELECT main_key FROM session_key_contract WHERE id = 1")).toEqual({
+  expectQuery(
+    migrated,
+    "SELECT entry_valid FROM session_nodes WHERE session_key = 'agent:main:historical-v14'",
+    { entry_valid: 1 },
+  );
+  expectQuery(migrated, "SELECT main_key FROM session_key_contract WHERE id = 1", {
     main_key: "main",
   });
   const event = get(
@@ -326,7 +322,7 @@ it("migrates the exact v2026.7.2-beta.4 schema without losing its session or med
   expect(message["__openclaw"]).toMatchObject({
     media: [expect.objectContaining({ path: "/media/v14.png" })],
   });
-  expect(get(migrated, "PRAGMA integrity_check")).toEqual({ integrity_check: "ok" });
+  expectQuery(migrated, "PRAGMA integrity_check", { integrity_check: "ok" });
   expect(all(migrated, "PRAGMA foreign_key_check")).toEqual([]);
   expect(fs.readFileSync(pristinePath)).toEqual(pristineBytes);
 });
@@ -434,11 +430,9 @@ it("keeps media bytes and v16 markers when registered coverage rejects before co
       ["trajectory_runtime_events", trajectoryJson],
     ] as const) {
       const expected = { bytes: Buffer.from(json).toString("hex").toUpperCase() };
-      expect(get(db, `SELECT hex(CAST(event_json AS BLOB)) AS bytes FROM ${table}`)).toEqual(
-        expected,
-      );
+      expectQuery(db, `SELECT hex(CAST(event_json AS BLOB)) AS bytes FROM ${table}`, expected);
     }
-    expect(get(db, "PRAGMA integrity_check")).toEqual({ integrity_check: "ok" });
+    expectQuery(db, "PRAGMA integrity_check", { integrity_check: "ok" });
   } finally {
     observer.mockRestore();
     await scope.close();
@@ -497,9 +491,7 @@ it.each([undefined, "missing-cache-table", "missing-memory-trigger"] as const)(
       index: schemaDrift ? undefined : { name: identityIndex },
     });
     if (!schemaDrift) {
-      expect(get(repaired, schemaObjectSql("trigger", routeTrigger))).toEqual({
-        name: routeTrigger,
-      });
+      expectQuery(repaired, schemaObjectSql("trigger", routeTrigger), { name: routeTrigger });
     }
   },
 );
@@ -528,14 +520,15 @@ it("leaves maintenance completion to Doctor after a successful media migration",
   const result = await migrateLegacyMediaPersistence({ env });
 
   expect(result.warnings).toEqual([]);
-  expect(
-    get(
-      openOpenClawStateDatabase({ env }).db,
-      "SELECT COUNT(*) AS count FROM gateway_boot_lifecycle WHERE outcome = 'startup_failed'",
-    ),
-  ).toMatchObject({ count: 3 });
-  const breaker = await inspectGatewayCrashLoopBreakerAsync(env, nowMs + 5);
-  expect(breaker).toMatchObject({ tripped: false, uncleanBoots: 0 });
+  expectQuery(
+    openOpenClawStateDatabase({ env }).db,
+    "SELECT COUNT(*) AS count FROM gateway_boot_lifecycle WHERE outcome = 'startup_failed'",
+    { count: 3 },
+  );
+  expect(await inspectGatewayCrashLoopBreakerAsync(env, nowMs + 5)).toMatchObject({
+    tripped: false,
+    uncleanBoots: 0,
+  });
 });
 it("Doctor preserves and rebuilds a quarantined corrupt agent index", () =>
   withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -572,19 +565,17 @@ it("Doctor preserves and rebuilds a quarantined corrupt agent index", () =>
       backupLine!.slice("Saved pre-repair SQLite backup: ".length),
       { readOnly: true },
     );
-    expect(backup.prepare("PRAGMA integrity_check").all()).toContainEqual({
+    expect(all(backup, "PRAGMA integrity_check")).toContainEqual({
       integrity_check: `row 1 missing from index ${index}`,
     });
-    expect(backup.prepare(payloadSql).all()).toEqual(rows);
+    expect(all(backup, payloadSql)).toEqual(rows);
     const repaired = openOpenClawAgentDatabase(options);
-    expect(repaired.db.prepare("PRAGMA integrity_check").all()).toEqual([
-      { integrity_check: "ok" },
-    ]);
-    expect(repaired.db.prepare(payloadSql).all()).toEqual(rows);
+    expect(all(repaired.db, "PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
+    expect(all(repaired.db, payloadSql)).toEqual(rows);
 
     closeOpenClawAgentDatabasesForTest();
     quarantine();
     const resumed = await migrateLegacyMediaPersistence({ env });
     expect(resumed).toEqual({ changes: [], warnings: [] });
-    expect(openOpenClawAgentDatabase(options).db.prepare(payloadSql).all()).toEqual(rows);
+    expect(all(openOpenClawAgentDatabase(options).db, payloadSql)).toEqual(rows);
   }));
