@@ -1,16 +1,22 @@
 import { afterEach, expect, it } from "vitest";
-import { createConfigIO } from "../../../../src/config/config.js";
-import { WRITE_SCOPE } from "../../../../src/gateway/operator-scopes.js";
+import { createConfigIO, resetConfigRuntimeState } from "../../../../src/config/config.js";
+import { READ_SCOPE, WRITE_SCOPE } from "../../../../src/gateway/operator-scopes.js";
 import {
+  connectGatewayClient,
   disconnectGatewayClient,
-  startGatewayWithClient,
 } from "../../../../src/gateway/test-helpers.e2e.js";
-import { installGatewayTestHooks, testState } from "../../../../src/gateway/test-helpers.js";
+import {
+  getGatewayTestPort,
+  installGatewayTestHooks,
+  startTestGatewayServer,
+  testState,
+} from "../../../../src/gateway/test-helpers.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../../../src/plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../../../../src/plugins/hooks.test-helpers.js";
+import { writeJsonFile } from "../../../helpers/temp-repo.js";
 
 installGatewayTestHooks();
 
@@ -30,69 +36,170 @@ function readToolCallId(value: unknown): string {
   return toolCallId;
 }
 
+async function postInvoke(params: {
+  port: number;
+  body: string | JsonRecord;
+  token?: string;
+  scopes?: string;
+}) {
+  const response = await fetch(`http://127.0.0.1:${params.port}/tools/invoke`, {
+    method: "POST",
+    headers: {
+      ...(params.token ? { authorization: `Bearer ${params.token}` } : {}),
+      "content-type": "application/json",
+      ...(params.scopes ? { "x-openclaw-scopes": params.scopes } : {}),
+    },
+    body: typeof params.body === "string" ? params.body : JSON.stringify(params.body),
+  });
+  return { status: response.status, body: (await response.json()) as JsonRecord };
+}
+
 function installHook(handler: (event: unknown) => unknown) {
   initializeGlobalHookRunner(createMockPluginRegistry([{ hookName: "before_tool_call", handler }]));
 }
 
-afterEach(resetGlobalHookRunner);
+const agentsListResult = {
+  details: {
+    requester: "main",
+    allowAny: false,
+    agents: [expect.objectContaining({ id: "main", configured: true })],
+  },
+};
+
+afterEach(() => {
+  resetGlobalHookRunner();
+});
 
 it(
-  "bridges real HTTP and RPC invocations to plugin approval hooks with stable call IDs",
+  "enforces public auth, invocation, approval, and call-id contracts",
   { timeout: 60_000 },
   async () => {
-    testState.agentsConfig = { entries: { main: { tools: { allow: ["agents_list"] } } } };
+    const port = await getGatewayTestPort();
+    const configPath = createConfigIO().configPath;
+    writeJsonFile(configPath, {
+      gateway: {
+        mode: "local",
+        port,
+        auth: { mode: "token", token: GATEWAY_TOKEN },
+        tools: { allow: ["nodes"] },
+      },
+    });
+    resetConfigRuntimeState();
+
+    testState.agentsConfig = {
+      entries: {
+        main: { tools: { allow: ["agents_list", "nodes"] } },
+      },
+    };
 
     const observedToolCallIds: string[] = [];
     installHook((event) => {
       observedToolCallIds.push(readToolCallId(event));
     });
 
-    const gateway = await startGatewayWithClient({
-      configPath: createConfigIO().configPath,
-      cfg: { gateway: { mode: "local", auth: { mode: "token", token: GATEWAY_TOKEN } } },
-      token: GATEWAY_TOKEN,
-      scopes: [WRITE_SCOPE],
-      clientDisplayName: "direct-tool-invoke-writer",
-    });
-    const invoke = async (body: JsonRecord) => {
-      const response = await fetch(`http://127.0.0.1:${gateway.port}/tools/invoke`, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${GATEWAY_TOKEN}`,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(body),
+    let gateway: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
+    let readOnlyClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+    let writeClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+    const invoke = (body: string | JsonRecord, scopes?: string) =>
+      postInvoke({ port, token: GATEWAY_TOKEN, body, scopes });
+    const connect = (scope: string, name: string) =>
+      connectGatewayClient({
+        url: `ws://127.0.0.1:${port}`,
+        token: GATEWAY_TOKEN,
+        scopes: [scope],
+        clientDisplayName: name,
+        deviceFamily: name,
+        requestTimeoutMs: 10_000,
+        timeoutMs: 10_000,
       });
-      return { status: response.status, body: (await response.json()) as JsonRecord };
-    };
     const httpArgs = { tool: "agents_list", args: {}, sessionKey: "main" };
 
     try {
-      expect(await invoke({})).toEqual({
-        status: 400,
-        body: {
-          ok: false,
-          error: { type: "invalid_request", message: "tools.invoke requires name" },
+      gateway = await startTestGatewayServer(port, {
+        host: "127.0.0.1",
+        auth: { mode: "token", token: GATEWAY_TOKEN },
+        controlUiEnabled: false,
+      });
+
+      for (const token of [undefined, "wrong-token"]) {
+        expect(await postInvoke({ port, token, body: httpArgs })).toEqual({
+          status: 401,
+          body: { error: { message: "Unauthorized", type: "unauthorized" } },
+        });
+      }
+      for (const [body, status, expected] of [
+        [
+          "{",
+          400,
+          expect.objectContaining({
+            error: expect.objectContaining({ type: "invalid_request_error" }),
+          }),
+        ],
+        [
+          {},
+          400,
+          {
+            ok: false,
+            error: { type: "invalid_request", message: "tools.invoke requires name" },
+          },
+        ],
+        [
+          { ...httpArgs, tool: "qa_missing_tool" },
+          404,
+          {
+            ok: false,
+            error: { type: "not_found", message: "Tool not available: qa_missing_tool" },
+          },
+        ],
+      ] as const) {
+        expect(await invoke(body)).toEqual({ status, body: expected });
+      }
+      expect(observedToolCallIds).toEqual([]);
+
+      readOnlyClient = await connect(READ_SCOPE, "direct-tool-invoke-read-only");
+      await expect(readOnlyClient.request("tools.invoke", AGENTS_LIST_ARGS)).rejects.toMatchObject({
+        message: "missing scope: operator.write",
+        details: {
+          missingScope: "operator.write",
+          requiredScopes: ["operator.write"],
         },
       });
       expect(observedToolCallIds).toEqual([]);
-      for (const idempotencyKey of [undefined, "qa-http-stable", "qa-http-stable"]) {
-        expect(await invoke({ ...httpArgs, idempotencyKey })).toMatchObject({
+
+      const ownerRestored = await invoke(
+        { ...httpArgs, tool: "nodes", action: "status" },
+        "operator.approvals",
+      );
+      expect(ownerRestored).toMatchObject({ status: 200, body: { ok: true } });
+      expect(ownerRestored.body.result).toBeDefined();
+
+      for (let index = 0; index < 2; index += 1) {
+        expect(await invoke({ ...httpArgs, idempotencyKey: "qa-http-stable" })).toMatchObject({
           status: 200,
-          body: { ok: true },
+          body: { ok: true, result: agentsListResult },
         });
       }
 
+      writeClient = await connect(WRITE_SCOPE, "direct-tool-invoke-writer");
+      const writer = writeClient;
       const rpc = (args: JsonRecord) =>
-        gateway.client.request(
-          "tools.invoke",
-          { ...AGENTS_LIST_ARGS, ...args },
-          { timeoutMs: 10_000 },
-        );
+        writer.request<{ output?: unknown }>("tools.invoke", { ...AGENTS_LIST_ARGS, ...args });
+      const unavailableRpc = await rpc({ name: "qa_missing_tool" });
+      expect(unavailableRpc).toEqual({
+        ok: false,
+        toolName: "qa_missing_tool",
+        error: {
+          code: "not_found",
+          message: "Tool not available: qa_missing_tool",
+        },
+      });
+
       for (let index = 0; index < 2; index += 1) {
         expect(await rpc({ idempotencyKey: "qa-rpc-stable" })).toMatchObject({
           ok: true,
           toolName: "agents_list",
+          source: "core",
+          output: agentsListResult,
         });
       }
 
@@ -122,7 +229,11 @@ it(
             };
       });
 
-      expect(await rpc({ confirm: false, idempotencyKey: "qa-rpc-approval" })).toEqual({
+      const approvalRpc = await rpc({
+        confirm: false,
+        idempotencyKey: "qa-rpc-approval",
+      });
+      expect(approvalRpc).toEqual({
         ok: false,
         toolName: "agents_list",
         requiresApproval: true,
@@ -148,8 +259,12 @@ it(
         "http-direct-operator-qa-http-blocked",
       ]);
     } finally {
-      await disconnectGatewayClient(gateway.client);
-      await gateway.server.close({ reason: "Gateway direct tool invoke QA proof complete" });
+      for (const client of [writeClient, readOnlyClient]) {
+        if (client) {
+          await disconnectGatewayClient(client);
+        }
+      }
+      await gateway?.close({ reason: "Gateway direct tool invoke QA proof complete" });
     }
   },
 );
