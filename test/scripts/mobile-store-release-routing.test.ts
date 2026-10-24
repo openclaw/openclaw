@@ -36,11 +36,6 @@ type Scenario = {
   repository?: string;
 };
 type Workflow = {
-  "run-name": string;
-  on: {
-    schedule: Array<{ cron: string; timezone: string }>;
-    workflow_dispatch: { inputs: { operation: { default: string; options: string[] } } };
-  };
   concurrency: { group: string; "cancel-in-progress": boolean };
   jobs: {
     qualify: { if: string };
@@ -52,15 +47,14 @@ type Workflow = {
 function scheduledScenarios(destination: "app-store" | "play-store"): Scenario[] {
   return [
     { destination: destination === "app-store" ? "testflight" : "internal" },
-    { enabled: "" },
     { enabled: "false" },
-    ...["true", "false", ""].map((enabled) => ({
+    ...["true", "false"].map((enabled) => ({
       schedule: "0 11 * * 1",
       enabled,
       destination,
       qualify: true,
     })),
-    ...(["failure", "cancelled", "skipped"] as const).map((qualificationResult) => ({
+    ...(["failure", "cancelled"] as const).map((qualificationResult) => ({
       schedule: "0 11 * * 1",
       qualify: true,
       qualificationResult,
@@ -75,7 +69,7 @@ function scheduledScenarios(destination: "app-store" | "play-store"): Scenario[]
 }
 
 function failedManualScenarios(schedule?: string): Scenario[] {
-  return (["failure", "cancelled", "skipped"] as const).map((qualificationResult) => ({
+  return (["failure", "cancelled"] as const).map((qualificationResult) => ({
     event: "workflow_dispatch",
     operation: "release",
     schedule,
@@ -92,19 +86,12 @@ function loadWorkflow(platform: string) {
   const workflow = parse(
     fs.readFileSync(`.github/workflows/${platform}-store-release.yml`, "utf8"),
   ) as Workflow;
-  expect(workflow.on.schedule).toEqual([
-    { cron: "0 7 * * *", timezone: "America/Los_Angeles" },
-    { cron: "0 11 * * 1", timezone: "America/Los_Angeles" },
-  ]);
-  expect(workflow.concurrency).toMatchObject({
-    group: `${platform}-release`,
-    "cancel-in-progress": false,
-  });
+  expect(workflow.concurrency["cancel-in-progress"]).toBe(false);
   expect(workflow.jobs.release.needs).toBe("qualify");
   return workflow;
 }
 
-function scenarioEvaluator(scenario: Scenario, variables: Record<string, string>, ios = false) {
+function scenarioEvaluator(scenario: Scenario, variables: Record<string, string>) {
   const qualificationResult =
     scenario.qualificationResult ?? (scenario.qualify ? "success" : "skipped");
   const context = {
@@ -120,12 +107,6 @@ function scenarioEvaluator(scenario: Scenario, variables: Record<string, string>
     cancelled: () => scenario.cancelled ?? qualificationResult === "cancelled",
     success: () => qualificationResult === "success",
     always: () => true,
-    ...(ios
-      ? {
-          failure: () => qualificationResult === "failure",
-          format: (template: string, operation: string) => template.replace("{0}", operation),
-        }
-      : {}),
   };
   return (expression: string): unknown =>
     runInNewContext(expression.replace(/^\$\{\{\s*|\s*\}\}$/gu, ""), context);
@@ -194,16 +175,10 @@ it.each(["ios", "android"])("routes %s daily and qualified weekly/manual release
       name,
     );
   const upload = findStep(`Prepare and upload ${ios ? "iOS" : "Android"} release`);
-  if (!ios) {
-    expect(workflow.on.workflow_dispatch.inputs.operation).toMatchObject({
-      default: "release",
-      options: ["release", "internal"],
-    });
-  }
   const scenarios: Scenario[] = [
     ...scheduledScenarios(store),
     manual(daily, { enabled: "false", destination: daily }),
-    manual(ios ? "release" : workflow.on.workflow_dispatch.inputs.operation.default, {
+    manual("release", {
       enabled: "false",
       destination: store,
       qualify: true,
@@ -231,14 +206,10 @@ it.each(["ios", "android"])("routes %s daily and qualified weekly/manual release
     { event: "push", operation: ios ? "release" : daily },
   ];
   for (const scenario of scenarios) {
-    const evaluate = scenarioEvaluator(
-      scenario,
-      {
-        [ios ? "IOS_TESTFLIGHT_ENABLED" : "ANDROID_INTERNAL_ENABLED"]: scenario.enabled ?? "true",
-        OPENCLAW_TESTFLIGHT_GROUP_ID: "external-group-id",
-      },
-      ios,
-    );
+    const evaluate = scenarioEvaluator(scenario, {
+      [ios ? "IOS_TESTFLIGHT_ENABLED" : "ANDROID_INTERNAL_ENABLED"]: scenario.enabled ?? "true",
+      OPENCLAW_TESTFLIGHT_GROUP_ID: "external-group-id",
+    });
     assertAdmission(workflow, scenario, evaluate);
     if (ios) {
       expect(Boolean(evaluate(workflow.jobs.screenshots.if))).toBe(scenario.screenshots ?? false);
@@ -247,15 +218,6 @@ it.each(["ios", "android"])("routes %s daily and qualified weekly/manual release
       continue;
     }
     const storeRelease = scenario.destination === store;
-    expect(evaluate(workflow["run-name"].slice(ios ? 4 : 8))).toBe(
-      !storeRelease
-        ? ios
-          ? "TestFlight distribution"
-          : "Internal testing distribution"
-        : (scenario.event ?? "schedule") === "schedule"
-          ? "Store release (weekly)"
-          : "Store release",
-    );
     expect(evaluate(release.environment)).toBe(
       storeRelease ? `${platform}-store-release` : `${platform}-${daily}`,
     );

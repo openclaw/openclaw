@@ -182,20 +182,6 @@ it("keeps normal npm commands unchanged", () => {
   expect(resolveWorkspaceInstallPlan(["install", "openclaw.tgz"], [])).toBeNull();
 });
 
-it("rewrites packed workspace protocols to the local package version", () => {
-  const packageJson = { dependencies: { "@openclaw/ai": "workspace:*", chalk: "5.6.2" } };
-
-  expect(
-    rewriteWorkspaceDependencyVersions(packageJson, [
-      { name: "@openclaw/ai", version: "2026.7.1-beta.3", tarball: "/tmp/openclaw-ai.tgz" },
-    ]),
-  ).toBe(1);
-  expect(packageJson.dependencies).toEqual({
-    "@openclaw/ai": "2026.7.1-beta.3",
-    chalk: "5.6.2",
-  });
-});
-
 it("rejects package archives with an unconfigured workspace dependency", () => {
   const packageJson = { dependencies: { "@openclaw/normalization-core": "workspace:*" } };
 
@@ -215,6 +201,7 @@ it("installs a packed root with transitive local workspace dependencies", () => 
   packageFixture(packagedRoot, {
     name: "openclaw",
     dependencies: { "@openclaw/ai": "workspace:*" },
+    devDependencies: { chalk: "5.6.2" },
   });
   workspaceFixture(workspaceDir, "@openclaw/ai", "ready", {
     "@openclaw/normalization-core": "workspace:*",
@@ -246,4 +233,5 @@ it("installs a packed root with transitive local workspace dependencies", () => 
     expect(installed(name).version).toBe("1.0.0");
   }
   expect(installed("@openclaw/ai").dependencies["@openclaw/normalization-core"]).toBe("1.0.0");
+  expect(installed("openclaw").devDependencies.chalk).toBe("5.6.2");
 });
