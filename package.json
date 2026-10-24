@@ -1,6 +1,6 @@
 {
   "name": "openclaw",
-  "version": "2026.10.6",
+  "version": "2026.10.7",
   "openclaw": {
     "updateAdmissionProtocol": 1,
     "databaseEngines": [
@@ -1546,6 +1546,10 @@
     },
     "./plugin-sdk/provider-http": {
       "default": "./dist/plugin-sdk/provider-http.js"
+    },
+    "./plugin-sdk/provider-request-headers": {
+      "types": "./dist/plugin-sdk/provider-request-headers.d.ts",
+      "default": "./dist/plugin-sdk/provider-request-headers.js"
     },
     "./plugin-sdk/provider-binary-stream": {
       "types": "./dist/plugin-sdk/provider-binary-stream.d.ts",

@@ -49,6 +49,7 @@ import {
   captureChannelOperatorRunAuthority,
   intersectOperatorRunModelPolicy,
 } from "./operator-run-authority.js";
+import { prepareRestartRecoveryParentSource } from "./operator-run-recovery-parent.js";
 import {
   decodeGatewayOperatorRecoverySource,
   decodeQueuedOperatorRecoverySource,
@@ -453,6 +454,7 @@ export async function restoreGatewayRunRecovery(params: {
 }): Promise<{
   operator?: RestoredGatewayOperatorAuthority;
   requesterOrigin?: RequesterOrigin;
+  parentSource?: { source: SessionSourceAssertion; release: () => void };
 }> {
   const target = { ...params.target };
   let entry: InternalSessionEntry | undefined;
@@ -558,6 +560,13 @@ export async function restoreGatewayRunRecovery(params: {
     const requesterOrigin = params.restoreRequester
       ? readRestartRecoveryRequesterSource({ ...target, entry })
       : undefined;
+    const parentSource = await prepareRestartRecoveryParentSource({
+      ...params,
+      target,
+      entry,
+      requesterOrigin,
+      operatorSource: operator ? { ...target, authority: operator.authority } : undefined,
+    });
     if (operator) {
       recoverySources.set(operator.authority, {
         target,
@@ -567,7 +576,7 @@ export async function restoreGatewayRunRecovery(params: {
         }),
       });
     }
-    return { operator, requesterOrigin };
+    return { operator, requesterOrigin, parentSource };
   } catch (error) {
     operator?.release();
     throw error;

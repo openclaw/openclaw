@@ -60,7 +60,7 @@ export function prepareBackgroundSessionCompletion(params: {
           if (observed.status === "pending" || observed.pendingError === true) {
             await sleepWithAbort(RETRY_DELAY_MS);
           } else if (observationalTimeout) {
-            // Startup display errors can mean unconfirmed delivery, not a failed run.
+            // Pending startup delivery is not a failed run.
             const initialTurn = context.placementStartup.get(key)?.initialTurn;
             if (initialTurn?.sendState === "failed" && initialTurn.sendRunId === normalizedRunId) {
               result = { status: "error", error: initialTurn.sendError };

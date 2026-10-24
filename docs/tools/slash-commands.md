@@ -118,6 +118,10 @@ do not rewrite transcript history.
   registration. Previously registered commands may stay visible until removed.
 </ParamField>
 
+The system prompt omits the `/reasoning` and `/status` hints when both text and
+native commands are disabled on the session's channel. Guidance uses channel-level
+native settings; per-account overrides may differ. Text-only surfaces keep the hints.
+
 <ParamField path="commands.nativeSkills" type='boolean | "auto"' default='"auto"'>
   Registers skill commands natively when supported. Auto: on for
   Discord/Telegram. Off for Slack. Override with

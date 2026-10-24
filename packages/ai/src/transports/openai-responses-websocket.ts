@@ -1,3 +1,4 @@
+import { omitNullRequestHeaders } from "@openclaw/llm-core";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type OpenAI from "openai";
@@ -14,7 +15,7 @@ import {
   registerSessionResourceCleanup,
   type SessionResourceOwner,
 } from "../session-resources.js";
-import type { Model, StreamOptions, UserMessage } from "../types.js";
+import type { Model, ModelRequestHeaders, StreamOptions, UserMessage } from "../types.js";
 import {
   recordResponsesContinuationState,
   resolveResponsesContinuationRequest,
@@ -190,7 +191,7 @@ function markDegradedWebSocketConnection(
 
 type PreparedWebSocketConnection = ReturnType<typeof prepareWebSocketConnection>;
 
-function prepareWebSocketConnection(client: OpenAI, headers: Record<string, string> | undefined) {
+function prepareWebSocketConnection(client: OpenAI, headers: ModelRequestHeaders | undefined) {
   if (!isOfficialOpenAIResponsesBaseUrl(client.baseURL)) {
     throw new Error("OpenAI Responses WebSocket requires the official API endpoint");
   }
@@ -199,7 +200,7 @@ function prepareWebSocketConnection(client: OpenAI, headers: Record<string, stri
   }
   const owner = getAiTransportHost();
   const resolvedApiKey = owner.resolveSecretSentinel(client.apiKey);
-  const resolvedHeaders = { ...resolveAiTransportHeaderSentinels(headers) };
+  const resolvedHeaders = { ...omitNullRequestHeaders(resolveAiTransportHeaderSentinels(headers)) };
   for (const key of Object.keys(resolvedHeaders)) {
     const normalizedKey = key.toLowerCase();
     if (normalizedKey === "authorization" || normalizedKey === "traceparent") {
@@ -384,7 +385,7 @@ export function createOpenAIResponsesWebSocketStream(params: {
   restoreRequest?: (request: ResponsesContinuationRequest) => ResponsesContinuationRequest;
   mode: OpenAIResponsesWebSocketMode;
   sessionId?: string;
-  headers?: Record<string, string>;
+  headers?: ModelRequestHeaders;
   signal?: AbortSignal;
   callerSignal?: AbortSignal;
   degradeCooldownMs?: number;

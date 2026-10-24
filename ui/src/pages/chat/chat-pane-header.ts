@@ -595,7 +595,7 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         onPlacementRecover: () => row && void this.changeHeaderPlacement(row, "recover"),
       },
       sessionMenuAction:
-        row && this.state?.connected
+        row && this.state
           ? {
               session: this.headerSessionMenuData(row, headerAccess.pinnable),
               worktreePath:

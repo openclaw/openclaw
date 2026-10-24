@@ -52,8 +52,7 @@ export class VisitorWelcome {
       invitation = this.service.findActiveInvitation(grant.grantId);
       const recorded = invitation?.onboarding;
       if (recorded?.state === "ready" && recorded.welcomeSessionKey) {
-        const sessionKey = recorded.welcomeSessionKey;
-        return { status: "ready", sessionKey, agentId: agentFromKey(sessionKey), created: false };
+        return await this.readyWelcome(recorded.welcomeSessionKey);
       }
     } catch (error) {
       return failed(error);
@@ -70,6 +69,24 @@ export class VisitorWelcome {
     } finally {
       this.inFlight.delete(invitation.grantId);
     }
+  }
+
+  /**
+   * A welcome session deleted after setup stays deleted: the record keeps its key so setup
+   * never recreates it, and the guest is not sent to a session that no longer exists.
+   * Before ready, retries deliberately resume the reserved key, even for a removed partial session.
+   */
+  private async readyWelcome(sessionKey: string): Promise<WelcomeEnsureResult> {
+    const agentId = agentFromKey(sessionKey);
+    // The guest role holds only session scopes; ask for the session read it implies.
+    const { session } = await this.gateway.request<{ session: unknown }>(
+      "sessions.describe",
+      { key: sessionKey, agentId },
+      { scopes: ["operator.sessions.read"] },
+    );
+    return session
+      ? { status: "ready", sessionKey, agentId, created: false }
+      : { status: "not_applicable" };
   }
 
   private async setUp(
@@ -124,19 +141,27 @@ export class VisitorWelcome {
         idempotencyKey: `visitor-welcome:${grantId}`,
       });
       const done = await advance(reservation, { state: "ready", welcomeSessionKey: sessionKey });
-      return done.applied
-        ? { status: "ready", sessionKey, agentId, created: true }
+      if (done.applied) {
+        return { status: "ready", sessionKey, agentId, created: true };
+      }
+      // Revoked or expired during setup: the grant record is gone, so a re-invite starts over.
+      return done.reason === "inactive"
+        ? { status: "not_applicable" }
         : { status: "pending", retryAfterMs: RETRY_AFTER_MS };
     } catch (error) {
       const detail = error instanceof Error ? error.message : String(error);
       this.logger.warn(`visitor-access: welcome setup failed: ${detail}`);
       if (reservation) {
         // Keep the reserved key so the next call resumes against the same session.
-        await advance(reservation, {
+        const recordedFailure = await advance(reservation, {
           state: "failed",
           welcomeSessionKey: reservation.welcomeSessionKey,
           error: detail,
         }).catch(() => undefined);
+        // Access ending mid-setup refuses the Gateway writes; there is nothing left to retry.
+        if (recordedFailure && !recordedFailure.applied && recordedFailure.reason === "inactive") {
+          return { status: "not_applicable" };
+        }
       }
       return failed(error);
     }

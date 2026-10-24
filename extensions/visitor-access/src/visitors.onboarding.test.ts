@@ -178,6 +178,40 @@ describe("VisitorAccessService onboarding record", () => {
     expect(invited.text).not.toContain("inviter note");
   });
 
+  it("lists each invitation's welcome-session progress for staff", async () => {
+    const ready = visitorGrant("a-ready@example.com", {
+      onboarding: { state: "ready", welcomeSessionKey: "agent:main:dashboard:a", updatedAt: NOW },
+    });
+    const failed = visitorGrant("b-failed@example.com", {
+      onboarding: {
+        state: "failed",
+        welcomeSessionKey: "agent:main:dashboard:b",
+        error: "transcript write failed",
+        updatedAt: NOW,
+      },
+    });
+    const pending = visitorGrant("c-pending@example.com", {
+      onboarding: { state: "pending", updatedAt: NOW },
+    });
+    const legacy = visitorGrant("d-legacy@example.com");
+    const grants = [ready, failed, pending, legacy];
+    const fixture = visitorFixture({ grants, emails: grants.map(({ email }) => email) });
+
+    const list = await fixture.list();
+
+    expect(list.details.grants.map((row) => row.welcome)).toEqual([
+      { state: "ready", sessionKey: "agent:main:dashboard:a" },
+      { state: "failed", sessionKey: "agent:main:dashboard:b" },
+      { state: "pending" },
+      undefined,
+    ]);
+    expect(list.text).toContain("| managed | welcome ready agent:main:dashboard:a |");
+    expect(list.text).toContain("| managed | welcome failed agent:main:dashboard:b |");
+    expect(list.text).toContain("| managed | welcome pending |");
+    expect(list.text).toMatch(/d-legacy@example\.com[^\n]*\| managed \| Gateway access:/);
+    expect(list.text).not.toContain("transcript write failed");
+  });
+
   it("lets exactly one concurrent caller advance the same onboarding snapshot", async () => {
     const fixture = visitorFixture();
     await fixture.service.initialize();

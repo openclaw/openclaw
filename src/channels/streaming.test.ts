@@ -489,6 +489,13 @@ it("renders automatic and configured progress labels through the public formatte
   );
 });
 
+it.each([
+  [`${"a".repeat(104)} important.json trailing text`, `${"a".repeat(104)} important.json…`],
+  [`${"𠮷".repeat(40)} ${"x".repeat(100)}`, `${"𠮷".repeat(40)} ${"x".repeat(78)}…`],
+])("preserves the code-point budget for a long progress label", (label, expected) => {
+  expect(render([], { label })).toBe(expected);
+});
+
 it("formats bounded progress draft text", () => {
   const patch = buildChannelProgressDraftLine({
     event: "patch",

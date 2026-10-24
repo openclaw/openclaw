@@ -316,7 +316,8 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
           });
         }
         // Check the leaf first for typed errors; a reset must never redirect this request.
-        if (backingSessionId && latestSessionId && latestSessionId !== backingSessionId) {
+        const expectedSessionId = requestedSessionId ?? backingSessionId;
+        if (expectedSessionId && latestSessionId !== expectedSessionId) {
           throw new Error(`Session "${sessionKey}" changed while starting work. Retry.`);
         }
         const retryableClaim = isRetryableUnadoptedChatClaim(latestEntry, clientRunId);
@@ -639,14 +640,13 @@ export async function admitChatSend(params: ChatSendAdmissionParams) {
   // Abandoned preparation discards media only while no transcript or pending
   // input retains it. Dispatch disarms this cleanup before taking custody, so
   // admission cleanup cannot race its persistence or final media disposal.
-  const admittedCleanup = createAdmittedChatSendCleanup({
+  const { cleanup: cleanupAdmittedRun, setDiscardPreparedMedia } = createAdmittedChatSendCleanup({
     cleanupAbort: () => {
       sessionPreparationActive = false;
       admittedRunAbort.cleanup();
     },
     releaseRetainedWork: retainedWork.release,
   });
-  const { cleanup: cleanupAdmittedRun, setDiscardPreparedMedia } = admittedCleanup;
   const rejectSessionRoutingChanged = () => {
     cleanupAdmittedRun();
     clearAgentRunContext(clientRunId, lifecycleGeneration);

@@ -580,7 +580,7 @@ export async function handleSendChat(
           normalizeChatFollowUpModeOverride(host.settings?.chatFollowUpMode));
     const activeRunQueueMode =
       !intent && applyRunPolicy && followUpMode !== "queue" ? followUpMode : undefined;
-    const allowActiveRunSend = Boolean(intent || (applyRunPolicy && followUpMode !== "queue"));
+    const allowActiveRunSend = !intent && applyRunPolicy && followUpMode !== "queue";
     const refreshSessions = Boolean(intent) || isChatResetCommand(message);
     const sendState = pendingSettings ? "waiting-model" : reconnectSafeQueuedSendState(host);
     const queuedText = trimHumanMentions(quotedMessage, effectiveMentions);

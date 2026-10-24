@@ -19,6 +19,7 @@ import {
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
 import { useInProcessWorktreeCapacityTransport } from "./capacity.test-support.js";
+import { git } from "./git-fixture.test-support.js";
 import * as worktreeGit from "./git.js";
 import { requireGit } from "./git.js";
 import { updateRegistryWorktree } from "./registry.js";
@@ -31,11 +32,6 @@ import {
 } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
-
-async function git(cwd: string, ...args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf8" });
-  return stdout.trim();
-}
 
 /** Commits both sides of a modify/delete conflict for a tracked `entry` file. */
 async function commitConflictedParent(repo: string): Promise<void> {

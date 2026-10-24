@@ -27,6 +27,11 @@ recorders remain non-enumerable symbol properties, consumed before serialization
 - SQLite format/schema/integrity/index/table checks: once per physical DB per process load, shared across workers/handles; never add repeats, remove when touched. Clean-close seals skip startup validation; Doctor/explicit verification keep checks. [Lifecycle](/reference/database-schemas/integrity-and-recovery#integrity-checks).
 - Gateway owns every DB/state; writer receipts invalidate caches, uncovered reads stay direct. No foreign-commit probes; remove when touched. Outside writers use Gateway or exclusive offline custody. Keep live authority/snapshots; [contract](/reference/database-schemas/integrity-and-recovery#gateway-database-ownership).
 
+Released session sharing, entry-predicate, and generation authorities drop their
+decoded rows even when a caller retains the inactive handle. Predicate comparison
+baselines last only until release; a late acknowledgement cannot restore them.
+Active authorities retain their existing publication and final-effect checks.
+
 ## Choose the execution owner
 
 Actor-backed session managers serialize append preparation and committed view

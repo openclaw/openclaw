@@ -131,6 +131,7 @@ export type ChatPageHost = ChatHost &
         dashboardPresentation?: "personal";
         geometryOnly?: boolean;
         automaticResource?: "desktop";
+        retireAutomaticResource?: "desktop";
       },
     ) => void;
     beginImageOpen: () => number;

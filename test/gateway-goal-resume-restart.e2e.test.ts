@@ -4,7 +4,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
-import type { SessionsListResult } from "../src/gateway/session-utils.types.js";
+import type { GatewaySessionRow, SessionsListResult } from "../src/gateway/session-utils.types.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { reserveTestPortListener } from "../src/test-utils/port-claims.js";
@@ -167,6 +167,17 @@ it.skipIf(process.platform === "win32")(
     const rows = async () =>
       (await client!.request<SessionsListResult>("sessions.list", { agentId: "main" })).sessions;
     const row = async (name: Case) => (await rows()).find((entry) => entry.key === key(name));
+    const waitForRow = (
+      name: Case,
+      expected: Partial<Pick<GatewaySessionRow, "hasActiveRun" | "status">> & {
+        goal?: Pick<NonNullable<GatewaySessionRow["goal"]>, "status">;
+      },
+    ) =>
+      race(
+        vi.waitFor(async () => expect(await row(name)).toMatchObject(expected), {
+          timeout: 30_000,
+        }),
+      );
     const connect = async () => {
       client = await connectRestartClient(instance, { mode: "test" }, signal);
       expect(instance.child?.pid).toBeTypeOf("number");
@@ -206,16 +217,7 @@ it.skipIf(process.platform === "win32")(
           expect(
             await client!.request("agent.wait", { runId: accepted.runId, timeoutMs: 30_000 }),
           ).toMatchObject({ status: "ok" });
-          await race(
-            vi.waitFor(
-              async () =>
-                expect(await row(name)).toMatchObject({
-                  hasActiveRun: false,
-                  goal: { status: "active" },
-                }),
-              { timeout: 30_000 },
-            ),
-          );
+          await waitForRow(name, { hasActiveRun: false, goal: { status: "active" } });
           const current = (await row(name))!;
           expect(current.sessionId).toBeTypeOf("string");
           expect(current.goal?.id).toBeTypeOf("string");
@@ -251,13 +253,7 @@ it.skipIf(process.platform === "win32")(
         expect(await client!.request("chat.abort", { sessionKey: key("stop") })).toMatchObject({
           aborted: true,
         });
-        await race(
-          vi.waitFor(
-            async () =>
-              expect(await row("stop")).toMatchObject({ status: "killed", hasActiveRun: false }),
-            { timeout: 30_000 },
-          ),
-        );
+        await waitForRow("stop", { status: "killed", hasActiveRun: false });
         await revokedClient.stopAndWait();
         revokedClient = undefined;
         for (let restart = 1; restart <= 2; restart++) {
@@ -277,12 +273,7 @@ it.skipIf(process.platform === "win32")(
             });
             releaseRevoked.resolve();
             await race(revokedResponseReleased.promise);
-            await race(
-              vi.waitFor(
-                async () => expect(await row("revoked")).toMatchObject({ hasActiveRun: false }),
-                { timeout: 30_000 },
-              ),
-            );
+            await waitForRow("revoked", { hasActiveRun: false });
             await expect(readFile(revokedEffect, "utf8")).rejects.toMatchObject({ code: "ENOENT" });
           } else {
             expect(await row("revoked")).toMatchObject({ hasActiveRun: false });
@@ -324,18 +315,6 @@ it.skipIf(process.platform === "win32")(
             JSON.stringify(await client!.request("chat.history", { sessionKey: key(name) })),
           ).not.toContain(final);
         }
-        console.log(
-          JSON.stringify({
-            proof: "goal-resume-cold-restart",
-            pids,
-            resumeCalls,
-            allowedRecoveredEffect: true,
-            revokedEffectAbsent: true,
-            entrypoint: await instance.entrypoint(),
-            stateRoot: instance.state.root,
-            node: process.version,
-          }),
-        );
       },
       async () => {
         await revokedClient?.stopAndWait();

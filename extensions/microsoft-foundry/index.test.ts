@@ -94,8 +94,9 @@ let runtimeAuthTestSequence = 0;
 let runtimeAuthTestTenantId = "tenant-0";
 
 function makeModel(
-  overrides: Partial<ProviderPrepareRuntimeAuthContext["model"]> & {
+  overrides: Partial<Omit<ProviderPrepareRuntimeAuthContext["model"], "headers">> & {
     api?: FoundryProviderApi;
+    headers?: Record<string, string>;
   } = {},
 ) {
   return {
