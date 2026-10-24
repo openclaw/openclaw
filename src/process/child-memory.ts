@@ -2,8 +2,6 @@ import { readFile, readdir } from "node:fs/promises";
 import os from "node:os";
 import { hasErrnoCode } from "../infra/errno.js";
 
-const GiB = 1024 ** 3;
-
 /** Host exec budgets physical memory, not V8/Go's virtual address reservations. */
 export function resolveHostExecMemoryLimit(): number | undefined {
   if (process.platform !== "linux") {
@@ -11,10 +9,7 @@ export function resolveHostExecMemoryLimit(): number | undefined {
   }
   const constrained = process.constrainedMemory();
   const total = constrained > 0 ? Math.min(os.totalmem(), constrained) : os.totalmem();
-  return Math.max(
-    1,
-    Math.floor(Math.min(8 * GiB, total / 4, (total - process.memoryUsage.rss()) / 2)),
-  );
+  return Math.max(1, Math.floor(Math.min(total / 4, (total - process.memoryUsage.rss()) / 2)));
 }
 
 function formatChildMemoryLimit(limitBytes: number, observedBytes: number): string {

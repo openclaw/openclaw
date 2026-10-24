@@ -16,9 +16,9 @@ Headless node-host commands terminated by an operating-system signal include the
 
 ## Host memory protection
 
-On Linux, Gateway-hosted exec commands have a default memory bound across the command's process tree, including foreground, PTY, and background execution. The bound is the smallest of 8 GiB, one quarter of host memory (or the process's cgroup memory constraint), and half the memory remaining after the Gateway's own resident usage. No configuration is required.
+On Linux, Gateway-hosted exec commands have a default memory bound across the command's process tree, including foreground, PTY, and background execution. The bound is the smaller of one quarter of host memory (or the process's cgroup memory constraint) and half the memory remaining after the Gateway's own resident usage. There is no fixed ceiling, so the bound scales with available host capacity. No configuration is required.
 
-OpenClaw samples resident memory plus swapped private pages once per second and kills the owned process tree when it exceeds the bound. The tool reports `memory-limit` and explains the failure; background `process` polling and logs retain the diagnostic. Reduce concurrency or input size, split the work, or move it to a separately resource-limited worker.
+OpenClaw samples resident memory plus swapped private pages once per second and kills the owned process tree when it exceeds the bound. The tool reports `memory-limit`, the observed usage, and the applied limit in MiB; background `process` polling and logs retain the diagnostic. Reduce concurrency or input size, split the work, or move it to a separately resource-limited worker.
 
 This is a sampled safeguard, not a kernel-enforced ceiling: rapid allocations can overshoot it, shared resident pages may count more than once across processes, and concurrent commands do not share an aggregate budget. Virtual address reservations are not counted. Ordinary child execution retains a tree owner for reparented descendants. PTY monitoring follows the live command's descendants only; daemonized children that reparent outside that tree are not covered. Use `background: true` without PTY for supervised long-running work instead of shell daemonization. Sandbox backends retain their own limits. This watchdog does not apply to remote `host=node`, Codex-native shell commands, or non-Linux hosts.
 

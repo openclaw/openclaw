@@ -27,12 +27,13 @@ test.skipIf(process.platform !== "linux").each([false, true])(
         status: "failed",
         exitReason: "memory-limit",
         timedOut: false,
+        reason: expect.stringContaining("256 MiB limit"),
       });
       expect(outcome.aggregated).toContain("hog-started");
       expect(outcome.aggregated).toContain(`terminal=${usePty}`);
       const result = await processTool.execute("memory-poll", { action: "poll", sessionId });
       expect(result.details).toMatchObject({ status: "failed", exitReason: "memory-limit" });
-      expect(JSON.stringify(result.content)).toContain("host memory bound");
+      expect(JSON.stringify(result.content)).toContain("256 MiB limit");
       expect(JSON.stringify(result.content)).toContain("Reduce concurrency");
     } finally {
       await stopProcess(run);

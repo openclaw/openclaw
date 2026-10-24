@@ -20,13 +20,15 @@ afterEach(() => {
   procfs.readdir.mockReset();
 });
 
-it("scales the host bound down for cgroup constraints and the owner's working set", () => {
+it("scales the host bound with host memory, cgroup constraints, and the owner's working set", () => {
   mockProcessPlatform("linux");
   const GiB = 1024 ** 3;
   vi.spyOn(os, "totalmem").mockReturnValue(192 * GiB);
   const constrained = vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
   const rss = vi.spyOn(process.memoryUsage, "rss").mockReturnValue(8 * GiB);
-  expect(resolveHostExecMemoryLimit()).toBe(8 * GiB);
+  expect(resolveHostExecMemoryLimit()).toBe(48 * GiB);
+  constrained.mockReturnValue(64 * GiB);
+  expect(resolveHostExecMemoryLimit()).toBe(16 * GiB);
   constrained.mockReturnValue(4 * GiB);
   rss.mockReturnValue(GiB);
   expect(resolveHostExecMemoryLimit()).toBe(GiB);
@@ -58,9 +60,7 @@ it("counts descendants from nonleader threads and swapped memory, then stops sam
   const stop = watchChildMemory({ pid: 100, limitBytes: 128 * 1024, onLimit, onDiagnostic });
   await vi.advanceTimersByTimeAsync(2000);
   expect(onLimit).toHaveBeenCalledExactlyOnceWith(144 * 1024);
-  expect(onDiagnostic).toHaveBeenCalledExactlyOnceWith(
-    expect.stringContaining("host memory bound"),
-  );
+  expect(onDiagnostic).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("1 MiB limit"));
   const reads = read.mock.calls.length;
   await vi.advanceTimersByTimeAsync(5000);
   expect(read).toHaveBeenCalledTimes(reads);
