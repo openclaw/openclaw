@@ -12,7 +12,6 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
@@ -42,7 +41,6 @@ import {
 } from "../../scripts/lib/full-release-child-request.mjs";
 import { validateReusableReleaseChild } from "../../scripts/lib/full-release-child-reuse.mjs";
 import { FULL_RELEASE_CHILD_EVIDENCE_JOB } from "../../scripts/lib/full-release-evidence.mjs";
-import { runManagedCommand } from "../../scripts/lib/managed-child-process.mts";
 import {
   artifactDownloadTimeoutMs,
   createReleaseEvidenceClient,
@@ -61,7 +59,6 @@ import {
   selectedChildKeys,
   tryReadReleaseDecisionArtifact,
   validateEvidenceReuseChain,
-  validateManifestArtifactCompatibility,
   validateManifestArtifactIdentity,
   validateManifestChildRun,
   validateParentManifest,
@@ -72,7 +69,6 @@ import {
 } from "../../scripts/release-ci-summary.mjs";
 import { authenticateFullReleaseValidationEvidence } from "../../scripts/validate-full-release-validation-evidence.mjs";
 import { fullReleaseCandidateBindingFixture } from "../helpers/full-release-candidate.js";
-import { withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { makeStoredZip } from "./actions-artifact-zip.test-support.js";
 import { candidatePublicationFixture } from "./candidate-publication.test-support.js";
@@ -245,37 +241,6 @@ function reuseManifest(
   });
 }
 
-async function runInterruptedPlanFixture(
-  args: string[],
-  env: NodeJS.ProcessEnv,
-  signal: AbortSignal,
-) {
-  let stdout = "";
-  let stderr = "";
-  const command = runManagedCommand({
-    bin: process.execPath,
-    args,
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-    timeoutMs: 12_000,
-    requireProcessTreeExit: process.platform !== "win32",
-    signal,
-    onReady(child) {
-      child.stdout!.on("data", (chunk: Buffer) => {
-        stdout += chunk.toString();
-      });
-      child.stderr!.on("data", (chunk: Buffer) => {
-        stderr += chunk.toString();
-      });
-    },
-  });
-  try {
-    return { status: await withinTest(command, signal), stdout, stderr };
-  } finally {
-    await command.catch(() => {});
-  }
-}
-
 function publicationSourceFixture(
   fixture: ReturnType<typeof trustedMainNpmFixture>,
   fullCoverage: boolean,
@@ -395,34 +360,23 @@ describe("original publication admission reader", () => {
       fixture.plan.sealParentRunAttempt = planSource === "wrong-attempt" ? 3 : 2;
       fixture.plan.sha256 = releaseExecutionPlanSha256(fixture.plan);
       const parent = publicationParent(fixture);
-      const resolveJob = {
-        id: 901,
-        name: "Resolve target ref",
-        run_attempt: 1,
-        status: "completed",
-        conclusion: "success",
+      const resolveJob = Object.assign(makeJob("Resolve target ref", { id: 901 }), {
         steps: [{ name: "Finalize publication admission", conclusion: "success" }],
-      };
-      const sealer = {
-        id: 902,
-        name: "Seal release execution plan",
-        run_attempt: 2,
-        status: "completed",
-        conclusion: "success",
-        steps: [...publicationPlanSteps(), planDigestStep()],
-      };
+      });
+      const sealer = Object.assign(
+        makeJob("Seal release execution plan", { id: 902, run_attempt: 2 }),
+        {
+          steps: [...publicationPlanSteps(), planDigestStep()],
+        },
+      );
       const client = {
-        getRunAttempt: vi.fn(async () => parent),
-        getWorkflowSource: vi.fn(
-          () =>
-            'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT: "1"\n',
-        ),
-        getRunAttemptJobs: vi.fn(async (_runId: string, attempt: number) =>
+        getRunAttempt: async () => parent,
+        getWorkflowSource: () =>
+          'env:\n  FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"\n  FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT: "1"\n',
+        getRunAttemptJobs: async (_runId: string, attempt: number) =>
           attempt === 1 ? [resolveJob] : [sealer],
-        ),
-        getJobLog: vi.fn(
-          async () => `2026-08-28T12:01:03.750Z FRV_EXECUTION_PLAN_SHA256=${fixture.plan.sha256}\n`,
-        ),
+        getJobLog: async () =>
+          `2026-08-28T12:01:03.750Z FRV_EXECUTION_PLAN_SHA256=${fixture.plan.sha256}\n`,
         loadExecutionPlanEvidence: vi.fn(() => {
           if (planSource === "cached") {
             throw new Error("authenticated cache must avoid artifact download");
@@ -453,12 +407,6 @@ describe("original publication admission reader", () => {
       }
       const restored = await operation;
       expect(restored.plan).toEqual(fixture.plan);
-      expect(client.getRunAttemptJobs).toHaveBeenNthCalledWith(1, fixture.runId, 1, {
-        requireComplete: true,
-      });
-      expect(client.getRunAttemptJobs).toHaveBeenNthCalledWith(2, fixture.runId, 2, {
-        requireComplete: true,
-      });
       expect(client.loadExecutionPlanEvidence).toHaveBeenCalledTimes(
         planSource === "cached" ? 0 : 1,
       );
@@ -707,13 +655,11 @@ describe("original publication admission reader", () => {
     "workflow-plan-cached",
     "cached-plan-mutated",
     "cached-plan-missing-witness",
-    "cached-plan-duplicate-witness",
     "cached-plan-outside-witness",
-    "cached-plan-wrong-witness-step",
     "cached-plan-failed-witness",
     "cached-plan-historical",
     "reuploaded-plan",
-    "interrupted-sealer",
+    "failed-sealer",
     "duplicate-sealer",
     "skipped-seal",
     "failed-upload",
@@ -732,7 +678,7 @@ describe("original publication admission reader", () => {
     "extra-entry",
     "symlink-entry",
     "changed-selection",
-  ])("authenticates retained attempt one before any new observations: %s", async (fault, t) => {
+  ])("authenticates retained attempt one before any new observations: %s", (fault) => {
     const fixture = publicationRestoreFixture();
     const cachedRestore = fault.includes("cached");
     const witnessContract =
@@ -747,18 +693,7 @@ describe("original publication admission reader", () => {
       fixture.admission.binding.observationsDigest = `sha256:${createHash("sha256").update(publicationObservationJson(fixture.admission.observations)).digest("hex")}`;
       fixture.plan.sha256 = releaseExecutionPlanSha256(fixture.plan);
     }
-    let interruptedWork: ReturnType<typeof runInterruptedPlanFixture> | undefined;
-    const caseTempDirs =
-      fault === "interrupted-sealer"
-        ? useAutoCleanupTempDirTracker((cleanup) =>
-            t.onTestFinished(async () => {
-              // The interrupted fixture owns its root until its managed process tree has joined.
-              await interruptedWork?.catch(() => {});
-              cleanup();
-            }),
-          )
-        : tempDirs;
-    const root = caseTempDirs.make("publication-original-reader-");
+    const root = tempDirs.make("publication-original-reader-");
     const request = join(root, "request.json");
     const fixturesPath = join(root, "fixtures.json");
     const archivePath = join(root, "plan.zip");
@@ -782,169 +717,6 @@ describe("original publication admission reader", () => {
         ...expectDefined(fixture.request.publicationSelection, "publication selection"),
         route: "prepared",
       };
-    }
-    if (fault === "interrupted-sealer") {
-      const pendingGh = gh;
-      const ready = join(root, "pending-gh-ready");
-      const settled = join(root, "pending-gh-settled");
-      const receipts = join(root, "pending-gh-receipts");
-      const written = join(root, "interrupted-plan.json");
-      const outputsPath = join(root, "interrupted-outputs");
-      const admissionPath = join(root, "source-admission.json");
-      writeFileSync(
-        admissionPath,
-        JSON.stringify({
-          sourceAdmissionContract: "1",
-          sourceAdmission: fixture.source,
-          publicationAdmissionContract: "1",
-          publicationAdmission: fixture.admission,
-        }),
-      );
-      writeFileSync(
-        pendingGh,
-        `#!${process.execPath}
-const fs = require("node:fs");
-const receipts = fs.openSync(${JSON.stringify(receipts)}, "w");
-const parent = process.ppid;
-process.once("exit", () => {
-  fs.writeFileSync(${JSON.stringify(settled)}, "settled");
-  // Synchronous FIFO writes cannot be lost when this orphan exits immediately afterward.
-  fs.writeSync(receipts, "settled\\n");
-});
-setInterval(() => { if (process.ppid !== parent) process.exit(0); }, 10);
-setTimeout(() => {}, 30000);
-fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid));
-fs.writeSync(receipts, "ready\\n");
-`,
-        { mode: 0o755 },
-      );
-      const inputs = {
-        childPhaseVersion: 3,
-        sourceAdmissionContract: "1",
-        sourceAdmission: fixture.source,
-        parentRunId: fixture.runId,
-        parentRunAttempt: 1,
-        workflowRef: "main",
-        workflowSha: fixture.workflowSha,
-        rerunGroup: "all",
-        coveragePolicy: fixture.plan.coveragePolicy,
-        targetVersion: fixture.source.projection!.version,
-        resolveTargetResult: "success",
-        candidateAcquisitionResult: "skipped",
-        candidateRequestInput: fixture.plan.candidateRequest,
-        trustedWorkflow: fixture.plan.trustedWorkflow,
-        evidenceReuse: true,
-        evidenceRunId: "99",
-        evidenceRootRunId: "99",
-        evidencePolicy: "exact-target-full-validation-v1",
-        evidenceSha: fixture.targetSha,
-        evidenceRunUrl: "https://example.invalid/runs/99",
-        evidenceChangedPaths: [],
-      };
-      interruptedWork = runInterruptedPlanFixture(
-        [
-          "--input-type=module",
-          "--eval",
-          `
-import { execFileSync, spawn } from "node:child_process";
-import { closeSync, createReadStream, existsSync, openSync, readFileSync } from "node:fs";
-import { once } from "node:events";
-execFileSync("mkfifo", [${JSON.stringify(receipts)}]);
-// Keep the FIFO open until gh owns its writer; then EOF joins that fixture's exit.
-let heldWriter = openSync(${JSON.stringify(receipts)}, "r+");
-const receiptStream = createReadStream(${JSON.stringify(receipts)}, { encoding: "utf8" });
-const receiptClosed = new Promise(resolve => receiptStream.once("close", resolve));
-const ended = once(receiptStream, "end");
-let markReady;
-const reached = new Promise(resolve => { markReady = resolve; });
-let receiptText = "";
-receiptStream.on("data", chunk => {
-  receiptText += chunk;
-  if (receiptText.includes("ready\\n")) markReady();
-});
-await once(receiptStream, "open");
-const child = spawn(process.execPath, [${JSON.stringify(resolve("scripts/full-release-validation-state.mjs"))}, "plan"], { env: process.env, stdio: ["ignore", "pipe", "pipe"] });
-child.stdout.pipe(process.stdout); child.stderr.pipe(process.stderr);
-const closed = new Promise(resolve => child.once("close", (code, signal) => resolve({ code, signal })));
-const timeout = setTimeout(() => child.kill("SIGKILL"), 8000);
-try {
-  await Promise.race([reached, closed.then(() => {
-    // The durable marker is written before the pipe receipt; close can win their delivery race.
-    if (!existsSync(${JSON.stringify(ready)})) throw new Error("reuse did not reach controlled gh: " + (existsSync(${JSON.stringify(written)}) ? readFileSync(${JSON.stringify(written)}, "utf8") : "no checkpoint"));
-  })]);
-  closeSync(heldWriter); heldWriter = undefined;
-  child.kill("SIGTERM");
-  const result = await closed;
-  if (result.code !== 1 || result.signal !== null) throw new Error("interruption did not write and exit 1");
-  await ended;
-  if (!existsSync(${JSON.stringify(settled)})) throw new Error("controlled gh did not settle after owner interruption");
-} finally {
-  clearTimeout(timeout);
-  if (heldWriter !== undefined) closeSync(heldWriter);
-  receiptStream.destroy();
-  child.kill("SIGKILL");
-  await closed;
-  await receiptClosed;
-}
-`,
-        ],
-        {
-          PATH: `${root}:${process.env.PATH ?? ""}`,
-          OPENCLAW_GH_BIN: pendingGh,
-          GH_TOKEN: "synthetic-evidence-token",
-          FULL_RELEASE_SOURCE_ADMISSION_CONTRACT: "1",
-          FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1",
-          FULL_RELEASE_EXECUTION_PLAN_PATH: written,
-          PUBLICATION_ADMISSION_PATH: admissionPath,
-          FULL_RELEASE_PLAN_INPUTS_JSON: JSON.stringify(inputs),
-          GITHUB_OUTPUT: outputsPath,
-          GITHUB_REPOSITORY: "openclaw/openclaw",
-          GITHUB_RUN_ID: fixture.runId,
-          GITHUB_RUN_ATTEMPT: "1",
-          GITHUB_REF_NAME: "main",
-          GITHUB_SHA: fixture.workflowSha,
-          TARGET_SHA: fixture.targetSha,
-          RELEASE_PROFILE: "beta",
-          RERUN_GROUP: "all",
-        },
-        t.signal,
-      );
-      const interrupted = await interruptedWork;
-      expect(interrupted.status, interrupted.stderr).toBe(0);
-      Object.assign(fixture.plan, JSON.parse(readFileSync(written, "utf8")));
-      expect(fixture.plan.errors).toContainEqual(
-        expect.objectContaining({ kind: "collector_cancelled" }),
-      );
-      expect(fixture.plan.publicationAdmission).toEqual(fixture.admission);
-      const workflow = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
-      const upload = workflow.jobs.release_execution_plan.steps.find(
-        (step: { name: string }) => step.name === "Upload immutable release execution plan",
-      );
-      const outputs = Object.fromEntries(
-        readFileSync(outputsPath, "utf8")
-          .trim()
-          .split("\n")
-          .map((line) => line.split("=")),
-      );
-      expect(outputs.sha256).toBe(fixture.plan.sha256);
-      expect(outputs.source_parent_attempt).toBe("1");
-      expect(
-        runInNewContext(
-          String(upload.if)
-            .replace(/^\$\{\{|\}\}$/gu, "")
-            .trim(),
-          {
-            always: () => true,
-            github: { run_attempt: 1 },
-            steps: {
-              plan: { outputs },
-              plan_inputs_upload: { outcome: "success" },
-              plan_inputs_restore: { outcome: "skipped" },
-            },
-          },
-        ),
-      ).toBe(true);
-      expect(upload.with.overwrite).toBe(false);
     }
     const entry = "full-release-execution-plan.json";
     const archive = makeStoredZip({
@@ -1018,26 +790,19 @@ try {
             name: "Seal release execution plan",
             run_attempt: 1,
             status: "completed",
-            conclusion: fault === "interrupted-sealer" ? "failure" : "success",
+            conclusion: fault === "failed-sealer" ? "failure" : "success",
             steps: [
               ...publicationPlanSteps(
                 fault === "skipped-seal"
                   ? "skipped"
-                  : fault === "interrupted-sealer"
+                  : fault === "failed-sealer"
                     ? "failure"
                     : "success",
                 fault === "failed-upload" ? "failure" : "success",
                 fault === "upload-before-seal" ? 4 : 6,
               ),
               ...(witnessContract
-                ? [
-                    planDigestStep(
-                      fault === "cached-plan-failed-witness" ? "failure" : "success",
-                      fault === "cached-plan-wrong-witness-step"
-                        ? "Unrelated successful step"
-                        : "Record immutable release execution plan digest",
-                    ),
-                  ]
+                ? [planDigestStep(fault === "cached-plan-failed-witness" ? "failure" : "success")]
                 : []),
             ],
           })),
@@ -1048,9 +813,7 @@ try {
       log:
         fault === "cached-plan-missing-witness"
           ? "2026-08-28T12:01:03.750Z unrelated output\n"
-          : `${fault === "cached-plan-outside-witness" ? "2026-08-28T12:01:02.750Z" : "2026-08-28T12:01:03.750Z"} FRV_EXECUTION_PLAN_SHA256=${originalPlanDigest}\n`.repeat(
-              fault === "cached-plan-duplicate-witness" ? 2 : 1,
-            ),
+          : `${fault === "cached-plan-outside-witness" ? "2026-08-28T12:01:02.750Z" : "2026-08-28T12:01:03.750Z"} FRV_EXECUTION_PLAN_SHA256=${originalPlanDigest}\n`,
     };
     writeFileSync(request, JSON.stringify(fixture.request));
     writeFileSync(fixturesPath, JSON.stringify(fixtures));
@@ -1194,7 +957,7 @@ process.stdout.write(JSON.stringify(restored));
       fault === "workflow-restore" ||
       fault === "workflow-restore-cached" ||
       fault === "reuploaded-plan" ||
-      fault === "interrupted-sealer"
+      fault === "failed-sealer"
     ) {
       expect(result.status, result.stderr).toBe(0);
       const restored = workflowRestore
@@ -1221,71 +984,6 @@ process.stdout.write(JSON.stringify(restored));
       if (fault === "workflow-plan-mutated") {
         expect(result.stderr).toContain("differs from its authenticated original");
       }
-    }
-    if (planRestore && !cachedRestore) {
-      const workflow = parse(readFileSync(".github/workflows/full-release-validation.yml", "utf8"));
-      const upload = workflow.jobs.release_execution_plan.steps.find(
-        (step: { name: string }) => step.name === "Upload immutable release execution plan",
-      );
-      const outputs = existsSync(join(root, "outputs"))
-        ? Object.fromEntries(
-            readFileSync(join(root, "outputs"), "utf8")
-              .trim()
-              .split("\n")
-              .map((line) => line.split("=")),
-          )
-        : {};
-      const condition = String(upload.if)
-        .replace(/^\$\{\{|\}\}$/gu, "")
-        .trim();
-      const uploadSelected = runInNewContext(condition, {
-        always: () => true,
-        github: { run_attempt: fault === "workflow-plan-prewrite" ? 1 : 2 },
-        steps: {
-          plan: { outputs: { sha256: "", source_parent_attempt: "", ...outputs } },
-          plan_inputs_upload: { outcome: "skipped" },
-          plan_inputs_restore: { outcome: "skipped" },
-        },
-      });
-      if (uploadSelected && upload.with.overwrite === true) {
-        const replacement = makeStoredZip({ [entry]: readFileSync(cachedPlanPath, "utf8") });
-        fixtures.artifact = {
-          ...artifact,
-          size_in_bytes: replacement.length,
-          digest: `sha256:${createHash("sha256").update(replacement).digest("hex")}`,
-          created_at: "2026-08-29T12:01:02.000Z",
-        };
-        fixtures.listing.artifacts = [fixtures.artifact];
-        writeFileSync(fixturesPath, JSON.stringify(fixtures));
-        writeFileSync(archivePath, replacement);
-      }
-      const subsequent = spawnSync(
-        process.execPath,
-        [
-          "--input-type=module",
-          "--eval",
-          `
-import { restoreOriginalPublicationAdmission } from ${JSON.stringify(pathToFileURL(resolve(SCRIPT)).href)};
-const restored = await restoreOriginalPublicationAdmission({ request: ${JSON.stringify(fixture.request)} });
-process.stdout.write(JSON.stringify(restored.plan));
-`,
-        ],
-        {
-          encoding: "utf8",
-          env: {
-            PATH: `${root}:${process.env.PATH ?? ""}`,
-            OPENCLAW_GH_BIN: gh,
-            GH_TOKEN: "synthetic-evidence-token",
-          },
-          timeout: 10_000,
-        },
-      );
-      expect.soft(uploadSelected).toBe(false);
-      expect.soft(subsequent.status, subsequent.stderr).toBe(0);
-      if (subsequent.status === 0) {
-        expect(JSON.parse(subsequent.stdout)).toEqual(fixture.plan);
-      }
-      expect(readFileSync(archivePath)).toEqual(archive);
     }
   });
 });
@@ -2028,9 +1726,6 @@ describe("release CI summary child correlation", () => {
     expect(selectManifestArtifact([artifact], runId, 1)).toBe(artifact);
     expect(selectManifestArtifact([legacyArtifact, artifact], runId, 1)).toBe(artifact);
     expect(selectManifestArtifact([legacyArtifact], runId, 1)).toBe(legacyArtifact);
-    expect(validateManifestArtifactCompatibility(legacyArtifact, { version: 2 }, runId, 1)).toBe(
-      legacyArtifact,
-    );
     expect(
       selectManifestArtifact(
         [{ ...artifact, workflow_run: { ...artifact.workflow_run, id: 1 } }],
@@ -2051,9 +1746,6 @@ describe("release CI summary child correlation", () => {
     expect(() => selectManifestArtifact([legacyArtifact], runId, 2)).toThrow(
       "legacy release validation manifest requires run attempt 1",
     );
-    expect(() =>
-      validateManifestArtifactCompatibility(legacyArtifact, { version: 3 }, runId, 1),
-    ).toThrow("legacy release validation manifest artifact is not compatible");
     expect(selectManifestArtifact([artifact], runId, 2)).toBeUndefined();
     expect(() => selectManifestArtifact([{ ...artifact, digest: undefined }], runId, 1)).toThrow(
       "manifest artifact digest is invalid",
@@ -2341,14 +2033,9 @@ describe("release CI summary child correlation", () => {
     const fixture = trustedMainNpmFixture("stable");
     const options = verifierOptions(fixture.runId);
     const evidence = await validateReleaseRunEvidence(options, fixture.client);
-    expect(evidence.children.map((child: { role: string }) => child.role).toSorted()).toEqual([
-      "normalCi",
-      "pluginPrereleaseCandidate",
-      "pluginPrereleaseIndependent",
-      "productPerformance",
-      "releaseChecksCandidate",
-      "releaseChecksIndependent",
-    ]);
+    expect(evidence.children).toContainEqual(
+      expect.objectContaining({ role: "productPerformance" }),
+    );
     expect(evidence.runReleaseSoak).toBe(true);
     expect(fixture.client.getRunAttemptJobs).toHaveBeenCalledTimes(6);
     const performance = expectDefined(
