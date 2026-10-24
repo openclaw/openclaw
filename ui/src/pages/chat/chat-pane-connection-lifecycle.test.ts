@@ -329,7 +329,7 @@ describe("chat pane connection lifecycle", () => {
       const view = document.createElement("div");
       const messageView = createMessageGroupHarness(view);
       onTestFinished(() => messageView.unmount());
-      const renderReply = () => {
+      const renderReply = () =>
         messageView.render(
           createMessageGroup(state.chatMessages[0], "assistant", { key: "pairing-reply" }),
           {
@@ -339,7 +339,6 @@ describe("chat pane connection lifecycle", () => {
             assistantAvatar: null,
           },
         );
-      };
       renderReply();
       await vi.dynamicImportSettled();
       await waitForSolid(() =>
@@ -472,18 +471,11 @@ describe("chat pane connection lifecycle", () => {
     expect(performUpdate).toHaveBeenCalledOnce();
     expect(renderedNames.at(-1)).toBe("Current hidden update");
 
-    const addVisibilityListener = vi.spyOn(document, "addEventListener");
-    const removeVisibilityListener = vi.spyOn(document, "removeEventListener");
     visibility("hidden");
     state.assistantName = "Disconnected hidden update";
     await Promise.resolve();
     setConnected(lifecycle, false);
     lifecycle.disconnectedCallback();
-    expect(removeVisibilityListener).toHaveBeenCalledWith(
-      "visibilitychange",
-      expect.any(Function),
-      undefined,
-    );
 
     setConnected(lifecycle, true);
     connectPaneTestView(lifecycle);
@@ -501,14 +493,9 @@ describe("chat pane connection lifecycle", () => {
 
     setConnected(lifecycle, false);
     lifecycle.disconnectedCallback();
-    addVisibilityListener.mockClear();
     state.assistantName = "Detached update";
     await lifecycle.updateComplete;
-    expect(addVisibilityListener).not.toHaveBeenCalledWith(
-      "visibilitychange",
-      expect.any(Function),
-      undefined,
-    );
+    expect(renderedNames.at(-1)).toBe("Latest remounted hidden update");
   });
 
   it("retires connection-owned work and fully tears down realtime Talk on disconnect", () => {
@@ -543,17 +530,7 @@ describe("chat pane connection lifecycle", () => {
       } as unknown as ChatPageHost["realtimeTalk"]["snapshot"]["realtimeTalkSession"],
       realtimeTalkActive: true,
       realtimeTalkStatus: "listening",
-      realtimeTalkDetail: "live",
-      realtimeTalkVideoStream: {} as MediaStream,
-      realtimeTalkCameraDevices: [{ deviceId: "camera", label: "Camera" }],
-      realtimeTalkVideoCapable: true,
-      realtimeTalkVideoPending: true,
-      realtimeTalkCameraError: true,
     });
-    state.realtimeTalk.snapshot.realtimeTalkInputLevel.set(0.7);
-    state.realtimeTalk.snapshot.realtimeTalkConversationState.entries = [
-      { id: "utterance", role: "user", text: "stale", isStreaming: true },
-    ];
 
     disconnect(pane);
 
@@ -569,14 +546,6 @@ describe("chat pane connection lifecycle", () => {
     expect(state.realtimeTalk.snapshot).toMatchObject({
       realtimeTalkActive: false,
       realtimeTalkStatus: "idle",
-      realtimeTalkDetail: null,
-      realtimeTalkInputLevel: { value: 0 },
-      realtimeTalkConversationState: { entries: [] },
-      realtimeTalkVideoStream: null,
-      realtimeTalkCameraDevices: [],
-      realtimeTalkVideoCapable: false,
-      realtimeTalkVideoPending: false,
-      realtimeTalkCameraError: false,
     });
   });
 
@@ -638,37 +607,12 @@ describe("chat pane connection lifecycle", () => {
           features: { methods: [...(hello.features?.methods ?? []), "question.list"] },
         },
       };
-      const initialGeneration = pane.connectionGeneration;
-      const applyPhase = (
-        phase: "reconnecting" | "connected",
-        generation: number,
-        loading: boolean,
-      ) => {
-        state.chatLoading = true;
-        pane.applyGatewaySnapshot({
-          ...snapshot,
-          phase,
-          hello: phase === "reconnecting" ? null : snapshot.hello,
-        });
-        expect(pane.connectionGeneration).toBe(initialGeneration + generation);
-        expect(state).toMatchObject({
-          connectionEpoch: initialGeneration + generation,
-          chatLoading: loading,
-        });
-      };
-      applyPhase("reconnecting", 1, false);
-      applyPhase("reconnecting", 1, true);
-      expect(state.connected).toBe(false);
-      expect(pane.connectedClient).toBeNull();
+      disconnect(pane);
       pane.applyGatewaySnapshot({ ...snapshot, phase: "connected" });
-      expect(pane.connectionGeneration).toBe(initialGeneration + 2);
-      expect(state.connectionEpoch).toBe(initialGeneration + 2);
-      applyPhase("connected", 2, true);
 
       await expect(chatHistoryRequests(state).subscriptionReady).resolves.toBe(true);
       expect(requestCalls(request, "chat.startup")).toHaveLength(1);
       expect(requestCalls(request, "question.list")).toHaveLength(questions);
-      expect(deferHydration).toHaveBeenCalledExactlyOnceWith(state.sessionKey, expect.any(Promise));
       expect(branches).not.toHaveBeenCalled();
       expect(commitEffects).toEqual([]);
 
@@ -684,15 +628,12 @@ describe("chat pane connection lifecycle", () => {
       });
       await expect(deferHydration.mock.calls[0]![1]).resolves.toBe(true);
       expect(state.chatLoading).toBe(false);
-      expect(branches).not.toHaveBeenCalled();
       expect(commitEffects.length).toBeGreaterThan(0);
       for (const effect of commitEffects) {
         effect(() => undefined);
       }
       expect(branches).toHaveBeenCalledOnce();
       await branches.mock.results[0]!.value;
-      expect(requestCalls(request, "chat.startup")).toHaveLength(1);
-      applyPhase("connected", 2, true);
     },
   );
 

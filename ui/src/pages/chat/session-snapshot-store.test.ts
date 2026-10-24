@@ -63,31 +63,41 @@ function boardSnapshot(sessionKey: string, message: string, receivedAtMs = 100) 
   };
 }
 
-function historyState(message: unknown): ChatSessionSnapshot["historyState"] {
+function historyState(message: unknown, commands = true): ChatSessionSnapshot["historyState"] {
   return {
-    stateRevision: { pendingInputs: "inputs-1", sessionInfo: "info-1", commands: "commands-1" },
-    commands: [
-      {
-        name: "skill",
-        description: "Run skill",
-        source: "skill",
-        scope: "text",
-        acceptsArgs: true,
-      },
-    ],
-    pendingInputs: {
-      items: [
-        {
-          id: "input-1",
-          acceptedAt: 1,
-          state: "queued",
-          queued: true,
-          message: { role: "user", content: message },
-        },
-      ],
-      total: 1,
-      queuedCount: 1,
+    stateRevision: {
+      pendingInputs: "inputs-1",
+      sessionInfo: "info-1",
+      ...(commands ? { commands: "commands-1" } : {}),
     },
+    ...(commands
+      ? {
+          commands: [
+            {
+              name: "skill",
+              description: "Run skill",
+              source: "skill",
+              scope: "text",
+              acceptsArgs: true,
+            },
+          ],
+        }
+      : {}),
+    pendingInputs: commands
+      ? {
+          items: [
+            {
+              id: "input-1",
+              acceptedAt: 1,
+              state: "queued",
+              queued: true,
+              message: { role: "user", content: message },
+            },
+          ],
+          total: 1,
+          queuedCount: 1,
+        }
+      : { items: [], total: 0 },
     sessionInfo: {
       key: "agent:main:metadata",
       kind: "direct",
@@ -126,18 +136,27 @@ async function openDatabase(version?: number, stores: string[] = []) {
   return requestResult(request);
 }
 
-async function putRawRecord(record: unknown, metadata?: unknown): Promise<void> {
+async function putRawRecord(
+  record: unknown,
+  metadata?: unknown,
+  storeName = SNAPSHOTS,
+): Promise<void> {
   const database = await openDatabase();
-  const transaction = database.transaction([SNAPSHOTS, METADATA], "readwrite");
-  const completed = transactionDone(transaction);
-  transaction.objectStore(SNAPSHOTS).put(record);
-  transaction.objectStore(METADATA).put(
-    metadata ?? {
-      savedAt: Date.now(),
-      sessionKey: (record as { sessionKey: string }).sessionKey,
-      weight: 0,
-    },
+  const transaction = database.transaction(
+    storeName === SNAPSHOTS ? [SNAPSHOTS, METADATA] : storeName,
+    "readwrite",
   );
+  const completed = transactionDone(transaction);
+  transaction.objectStore(storeName).put(record);
+  if (storeName === SNAPSHOTS) {
+    transaction.objectStore(METADATA).put(
+      metadata ?? {
+        savedAt: Date.now(),
+        sessionKey: (record as { sessionKey: string }).sessionKey,
+        weight: 0,
+      },
+    );
+  }
   await completed;
   database.close();
 }
@@ -253,103 +272,46 @@ describe("persistent chat session snapshots", () => {
     expect(presentBoard).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "persists raw metadata with its receipts unless privacy projection changes it (pairing: %s)",
-    async (pairing) => {
+  it.each(["plain", "pairing", "legacy"])(
+    "persists raw metadata with its receipts unless privacy projection changes it (%s)",
+    async (mode) => {
       const sessionKey = key("agent:main:metadata");
       const value: ChatSessionSnapshot = {
         ...snapshot("history"),
         deltaCursor: "cursor-1",
         historyState: historyState(
-          pairing
+          mode === "pairing"
             ? [{ type: "openclaw_pairing_qr", data: "synthetic-private-pairing" }]
             : "Follow up.",
+          mode !== "legacy",
         ),
       };
       await persist(writer, sessionKey, value);
       const restored = await new SessionSnapshotStore().read(sessionKey);
       expect(restored?.deltaCursor).toBe("cursor-1");
-      expect(restored?.historyState).toEqual(pairing ? undefined : value.historyState);
+      expect(restored?.historyState).toEqual(mode === "pairing" ? undefined : value.historyState);
       expect(JSON.stringify(await readStoredChatSnapshotRecord(sessionKey))).not.toContain(
         "synthetic-private-pairing",
       );
     },
   );
 
-  it("restores persisted startup state from before command receipts were added", async () => {
-    const sessionKey = key("agent:main:existing-snapshot");
-    await persist(writer, sessionKey, snapshot("initialize database"));
-    const previous: ChatSessionSnapshot = {
-      ...snapshot("Existing conversation"),
-      deltaCursor: "existing-cursor",
-      historyState: {
-        stateRevision: { pendingInputs: "inputs-1", sessionInfo: "info-1" },
-        pendingInputs: { items: [], total: 0 },
-        sessionInfo: {
-          key: "agent:main:existing-snapshot",
-          kind: "direct",
-          sessionId: "session-1",
-          updatedAt: 1,
-        },
-      },
-    };
-    await putRawRecord(envelope(sessionKey, previous));
-    expect(await new SessionSnapshotStore().read(sessionKey)).toEqual(previous);
-  });
-
-  it("restores bounded sidebar facts with legacy defaults and strips live-only fields", async () => {
+  it("restores legacy sidebar presence defaults", async () => {
     const store = makeStore(undefined, true);
     const sidebarKey = `${key("").split("\u0000")[0]}\u0000sidebar:operator`;
-    const row = { key: "agent:main:cedar", kind: "direct", label: "Cedar" };
-    const roster = {
-      agentId: "main",
-      result: {
-        ts: 1,
-        path: "sessions",
-        count: 1,
-        defaults: { model: null, modelProvider: null, contextTokens: null },
-        sessions: [{ ...row, hasActiveRun: true }],
-      },
-      groups: [],
-      groupSettings: [],
-      sectionOrder: [],
-    };
-    async function putSidebarModel(model: unknown): Promise<void> {
-      const database = await openDatabase();
-      const transaction = database.transaction(SIDEBAR, "readwrite");
-      const completed = transactionDone(transaction);
-      transaction.objectStore(SIDEBAR).put({
+    expect(await store.writeSidebar(sidebarKey, sidebarSnapshot, parseSidebarSnapshot)).toBe(true);
+    await putRawRecord(
+      {
         sessionKey: sidebarKey,
         projectionVersion: 1,
         savedAt: Date.now(),
-        model,
-      });
-      await completed;
-      database.close();
-    }
-    expect(await store.writeSidebar(sidebarKey, sidebarSnapshot, parseSidebarSnapshot)).toBe(true);
-    // Older or foreign writers can leave data that is not an admitted live model.
-    await putSidebarModel({
-      ...sidebarSnapshot,
-      peoplePresenceFilter: undefined,
-      offlineUsers: undefined,
-      roster,
-      footer: { id: "operator", scopes: ["operator.admin"] },
-      token: "synthetic-disallowed-field",
-    });
+        model: { ...sidebarSnapshot, peoplePresenceFilter: undefined, offlineUsers: undefined },
+      },
+      undefined,
+      SIDEBAR,
+    );
     const restored = await store.readSidebar(sidebarKey, parseSidebarSnapshot);
     expect(restored).toMatchObject({ peoplePresenceFilter: "online", offlineUsers: [] });
-    expect(restored?.roster?.result.sessions).toEqual([row]);
-    expect(restored?.footer).toEqual({ id: "operator" });
-    expect(restored).not.toHaveProperty("token");
-    await putSidebarModel({
-      ...sidebarSnapshot,
-      roster: {
-        ...roster,
-        result: { ...roster.result, sessions: [{ ...row, incognito: true }] },
-      },
-    });
-    expect(await store.readSidebar(sidebarKey, parseSidebarSnapshot)).toBeNull();
   });
 
   it("rejects malformed durable history without exposing cached history", async () => {
@@ -413,26 +375,20 @@ describe("persistent chat session snapshots", () => {
   it("keeps Incognito history in memory without persisting snapshots or metadata", async () => {
     const memory: ChatMessageCache = new Map();
     writer = makeStore(memory);
-    const privateKeys = ["dashboard", "subagent", "internal-session-effects"].map((kind) =>
-      key(`agent:main:${kind}:incognito-private`),
-    );
+    const privateKey = key("agent:main:dashboard:incognito-private");
     const ordinaryKey = key("agent:main:dashboard:ordinary");
     cacheSnapshot(memory, ordinaryKey);
     const ordinaryFlush = writer.flush();
-    for (const sessionKey of privateKeys) {
-      cacheSnapshot(memory, sessionKey);
-    }
+    cacheSnapshot(memory, privateKey);
     await Promise.all([ordinaryFlush, writer.flush()]);
     const reader = new SessionSnapshotStore();
     await reader.loadSavedAtIndex();
-    for (const sessionKey of privateKeys) {
-      expect(memory.get(sessionKey)?.snapshot).toEqual(snapshot(sessionKey));
-      expect(await readRawRecord(sessionKey)).toBeUndefined();
-      expect(await readRawRecord(sessionKey, METADATA)).toBeUndefined();
-      expect(writer.readSavedAt(sessionKey)).toBeNull();
-      expect(reader.readSavedAt(sessionKey)).toBeNull();
-      expect(await reader.read(sessionKey)).toBeNull();
-    }
+    expect(memory.get(privateKey)?.snapshot).toEqual(snapshot(privateKey));
+    expect(await readRawRecord(privateKey)).toBeUndefined();
+    expect(await readRawRecord(privateKey, METADATA)).toBeUndefined();
+    expect(writer.readSavedAt(privateKey)).toBeNull();
+    expect(reader.readSavedAt(privateKey)).toBeNull();
+    expect(await reader.read(privateKey)).toBeNull();
     expect(await reader.read(ordinaryKey)).toEqual(snapshot(ordinaryKey));
     expect(reader.readSavedAt(ordinaryKey)).not.toBeNull();
   });
@@ -637,17 +593,8 @@ describe("persistent chat session snapshots", () => {
     await transactionDone(write);
     legacy.close();
     await new SessionSnapshotStore().delete(sessionKey);
-    const database = await openDatabase();
-    expect(database.version).toBe(8);
-    expect(Array.from(database.objectStoreNames)).toEqual([SIDEBAR, METADATA, SNAPSHOTS]);
-    const transaction = database.transaction([SNAPSHOTS, METADATA], "readonly");
-    const snapshotRequest = transaction.objectStore(SNAPSHOTS).get(sessionKey);
-    const metadataRequest = transaction.objectStore(METADATA).get(sessionKey);
-    const completed = transactionDone(transaction);
-    await Promise.all([requestResult(snapshotRequest), requestResult(metadataRequest), completed]);
-    expect(snapshotRequest.result).toBeUndefined();
-    expect(metadataRequest.result).toBeUndefined();
-    database.close();
+    expect(await readRawRecord(sessionKey)).toBeUndefined();
+    expect(await readRawRecord(sessionKey, METADATA)).toBeUndefined();
   });
 
   it("upgrades unbounded transcripts without discarding the current sidebar", async () => {

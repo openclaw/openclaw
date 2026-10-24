@@ -201,17 +201,6 @@ async function startHold(target: HTMLElement): Promise<void> {
   );
 }
 
-it("binds microphone transcription to the displayed agent session", async () => {
-  const { target } = createHarness({ sessionKey: "agent:researcher:conversation" });
-  await startHold(target);
-  expect(request).toHaveBeenCalledWith("talk.session.create", {
-    sessionKey: "agent:researcher:conversation",
-    mode: "transcription",
-    transport: "gateway-relay",
-    brain: "none",
-  });
-});
-
 async function releaseLatched(target: HTMLElement): Promise<void> {
   document.dispatchEvent(pointer("pointerup"));
   click(target);
@@ -330,41 +319,7 @@ describe("ComposerDictationOwner", () => {
     },
   );
 
-  it("lets Read aloud discard pending dictation without stopping newer playback", async () => {
-    const { controller, onCommit, options } = createHarness();
-    const reading = new GatewaySpeechPlayback();
-    try {
-      await startDirect(controller);
-
-      const finished = controller.finishActive();
-      const speaking = reading.speak(options.client, "New message");
-      await speechStarted.promise;
-      transcript("confirmed words");
-      emit({ type: "close", reason: "completed" });
-      await expect(finished).resolves.toBe(false);
-      expect(onCommit).not.toHaveBeenCalled();
-      const currentAudio = latestAudio();
-      expect(currentAudio.pause).toHaveBeenCalledOnce();
-      currentAudio.dispatchEvent(new Event("ended"));
-      await speaking;
-    } finally {
-      reading.stop();
-    }
-  });
-
-  it("stops Read aloud before capture and lets new Read aloud discard dictation", async () => {
-    const createStarted = createDeferred();
-    const closed = createDeferred();
-    const implementation = request.getMockImplementation();
-    request.mockImplementation(async (method, params) => {
-      if (method === "talk.session.create") {
-        createStarted.resolve();
-      }
-      if (method === "talk.session.close") {
-        closed.resolve();
-      }
-      return implementation?.(method, params);
-    });
+  it.each([false, true])("Read aloud replaces dictation (finalizing: %s)", async (finalizing) => {
     const stopTrack = captureStop();
     const { controller, onCommit, options } = createHarness();
     const previous = new GatewaySpeechPlayback();
@@ -372,24 +327,27 @@ describe("ComposerDictationOwner", () => {
     const reading = previous.speak(options.client, "First message");
     try {
       await speechStarted.promise;
-      const firstAudio = audios[0];
-      assert.isDefined(firstAudio);
-      expect(controller.startDirect()).toBe(true);
+      const firstAudio = latestAudio();
+      await startDirect(controller);
       expect(firstAudio.pause).toHaveBeenCalledTimes(2);
       await reading;
-      await createStarted.promise;
       expect(controller.active).toBe(true);
-
+      const finished = finalizing ? controller.finishActive() : null;
       speechStarted = createDeferred();
       const replacement = next.speak(options.client, "Second message");
       expect(controller.active).toBe(false);
       expect(stopTrack).toHaveBeenCalledOnce();
       await speechStarted.promise;
-      await closed.promise;
-      expectClosed("dictation-1", true);
+      await waitForFast(() => expectClosed("dictation-1", true));
       transcript("discard");
+      emit({ type: "close", reason: "completed" });
+      if (finished) {
+        await expect(finished).resolves.toBe(false);
+      }
       expect(onCommit).not.toHaveBeenCalled();
-      latestAudio().dispatchEvent(new Event("ended"));
+      const current = latestAudio();
+      expect(current.pause).toHaveBeenCalledOnce();
+      current.dispatchEvent(new Event("ended"));
       await replacement;
     } finally {
       previous.stop();
@@ -624,9 +582,17 @@ describe("ComposerDictationOwner", () => {
       order.push("microphone");
       return microphone();
     });
-    const { controller, onCommit, target } = createHarness();
+    const { controller, onCommit, target } = createHarness({
+      sessionKey: "agent:researcher:conversation",
+    });
 
     await startHold(target);
+    expect(request).toHaveBeenCalledWith("talk.session.create", {
+      sessionKey: "agent:researcher:conversation",
+      mode: "transcription",
+      transport: "gateway-relay",
+      brain: "none",
+    });
     expect(order.slice(0, 2)).toEqual(["microphone", "talk.session.create"]);
     captureAudio();
     await waitForFast(() => expectAppended());
@@ -671,7 +637,7 @@ describe("ComposerDictationOwner", () => {
     const { promise: createResult, resolve: resolveCreate } =
       createDeferred<ReturnType<typeof sessionResult>>();
     const order = recordRequests(() => createResult);
-    const { controller, onCommit, target } = createHarness();
+    const { controller, onCommit, onError, target } = createHarness();
     await startHold(target);
     captureAudio();
     expect(request).not.toHaveBeenCalledWith("talk.session.appendAudio", expect.anything());
@@ -685,33 +651,24 @@ describe("ComposerDictationOwner", () => {
       order.indexOf("talk.session.close"),
     );
     expect(onCommit).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])(
-    "closes late session creation after Stop (bounded wait: %s)",
-    async (bounded) => {
-      const created = createDeferred<ReturnType<typeof sessionResult>>();
-      request = vi.fn(async (method: string) =>
-        method === "talk.session.create" ? created.promise : { ok: true },
-      );
-      const { controller, onError, target } = createHarness();
-      await startHold(target);
-      if (bounded) {
-        const finished = controller.finishActive();
-        await vi.advanceTimersByTimeAsync(10_000);
-        await expect(finished).resolves.toBe(false);
-        expect(controller.locksComposer).toBe(false);
-        expect(request).not.toHaveBeenCalledWith("talk.session.close", expect.anything());
-      } else {
-        await commitLatched(controller, target);
-      }
-      created.resolve(sessionResult("late-session"));
-      await waitForFast(() => expectClosed("late-session"));
-      if (!bounded) {
-        expect(onError).not.toHaveBeenCalled();
-      }
-    },
-  );
+  it("closes late session creation after the bounded Stop wait", async () => {
+    const created = createDeferred<ReturnType<typeof sessionResult>>();
+    request = vi.fn(async (method: string) =>
+      method === "talk.session.create" ? created.promise : { ok: true },
+    );
+    const { controller, target } = createHarness();
+    await startHold(target);
+    const finished = controller.finishActive();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(finished).resolves.toBe(false);
+    expect(controller.locksComposer).toBe(false);
+    expect(request).not.toHaveBeenCalledWith("talk.session.close", expect.anything());
+    created.resolve(sessionResult("late-session"));
+    await waitForFast(() => expectClosed("late-session"));
+  });
 
   it("commits final text promptly when the Gateway disconnects during a partial drain", async () => {
     const harness = createHarness();
