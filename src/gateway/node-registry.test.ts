@@ -139,6 +139,25 @@ function failure(code: string, message: string) {
   return { ok: false, error: { code, message } };
 }
 
+async function expectInvokeError(invoke: ReturnType<NodeRegistry["invoke"]>, code: string) {
+  await expect(invoke).resolves.toMatchObject({ ok: false, error: { code } });
+}
+
+function expectNoActiveNode(registry: NodeRegistry) {
+  expect(registry.getActiveNode()).toBeUndefined();
+  expect(getCurrentActiveNodeContext()).toBeNull();
+}
+
+function enabledHost(available = 2, total = 2) {
+  return { enabled: true as const, capacity: { total, available } };
+}
+
+function catalogState(registry: NodeRegistry, pairingGeneration = "generation-a") {
+  return collectNodeCatalogRuntimeState(registry, [
+    { nodeId: "node-1", connId: "conn-1", pairingGeneration },
+  ]);
+}
+
 const timedOut = failure("TIMEOUT", "node invoke timed out");
 const aborted = failure("ABORTED", "node invoke cancelled");
 const idleTimedOut = failure("IDLE_TIMEOUT", "node invoke produced no progress");
@@ -394,17 +413,12 @@ describe("gateway/node-registry", () => {
     expect(registry.get("node-invalidated")).toBeUndefined();
     expect(registry.listConnected()).toEqual([]);
     expect(registry.sendEvent("node-invalidated", "node.test", { ok: true })).toBe(false);
-    await expect(
+    await expectInvokeError(
       registry.invoke({ nodeId: "node-invalidated", command: "system.run" }),
-    ).resolves.toMatchObject({
-      ok: false,
-      error: { code: "PAIRING_CHANGED" },
-    });
+      "PAIRING_CHANGED",
+    );
     expect(frames).toEqual([]);
-    await expect(registry.checkConnectivity("node-invalidated", 50)).resolves.toMatchObject({
-      ok: false,
-      error: { code: "NOT_CONNECTED" },
-    });
+    await expectInvokeError(registry.checkConnectivity("node-invalidated", 50), "NOT_CONNECTED");
     expect(ping).not.toHaveBeenCalled();
   });
 
@@ -466,9 +480,7 @@ describe("gateway/node-registry", () => {
       return node ? [node] : [];
     };
     await expect(readNodes()).resolves.toEqual([]);
-    expect(
-      publishRunner(registry, { enabled: true, capacity: { total: 2, available: 2 } }),
-    ).toEqual({ changed: true });
+    expect(publishRunner(registry, enabledHost())).toEqual({ changed: true });
     await expect(readNodes()).resolves.toEqual([
       expect.objectContaining({
         nodeId: "node-1",
@@ -482,25 +494,15 @@ describe("gateway/node-registry", () => {
       }),
     ]);
     expect(registry.get("node-1")).not.toHaveProperty("protocolFeatures");
-    expect(
-      collectNodeCatalogRuntimeState(registry, [
-        { nodeId: "node-1", connId: "conn-1", pairingGeneration: "generation-a" },
-      ]).sessionHostNodeIds.has("node-1"),
-    ).toBe(true);
+    expect(catalogState(registry).sessionHostNodeIds.has("node-1")).toBe(true);
 
     currentGeneration = "generation-b";
     expect(
       registry.updateSurface("node-1", { commands: ["system.run"] }, generationTransition),
     ).not.toBeNull();
     await expect(readNodes()).resolves.toEqual([]);
-    expect(
-      collectNodeCatalogRuntimeState(registry, [
-        { nodeId: "node-1", connId: "conn-1", pairingGeneration: "generation-b" },
-      ]).sessionHostNodeIds.has("node-1"),
-    ).toBe(false);
-    expect(
-      publishRunner(registry, { enabled: true, capacity: { total: 2, available: 2 } }),
-    ).toEqual({ changed: true });
+    expect(catalogState(registry, "generation-b").sessionHostNodeIds.has("node-1")).toBe(false);
+    expect(publishRunner(registry, enabledHost())).toEqual({ changed: true });
     await expect(readNodes()).resolves.toEqual([
       expect.objectContaining({ pairingGeneration: "generation-b" }),
     ]);
@@ -510,12 +512,8 @@ describe("gateway/node-registry", () => {
       pairingGeneration: "generation-b",
     });
     await expect(readNodes()).resolves.toEqual([]);
-    expect(
-      publishRunner(registry, { enabled: true, capacity: { total: 2, available: 2 } }),
-    ).toBeNull();
-    expect(
-      publishRunner(registry, { enabled: true, capacity: { total: 2, available: 2 } }, "conn-2"),
-    ).toEqual({ changed: true });
+    expect(publishRunner(registry, enabledHost())).toBeNull();
+    expect(publishRunner(registry, enabledHost(), "conn-2")).toEqual({ changed: true });
     await expect(readNodes()).resolves.toEqual([
       expect.objectContaining({
         connId: "conn-2",
@@ -587,11 +585,7 @@ describe("gateway/node-registry", () => {
     };
     expect(publish(idleHost)).toEqual({ changed: true });
     expect(transport.isCurrent(proof, true)).toBe(true);
-    expect(
-      collectNodeCatalogRuntimeState(registry, [
-        { nodeId: "node-1", connId: "conn-1", pairingGeneration: "generation-a" },
-      ]).workerSlotsByNodeId.get("node-1"),
-    ).toEqual(idleHost.capacity);
+    expect(catalogState(registry).workerSlotsByNodeId.get("node-1")).toEqual(idleHost.capacity);
     expect(
       publish({ ...idleHost, capacity: { ...idleHost.capacity, reclaimableIdle: 0 } }),
     ).toEqual({ changed: true });
@@ -633,26 +627,16 @@ describe("gateway/node-registry", () => {
     "keeps capacity admission separate from negotiated environment turn reuse (%s)",
     async (clientId) => {
       const { registry, transport, frames } = privateFixture(undefined, { clientId });
-      expect(
-        publishRunner(registry, { enabled: true, capacity: { total: 2, available: 2 } }),
-      ).toEqual({ changed: true });
+      expect(publishRunner(registry, enabledHost())).toEqual({ changed: true });
       const [candidate] = await transport.listCurrentNodes();
       const proof = expectDefined(candidate, "current supervisor proof");
       expect(proof.clientId).toBe(clientId);
-      expect(
-        publishRunner(registry, { enabled: true, capacity: { total: 2, available: 0 } }),
-      ).toEqual({ changed: true });
-      expect(
-        collectNodeCatalogRuntimeState(registry, [
-          { nodeId: "node-1", connId: "conn-1", pairingGeneration: "generation-a" },
-        ]).sessionHostNodeIds.has("node-1"),
-      ).toBe(true);
+      expect(publishRunner(registry, enabledHost(0))).toEqual({ changed: true });
+      expect(catalogState(registry).sessionHostNodeIds.has("node-1")).toBe(true);
 
       // Catalog host consent uses the supplied generation; capacity still describes
       // the current connection, including a full host with zero available slots.
-      const snapshot = collectNodeCatalogRuntimeState(registry, [
-        { nodeId: "node-1", connId: "conn-1", pairingGeneration: "stale-generation" },
-      ]);
+      const snapshot = catalogState(registry, "stale-generation");
       expect(snapshot.sessionHostNodeIds.has("node-1")).toBe(false);
       expect(snapshot.workerSlotsByNodeId.get("node-1")).toEqual({ total: 2, available: 0 });
       expect(transport.isCurrent(proof, true)).toBe(false);
@@ -668,16 +652,14 @@ describe("gateway/node-registry", () => {
       expect(finish(registry, request.id, { ok: true, payloadJSON: "null" })).toBe(true);
       await expect(workspaceInvoke).resolves.toMatchObject({ ok: true, payloadJSON: "null" });
 
-      await expect(
+      await expectInvokeError(
         transport.invoke({
           node: proof,
           command: NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
           isDispatchAuthorized: () => true,
         }),
-      ).resolves.toMatchObject({
-        ok: false,
-        error: { code: "PRIVATE_DIALECT_UNAVAILABLE" },
-      });
+        "PRIVATE_DIALECT_UNAVAILABLE",
+      );
 
       publishRunner(registry, {
         enabled: true,
@@ -832,14 +814,15 @@ describe("gateway/node-registry", () => {
       { nativeProcessOwner: true },
       { quiescence: { action: "release", nonce: "a".repeat(32) } },
     ]) {
-      await expect(
+      await expectInvokeError(
         transport.invoke({
           node: proof,
           command: NODE_WORKER_WORKSPACE_EXEC_COMMAND,
           params,
           isDispatchAuthorized: () => true,
         }),
-      ).resolves.toMatchObject({ ok: false, error: { code: "PRIVATE_DIALECT_UNAVAILABLE" } });
+        "PRIVATE_DIALECT_UNAVAILABLE",
+      );
     }
     expect(frames).toEqual([]);
   });
@@ -850,7 +833,7 @@ describe("gateway/node-registry", () => {
       const { registry, transport, frames } = privateFixture(undefined, {
         commands: [NODE_WORKER_WORKSPACE_RETAIN_COMMAND],
       });
-      publishRunner(registry, { enabled: true, capacity: { total: 1, available: 1 } });
+      publishRunner(registry, enabledHost(1, 1));
       const proof = expectDefined((await transport.listCurrentNodes())[0], "runner proof");
       const dispatched = createDeferred();
       let dispatchCurrent = true;
@@ -876,10 +859,7 @@ describe("gateway/node-registry", () => {
       if (completion === "current") {
         await expect(invocation).resolves.toMatchObject({ ok: true, payloadJSON });
       } else {
-        await expect(invocation).resolves.toMatchObject({
-          ok: false,
-          error: { code: "APPROVAL_AUTHORITY_CLOSED" },
-        });
+        await expectInvokeError(invocation, "APPROVAL_AUTHORITY_CLOSED");
       }
     },
   );
@@ -1020,8 +1000,7 @@ describe("gateway/node-registry", () => {
         expect(resolveCurrentPairingState).toHaveBeenCalledWith("node-generation");
       } else if (boundary === "connected lookup") {
         await expect(registry.getCurrentConnected("node-generation")).resolves.toBeUndefined();
-        expect(registry.getActiveNode()).toBeUndefined();
-        expect(getCurrentActiveNodeContext()).toBeNull();
+        expectNoActiveNode(registry);
         expect(client.invalidated).toBe(true);
         expect(onPairingInvalidated).toHaveBeenCalledWith({
           nodeId: "node-generation",
@@ -1106,7 +1085,7 @@ describe("gateway/node-registry", () => {
     );
 
     controller.abort();
-    await expect(invoke).resolves.toMatchObject({ ok: false, error: { code: "ABORTED" } });
+    await expectInvokeError(invoke, "ABORTED");
   });
 
   it.each(["websocket", "polling"])(
@@ -1293,7 +1272,7 @@ describe("gateway/node-registry", () => {
       expect(onDispatchReady).toHaveBeenCalledExactlyOnceWith(request.id, 1_100);
       clock.now = 1_100;
       await vi.advanceTimersByTimeAsync(30);
-      await expect(invoke).resolves.toMatchObject({ ok: false, error: { code: "TIMEOUT" } });
+      await expectInvokeError(invoke, "TIMEOUT");
       expect(finish(registry, request.id, { ok: true })).toBe(false);
       expect(vi.getTimerCount()).toBe(0);
     } finally {
@@ -1660,10 +1639,7 @@ describe("gateway/node-registry", () => {
 
       controller.abort();
 
-      await expect(invoke).resolves.toMatchObject({
-        ok: false,
-        error: { code: "ABORTED" },
-      });
+      await expectInvokeError(invoke, "ABORTED");
       if (clientId === GATEWAY_CLIENT_IDS.IOS_APP) {
         expect(frames).toHaveLength(1);
       } else {
@@ -1940,8 +1916,7 @@ describe("gateway/node-registry", () => {
     );
     expect(session.lastActiveAtMs).toBeUndefined();
     expect(session.presenceUpdatedAtMs).toBeUndefined();
-    expect(registry.getActiveNode()).toBeUndefined();
-    expect(getCurrentActiveNodeContext()).toBeNull();
+    expectNoActiveNode(registry);
     registry.updateSurface("node-1", { commands: [], permissions: undefined });
     expect(registry.get("node-1")?.permissions).toBeUndefined();
     expect(client.connect.permissions).toBeUndefined();
@@ -1962,13 +1937,14 @@ describe("gateway/node-registry", () => {
       reportPresence(registry);
       expect(registry.getForPairingGeneration("node-1", "generation-b")).toBeUndefined();
       expect(registry.getForPairingGeneration("node-1", "generation-a")?.connId).toBe("conn-1");
-      await expect(
+      await expectInvokeError(
         registry.invoke({
           nodeId: "node-1",
           expectedPairingGeneration: "generation-b",
           command: "system.run",
         }),
-      ).resolves.toMatchObject({ ok: false, error: { code: "PAIRING_CHANGED" } });
+        "PAIRING_CHANGED",
+      );
       expect(registry.get("node-1")?.client.invalidated).not.toBe(true);
       expect(frames).toEqual([]);
       const invoke = registry.invoke({
@@ -2149,8 +2125,7 @@ describe("node registry presence", () => {
     registerAccessibleNode(registry, "conn-new");
 
     expect(reportPresence(registry, { connId: "conn-old" })).toBeNull();
-    expect(registry.getActiveNode()).toBeUndefined();
-    expect(getCurrentActiveNodeContext()).toBeNull();
+    expectNoActiveNode(registry);
     expect(registry.unregister("conn-old")).toBeNull();
     expect(getCurrentActiveNodeContext()).toBeNull();
   });
