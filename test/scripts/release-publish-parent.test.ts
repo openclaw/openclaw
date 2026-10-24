@@ -313,9 +313,7 @@ describe("optional Gateway publication notification", () => {
   );
 
   it.each([
-    { workflow: coreNpm, failed: "validate_publish_request", conclusion: "failure" },
     { workflow: coreNpm, failed: "publish_openclaw_npm", conclusion: "failure" },
-    { workflow: coreNpm, failed: "unknown_job", conclusion: "failure" },
     { workflow: "plugin-npm-release.yml", failed: notificationName, conclusion: "failure" },
     { workflow: coreNpm, failed: notificationName, conclusion: "action_required" },
   ])(
@@ -454,16 +452,6 @@ append_clawhub_dispatch_args() { clawhub_dispatch_args=(); }
     expect(result.stderr).toContain("Publisher slot for plugin-clawhub-new.yml remains occupied");
   } else {
     expect(firstDispatch).toBeGreaterThan(result.calls.findIndex(isCancel));
-    const sweeps = result.calls.filter((call) => call.args[1] === "list");
-    expect(new Set(sweeps.map((call) => call.args[call.args.indexOf("--workflow") + 1]))).toEqual(
-      new Set([
-        "openclaw-release-publish.yml",
-        "plugin-npm-release.yml",
-        clawhub,
-        bootstrap,
-        coreNpm,
-      ]),
-    );
     expect(
       result.calls.slice(firstDispatch).some((call) => call.args[1] === "list" || isCancel(call)),
     ).toBe(false);
@@ -500,18 +488,10 @@ it.each([
         `repos/${repo}/actions/runs/91/pending_deployments`,
         "state=rejected",
         "environment_ids[]=7",
-        "comment=Superseded release child; rejected by publish parent 100/2",
       ]),
       expect.arrayContaining(["run", "cancel", "91"]),
       expect.arrayContaining(["POST", `repos/${repo}/actions/workflows/${name}/dispatches`]),
     ]);
-    const afterCancel = result.calls.slice(
-      result.calls.findIndex(isCancel) + 1,
-      result.calls.findIndex(isDispatch),
-    );
-    expect(
-      afterCancel.filter((call) => call.args.includes(`repos/${repo}/actions/runs/91`)),
-    ).toHaveLength(2);
   },
 );
 

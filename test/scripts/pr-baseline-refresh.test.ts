@@ -237,6 +237,29 @@ function reviewedFixture() {
   return f;
 }
 
+function contextWriteFault(f: ReturnType<typeof fixture>) {
+  const hook = join(f.root, ".local/write-fault.mjs");
+  writeFileSync(
+    hook,
+    `import fs from 'node:fs';
+const rename = fs.renameSync;
+fs.renameSync = (from, to) => {
+  if (to === '.local/prep-context.env') throw new Error('injected context write failure');
+  return rename(from, to);
+};\n`,
+  );
+  return { NODE_OPTIONS: `--import=${hook}` };
+}
+
+function driftAfterSigning(command: string, change: string, oid: string) {
+  return `node() {
+      command node "$@" || return $?
+      if [ "\${2:-}" = ${command} ]; then
+        ${change === "review" ? "printf '\\n' >> .local/correction-review.json" : `command git update-ref "$PR_OPERATION_LOCK_REF" ${oid}`}
+      fi
+    }`;
+}
+
 describePosix("native correction baseline refresh", () => {
   beforeAll(() => {
     const root = keys.make("openclaw-pr-baseline-key-");
@@ -480,20 +503,8 @@ printf '%s\\n' "$snapshot"
     (phase) => {
       const f = fixture();
       let setup = "";
-      const env: NodeJS.ProcessEnv = {};
-      if (phase === "binding") {
-        const hook = join(f.root, ".local/write-fault.mjs");
-        writeFileSync(
-          hook,
-          `import fs from 'node:fs';
-const rename = fs.renameSync;
-fs.renameSync = (from, to) => {
-  if (to === '.local/prep-context.env') throw new Error('injected context write failure');
-  return rename(from, to);
-};\n`,
-        );
-        env.NODE_OPTIONS = `--import=${hook}`;
-      } else if (phase === "restore") {
+      const env = phase === "binding" ? contextWriteFault(f) : {};
+      if (phase === "restore") {
         setup = `pr_git() {
         if [ "$1" = --literal-pathspecs ] && [ "$2" = restore ]; then
           command git restore --source="$(jq -r .target .local/review-transition.json)" --staged --worktree -- docs/fix.md
@@ -501,7 +512,7 @@ fs.renameSync = (from, to) => {
         fi
         command git "$@"
       }`;
-      } else {
+      } else if (phase === "CAS") {
         setup = `pr_git() {
         command git "$@" || return $?
         if [ "$1" = update-ref ] && [ "$2" = --no-deref ] && [ "$3" = refs/heads/pr-42-prep ]; then return 91; fi
@@ -545,12 +556,7 @@ fs.renameSync = (from, to) => {
             jq '${change === "head" ? `.headRefOid="${f.baseline}"` : '.headRepository={id:"changed"}'}' .local/pr-meta.json
           else cat .local/pr-meta.json; fi
         }`
-          : `node() {
-          command node "$@" || return $?
-          if [ "\${2:-}" = create ]; then
-            ${change === "review" ? "printf '\\n' >> .local/correction-review.json" : `command git update-ref "$PR_OPERATION_LOCK_REF" ${f.baseline}`}
-          fi
-        }`;
+          : driftAfterSigning("create", change, f.baseline);
       reject(f.refresh("", setup));
       expect(f.git("rev-parse", "HEAD")).toBe(f.source);
       expect(existsSync(join(f.root, ".local/review-transition.json"))).toBe(false);
@@ -685,17 +691,7 @@ fs.renameSync = (from, to) => {
     const source = f.git("rev-parse", "HEAD");
     const binding = f.read(".local/prepare-baseline.json");
     const next = f.nextBaseline();
-    reject(
-      f.successor(
-        next,
-        `node() {
-      command node "$@" || return $?
-      if [ "\${2:-}" = create-successor ]; then
-        ${change === "review" ? "printf '\\n' >> .local/correction-review.json" : `command git update-ref "$PR_OPERATION_LOCK_REF" ${next}`}
-      fi
-    }`,
-      ),
-    );
+    reject(f.successor(next, driftAfterSigning("create-successor", change, next)));
     expect(f.git("rev-parse", "HEAD")).toBe(source);
     expect(f.read(".local/prepare-baseline.json")).toEqual(binding);
     expect(existsSync(join(f.root, ".local/review-transition.json"))).toBe(false);
@@ -709,16 +705,8 @@ fs.renameSync = (from, to) => {
       const predecessor = f.read(".local/prepare-baseline.json");
       const next = f.nextBaseline();
       let setup = "";
-      const env: NodeJS.ProcessEnv = {};
-      if (phase === "binding") {
-        const hook = join(f.root, ".local/successor-write-fault.mjs");
-        writeFileSync(
-          hook,
-          `import fs from 'node:fs'; const rename=fs.renameSync;
-fs.renameSync=(from,to)=>{if(to==='.local/prep-context.env') throw new Error('fixture context fault'); return rename(from,to);};`,
-        );
-        env.NODE_OPTIONS = `--import=${hook}`;
-      } else {
+      const env = phase === "binding" ? contextWriteFault(f) : {};
+      if (phase === "CAS") {
         setup = `pr_git() { command git "$@" || return $?; if [ "$1" = update-ref ] && [ "\${2:-}" = --no-deref ]; then return 91; fi; }`;
       }
       reject(f.successor(next, setup, env));
