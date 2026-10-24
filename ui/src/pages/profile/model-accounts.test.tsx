@@ -95,7 +95,7 @@ async function mount(
   let starts = 0;
   let listed = inventory(initialAccounts);
   const presented = new Set<string>();
-  const request = vi.fn(async (method: string, params?: unknown) => {
+  const request = vi.fn(async (method: string, params?: unknown): Promise<unknown> => {
     switch (method) {
       case "users.authConnect.catalog":
         return catalog;
@@ -119,7 +119,7 @@ async function mount(
     createApplicationGatewaySnapshot({
       client,
       phase: "connected",
-      hello: { auth: { role: "operator", scopes } },
+      hello: { type: "hello-ok", protocol: 3, auth: { role: "operator", scopes } },
       selfUser: { id: "profile-1", name: "Ada" },
     }),
   );

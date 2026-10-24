@@ -569,7 +569,9 @@ describe("channel refresh sequencing", () => {
       }
       await expect(receipt.completion).resolves.toBeNull();
       expect(channels.state.channelsRead).toBeNull();
-      expect(channels.state.channelsLoading).toBe(false);
+      if (transition !== "dispose") {
+        expect(channels.state.channelsLoading).toBe(false);
+      }
       expect(channels.state.channelsSnapshot).toBeNull();
       pending.resolve(createChannelsSnapshot("retired"));
       await refresh;

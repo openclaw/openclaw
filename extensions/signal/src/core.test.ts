@@ -283,7 +283,7 @@ describe("signal outbound", () => {
         cfg: aliasConfig,
         agentId: "main",
         target: input,
-        resolvedTarget: required(resolved),
+        resolvedTarget: { ...required(resolved), source: required(resolved?.source) },
       });
       expect(route?.to).toBe(groupTo);
       expect(route?.baseSessionKey).toContain(`signal:${groupTo}`);
