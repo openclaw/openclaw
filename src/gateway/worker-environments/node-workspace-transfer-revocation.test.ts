@@ -448,38 +448,6 @@ it.each([
   }
 });
 
-it("fenceEnvironment aborts capability signals and denies new admissions", async () => {
-  const root = tempDirs.make("workspace-transfer-fence-");
-  const localPath = path.join(root, "source");
-  await fs.mkdir(localPath);
-  const service = makeService(root);
-  await service.initialize();
-  try {
-    const { snapshot, token } = await prepareSync(service, localPath);
-    const route = {
-      kind: "manifest",
-      direction: "download",
-      environmentId: "environment",
-      manifestRef: snapshot.manifestRef,
-    } as const;
-    const authorization = service.authorize({ route, token });
-    expect(authorization).toBeDefined();
-    if (!authorization) {
-      throw new Error("authorization missing before fence");
-    }
-    const signal = service.authorizationSignal(authorization);
-    expect(signal.aborted).toBe(false);
-
-    service.fenceEnvironment("environment");
-
-    expect(signal.aborted).toBe(true);
-    expect(service.isAuthorizationCurrent(authorization)).toBe(false);
-    expect(service.authorize({ route, token })).toBeUndefined();
-  } finally {
-    await service.closeAll().catch(() => undefined);
-  }
-});
-
 it("a permanent store revocation fences an in-flight blob response end to end", async () => {
   const root = tempDirs.make("workspace-transfer-store-fence-");
   const localPath = path.join(root, "source");
@@ -574,6 +542,11 @@ it("a permanent store revocation fences an in-flight blob response end to end", 
   } as const;
   const authorization = service.authorize({ route, token });
   expect(authorization).toBeDefined();
+  if (!authorization) {
+    throw new Error("authorization missing before fence");
+  }
+  const signal = service.authorizationSignal(authorization);
+  expect(signal.aborted).toBe(false);
 
   const callback = createNodeWorkspaceTransferHttpCallback(service);
   const server = createServer((req, res) => {
@@ -595,6 +568,7 @@ it("a permanent store revocation fences an in-flight blob response end to end", 
     let bytes = first.value?.byteLength ?? 0;
 
     await store.revokeEnvironmentCredential(environmentId, { fenceWorkspaceTransfers: true });
+    expect(signal.aborted).toBe(true);
 
     try {
       for (;;) {
@@ -608,7 +582,7 @@ it("a permanent store revocation fences an in-flight blob response end to end", 
       // The fenced response is destroyed mid-body; the client read may reject.
     }
     expect(bytes).toBeLessThan(payload.byteLength);
-    expect(service.isAuthorizationCurrent(authorization!)).toBe(false);
+    expect(service.isAuthorizationCurrent(authorization)).toBe(false);
     expect(service.authorize({ route, token })).toBeUndefined();
   } finally {
     unsubscribe();

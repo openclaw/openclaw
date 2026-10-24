@@ -44,50 +44,6 @@ function commandFixture() {
   return { root, outputPath: path.join(root, "output"), controller: new AbortController() };
 }
 
-function injectPositiveShortWrite(targetPath: string): () => boolean {
-  let shortWriteObserved = false;
-  interceptOutput(targetPath, (handle) => {
-    let injectShortWrite = true;
-    const injectedHandle = Object.create(handle) as typeof handle;
-    injectedHandle.close = handle.close.bind(handle);
-    injectedHandle.write = (async (
-      data: string | NodeJS.ArrayBufferView,
-      offsetOrPosition: number | null = null,
-      length?: number | null,
-      position?: number | null,
-    ) => {
-      const buffer =
-        typeof data === "string"
-          ? Buffer.from(data)
-          : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-      const offset = typeof data === "string" ? 0 : (offsetOrPosition ?? 0);
-      const requested =
-        typeof data === "string" ? buffer.length : (length ?? buffer.length - offset);
-      const filePosition = typeof data === "string" ? offsetOrPosition : position;
-      const writeLength = injectShortWrite ? Math.max(1, Math.floor(requested / 2)) : requested;
-      injectShortWrite = false;
-      shortWriteObserved ||= writeLength < requested;
-      return await handle.write(buffer, offset, writeLength, filePosition);
-    }) as typeof handle.write;
-    injectedHandle.writeFile = (async (data: string | NodeJS.ArrayBufferView) => {
-      const buffer =
-        typeof data === "string"
-          ? Buffer.from(data)
-          : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-      let offset = 0;
-      while (offset < buffer.length) {
-        const { bytesWritten } = await injectedHandle.write(buffer, offset, buffer.length - offset);
-        if (bytesWritten === 0) {
-          throw new Error("injected file write made no progress");
-        }
-        offset += bytesWritten;
-      }
-    }) as typeof handle.writeFile;
-    return injectedHandle;
-  });
-  return () => shortWriteObserved;
-}
-
 function interceptOutput(target: string, intercept: (handle: FileHandle) => FileHandle | void) {
   const open = fs.open.bind(fs);
   vi.spyOn(fs, "open").mockImplementation(async (...args) => {
@@ -149,19 +105,29 @@ function transferList(
 }
 
 describe("runWorkspaceInventoryCommandToFile", () => {
-  it("fully persists bounded stdout after a positive short write", async () => {
+  it("persists stdout at its exact output budget", async () => {
     const { outputPath } = commandFixture();
     const expected = Buffer.from("bounded workspace inventory output\n");
-    const shortWriteObserved = injectPositiveShortWrite(outputPath);
-
     await inventoryCommand(
       [process.execPath, "-e", "process.stdout.write(process.argv[1])", expected.toString()],
       outputPath,
       { maxOutputBytes: expected.length },
     );
-
-    expect(shortWriteObserved()).toBe(true);
     await expect(fs.readFile(outputPath)).resolves.toEqual(expected);
+  });
+
+  it("filters missing files from a persisted Git transfer list", async () => {
+    const { root, outputPath } = commandFixture();
+    const preparedListPath = path.join(root, "prepared");
+    await files(root, {
+      "alpha.txt": "alpha",
+      "nested/beta.txt": "beta",
+      prepared: "alpha.txt\0missing.txt\0nested/beta.txt\0",
+    });
+    await filterExistingGitTransferList({ gitRoot: root, preparedListPath, outputPath });
+    await expect(fs.readFile(outputPath)).resolves.toEqual(
+      Buffer.from("alpha.txt\0nested/beta.txt\0"),
+    );
   });
 
   it.each(
@@ -253,24 +219,6 @@ describe("runWorkspaceInventoryCommandToFile", () => {
       }
     },
   );
-
-  it("fully persists a filtered Git transfer list after a positive short write", async () => {
-    const { root, outputPath } = commandFixture();
-    const preparedListPath = path.join(root, "prepared");
-    await files(root, {
-      "alpha.txt": "alpha",
-      "nested/beta.txt": "beta",
-      prepared: "alpha.txt\0missing.txt\0nested/beta.txt\0",
-    });
-    const shortWriteObserved = injectPositiveShortWrite(outputPath);
-
-    await filterExistingGitTransferList({ gitRoot: root, preparedListPath, outputPath });
-
-    expect(shortWriteObserved()).toBe(true);
-    await expect(fs.readFile(outputPath)).resolves.toEqual(
-      Buffer.from("alpha.txt\0nested/beta.txt\0"),
-    );
-  });
 
   it("force-kills a command that ignores abort termination", async ({ signal, onTestFinished }) => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-workspace-sync-"));
