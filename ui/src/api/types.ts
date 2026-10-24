@@ -168,7 +168,7 @@ export type SessionsPatchResult = SessionsPatchResultBase<{
 }> &
   Pick<GatewayWireSessionsPatchResult, "resolved">;
 
-export type { CostUsageSummary, SessionsUsageResult } from "../pages/usage/data-types.ts";
+export type { SessionsUsageResult } from "../pages/usage/data-types.ts";
 
 export type CronRunStatus = NonNullable<ProtocolCronRunLogEntry["status"]>;
 export type CronDeliveryStatus = NonNullable<ProtocolCronRunLogEntry["deliveryStatus"]>;

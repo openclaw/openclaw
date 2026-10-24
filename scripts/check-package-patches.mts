@@ -10,6 +10,7 @@ import { pnpmLockfileDocuments } from "./lib/pnpm-lockfile-documents.mjs";
 import { runAsScript } from "./lib/ts-guard-utils.mts";
 
 const ALLOWED_PATCHED_DEPENDENCIES = new Map([
+  ["playwright-core@1.64.1", "patches/playwright-core@1.64.1.patch"],
   ["chrome-devtools-mcp@1.11.0", "patches/chrome-devtools-mcp@1.11.0.patch"],
   ["@novnc/novnc@1.7.0", "patches/@novnc__novnc@1.7.0.patch"],
   ["@solidjs/web@2.0.0-rc.18", "patches/@solidjs__web@2.0.0-rc.18.patch"],

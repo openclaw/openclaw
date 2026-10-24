@@ -148,6 +148,9 @@ allowBuilds:
   node-pty: true
 
 packageExtensions:
+  "playwright-core@1.64.1":
+    dependencies:
+      acorn: 8.19.0
   # rc14 imports long directly; protobufjs's transitive edge is not visible in isolated graphs.
   "baileys@7.0.0-rc14":
     dependencies:
@@ -159,6 +162,7 @@ packageExtensions:
         optional: true
 
 patchedDependencies:
+  playwright-core@1.64.1: patches/playwright-core@1.64.1.patch
   "baileys@7.0.0-rc14": patches/baileys@7.0.0-rc14.patch
   "matrix-js-sdk@43.0.0": patches/matrix-js-sdk@43.0.0.patch
   "@novnc/novnc@1.7.0": patches/@novnc__novnc@1.7.0.patch

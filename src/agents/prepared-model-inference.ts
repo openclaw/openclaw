@@ -61,6 +61,7 @@ export async function withPreparedModelInference<Result>(
           agentDir: resolveAgentDir(params.cfg, agentId),
           workspaceDir,
           loadRuntimePlugins: true,
+          runtimePluginPurpose: "isolated-completion",
           runtimePluginSelections: [{ ...selection, agentId }],
         },
         {

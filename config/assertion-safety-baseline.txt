@@ -52,8 +52,6 @@ extensions/browser/src/browser/output-files.ts	1
 extensions/browser/src/browser/playwright-core.runtime.ts	2
 extensions/browser/src/browser/pw-session-actions.ts	2
 extensions/browser/src/browser/pw-session-navigation.ts	1
-extensions/browser/src/browser/pw-tools-core.interactions.actions.ts	2
-extensions/browser/src/browser/pw-tools-core.interactions.content.ts	1
 extensions/browser/src/browser/pw-tools-core.interactions.execution.ts	4
 extensions/browser/src/browser/pw-tools-core.interactions.navigation.ts	1
 extensions/browser/src/browser/pw-tools-core.snapshot.ts	1
