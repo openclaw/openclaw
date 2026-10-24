@@ -322,6 +322,8 @@ export type OwnedNativeHookRelayParams = RegisterNativeHookRelayParams &
 export type RelayLifetime = {
   foregroundOpen: boolean;
   foregroundToken: symbol;
+  /** Gateway lifecycle generation that admitted this relay. */
+  lifecycleGeneration: string;
   policyReady: Promise<void>;
   /** Process-local monotonic expiry used only by the in-process rearm timer. */
   expiresAtMonotonicMs?: number;
