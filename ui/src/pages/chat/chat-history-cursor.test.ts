@@ -95,6 +95,89 @@ async function loadHistoryWithBrowserTimers(state: ReturnType<typeof createState
 describe("chat history cursor revalidation", () => {
   afterEach(() => vi.unstubAllGlobals());
 
+  it.each(["live", "restored", "restored duplicate"] as const)(
+    "shows a terminal answer once after %s history revalidation",
+    async (mode) => {
+      vi.stubGlobal("window", globalThis);
+      const runId = "final-run";
+      const prompt = message("user", "Check the result", "user-1", 1);
+      const final = {
+        role: "assistant",
+        content: [{ type: "text", text: "The result is 42." }],
+        timestamp: 2000,
+      };
+      const persisted = {
+        ...final,
+        stopReason: "stop",
+        __openclaw: { id: "answer-2", seq: 2, runId },
+      };
+      const sessionInfo = {
+        key: "main",
+        kind: "direct",
+        sessionId: "session-cursor",
+        updatedAt: 2000,
+        hasActiveRun: false,
+        status: "done",
+        lastRunId: runId,
+      };
+      const handler = (params?: unknown) =>
+        asOptionalRecord(params)?.cursor
+          ? {
+              kind: "delta",
+              messages: [{ message: persisted, messageId: "answer-2", messageSeq: 2, runId }],
+              deltaCursor: "cursor-2",
+              sessionInfo,
+            }
+          : {
+              messages: [prompt, persisted],
+              sessionId: "session-cursor",
+              deltaCursor: "cursor-2",
+              sessionInfo,
+            };
+      const live = createState(handler);
+      seedCachedHistory(live, [prompt], "cursor-1");
+      live.chatRunId = runId;
+      handleChatGatewayEvent(live, {
+        sessionKey: "main",
+        runId,
+        state: "final",
+        message: final,
+      });
+      const state = mode === "live" ? live : createState(handler);
+      if (mode !== "live") {
+        // A restored pane has transcript paint, but no live run projection.
+        seedCachedHistory(
+          state,
+          mode === "restored duplicate"
+            ? [prompt, persisted, ...live.chatMessages.slice(1)]
+            : live.chatMessages,
+          "cursor-1",
+        );
+      }
+
+      await loadChatHistory(state);
+
+      const visibleText = buildChatItems({
+        paneId: "restored-final",
+        sessionKey: state.sessionKey,
+        runId: state.chatRunId,
+        messages: state.chatMessages,
+        toolMessages: state.chatToolMessages ?? [],
+        streamSegments: state.chatStreamSegments ?? [],
+        stream: state.chatStream,
+        streamStartedAt: state.chatStreamStartedAt,
+        showToolCalls: true,
+      }).flatMap((item) =>
+        item.kind === "group"
+          ? item.messages.map(({ message: entry }) => extractText(entry))
+          : item.kind === "stream"
+            ? [item.text]
+            : [],
+      );
+      expect(visibleText).toEqual(["Check the result", "The result is 42."]);
+    },
+  );
+
   it("catches up a lagging split after a sibling advances", async () => {
     const cached = message("user", "First turn", "user-1", 1);
     const reply = message("assistant", "New reply", "answer-2", 2);
@@ -116,6 +199,34 @@ describe("chat history cursor revalidation", () => {
     expect(handler).toHaveBeenLastCalledWith(
       expect.objectContaining({ cursor: "cursor-1", toolResultMaxChars: 2_000 }),
     );
+  });
+
+  it.each([
+    { id: "answer-1", seq: 1 },
+    { importedFrom: "cli", cliSessionId: "external-session", externalId: "answer-1" },
+  ])("retains cursor catch-up and equal-text answers for cached identity %j", async (identity) => {
+    const cached = { role: "assistant", content: "Done.", __openclaw: identity };
+    const next = message("assistant", "Done.", "answer-2", 2);
+    const handler = vi.fn(async () => ({
+      kind: "delta",
+      messages: [{ message: next, messageId: "answer-2", messageSeq: 2 }],
+      deltaCursor: "cursor-2",
+      sessionInfo: {
+        key: "main",
+        kind: "direct",
+        sessionId: "session-cursor",
+        updatedAt: 2,
+      },
+    }));
+    const state = createState(handler);
+    seedCachedHistory(state, [cached], "cursor-1");
+
+    await loadChatHistory(state);
+
+    expect(handler).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ cursor: "cursor-1" }),
+    );
+    expect(state.chatMessages).toEqual([cached, next]);
   });
 
   it.each(["session", "agent", "transcript", "reset"] as const)(

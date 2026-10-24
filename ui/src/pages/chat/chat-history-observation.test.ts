@@ -195,7 +195,7 @@ async function fixture(primary = initial, observeManaged = true, models: ModelCa
 
 function seedCursor(state: ReturnType<Awaited<ReturnType<typeof fixture>>["makeState"]>) {
   const snapshot = {
-    messages: [{ role: "assistant", content: "Cached transcript" }],
+    messages: [nativeHistoryMessage(2, "Cached transcript")],
     sessionId: initial.sessionId,
     pagination: { hasMore: false },
     deltaCursor: "cursor-observation",
