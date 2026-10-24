@@ -531,6 +531,19 @@ export function retainSilentFinalPayloads(payloads: readonly ReplyPayload[]): Re
   });
 }
 
+/** Structured no_change suppresses unsent content; ordinary silence retains its media contract. */
+export function selectAutomationReplyPayloads(
+  payloads: ReplyPayload[],
+  noChange: boolean,
+  quiet: boolean,
+): ReplyPayload[] {
+  return noChange
+    ? payloads.filter((payload) => payload.isError)
+    : quiet
+      ? retainSilentFinalPayloads(payloads)
+      : payloads;
+}
+
 /** Marks a host-owned payload as deliverable even when normal source replies are suppressed. */
 export function markReplyPayloadForSourceSuppressionDelivery<T extends object>(payload: T): T {
   return setReplyPayloadMetadata(payload, {

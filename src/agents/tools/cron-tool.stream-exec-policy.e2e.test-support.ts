@@ -72,6 +72,7 @@ export async function proveHostStreamApprovalEffects(params: {
   waitForDead: (pid: number) => Promise<void>;
 }) {
   const { instance, provider } = params;
+  let approvalRequests = 0;
   let expectedSession: string | undefined;
   let requested = createDeferredCore<{ id: string; request: Record<string, unknown> }>();
   const client = await acquireGatewayTestClient(
@@ -89,6 +90,7 @@ export async function proveHostStreamApprovalEffects(params: {
         }
         const { id, request } = event.payload;
         if (typeof id === "string" && isRecord(request) && request.sessionKey === expectedSession) {
+          approvalRequests += 1;
           requested.resolve({ id, request });
         }
       },
@@ -124,6 +126,7 @@ export async function proveHostStreamApprovalEffects(params: {
         sessions.push(created.key);
         expectedSession = created.key;
         requested = createDeferredCore();
+        approvalRequests = 0;
         provider.propose({
           name,
           schedule: {
@@ -156,7 +159,8 @@ export async function proveHostStreamApprovalEffects(params: {
           requested.promise,
           terminal.then((result) => {
             throw new Error(
-              `Creator settled before asking for approval: ${JSON.stringify(result)}`,
+              `${name}: creator settled before asking for approval: ${JSON.stringify(result)}
+${instance.logs()}`,
             );
           }),
         ]);
@@ -180,8 +184,14 @@ export async function proveHostStreamApprovalEffects(params: {
           await client.request("exec.approval.resolve", { id: approval.id, decision });
         }
         const settled = await terminal;
-        expect(settled.status).not.toBe("pending");
-        expect(settled.status).not.toBe("timeout");
+        const failureContext =
+          settled.status === "pending" || settled.status === "timeout"
+            ? `${name}: creator did not settle
+${instance.logs()}`
+            : name;
+        expect(settled.status, failureContext).not.toBe("pending");
+        expect(settled.status, failureContext).not.toBe("timeout");
+        expect(approvalRequests).toBe(1);
         if (decision === "allow-once") {
           expect(settled.status).toBe("ok");
           const saved = (await jobs()).find((job) => job.name === name);

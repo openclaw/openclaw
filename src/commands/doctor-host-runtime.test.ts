@@ -7,6 +7,7 @@ import { maybeRepairGatewayDaemon } from "./doctor-gateway-daemon-flow.js";
 import { makeDoctorIo, makeDoctorPrompts } from "./doctor-gateway-runtime.test-utils.js";
 import { maybeRepairGatewayServiceConfig } from "./doctor-gateway-services.js";
 import { collectNodeRuntimeFindings } from "./node-runtime-diagnostics.js";
+import { MACOS_APP_INSTALL_OWNER_MARKER } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   root: vi.fn<() => Promise<string | null>>(),
@@ -79,12 +80,7 @@ async function hostRoot() {
   await fs.writeFile(path.join(root, "openclaw.mjs"), "");
   await fs.writeFile(
     path.join(root, "openclaw-install-owner.json"),
-    JSON.stringify({
-      schemaVersion: 1,
-      owner: "macos-app",
-      displayName: "OpenClaw.app",
-      updateHint: "Update OpenClaw.app to update this Gateway.",
-    }),
+    MACOS_APP_INSTALL_OWNER_MARKER,
   );
   return root;
 }

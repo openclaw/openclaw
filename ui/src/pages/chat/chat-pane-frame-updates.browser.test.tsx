@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import {
   createSessionCapabilityFixture,
   createTestChatPane,
@@ -233,14 +234,10 @@ it("keeps an unpresented pane parked when the document becomes visible", async (
 });
 
 it("absorbs a queued stream frame into a property commit and accepts the next stream", async () => {
-  let nextFrame = 1;
-  const frames = new Map<number, FrameRequestCallback>();
-  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-    const id = nextFrame++;
-    frames.set(id, callback);
-    return id;
-  });
-  vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+  const framesClock = createFrameClock();
+  const frames = framesClock.frames;
+  vi.stubGlobal("requestAnimationFrame", framesClock.request);
+  vi.stubGlobal("cancelAnimationFrame", framesClock.cancel);
   const { pane, expectFrame } = await mountPane(true, (current) => ({
     label: current.paneLabel,
     stream: current.state.chatStream,

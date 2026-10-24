@@ -187,7 +187,12 @@ try {
           "No sidebar text input exists; measure command palette search separately",
           "No fake clocks, Lit probes or simulated transport delay",
         ],
-        scenarios: scenarios.map(({ id, route, expected }) => ({ id, route, expected })),
+        scenarios: scenarios.map(({ id, route, expected, fixture }) => ({
+          id,
+          route,
+          expected,
+          fixture,
+        })),
         viewports,
         bundles: servers.map(({ directory, build, indexSha256 }) => ({
           directory,
@@ -232,7 +237,11 @@ try {
           const events: unknown[] = [];
           const styleSheets = new Map<string, InteractionStyleSheet>();
           try {
-            const fixture = createInteractionFixture(slot.build.buildId, slot.build.version);
+            const fixture = createInteractionFixture(
+              slot.build.buildId,
+              slot.build.version,
+              scenario.fixture,
+            );
             const sessions = createTeamScaleSidebarListOwner({
               rows: fixture.sessions,
               viewerProfileId: "interaction-viewer",

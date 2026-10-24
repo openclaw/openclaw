@@ -815,7 +815,7 @@ function mergeProjectedToolResultMessage(
   return { ...message, content: mergedContent };
 }
 
-function projectToolResultMessages(params: {
+export function projectToolResultMessages(params: {
   messages: AgentMessage[];
   projectionState: ToolResultPromptProjectionState;
   recovering?: true;

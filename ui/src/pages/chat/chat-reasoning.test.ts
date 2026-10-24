@@ -528,7 +528,7 @@ it.each([false, true])(
   },
 );
 
-it("uses the producer run in the receipt when Gateway remaps the live client run", () => {
+it("uses the producer run in the receipt when Gateway remaps the live client run", async () => {
   thinking("A remapped source occurrence.");
   receipt("source-answer", "thinking-1", 2, "source-run");
   applyMessage(
@@ -547,5 +547,6 @@ it("uses the producer run in the receipt when Gateway remaps the live client run
     messageId: "source-answer",
     persisted: true,
   });
-  showReasoning(1);
+  show();
+  await waitForSolid(() => expect(thinkingNodes()).toHaveLength(1));
 });

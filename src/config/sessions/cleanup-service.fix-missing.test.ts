@@ -335,7 +335,7 @@ it.each([false, true])(
   },
 );
 
-it("drops a retained canonical row only after retention removes its derived file", async () => {
+it("expires a retained canonical row and its derived file in one retention pass", async () => {
   const scope = await seed("retention");
   const { sessionId } = scope;
   appendTranscriptEventSync(scope, { type: "proof", content: "expire together" });
@@ -344,10 +344,9 @@ it("drops a retained canonical row only after retention removes its derived file
   expect(archivePath).toBeTruthy();
   sql("UPDATE session_transcript_archives SET created_at = 1 WHERE session_id = ?").run(sessionId);
 
-  expect(await pruneArchives()).toBe(0);
   expect(archiveRow(sessionId)).toEqual({ 1: 1 });
-
-  fs.rmSync(archivePath ?? "");
   expect(await pruneArchives()).toBe(1);
+  expect(fs.existsSync(archivePath!)).toBe(false);
   expect(archiveRow(sessionId)).toBeUndefined();
+  expect(await pruneArchives()).toBe(0);
 });

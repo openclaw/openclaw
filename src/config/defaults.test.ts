@@ -3,6 +3,7 @@ import { normalizeModelCostConfig } from "@openclaw/llm-core";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { listAgentIds } from "../agents/agent-roster.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import type { ProviderResolveModelRoutesContext } from "../plugin-sdk/provider-model-types.js";
 import { resolveProviderModelRoutes } from "../plugins/provider-model-routes.js";
 import { estimateUsageCost } from "../utils/usage-format.js";
@@ -429,15 +430,12 @@ describe("applyModelDefaults catalog seeding", () => {
             openai: {
               baseUrl: "https://api.openai.com/v1",
               models: [
-                {
-                  id: "gpt-5.6-sol",
+                modelDefinition("gpt-5.6-sol", {
                   name: "text-only override",
                   reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: 8_192,
                   maxTokens: 4_096,
-                },
+                }),
               ],
             },
           },
@@ -460,16 +458,7 @@ describe("applyModelDefaults catalog seeding", () => {
         providers: {
           openai: {
             baseUrl: "https://api.openai.com/v1",
-            models: [
-              {
-                id: "gpt-5.6-sol",
-                name: "GPT-5.6 Sol",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                maxTokens: 8192,
-              },
-            ],
+            models: [modelDefinition("gpt-5.6-sol", { name: "GPT-5.6 Sol" })],
           },
         },
       },

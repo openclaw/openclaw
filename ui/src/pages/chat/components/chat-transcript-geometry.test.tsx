@@ -52,7 +52,7 @@ beforeEach(installTranscriptDomMocks);
 afterEach(resetTranscriptTestDom);
 
 it.each([null, 4_800])(
-  "keeps one bounded scrolling buffer from the first presented frame at offset %s",
+  "keeps a bounded initial range before measured placement at offset %s",
   (offset) => {
     const flushFrames = stubAnimationFrames();
     const paneId = `render-window-${offset}`;
@@ -85,12 +85,12 @@ it.each([null, 4_800])(
     expect(renderWindow([])).toBe(0);
     flushFrames();
 
-    expect(renderWindow()).toBe(offset === null ? 3 : 9);
+    expect(renderWindow()).toBe(offset === null ? 1 : 9);
     const mounted = transcriptRows(container).map((row) => Number(row.dataset.index));
     expect(mounted).toEqual(expect.arrayContaining(offset === null ? [99] : [40, 44]));
-    expect(renderWindow()).toBe(offset === null ? 3 : 9);
+    expect(renderWindow()).toBe(offset === null ? 1 : 9);
     flushFrames();
-    expect(renderWindow()).toBe(offset === null ? 3 : 9);
+    expect(renderWindow()).toBe(offset === null ? 1 : 9);
 
     transcript.dispose();
   },
@@ -163,10 +163,17 @@ it.each([false, true])(
   "coalesces end geometry across commits and retires disconnected work=%s",
   async (disconnect) => {
     const flushFrames = stubAnimationFrames();
+    transcriptDomState.measuredRowHeight = 1200;
     const rows = contentRows(1, "reply", "Reply");
     const { container, transcript, renderRows } = await mountTestTranscript("coalesced-end", rows);
     try {
       setTranscriptViewport(container, 1200);
+      // Native scrolling clamps without invoking the JavaScript geometry getter under test.
+      container.scrollTo = (options?: ScrollToOptions | number) => {
+        if (typeof options === "object") {
+          container.scrollTop = Math.max(0, Math.min(options.top ?? container.scrollTop, 600));
+        }
+      };
       container.scrollTop = 600;
       // JSDOM does not emit the browser's scroll read-back that settles initial compensation.
       container.dispatchEvent(new Event("scroll"));
@@ -186,7 +193,7 @@ it.each([false, true])(
 
       const row = requireElement(container, ".chat-virtual-row");
       for (let index = 0; index < 4; index++) {
-        emitTranscriptResize(row, 800, 240 + index);
+        emitTranscriptResize(row, 800, 1240 + index);
         renderRows(rows);
       }
       expect(readHeight).not.toHaveBeenCalled();
@@ -252,6 +259,7 @@ it("updates rail geometry for size changes without measuring streamed content or
     transcript.start();
     transcript.update();
     flush();
+    await flushDeferredRowPrune();
     const viewport = expectDefined(transcript.scrollElement, "rail viewport");
     const inner = requireElement(viewport, ".chat-thread-inner");
     const column = requireElement(inner, ".chat-virtual-sizer");

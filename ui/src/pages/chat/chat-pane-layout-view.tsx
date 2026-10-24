@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { Show } from "solid-js";
+import { createSignal, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
@@ -25,6 +25,7 @@ import {
   ChatSubagentMobileHeader,
   type ChatSubagentMobileStop,
 } from "./components/chat-subagent-mobile-header.tsx";
+import { isSidebarSlotVisible } from "./sidebar-layout.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -184,6 +185,12 @@ export type PaneLayoutData = {
 
 function PaneContent(props: { data: PaneLayoutData; questions: ComposerQuestions }) {
   const presented = usePanePresentation(() => props.data.overlays.presentation);
+  // A restored tool-only layout needs no conversation root until first revealed.
+  // Once mounted, keep its composer and transcript DOM through later panel changes.
+  const [conversationMounted] = createSignal(
+    (previous = false) =>
+      previous || (presented() && isSidebarSlotVisible(props.data.region.layout, "conversation")),
+  );
   const header = (
     <Show
       when={props.data.subagentHeader}
@@ -195,15 +202,21 @@ function PaneContent(props: { data: PaneLayoutData; questions: ComposerQuestions
     </Show>
   );
   const primary = (
-    <div class="chat-pane-primary-column">
-      <ChatView
-        props={props.data.primary.chat}
-        application={props.data.primary.application}
-        questions={props.questions}
-      />
-    </div>
+    <Show when={conversationMounted()}>
+      <div class="chat-pane-primary-column">
+        <ChatView
+          props={props.data.primary.chat}
+          application={props.data.primary.application}
+          questions={props.questions}
+        />
+      </div>
+    </Show>
   );
-  const background = <SessionBackgroundView {...props.data.background} />;
+  const background = (
+    <Show when={conversationMounted()}>
+      <SessionBackgroundView {...props.data.background} />
+    </Show>
+  );
   return (
     <>
       <SidebarRegionView

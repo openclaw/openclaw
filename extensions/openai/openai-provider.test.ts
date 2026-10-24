@@ -1,4 +1,5 @@
 import { queryObjects } from "node:v8";
+import { expectDefined } from "@openclaw/normalization-core";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { Context, Model, SimpleStreamOptions } from "openclaw/plugin-sdk/llm";
 import {
@@ -22,6 +23,7 @@ import {
 } from "./test-support/live-catalog.test-support.js";
 import { registerOpenAIServiceTierCatalogTests } from "./test-support/model-service-tiers.test-support.js";
 import { registerOpenAIFailoverTests } from "./test-support/provider-failover.test-support.js";
+import { createOpenAIResponsesTestModel } from "./test-support/responses-model.test-support.js";
 
 async function runWrappedPayloadCase(params: {
   wrap: NonNullable<ReturnType<typeof buildOpenAIProvider>["wrapStreamFn"]>;
@@ -1284,11 +1286,8 @@ describe("buildOpenAIProvider", () => {
 
   it("owns direct OpenAI wrapper composition for responses payloads", async () => {
     const provider = buildOpenAIProvider();
-    const wrap = provider.wrapStreamFn;
+    const wrap = expectDefined(provider.wrapStreamFn, "OpenAI wrapper");
     expect(wrap).toBeTypeOf("function");
-    if (!wrap) {
-      throw new Error("expected OpenAI wrapper");
-    }
     const extraParams = provider.prepareExtraParams?.({
       provider: "openai",
       modelId: "gpt-5.4",
@@ -1329,23 +1328,14 @@ describe("buildOpenAIProvider", () => {
   });
 
   it("authorizes native OpenAI web search through the code mode wrapper chain", async () => {
-    const provider = buildOpenAIProvider();
-    const wrap = provider.wrapStreamFn;
-    if (!wrap) {
-      throw new Error("expected OpenAI wrapper");
-    }
+    const wrap = expectDefined(buildOpenAIProvider().wrapStreamFn, "OpenAI wrapper");
     const allowedHostedToolTypes = new Set<string>();
 
     const result = await runWrappedPayloadCase({
       wrap,
       provider: "openai",
       modelId: "gpt-5.4",
-      model: {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-        baseUrl: "https://api.openai.com/v1",
-      } as Model<"openai-responses">,
+      model: createOpenAIResponsesTestModel(),
       context: {
         messages: [],
         tools: [
@@ -1376,22 +1366,13 @@ describe("buildOpenAIProvider", () => {
   });
 
   it("keeps one native OpenAI web search tool when the payload is already patched", async () => {
-    const provider = buildOpenAIProvider();
-    const wrap = provider.wrapStreamFn;
-    if (!wrap) {
-      throw new Error("expected OpenAI wrapper");
-    }
+    const wrap = expectDefined(buildOpenAIProvider().wrapStreamFn, "OpenAI wrapper");
 
     const result = await runWrappedPayloadCase({
       wrap,
       provider: "openai",
       modelId: "gpt-5.4",
-      model: {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-        baseUrl: "https://api.openai.com/v1",
-      } as Model<"openai-responses">,
+      model: createOpenAIResponsesTestModel(),
       payload: {
         tools: [{ type: "web_search" }, { type: "function", name: "web_search" }],
         reasoning: { effort: "minimal" },
@@ -1403,12 +1384,8 @@ describe("buildOpenAIProvider", () => {
   });
 
   it("keeps managed OpenAI web_search when agent policy denies native web search", async () => {
-    const provider = buildOpenAIProvider();
-    const wrap = provider.wrapStreamFn;
+    const wrap = expectDefined(buildOpenAIProvider().wrapStreamFn, "OpenAI wrapper");
     expect(wrap).toBeTypeOf("function");
-    if (!wrap) {
-      throw new Error("expected OpenAI wrapper");
-    }
 
     const allowedHostedToolTypes = new Set<string>();
     const result = await runWrappedPayloadCase({
@@ -1430,12 +1407,7 @@ describe("buildOpenAIProvider", () => {
           },
         },
       },
-      model: {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-        baseUrl: "https://api.openai.com/v1",
-      } as Model<"openai-responses">,
+      model: createOpenAIResponsesTestModel(),
       payload: {
         tools: [
           { type: "function", name: "read" },
@@ -1452,12 +1424,8 @@ describe("buildOpenAIProvider", () => {
   });
 
   it("does not inject native OpenAI web search when disabled or proxied", async () => {
-    const provider = buildOpenAIProvider();
-    const wrap = provider.wrapStreamFn;
+    const wrap = expectDefined(buildOpenAIProvider().wrapStreamFn, "OpenAI wrapper");
     expect(wrap).toBeTypeOf("function");
-    if (!wrap) {
-      throw new Error("expected OpenAI wrapper");
-    }
 
     const disabledAllowedHostedToolTypes = new Set<string>();
     const disabled = await runWrappedPayloadCase({
@@ -1468,12 +1436,7 @@ describe("buildOpenAIProvider", () => {
       streamOptions: {
         openclawCodeModeAllowedHostedToolTypes: disabledAllowedHostedToolTypes,
       },
-      model: {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-        baseUrl: "https://api.openai.com/v1",
-      } as Model<"openai-responses">,
+      model: createOpenAIResponsesTestModel(),
       payload: { tools: [{ type: "function", name: "web_search" }] },
     });
     const proxiedAllowedHostedToolTypes = new Set<string>();
@@ -1500,12 +1463,8 @@ describe("buildOpenAIProvider", () => {
   });
 
   it("keeps managed web_search when another search provider is configured", async () => {
-    const provider = buildOpenAIProvider();
-    const wrap = provider.wrapStreamFn;
+    const wrap = expectDefined(buildOpenAIProvider().wrapStreamFn, "OpenAI wrapper");
     expect(wrap).toBeTypeOf("function");
-    if (!wrap) {
-      throw new Error("expected OpenAI wrapper");
-    }
 
     const allowedHostedToolTypes = new Set<string>();
     const result = await runWrappedPayloadCase({
@@ -1516,12 +1475,7 @@ describe("buildOpenAIProvider", () => {
       streamOptions: {
         openclawCodeModeAllowedHostedToolTypes: allowedHostedToolTypes,
       },
-      model: {
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-        baseUrl: "https://api.openai.com/v1",
-      } as Model<"openai-responses">,
+      model: createOpenAIResponsesTestModel(),
       payload: { tools: [{ type: "function", name: "web_search" }] },
     });
 
@@ -1541,12 +1495,7 @@ describe("buildOpenAIProvider", () => {
       provider.prepareExtraParams?.({
         provider: "openai",
         modelId: "gpt-5.4",
-        model: {
-          api: "openai-responses",
-          provider: "openai",
-          id: "gpt-5.4",
-          baseUrl: "https://api.openai.com/v1",
-        },
+        model: createOpenAIResponsesTestModel(),
         config: {
           models: {
             providers: {

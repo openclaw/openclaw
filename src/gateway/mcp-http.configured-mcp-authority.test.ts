@@ -4,6 +4,10 @@ import http from "node:http";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeAll, expect, it } from "vitest";
 import {
+  listenLoopback,
+  closeHttpServer,
+} from "../../test/helpers/gateway-integration-fixtures.js";
+import {
   prepareSystemAgentRunAdmission,
   type PreparedAgentRunAdmission,
 } from "../agents/admitted-run-context.js";
@@ -139,15 +143,9 @@ async function startProbeServer() {
       );
     })().catch(() => response.writeHead(500).end());
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("MCP probe server did not acquire a loopback port");
-  }
+  const port = Number(new URL(await listenLoopback(server)).port);
   return {
-    port: address.port,
+    port,
     counts,
     state,
     /**
@@ -175,10 +173,7 @@ async function startProbeServer() {
       );
     },
     close: async () => {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeHttpServer(server);
     },
   };
 }

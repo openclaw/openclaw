@@ -41,6 +41,33 @@ let resolveWhatsAppApprovalReactionTargetWithPersistence: typeof import("./appro
 
 type ApprovalAction = Extract<MessagePresentationAction, { type: "approval" }>;
 
+function createExecTargetApprovalPayload(id: string) {
+  const cfg = {
+    approvals: {
+      exec: {
+        enabled: true,
+        mode: "targets" as const,
+        targets: [{ channel: "whatsapp", to: "configured-target" }],
+      },
+    },
+  } as OpenClawConfig;
+  const payload = whatsappApprovalCapability.render?.exec?.buildPendingPayload?.({
+    cfg,
+    request: {
+      id,
+      request: {
+        command: "printf mismatch",
+        allowedDecisions: ["allow-once", "deny"],
+      },
+      createdAtMs: 1_000,
+      expiresAtMs: 61_000,
+    } satisfies ExecApprovalRequest,
+    target: { channel: "whatsapp", to: "configured-target", source: "target" },
+    nowMs: 1_000,
+  });
+  return { cfg, payload };
+}
+
 describe("whatsappChannelOutbound", () => {
   beforeAll(async () => {
     ({ whatsappChannelOutbound, whatsappMessageAdapter } = await import("./channel-outbound.js"));
@@ -215,29 +242,7 @@ describe("whatsappChannelOutbound", () => {
   ])("fails closed when typed $name disagrees with approval metadata", async ({ mutate }) => {
     const renderPresentation = whatsappChannelOutbound.renderPresentation;
     const afterDeliverPayload = whatsappChannelOutbound.afterDeliverPayload;
-    const cfg = {
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets" as const,
-          targets: [{ channel: "whatsapp", to: "configured-target" }],
-        },
-      },
-    } as OpenClawConfig;
-    const payload = whatsappApprovalCapability.render?.exec?.buildPendingPayload?.({
-      cfg,
-      request: {
-        id: "exec-mismatch",
-        request: {
-          command: "printf mismatch",
-          allowedDecisions: ["allow-once", "deny"],
-        },
-        createdAtMs: 1_000,
-        expiresAtMs: 61_000,
-      } satisfies ExecApprovalRequest,
-      target: { channel: "whatsapp", to: "configured-target", source: "target" },
-      nowMs: 1_000,
-    });
+    const { cfg, payload } = createExecTargetApprovalPayload("exec-mismatch");
     if (!renderPresentation || !afterDeliverPayload || !payload || !payload.presentation) {
       throw new Error("WhatsApp approval delivery hooks unavailable");
     }
@@ -315,29 +320,7 @@ describe("whatsappChannelOutbound", () => {
   ])("fails closed when the visible approval $name", async ({ rewrite }) => {
     const renderPresentation = whatsappChannelOutbound.renderPresentation;
     const afterDeliverPayload = whatsappChannelOutbound.afterDeliverPayload;
-    const cfg = {
-      approvals: {
-        exec: {
-          enabled: true,
-          mode: "targets" as const,
-          targets: [{ channel: "whatsapp", to: "configured-target" }],
-        },
-      },
-    } as OpenClawConfig;
-    const payload = whatsappApprovalCapability.render?.exec?.buildPendingPayload?.({
-      cfg,
-      request: {
-        id: "exec-visible-mismatch",
-        request: {
-          command: "printf mismatch",
-          allowedDecisions: ["allow-once", "deny"],
-        },
-        createdAtMs: 1_000,
-        expiresAtMs: 61_000,
-      } satisfies ExecApprovalRequest,
-      target: { channel: "whatsapp", to: "configured-target", source: "target" },
-      nowMs: 1_000,
-    });
+    const { cfg, payload } = createExecTargetApprovalPayload("exec-visible-mismatch");
     if (!renderPresentation || !afterDeliverPayload || !payload || !payload.presentation) {
       throw new Error("WhatsApp approval delivery hooks unavailable");
     }

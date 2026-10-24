@@ -371,6 +371,7 @@ it("returns a newer committed replica when a receipt arrives during a worker rea
     lifetime,
     replica,
     transport: {
+      agentId: "main",
       run: async (operation) => {
         const result = operation({ execute });
         started.resolve();

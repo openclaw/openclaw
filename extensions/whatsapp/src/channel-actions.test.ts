@@ -1,23 +1,22 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
-import {
-  describeWhatsAppMessageActions,
-  resolveWhatsAppAgentReactionGuidance,
-} from "./channel-actions.js";
+import { whatsappPlugin } from "./channel.js";
+
+const { agentPrompt, actions } = whatsappPlugin;
 
 function config(whatsapp: NonNullable<OpenClawConfig["channels"]>["whatsapp"]): OpenClawConfig {
   return { channels: { whatsapp: { allowFrom: ["*"], ...whatsapp } } };
 }
 
-describe("whatsapp channel action helpers", () => {
+describe("whatsapp public channel actions", () => {
   it("defaults to minimal reaction guidance when reactions are available", () => {
     const cfg = config({});
-    expect(resolveWhatsAppAgentReactionGuidance({ cfg, accountId: "default" })).toBe("minimal");
+    expect(agentPrompt?.reactionGuidance?.({ cfg, accountId: "default" })?.level).toBe("minimal");
   });
 
   it("omits reaction guidance when WhatsApp is not configured", () => {
     expect(
-      resolveWhatsAppAgentReactionGuidance({
+      agentPrompt?.reactionGuidance?.({
         cfg: {},
         accountId: "default",
       }),
@@ -26,7 +25,7 @@ describe("whatsapp channel action helpers", () => {
 
   it("omits reaction guidance when WhatsApp reactions are disabled", () => {
     const cfg = config({ actions: { reactions: false } });
-    expect(resolveWhatsAppAgentReactionGuidance({ cfg, accountId: "default" })).toBeUndefined();
+    expect(agentPrompt?.reactionGuidance?.({ cfg, accountId: "default" })).toBeUndefined();
   });
 
   it("omits reaction guidance when reactionLevel disables agent reactions", () => {
@@ -39,7 +38,7 @@ describe("whatsapp channel action helpers", () => {
       },
     } as OpenClawConfig;
 
-    expect(resolveWhatsAppAgentReactionGuidance({ cfg, accountId: "default" })).toBeUndefined();
+    expect(agentPrompt?.reactionGuidance?.({ cfg, accountId: "default" })).toBeUndefined();
   });
 
   it("advertises react when agent reactions are enabled", () => {
@@ -51,7 +50,7 @@ describe("whatsapp channel action helpers", () => {
       },
     } as OpenClawConfig;
 
-    expect(describeWhatsAppMessageActions({ cfg, accountId: "default" })?.actions).toEqual([
+    expect(actions?.describeMessageTool({ cfg, accountId: "default" })?.actions).toEqual([
       "react",
       "poll",
       "upload-file",
@@ -59,12 +58,12 @@ describe("whatsapp channel action helpers", () => {
   });
 
   it("returns null when WhatsApp is not configured", () => {
-    expect(describeWhatsAppMessageActions({ cfg: {}, accountId: "default" })).toBeNull();
+    expect(actions?.describeMessageTool({ cfg: {}, accountId: "default" })).toBeNull();
   });
 
   it("omits react when reactionLevel disables agent reactions", () => {
     const cfg = config({ reactionLevel: "ack" });
-    expect(describeWhatsAppMessageActions({ cfg, accountId: "default" })?.actions).toEqual([
+    expect(actions?.describeMessageTool({ cfg, accountId: "default" })?.actions).toEqual([
       "poll",
       "upload-file",
     ]);
@@ -85,7 +84,7 @@ describe("whatsapp channel action helpers", () => {
       },
     } as OpenClawConfig;
 
-    expect(describeWhatsAppMessageActions({ cfg, accountId: "work" })?.actions).toEqual([
+    expect(actions?.describeMessageTool({ cfg, accountId: "work" })?.actions).toEqual([
       "react",
       "poll",
       "upload-file",
@@ -97,7 +96,7 @@ describe("whatsapp channel action helpers", () => {
       reactionLevel: "ack",
       accounts: { work: { reactionLevel: "minimal" } },
     });
-    expect(describeWhatsAppMessageActions({ cfg })?.actions).toEqual([
+    expect(actions?.describeMessageTool({ cfg })?.actions).toEqual([
       "react",
       "poll",
       "upload-file",
@@ -109,6 +108,6 @@ describe("whatsapp channel action helpers", () => {
       reactionLevel: "ack",
       accounts: { work: { enabled: false, reactionLevel: "minimal" } },
     });
-    expect(describeWhatsAppMessageActions({ cfg })?.actions).toEqual(["poll", "upload-file"]);
+    expect(actions?.describeMessageTool({ cfg })?.actions).toEqual(["poll", "upload-file"]);
   });
 });

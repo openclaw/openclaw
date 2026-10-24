@@ -4,6 +4,7 @@ import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
 import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { GatewayClient, type GatewayClientOptions } from "./client.js";
 import { pairOperatorDeviceFixture } from "./paired-device.test-support.js";
@@ -121,15 +122,12 @@ it(
               apiKey: "synthetic-local-provider-key",
               baseUrl: `http://127.0.0.1:${address.port}/v1`,
               models: [
-                {
-                  id: "avatar-model",
+                modelDefinition("avatar-model", {
                   name: "Avatar model",
                   reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
                   contextWindow: 8192,
                   maxTokens: 1024,
-                },
+                }),
               ],
             },
           },

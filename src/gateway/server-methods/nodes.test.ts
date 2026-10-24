@@ -35,14 +35,11 @@ import {
 import { drainNodePendingWork, enqueueNodePendingWork } from "../node-pending-work.js";
 import { createNodeRegistryRuntime } from "../node-registry-private.js";
 import { NodeRegistry } from "../node-registry.js";
-import {
-  captureNodeWakeLifecycle,
-  runNodeWakeAttempt,
-  runNodeWakeNudgeAttempt,
-} from "../node-wake-state.js";
+import { captureNodeWakeLifecycle } from "../node-wake-state.js";
 import {
   getNodeWakeStateSnapshot,
   resetNodeWakeStateForTest,
+  seedNodeWakeState,
 } from "../node-wake-state.test-support.js";
 import { bindDeviceWorkerReconciliation } from "../worker-environments/device-provider.js";
 import { nodeHandlers } from "./nodes.js";
@@ -81,24 +78,6 @@ function registerApns(
     topic: "ai.openclaw.ios",
     environment: "sandbox",
     ...overrides,
-  });
-}
-
-async function seedNodeWakeState(nodeId: string): Promise<void> {
-  await runNodeWakeAttempt({
-    nodeId,
-    force: true,
-    throttleMs: 60_000,
-    attempt: async (markAttempted) => {
-      markAttempted();
-      return { available: true, throttled: false, path: "sent", durationMs: 1 };
-    },
-  });
-  await runNodeWakeNudgeAttempt({
-    nodeId,
-    throttleMs: 60_000,
-    throttled: () => ({ sent: false, throttled: true, reason: "throttled", durationMs: 0 }),
-    attempt: async () => ({ sent: true, throttled: false, reason: "sent", durationMs: 1 }),
   });
 }
 

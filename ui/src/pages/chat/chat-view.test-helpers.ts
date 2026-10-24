@@ -9,6 +9,7 @@ import {
   isUiGlobalScopeConfigured,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
+import { createFrameQueue } from "../../test-helpers/animation-frame-queue.ts";
 import { normalizeApplicationContext } from "../../test-helpers/application-context-fixtures.ts";
 import { installModelPickerLayout } from "../../test-helpers/model-picker-layout.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -154,14 +155,8 @@ export function appendChatBubble(
 }
 
 export function stubAnimationFrames() {
-  const callbacks: FrameRequestCallback[] = [];
-  vi.stubGlobal(
-    "requestAnimationFrame",
-    vi.fn((callback: FrameRequestCallback) => {
-      callbacks.push(callback);
-      return callbacks.length;
-    }),
-  );
+  const { frames: callbacks, request } = createFrameQueue();
+  vi.stubGlobal("requestAnimationFrame", vi.fn(request));
   return () => {
     for (const callback of callbacks.splice(0)) {
       callback(0);

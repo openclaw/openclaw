@@ -1,5 +1,8 @@
-import type { AddressInfo } from "node:net";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  listenLoopback,
+  closeHttpServer,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getRuntimeConfig } from "../config/io.js";
@@ -135,10 +138,7 @@ it.each([
         getRuntimeConfig,
       },
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const origin = "http://127.0.0.1:" + (server.address() as AddressInfo).port;
+    const origin = await listenLoopback(server);
     try {
       const response = fetch(
         origin + "/control/__openclaw__/users/background/" + uploaded.asset.assetId,
@@ -196,10 +196,7 @@ it.each([
       }
     } finally {
       release.resolve();
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeHttpServer(server);
     }
   },
 );
@@ -280,15 +277,10 @@ it.each(["role-reduced", "profile-reassigned"] as const)(
       resolvedAuth: auth,
       overrides: { controlUiBasePath: "/control", getResolvedAuth: () => auth, getRuntimeConfig },
     });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
+    const origin = await listenLoopback(server);
     try {
       const response = fetch(
-        "http://127.0.0.1:" +
-          (server.address() as AddressInfo).port +
-          "/control/__openclaw__/users/background/" +
-          uploaded.asset.assetId,
+        origin + "/control/__openclaw__/users/background/" + uploaded.asset.assetId,
         {
           headers: {
             "x-forwarded-for": "198.51.100.23",
@@ -331,10 +323,7 @@ it.each(["role-reduced", "profile-reassigned"] as const)(
       expect(replacement ? imageWait : profileWait).toHaveBeenCalledOnce();
     } finally {
       release.resolve();
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await closeHttpServer(server);
     }
   },
 );

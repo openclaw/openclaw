@@ -11,6 +11,7 @@ const replacedFiles = new Set([
   "src/agents/workspace-git.ts",
   "src/gateway/worker-environments/workspace-result-git.ts",
   "src/infra/git-exec.ts",
+  "src/infra/sqlite-staging-token.ts",
   "src/plugins/plugin-generation-preparation.worker.ts",
   "src/skills/loading/plugin-skills.ts",
 ]);

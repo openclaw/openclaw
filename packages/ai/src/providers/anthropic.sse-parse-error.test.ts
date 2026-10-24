@@ -4,6 +4,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { streamWithIdleTimeout } from "../../../../src/agents/embedded-agent-runner/run/llm-idle-timeout.js";
 import { configureAiTransportHost } from "../host.js";
+import { collectEventTypes } from "../transports/openai-stream-cases.test-support.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../transports/transport-utils.js";
 import type { Context, Model } from "../types.js";
 import { streamAnthropic } from "./anthropic.js";
@@ -200,10 +201,7 @@ describe("Anthropic malformed SSE frames", () => {
       apiKey: "test-api-key",
       client,
     });
-    const eventTypes: string[] = [];
-    for await (const event of stream) {
-      eventTypes.push(event.type);
-    }
+    const eventTypes = await collectEventTypes(stream);
     const result = await stream.result();
 
     expect(result.stopReason).toBe(stopReason);

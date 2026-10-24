@@ -41,8 +41,6 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
-import { sessionActivitySummaryHandlers } from "./server-methods/session-activity-summary.js";
-import { sessionByKeyReadHandlers } from "./server-methods/sessions-read-by-key.js";
 import {
   createSessionActivitySummaries,
   type SessionActivitySummaryService,
@@ -52,6 +50,8 @@ import {
   createActivityRecapSessionFixture,
   messages,
   preparedActivityRecapModel as prepared,
+  recapRpc as rpc,
+  seedRecapConversation as seedConversation,
   scope,
   target,
   terminal,
@@ -130,19 +130,6 @@ describe("Activity recap lifecycle with the canonical session store", () => {
     };
   };
 
-  const seedConversation = async (
-    session: typeof scope,
-    content: string,
-    entry: Partial<SessionEntry> = {},
-    eventId = `event-${session.sessionKey}`,
-  ) => {
-    await upsertSessionEntryCore(session, { sessionId: session.sessionId, updatedAt: 1, ...entry });
-    await persistSessionTranscriptTurn(session, {
-      messages: [{ eventId, message: { role: "user", content } }],
-      touchSessionEntry: false,
-    });
-  };
-
   const transcript = (
     turns: Parameters<typeof persistSessionTranscriptTurn>[1]["messages"],
     session = scope,
@@ -173,28 +160,6 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       opts: { includeActivitySummary: true },
       ...extra,
     });
-  const rpc = (
-    method: "sessions.describe" | "sessions.activitySummary.ensure",
-    context: ReturnType<typeof createDirectChatContext>,
-  ) => {
-    const respond = vi.fn();
-    const handler =
-      method === "sessions.describe"
-        ? sessionByKeyReadHandlers[method]!
-        : sessionActivitySummaryHandlers[method]!;
-    return {
-      respond,
-      invoke: (params: Record<string, unknown>) =>
-        handler({
-          req: { type: "req", id: "recap", method, params },
-          params,
-          context,
-          client: null,
-          respond,
-          isWebchatConnect: () => false,
-        }),
-    };
-  };
 
   const publication = (ready = () => view()?.state === "current") => {
     const published = createDeferred();

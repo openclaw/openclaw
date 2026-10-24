@@ -11,6 +11,7 @@ import {
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION, type ConnectParams } from "../../packages/gateway-protocol/src/index.js";
+import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { issueDevicePairSetupBootstrapToken } from "../infra/device-bootstrap.js";
 import {
@@ -186,13 +187,7 @@ export async function startWatchNodeHttpRuntime(
     });
     await settleRequests();
   });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected TCP server address");
-  }
+  const origin = await listenLoopback(server);
   return {
     nodeRegistry,
     broadcasts,
@@ -201,7 +196,7 @@ export async function startWatchNodeHttpRuntime(
     runtime,
     connectHandled,
     settleRequests,
-    baseUrl: `http://127.0.0.1:${address.port}/api/nodes/watch`,
+    baseUrl: `${origin}/api/nodes/watch`,
   };
 }
 
