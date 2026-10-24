@@ -133,10 +133,13 @@ it("selects a reopened historical question ahead of another pending request", as
   props.messages = [old, terminal("old-run"), latest, terminal("latest-run")];
   draw();
   await vi.waitFor(() => expect(dock()?.textContent).toContain("Which format?"));
-  const summary = [...container.querySelectorAll<HTMLElement>(".chat-question-summary")].find(
-    (element) => element.textContent?.includes("Which audience?"),
-  )!;
-  expect(summary.textContent).toContain("No longer pending");
+  const summary = await waitForSolid(() => {
+    const element = [...container.querySelectorAll<HTMLElement>(".chat-question-summary")].find(
+      (candidate) => candidate.textContent?.includes("Which audience?"),
+    );
+    expect(element?.textContent).toContain("No longer pending");
+    return element!;
+  });
   summary.querySelector<HTMLButtonElement>("button")!.click();
   await vi.waitFor(() => expect(dock()?.textContent).toContain("Which audience?"));
   expect(other()?.value).toBe("");
