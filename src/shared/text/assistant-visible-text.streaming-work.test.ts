@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import * as toolCallRepair from "../../../packages/tool-call-repair/src/index.js";
 import {
   createAssistantVisibleStreamText,
   sanitizeAssistantVisibleStreamText,
@@ -25,6 +26,62 @@ vi.mock("./code-regions.js", async (importOriginal) => {
       return actual.findCodeRegions(text);
     },
   };
+});
+
+it.each([
+  [
+    "pretty-printed JSON",
+    () => `{\n${'  {"id":0,"label":"ordinary value"},\n'.repeat(1_024)}  "done": true\n}`,
+  ],
+  [
+    "brace-heavy prose",
+    () =>
+      'Configure the value as {"mode":"fast"} before starting the service and continue. '.repeat(
+        512,
+      ),
+  ],
+])("does not checkpoint ordinary %s", (_name, buildSource) => {
+  const source = buildSource().slice(0, 32 * 1024);
+  const project = vi.spyOn(toolCallRepair, "projectPlainTextToolCallBlocks");
+  const stream = createAssistantVisibleStreamText("final_answer");
+  try {
+    for (let offset = 0; offset < source.length; offset += 4) {
+      stream.append(source.slice(offset, offset + 4));
+    }
+    expect(stream.text).toBe(source.trimEnd());
+    expect(project).not.toHaveBeenCalled();
+  } finally {
+    project.mockRestore();
+  }
+});
+
+it.each([
+  ["large first chunk", () => `[tool:write] {"content":"${"x".repeat(600)}"}\nDone.`, "Done."],
+  [
+    "call split across permitted whitespace",
+    () => `Before\n[tool:write]\r\n \t{"content":"${"x".repeat(600)}"}\nDone.`,
+    "Before\nDone.",
+  ],
+])("matches canonical projection for a %s", (_name, buildSource, expected) => {
+  const source = buildSource();
+  const stream = createAssistantVisibleStreamText("final_answer");
+
+  stream.append(source);
+
+  expect(stream.text).toBe(sanitizeAssistantVisibleStreamText(source, "final_answer"));
+  expect(stream.text).toBe(expected);
+});
+
+it("rechecks a complete replacement before retiring probe state", () => {
+  const source = `[tool:write] {"content":"${"x".repeat(600)}"}\nDone.`;
+  const stream = createAssistantVisibleStreamText("final_answer");
+  stream.append("Visible preface");
+
+  const replaced = stream.replace(source);
+
+  expect(replaced.text).toBe(sanitizeAssistantVisibleStreamText(source, "final_answer"));
+  expect(replaced.text).toBe("Done.");
+  expect(replaced.delta).toBeNull();
 });
 
 it("bounds prefix comparisons after a stripped trace line", () => {

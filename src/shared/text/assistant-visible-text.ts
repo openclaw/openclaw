@@ -1,6 +1,7 @@
 import { scanFenceSpans } from "../../../packages/markdown-core/src/fences.js";
 // Assistant visible text helpers strip hidden reasoning and control marker text.
 import {
+  createPlainTextToolCallBraceProbe,
   projectPlainTextToolCallBlocks,
   stripPlainTextToolCallBlocks,
 } from "../../../packages/tool-call-repair/src/index.js";
@@ -393,7 +394,7 @@ export const assistantTraceTextFilter: TextFilter = {
   },
 };
 
-const plainToolCallActivationTokens = ["{", "<parameter=", "<function=", "to="] as const;
+const plainToolCallActivationTokens = ["<parameter=", "<function=", "to="] as const;
 const plainToolCallTransform = (text: string) =>
   stripPlainTextToolCallBlocks(text, { resolveProtectedRanges: findCodeRegions });
 
@@ -480,6 +481,7 @@ function createPlainToolCallTextProjector() {
     projectPlainTextToolCallBlocks(text, { resolveProtectedRanges, settleBefore });
   const activation = new RegExp(plainToolCallActivationTokens.map(escapeRegExp).join("|"), "i");
   const overlap = Math.max(...plainToolCallActivationTokens.map((token) => token.length - 1));
+  const braceProbe = createPlainTextToolCallBraceProbe();
   let active = false;
   let tail = "";
   return createConditionalTextProjector(
@@ -487,7 +489,7 @@ function createPlainToolCallTextProjector() {
     (input) => {
       if (!active) {
         const appended = tail + (input.delta ?? input.text);
-        active = activation.test(appended);
+        active = activation.test(appended) || braceProbe(input.delta ?? input.text);
         tail = !active && overlap ? appended.slice(-overlap) : "";
       }
       return active;
