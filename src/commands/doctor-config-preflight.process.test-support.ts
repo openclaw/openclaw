@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
+import packageJson from "../../package.json" with { type: "json" };
 import { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 import { removeCanonicalValidationFromHistoricalAgentFixture } from "../state/openclaw-agent-db.test-support.js";
 import { seedOpenClawAgentSchemaV21 } from "../state/openclaw-agent-schema-v21.test-support.js";
@@ -113,20 +114,7 @@ export function createSourceRuntime(root: string): string {
     );
   }
   for (const filename of [
-    "node-host-launcher.mjs",
-    "node-compile-cache.mjs",
-    "node-version.mjs",
-    "node-sqlite.mjs",
-    "node-runtime-update.mjs",
-    "node-runtime-recovery.mjs",
-    "cli-parent-lifetime.mjs",
-    "node-runtime-env.mjs",
-    "cli-invocation.mjs",
-    "cli-root-options.mjs",
-    "gateway-run-argv.mjs",
-    "gateway-shutdown-budget.mjs",
-    "standalone-runtime-profile.mjs",
-    "worker-heap-flag.mjs",
+    ...packageJson.files.filter((file) => !file.includes("/") && file.endsWith(".mjs")),
     "package.json",
     "tsconfig.json",
   ]) {
