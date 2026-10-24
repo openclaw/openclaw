@@ -1,5 +1,10 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  createBoardWidgetContentFields,
+  parseManifest,
+  serializeManifest,
+} from "../boards/sqlite-board-codec.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -9,6 +14,7 @@ import {
 } from "../infra/session-sqlite-migration-readers.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import type { MigrationMessages } from "../infra/state-migrations.types.js";
+import { escapeHtml } from "../shared/html-escape.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import {
@@ -19,31 +25,55 @@ import {
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import { backupDoctorMigrationDatabases } from "./doctor-migration-backup.js";
 
-function readLegacyProperty(json: string | null, key: string): unknown {
+function readLegacyRecord(json: string | null) {
   if (json === null) {
     return undefined;
   }
   try {
-    return asOptionalRecord(JSON.parse(json))?.[key];
+    return asOptionalRecord(JSON.parse(json));
   } catch {
     // Unrelated malformed widget data stays with its existing repair owner.
     return undefined;
   }
 }
 
-function listRetiredWidgets(database: EngineConnection) {
+function listLegacyWidgets(database: EngineConnection) {
   const db = getNodeSqliteKysely<Pick<DB, "board_widgets">>(database);
   return executeSqliteQuerySync(
     database,
-    db.selectFrom("board_widgets").select(["session_key", "name", "descriptor_json", "manifest"]),
-  ).rows.filter(
-    (row) =>
-      readLegacyProperty(row.descriptor_json, "pluginKind") === "canvas:a2ui" ||
-      readLegacyProperty(row.manifest, "registeredContentKind") === "a2ui",
-  );
+    db
+      .selectFrom("board_widgets")
+      .select(["session_key", "name", "content_kind", "revision", "descriptor_json", "manifest"]),
+  ).rows.flatMap((row) => {
+    const descriptor = readLegacyRecord(row.descriptor_json);
+    const metadata = readLegacyRecord(row.manifest);
+    const retire =
+      descriptor?.pluginKind === "canvas:a2ui" || metadata?.registeredContentKind === "a2ui";
+    return retire ||
+      metadata?.contentOwner === "registered" ||
+      (row.content_kind === "plugin" && typeof descriptor?.source === "string")
+      ? [{ ...row, descriptor, metadata, retire }]
+      : [];
+  });
 }
 
-/** Candidate Doctor owns this retirement; ordinary board readers only consume canonical widgets. */
+function createRetiredWidgetPreview(row: ReturnType<typeof listLegacyWidgets>[number]) {
+  const kind =
+    typeof row.descriptor?.pluginKind === "string" ? row.descriptor.pluginKind : "unknown";
+  const source =
+    typeof row.descriptor?.source === "string"
+      ? row.descriptor.source
+      : (row.descriptor_json ?? "");
+  return `<article><h1>Retired ${escapeHtml(kind)} widget</h1>
+<p>This widget renderer was removed. Its saved source is preserved below and can be recreated as an HTML widget.</p>
+<pre style="white-space:pre-wrap;overflow-wrap:anywhere">${escapeHtml(source)}</pre>
+<details><summary>Original widget data</summary>
+<h2>Descriptor</h2><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${escapeHtml(row.descriptor_json ?? "")}</pre>
+<h2>Manifest</h2><pre style="white-space:pre-wrap;overflow-wrap:anywhere">${escapeHtml(row.manifest)}</pre>
+</details></article>`;
+}
+
+/** Retire A2UI and preserve other removed renderers as inert HTML before canonical board reads. */
 export async function retireDoctorA2uiWidgets(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
@@ -58,13 +88,13 @@ export async function retireDoctorA2uiWidgets(params: {
   const pending = targets.filter((target) => {
     try {
       const inspected = withOpenClawAgentDatabaseReadOnly(
-        (database) => listRetiredWidgets(database.db).length,
+        (database) => listLegacyWidgets(database.db).length,
         resolveTargetSqliteOptions(target, params.env),
       );
       return inspected.found && inspected.value > 0;
     } catch (error) {
       result.warnings.push(
-        `Could not inspect retired A2UI widgets in agent ${target.agentId}: ${formatErrorMessage(error)}. Run openclaw doctor --fix after resolving the database warning.`,
+        `Could not inspect retired board widgets in agent ${target.agentId}: ${formatErrorMessage(error)}. Run openclaw doctor --fix after resolving the database warning.`,
       );
       return false;
     }
@@ -89,28 +119,73 @@ export async function retireDoctorA2uiWidgets(params: {
   result.warnings.push(...backup.warnings);
   maintenance.assertAdmission();
   let removed = 0;
+  let converted = 0;
   for (const target of pending) {
     const wasOpen = isOpenClawAgentDatabaseOpen(target.sqlitePath);
     try {
-      removed += runOpenClawAgentWriteTransaction(
+      const migrated = runOpenClawAgentWriteTransaction(
         (database) => {
           maintenance.assertAdmission();
-          const rows = listRetiredWidgets(database.db);
+          const rows = listLegacyWidgets(database.db);
           const db = getNodeSqliteKysely<Pick<DB, "board_widgets">>(database.db);
           for (const row of rows) {
+            if (row.retire) {
+              executeSqliteQuerySync(
+                database.db,
+                db
+                  .deleteFrom("board_widgets")
+                  .where("session_key", "=", row.session_key)
+                  .where("name", "=", row.name),
+              );
+              continue;
+            }
+            const manifest = parseManifest(
+              JSON.stringify({
+                ...row.metadata,
+                contentOwner: "html",
+                netOrigins: undefined,
+                tools: undefined,
+              }),
+            );
+            const fields = createBoardWidgetContentFields(
+              {
+                sessionKey: row.session_key,
+                name: row.name,
+                content: { kind: "html", html: createRetiredWidgetPreview(row) },
+              },
+              manifest,
+              row.revision + 1,
+              "none",
+              randomBytes(16).toString("hex"),
+              Date.now(),
+            );
+            fields.manifest = serializeManifest(
+              { contentOwner: "html" },
+              undefined,
+              "none",
+              undefined,
+              manifest,
+              manifest.nameIdentity?.kind !== "invalid" ? manifest.nameIdentity : undefined,
+            );
             executeSqliteQuerySync(
               database.db,
               db
-                .deleteFrom("board_widgets")
+                .updateTable("board_widgets")
+                .set(fields)
                 .where("session_key", "=", row.session_key)
                 .where("name", "=", row.name),
             );
           }
-          return rows.length;
+          return {
+            removed: rows.filter((row) => row.retire).length,
+            converted: rows.filter((row) => !row.retire).length,
+          };
         },
         resolveTargetSqliteOptions(target, params.env),
         { operationLabel: "doctor.retire-a2ui-widgets" },
       );
+      removed += migrated.removed;
+      converted += migrated.converted;
     } finally {
       if (!wasOpen) {
         await closeOpenClawAgentDatabaseByPathAsync(target.sqlitePath);
@@ -121,6 +196,11 @@ export async function retireDoctorA2uiWidgets(params: {
   if (removed > 0) {
     result.warnings.push(
       `Deleted ${removed} stored widget(s) after backup. A2UI widgets were retired and can be recreated as HTML widgets.`,
+    );
+  }
+  if (converted > 0) {
+    result.warnings.push(
+      `Converted ${converted} other retired widget(s) to inert HTML source previews after backup. Original source and widget metadata were preserved; previous capabilities were removed.`,
     );
   }
   return result;

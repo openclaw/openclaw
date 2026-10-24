@@ -47,6 +47,11 @@ It preserves other widgets and records a warning naming the deleted count,
 explaining that A2UI widgets were retired and can be recreated as HTML widgets.
 This repair does not convert their source into HTML.
 
+Other widgets using the retired registered-renderer API become inert HTML source
+previews after the same backup. Doctor preserves their original descriptor and
+manifest in the preview, keeps their layout and valid identity, and removes
+previous capabilities. Existing HTML, native plugin, and MCP widgets are unchanged.
+
 During `openclaw update`, the candidate's Doctor step owns this backed-up repair,
 including when the update was started by an older installed update driver.
 Stored A2UI rows do not prevent the update. Runtime readers accept only the
