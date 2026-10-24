@@ -10,7 +10,6 @@ import {
 } from "../../commands/doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "../../commands/doctor-session-sqlite-retirement.js";
 import { selectUnmanifestedRecovery } from "../../commands/update-cleanup-unmanifested.js";
-import { createMissingConfigRecoveryManifest } from "../../commands/update-recovery-manifest.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { resolveUpdateCaptureRoot } from "../../infra/update-capture-paths.js";
@@ -84,15 +83,31 @@ function orphan(f: Fixture) {
   fs.writeFileSync(path.join(directory, "payload", "original"), "capture payload");
   fs.writeFileSync(
     path.join(directory, "manifest.json"),
-    JSON.stringify(
-      createMissingConfigRecoveryManifest({
-        runId,
-        installRoot: f.home,
-        stateDir: f.stateDir,
-        configPath: f.env.OPENCLAW_CONFIG_PATH,
-        createdAt: "2026-01-01T00:00:00.000Z",
-      }),
-    ),
+    JSON.stringify({
+      schemaVersion: 2,
+      kind: "update-recovery",
+      generation: { kind: "baseline" },
+      databases: [],
+      runId,
+      installRoot: f.home,
+      stateDir: f.stateDir,
+      configPath: f.env.OPENCLAW_CONFIG_PATH,
+      configPaths: [f.env.OPENCLAW_CONFIG_PATH],
+      creator: { host: "fixture", pid: 1, startIdentity: "1" },
+      drivers: [],
+      createdAt: "2026-01-01T00:00:00.000Z",
+      roots: [f.env.OPENCLAW_CONFIG_PATH],
+      excludedRoots: [],
+      protectedPaths: [f.env.OPENCLAW_CONFIG_PATH],
+      entries: [
+        {
+          kind: "missing",
+          sourcePath: f.env.OPENCLAW_CONFIG_PATH,
+          sqlite: false,
+          directory: false,
+        },
+      ],
+    }),
   );
   return directory;
 }
