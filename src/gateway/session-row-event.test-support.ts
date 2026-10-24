@@ -1,6 +1,7 @@
 import { vi } from "vitest";
 import type { UserProfile } from "../state/user-profiles.types.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
+import { dispatchProfile } from "./server/client-fixtures.test-support.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { sharingPolicyClient } from "./session-sharing.test-utils.js";
 
@@ -14,13 +15,10 @@ export function createSessionRowEventPeer(
     ...sharingPolicyClient({ user: profile.id }),
     connId,
     usesSharedGatewayAuth: false,
-    authenticatedUserProfile: {
-      profileId: profile.id,
+    authenticatedUserProfile: dispatchProfile(profile.id, {
       displayName: profile.displayName,
-      avatarRevision: "1",
-      hasAvatar: false,
       updatedAt: now,
-    },
+    }),
     socket: {
       readyState: 1,
       bufferedAmount: 0,

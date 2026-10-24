@@ -8,12 +8,12 @@ import {
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { NodeRegistry } from "../../node-registry.js";
 import type { GatewayRequestOptions } from "../../server-methods/types.js";
+import { dispatchProfile } from "../client-fixtures.test-support.js";
 import type { GatewayWsClient } from "../ws-types.js";
 import { createRequestGate } from "./authenticated-request-dispatch.fixtures.test-support.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
-  dispatchProfile,
   requestFrame,
 } from "./authenticated-request-dispatch.test-support.js";
 

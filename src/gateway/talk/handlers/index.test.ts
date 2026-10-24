@@ -24,6 +24,7 @@ import type { RealtimeVoiceProviderResolveConfigContext } from "../../../talk/pr
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { resolveChatSendCallerContext } from "../../server-methods/gateway-client-identity.js";
 import type { GatewayClient, GatewayRequestHandlerOptions } from "../../server-methods/types.js";
+import { gatewayProfile } from "../../server/client-fixtures.test-support.js";
 import { bindSessionRowProjection } from "../../session-row-projection-access.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "../../test-helpers.rpc-source.js";
 import { prepareTalkSessionTarget } from "../session-target.js";
@@ -2559,12 +2560,7 @@ describe("talk.client.toolCall handler", () => {
     const client: GatewayClient = {
       connId,
       authenticatedUserId: "ada@example.test",
-      authenticatedUserProfile: {
-        profileId: "profile-ada",
-        displayName: "Ada",
-        hasAvatar: false,
-        updatedAt: 1,
-      },
+      authenticatedUserProfile: gatewayProfile("profile-ada", "Ada"),
       connect: {
         minProtocol: 1,
         maxProtocol: 1,
