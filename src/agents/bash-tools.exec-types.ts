@@ -21,11 +21,12 @@ import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/ty
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
 import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.types.js";
 
-type ExecProcessFailureKind =
+export type ExecProcessFailureKind =
   | "shell-command-not-found"
   | "shell-not-executable"
   | "overall-timeout"
   | "no-output-timeout"
+  | "memory-limit"
   | "signal"
   | "aborted"
   | "runtime-error";
