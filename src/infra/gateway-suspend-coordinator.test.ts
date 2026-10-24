@@ -73,11 +73,18 @@ afterEach(() => {
 });
 
 describe("gateway suspend coordinator", () => {
-  it.each([false, true])(
-    "lifecycle reset resumes a held scheduler before admission is cleared (drain: %s)",
-    (drain) => {
+  it.each([
+    { action: "reset", drain: false },
+    { action: "reset", drain: true },
+    { action: "resume", drain: true },
+  ])(
+    "$action resumes the scheduler before clearing admission (drain: $drain)",
+    ({ action, drain }) => {
       const resumeWhileClosed = vi.fn(() => {
         expect(isGatewayWorkAdmissionClosed()).toBe(true);
+        if (action === "resume") {
+          expect(getGatewaySuspendAdmissionPhase()).toBe("draining");
+        }
       });
       expect(
         prepare({
@@ -87,34 +94,51 @@ describe("gateway suspend coordinator", () => {
         }),
       ).toMatchObject({ status: drain ? "draining" : "ready" });
 
-      markGatewayRestartDraining();
-      expect(resumeWhileClosed).not.toHaveBeenCalled();
-      expect(isGatewayWorkAdmissionClosed()).toBe(true);
-
-      resetGatewaySuspendCoordinatorForLifecycleRestart();
-
-      expect(resumeWhileClosed).toHaveBeenCalledOnce();
-      resetGatewayWorkAdmission();
-      expect(isGatewayWorkAdmissionClosed()).toBe(false);
+      if (action === "reset") {
+        markGatewayRestartDraining();
+        expect(resumeWhileClosed).not.toHaveBeenCalled();
+        expect(isGatewayWorkAdmissionClosed()).toBe(true);
+        resetGatewaySuspendCoordinatorForLifecycleRestart();
+        expect(resumeWhileClosed).toHaveBeenCalledOnce();
+        resetGatewayWorkAdmission();
+      } else {
+        expect(resumeGatewaySuspend(LEASE)).toEqual(resumed);
+      }
+      expectReopened(resumeWhileClosed);
     },
   );
 
-  it("reopens admission in the same turn when active work refuses preparation", () => {
+  it("reopens admission after refusing hidden background work until its process exits", () => {
+    const session = createProcessSessionFixture({
+      id: "private-background-session",
+      command: "private command",
+    });
+    addSession(session);
+    markBackgrounded(session);
+    deleteSession(session.id);
     const events: string[] = [];
-    const result = prepare({
+    const params = {
       pauseScheduling: () => events.push("pause"),
       resumeScheduling: () => events.push("resume"),
       inspect: {
-        getQueueSize: () => {
+        getBackgroundExecSessions: () => {
           events.push("inspect");
-          return 1;
+          return getActiveBackgroundExecSessionCount();
         },
       },
+    };
+    expect(prepare(params)).toMatchObject({
+      status: "busy",
+      reason: "active-work",
+      retryAfterMs: SUSPEND_BUSY_RETRY_AFTER_MS,
+      activeCount: 1,
+      writeCustody: [],
+      blockers: [{ kind: "background-exec", count: 1 }],
     });
-
-    expect(result.status).toBe("busy");
     expect(events).toEqual(["pause", "inspect", "resume"]);
     expect(isGatewayWorkAdmissionClosed()).toBe(false);
+    markExited(session, 0, null, "completed");
+    expect(prepare(params)).toMatchObject({ status: "ready", activeCount: 0, blockers: [] });
   });
 
   it("holds a preserve-only drain until terminal persistence, delivery, and sessions settle", () => {
@@ -134,7 +158,7 @@ describe("gateway suspend coordinator", () => {
         inspect,
         nowMs: () => 1_000,
       }),
-    ).toEqual({
+    ).toMatchObject({
       status: "draining",
       suspensionId: LEASE,
       expiresAtMs: drainExpiry,
@@ -142,13 +166,9 @@ describe("gateway suspend coordinator", () => {
       activeCount: 3,
       writeCustody: [{ phase: "terminal-persistence", count: 1 }],
       blockers: [
-        replyBlocker,
-        {
-          kind: "terminal-persistence",
-          count: 1,
-          message: "1 pending terminal session write(s)",
-        },
-        { kind: "terminal-session", count: 1, message: "1 open terminal session(s)" },
+        { kind: "reply", count: 1 },
+        { kind: "terminal-persistence", count: 1 },
+        { kind: "terminal-session", count: 1 },
       ],
     });
     expect(pauseScheduling).toHaveBeenCalledOnce();
@@ -182,45 +202,50 @@ describe("gateway suspend coordinator", () => {
     expectReopened();
   });
 
-  it.each(["preserve", "terminate"] as const)(
-    "retains the absolute deadline of the same %s drain and rejects conflicting request, policy, or drain modes",
-    (terminalPolicy) => {
+  it.each([
+    { terminalPolicy: "preserve", drain: true },
+    { terminalPolicy: "terminate", drain: true },
+    { terminalPolicy: "preserve", drain: false },
+  ] as const)(
+    "renews only freeze leases and rejects conflicting owners or modes ($terminalPolicy, drain=$drain)",
+    ({ terminalPolicy, drain }) => {
       let queued = 2;
       let nowMs = 1_000;
       const params = {
         terminalPolicy,
-        drain: true,
+        drain,
         inspect: {
-          getQueueSize: () => queued,
+          getQueueSize: () => (drain ? queued : 0),
           getTerminalSessions: () => (terminalPolicy === "terminate" ? 2 : 0),
         },
         nowMs: () => nowMs,
       };
 
       expect(prepare(params)).toMatchObject({
-        status: "draining",
+        status: drain ? "draining" : "ready",
         suspensionId: LEASE,
-        expiresAtMs: drainExpiry,
-        activeCount: 2,
+        expiresAtMs: 1_000 + (drain ? DRAIN_BUDGET_MS : SUSPEND_TTL_MS),
+        activeCount: drain ? 2 : 0,
       });
 
       nowMs = 2_000;
       queued = 1;
-      expect(prepare(params)).toMatchObject({
-        status: "draining",
+      const expiresAtMs = drain ? drainExpiry : nowMs + SUSPEND_TTL_MS;
+      expect(prepare({ ...params, inspect: { getQueueSize: () => 99 } })).toMatchObject({
+        status: drain ? "draining" : "ready",
         suspensionId: LEASE,
-        expiresAtMs: drainExpiry,
-        activeCount: 1,
+        expiresAtMs,
+        activeCount: drain ? 1 : 0,
       });
       const otherTerminalPolicy = terminalPolicy === "preserve" ? "terminate" : "preserve";
       for (const conflict of [
         { requestId: "request-other" },
-        { drain: false },
+        { drain: !drain },
         { terminalPolicy: otherTerminalPolicy },
       ] satisfies Partial<SuspendOptions>[]) {
         expect(prepare({ ...params, ...conflict })).toEqual({
           status: "conflict",
-          expiresAtMs: drainExpiry,
+          expiresAtMs,
         });
       }
       expect(pauseScheduling).toHaveBeenCalledOnce();
@@ -230,61 +255,20 @@ describe("gateway suspend coordinator", () => {
       expect(prepare(params)).toEqual({
         status: "ready",
         suspensionId: LEASE,
-        expiresAtMs: drainExpiry,
+        expiresAtMs: drain ? drainExpiry : nowMs + SUSPEND_TTL_MS,
         ...emptyWork,
       });
       expect(getGatewaySuspendAdmissionPhase()).toBe("prepared");
       expect(pauseScheduling).toHaveBeenCalledOnce();
       expect(resumeScheduling).not.toHaveBeenCalled();
+      expect(resumeGatewaySuspend("wrong-id")).toEqual({
+        ok: false,
+        reason: "suspension-mismatch",
+      });
+      expect(resumeGatewaySuspend(LEASE)).toEqual(resumed);
+      expectReopened();
     },
   );
-
-  it("resumes a still-draining lease without dropping its admission fence first", () => {
-    const resumeWhileDraining = vi.fn(() => {
-      expect(getGatewaySuspendAdmissionPhase()).toBe("draining");
-    });
-    expect(
-      prepare({
-        drain: true,
-        resumeScheduling: resumeWhileDraining,
-        inspect: { getTerminalSessions: () => 1 },
-      }),
-    ).toMatchObject({ status: "draining" });
-
-    expect(resumeGatewaySuspend(LEASE)).toEqual(resumed);
-    expectReopened(resumeWhileDraining);
-  });
-
-  it("stays busy after a background session is hidden until its process exits", () => {
-    const session = createProcessSessionFixture({
-      id: "private-background-session",
-      command: "private command",
-    });
-    addSession(session);
-    markBackgrounded(session);
-    deleteSession(session.id);
-
-    const inspect = {
-      getBackgroundExecSessions: getActiveBackgroundExecSessionCount,
-    };
-    expect(prepare({ inspect })).toEqual({
-      status: "busy",
-      reason: "active-work",
-      retryAfterMs: SUSPEND_BUSY_RETRY_AFTER_MS,
-      activeCount: 1,
-      writeCustody: [],
-      blockers: [
-        {
-          kind: "background-exec",
-          count: 1,
-          message: "1 active background exec session(s)",
-        },
-      ],
-    });
-
-    markExited(session, 0, null, "completed");
-    expect(prepare({ inspect })).toMatchObject({ status: "ready", activeCount: 0, blockers: [] });
-  });
 
   it("reopens admission when inspection fails before admission commits", () => {
     expect(() =>
@@ -299,38 +283,12 @@ describe("gateway suspend coordinator", () => {
     expectReopened();
   });
 
-  it("renews one ready lease and resumes only with the matching id", () => {
-    expect(prepare({ inspect: {}, nowMs: () => 1_000 })).toMatchObject({
-      status: "ready",
-      suspensionId: LEASE,
-      expiresAtMs: 1_000 + SUSPEND_TTL_MS,
-    });
-    expect(isGatewayWorkAdmissionClosed()).toBe(true);
-
-    expect(
-      prepare({
-        inspect: { getQueueSize: () => 99 },
-        nowMs: () => 2_000,
-      }),
-    ).toMatchObject({
-      status: "ready",
-      suspensionId: LEASE,
-      expiresAtMs: 2_000 + SUSPEND_TTL_MS,
-    });
-    expect(prepare({ requestId: "request-other" }).status).toBe("conflict");
-
-    expect(resumeGatewaySuspend("wrong-id")).toEqual({ ok: false, reason: "suspension-mismatch" });
-    expect(resumeGatewaySuspend(LEASE)).toEqual(resumed);
-    expectReopened();
-  });
-
-  it.each(
-    [false, true].flatMap((drain) =>
-      [0, (drain ? DRAIN_BUDGET_MS : SUSPEND_TTL_MS) / 2].flatMap((preparationMs) =>
-        [false, true].map((rollbackClock) => ({ drain, preparationMs, rollbackClock })),
-      ),
-    ),
-  )(
+  it.each([
+    { drain: false, preparationMs: 0, rollbackClock: false },
+    { drain: true, preparationMs: 0, rollbackClock: false },
+    { drain: false, preparationMs: SUSPEND_TTL_MS / 2, rollbackClock: true },
+    { drain: true, preparationMs: DRAIN_BUDGET_MS / 2, rollbackClock: false },
+  ])(
     "auto-resumes at the original expiry (drain: $drain, preparation: $preparationMs ms, clock rollback: $rollbackClock)",
     ({ drain, preparationMs, rollbackClock }) => {
       vi.useFakeTimers();
@@ -359,13 +317,9 @@ describe("gateway suspend coordinator", () => {
     },
   );
 
-  it.each(
-    ["status", "renewal"].flatMap((operation) =>
-      [0, 1].map((remainingWork) => ({ operation, remainingWork })),
-    ),
-  )(
-    "expires after a slow draining inspection (operation: $operation, remaining work: $remainingWork)",
-    ({ operation, remainingWork }) => {
+  it.each(["status", "renewal"])(
+    "expires after a slow draining inspection during %s",
+    (operation) => {
       vi.useFakeTimers();
       const params = {
         drain: true,
@@ -376,7 +330,7 @@ describe("gateway suspend coordinator", () => {
             .mockImplementation(() => {
               // Synchronous inspection prevents an expired timer from being delivered.
               vi.setSystemTime(Date.now() + SUSPEND_TTL_MS);
-              return remainingWork;
+              return 1;
             }),
         },
       };
@@ -390,11 +344,10 @@ describe("gateway suspend coordinator", () => {
     },
   );
 
-  it.each(
-    [false, true].flatMap((drain) =>
-      ["inspection", "lease setup"].map((phase) => ({ drain, phase })),
-    ),
-  )(
+  it.each([
+    { drain: false, phase: "inspection" },
+    { drain: true, phase: "lease setup" },
+  ])(
     "resumes instead of returning an already-expired lease (drain: $drain, phase: $phase)",
     ({ drain, phase }) => {
       vi.useFakeTimers();

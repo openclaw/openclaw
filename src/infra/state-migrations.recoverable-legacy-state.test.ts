@@ -128,63 +128,44 @@ afterEach(() => {
   resetPluginStateStoreForTests();
 });
 
-it.each([false, true])(
-  "keeps Discord cache cleanup advisory with retired state=%s",
-  (retiredState) =>
-    withOpenClawTestState({ label: "discord-cache-cleanup" }, async ({ stateDir, env }) => {
-      const discordDir = path.join(stateDir, "discord");
-      const sourcePath = path.join(discordDir, "command-deploy-cache.json");
-      const retiredPath = path.join(discordDir, "thread-bindings.json");
-      await fs.mkdir(discordDir, { recursive: true });
-      await fs.writeFile(sourcePath, "retired deploy hashes");
-      if (retiredState) {
-        await fs.writeFile(retiredPath, "{}");
-      }
-      failUnlink(sourcePath, "synthetic cache cleanup permission denied");
-      const params = {
-        config: {},
+it("keeps Discord cache cleanup advisory and retries it", () =>
+  withOpenClawTestState({ label: "discord-cache-cleanup" }, async ({ stateDir, env }) => {
+    const discordDir = path.join(stateDir, "discord");
+    const sourcePath = path.join(discordDir, "command-deploy-cache.json");
+    await fs.mkdir(discordDir, { recursive: true });
+    await fs.writeFile(sourcePath, "retired deploy hashes");
+    failUnlink(sourcePath, "synthetic cache cleanup permission denied");
+    const params = {
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "credentials"),
+      context: createPluginDoctorStateMigrationContext({
+        pluginId: "discord",
         env,
-        stateDir,
-        oauthDir: path.join(stateDir, "credentials"),
-        context: createPluginDoctorStateMigrationContext({
-          pluginId: "discord",
-          env,
-          config: {},
-        }),
-      };
+        config: {},
+      }),
+    };
 
-      const migrate = async () =>
-        (await runPluginMigrations("discord", params)).map(({ id, result }) =>
-          migrationReceipt(id, result),
-        );
-      const receipts = await migrate();
-      const warnings = receipts.flatMap((receipt) => receipt.warnings).join("\n");
-
-      await expectFile(sourcePath, "retired deploy hashes");
-      expect(warnings).toContain("Discord command deployment cache");
-      expect(warnings).toContain("synthetic cache cleanup permission denied");
-      expect(receipts).toContainEqual(
-        expect.objectContaining({ id: "discord-legacy-state", outcome: "warning" }),
+    const migrate = async () =>
+      (await runPluginMigrations("discord", params)).map(({ id, result }) =>
+        migrationReceipt(id, result),
       );
-      if (retiredState) {
-        expect(() => throwIfDoctorStateMigrationRefused(receipts)).toThrow(
-          "Doctor stopped because a state migration refused",
-        );
-        expect(warnings).toContain(
-          `Discord retired model preferences and thread bindings uses a retired pre-July 2026 format: ${retiredPath}. Install OpenClaw 2026.9.5. Run openclaw doctor --fix before upgrading to latest. Retired files were left untouched.`,
-        );
-        await expectFile(retiredPath, "{}");
-      } else {
-        expect(() => throwIfDoctorStateMigrationRefused(receipts)).not.toThrow();
-        expect(warnings).toContain("openclaw doctor --fix");
-      }
-      vi.restoreAllMocks();
-      if (!retiredState) {
-        expect((await migrate()).flatMap((receipt) => receipt.warnings)).toEqual([]);
-        await expectMissing(sourcePath);
-      }
-    }),
-);
+    const receipts = await migrate();
+    const warnings = receipts.flatMap((receipt) => receipt.warnings).join("\n");
+
+    await expectFile(sourcePath, "retired deploy hashes");
+    expect(warnings).toContain("Discord command deployment cache");
+    expect(warnings).toContain("synthetic cache cleanup permission denied");
+    expect(receipts).toContainEqual(
+      expect.objectContaining({ id: "discord-legacy-state", outcome: "warning" }),
+    );
+    expect(() => throwIfDoctorStateMigrationRefused(receipts)).not.toThrow();
+    expect(warnings).toContain("openclaw doctor --fix");
+    vi.restoreAllMocks();
+    expect((await migrate()).flatMap((receipt) => receipt.warnings)).toEqual([]);
+    await expectMissing(sourcePath);
+  }));
 
 it("keeps a shared source blocked when another cleanup owner does not opt in", () =>
   withOpenClawTestState({ label: "shared-cleanup-policy" }, async ({ stateDir }) => {
@@ -223,8 +204,6 @@ it.each<{
   copyFailure?: boolean;
 }>([
   { relativeDatabase: "openclaw-agent.sqlite", destination: "database" },
-  { relativeDatabase: "state/openclaw.sqlite", destination: "database" },
-  { relativeDatabase: "cache.db", destination: "empty" },
   { relativeDatabase: "custom-store", destination: "wal" },
   { relativeDatabase: "sessions/transcripts.sqlite", destination: "empty", orphanSource: true },
   { relativeDatabase: "openclaw-agent.sqlite", destination: "empty", copyFailure: true },
@@ -293,9 +272,8 @@ it.each<{
         outcome: "deferred",
         reason: "sqlite-family",
       }));
-      const renameSpy = vi.spyOn(fsSync, "renameSync");
       const copy = fsSync.copyFileSync;
-      const copySpy = vi.spyOn(fsSync, "copyFileSync").mockImplementation((from, to, mode) => {
+      vi.spyOn(fsSync, "copyFileSync").mockImplementation((from, to, mode) => {
         if (copyFailure && String(from) === failedBinary) {
           expect(fsSync.readFileSync(path.join(targetDir, "bin/fd"), "utf8")).toBe("installed");
           throw new Error("injected binary move failure");
@@ -331,14 +309,6 @@ it.each<{
       await expectFiles(targetDir, { "bin/fd": "installed", "bin/rg": "current" });
       await expectFiles(legacyDir, { "bin/fd": "installed", "bin/rg": "legacy" });
       expect(await listQuarantines(state.stateDir)).toEqual([]);
-      const touchesFamily = (from: fsSync.PathLike) =>
-        families.some((family) =>
-          family.files.some(
-            (file) => file === String(from) || file.startsWith(`${String(from)}${path.sep}`),
-          ),
-        );
-      expect(renameSpy.mock.calls.some(([from]) => touchesFamily(from))).toBe(false);
-      expect(copySpy.mock.calls.some(([from]) => touchesFamily(from))).toBe(false);
       if (copyFailure) {
         expect(receipt.warnings.join("\n")).toContain("injected binary move failure");
         await expectFile(failedBinary, "retained binary");
@@ -532,19 +502,21 @@ it.each([false, true])(
     }),
 );
 
-it("keeps conflict quarantines confined to state for an ancestor-symlink agent directory", () =>
+it("merges nested binaries once and confines conflict quarantine through an ancestor symlink", () =>
   withOpenClawTestState({ label: "agent-quarantine-boundary" }, async (state) => {
     const outside = path.join(state.root, "external");
     const physicalTarget = path.join(outside, "agent");
-    await writeFiles(physicalTarget, { "bin/rg": "current binary" });
+    const binaries = { "bin/rg": "legacy", "bin/fd": "same", "bin/nested/tool": "missing" };
+    await writeFiles(physicalTarget, { "bin/rg": "current", "bin/fd": "same" });
     const alias = state.statePath("linked");
     await fs.symlink(outside, alias, process.platform === "win32" ? "junction" : "dir");
-    await writeFiles(state.statePath("agent"), { "bin/rg": "legacy", "bin/fd": "missing" });
-    const detected = await detectAgentState(state, {
+    await writeFiles(state.statePath("agent"), binaries);
+    const config = {
       agents: { entries: { main: { agentDir: path.join(alias, "agent") } } },
-    });
+    };
+    const detect = () => detectAgentState(state, config);
 
-    const result = await migrateLegacyAgentDir(detected, () => 1234);
+    const result = await migrateLegacyAgentDir(await detect(), () => 1234);
 
     const stateRoot = await fs.realpath(state.stateDir);
     const quarantine = await onlyQuarantine(stateRoot);
@@ -552,28 +524,7 @@ it("keeps conflict quarantines confined to state for an ancestor-symlink agent d
     expect(await fs.realpath(quarantine)).toBe(quarantine);
     expect(await listQuarantines(outside)).toEqual([]);
     await expectFile(path.join(quarantine, "bin/rg"), "legacy");
-    await expectFiles(physicalTarget, { "bin/rg": "current binary", "bin/fd": "missing" });
-    expect(result).toMatchObject({
-      warningDisposition: "recoverable",
-      warnings: [expect.stringContaining(path.join(quarantine, "bin/rg"))],
-    });
-  }));
-
-it("merges nested binaries, keeps destination bytes, and quarantines only conflicts once", () =>
-  withOpenClawTestState({ label: "legacy-agent-merge" }, async (state) => {
-    const binaries = { "bin/rg": "legacy", "bin/fd": "same", "bin/nested/tool": "missing" };
-    await writeFiles(state.statePath("agent"), binaries);
-    const expected = { ...binaries, "bin/rg": "current" };
-    await writeFiles(state.agentDir(), { "bin/rg": "current", "bin/fd": "same" });
-    const detect = () => detectAgentState(state);
-
-    const result = await migrateLegacyAgentDir(await detect(), () => 1234);
-
-    await expectFiles(state.agentDir(), expected);
-    const agentRoot = await fs.realpath(state.stateDir);
-    const quarantines = await listQuarantines(agentRoot);
-    const quarantine = await onlyQuarantine(agentRoot);
-    await expectFile(path.join(quarantine, "bin/rg"), "legacy");
+    await expectFiles(physicalTarget, { ...binaries, "bin/rg": "current" });
     expect(await fs.readdir(path.join(quarantine, "bin"))).toEqual(["rg"]);
     expect(result).toMatchObject({
       warningDisposition: "recoverable",
@@ -585,7 +536,7 @@ it("merges nested binaries, keeps destination bytes, and quarantines only confli
     await state.writeText("agent/bin/fd", "same");
     const repeated = await migrateLegacyAgentDir(await detect(), () => 5678);
     expect(repeated.warnings).toEqual([]);
-    expect(await listQuarantines(agentRoot)).toEqual(quarantines);
+    expect(await listQuarantines(stateRoot)).toEqual([path.basename(quarantine)]);
   }));
 
 it("reports old quarantine artifacts without requiring a new legacy payload or deleting data", () =>

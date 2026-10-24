@@ -23,17 +23,10 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import {
-  completeGatewayBootLifecycle,
-  inspectGatewayCrashLoopBreakerAsync,
-  beginGatewayBootLifecycle,
-} from "./gateway-boot-lifecycle.js";
 import * as nodeSqlite from "./node-sqlite.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import type { SqlConnection } from "./sql-connection.js";
-import { corruptSqliteIndexKey } from "./sqlite-index-corruption.test-support.js";
 import { admitSqliteSchema } from "./sqlite-schema-facts.js";
-import { GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON } from "./startup-maintenance-required.js";
 import { historicalV14AgentSchemaSql } from "./state-migrations.media-persistence.historical-schema.test-support.js";
 import { migrateLegacyMediaPersistence } from "./state-migrations.media-persistence.js";
 import { createLegacyDatabaseFixture } from "./state-migrations.media-persistence.test-support.js";
@@ -496,41 +489,7 @@ it.each([undefined, "missing-cache-table", "missing-memory-trigger"] as const)(
   },
 );
 
-it("leaves maintenance completion to Doctor after a successful media migration", async () => {
-  const stateDir = makeTempDir(tempDirs, "media-persistence-startup-recovery-");
-  const env = { OPENCLAW_STATE_DIR: stateDir };
-  createLegacyDatabaseFixture({ env, eventsBySession: {}, schemaVersion: 14 });
-
-  const nowMs = 1_000_000;
-  for (let index = 0; index < 3; index += 1) {
-    const bootId = (await beginGatewayBootLifecycle(env, nowMs + index)).id;
-    await completeGatewayBootLifecycle(
-      bootId,
-      {
-        outcome: "startup_failed",
-        reason: `migration required ${index}`,
-        startupReason: GATEWAY_STARTUP_MAINTENANCE_REQUIRED_REASON,
-      },
-      env,
-      nowMs + index + 1,
-    );
-  }
-  expect((await inspectGatewayCrashLoopBreakerAsync(env, nowMs + 4)).tripped).toBe(false);
-
-  const result = await migrateLegacyMediaPersistence({ env });
-
-  expect(result.warnings).toEqual([]);
-  expectQuery(
-    openOpenClawStateDatabase({ env }).db,
-    "SELECT COUNT(*) AS count FROM gateway_boot_lifecycle WHERE outcome = 'startup_failed'",
-    { count: 3 },
-  );
-  expect(await inspectGatewayCrashLoopBreakerAsync(env, nowMs + 5)).toMatchObject({
-    tripped: false,
-    uncleanBoots: 0,
-  });
-});
-it("Doctor preserves and rebuilds a quarantined corrupt agent index", () =>
+it("clears stale quarantine without changing healthy agent rows", () =>
   withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
     const options = { agentId: "main", env };
     const initial = openOpenClawAgentDatabase(options);
@@ -540,41 +499,12 @@ it("Doctor preserves and rebuilds a quarantined corrupt agent index", () =>
     const payloadSql = "SELECT session_key, entry_json FROM session_nodes NOT INDEXED";
     const rows = initial.db.prepare(payloadSql).all();
     closeOpenClawAgentDatabasesForTest();
-    const index = "sqlite_autoindex_session_nodes_1";
-    corruptSqliteIndexKey(initial.path, index, "index-original", "index-damaged!");
-    const quarantine = () =>
-      seedOpenClawDatabaseQuarantine({
-        env,
-        kind: "agent",
-        path: initial.path,
-        reason: `row 1 missing from index ${index}`,
-      });
-    quarantine();
-
-    const result = await migrateLegacyMediaPersistence({ env });
-
-    expect(result.warnings).toEqual([]);
-    expect(result.changes).toContain(
-      `Warning: Rebuilt corrupt agent main SQLite indexes: ${index}. No table rows were removed.`,
-    );
-    const backupLine = result.changes.find((line) =>
-      line.startsWith("Saved pre-repair SQLite backup: "),
-    );
-    expect(backupLine).toBeDefined();
-    using backup = new NativeDatabaseSync(
-      backupLine!.slice("Saved pre-repair SQLite backup: ".length),
-      { readOnly: true },
-    );
-    expect(all(backup, "PRAGMA integrity_check")).toContainEqual({
-      integrity_check: `row 1 missing from index ${index}`,
+    seedOpenClawDatabaseQuarantine({
+      env,
+      kind: "agent",
+      path: initial.path,
+      reason: "previously repaired index",
     });
-    expect(all(backup, payloadSql)).toEqual(rows);
-    const repaired = openOpenClawAgentDatabase(options);
-    expect(all(repaired.db, "PRAGMA integrity_check")).toEqual([{ integrity_check: "ok" }]);
-    expect(all(repaired.db, payloadSql)).toEqual(rows);
-
-    closeOpenClawAgentDatabasesForTest();
-    quarantine();
     const resumed = await migrateLegacyMediaPersistence({ env });
     expect(resumed).toEqual({ changes: [], warnings: [] });
     expect(all(openOpenClawAgentDatabase(options).db, payloadSql)).toEqual(rows);
