@@ -562,6 +562,9 @@ function coerceJsoncLeaf(valueText: string, existing: JsoncValue): JsoncValue | 
     return { kind: "string", value: valueText, ...lineExt };
   }
   if (existing.kind === "number") {
+    if (valueText.trim() === "") {
+      return null;
+    }
     const n = Number(valueText);
     return Number.isFinite(n) ? { kind: "number", value: n, ...lineExt } : null;
   }

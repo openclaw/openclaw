@@ -104,9 +104,25 @@ describe("setOcPath", () => {
     expect(JSON.parse(edit(ast, "oc://config/k", "false").raw)).toEqual({ k: false });
   });
 
-  it("rejects non-numeric string for number leaf", () => {
-    const ast = parseJsonc('{ "k": 1 }');
-    expectEditError(ast, "oc://config/k", "not-a-number", "parse-error");
+  it.each(["jsonc", "jsonl"])("rejects non-numeric strings for a %s number leaf", (kind) => {
+    const raw = '{"k":1}\n';
+    const ast = kind === "jsonc" ? parseJsonc(raw) : parseJsonl(raw);
+    const uri = kind === "jsonc" ? "oc://config/k" : "oc://log/L1/k";
+    for (const value of ["not-a-number", "", " \t\r\n "]) {
+      expectEditError(ast, uri, value, "parse-error");
+      expect(ast.raw).toBe(raw);
+    }
+  });
+
+  it.each([
+    { value: "0", expected: 0 },
+    { value: "1e2", expected: 100 },
+    { value: "0x10", expected: 16 },
+    { value: "1.", expected: 1 },
+    { value: " 2 ", expected: 2 },
+  ])("coerces nonblank numeric input $value", ({ value, expected }) => {
+    const ast = parseJsonc('{"k":3}');
+    expect(JSON.parse(edit(ast, "oc://config/k", value).raw)).toEqual({ k: expected });
   });
 
   it("rejects non-bool string for boolean leaf", () => {
