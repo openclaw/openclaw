@@ -1,6 +1,7 @@
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-entry-contract";
 import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
+import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 import { ZaloCredentialPersistence } from "./credential-persistence.js";
-import { zalouserSessionStore } from "./runtime.js";
 import type { ZaloGroupContext } from "./types.js";
 import type { API } from "./zca-client.js";
 
@@ -24,7 +25,21 @@ type ActiveZaloListener = {
   stop: () => void;
 };
 
-export type ZaloSessionState = ReturnType<typeof createZaloSessionState>;
+type ZaloSessionState = ReturnType<typeof createZaloSessionState>;
+
+// Bundled modules survive replacement; the SDK slot follows the invoking instance,
+// while direct standalone calls keep their existing process-local session lifetime.
+const zalouserSessionStore = createPluginRuntimeStore<ZaloSessionState>({
+  key: "zalouser:sessions",
+  errorMessage: "Zalouser sessions not initialized",
+});
+
+export function registerZalouserRuntimeLifecycle(api: OpenClawPluginApi): void {
+  api.lifecycle.onDispose?.(() => {
+    zalouserSessionStore.tryGetRuntime()?.dispose();
+    zalouserSessionStore.clearRuntime();
+  });
+}
 
 function createZaloSessionState() {
   const apiByProfile = new Map<string, API>();

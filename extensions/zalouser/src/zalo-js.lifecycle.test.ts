@@ -27,7 +27,10 @@ const saveCredentialsMock = vi.hoisted(() =>
 );
 // Only authentication/storage I/O is replaced. Registration, scoped runtime slots,
 // channel call admission, cache reads, and instance retirement are production code.
-vi.mock("./zca-client.js", () => ({ createZalo: createZaloMock }));
+vi.mock("./zca-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./zca-client.js")>()),
+  createZalo: createZaloMock,
+}));
 vi.mock("./session-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./session-state.js")>()),
   loadStoredZaloCredentials: async (profile: string) => ({

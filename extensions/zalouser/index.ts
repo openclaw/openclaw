@@ -3,7 +3,7 @@ import {
   defineBundledChannelEntry,
   loadBundledEntryExportSync,
 } from "openclaw/plugin-sdk/channel-entry-contract";
-import { registerZalouserRuntimeLifecycle } from "./src/runtime.js";
+import { registerZalouserRuntimeLifecycle } from "./src/session-runtime.js";
 
 function createZalouserTool(context?: unknown): AnyAgentTool {
   const createTool = loadBundledEntryExportSync<(context?: unknown) => AnyAgentTool>(
