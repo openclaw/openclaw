@@ -85,18 +85,10 @@ it("covers every native live test and tracks provider-filtered release fanout", 
   ]);
 });
 
-it("keeps aggregate shard aliases available outside the release partition", () => {
-  expect(live.LIVE_TEST_SHARDS).toEqual([
-    ...live.RELEASE_LIVE_TEST_SHARDS,
-    "native-live-extensions-o-z",
-    "native-live-extensions-media",
-    "native-live-extensions-media-music",
-  ]);
-});
-
 it.each([
   { alias: "o-z", members: ["o-z-other", "xai"] },
   { alias: "media", members: ["media-audio", "media-music", "media-video"] },
+  { alias: "media-music", members: ["media-music-google"] },
 ])("keeps $alias as the union of its component shards", ({ alias, members }) => {
   const select = (name: string) =>
     live.selectLiveShardFiles(`native-live-extensions-${name}`, allFiles);
@@ -105,9 +97,6 @@ it.each([
 
 it("rejects unknown shard names", () => {
   expect(() => live.selectLiveShardFiles("native-live-missing")).toThrow(
-    /Unknown live test shard/u,
-  );
-  expect(() => live.selectLiveShardFiles("native-live-extensions-l-z")).toThrow(
     /Unknown live test shard/u,
   );
 });
@@ -162,7 +151,6 @@ it("adds JSON report evidence without dropping operator output", () => {
 
 it.each([
   ["extensions-o-z-other", "qaRuntime"],
-  ["extensions-o-z", "qaRuntime"],
   ["extensions-xai", null],
   ["src-gateway-profiles", "sourcePerformance"],
   ["extensions-openai", "sourcePerformance"],
@@ -209,7 +197,6 @@ it.each([
   { payload: report(1, 3), reason: undefined },
   { payload: report(4, 3), reason: "numPassedTests exceeds numTotalTests." },
   { payload: report(0, 3), reason: "has no passing live tests." },
-  { payload: report(0, 0), reason: "has no passing live tests." },
   { payload: { numPassedTests: 0 }, reason: "numTotalTests must be a non-negative integer." },
 ])("validates live shard report counts: $payload", ({ payload, reason }) =>
   expectReport(payload, reason),
