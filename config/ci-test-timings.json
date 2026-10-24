@@ -3658,7 +3658,6 @@
       "ui/src/e2e/new-session-page.prompt-attachments.e2e.test.ts": 26,
       "ui/src/e2e/new-session-page.provisional-navigation.e2e.test.ts": 2,
       "ui/src/e2e/new-session-page.responsive-welcome.e2e.test.ts": 11,
-      "ui/src/e2e/new-session-page.saved-split.e2e.test.ts": 5,
       "ui/src/e2e/new-session-page.title.e2e.test.ts": 9,
       "ui/src/e2e/new-session-page.transition-cancel.e2e.test.ts": 3,
       "ui/src/e2e/new-session-page.transition.e2e.test.ts": 68,
