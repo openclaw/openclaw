@@ -151,6 +151,7 @@ export async function runEmbeddedAttemptExecutionPhase(
   const preparedStream = prepareEmbeddedAttemptStream({
     attempt,
     agentSession: sessionRuntime.agentSession,
+    getUserTranscriptContexts: sessionRuntime.boundary.getUserTranscriptContexts,
     onModelUsage,
     applyPermissionMode: input.lifecycle.applyPermissionMode,
     runAbortController: input.runAbortController,

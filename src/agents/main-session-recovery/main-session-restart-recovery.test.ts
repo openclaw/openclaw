@@ -20,6 +20,11 @@ import {
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { resolveReplyRunDeliveryContext } from "../../auto-reply/reply/agent-runner-core.js";
 import { markInboundContextLabel } from "../../auto-reply/reply/inbound-context-marker.js";
+import {
+  buildRecoverablePendingFinalDeliveryText,
+  normalizePendingFinalRecoveryPayloads,
+} from "../../auto-reply/reply/pending-final-delivery.js";
+import { applyReplyThreading } from "../../auto-reply/reply/reply-payloads-base.js";
 import { createReplyRestartRecoveryClaimController } from "../../auto-reply/reply/restart-recovery-claim.js";
 import { createReplyRecoveryActorFixture } from "../../auto-reply/reply/restart-recovery-claim.test-support.js";
 import type { ChannelOutboundAdapter } from "../../channels/plugins/types.public.js";
@@ -130,6 +135,7 @@ import { withEnvAsync } from "../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { buildCurrentRunRestartRecoveryClaim } from "../agent-command-restart-recovery.js";
 import { deliverAgentCommandResult } from "../command/delivery.js";
+import { withAssistantReplySource } from "../embedded-agent-reply-source.js";
 import type { EmbeddedAgentQueueHandle } from "../embedded-agent-runner/runs.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
@@ -177,6 +183,7 @@ import {
   commitMainSessionRecovery,
 } from "./main-session-recovery-store.js";
 import { dispatchRestartRecoveryUntilStarted } from "./main-session-restart-dispatch-start.js";
+import { pendingFinalRecoveryAction } from "./main-session-restart-recovery-delivery.js";
 import { readStartupRecoveryWarning } from "./main-session-restart-recovery-diagnostics.js";
 import {
   createRestartRecoveryStoreFixture,
@@ -2261,6 +2268,33 @@ describe("main-session-restart-recovery", () => {
 
     expect(result).toEqual(recoveryCounts({ started: 1 }));
     expect(gatewayParams().deliver).toBe(false);
+  });
+
+  it("retries a persisted implicit-source final before transport enqueue", async () => {
+    try {
+      const finals = applyReplyThreading({
+        payloads: [withAssistantReplySource({ text: "Replayable answer" }, "101")],
+        replyToMode: "all",
+        replyToChannel: "telegram",
+        currentMessageId: "103",
+      });
+      const text = buildRecoverablePendingFinalDeliveryText(
+        normalizePendingFinalRecoveryPayloads(finals),
+      );
+      expect(text).toBe("Replayable answer");
+      const { storePath, sessionKey } = await makeMainSessionFixture({
+        pendingFinalDelivery: makePendingFinalDelivery(text, {
+          context: { channel: "telegram", to: "telegram:fixture" },
+        }),
+      });
+      const entries = await readSessionEntrySummariesInWorker({ storePath, agentId: "main" });
+      const reloaded = entries.find((entry) => entry.sessionKey === sessionKey)?.entry;
+      const pending = expectDefined(reloaded?.pendingFinalDelivery, "stored pending final");
+      expect(pending).toMatchObject({ kind: "replayable", text: "Replayable answer" });
+      expect(await pendingFinalRecoveryAction(pending, tmpDir)).toBe("retry");
+    } finally {
+      closeOpenClawStateDatabaseForTest();
+    }
   });
 
   it("resumes safely when pending final delivery identities are missing", async () => {

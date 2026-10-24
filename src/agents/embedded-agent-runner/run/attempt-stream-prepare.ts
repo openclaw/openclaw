@@ -104,6 +104,9 @@ type PrepareEmbeddedAttemptStreamInput = {
     revokeApprovals: () => void,
   ) => Promise<void>;
   onModelUsage?: Parameters<typeof subscribeEmbeddedAgentSession>[0]["onModelUsage"];
+  getUserTranscriptContexts?: Parameters<
+    typeof subscribeEmbeddedAgentSession
+  >[0]["getUserTranscriptContexts"];
   runtimeChannel?: string;
   hookAgentId: string;
   diagnosticTrace: DiagnosticTraceContext;
@@ -349,6 +352,7 @@ function prepareStream(
     ...attempt,
     ...agentSession,
     session: activeSession,
+    getUserTranscriptContexts: input.getUserTranscriptContexts,
     onModelUsage: input.onModelUsage,
     messageChannel: input.runtimeChannel,
     hookRunner: getGlobalHookRunner() ?? undefined,
