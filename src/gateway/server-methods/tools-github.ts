@@ -19,6 +19,8 @@ import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
+import { formatErrorMessage } from "../../infra/errors.js";
+import { logWarn } from "../../logger.js";
 import { capturePluginLifecycleAuthority } from "../../plugins/registry-lifecycle.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-state.js";
@@ -225,7 +227,8 @@ export const toolsGitHubHandlers: GatewayRequestHandlers = {
             selectedScope: params.scope,
           }),
         );
-      } catch {
+      } catch (error) {
+        logWarn(`tools-github: GitHub identity setup failed: ${formatErrorMessage(error)}`);
         respond(
           false,
           undefined,

@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { GitHubCliUnavailableError } from "../github-cli-preflight.js";
 import { toolsGitHubHandlers } from "./tools-github.js";
 
@@ -12,6 +13,7 @@ const github = vi.hoisted(() => ({
   updateConfig: vi.fn(),
 }));
 const secrets = vi.hoisted(() => ({ consumeHandoff: vi.fn() }));
+const logger = vi.hoisted(() => ({ logWarn: vi.fn() }));
 const oauth = {
   startAuthorization: vi.fn(),
   pollAuthorization: vi.fn(),
@@ -32,6 +34,10 @@ vi.mock("../github-tool-identity-config.js", () => ({
 }));
 vi.mock("../../secrets/store/secret-store.js", () => ({
   consumeGitHubSetupHandoff: secrets.consumeHandoff,
+}));
+vi.mock("../../logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../logger.js")>()),
+  logWarn: logger.logWarn,
 }));
 vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../agents/agent-scope.js")>()),
@@ -344,6 +350,28 @@ describe("tools.github handlers", () => {
 
     expect(github.install).not.toHaveBeenCalled();
     expect(respond.mock.calls[0]?.[0]).toBe(false);
+  });
+
+  it("logs the unavailable-handoff cause while retaining the generic response", async () => {
+    secrets.consumeHandoff.mockImplementation(() => {
+      throw new Error("setup handoff expired before use");
+    });
+
+    const respond = await invoke("tools.github.configure", {
+      scope: "system",
+      agentId: "main",
+      mode: "managed",
+      secretName: "github-setup-55555555555555555555555555555555",
+    });
+
+    expect(logger.logWarn).toHaveBeenCalledWith(
+      "tools-github: GitHub identity setup failed: setup handoff expired before use",
+    );
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      errorShape(ErrorCodes.UNAVAILABLE, "GitHub identity setup failed"),
+    );
   });
 
   it("consumes the setup handoff before gh validation can fail", async () => {
