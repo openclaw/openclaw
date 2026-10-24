@@ -17,8 +17,8 @@ The Node override is required for Playwright. After disposing the rendered
 select, two explicit collections must release both it and its form; a separate
 unowned object checks that collection actually ran.
 The second probe disposes an unobserved pending computation with no subsequent
-reactive work. Its payload and root must collect while the scheduler is idle;
-calling `flush()` from the test would conceal the dependency bug.
+reactive work. Its payload and root must collect while the scheduler is idle. An explicit
+`flush()` is a no-op when no work is scheduled.
 
 ```sh
 pnpm ui:build
