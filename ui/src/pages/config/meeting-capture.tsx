@@ -47,7 +47,6 @@ export function MeetingCaptureSettings(props: SettingsProps) {
     client,
     pending,
     read: readStatus,
-    scopeKey,
     requestKey,
     result,
     refresh: refreshStatus,
@@ -222,7 +221,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
     // A pending health refresh retains the last status from the current connection.
     // Only the original request owner can seed an editor's validation rules.
     const currentResult = result();
-    return currentResult?.isCurrent() ? currentResult.status : null;
+    return client() && currentResult?.isCurrent() ? currentResult.status : null;
   }
   const captureStatus = createMemo(() => (client() && !pending() ? knownCaptureStatus() : null));
   function SourceEditor(editorProps: { index: number | "new" }) {
@@ -496,13 +495,7 @@ export function MeetingCaptureSettings(props: SettingsProps) {
                 description={t("meetingCapture.libraryHint")}
                 onClick={() => context.navigate("meetings")}
               />
-              <Errored fallback={(_error) => <CaptureSummary status={null} />}>
-                <Loading on={scopeKey()} fallback={<CaptureSummary status={null} />}>
-                  <Show when={client() && readStatus()} fallback={<CaptureSummary status={null} />}>
-                    {(current) => <CaptureSummary status={current().status} />}
-                  </Show>
-                </Loading>
-              </Errored>
+              <CaptureSummary status={knownCaptureStatus()} />
               <SettingsRow
                 title={t("meetingCapture.health")}
                 control={
@@ -571,54 +564,52 @@ export function MeetingCaptureSettings(props: SettingsProps) {
           <Show when={editing() !== null ? { index: editing() } : undefined} keyed>
             {(selection) => <SourceEditor index={selection.index!} />}
           </Show>
-          <Show when={knownCaptureStatus()}>
-            {(currentStatus) => (
-              <>
-                {!currentStatus().providers.some(supportsAutoStartSetup) ? (
-                  <SettingsEmpty message={t("meetingCapture.noAutoStartProviders")} />
-                ) : undefined}
-                {currentStatus().configuredSources.length ? (
-                  <SettingsSection
-                    title={t("meetingCapture.sourceHealth")}
-                    description={t("meetingCapture.armedHint")}
-                  >
-                    <For each={currentStatus().configuredSources} keyed={false}>
-                      {(item) => (
-                        <SettingsRow
-                          title={item().title ?? item().source.providerId}
-                          description={[
-                            ...TRANSCRIPT_SOURCE_LOCATOR_FIELDS.map((key) => item().source[key]),
-                            item().startDiagnostic
-                              ? t(`meetingCapture.startDiagnostics.${item().startDiagnostic}`)
-                              : undefined,
-                          ]
-                            .filter(Boolean)
-                            .join(" · ")}
-                          control={
-                            <SettingsStatus
-                              kind={"muted"}
-                              label={t(`meetingCapture.states.${item().state}`)}
-                            />
-                          }
-                        />
-                      )}
-                    </For>
-                  </SettingsSection>
-                ) : undefined}
-                {Object.values(currentStatus().omitted).some((count) => count > 0) ? (
-                  <p class="settings-page__intro">
-                    {t("meetingCapture.omitted", {
-                      count: String(
-                        Object.values(currentStatus().omitted).reduce(
-                          (sum, count) => sum + count,
-                          0,
-                        ),
+          <Show when={Boolean(knownCaptureStatus())}>
+            <>
+              {!knownCaptureStatus()?.providers.some(supportsAutoStartSetup) ? (
+                <SettingsEmpty message={t("meetingCapture.noAutoStartProviders")} />
+              ) : undefined}
+              {knownCaptureStatus()?.configuredSources.length ? (
+                <SettingsSection
+                  title={t("meetingCapture.sourceHealth")}
+                  description={t("meetingCapture.armedHint")}
+                >
+                  <For each={knownCaptureStatus()?.configuredSources ?? []} keyed={false}>
+                    {(item) => (
+                      <SettingsRow
+                        title={item().title ?? item().source.providerId}
+                        description={[
+                          ...TRANSCRIPT_SOURCE_LOCATOR_FIELDS.map((key) => item().source[key]),
+                          item().startDiagnostic
+                            ? t(`meetingCapture.startDiagnostics.${item().startDiagnostic}`)
+                            : undefined,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ")}
+                        control={
+                          <SettingsStatus
+                            kind={"muted"}
+                            label={t(`meetingCapture.states.${item().state}`)}
+                          />
+                        }
+                      />
+                    )}
+                  </For>
+                </SettingsSection>
+              ) : undefined}
+              {Object.values(knownCaptureStatus()?.omitted ?? {}).some((count) => count > 0) ? (
+                <p class="settings-page__intro">
+                  {t("meetingCapture.omitted", {
+                    count: String(
+                      Object.values(knownCaptureStatus()?.omitted ?? {}).reduce(
+                        (sum, count) => sum + count,
+                        0,
                       ),
-                    })}
-                  </p>
-                ) : undefined}
-              </>
-            )}
+                    ),
+                  })}
+                </p>
+              ) : undefined}
+            </>
           </Show>
           <p class="settings-page__intro">{t("meetingCapture.safetyHint")}</p>
           <p class="settings-page__intro">{t("meetingCapture.durationHint")}</p>

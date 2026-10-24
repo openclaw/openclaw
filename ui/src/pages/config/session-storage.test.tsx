@@ -60,7 +60,10 @@ async function mount(initialInventory = inventory(7)) {
     };
   const client = { request } as unknown as GatewayBrowserClient;
   const mounted = await mountConfigSettings(client, () => <SessionStorageSettings />);
-  const hotTranscripts = initialInventory.agents.reduce((sum, agent) => sum + agent.hotTranscripts, 0);
+  const hotTranscripts = initialInventory.agents.reduce(
+    (sum, agent) => sum + agent.hotTranscripts,
+    0,
+  );
   await waitText(mounted.page, `${hotTranscripts} uncompressed`);
   return { ...mounted, request, respond, reply };
 }
@@ -87,7 +90,9 @@ it("retains expanded agent inventory rows across refreshes and updates reordered
   const rows = [...disclosure.querySelectorAll(".settings-row")];
   expect(rows).toHaveLength(2);
 
-  request.mockImplementation(reply("sessions.storage.status", async () => structuredClone(initial)));
+  request.mockImplementation(
+    reply("sessions.storage.status", async () => structuredClone(initial)),
+  );
   click(page, "Refresh");
   await waitForSolid(() => expect(button(page, "Refresh").disabled).toBe(false));
   expect(rows.filter((row) => !page.contains(row))).toHaveLength(0);

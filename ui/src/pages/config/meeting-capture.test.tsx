@@ -955,7 +955,7 @@ describe("curated meeting capture", () => {
       await pending;
       return meetingStatus;
     });
-    click(page, "Refresh");
+    const refresh = click(page, "Refresh");
     await waitForSolid(() => expect(page.textContent).toContain("Loading"));
     expect(page.querySelector<HTMLInputElement>('input[name="accountId"]')?.value).toBe(
       "new-account",
@@ -963,7 +963,7 @@ describe("curated meeting capture", () => {
     page.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
     expect(runtimeConfig.state.configFormDirty).toBe(false);
     finish();
-    await waitForSolid(() => expect(page.textContent).toContain("Not active"));
+    await waitForSolid(() => expect(refresh.disabled).toBe(false));
     expect(page.querySelector<HTMLInputElement>('input[name="accountId"]')?.value).toBe(
       "new-account",
     );
