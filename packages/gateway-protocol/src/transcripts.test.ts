@@ -1,10 +1,10 @@
+import { Check } from "typebox/schema";
 import { describe, expect, it } from "vitest";
 import {
   transcriptGetFixture,
   transcriptListFixture,
   transcriptStatusFixture,
 } from "../../../src/transcripts/library.test-support.js";
-import { lazyCompile } from "./protocol-validator.js";
 import {
   TranscriptsGetResultSchema,
   TranscriptsListResultSchema,
@@ -17,7 +17,7 @@ import {
   validateTranscriptsStatusParams,
 } from "./validator-registry.js";
 
-const validateStatus = lazyCompile(TranscriptsStatusResultSchema);
+const validateStatus = (value: unknown) => Check(TranscriptsStatusResultSchema, value);
 const sourceRow = { source: { providerId: "fixture" }, state: "not-active", activeSelectors: [] };
 const withSources = (configuredSources: unknown[]) => ({
   ...transcriptStatusFixture,
@@ -51,10 +51,10 @@ describe("transcript UI wire contracts", () => {
     }
   });
   it("validates shared UI fixture responses against the canonical wire schemas", () => {
-    expect(lazyCompile(TranscriptsListResultSchema)(transcriptListFixture)).toBe(true);
-    expect(lazyCompile(TranscriptsGetResultSchema)(transcriptGetFixture)).toBe(true);
+    expect(Check(TranscriptsListResultSchema, transcriptListFixture)).toBe(true);
+    expect(Check(TranscriptsGetResultSchema, transcriptGetFixture)).toBe(true);
     expect(validateStatus(transcriptStatusFixture)).toBe(true);
-    const validateGet = lazyCompile(TranscriptsGetResultSchema);
+    const validateGet = (value: unknown) => Check(TranscriptsGetResultSchema, value);
     const utterances = Array.from({ length: 2000 }, (_, sequence) => ({
       sequence,
       text: "speech",

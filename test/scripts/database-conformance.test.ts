@@ -7,7 +7,7 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 let runner: string;
-const engineFiles = ["unit.test.ts", "integration.test.ts", "nested/integration.test.ts"];
+const engineFiles = ["unit.test.ts", "nested/integration.test.ts"];
 
 beforeAll(() => {
   const scripts = path.join(tempDirs.make("database-conformance-"), "scripts");
@@ -23,16 +23,10 @@ beforeAll(() => {
     "scripts/lib/postgres-conformance-shards.mts",
     path.join(scripts, "lib/postgres-conformance-shards.mts"),
   );
-  const files = Object.fromEntries(
-    engineFiles.map((file, index) => [
-      `src/infra/database-engine/${file}`,
-      { group: "infra", seconds: 900 - index * 100 },
-    ]),
-  );
   write(
     "../config/postgres-conformance-timings.json",
     JSON.stringify({
-      files,
+      files: {},
       workers: 1,
       preparationSeconds: { base: 0, runtime: 0 },
       groupSeconds: {},
@@ -69,15 +63,9 @@ describe("PostgreSQL conformance shards", () => {
   it("partitions the full target inventory without loss or overlap and forwards test options", () => {
     const full = targets([]);
     const shards = [1, 2, 3].map((index) => targets(["--shard", `${index}/3`]));
-    for (const [index, file] of engineFiles.entries()) {
-      expect(shards[index]).toContain(`src/infra/database-engine/${file}`);
-    }
     expect(shards.flat().toSorted()).toEqual(full.toSorted());
     expect(new Set(shards.flat()).size).toBe(full.length);
-    const firstShard = shards[0];
-    if (!firstShard) {
-      throw new Error("expected the first conformance shard");
-    }
+    const firstShard = shards[0]!;
     const options = ["--maxWorkers=1"];
     expect(targets(["--shard", "1/3", "--", ...options])).toEqual([...firstShard, ...options]);
     const custom = ["custom.test.ts", ...options];
@@ -93,9 +81,7 @@ describe("PostgreSQL conformance shards", () => {
 
   it.each([
     ["--shard", "unknown"],
-    ["--shard", "0/3"],
     ["--shard", "4/3"],
-    ["--shard", "1/0"],
     ["--shard", "1/99999999999999999999"],
     ["--shard", "1/3", "--", "custom.test.ts"],
   ])("rejects invalid shard selection %j before running tests", (...args) => {

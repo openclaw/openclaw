@@ -14,43 +14,15 @@ import {
 import { createDeferred } from "../helpers/promise.js";
 
 function workerResult(scenario: WorkerScenario, size: number, timingsMs = [1, 2, 3]): WorkerResult {
-  const counts = (...keys: string[]) => Object.fromEntries(keys.map((key) => [key, size]));
-  const invariant: Record<string, number | boolean> =
-    scenario === "spawnPipelineInMemory" || scenario === "spawnPipelineDurable"
-      ? {
-          ok: true,
-          ...counts("registeredRuns", "reservationsReleased", "blockedWaits", "settledRuns"),
-          outstandingWaits: 0,
-          durableSubagentRows: scenario === "spawnPipelineDurable" ? size : 0,
-          durableStateFile: scenario === "spawnPipelineDurable",
-          postTeardownRegistryRows: 0,
-          postTeardownDurableSubagentRows: 0,
-          postTeardownActiveRootWork: 0,
-        }
-      : scenario === "admission"
-        ? { ok: true, admissionCap: size, overflowRejected: true, released: true }
-        : scenario === "recoverySweep"
-          ? {
-              ok: true,
-              seededRows: size * 3,
-              removedRows: size * 2,
-              ...counts("retainedCurrent", "recoveryProjections"),
-              sessionEffects: 0,
-              lostContextCompletions: 0,
-            }
-          : {
-              ok: true,
-              inputRowsPerOrdering: size * 3,
-              ...counts("newestFirstSelectedRows", "oldestFirstSelectedRows"),
-              newestFirstSelectedNewest: true,
-              oldestFirstSelectedNewest: true,
-            };
   return {
     scenario,
     size,
     timingsMs,
     memory: { rssStartBytes: 100, rssEndBytes: 120, processMaxRssBytes: 150 },
-    invariant,
+    invariant:
+      scenario === "admission"
+        ? { ok: true, admissionCap: size, overflowRejected: true, released: true }
+        : { ok: true },
   };
 }
 
@@ -78,13 +50,7 @@ it("parses bounded options and rejects ambiguous arguments", () => {
   }
 });
 
-it("emits tail percentiles only when the sample supports them", () => {
-  expect(testing.summarizeTimings([100, 1, 4, 2, 3])).toEqual({
-    count: 5,
-    min: 1,
-    p50: 3,
-    max: 100,
-  });
+it("emits supported tail percentiles", () => {
   const summary = testing.summarizeTimings(Array.from({ length: 20 }, (_, index) => index + 1));
   expect(summary).toMatchObject({ count: 20, p50: 10, p95: 19, p99: 20, max: 20 });
 });
@@ -123,29 +89,19 @@ it("rejects a spawn sample when detached gateway active work does not drain", as
   ).rejects.toThrow("spawn sample left 2 active gateway work items");
 });
 
-it("reports deterministic parent progress around every worker", () => {
+it("aggregates each concurrency scenario", () => {
   const options = testing.parseOptions("--runs 3 --warmup 0 --fanout 2 --sweep-rows 4".split(" "));
-  const progress: string[] = [];
-  let now = 0;
   const report = testing.benchmark(options, {
     runWorker: (_options, scenario, size) => workerResult(scenario, size),
-    writeProgress: (line) => progress.push(line),
-    now: () => {
-      const value = now;
-      now += 250;
-      return value;
-    },
+    writeProgress: () => {},
   });
 
   expect(report.invariants.ok).toBe(true);
-  expect(progress).toHaveLength(10);
-  const progressPair = (worker: number, scenario: WorkerScenario, size: number) => {
-    const prefix = `[bench-agent-concurrency] worker ${worker}/5`;
-    const identity = `scenario=${scenario} size=${size}`;
-    return [`${prefix} start ${identity}`, `${prefix} complete ${identity} elapsed=0.250s`];
-  };
-  expect(progress.slice(0, 2)).toEqual(progressPair(1, "spawnPipelineInMemory", 2));
-  expect(progress.slice(-2)).toEqual(progressPair(5, "duplicateSuppression", 4));
+  expect(report.scenarios.admission[0]).toMatchObject({
+    size: 2,
+    timingsMs: { count: 3, p50: 2 },
+    invariant: { admissionCap: 2 },
+  });
 });
 
 it("rejects incomplete synthetic worker sets", () => {

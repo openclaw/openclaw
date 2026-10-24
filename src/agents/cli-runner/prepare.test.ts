@@ -316,6 +316,20 @@ function createArgBackendConfig(
   return { command, args, output, input: "arg", sessionMode: "existing" };
 }
 
+function createNativeArgMcpBackend(): CliBackendPlugin & { pluginId: string } {
+  return {
+    id: "native-cli",
+    pluginId: "native-plugin",
+    bundleMcp: true,
+    bundleMcpMode: "claude-config-file",
+    config: {
+      ...createArgBackendConfig("native-cli"),
+      systemPromptArg: "--system-prompt",
+      systemPromptWhen: "first",
+    },
+  };
+}
+
 type CliContextBudgetTestCase = {
   name: string;
   provider: string;
@@ -2283,17 +2297,7 @@ describe("prepareCliRunContext", () => {
       getActiveMcpLoopbackRuntime,
       resolveMcpLoopbackScopedTools,
     });
-    setRawCliBackendForPrepareTest({
-      id: "native-cli",
-      pluginId: "native-plugin",
-      bundleMcp: true,
-      bundleMcpMode: "claude-config-file",
-      config: {
-        ...createArgBackendConfig("native-cli"),
-        systemPromptArg: "--system-prompt",
-        systemPromptWhen: "first",
-      },
-    });
+    setRawCliBackendForPrepareTest(createNativeArgMcpBackend());
     const cliSessionBindingFacts = {
       extraSystemPromptStatic: "group:telegram:group:message_tool_only",
       sourceReplyDeliveryMode: "message_tool_only" as const,
@@ -2489,17 +2493,7 @@ describe("prepareCliRunContext", () => {
       revokeMcpLoopbackClientGrant,
       resolveMcpLoopbackScopedTools,
     });
-    setRawCliBackendForPrepareTest({
-      id: "native-cli",
-      pluginId: "native-plugin",
-      bundleMcp: true,
-      bundleMcpMode: "claude-config-file",
-      config: {
-        ...createArgBackendConfig("native-cli"),
-        systemPromptArg: "--system-prompt",
-        systemPromptWhen: "first",
-      },
-    });
+    setRawCliBackendForPrepareTest(createNativeArgMcpBackend());
     const baselineContext = await fixture.prepare({
       sessionKey: "main",
       agentId: "worker",
@@ -2611,17 +2605,7 @@ describe("prepareCliRunContext", () => {
       createMcpLoopbackServerConfig,
       resolveMcpLoopbackScopedTools,
     });
-    setRawCliBackendForPrepareTest({
-      id: "native-cli",
-      pluginId: "native-plugin",
-      bundleMcp: true,
-      bundleMcpMode: "claude-config-file",
-      config: {
-        ...createArgBackendConfig("native-cli"),
-        systemPromptArg: "--system-prompt",
-        systemPromptWhen: "first",
-      },
-    });
+    setRawCliBackendForPrepareTest(createNativeArgMcpBackend());
     await expect(
       fixture.prepare({
         sessionKey: "agent:main:test",

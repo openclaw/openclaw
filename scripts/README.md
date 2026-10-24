@@ -267,6 +267,21 @@ it. The complete semantic program is preserved on cache misses.
 
 ## Maintenance Rules
 
+Fixed validators are emitted from their canonical schemas. Gateway, Control UI,
+Codex, and plugin generators share the standalone TypeBox emitter in
+`lib/typebox-standalone.mts`; it binds explicit static captures and rejects
+unsupported ones.
+
+| Schemas                                                     | Regenerate                             |
+| ----------------------------------------------------------- | -------------------------------------- |
+| Gateway protocol                                            | `pnpm gateway:validators:gen`          |
+| Control UI protocol                                         | `pnpm ui:validators:gen`               |
+| Codex app-server protocol                                   | `pnpm codex-app-server:validators:gen` |
+| Model registry, theme, TypeSafe, and computer-use contracts | `pnpm static:validators:gen`           |
+
+Run `pnpm validators:check` after schema changes to verify the committed
+validators are current. CI runs this freshness check alongside the normal build.
+
 - Read `scripts/AGENTS.md` before changing scripts.
 - Keep package scripts, generators, generated-artifact checks, docs references,
   and workflow references aligned when touching a script path.

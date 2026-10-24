@@ -3,7 +3,6 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { encodePngRgba, fillPixel } from "openclaw/plugin-sdk/media-runtime";
 import type { OpenClawPluginToolFactory } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
@@ -22,6 +21,7 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { isBillingErrorMessage } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
+import { createReferencePng as createSyntheticPng } from "../test-support/generation-live-test-helpers.js";
 import { createCodeExecutionTool } from "./code-execution.js";
 import plugin from "./index.js";
 
@@ -47,44 +47,17 @@ function createLiveConfig(): OpenClawConfig {
 }
 
 function createReferencePng(): Buffer {
-  const width = 96;
-  const height = 96;
-  const buf = Buffer.alloc(width * height * 4, 255);
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      fillPixel(buf, x, y, width, 230, 244, 255, 255);
-    }
-  }
-
-  for (let y = 24; y < 72; y += 1) {
-    for (let x = 24; x < 72; x += 1) {
-      fillPixel(buf, x, y, width, 255, 153, 51, 255);
-    }
-  }
-
-  return encodePngRgba(buf, width, height);
+  return createSyntheticPng(96, 96, (x, y) =>
+    x >= 24 && x < 72 && y >= 24 && y < 72 ? [255, 153, 51, 255] : [230, 244, 255, 255],
+  );
 }
 
 function createVideoReferencePng(): Buffer {
-  const width = 384;
-  const height = 384;
-  const buf = Buffer.alloc(width * height * 4, 255);
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const blue = Math.round(160 + (80 * y) / height);
-      fillPixel(buf, x, y, width, 32, 96, blue, 255);
-    }
-  }
-
-  for (let y = 112; y < 272; y += 1) {
-    for (let x = 112; x < 272; x += 1) {
-      fillPixel(buf, x, y, width, 255, 153, 51, 255);
-    }
-  }
-
-  return encodePngRgba(buf, width, height);
+  return createSyntheticPng(384, 384, (x, y) =>
+    x >= 112 && x < 272 && y >= 112 && y < 272
+      ? [255, 153, 51, 255]
+      : [32, 96, Math.round(160 + (80 * y) / 384), 255],
+  );
 }
 
 async function createTempAgentDir(): Promise<string> {

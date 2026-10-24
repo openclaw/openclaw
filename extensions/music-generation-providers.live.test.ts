@@ -23,8 +23,6 @@ import {
 import { collectProviderApiKeys, getShellEnvAppliedKeys } from "openclaw/plugin-sdk/test-live-auth";
 import {
   DEFAULT_LIVE_MUSIC_MODELS,
-  encodePngRgba,
-  fillPixel,
   parseCsvFilter,
   parseProviderModelMap,
   redactLiveApiKey,
@@ -36,7 +34,10 @@ import falPlugin from "./fal/index.js";
 import googlePlugin from "./google/index.js";
 import minimaxPlugin from "./minimax/index.js";
 import openrouterPlugin from "./openrouter/index.js";
-import { maybeLoadShellEnvForGenerationProviders } from "./test-support/generation-live-test-helpers.js";
+import {
+  createReferencePng,
+  maybeLoadShellEnvForGenerationProviders,
+} from "./test-support/generation-live-test-helpers.js";
 
 const LIVE = isLiveTestEnabled();
 const REQUIRE_PROFILE_KEYS =
@@ -92,29 +93,12 @@ function withPluginsEnabled(cfg: OpenClawConfig): OpenClawConfig {
 }
 
 function createEditReferencePng(): Buffer {
-  const width = 192;
-  const height = 192;
-  const buf = Buffer.alloc(width * height * 4, 255);
-
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      fillPixel(buf, x, y, width, 250, 246, 240, 255);
+  return createReferencePng(192, 192, (x, y) => {
+    if (x >= 48 && x < 144 && y >= 48 && y < 144) {
+      return [34, 40, 49, 255];
     }
-  }
-
-  for (let y = 24; y < 168; y += 1) {
-    for (let x = 24; x < 168; x += 1) {
-      fillPixel(buf, x, y, width, 255, 143, 77, 255);
-    }
-  }
-
-  for (let y = 48; y < 144; y += 1) {
-    for (let x = 48; x < 144; x += 1) {
-      fillPixel(buf, x, y, width, 34, 40, 49, 255);
-    }
-  }
-
-  return encodePngRgba(buf, width, height);
+    return x >= 24 && x < 168 && y >= 24 && y < 168 ? [255, 143, 77, 255] : [250, 246, 240, 255];
+  });
 }
 
 function resolveProviderModelForLiveTest(providerId: string, modelRef: string): string {

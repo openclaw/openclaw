@@ -9,7 +9,6 @@ import { expect, vi } from "vitest";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import { withAdminIngress } from "../../channels/message-access/operator-authority.test-support.js";
 import {
-  loadSessionEntry,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
@@ -47,8 +46,8 @@ import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
 import { handlePluginCommand } from "./commands-plugin.js";
+import { createPersistedPluginCommandParams } from "./commands-plugin.test-support.js";
 import type { HandleCommandsParams } from "./commands-types.js";
-import { buildCommandTestParams } from "./commands.test-harness.js";
 import { runWithCommandNativeSubagents } from "./dispatch-native-subagent.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 export const pluginId = "command-controller";
@@ -269,30 +268,7 @@ export async function withCommandPlugin(
       },
     );
     await state.writeConfig(cfg);
-    const params = (body = "/review-panel") => {
-      const value = buildCommandTestParams(
-        body,
-        cfg,
-        {
-          ...inbound,
-          Body: body,
-          CommandBody: body,
-          RawBody: body,
-          // The fixture ingress was created with plain text; project this as the
-          // authenticated command turn, as real command dispatch does.
-          CommandAuthorized: true,
-          CommandTurn: undefined,
-        },
-        { workspaceDir: state.workspaceDir },
-      );
-      value.sessionKey = sessionKey;
-      value.storePath = storePath;
-      value.sessionEntry = expectDefined(
-        loadSessionEntry({ agentId: "main", sessionKey, storePath }),
-        "persisted command requester",
-      );
-      return value;
-    };
+    const params = createPersistedPluginCommandParams(cfg, inbound, state, sessionKey, storePath);
     const transcriptContents = async (role: "user" | "assistant") => {
       const events = await loadTranscriptEvents({
         agentId: "main",

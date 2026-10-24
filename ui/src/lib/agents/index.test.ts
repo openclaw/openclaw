@@ -2,10 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { ApplicationGatewayPhase } from "../../app/gateway.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { createGatewayHarness } from "../sessions/session-capability.test-support.ts";
 import { createSessionState } from "../sessions/session-capability.ts";
 import { agentCreationRejection } from "./creation.test-support.ts";
 import {
@@ -18,31 +18,6 @@ import { setDefaultAgent } from "./mutations.ts";
 type AgentsConfigCapability = Parameters<typeof setDefaultAgent>[0];
 
 type TestRequest = (method: string, payload?: unknown) => Promise<unknown>;
-
-function createGatewayHarness(client: GatewayBrowserClient) {
-  let snapshot: { client: GatewayBrowserClient | null; phase: ApplicationGatewayPhase } = {
-    client,
-    phase: "connected",
-  };
-  const listeners = new Set<(next: typeof snapshot) => void>();
-  return {
-    gateway: {
-      get snapshot() {
-        return snapshot;
-      },
-      subscribe(listener: (next: typeof snapshot) => void) {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    },
-    publish(connected: boolean, nextClient = client) {
-      snapshot = { client: nextClient, phase: connected ? "connected" : "reconnecting" };
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
-    },
-  };
-}
 
 function createToolsState(): Parameters<typeof buildToolsEffectiveRequestKey>[0] {
   return {

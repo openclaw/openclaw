@@ -52,6 +52,13 @@ hook handling, and transcript provenance. Constructed messages are persisted
 through the existing scoped transcript APIs; the shared projection helpers do
 not own storage.
 
+The adapter validates native responses with checks and diagnostic schemas generated
+from the pinned app-server schemas. This removes runtime schema compilation and
+normalization while preserving invalid-response diagnostics. Protocol sync regenerates both outputs.
+For validator-only changes, run
+`pnpm codex-app-server:validators:gen` and verify with
+`pnpm codex-app-server:validators:check` without running Codex.
+
 Run tool summaries retain explicit native-tool failures recorded before execution,
 including malformed patches and workspace refusals. A successful retry leaves the
 earlier failure in the count. Code Mode wrapper output does not add another count
