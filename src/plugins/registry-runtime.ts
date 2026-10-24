@@ -631,6 +631,7 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
         }
         const subagent: PluginRuntime["subagent"] = getRuntimeProperty();
         const native = subagent.native;
+        const list = native?.list;
         return {
           ...(native
             ? {
@@ -649,6 +650,17 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                         () => native.collect(params),
                       ),
                     ),
+                  ...(list
+                    ? {
+                        list: (params) =>
+                          runWithPluginScope(() =>
+                            withNativeSubagentRuntimeGuard(
+                              { pluginId, assertCurrent: assertNativeRuntimeCurrent },
+                              () => list(params),
+                            ),
+                          ),
+                      }
+                    : {}),
                 },
               }
             : {}),
