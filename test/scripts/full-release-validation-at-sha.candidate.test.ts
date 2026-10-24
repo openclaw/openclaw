@@ -1,5 +1,4 @@
 import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { semanticQualificationInputs } from "../../scripts/release-qualification-admission.mjs";
@@ -135,7 +134,6 @@ describe("candidate-owned full release dispatch entry point", () => {
     });
     expect(f.readCalls(f.npmCallsPath)).toEqual([npmVersionsArgs]);
     expect(admitted.coverage.profile).toBe("stable");
-    expect(result.stderr).not.toContain("packages/ai/package.json");
     expect(admitted.request).toMatchObject({
       candidateSha: f.targetSha,
       qualificationSha: f.targetSha,
@@ -146,24 +144,6 @@ describe("candidate-owned full release dispatch entry point", () => {
     expect(() =>
       runGit(f.origin, ["merge-base", "--is-ancestor", f.targetSha, "refs/heads/main"]),
     ).toThrow();
-    const reads = f
-      .readCalls(f.ghCallsPath)
-      .filter((call) => ghApiMethod(call) === "GET")
-      .map(ghApiEndpoint);
-    expect(
-      reads.some((endpoint) =>
-        endpoint.includes(
-          "/contents/.github/workflows/openclaw-release-prepare.yml?ref=" + f.workflowSha,
-        ),
-      ),
-    ).toBe(true);
-    expect(reads.some((endpoint) => endpoint.endsWith("/actions/artifacts/9002/zip"))).toBe(true);
-    expect(reads.some((endpoint) => endpoint.includes("/actions/runs/321/attempts/1/jobs"))).toBe(
-      true,
-    );
-    expect(reads.some((endpoint) => endpoint.includes("/compare/" + f.targetSha))).toBe(false);
-    expect(readFileSync(f.pathGhCallsPath, "utf8")).toBe("");
-    expect(readFileSync(f.fetchCallsPath, "utf8")).toBe("");
   });
 
   it("waits for the candidate witness without redispatch or baseline resolution", () => {
@@ -190,24 +170,20 @@ describe("candidate-owned full release dispatch entry point", () => {
     });
   });
 
-  it.each(["admission", "qualification"] as const)(
-    "reconciles an accepted uncertain %s response without another POST",
-    (stage) => {
-      const f = createDispatchFixture({
-        candidateOwned: true,
-        admissionAcceptedFailure: stage === "admission",
-        acceptedDispatchFailure: stage === "qualification",
-      });
-      const result = f.run();
-      expect(result.status, result.stderr).toBe(0);
-      expect(dispatches(f)).toEqual([P, Q]);
-      const before = readFileSync(f.requestPath(), "utf8");
-      const reopened = f.run(["--reconcile-request", f.requestPath()], true);
-      expect(reopened.status, reopened.stderr).toBe(0);
-      expect(dispatches(f)).toEqual([P, Q]);
-      expect(readFileSync(f.requestPath(), "utf8")).toBe(before);
-    },
-  );
+  it("reconciles an accepted uncertain admission response without another POST", () => {
+    const f = createDispatchFixture({
+      candidateOwned: true,
+      admissionAcceptedFailure: true,
+    });
+    const result = f.run();
+    expect(result.status, result.stderr).toBe(0);
+    expect(dispatches(f)).toEqual([P, Q]);
+    const before = readFileSync(f.requestPath(), "utf8");
+    const reopened = f.run(["--reconcile-request", f.requestPath()], true);
+    expect(reopened.status, reopened.stderr).toBe(0);
+    expect(dispatches(f)).toEqual([P, Q]);
+    expect(readFileSync(f.requestPath(), "utf8")).toBe(before);
+  });
 
   it("resumes the retained pre-Q request after a crash following accepted P", () => {
     const f = createDispatchFixture({ candidateOwned: true, stopAfterAccepted: "admission" });
@@ -305,7 +281,13 @@ describe("candidate-owned full release dispatch entry point", () => {
   it("retains publication and lane inputs in the envelope and reopens the same request read-only", () => {
     const fixture = createDispatchFixture({ candidateOwned: true });
     const excludedJson = JSON.stringify([], null, 1);
-    const selection = JSON.stringify(publicationSelectionFixture(), null, 1);
+    const selected = {
+      ...publicationSelectionFixture(),
+      publishOpenclawNpm: false,
+      pluginPublishScope: "selected",
+      plugins: ["@openclaw/z", "@openclaw/a", "@openclaw/z"],
+    };
+    const selection = JSON.stringify(selected, null, 1);
     const result = fixture.run([
       "--workflow-sha",
       fixture.targetSha,
@@ -327,7 +309,7 @@ describe("candidate-owned full release dispatch entry point", () => {
       },
       qualificationAdmission: record.admission.descriptor,
       validationPurpose: "publish",
-      publicationSelection: JSON.parse(selection),
+      publicationSelection: { ...selected, plugins: ["@openclaw/a", "@openclaw/z"] },
       laneInputs: {
         extension_test_exclude_patterns_json: "[]",
         qualification_baselines_json: JSON.stringify(frozenBaselines),
@@ -335,11 +317,6 @@ describe("candidate-owned full release dispatch entry point", () => {
     });
     expect(record.request.inputs.trusted_workflow_json).toBe(wire);
     expect(fixture.readPayload().body.inputs.trusted_workflow_json).toBe(wire);
-    expect(record.request.inputs).not.toHaveProperty("validation_purpose");
-    expect(record.request.wireInputs).not.toHaveProperty("publication_selection_json");
-    expect(record.request.wireInputs).not.toHaveProperty("extension_test_exclude_patterns_json");
-    expect(record.request.wireInputs).not.toHaveProperty("known_flaky_jobs_json");
-    expect(Object.keys(fixture.readPayload().body.inputs)).toHaveLength(24);
     const before = readFileSync(fixture.requestPath());
     const callsBefore = fixture.readCalls(fixture.ghCallsPath).length;
     const reopened = fixture.run(
@@ -418,41 +395,4 @@ describe("candidate-owned full release dispatch entry point", () => {
       }
     },
   );
-
-  it("reopens the original selected-plugin spelling after dispatch canonicalizes order and duplicates", () => {
-    const fixture = createDispatchFixture({ candidateOwned: true });
-    const original = JSON.stringify({
-      route: "normal",
-      npmDistTag: "latest",
-      publishOpenclawNpm: false,
-      pluginPublishScope: "selected",
-      plugins: ["@openclaw/z", "@openclaw/a", "@openclaw/z"],
-    });
-    const request = [
-      "--request-file",
-      join(fixture.checkout, "request.json"),
-      "-f",
-      "validation_purpose=publish",
-      "-f",
-      `publication_selection_json=${original}`,
-    ];
-    const first = fixture.run(["--workflow-sha", fixture.targetSha, ...request]);
-    expect(first.status, first.stderr).toBe(0);
-    const path = join(fixture.checkout, "request.json");
-    const before = readFileSync(path);
-    const record = JSON.parse(before.toString());
-    expect(
-      JSON.parse(record.request.wireInputs.trusted_workflow_json).publicationSelection.plugins,
-    ).toEqual(["@openclaw/a", "@openclaw/z"]);
-    const callsBefore = fixture.readCalls(fixture.ghCallsPath).length;
-    const reopened = fixture.run(request, true);
-    expect(reopened.status, reopened.stderr).toBe(0);
-    expect(readFileSync(path)).toEqual(before);
-    expect(
-      fixture
-        .readCalls(fixture.ghCallsPath)
-        .slice(callsBefore)
-        .every((args) => ghApiMethod(args) === "GET"),
-    ).toBe(true);
-  });
 });

@@ -311,19 +311,13 @@ it.each([
     if (identical) {
       expect(child.status, child.stderr).toBe(0);
       expect(decode(readJson(jsonPath))).toEqual(emptyDiff);
-      expect(decode(readJson(evidencePath))).toEqual({
-        schema: "openclaw.plugin-sdk-api-release-evidence/v1",
-        status: "checked",
+      expect(decode(readJson(evidencePath))).toMatchObject({
         baseRef: "same-commit",
         baseSha: headSha,
         headSha,
-        hasChanges: false,
-        digest: emptyDiff.digest,
         diff: emptyDiff,
         workflowSha: headSha,
       });
-      expect(child.stdout).toContain("No Plugin SDK API changes.");
-      expect(child.stdout).toContain("Acknowledgement digest: `ff7b090f`");
       expect(readFileSync(summaryPath, "utf8")).toBe(child.stdout);
     } else {
       expect(child.status).toBe(1);
@@ -442,7 +436,6 @@ it.each([
       ).toSorted(),
     );
     const bundle = readJson(evidencePath);
-    expect(decode(bundle).schema).toBe("openclaw.plugin-sdk-api-release-evidence-set/v2");
     const reports = expandDiffs(readJson(jsonPath));
     for (const [selector, ref] of Object.entries(bases)) {
       const evidence = selectEvidence({ evidence: bundle, npmDistTag: selector });

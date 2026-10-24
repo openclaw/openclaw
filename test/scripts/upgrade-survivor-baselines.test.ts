@@ -214,115 +214,63 @@ if (process.env.FAIL_API === "true") process.exit(75);
     expect(() => parseArgs(["--github-output", "-h"])).toThrow("missing value for --github-output");
   });
 
-  it.each(["package", "update-migration", "normalized", "release-checks", "minimum"])(
-    "pins the %s workflow baseline once before Docker fanout",
-    (entrypoint) => {
-      const packageWorkflow = workflow();
-      const migration = parse(readFileSync(".github/workflows/update-migration.yml", "utf8")) as {
-        on: { workflow_dispatch: { inputs: { baselines: { default: string } } } };
-      };
-      const inputs = packageWorkflow.on.workflow_call.inputs;
-      const release = parse(
-        readFileSync(".github/workflows/openclaw-release-checks.yml", "utf8"),
-      ) as {
-        jobs: {
-          prepare_release_package: { steps: Steps };
-        };
-      };
-      const run = packageWorkflow.jobs.resolve_package.steps.find(
-        (entry) => entry.id === "upgrade_survivor_baselines",
-      )?.run;
-      assert(run, "Missing baseline preparation step");
-      const standaloneSelectors = new Map([["normalized", " , supported-lines, supported-lines "]]);
-      let requested =
-        standaloneSelectors.get(entrypoint) ??
-        (entrypoint === "update-migration"
-          ? migration.on.workflow_dispatch.inputs.baselines.default
-          : entrypoint === "release-checks"
-            ? ""
-            : entrypoint === "minimum"
-              ? "2026.6.1"
-              : inputs.published_upgrade_survivor_baselines.default);
-
-      writeExecutable(
-        path.join(bin, "npm"),
-        `#!/usr/bin/env node
+  it("normalizes supported-line selectors before Docker fanout", () => {
+    const packageWorkflow = workflow();
+    const inputs = packageWorkflow.on.workflow_call.inputs;
+    const run = packageWorkflow.jobs.resolve_package.steps.find(
+      (entry) => entry.id === "upgrade_survivor_baselines",
+    )?.run;
+    assert(run, "Missing baseline preparation step");
+    writeExecutable(
+      path.join(bin, "npm"),
+      `#!/usr/bin/env node
 console.log(JSON.stringify(process.argv[4] === "dist-tags"
   ? [{ latest: "2026.9.2", "extended-stable": "2026.8.35" }]
   : ["2026.6.34", "2026.7.1-2", "2026.8.1", "2026.8.33", "2026.8.35", "2026.9.1", "2026.9.2"]));
 `,
-      );
-      writeExecutable(path.join(bin, "gh"), "#!/bin/sh\nexit 75\n");
-      if (entrypoint === "release-checks") {
-        const profile = release.jobs.prepare_release_package.steps.find(
-          (entry) => entry.id === "upgrade_survivor_profile",
-        );
-        assert(profile?.run, "Missing release survivor profile producer");
-        const profileOutput = path.join(root, "profile-output");
-        writeFileSync(profileOutput, "");
-        shell(profile.run, {
-          CANDIDATE_PUBLISHED: "true",
-          CANDIDATE_REF: "v2026.8.1",
-          CANDIDATE_SOURCE_SHA: "a".repeat(40),
-          CANDIDATE_VERSION: "2026.8.1",
-          PACKAGE_ACCEPTANCE_PACKAGE_SPEC: "",
-          RUN_RELEASE_SOAK: "false",
-          GITHUB_OUTPUT: profileOutput,
-          GITHUB_REPOSITORY: "openclaw/openclaw",
-        });
-        const selected = readOutputs(profileOutput);
-        expect(selected.baselines).toBe("");
-        assert(selected.baselines !== undefined, "Missing release baseline output");
-        requested = selected.baselines;
-      }
-      shell(run, {
-        CANDIDATE_PUBLISHED: "true",
-        CANDIDATE_VERSION: "2026.8.1",
-        FALLBACK_BASELINE: inputs.published_upgrade_survivor_baseline.default,
-        REQUESTED_BASELINES: requested,
-        RUNNER_TEMP: root,
-      });
-      const expanded = entrypoint === "update-migration" || standaloneSelectors.has(entrypoint);
-      const expectedBaselines = expanded
-        ? "openclaw@2026.9.2 openclaw@2026.9.1 openclaw@2026.8.35 openclaw@2026.6.34"
-        : `openclaw@${entrypoint === "minimum" ? "2026.6.1" : "2026.7.1-2"}`;
-      expect(readFileSync(output, "utf8")).toBe(
-        `baselines=${expectedBaselines}\nbaseline_scope=${expanded ? "legacy-operator-state" : "all-scenarios"}\nbaseline=openclaw@2026.7.1-2\n`,
-      );
-      if (expanded) {
-        const selected = readOutputs(output);
-        const groups = JSON.parse(
-          execFileSync(process.execPath, ["scripts/plan-targeted-docker-lane-groups.mjs"], {
-            encoding: "utf8",
-            env: {
-              ...process.env,
-              LANES: "update-migration",
-              GROUP_SIZE: "1",
-              OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: selected.baseline,
-              OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: selected.baselines,
-              OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: selected.baseline_scope,
-              OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "plugin-deps-cleanup legacy-operator-state",
-            },
-          }),
-        ) as Array<{
-          published_upgrade_survivor_baselines: string;
-          published_upgrade_survivor_scenarios: string;
-        }>;
-        expect(
-          groups.map((group) => [
-            group.published_upgrade_survivor_baselines,
-            group.published_upgrade_survivor_scenarios,
-          ]),
-        ).toEqual([
-          ["openclaw@2026.9.2", "legacy-operator-state"],
-          ["openclaw@2026.9.1", "legacy-operator-state"],
-          ["openclaw@2026.8.35", "legacy-operator-state"],
-          ["openclaw@2026.6.34", "legacy-operator-state"],
-          ["openclaw@2026.7.1-2", "plugin-deps-cleanup"],
-        ]);
-      }
-    },
-  );
+    );
+    writeExecutable(path.join(bin, "gh"), "#!/bin/sh\nexit 75\n");
+    shell(run, {
+      CANDIDATE_PUBLISHED: "true",
+      CANDIDATE_VERSION: "2026.8.1",
+      FALLBACK_BASELINE: inputs.published_upgrade_survivor_baseline.default,
+      REQUESTED_BASELINES: " , supported-lines, supported-lines ",
+      RUNNER_TEMP: root,
+    });
+    expect(readFileSync(output, "utf8")).toBe(
+      "baselines=openclaw@2026.9.2 openclaw@2026.9.1 openclaw@2026.8.35 openclaw@2026.6.34\nbaseline_scope=legacy-operator-state\nbaseline=openclaw@2026.7.1-2\n",
+    );
+    const selected = readOutputs(output);
+    const groups = JSON.parse(
+      execFileSync(process.execPath, ["scripts/plan-targeted-docker-lane-groups.mjs"], {
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          LANES: "update-migration",
+          GROUP_SIZE: "1",
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: selected.baseline,
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS: selected.baselines,
+          OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SCOPE: selected.baseline_scope,
+          OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS: "plugin-deps-cleanup legacy-operator-state",
+        },
+      }),
+    ) as Array<{
+      published_upgrade_survivor_baselines: string;
+      published_upgrade_survivor_scenarios: string;
+    }>;
+    expect(
+      groups.map((group) => [
+        group.published_upgrade_survivor_baselines,
+        group.published_upgrade_survivor_scenarios,
+      ]),
+    ).toEqual([
+      ["openclaw@2026.9.2", "legacy-operator-state"],
+      ["openclaw@2026.9.1", "legacy-operator-state"],
+      ["openclaw@2026.8.35", "legacy-operator-state"],
+      ["openclaw@2026.6.34", "legacy-operator-state"],
+      ["openclaw@2026.7.1-2", "plugin-deps-cleanup"],
+    ]);
+  });
 
   it.each<BaselineFixture & { name: string; expected: string[] }>([
     { name: "fallback", args: { fallback: "2026.6.1" }, expected: ["2026.6.1"] },

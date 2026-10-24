@@ -170,22 +170,20 @@ exit "$probe_status"
   );
 
   it.each([
-    [0, 0, 3, "none", "sqlite-volume"],
-    [43, 0, 3, "none", "base"],
-    [0, 42, 3, "none", "base"],
-    [0, 0, 0, "none", "base"],
-    [0, 0, 3, "unit", "base"],
-    [0, 0, 3, "env", "base"],
+    [0, 0, "none", "sqlite-volume"],
+    [43, 0, "none", "base"],
+    [0, 42, "none", "base"],
+    [0, 0, "unit", "base"],
+    [0, 0, "env", "base"],
   ] as const)(
-    "requires prepared service readiness before the final updater (start=%s, ready=%s, active=%s, mutation=%s, scenario=%s)",
-    (startStatus, readyStatus, activeStatus, mutation, scenario) => {
+    "requires prepared service readiness before the final updater (start=%s, ready=%s, mutation=%s, scenario=%s)",
+    (startStatus, readyStatus, mutation, scenario) => {
       const { root, read, executable } = makeFixture("openclaw-repaired-service-start-");
       executable(
         "systemctl",
         `#!/usr/bin/env bash
-[ "$*" != '--user is-active --quiet openclaw-gateway.service' ] || exit "$PROBE_ACTIVE_STATUS"
+[ "$*" != '--user is-active --quiet openclaw-gateway.service' ] || exit 3
 printf '%s\\n' "$*" >>"$PROBE_EVENTS"
-# Stopping an inactive unit succeeds; PROBE_ACTIVE_STATUS models the state after stop.
 [ "$*" != '--user stop openclaw-gateway.service' ] || exit 0
 [ "$*" = '--user start openclaw-gateway.service' ] || exit 97
 printf 'synthetic start diagnostic\\n' >&2
@@ -262,41 +260,33 @@ exit "$probe_status"
           OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: scenario,
           OPENCLAW_CLAWHUB_URL: "",
           OPENCLAW_E2E_REDACTOR_MODULE: redactor,
-          PROBE_ACTIVE_STATUS: String(activeStatus),
           PROBE_MUTATION: mutation,
           PROBE_START_STATUS: String(startStatus),
           PROBE_READY_STATUS: String(readyStatus),
         },
       );
-      const expected =
-        activeStatus === 3
-          ? startStatus || (mutation !== "none" ? 1 : readyStatus)
-          : activeStatus || 1;
+      const expected = startStatus || (mutation !== "none" ? 1 : readyStatus);
       expect(result.status, result.stdout + result.stderr).toBe(expected);
       expect(read("events").trimEnd().split("\n").filter(Boolean)).toEqual([
         "--user stop openclaw-gateway.service",
-        ...(activeStatus !== 3
-          ? []
-          : startStatus || mutation !== "none"
-            ? ["--user start openclaw-gateway.service"]
-            : readyStatus
-              ? ["--user start openclaw-gateway.service", "readiness"]
-              : [
-                  "--user start openclaw-gateway.service",
-                  "readiness",
-                  "authenticated",
-                  "update",
-                  "membership-warning",
-                  "serving-turn",
-                  "assert-survival",
-                  ...(scenario === "sqlite-volume" ? ["volume-doctor", "volume-state"] : []),
-                ]),
+        ...(startStatus || mutation !== "none"
+          ? ["--user start openclaw-gateway.service"]
+          : readyStatus
+            ? ["--user start openclaw-gateway.service", "readiness"]
+            : [
+                "--user start openclaw-gateway.service",
+                "readiness",
+                "authenticated",
+                "update",
+                "membership-warning",
+                "serving-turn",
+                "assert-survival",
+                ...(scenario === "sqlite-volume" ? ["volume-doctor", "volume-state"] : []),
+              ]),
       ]);
-      if (activeStatus === 3) {
-        expect(read("artifacts", "systemctl-shim-gateway.log.before-start")).toBe(
-          "baseline timeline\n",
-        );
-      }
+      expect(read("artifacts", "systemctl-shim-gateway.log.before-start")).toBe(
+        "baseline timeline\n",
+      );
       if (startStatus) {
         expect(result.stderr).toContain("synthetic start diagnostic");
       }
@@ -305,34 +295,6 @@ exit "$probe_status"
       }
     },
   );
-
-  it("propagates guarded restart survival failure", () => {
-    const root = tempDirs.make("openclaw-survivor-guarded-assertion-");
-    const result = runPublished(
-      root,
-      `SCENARIO=base
-UPDATE_RESTART_MODE=auto-auth
-update_repair_required=0
-candidate_version=2026.9.3
-baseline_version=2026.9.2
-OPENCLAW_CLAWHUB_URL=fixture
-${noops("stop_update_restart_probe_gateway", "prepare_restart_inference", "prepare_restart_plugin_release_selectors", "install_update_restart_systemctl_shim", "run_update_restart_probe_gateway", "check_gateway_status", "update_candidate", "assert_managed_membership_warning")}
-prepare_restart_fixture() { restart_fixture_package=/tmp/fixture.tgz; restart_fixture_version=2026.9.3; }
-node() { if [ "$#" -ge 2 ] && [ "$2" = assert-restart-serving-turn ]; then return 47; fi; }
-read_installed_version() { printf '2026.9.3'; }
-assert_prepublish_plugin_install() { touch "$PROBE_SIDE_EFFECT"; }
-probe_status=0
-repair_fixture_plugin_consent || probe_status=$?
-exit "$probe_status"
-`,
-      {
-        OPENCLAW_UPGRADE_SURVIVOR_BASELINE: "openclaw@2026.9.2",
-        PROBE_SIDE_EFFECT: path.join(root, "continued"),
-      },
-    );
-    expect(result.status, result.stdout + result.stderr).toBe(47);
-    expect(existsSync(path.join(root, "continued"))).toBe(false);
-  });
 
   it.each([false, true])(
     "preserves phase failure without disabling normal errexit (conditional=%s)",

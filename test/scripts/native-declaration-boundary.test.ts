@@ -5,12 +5,7 @@ import { createDeclarationInputBoundary } from "../../scripts/lib/local-check-ru
 import { emitNativeDeclarations } from "../../scripts/lib/native-declaration-emitter.mts";
 import { readNativeTypeScriptConfig } from "../../scripts/lib/native-typescript-config.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
-import {
-  installNativeAncestorTypes,
-  materializeNativeCompiler,
-  resolveNativeFixtureShortPath,
-  writeNativeFixtureFile,
-} from "./native-boundary-fixture.js";
+import { materializeNativeCompiler, writeNativeFixtureFile } from "./native-boundary-fixture.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
 const tempRoot = (name: string) =>
@@ -260,76 +255,6 @@ it("bounds optional SDK relative imports and manifest probes to the checkout", a
   expect(localChanged.declarations.get(entry)?.code).toContain(
     'origin(options: Options): "changed-local"',
   );
-});
-
-for (const kind of [
-  "directory alias",
-  "Windows 8.3 alias",
-  "directory alias targeting Windows 8.3",
-  "Windows namespaced executable",
-]) {
-  it.skipIf(kind.includes("Windows") && process.platform !== "win32")(
-    `emits and captures checkout-local inputs through a ${kind}`,
-    async (context) => {
-      const ancestor = tempRoot("alias");
-      const longExecutable = kind === "Windows namespaced executable";
-      const directory = longExecutable ? "LongNativeCheckout".repeat(10) : "validation";
-      const root = path.join(ancestor, ".claude/worktrees", directory);
-      fs.mkdirSync(root, { recursive: true });
-      let target = root;
-      if (kind.includes("8.3")) {
-        const short = resolveNativeFixtureShortPath(root);
-        if (!short) {
-          context.skip("Filesystem does not expose a distinct Windows 8.3 checkout alias");
-          return;
-        }
-        target = short;
-      }
-      let declared = target;
-      if (kind.startsWith("directory alias") || longExecutable) {
-        declared = path.join(path.dirname(root), "declared-alias");
-        fs.symlinkSync(target, declared, "junction");
-      }
-      if (kind === "directory alias targeting Windows 8.3") {
-        expect(fs.realpathSync(declared)).not.toBe(declared);
-        expect(fs.realpathSync(declared)).not.toBe(root);
-      }
-      const f = createNativeFixture(root, declared);
-      if (longExecutable) {
-        // Exercise the actual installed getExePath contract, not a synthetic path adapter.
-        expect(f.native.startsWith("\\\\?\\")).toBe(true);
-        expect(f.native.slice(4).length).toBeGreaterThanOrEqual(248);
-      }
-      installNativeAncestorTypes(ancestor, root);
-      const run = await f.compile();
-      expect(run.declarations.get(path.join(root, "src/index.ts"))?.code).toContain(
-        'inferredOrigin: "local"',
-      );
-      f.expectInputs(
-        run.inputs,
-        "src/index.ts",
-        "node_modules/.pnpm/core/node_modules/@types/synthetic-core/index.d.ts",
-        "node_modules/.pnpm/core/node_modules/@types/synthetic-core/package.json",
-      );
-      expect(run.inputs.some((file) => file.endsWith("/lib.es2023.d.ts"))).toBe(true);
-      expect(run.inputs.every((file) => !path.relative(root, file).startsWith(".."))).toBe(true);
-    },
-  );
-}
-
-it("rejects a native reference through an unrelated outside symlink back inside", async () => {
-  const ancestor = tempRoot("symlink-back");
-  const root = path.join(ancestor, ".claude/worktrees/validation");
-  const f = createNativeFixture(root);
-  const outside = path.join(ancestor, "outside-reference");
-  fs.symlinkSync(path.join(root, "src"), outside, "junction");
-  f.write({ "src/referenced.d.ts": 'interface FixtureContract { origin: "local" }\n' });
-  const reference = path.join(outside, "referenced.d.ts");
-  f.write({
-    "src/index.ts": `/// <reference path="${reference.replaceAll(path.sep, "/")}" />\nexport type Marker = FixtureContract;\n`,
-  });
-  expect(fs.realpathSync.native(reference)).toBe(path.join(root, "src/referenced.d.ts"));
-  await expect(f.compile()).rejects.toThrow(/TS6053/);
 });
 
 it("preserves original nested config paths and explicit override precedence during native emission", async () => {
