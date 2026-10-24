@@ -1647,6 +1647,8 @@ extension GatewayConnection {
         agentID: String? = nil,
         limit: Int? = nil,
         maxChars: Int? = nil,
+        cursor: String? = nil,
+        maxBytes: Int? = nil,
         timeoutMs: Int? = nil,
         inputRunIDs: [String]? = nil,
         ifCurrentRoute route: Route? = nil) async throws -> OpenClawChatHistoryPayload
@@ -1657,6 +1659,8 @@ extension GatewayConnection {
             limit: limit,
             maxChars: maxChars,
             inputRunIDs: inputRunIDs,
+            cursor: cursor,
+            maxBytes: maxBytes,
             timeoutMs: timeoutMs)
         let data = try await self.requestHistory(request, ifCurrentRoute: route)
         return try self.decoder.decode(OpenClawChatHistoryPayload.self, from: data)
