@@ -12,6 +12,7 @@ import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js"
 import * as updateWriter from "../../infra/update-run-write.async.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import * as postUpdateMaintenance from "./update-command-post-update-maintenance.js";
 import { registerServiceStartRefusalFinalizationTests } from "./update-command-post-update-runtime-refresh.test-support.js";
 import {
@@ -464,30 +465,25 @@ export function registerBoundaryFinalizationControls({
             preManagedServiceStop: transferred,
             ...(scenario === "failed-uninspected"
               ? {
-                  result: {
-                    status: "error" as const,
+                  result: updateResult({
+                    status: "error",
                     reason: "package-install",
-                    mode: "npm" as const,
                     root: originalService.serviceUpdateVerdict.root,
-                    steps: [],
                     durationMs: 0,
                     recovery: {
-                      serviceRestartSafe: false as const,
-                      reason: "runtime-verification-failed" as const,
+                      serviceRestartSafe: false,
+                      reason: "runtime-verification-failed",
                     },
-                  },
+                  }),
                 }
               : {}),
             ...(scenario.startsWith("legacy-stop-")
               ? {
-                  result: {
-                    status: "ok" as const,
-                    mode: "npm" as const,
+                  result: updateResult({
                     root: originalService.serviceUpdateVerdict.root,
-                    steps: [],
                     durationMs: 0,
-                    recovery: { serviceRestartSafe: true as const, version: "2.0.0" },
-                  },
+                    recovery: { serviceRestartSafe: true, version: "2.0.0" },
+                  }),
                 }
               : {}),
           },
@@ -520,9 +516,7 @@ export function registerBoundaryFinalizationControls({
           expectNoCalls(recover, mocks.restartService);
           expect(running).toBe(false);
         } else if (
-          scenario === "inspection-unavailable" ||
-          scenario === "runtime-unverified" ||
-          scenario === "inspection-threw"
+          ["inspection-unavailable", "runtime-unverified", "inspection-threw"].includes(scenario)
         ) {
           await expect(finishing).rejects.toMatchObject({
             name: "UpdateCommandPendingRecoveryFailure",
