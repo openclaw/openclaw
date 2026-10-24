@@ -188,7 +188,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
                 <div class="chat-inline-approval">Approval</div>
                 <div class="chat-prs"><article class="chat-pr">Pull request</article></div>
                 <div class="session-suggestions">Suggestion</div>
-                <div class="chat-swarm">Parallel task</div>
+                <div class="chat-inline-approval">Approval context</div>
                 <openclaw-plugin-contributions><button data-plugin-action>Plugin action</button></openclaw-plugin-contributions>
               </div>`,
           ),
@@ -196,7 +196,7 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
       const composer = await getRect(page, ".agent-chat__input");
       for (const selector of [
         ".chat-prs",
-        ".chat-swarm",
+        ".chat-inline-approval",
         ".session-suggestions",
         ".chat-inline-approval",
       ]) {
@@ -204,7 +204,11 @@ describeBrowserLayout.concurrent("chat footer browser layout", () => {
         expect(card.left, selector).toBeCloseTo(composer.left, 0);
         expect(card.right, selector).toBeCloseTo(composer.right, 0);
       }
-      for (const selector of [".session-suggestions", ".chat-swarm", "[data-plugin-action]"]) {
+      for (const selector of [
+        ".session-suggestions",
+        ".chat-inline-approval",
+        "[data-plugin-action]",
+      ]) {
         const pullRequest = await getRect(page, ".chat-pr");
         const neighbor = await getRect(page, selector);
         expect(neighbor.top, selector).toBeGreaterThan(pullRequest.bottom);

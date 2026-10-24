@@ -91,7 +91,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "phase" in value &&
       "approval" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_26, var_27) => External[0].test(var_26) || check_3(value[var_26]),
+        (var_28, var_29) => External[0].test(var_28) || check_3(value[var_28]),
       ) &&
       check_4(value.sessionKey) &&
       (value.sourceSessionKey === void 0 ||
@@ -119,7 +119,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "presentation" in value &&
       "status" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_28, var_29) => External[1].test(var_28) || check_3(value[var_28]),
+        (var_30, var_31) => External[1].test(var_30) || check_3(value[var_30]),
       ) &&
       check_8(value.id) &&
       check_4(value.urlPath) &&
@@ -143,7 +143,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "commandText" in value &&
       "allowedDecisions" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_30, var_31) => External[3].test(var_30) || check_3(value[var_30]),
+        (var_32, var_33) => External[3].test(var_32) || check_3(value[var_32]),
       ) &&
       check_11(value.kind) &&
       check_4(value.commandText) &&
@@ -171,7 +171,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "name" in value &&
       "operation" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_32, var_33) => External[4].test(var_32) || check_3(value[var_32]),
+        (var_34, var_35) => External[4].test(var_34) || check_3(value[var_34]),
       ) &&
       check_4(value.jobId) &&
       check_4(value.name) &&
@@ -189,7 +189,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "target" in value &&
       "recipientCount" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_34, var_35) => External[5].test(var_34) || check_3(value[var_34]),
+        (var_36, var_37) => External[5].test(var_36) || check_3(value[var_36]),
       ) &&
       check_22(value.kind) &&
       check_23(value.target) &&
@@ -220,7 +220,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "currency" in value &&
       "target" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_36, var_37) => External[6].test(var_36) || check_3(value[var_36]),
+        (var_38, var_39) => External[6].test(var_38) || check_3(value[var_38]),
       ) &&
       check_30(value.kind) &&
       check_31(value.amount) &&
@@ -243,7 +243,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "target" in value &&
       "visibility" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_38, var_39) => External[7].test(var_38) || check_3(value[var_38]),
+        (var_40, var_41) => External[7].test(var_40) || check_3(value[var_40]),
       ) &&
       check_34(value.kind) &&
       check_23(value.target) &&
@@ -260,7 +260,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "automation" in value &&
       "command" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_40, var_41) => External[8].test(var_40) || check_3(value[var_40]),
+        (var_42, var_43) => External[8].test(var_42) || check_3(value[var_42]),
       ) &&
       check_39(value.kind) &&
       check_23(value.automation) &&
@@ -279,7 +279,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
     check_42 = (value) =>
       Array.isArray(value) &&
       value.length !== 0 &&
-      value.some((var_42, _) => check_43(var_42)) &&
+      value.some((var_44, _) => check_43(var_44)) &&
       value.every((element, index) => check_44(element)) &&
       value.length >= 1 &&
       value.length <= 3 &&
@@ -298,7 +298,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "severity" in value &&
       "allowedDecisions" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_43, var_44) => External[9].test(var_43) || check_3(value[var_43]),
+        (var_45, var_46) => External[9].test(var_45) || check_3(value[var_45]),
       ) &&
       check_48(value.kind) &&
       check_49(value.title) &&
@@ -337,7 +337,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "label" in value &&
       "decisions" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_45, var_46) => External[10].test(var_45) || check_3(value[var_45]),
+        (var_47, var_48) => External[10].test(var_47) || check_3(value[var_47]),
       ) &&
       check_49(value.label) &&
       check_57(value.decisions),
@@ -358,7 +358,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "proposalHash" in value &&
       "allowedDecisions" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_47, var_48) => External[11].test(var_47) || check_3(value[var_47]),
+        (var_49, var_50) => External[11].test(var_49) || check_3(value[var_49]),
       ) &&
       check_60(value.kind) &&
       check_49(value.title) &&
@@ -370,7 +370,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
     check_61 = (value) => typeof value == "string" && External[12].test(value),
     check_62 = (value) =>
       Array.isArray(value) &&
-      value.every((var_49, var_50) => var_50 < 2 || check_3(var_49)) &&
+      value.every((var_51, var_52) => var_52 < 2 || check_3(var_51)) &&
       (value.length <= 0 || check_45(value[0])) &&
       (value.length <= 1 || check_43(value[1])) &&
       value.length >= 2,
@@ -383,7 +383,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "phase" in value &&
       "approval" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_51, var_52) => External[13].test(var_51) || check_3(value[var_51]),
+        (var_53, var_54) => External[13].test(var_53) || check_3(value[var_53]),
       ) &&
       check_4(value.sessionKey) &&
       (value.sourceSessionKey === void 0 ||
@@ -408,7 +408,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "decision" in value &&
       "reason" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_53, var_54) => External[14].test(var_53) || check_3(value[var_53]),
+        (var_55, var_56) => External[14].test(var_55) || check_3(value[var_55]),
       ) &&
       check_8(value.id) &&
       check_4(value.urlPath) &&
@@ -426,7 +426,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       value !== null &&
       !Array.isArray(value) &&
       Object.getOwnPropertyNames(value).every(
-        (var_55, var_56) => External[15].test(var_55) || check_3(value[var_55]),
+        (var_57, var_58) => External[15].test(var_57) || check_3(value[var_57]),
       ) &&
       (value.agentId === void 0 || !("agentId" in value) || check_4(value.agentId)) &&
       (value.sessionKey === void 0 || !("sessionKey" in value) || check_4(value.sessionKey)),
@@ -436,7 +436,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       !Array.isArray(value) &&
       "kind" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_57, var_58) => External[16].test(var_57) || check_3(value[var_57]),
+        (var_59, var_60) => External[16].test(var_59) || check_3(value[var_59]),
       ) &&
       check_69(value.kind) &&
       (value.id === void 0 || !("id" in value) || check_4(value.id)),
@@ -462,7 +462,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "decision" in value &&
       "reason" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_59, var_60) => External[17].test(var_59) || check_3(value[var_59]),
+        (var_61, var_62) => External[17].test(var_61) || check_3(value[var_61]),
       ) &&
       check_8(value.id) &&
       check_4(value.urlPath) &&
@@ -493,7 +493,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "status" in value &&
       "reason" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_61, var_62) => External[18].test(var_61) || check_3(value[var_61]),
+        (var_63, var_64) => External[18].test(var_63) || check_3(value[var_63]),
       ) &&
       check_8(value.id) &&
       check_4(value.urlPath) &&
@@ -521,7 +521,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "status" in value &&
       "reason" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_63, var_64) => External[19].test(var_63) || check_3(value[var_63]),
+        (var_65, var_66) => External[19].test(var_65) || check_3(value[var_65]),
       ) &&
       check_8(value.id) &&
       check_4(value.urlPath) &&
@@ -547,7 +547,7 @@ var { isSessionApprovalEvent, isSessionApprovalReplay } = (() => {
       "approvals" in value &&
       "truncated" in value &&
       Object.getOwnPropertyNames(value).every(
-        (var_65, var_66) => External[20].test(var_65) || check_3(value[var_65]),
+        (var_67, var_68) => External[20].test(var_67) || check_3(value[var_67]),
       ) &&
       check_4(value.sessionKey) &&
       check_5(value.updatedAtMs) &&
