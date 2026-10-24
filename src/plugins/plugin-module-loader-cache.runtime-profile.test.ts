@@ -5,9 +5,9 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { getCachedPluginModuleLoader, preparePluginModule } from "./plugin-module-loader-cache.js";
 
-vi.mock("../../cli-invocation.mjs", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../cli-invocation.mjs")>()),
-  getStandaloneRuntimeBuild: () => ({ mode: "aot" }),
+vi.mock("../../standalone-runtime-profile.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../standalone-runtime-profile.mjs")>()),
+  getRuntimeExecutionProfile: () => "embedded-aot",
 }));
 
 const temp = useAutoCleanupTempDirTracker(afterEach);

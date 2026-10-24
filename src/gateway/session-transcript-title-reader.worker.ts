@@ -259,7 +259,7 @@ export function readSessionTitleFieldsFromTranscript(
         lastMessagePreview: fields.lastMessagePreview,
       });
     }
-    return { ...fields };
+    return fields;
   } catch (error) {
     if (!(error instanceof SessionTranscriptColdError)) {
       throw error;

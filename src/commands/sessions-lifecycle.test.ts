@@ -16,14 +16,12 @@ vi.mock("../cli/gateway-rpc.js", () => ({
 }));
 
 // mock-isolation: Session lifecycle fixtures supply config without reading operator state.
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: mocks.getRuntimeConfig,
-  loadConfig: mocks.getRuntimeConfig,
-  captureRuntimeConfigAsyncReader:
-    (...args: Parameters<typeof mocks.getRuntimeConfig>) =>
-    async () =>
-      mocks.getRuntimeConfig(...args),
-}));
+vi.mock("../config/config.js", async () => {
+  const { createTestConfigReadMocks } = await import("./test-runtime-config-helpers.js");
+  return {
+    ...createTestConfigReadMocks(mocks, "getRuntimeConfig"),
+  };
+});
 
 vi.mock("../wizard/clack-prompter.js", () => ({
   createClackPrompter: () => ({ confirm: mocks.confirm }),

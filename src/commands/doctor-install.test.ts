@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { note } from "../../packages/terminal-core/src/note.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { noteSourceInstallIssues } from "./doctor-install.js";
+import { MACOS_APP_INSTALL_OWNER_MARKER } from "./test-runtime-config-helpers.js";
 
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note: vi.fn(),
@@ -23,16 +24,7 @@ describe("noteSourceInstallIssues", () => {
   it("reports the host owner instead of source package repair advice", async () => {
     await withTestDir({ prefix: "openclaw-doctor-install-host-" }, async (root) => {
       await writeSourceCheckout(root, "overrides: {openclaw: 'link:.'}\n");
-      await writeFile(
-        root,
-        "openclaw-install-owner.json",
-        JSON.stringify({
-          schemaVersion: 1,
-          owner: "macos-app",
-          displayName: "OpenClaw.app",
-          updateHint: "Update OpenClaw.app to update this Gateway.",
-        }),
-      );
+      await writeFile(root, "openclaw-install-owner.json", MACOS_APP_INSTALL_OWNER_MARKER);
 
       await noteSourceInstallIssues(root);
 

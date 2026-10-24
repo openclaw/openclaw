@@ -101,7 +101,7 @@ export async function searchProjectedSessionTranscripts(params: {
     const selected = select();
     // Filter every physical store before LIMIT. Never dispatch an empty key set.
     const pages = await Promise.all(
-      [...selected.stores].map(async ([path, { target, rows }]) => ({
+      Array.from(selected.stores, async ([path, { target, rows }]) => ({
         path,
         page: await searchSessionTranscripts(
           {

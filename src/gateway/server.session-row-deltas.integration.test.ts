@@ -20,6 +20,7 @@ import {
 } from "../process/gateway-work-admission.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
+import { captureGatewayKernel } from "./server.capture-kernel.test-support.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
 import { broadcastSessionActivitySummary } from "./session-activity-summary-events.js";
 import { drainSessionEventPublications } from "./session-event-prepared-row.js";
@@ -43,14 +44,9 @@ let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGate
 installGatewayTestHooks({
   scope: "suite",
   setup: async () => {
-    const module = await import("./server-kernel.js");
-    const create = module.createGatewayKernel;
-    using capture = vi.spyOn(module, "createGatewayKernel").mockImplementation(async (...args) => {
-      kernel = await create(...args);
-      return kernel;
+    kernel = await captureGatewayKernel(async () => {
+      harness = await startGatewayServerHarness();
     });
-    void capture;
-    harness = await startGatewayServerHarness();
   },
   cleanup: async () => harness?.close(),
 });

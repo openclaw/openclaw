@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, test, vi } from "vitest";
+import { modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
@@ -194,27 +195,19 @@ test.each([
                 baseUrl: "https://openrouter.ai/api/v1",
                 api: "openai-completions",
                 models: [
-                  {
-                    id: "trinity-large-thinking",
+                  modelDefinition("trinity-large-thinking", {
                     name: "Direct Arcee model",
                     api: "openai-completions",
                     baseUrl: "https://api.arcee.ai/api/v1",
-                    reasoning: true,
-                    input: ["text"],
                     contextWindow: 32768,
                     maxTokens: 2048,
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  },
-                  {
-                    id: "trinity-large-preview",
+                  }),
+                  modelDefinition("trinity-large-preview", {
                     name: "Arcee model through OpenRouter",
                     api: "openai-completions",
-                    reasoning: true,
-                    input: ["text"],
                     contextWindow: 32768,
                     maxTokens: 2048,
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  },
+                  }),
                 ],
               },
             },

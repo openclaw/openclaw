@@ -8,6 +8,7 @@ import { createConnectionBootstrapCoordinator } from "../app/connection-bootstra
 import { createSessionCapability } from "../lib/sessions/index.ts";
 import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import "../test-helpers/app-sidebar-suite.ts";
+import { createFrameClock } from "../test-helpers/animation-frame-clock.ts";
 import {
   createContext,
   createGatewayHarness,
@@ -26,11 +27,11 @@ import {
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
 import { childToggle, mountRoster } from "./app-sidebar-freshness.test-support.ts";
+import "./app-sidebar.tsx";
 import {
   storeSidebarSessionOwnerFilter,
   storeSidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
-import "./app-sidebar.tsx";
 
 type Query = NonNullable<ReturnType<typeof asOptionalRecord>>;
 function mountSessionRoster(
@@ -76,13 +77,11 @@ describe("AppSidebar automatic list scope replacement", () => {
       await settleLitElement(sidebar);
       expect(sidebar.textContent).toContain(row.displayName);
 
-      const frames = new Map<number, FrameRequestCallback>();
-      let frameId = 0;
-      vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
-        frames.set(++frameId, callback);
-        return frameId;
-      });
-      vi.stubGlobal("cancelAnimationFrame", (id: number) => frames.delete(id));
+      const framesClock = createFrameClock();
+      const frames = framesClock.frames;
+
+      vi.stubGlobal("requestAnimationFrame", framesClock.request);
+      vi.stubGlobal("cancelAnimationFrame", framesClock.cancel);
       sidebar.sessionOrganizer.setSessionsStatusFilter("archived");
       await settleLitElement(sidebar);
       expect(sidebar.textContent).not.toContain(row.displayName);

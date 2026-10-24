@@ -1,29 +1,30 @@
 import vm from "node:vm";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   annotateRuntimeExecutionError,
   getRuntimeExecutionProfile,
   noteRuntimeDynamicExecution,
   noteRuntimePluginExecution,
-  resolveRuntimeExecutionProfile,
 } from "./runtime-profile.js";
 
 vi.mock("../../cli-invocation.mjs", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../cli-invocation.mjs")>()),
-  getStandaloneRuntimeBuild: () => ({ mode: "aot" }),
   isEmbeddedStandaloneModule: (filename: string) => filename === "/image/plugin.js",
 }));
 
-describe("runtime execution profiles", () => {
-  it.each([
-    [undefined, "dynamic-execution"],
-    [{ mode: "jit" as const }, "dynamic-execution"],
-    [{ mode: "bytecode" as const }, "dynamic-execution"],
-    [{ mode: "aot" as const }, "embedded-aot"],
-  ] as const)("selects the profile from build facts %j", (build, expected) => {
-    expect(resolveRuntimeExecutionProfile(build)).toBe(expected);
+beforeEach(() => {
+  vi.stubGlobal("__openclawStandaloneBuildInfo", {
+    mode: "aot",
+    openclaw: { version: "test" },
+    bun: { version: "test" },
   });
+});
 
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+describe("runtime execution profiles", () => {
   it("allows dynamic code and reports each interpreted feature once, excluding embedded plugins", () => {
     expect(getRuntimeExecutionProfile()).toBe("embedded-aot");
     const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});

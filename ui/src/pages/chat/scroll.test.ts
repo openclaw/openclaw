@@ -1,5 +1,6 @@
 import { createEffect, createRoot } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { createFrameClock } from "../../test-helpers/animation-frame-clock.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { projectChatFields } from "./chat-field-projection.ts";
 import type { RenderLifecycle } from "./render-lifecycle.ts";
@@ -104,14 +105,12 @@ function scroll(host: ChatScrollHost, scrollTop: number, clientHeight = 400) {
 }
 
 function installAnimationFrameQueue() {
-  const callbacks = new Map<number, FrameRequestCallback>();
-  let nextId = 0;
-  vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-    callbacks.set(++nextId, callback);
-    return nextId;
-  });
+  const framesClock = createFrameClock();
+  const callbacks = framesClock.frames;
+
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation(framesClock.request);
   vi.spyOn(window, "cancelAnimationFrame").mockImplementation((id) => {
-    callbacks.delete(id);
+    framesClock.cancel(id);
   });
   return {
     get callbacks() {

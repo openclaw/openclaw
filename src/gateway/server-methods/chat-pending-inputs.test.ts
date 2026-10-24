@@ -27,6 +27,7 @@ import { setAvatar } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { createSessionGoalFixture } from "../session-goal.test-support.js";
 import { createRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { historyPayload, historyRpc } from "./chat-history-fixture.test-support.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
@@ -85,17 +86,11 @@ describe("pending input read boundary", () => {
       const scope = await createScope("warm-metadata");
       await upsertSessionEntryCore(scope, {
         displayName: "Synthetic warm conversation",
-        goal: {
-          schemaVersion: 1,
-          id: "warm-goal",
-          objective: "Review the synthetic project and its pending followups. ".repeat(30),
-          status: "complete",
-          createdAt: 1,
-          updatedAt: 1,
-          tokenStart: 0,
-          tokensUsed: 0,
-          continuationTurns: 0,
-        },
+        goal: createSessionGoalFixture(
+          "warm-goal",
+          "Review the synthetic project and its pending followups. ".repeat(30),
+          { status: "complete" },
+        ),
       });
       await appendTranscriptMessages(scope, {
         messages: Array.from({ length: 820 }, (_, index) => ({

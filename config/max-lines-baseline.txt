@@ -390,7 +390,6 @@ src/secrets/configure.ts
 src/secrets/runtime-state.ts
 src/security/audit-extra.sync.ts
 src/security/audit.ts
-src/shared/json-schema-defaults.ts
 src/skills/lifecycle/clawhub.test.ts
 src/snapshot/local-repository.test.ts
 src/snapshot/local-repository.ts

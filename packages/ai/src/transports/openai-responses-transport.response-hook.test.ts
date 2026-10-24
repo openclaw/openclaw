@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import type { BaseOpenAIStreamOptions } from "../provider-options.js";
 import { streamAzureOpenAIResponses } from "../providers/azure-openai-responses.js";
@@ -14,6 +15,7 @@ import {
   createAzureOpenAIResponsesTransportStreamFn,
   createOpenAIResponsesTransportStreamFn,
 } from "./openai-responses-client.js";
+import { collectEventTypes } from "./openai-stream-cases.test-support.js";
 
 const openAIModel = makeProviderModel("openai-responses", "openai", "gpt-5.6-luna", {
   name: "Responses hook lifecycle",
@@ -309,21 +311,14 @@ describe.each([fixtures.azure, fixtures.chatgpt])(
     it("awaits response metadata before exposing the first stream event", async () => {
       installResponse();
       const order: string[] = [];
-      let continueHook!: () => void;
-      const hookCompleted = new Promise<void>((resolve) => {
-        continueHook = resolve;
-      });
+      const hookCompleted = createDeferred();
       const onResponse = vi.fn(async () => {
         order.push("hook:start");
-        await hookCompleted;
+        await hookCompleted.promise;
         order.push("hook:end");
       });
       const stream = createStream({ onResponse });
-      const consume = (async () => {
-        for await (const event of stream) {
-          order.push(event.type);
-        }
-      })();
+      const consume = collectEventTypes(stream, order);
 
       await vi.waitFor(() => expect(onResponse).toHaveBeenCalledOnce());
       expect(order).toEqual(["hook:start"]);
@@ -339,7 +334,7 @@ describe.each([fixtures.azure, fixtures.chatgpt])(
         model,
       );
 
-      continueHook();
+      hookCompleted.resolve();
       await consume;
       expect((await stream.result()).stopReason).toBe("stop");
       expect(order.slice(0, 3)).toEqual(["hook:start", "hook:end", "start"]);
@@ -358,11 +353,7 @@ describe.each([fixtures.shared])("$name response hook", ({ createStream, install
       onResponse,
     });
     const eventTypes: string[] = [];
-    const consume = (async () => {
-      for await (const event of stream) {
-        eventTypes.push(event.type);
-      }
-    })();
+    const consume = collectEventTypes(stream, eventTypes);
     const result = await settleWithin(stream.result());
     await consume;
 
@@ -399,11 +390,7 @@ describe.each([fixtures.openai, fixtures.chatgpt])(
         const onResponse = vi.fn(() => pendingHook);
         const stream = createStream({ signal: controller.signal, onResponse });
         const eventTypes: string[] = [];
-        const consume = (async () => {
-          for await (const event of stream) {
-            eventTypes.push(event.type);
-          }
-        })();
+        const consume = collectEventTypes(stream, eventTypes);
 
         await vi.waitFor(() => expect(onResponse).toHaveBeenCalledOnce());
         const abortReason = Object.assign(new Error("caller canceled the provider response"), {

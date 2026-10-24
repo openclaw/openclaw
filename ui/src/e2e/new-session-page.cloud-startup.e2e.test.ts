@@ -135,6 +135,8 @@ suite.define(() => {
         attachments: [{ fileName: "pixel.png", content: ONE_PIXEL_PNG_B64 }],
       });
       await waitForCommittedChatRoute(page);
+      // Keep automatic retries unacknowledged until the pending turn survives reload.
+      await gateway.deferNext("chat.send");
       await gateway.rejectDeferred("chat.send", {
         code: "UNAVAILABLE",
         message: "send outcome unknown",
