@@ -40,7 +40,7 @@ export type SessionIdentityProjection = ReturnType<typeof createSessionIdentityP
 /** The row owner invalidates these facts on profile/config publication; entry replacement is exact. */
 export function createSessionIdentityProjection() {
   let revision = {};
-  let owners = new WeakMap<SessionEntry, ReturnType<typeof projectSessionOwner>>();
+  let owners = new WeakMap<SessionEntry, ReturnType<typeof projectSessionOwner> | null>();
   let participants = new WeakMap<SessionEntry, ReadonlyMap<string, SessionParticipant>>();
   let people = new WeakMap<SessionEntry, readonly SessionPerson[]>();
   let involvement = new WeakMap<SessionEntry, Map<string, SessionProfileInvolvement>>();
@@ -67,16 +67,17 @@ export function createSessionIdentityProjection() {
       }
       return projected;
     },
-    owner(this: void, ...args: Parameters<typeof projectSessionOwner>) {
-      const [entry] = args;
+    owner: ((entry, profiles, cfg, configuredAgentIds) => {
       if (!entry) {
-        return projectSessionOwner(...args);
+        return undefined;
       }
-      if (!owners.has(entry)) {
-        owners.set(entry, projectSessionOwner(...args));
+      let projected = owners.get(entry);
+      if (projected === undefined) {
+        projected = projectSessionOwner(entry, profiles, cfg, configuredAgentIds) ?? null;
+        owners.set(entry, projected);
       }
-      return owners.get(entry);
-    },
+      return projected ?? undefined;
+    }) satisfies typeof projectSessionOwner,
     participants(
       this: void,
       ...args: Parameters<typeof projectSessionParticipants>

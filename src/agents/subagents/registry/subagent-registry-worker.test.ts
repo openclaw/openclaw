@@ -57,7 +57,7 @@ import {
   prepareSubagentRegistrationRows,
   prepareSubagentRunsSnapshotForRunIds,
 } from "./subagent-registry-state.js";
-import { streamSubagentRegistryInWorker } from "./subagent-registry.store.worker.js";
+import { streamSubagentRegistryInWorker } from "./subagent-registry.store.restore.worker.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { isSameSubagentRunOwner } from "./subagent-run-generation.js";
 

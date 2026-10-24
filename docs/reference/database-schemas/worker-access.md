@@ -65,6 +65,10 @@ attachment promotion, and cleanup claims/deletions retain their writer ordering
 and current-row checks. Scheduled media maintenance waits until after the first
 two minutes of startup, then keeps its hourly maintenance cadence; explicit media
 cleanup and retention rules are unchanged.
+Managed media retention selects the message IDs already recorded on attachment
+metadata through the transcript owner's identity index. Unrelated indexed
+transcript payloads stay in storage. Off-path branches, reset archives, and
+legacy messages without indexed IDs remain eligible to retain their attachments.
 The shared implementations are
 [`sqlite-readonly-worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/infra/sqlite-readonly-worker.ts),
 [`openclaw-state-read-worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-state-read-worker.ts),

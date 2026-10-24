@@ -8,7 +8,11 @@ import { afterEach, beforeEach, describe, expect, it, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
 import { validatePreviousConnectParams } from "../../gateway-protocol/src/connect-compatibility.test-support.js";
-import { GATEWAY_SERVER_CAPS, validateConnectParams } from "../../gateway-protocol/src/index.js";
+import {
+  GATEWAY_SERVER_CAPS,
+  PROTOCOL_VERSION,
+  validateConnectParams,
+} from "../../gateway-protocol/src/index.js";
 import {
   GatewayClient,
   GatewayClientRequestTimeoutError,
@@ -256,7 +260,7 @@ it.each([
           id: frame.id,
           ok: valid,
           ...(valid
-            ? { payload: { type: "hello-ok", protocol: 4 } }
+            ? { payload: { type: "hello-ok", protocol: PROTOCOL_VERSION } }
             : { error: { code: "INVALID_REQUEST", message: "invalid connect params" } }),
         });
       });
@@ -487,7 +491,7 @@ describe("GatewayClient", () => {
         if (frame.method === "connect") {
           sendResponse(socket, frame.id, {
             type: "hello-ok",
-            protocol: 4,
+            protocol: PROTOCOL_VERSION,
             policy: { tickIntervalMs: 20 },
           });
           return;

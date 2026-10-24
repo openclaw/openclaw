@@ -225,7 +225,6 @@ export function buildQaAgenticParityComparison(params: {
   baselineLabel: string;
   candidateSummary: QaParitySuiteSummary;
   baselineSummary: QaParitySuiteSummary;
-  comparedAt?: string;
 }) {
   verifySummaryLabelMatch({
     summary: params.candidateSummary,
@@ -343,7 +342,7 @@ export function buildQaAgenticParityComparison(params: {
   return {
     candidateLabel: params.candidateLabel,
     baselineLabel: params.baselineLabel,
-    comparedAt: params.comparedAt ?? new Date().toISOString(),
+    comparedAt: new Date().toISOString(),
     candidateMetrics,
     baselineMetrics,
     scenarioComparisons,
@@ -401,7 +400,6 @@ export function renderQaAgenticParityMarkdownReport(comparison: QaAgenticParityC
 
 export function buildQaRuntimeParityReport(params: {
   summary: QaParitySuiteSummary;
-  comparedAt?: string;
 }): QaRuntimeParityReport {
   const runtimePair = normalizeRuntimePair(params.summary.run?.runtimePair);
   const providerMode = params.summary.run?.providerMode;
@@ -501,7 +499,7 @@ export function buildQaRuntimeParityReport(params: {
   }
   return {
     runtimePair,
-    comparedAt: params.comparedAt ?? new Date().toISOString(),
+    comparedAt: new Date().toISOString(),
     providerMode,
     primaryModel: params.summary.run?.primaryModel,
     totalScenarios,

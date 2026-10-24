@@ -66,18 +66,37 @@ describe("standalone build interface", () => {
     }
   });
 
+  it("accepts a JIT support destination only with AOT and rejects cross-target requests", () => {
+    expect(parse("--compile-aot", "--support-output", "support")).toEqual({
+      outputDirectory: "out",
+      mode: "aot",
+      compileFlags: ["--aot"],
+      supportOutputDirectory: "support",
+    });
+    expect(() => parse("--support-output", "support")).toThrow("requires --compile-aot");
+    expect(() => parse("--compile-aot", "--support-output")).toThrow("fresh directory");
+    expect(() =>
+      parse("--compile-aot", "--support-output", "one", "--support-output", "two"),
+    ).toThrow("once");
+    for (const flags of [
+      ["--target=bun-linux-x64"],
+      ["--compile-aot", "--target", "bun-linux-x64"],
+    ]) {
+      expect(() => parse(...flags)).toThrow("AOT cannot cross-compile");
+    }
+  });
+
   it("refuses experimental AOT on a compiler without that capability", () => {
     expect(() =>
       assertStandaloneCompiler("aot", "--compile  Build an executable\n--bytecode  Cache bytecode"),
     ).toThrow("Use the default JIT mode or --bytecode");
-    expect(() =>
-      assertStandaloneCompiler("aot", "  --compile-aot  Compile native code"),
-    ).not.toThrow();
+    expect(() => assertStandaloneCompiler("aot", "  --aot  Compile native code")).not.toThrow();
   });
 
   it("limits standalone artifacts to supported build hosts", () => {
     expect(() => assertStandalonePlatform("darwin")).not.toThrow();
     expect(() => assertStandalonePlatform("linux")).not.toThrow();
+    expect(() => assertStandalonePlatform("linux", "riscv64")).toThrow("arm64 or x64");
     expect(() => assertStandalonePlatform("win32")).toThrow(
       "Build on macOS or Linux; Windows standalone artifacts are not supported yet.",
     );

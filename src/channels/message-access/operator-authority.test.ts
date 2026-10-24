@@ -896,7 +896,7 @@ it.each([
         expect(loadSessionEntry(scope(spawnedSessionKey))).toMatchObject({
           createdVia: "spawn",
           createdActor: agent,
-          owner: { actor: agent },
+          owner: { actor: role === "admin" ? requester : agent },
         });
         expect((await assign(spawnedSessionKey, requester.id)).details).toMatchObject(updated);
         const listed = await execute("sessions_list", "read-owner", {

@@ -10,7 +10,24 @@ import { parseNodeOptionsEnvVar } from "../infra/node-options.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 
 export const DIAGNOSTIC_PROFILE_MAX_BYTES = 1024 * 1024;
-const ENGINE_NAMES = new Set(["(root)", "(program)", "(idle)", "(garbage collector)"]);
+const ENGINE_NAMES = new Set([
+  "(root)",
+  "(program)",
+  "(idle)",
+  "(garbage collector)",
+  // V8's heap sampler names its VM state when no JavaScript frame is available.
+  "(GC)",
+  "(PARSER)",
+  "(COMPILER)",
+  "(BYTECODE_COMPILER)",
+  "(V8 API)",
+  "(EXTERNAL)",
+  "(LOGGING)",
+  "(IDLE_EXTERNAL)",
+  "(IDLE)",
+  "(JS)",
+  "(deopt)",
+]);
 let capturing = false;
 
 type FailureReason =
@@ -65,9 +82,9 @@ export function parseNativeCpuProfile(json: string): Profiler.Profile {
   };
   // The native serializer owns this shape; inspector consumers require string IDs.
   const nodes: Profiler.ProfileNode[] = [];
-  for (const { callFrame, ...node } of profile.nodes) {
-    const { scriptId, ...frame } = callFrame;
-    nodes.push({ ...node, callFrame: { ...frame, scriptId: String(scriptId) } });
+  for (const node of profile.nodes) {
+    const frame = node.callFrame;
+    nodes.push({ ...node, callFrame: { ...frame, scriptId: String(frame.scriptId) } });
   }
   return { ...profile, nodes };
 }

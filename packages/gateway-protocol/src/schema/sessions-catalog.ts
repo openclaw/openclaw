@@ -45,6 +45,8 @@ export const SessionCatalogDescriptorSchema = closedObject({
   id: NonEmptyString,
   label: NonEmptyString,
   capabilities: SessionCatalogCapabilitiesSchema,
+  /** Never retain previous rows while source authorization is pending or unavailable. */
+  requiresFreshList: Type.Optional(Type.Literal(true)),
 });
 
 export const SessionCatalogPullRequestSummarySchema = closedObject({
@@ -86,7 +88,7 @@ export const SessionCatalogHostSchema = closedObject({
   label: NonEmptyString,
   kind: stringLiteralUnion(["gateway", "node"]),
   connected: Type.Boolean(),
-  /** First snapshot is still loading; retain prior rows until the host publication arrives. */
+  /** First snapshot is loading; retain prior rows only when the catalog permits stale lists. */
   pending: Type.Optional(Type.Boolean()),
   nodeId: Type.Optional(NonEmptyString),
   canStartTerminal: Type.Optional(Type.Boolean()),

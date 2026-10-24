@@ -65,6 +65,9 @@ if (isMainThread) {
   if (!process.send) {
     throw new Error("Gateway profiling requires the benchmark IPC channel");
   }
+  if (process.env.OPENCLAW_BENCH_DISABLE_INLINING === "1") {
+    v8.setFlagsFromString("--no-turbo-inlining --no-maglev-inlining");
+  }
   const broadcastTiming = process.env.OPENCLAW_BENCH_BROADCAST_TIMING === "1";
   const workerAttribution = process.env.OPENCLAW_BENCH_WORKER_ATTRIBUTION === "1";
   const workerAttributionSourceHooks = new Set<string>();
@@ -87,6 +90,7 @@ if (isMainThread) {
     const projectionSources = new Map<string, string>();
     if (sessionProjectionSource) {
       for (const file of [
+        "server-broadcast.ts",
         "session-event-projection.ts",
         "session-row-presentation.ts",
         "session-sharing-read.ts",
@@ -95,6 +99,7 @@ if (isMainThread) {
         "session-ancestor-references.ts",
         "server-connection-state.ts",
         "server-methods/sessions-read.ts",
+        "server-methods/sessions-read-by-key.ts",
       ]) {
         projectionSources.set(
           new URL(`../../src/gateway/${file}`, import.meta.url).href,
@@ -161,6 +166,12 @@ if (isMainThread) {
         const projectionSource = projectionSources.get(url);
         if (sessionProjectionCounts && url === projectionOwner) {
           let source = projectionSource ?? readFileSync(new URL(url), "utf8");
+          // Source-overlay comparisons also load the pre-sharing baseline owner.
+          const sharedDelivery = source.includes("      return projected;");
+          const returnAnchor = sharedDelivery
+            ? "      return projected;"
+            : "      return {\n        payload: wirePayload,";
+          const payload = sharedDelivery ? "projected.payload" : "wirePayload";
           const replacements = [
             [
               "    const audiences = new Map<",
@@ -179,15 +190,14 @@ if (isMainThread) {
         benchmarkSessionProjectionChannel.publish({ operation: event, payloadCacheMisses: 1 });`,
             ],
             [
-              "      return {\n        payload: wirePayload,",
+              returnAnchor,
               `      benchmarkSessionProjectionChannel.publish({
         operation: event,
         projectedRecipients: 1,
-        wirePayloads: benchmarkProjectionPayloads.has(wirePayload) ? 0 : 1,
+        wirePayloads: benchmarkProjectionPayloads.has(${payload}) ? 0 : 1,
       });
-      benchmarkProjectionPayloads.add(wirePayload);
-      return {
-        payload: wirePayload,`,
+      benchmarkProjectionPayloads.add(${payload});
+${returnAnchor}`,
             ],
           ] as const;
           for (const [anchor, replacement] of replacements) {
@@ -204,14 +214,14 @@ ${source}`;
           sessionProjectionCountsInstalled = true;
           return { ...loaded, format: "module-typescript", source };
         }
-        if (projectionSource !== undefined) {
+        if (projectionSource !== undefined && url !== owner) {
           // Preserve canonical imports and original TypeScript lines in sampled stacks.
           return { ...loaded, format: "module-typescript", source: projectionSource };
         }
         if (url !== owner) {
           return loaded;
         }
-        let source = readFileSync(new URL(url), "utf8");
+        let source = projectionSource ?? readFileSync(new URL(url), "utf8");
         // Native source preserves the broadcaster's name in allocation profiles without a timer.
         if (!broadcastTiming) {
           return { ...loaded, format: "module-typescript", source };

@@ -82,7 +82,8 @@ export function selectTaskPublicationSessions(
     node.children ??= projection.selectEntries({ parentSessionKey: row }).map(prepare);
     pending.push(...node.children);
   }
-  return sessions.toSorted(
+  // oxlint-disable-next-line unicorn/no-array-sort -- Indexed lineage traversal built this private result.
+  return sessions.sort(
     (a, b) => a.sessionKey.localeCompare(b.sessionKey) || a.agentId.localeCompare(b.agentId),
   );
 }

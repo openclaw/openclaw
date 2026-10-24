@@ -33,19 +33,21 @@ it.each(["drop", "throw", "callback", "serialize"] as const)(
         if (!peer) {
           throw new Error("Unknown recipient");
         }
-        const delivery = peer.rows.prepareRows([row], diff);
+        const delivery = peer.rows.prepareDelivery(row, undefined, undefined, diff);
         return {
           payload: {
-            session: delivery.wire[0],
+            session: delivery.rows?.wire[0],
             ...(brokenSerialization && peer === peers[0] ? { invalid: 1n } : {}),
           },
-          delivered: delivery.delivered,
+          delivered: () => peer.rows.deliver(delivery),
         };
       },
     });
     try {
       broadcast("sessions.changed", {});
-      expect(peers[0]!.rows.prepareRows([row], diff).wire[0]).toHaveProperty("base");
+      expect(
+        peers[0]!.rows.prepareDelivery(row, undefined, undefined, diff).rows?.wire[0],
+      ).toHaveProperty("base");
       if (failure === "drop") {
         peers[0]!.client.socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
       } else if (failure === "serialize") {
@@ -60,8 +62,12 @@ it.each(["drop", "throw", "callback", "serialize"] as const)(
         );
       }
       broadcast("sessions.changed", {}, { dropIfSlow: true });
-      expect(peers[0]!.rows.prepareRows([row], diff).wire[0]).toHaveProperty("full");
-      expect(peers[1]!.rows.prepareRows([row], diff).wire[0]).toHaveProperty("base");
+      expect(
+        peers[0]!.rows.prepareDelivery(row, undefined, undefined, diff).rows?.wire[0],
+      ).toHaveProperty("full");
+      expect(
+        peers[1]!.rows.prepareDelivery(row, undefined, undefined, diff).rows?.wire[0],
+      ).toHaveProperty("base");
     } finally {
       peers.forEach((peer) => peer.rows.clear());
       vi.restoreAllMocks();

@@ -2,12 +2,32 @@ import { describe, expect, it, vi } from "vitest";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { ChannelIngressDispatchLifecycle } from "./ingress-drain-lifecycle.js";
-import { createChannelIngressDrain } from "./ingress-drain.js";
+import {
+  createChannelIngressDrain,
+  type CreateChannelIngressDrainOptions,
+} from "./ingress-drain.js";
 import {
   createTestIngressQueue,
   type IngressDrainTestPayload as Payload,
   withTempState,
 } from "./ingress-drain.test-helpers.js";
+
+function createAdoptingDrain(
+  queue: CreateChannelIngressDrainOptions<Payload>["queue"],
+  currentNow: number,
+) {
+  const dispatches: string[] = [];
+  const drain = createChannelIngressDrain<Payload>({
+    queue,
+    now: () => currentNow,
+    retryPolicy: { baseMs: 60_000, maxMs: 60_000 },
+    dispatchClaimedEvent: async (event, lifecycle) => {
+      dispatches.push(event.id);
+      await lifecycle.onAdopted();
+    },
+  });
+  return { drain, dispatches };
+}
 
 describe("channel ingress drain lanes", () => {
   it("keeps a competing lane head ahead of its tail while dispatching other lanes", async () => {
@@ -212,16 +232,7 @@ describe("channel ingress drain lanes", () => {
       expect(tailClaim).not.toBeNull();
       await queue.release(tailClaim!, { lastError: "boom", releasedAt: currentNow });
 
-      const dispatches: string[] = [];
-      const drain = createChannelIngressDrain<Payload>({
-        queue,
-        now: () => currentNow,
-        retryPolicy: { baseMs: 60_000, maxMs: 60_000 },
-        dispatchClaimedEvent: async (event, lifecycle) => {
-          dispatches.push(event.id);
-          await lifecycle.onAdopted();
-        },
-      });
+      const { drain, dispatches } = createAdoptingDrain(queue, currentNow);
 
       await expect(drain.drainOnce()).resolves.toEqual({ started: 1 });
       await vi.waitFor(() => expect(dispatches).toEqual(["head"]));
@@ -241,16 +252,7 @@ describe("channel ingress drain lanes", () => {
       expect(headClaim).not.toBeNull();
       await queue.release(headClaim!, { lastError: "boom", releasedAt: currentNow });
 
-      const dispatches: string[] = [];
-      const drain = createChannelIngressDrain<Payload>({
-        queue,
-        now: () => currentNow,
-        retryPolicy: { baseMs: 60_000, maxMs: 60_000 },
-        dispatchClaimedEvent: async (event, lifecycle) => {
-          dispatches.push(event.id);
-          await lifecycle.onAdopted();
-        },
-      });
+      const { drain, dispatches } = createAdoptingDrain(queue, currentNow);
 
       await expect(drain.drainOnce()).resolves.toEqual({ started: 0 });
       expect(dispatches).toEqual([]);
@@ -445,16 +447,7 @@ describe("channel ingress drain lanes", () => {
       await queue.complete(headClaim!);
       vi.spyOn(queue, "listUnsettled").mockResolvedValue(snapshot);
 
-      const dispatches: string[] = [];
-      const drain = createChannelIngressDrain<Payload>({
-        queue,
-        now: () => currentNow,
-        retryPolicy: { baseMs: 60_000, maxMs: 60_000 },
-        dispatchClaimedEvent: async (event, lifecycle) => {
-          dispatches.push(event.id);
-          await lifecycle.onAdopted();
-        },
-      });
+      const { drain, dispatches } = createAdoptingDrain(queue, currentNow);
 
       await expect(drain.drainOnce()).resolves.toEqual({ started: 0 });
       expect(dispatches).toEqual([]);

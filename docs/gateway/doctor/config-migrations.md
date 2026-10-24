@@ -34,6 +34,29 @@ backed by those local providers and repairs references to unavailable providers.
 This repair leaves `models.json` unchanged, preserving its comments. Unreadable
 or malformed catalogs still produce a warning and leave affected references intact.
 
+## Retired A2UI widgets
+
+A2UI widgets and the `registerBoardWidgetContentKind` Plugin SDK API have been
+removed. Use [`show_widget`](/tools/show-widget) with `kind: "html"` for
+interactive widget content. Calls that still request `kind: "a2ui"` fail
+validation with the next step: `A2UI widgets were removed; use kind "html"`.
+
+Doctor backs up the affected agent database before deleting stored A2UI widgets
+identified by `pluginKind: "canvas:a2ui"` or `registeredContentKind: "a2ui"`.
+It preserves other widgets and records a warning naming the deleted count,
+explaining that A2UI widgets were retired and can be recreated as HTML widgets.
+This repair does not convert their source into HTML.
+
+Other widgets using the retired registered-renderer API become inert HTML source
+previews after the same backup. Doctor preserves their original descriptor and
+manifest in the preview, keeps their layout and valid identity, and removes
+previous capabilities. Existing HTML, native plugin, and MCP widgets are unchanged.
+
+During `openclaw update`, the candidate's Doctor step owns this backed-up repair,
+including when the update was started by an older installed update driver.
+Stored A2UI rows do not prevent the update. Runtime readers accept only the
+current widget formats; they do not retain a compatibility renderer.
+
 ## Group allowlist fallback
 
 For channels that support legacy DM sender fallback, Doctor copies `allowFrom`

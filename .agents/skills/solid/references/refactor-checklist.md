@@ -8,7 +8,7 @@ its replacement, and the exception that justifies keeping it. Measure the touche
 and after, and report the counts in the PR. Prefer fewer production lines;
 explain growth needed for the idiom or correctness.
 
-The installed `solid-js/CHEATSHEET.md` (rc.16) is the API contract. Its
+The installed `solid-js/CHEATSHEET.md` (rc.18) is the API contract. Its
 "What changed from 1.x" list is required reading before the first edit: Solid 2
 is neither React nor Solid 1, and both priors produce plausible-looking bugs.
 

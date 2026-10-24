@@ -3004,7 +3004,7 @@ openclaw-chat-ci-details {
   }
 }
 
-::highlight(openclaw-comment) {
+:root::highlight(openclaw-comment) {
   background: var(--selection-bg);
   color: var(--selection-fg);
 }

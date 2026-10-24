@@ -308,7 +308,7 @@ itPosix.each(["empty", "legacy", "outdated"])(
       expect(bootstrap.status, bootstrap.stderr).toBe(1);
       expect(bootstrap.stderr).toContain("has version 0.5.6; the trust anchor requires");
       expect(bootstrap.stderr).toContain(
-        "Restore frozen dependencies in a clean trusted-main checkout",
+        "The current trusted wrapper can materialize this anchor’s frozen dependencies",
       );
       expect(existsSync(join(anchor, "node_modules"))).toBe(false);
       expectResult(run("git", ["-C", canonical, "for-each-ref", "refs/openclaw"], { env }), {

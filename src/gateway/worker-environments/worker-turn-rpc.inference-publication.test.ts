@@ -1,3 +1,4 @@
+import "./store-publication.test-support.js";
 import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import {
@@ -18,34 +19,7 @@ import {
 } from "./worker-turn-rpc-fixtures.test-support.js";
 import { claimWorkerPlacement } from "./worker-turn-rpc.test-support.js";
 
-const delivery = vi.hoisted(() => ({
-  command: undefined as string | undefined,
-  afterCommit: undefined as (() => Promise<void>) | undefined,
-}));
-vi.mock("../../state/openclaw-state-worker-store.js", async (importOriginal) => {
-  const actual =
-    await importOriginal<typeof import("../../state/openclaw-state-worker-store.js")>();
-  return {
-    ...actual,
-    runOpenClawStateWorkerOperation: (
-      ...[context, operation, options]: Parameters<typeof actual.runOpenClawStateWorkerOperation>
-    ) =>
-      actual.runOpenClawStateWorkerOperation(
-        context,
-        (scope) =>
-          operation({
-            execute: async (command, executeOptions) => {
-              const result = await scope.execute(command, executeOptions);
-              if (command.type === delivery.command) {
-                await delivery.afterCommit?.();
-              }
-              return result;
-            },
-          }),
-        options,
-      ),
-  };
-});
+const { delivery } = await import("./store-publication.test-support.js");
 
 const delta = { type: "text_delta", contentIndex: 0, delta: "preserved provider output" } as const;
 const inferenceFrame = (event: string, payload: unknown) => ({

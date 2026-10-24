@@ -83,7 +83,6 @@ export const uiNodeDrivenBrowserTestFiles = [
   "ui/src/pages/chat/chat-search-layout.browser.test.ts",
   "ui/src/pages/chat/chat-footer-layout.browser.test.ts",
   "ui/src/pages/chat/chat-working-indicator.browser.test.ts",
-  "ui/src/pages/chat/components/chat-swarm-progress.browser.test.ts",
   "ui/src/pages/chat/components/chat-attachment-download-visibility.browser.test.ts",
   "ui/src/components/form-controls.browser.test.ts",
   "ui/src/components/sidebar-footer-layout.browser.test.ts",

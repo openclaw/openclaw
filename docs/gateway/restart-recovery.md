@@ -1210,6 +1210,12 @@ its recovery ownership together with its delivery claim, so the next agent turn
 can proceed. The notice and terminal deduplication evidence survive another
 restart; completed work is not replayed.
 
+A recovery continuation for a legacy saved final without a delivery intent or
+queue owner may fail terminally. In that case, recovery preserves the saved
+reply in the local transcript as delivery-unconfirmed and retires its pending
+marker. Later Gateway boots do not replay that failed continuation. An interrupted
+continuation or a newer pending delivery keeps its own recovery ownership.
+
 Message-tool-only replies use a second durable correlation. Before a terminal
 same-conversation send reaches the channel, the gateway records an unresolved
 delivery intent on the exact session and source turn. A confirmed provider
