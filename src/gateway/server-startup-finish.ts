@@ -666,7 +666,7 @@ export async function finishGatewayStartup(params: {
         repeatDelayMs: 15 * 60_000,
         run: async () => {
           const { reclaimAbandonedSqliteSnapshotsAsync } =
-            await import("../infra/sqlite-snapshot-staging.js");
+            await import("../infra/sqlite-snapshot-reclamation.js");
           await reclaimAbandonedSqliteSnapshotsAsync();
         },
         log,

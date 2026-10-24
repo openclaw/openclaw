@@ -13,7 +13,6 @@ import {
   SESSIONS_LIST_OWNER_LIMIT,
   SESSIONS_LIST_TRANSCRIPT_LIMIT,
 } from "../shared/session-list-limits.js";
-import { runSynchronousWork, type SynchronousWork } from "../shared/synchronous-work.js";
 import { resolveAssistantIdentityName } from "./assistant-identity.js";
 import { prepareOperatorModelPresentation } from "./operator-model-presentation.js";
 import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
@@ -55,13 +54,13 @@ import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 import { getSessionDefaults } from "./session-utils-model.js";
 import type { GatewaySessionRow, SessionsListResult } from "./session-utils.types.js";
 
-export function* selectSessionEntries(
+export function selectSessionEntries(
   params: SessionListFilterParams & {
     defaultLimit?: number;
     partitions?: ReturnType<ReturnType<typeof createSessionRowSelection>["read"]>["partitions"];
     retained?: WeakMap<object, SessionListFilteredEntries>;
   },
-): SynchronousWork<SessionEntrySelection> {
+): SessionEntrySelection {
   const limit = resolveOptionalIntegerOption(params.opts.limit, { min: 1 }) ?? params.defaultLimit;
   const offset = resolveNonNegativeIntegerOption(params.opts.offset, 0);
   const ownerLimit =
@@ -91,15 +90,15 @@ export function* selectSessionEntries(
       }
       let part = params.retained!.get(partition.revision);
       if (!part) {
-        part = yield* filterSessionEntries({
+        part = filterSessionEntries({
           ...params,
           entries: (archived) =>
             Array.from(partition.entries.values()).filter(([, entry]) =>
               matchesSessionArchiveFilter(entry, archived),
             ),
         });
-        part.entries = yield* sortAndLimitSessionEntries(part.entries, pageEnd, params.opts.sortBy);
-        part.ownerEntries = yield* sortAndLimitSessionEntries(
+        part.entries = sortAndLimitSessionEntries(part.entries, pageEnd, params.opts.sortBy);
+        part.ownerEntries = sortAndLimitSessionEntries(
           part.ownerEntries,
           ownerLimit,
           params.opts.sortBy,
@@ -122,7 +121,7 @@ export function* selectSessionEntries(
       ...(Number.isFinite(activityExpiresAt) ? { activityExpiresAt } : {}),
     };
   } else {
-    filteredResult = yield* filterSessionEntries(
+    filteredResult = filterSessionEntries(
       params,
       params.entriesSorted ? { offset, limit, ownerLimit } : undefined,
     );
@@ -131,24 +130,18 @@ export function* selectSessionEntries(
   const sharedEntries =
     params.entriesSorted && !incremental
       ? filtered
-      : (yield* sortAndLimitSessionEntries(
+      : sortAndLimitSessionEntries(
           filtered,
           limit === undefined ? undefined : Math.min(offset + limit, Number.MAX_SAFE_INTEGER),
           params.opts.sortBy,
-          params.shouldYield,
-        )).slice(offset);
+        ).slice(offset);
   let entries = sharedEntries;
   let ownerCount = 0;
   if (ownerLimit > 0) {
     const owned =
       params.entriesSorted && !incremental
         ? ownerEntries
-        : yield* sortAndLimitSessionEntries(
-            ownerEntries,
-            ownerLimit,
-            params.opts.sortBy,
-            params.shouldYield,
-          );
+        : sortAndLimitSessionEntries(ownerEntries, ownerLimit, params.opts.sortBy);
     ownerCount = owned.length;
     const ownedKeys = new Set(owned.map(([key]) => key));
     entries = [...owned, ...sharedEntries.filter(([key]) => !ownedKeys.has(key))];
@@ -377,12 +370,10 @@ export function prepareSessionRowSelection(
 
 export function filterAndSortSessionEntries(params: SessionListFilterParams): SessionEntryPair[] {
   return withAgentRosterFactsBatch(params.cfg, () =>
-    runSynchronousWork(
-      selectSessionEntries({
-        ...params,
-        restrictProfileReferences: params.entryFilter !== undefined,
-      }),
-    ),
+    selectSessionEntries({
+      ...params,
+      restrictProfileReferences: params.entryFilter !== undefined,
+    }),
   ).entries;
 }
 
@@ -548,14 +539,12 @@ export async function listProjectedSessions(params: {
         diagnostics?.mark("filterSetup");
         const select = (retained?: WeakMap<object, SessionListFilteredEntries>) =>
           withAgentRosterFactsBatch(prepared.cfg, () =>
-            runSynchronousWork(
-              selectSessionEntries({
-                ...filters,
-                defaultLimit: 100,
-                partitions: prepared.partitions,
-                retained,
-              }),
-            ),
+            selectSessionEntries({
+              ...filters,
+              defaultLimit: 100,
+              partitions: prepared.partitions,
+              retained,
+            }),
           );
         const selection =
           params.acceptsSerializedJson && exactKey === undefined

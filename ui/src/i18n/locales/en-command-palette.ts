@@ -137,6 +137,9 @@ const enCommandPalette = {
         summarizeRecentSessions: "Summarize my recent sessions",
         configureChannel: "Help me configure a channel",
         checkSystemHealth: "Check system health",
+        exploreOpenClaw: "Tour OpenClaw's code and docs",
+        investigateInSandbox: "Investigate an issue in a sandbox",
+        openDraftPullRequest: "Fix a bug and open a draft PR",
       },
     },
     commands: {

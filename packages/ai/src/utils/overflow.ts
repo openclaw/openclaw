@@ -22,6 +22,8 @@ const ASSISTANT_OVERFLOW_PATTERNS = [
   /input \(\d+ tokens\) is longer than the model'?s context length \(\d+ tokens\)/i, // Together AI
   /exceeds the limit of \d+/i, // GitHub Copilot
   /(?:exceeds the available context size|context size has been exceeded)/i, // llama.cpp server
+  /decoder prompt \(length [\d,]+\)(?: plus the number of requested output tokens \(at least 1\))? is longer than the maximum model length of [\d,]+/i, // vLLM input processor
+  /engine prompt length [\d,]+ exceeds the max_model_len [\d,]+/i, // vLLM Responses API
   /`?inputs`? tokens \+ `?max_new_tokens`? must be <= [\d,]+/i, // Hugging Face TGI
   /`?inputs`? must have less than [\d,]+ tokens/i, // Hugging Face TGI
   /greater than the context length|model is loaded with context length of only \d[\d,]* tokens, which is not enough/i, // LM Studio

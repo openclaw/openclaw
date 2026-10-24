@@ -26,34 +26,6 @@ type GatewayStatusSummary = {
 
 type PortStatusSummary = Pick<PortUsage, "port" | "status" | "listeners" | "hints">;
 
-export function resolveGatewayStatusProbeConfig(params: {
-  config: OpenClawConfig;
-  hasUrlOverride: boolean;
-}): OpenClawConfig {
-  const { config, hasUrlOverride } = params;
-  // Freeze the resolved target and Gateway credentials while preserving
-  // endpoint-scoped transport policy for the existing client selectors.
-  return {
-    ...config,
-    gateway: {
-      ...config.gateway,
-      mode: "local",
-      remote: config.gateway?.remote
-        ? {
-            url: config.gateway.remote.url,
-            edgeAuth: config.gateway.remote.edgeAuth,
-            tlsFingerprint: config.gateway.remote.tlsFingerprint,
-          }
-        : undefined,
-      auth:
-        !hasUrlOverride && config.gateway?.auth?.mode
-          ? { mode: config.gateway.auth.mode }
-          : undefined,
-      tls: undefined,
-    },
-  };
-}
-
 export async function resolveGatewayStatusSummary(params: {
   daemonCfg: OpenClawConfig;
   cliCfg: OpenClawConfig;

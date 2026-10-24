@@ -1,5 +1,4 @@
 import { statSync } from "node:fs";
-import nodePath from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { resolveUnsuffixedSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target-paths.js";
 import {
@@ -59,7 +58,7 @@ export function selectAgentDatabaseInspectionTargets(
       }
       if (options.requireStartupMigrationReadiness && !skipped.has(row.path)) {
         createSubsystemLogger("state/agent-admission").warn(
-          `Skipped ${nodePath.basename(row.path)}: database is not a configured target; run openclaw doctor to inspect retained data.`,
+          `Skipped ${row.path}${row.agentId ? ` (agent ${row.agentId})` : ""}: database is not a configured target; run openclaw doctor to inspect retained data.`,
         );
         skipped.add(row.path);
       }

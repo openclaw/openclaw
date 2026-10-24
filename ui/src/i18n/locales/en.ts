@@ -1590,6 +1590,8 @@ const startupEnglish = {
     waitingOnSubagent: "Waiting on {name}",
     subagentsRunning: "{count} subagents running",
     subagentsRunningOne: "1 subagent running",
+    bubbleTaskOne: "1 task",
+    bubbleTasks: "{count} tasks",
     startupStatus: {
       preparingWorkspace: "Preparing workspace…",
       namingWorktree: "Naming worktree…",
@@ -1654,6 +1656,9 @@ const startupEnglish = {
     },
     sessionHeader: {},
     board: {},
+    codexSupervisionDisabled:
+      "Codex supervision is off. Enable it in plugin settings to continue this session.",
+    openCodexSettings: "Open settings",
     catalog: {},
     taskSuggestions: {},
     pullRequests: {

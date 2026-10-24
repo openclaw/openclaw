@@ -416,6 +416,9 @@ const AGGRESSIVE_PR_SMOKE_TEST_FILES = [
   "src/plugins/loader.runtime-registry.test.ts",
 ];
 const protectedRuntimeTestFiles = new Set(PR_PROTECTED_RUNTIME_TEST_FILES);
+// Roots whose tests have ordinary PR Vitest owners. Tests elsewhere, such as the
+// opt-in scripts/control-ui-retention census, keep their own config and command.
+const CHANGED_TEST_ROOTS = ["src", "test", "extensions", "packages", "ui"];
 
 /** Resolve owner areas and transitive consumers once, before projecting platform jobs. */
 export function resolveChangedNodeTestTargets(
@@ -491,11 +494,7 @@ export function resolveChangedNodeTestTargets(
     ]),
   ];
   let inventory: string[] | undefined;
-  const allFiles = () =>
-    (inventory ??= listExtensionTestFilesForRoots(
-      ["src", "test", "extensions", "packages", "ui"],
-      cwd,
-    ));
+  const allFiles = () => (inventory ??= listExtensionTestFilesForRoots(CHANGED_TEST_ROOTS, cwd));
   const optInTargets = new Set([...paths, ...smoke, ...ownerOptIns]);
   const expandTarget = (target: string): string[] => {
     if (isTestFileTarget(target)) {
@@ -537,6 +536,7 @@ export function resolveChangedNodeTestTargets(
       (file) =>
         isTestFileTarget(file) &&
         !file.endsWith(".live.test.ts") &&
+        CHANGED_TEST_ROOTS.some((root) => file.startsWith(`${root}/`)) &&
         (optInTargets.has(file) ||
           ((options.includePrExemptRuntimeTests !== false || !isPrExemptRuntimeTestFile(file)) &&
             (options.includeReleaseOnlyRuntimeTests !== false ||

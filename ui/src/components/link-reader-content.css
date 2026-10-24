@@ -238,12 +238,16 @@
   font-size: 11px;
   color: var(--muted);
 }
+.lr-checks .lr-note a,
 .lr-checks-footer a {
   display: inline-flex;
   align-items: center;
   gap: 5px;
+}
+.lr-checks-footer a {
   color: var(--muted);
 }
+.lr-checks .lr-note svg,
 .lr-checks-footer svg {
   width: 12px;
   height: 12px;

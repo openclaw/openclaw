@@ -384,7 +384,7 @@ later Doctor runs do not overwrite edits or recreate a deleted migrated job.
 Use `automations show`, `runs`, `enable`, and `disable` to manage the jobs.
 Legacy `system heartbeat` controls apply only to converted/default jobs. See [Heartbeat migration](/gateway/heartbeat).
 
-The `cron.*` Gateway methods and protocol v4 remain compatible. The deprecated
+The `cron.*` Gateway methods remain compatible. The deprecated
 `--wake now|next-heartbeat` field remains accepted, but scheduled jobs execute
 their payload through ordinary session execution when the job is due. It does
 not add another wake or deferral step. Use the job's schedule to control timing.

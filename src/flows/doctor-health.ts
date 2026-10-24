@@ -302,6 +302,21 @@ async function runDoctorHealthFlowWithResult(
         }),
       );
 
+      const { prepareDoctorClientCredentials } =
+        await import("../commands/doctor-client-credentials.js");
+      if (
+        !(await prepareDoctorClientCredentials({
+          runtime: doctorRuntime,
+          options,
+          prompter,
+          maintenanceActive: maintenance !== undefined,
+          schemas,
+        }))
+      ) {
+        exitCode = 1;
+        return undefined;
+      }
+
       if (maintenance && (options.repair === true || options.yes === true)) {
         const repairedState = await measure("doctor.state-database-repair", () =>
           startup.repairDoctorStateDatabase(

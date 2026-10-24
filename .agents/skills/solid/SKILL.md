@@ -5,15 +5,17 @@ description: Write, refactor, review, or test Solid 2 UI in OpenClaw (Control UI
 
 # Solid 2 in OpenClaw
 
-The Control UI and plugin views (`extensions/x`, `extensions/workboard`) render with **Solid 2** (`solid-js`, `@solidjs/web`, `@solidjs/signals`, compiled by `@solidjs/vite-plugin`/`@solidjs/compiler`). Lit and Web Awesome are removed from these surfaces; new code is Solid only. The Canvas hosts and A2UI v0.8 catalog also use Solid; the v0.9 catalog still uses the upstream renderer from `@a2ui/web_core`.
+The Control UI and plugin views (`extensions/x`, `extensions/workboard`) render with **Solid 2** (`solid-js`, `@solidjs/web`, `@solidjs/signals`, compiled by `@solidjs/vite-plugin`/`@solidjs/compiler`). Lit and Web Awesome are removed from these surfaces; new code is Solid only. The Canvas hosts also use Solid.
 
-Read [ui/AGENTS.md](../../../ui/AGENTS.md) first; its state-ownership rules apply to Solid unchanged. Use the exact installed Solid pins from the owning `package.json`: the runtime and compiler are `2.0.0-rc.16`, and `@solidjs/vite-plugin` is `3.0.0-next.50`. `@solidjs/testing-library` remains `1.0.0-beta.3`. `solid-js` and `@solidjs/*` are exempt from the repository's seven-day release-age gate (Peter, 2026-10-11); third-party Solid ecosystem packages remain subject to it.
+Read [ui/AGENTS.md](../../../ui/AGENTS.md) first; its state-ownership rules apply to Solid unchanged. Use the exact installed Solid pins from the owning `package.json`: the runtime and compiler are `2.0.0-rc.18`, and `@solidjs/vite-plugin` is `3.0.0-next.51`. `@solidjs/testing-library` remains `1.0.0-beta.3`. `solid-js` and `@solidjs/*` are exempt from the repository's seven-day release-age gate (Peter, 2026-10-11). Peter also approved exact-version exceptions for `seroval@1.7.0` and `seroval-plugins@1.7.0` on 2026-10-24: rc.18 requires them for SSR/hydration serialization. Other third-party Solid ecosystem packages remain subject to the gate.
 
 ## Rules that keep the UI correct
 
-**Before your first edit**, read the installed `ui/node_modules/solid-js/CHEATSHEET.md`, especially its "What changed from 1.x" list. It is the rc.16 API contract, written as a guard against React and Solid 1 priors, the two dominant bug sources. For new code or a Solid audit, then read [idioms](references/idioms.md) and [lessons](references/lessons.md); to refactor or review existing code, also use the [refactor checklist](references/refactor-checklist.md). Check `solid-js/types/client/flow.d.ts` and the installed `@solidjs/signals` / `@solidjs/web` types when choosing an API. rc.16 has no `createAsync`: asynchronous values are ordinary computations returning promises or async iterables. `createDeferred` explicitly permits stale answers during refetch; use it only when that lag is the intended presentation contract.
+**Before your first edit**, read the installed `ui/node_modules/solid-js/CHEATSHEET.md`, especially its "What changed from 1.x" list. It is the rc.18 API contract, written as a guard against React and Solid 1 priors, the two dominant bug sources. For new code or a Solid audit, then read [idioms](references/idioms.md) and [lessons](references/lessons.md); to refactor or review existing code, also use the [refactor checklist](references/refactor-checklist.md). Check `solid-js/types/client/flow.d.ts` and the installed `@solidjs/signals` / `@solidjs/web` types when choosing an API. rc.18 has no `createAsync`: asynchronous values are ordinary computations returning promises or async iterables. `createDeferred` explicitly permits stale answers during refetch; use it only when that lag is the intended presentation contract.
 
 For async reads, mutations, keyed projections, lazy components, or coordinated loading, read the [async and action recipes](references/async-and-actions.md). Cron is the worked reference: plain owners admit requests and writes; Solid presents their readiness and optimistic transitions.
+
+For lists, derivations, copies, or anything on a hot path, read [performance](references/performance.md).
 
 1. **Domain owners stay plain TypeScript.** The Gateway store, capabilities, `lib/sessions/*`, caches, persistence, and mutation authority keep synchronous mutate-then-read semantics. Solid 2 writes become visible only after a microtask flush, so authoritative state never lives in a signal. → [state and ownership](references/state-and-ownership.md)
 2. **Components consume projections** from `ui/src/lib/reactive/` (one per owner and scope, never a second store) and `useApplication()` for the application context. Add a thin adapter only with its first production caller; subscribe to ordered events directly.
@@ -52,7 +54,7 @@ Use `jsxImportSource: "@solidjs/web"` and its JSX types, not Solid 1's `solid-js
 
 ## Traps that compile but break
 
-- `on:x`, `attr:x`, `bool:x`, `classList`, and `use:` are gone in Solid 2; they compile to literal attributes or no-ops (lint flags them). `prop:` is the only namespace left.
+- `on:x`, `oncapture:`, `attr:x`, `bool:x`, `classList`, and `use:` are compile errors on native elements in rc.18. Spreads can still hide them from the compiler; keep the lint guard. `prop:` and XML namespaces remain supported.
 - Events are **camelCase** (`onClick`). Dashed custom events need the exact dash, such as `onSession-change`, or a `listen(...)` ref factory.
 - Native event bindings bind once: dispatch through a stable callback that reads the current handler prop. Runtime spreads, including dynamic elements, can update handlers.
 - A read right after a write sees the **old** value until `flush()`. Don't write-then-read in handlers; derive.

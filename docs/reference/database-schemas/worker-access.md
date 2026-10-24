@@ -38,6 +38,10 @@ caller label. A reservation includes worker queueing, preparation, and result
 delivery; its duration alone does not establish a slow SQL transaction.
 Schemas, stored data, live commit authority, and update behavior are unchanged.
 
+Refused ordered session reads include the conflicting admission's shortened,
+bounded database path, operation, thread, age, and any recorded caller or worker
+operation labels in the error itself. They never include request payloads.
+
 SQLite admission delivery follows each worker's ordered cursor. The first snapshot
 includes its shared revision cells; later publications send only new or replaced
 facts, session scopes, and reference cells. Existing cells carry invalidation
@@ -61,6 +65,10 @@ attachment promotion, and cleanup claims/deletions retain their writer ordering
 and current-row checks. Scheduled media maintenance waits until after the first
 two minutes of startup, then keeps its hourly maintenance cadence; explicit media
 cleanup and retention rules are unchanged.
+Managed media retention selects the message IDs already recorded on attachment
+metadata through the transcript owner's identity index. Unrelated indexed
+transcript payloads stay in storage. Off-path branches, reset archives, and
+legacy messages without indexed IDs remain eligible to retain their attachments.
 The shared implementations are
 [`sqlite-readonly-worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/infra/sqlite-readonly-worker.ts),
 [`openclaw-state-read-worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/state/openclaw-state-read-worker.ts),
@@ -70,10 +78,16 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
-If PostgreSQL schema publication invalidates a shared-state reader's admission
-before its callback starts, the reader rolls back and retries admission once
-using the owner's current facts. It never retries caller work or refreshes an
-imported snapshot. Schema validation and live ownership checks remain in force.
+If PostgreSQL schema publication invalidates admission, connection opening,
+shared-state reads before their callback, and standalone feature-schema ensures
+share a brief backoff retry for at most one second, bounded by the caller's
+deadline and cancellation. Transaction retries require a completed rollback;
+feature-schema ensures only replay their own schema work. Each retry asks the
+owner for current facts, even if physical facts arrived before version facts;
+ordinary reads do not poll. A longer publication gap
+still fails visibly. Readers never replay caller work or refresh an imported
+snapshot, and fragment checks inside a caller's transaction do not retry.
+Schema validation and live ownership checks remain in force.
 
 Startup client credential preparation uses the existing credential worker and
 its native custody admission. The admission's receipt postimage also decides

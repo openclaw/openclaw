@@ -12156,8 +12156,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     );
     expect(prerelease.uses).toBe(reusableWorkflow);
     expect(prerelease.with).toMatchObject({
-      candidate_artifact_name: "${{ needs.prepare_release_package.outputs.artifact_name }}",
-      candidate_artifact_run_id: "${{ needs.prepare_release_package.outputs.artifact_run_id }}",
+      candidate_artifact_name:
+        "${{ needs.prepare_release_package.outputs.windows_node_artifact_name }}",
+      candidate_artifact_run_id: "${{ github.run_id }}",
+      candidate_sha256: "${{ needs.prepare_release_package.outputs.windows_node_package_sha256 }}",
       windows_node_release_asset_name:
         "${{ needs.resolve_windows_node_release_artifacts.outputs.prerelease_asset_name }}",
       windows_node_release_asset_sha256:
@@ -12170,8 +12172,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(stable.uses).toBe(reusableWorkflow);
     expect(stable.with).toMatchObject({
       allow_protocol_mismatch: false,
-      candidate_artifact_name: "${{ needs.prepare_release_package.outputs.artifact_name }}",
-      candidate_artifact_run_id: "${{ needs.prepare_release_package.outputs.artifact_run_id }}",
+      candidate_artifact_name:
+        "${{ needs.prepare_release_package.outputs.windows_node_artifact_name }}",
+      candidate_artifact_run_id: "${{ github.run_id }}",
+      candidate_sha256: "${{ needs.prepare_release_package.outputs.windows_node_package_sha256 }}",
       windows_node_release_asset_name:
         "${{ needs.resolve_windows_node_release_artifacts.outputs.stable_asset_name }}",
       windows_node_release_asset_sha256:
@@ -12188,8 +12192,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "resolve_windows_node_main_source",
     ]);
     expect(main.with).toMatchObject({
-      candidate_artifact_name: "${{ needs.prepare_release_package.outputs.artifact_name }}",
-      candidate_artifact_run_id: "${{ needs.prepare_release_package.outputs.artifact_run_id }}",
+      candidate_artifact_name:
+        "${{ needs.prepare_release_package.outputs.windows_node_artifact_name }}",
+      candidate_artifact_run_id: "${{ github.run_id }}",
+      candidate_sha256: "${{ needs.prepare_release_package.outputs.windows_node_package_sha256 }}",
       windows_node_source: "main",
       windows_node_source_sha:
         "${{ needs.resolve_windows_node_main_source.outputs.main_source_sha }}",

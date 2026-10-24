@@ -452,6 +452,15 @@ describe("security review workflow trust boundaries", () => {
       { eventName: "workflow_run", sourceEvent: "workflow_dispatch", allowed: true },
       { action: "created", body: "/allow-security-sensitive-change", allowed: true },
       { action: "created", body: "/allow-dependencies-change", allowed: true },
+      { action: "created", body: `/refresh-security-review ${"a".repeat(40)}`, allowed: true },
+      { action: "edited", body: `/refresh-security-review ${"a".repeat(40)}`, allowed: false },
+      { action: "deleted", body: `/refresh-security-review ${"a".repeat(40)}`, allowed: false },
+      {
+        action: "created",
+        body: `/refresh-security-review ${"a".repeat(40)}`,
+        issue: true,
+        allowed: false,
+      },
       { action: "created", body: "Thanks", allowed: false },
       {
         action: "edited",

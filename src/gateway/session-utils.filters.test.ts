@@ -2,7 +2,6 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/schema/sessions-list.js";
 import type { SessionEntry } from "../config/sessions.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { runSynchronousWork } from "../shared/synchronous-work.js";
 import {
   requestContext,
   sessionReadHandlers,
@@ -61,7 +60,7 @@ function projectionFixture(
   return projection;
 }
 function filteredKeys(params: Parameters<typeof filterSessionEntries>[0]) {
-  return runSynchronousWork(filterSessionEntries(params)).entries.map(([key]) => key);
+  return filterSessionEntries(params).entries.map(([key]) => key);
 }
 
 it.each([true, false])("pages owner-first rows with full-roster facets (ordered=%s)", (ordered) => {
@@ -85,9 +84,11 @@ it.each([true, false])("pages owner-first rows with full-roster facets (ordered=
   ] as const) {
     const opts = { limit: 2, offset, includePeople: true };
     const prepared = prepareSessionRowSelection(projection, opts, { ordered });
-    const selected = runSynchronousWork(
-      selectSessionEntries({ ...prepared, entriesSorted: ordered, ownerFirstActorId: adaId }),
-    );
+    const selected = selectSessionEntries({
+      ...prepared,
+      entriesSorted: ordered,
+      ownerFirstActorId: adaId,
+    });
     expect({
       ...selected,
       entries: selected.entries.map(([key]) => key),

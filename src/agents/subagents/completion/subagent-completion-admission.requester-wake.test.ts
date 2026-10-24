@@ -152,6 +152,125 @@ describe("persisted subagent requester wakes", () => {
     },
   );
 
+  it.each([
+    "same terminal",
+    "terminal time",
+    "terminal result",
+    "start time",
+    "interruption reason",
+    "sticky fence",
+    "cleanup receipt",
+    "new recovery marker",
+    "running execution",
+    "kill intent",
+    "lifecycle",
+    "child incarnation",
+    "run generation",
+    "requester turn",
+  ] as const)(
+    "settles a cleaned interrupted winner only with unchanged custody: %s",
+    async (change) => {
+      const input = failedRecords("failed", { status: "error", error: "restart interrupted run" });
+      input.subagent.generation = 1;
+      input.subagent.terminalOwner =
+        change === "new recovery marker" ? undefined : "interrupted-recovery";
+      input.subagent.execution.startedAt = input.subagent.createdAt;
+      input.subagent.execution.lifecycleGeneration = "original-lifecycle";
+      input.subagent.execution.interruptionReason = "gateway-restart";
+      input.subagent.cleanupCompletedAt = undefined;
+      input.subagent.requesterSettleWake!.status = "dispatching";
+      input.subagent.requesterSettleWake!.attemptCount = 1;
+      persistOwner(input);
+      const observed = input.subagent;
+      // A follow-up owns the child session; the original run still owes its admitted wake.
+      const successor = structuredClone(observed);
+      successor.runId = "followup-run";
+      successor.taskRunId = "followup-run";
+      successor.generation = 2;
+      successor.terminalOwner = undefined;
+      successor.expectsCompletionMessage = false;
+      successor.requesterSettleWake = undefined;
+      persistOwner({ subagent: successor });
+      using driver = requesterWakeDriver([input]);
+      await driver.controller.completeCleanupBookkeeping({
+        runId: observed.runId,
+        entry: observed,
+        cleanup: "keep",
+        completedAt: Date.now(),
+        preserveTranscript: true,
+        skipRequesterSettleWake: true,
+      });
+      expect(currentRun(input).terminalOwner).toBeUndefined();
+      expect(currentRun(input).execution.suppressSessionEffects).toBe(true);
+      expect(observed.terminalOwner).toBe(
+        change === "new recovery marker" ? undefined : "interrupted-recovery",
+      );
+      if (change !== "same terminal") {
+        await updateCompletionOwner(observed.runId, (current) => {
+          const next = structuredClone(current);
+          switch (change) {
+            case "terminal time":
+              next.execution.endedAt! += 1;
+              break;
+            case "terminal result":
+              next.execution.outcome = { status: "error", error: "different terminal" };
+              break;
+            case "start time":
+              next.execution.startedAt! += 1;
+              break;
+            case "interruption reason":
+              next.execution.interruptionReason = undefined;
+              break;
+            case "sticky fence":
+              next.execution.suppressSessionEffects = undefined;
+              break;
+            case "cleanup receipt":
+              next.cleanupCompletedAt = undefined;
+              break;
+            case "new recovery marker":
+              next.terminalOwner = "interrupted-recovery";
+              break;
+            case "running execution":
+              next.execution.status = "running";
+              break;
+            case "kill intent":
+              next.killIntent = { requestedAt: Date.now(), reason: "stop" };
+              break;
+            case "lifecycle":
+              next.execution.lifecycleGeneration = "replacement-lifecycle";
+              break;
+            case "child incarnation":
+              next.childSessionIdentity!.sessionId = "replacement-session";
+              break;
+            case "run generation":
+              next.generation = 3;
+              break;
+            case "requester turn":
+              next.requesterTurnRunId = "different-requester-turn";
+              break;
+          }
+          return next;
+        });
+      }
+      const before = stored(input);
+      expect(before).toBeDefined();
+      const settlement = settleOne(input, { delivered: true, path: "direct" });
+      if (change === "same terminal") {
+        await expect(settlement).resolves.toMatchObject({ applied: true });
+      } else {
+        await expect(settlement).rejects.toThrow(/owner changed before mutation/);
+      }
+      db.value = await reopenOwners();
+      if (change === "same terminal") {
+        expect(stored(input)?.delivery?.status).toBe("delivered");
+        expect(stored(input)?.requesterSettleWake).toBeUndefined();
+        expect(stored(input)?.execution).toEqual(before?.execution);
+      } else {
+        expect(stored(input)).toEqual(before);
+      }
+    },
+  );
+
   it("settles lost operator authority without discarding child results or queuing a notice", async () => {
     const input = armRequesterWake(records());
     input.subagent.cleanupCompletedAt = undefined;

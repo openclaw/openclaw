@@ -14,9 +14,9 @@ import {
   runSqliteImmediateTransactionSync,
 } from "../../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
-import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
 import {
   assertSessionTranscriptHot,
+  readHotSessionTranscriptSnapshot,
   SessionTranscriptColdError,
 } from "./session-cold-storage-state.js";
 

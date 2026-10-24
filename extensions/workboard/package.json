@@ -7,16 +7,16 @@
   "dependencies": {
     "@openclaw/gateway-protocol": "workspace:*",
     "@openclaw/workboard-contract": "workspace:*",
-    "@solidjs/web": "2.0.0-rc.16",
-    "solid-js": "2.0.0-rc.16",
-    "typebox": "1.3.37",
+    "@solidjs/web": "2.0.0-rc.18",
+    "solid-js": "2.0.0-rc.18",
+    "typebox": "1.4.1",
     "zod": "4.6.7"
   },
   "devDependencies": {
     "@openclaw/gateway-client": "workspace:*",
     "@openclaw/normalization-core": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
-    "@solidjs/compiler": "2.0.0-rc.16",
+    "@solidjs/compiler": "2.0.0-rc.18",
     "esbuild": "0.28.2",
     "openclaw": "workspace:*"
   },

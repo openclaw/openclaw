@@ -19,6 +19,7 @@ import {
   CONTROL_UI_BUILD_ID_ATTRIBUTE,
   isControlUiVersionedPublicAsset,
 } from "../src/gateway/control-ui-root-assets.ts";
+import { selectControlUiRoutePreloads } from "../src/gateway/control-ui-route-preloads.ts";
 import {
   collectControlUiBootAssets,
   controlUiBootPreloadsPlugin,
@@ -33,6 +34,7 @@ import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
 import { controlUiPluginDistributionsPlugin } from "./config/control-ui-plugin-distributions.ts";
 import { controlUiSocialCardPlugin } from "./config/control-ui-social-card.ts";
 import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
+import { extractControlUiStartupAssetPaths } from "./config/control-ui-startup-assets.ts";
 import { normalizeControlUiBuildInfo } from "./src/build-info-normalizers.ts";
 import type { ControlUiBuildInfo } from "./src/build-info.ts";
 
@@ -77,6 +79,8 @@ const controlUiPrecompressedAssetExtensions = new Set([
 ]);
 
 const compressBrotli = promisify(brotliCompress);
+// Small-asset sidecars waste entries in the installed package's updater budget.
+const CONTROL_UI_PRECOMPRESS_MIN_BYTES = 4096;
 
 function isControlUiPrecompressedAsset(fileName: string) {
   return (
@@ -88,12 +92,20 @@ function isControlUiPrecompressedAsset(fileName: string) {
 export async function createControlUiPrecompressedAssetVariants(
   fileName: string,
   source: string | Uint8Array,
+  startupAssets: ReadonlySet<string> = new Set(),
 ): Promise<Array<{ fileName: string; source: Buffer }>> {
   if (!isControlUiPrecompressedAsset(fileName)) {
     return [];
   }
   const body = typeof source === "string" ? Buffer.from(source) : source;
-  return [
+  if (
+    body.byteLength < CONTROL_UI_PRECOMPRESS_MIN_BYTES &&
+    path.extname(fileName).toLowerCase() !== ".css" &&
+    !startupAssets.has(fileName)
+  ) {
+    return [];
+  }
+  const variants = [
     {
       fileName: `${fileName}.br`,
       source: await compressBrotli(body, {
@@ -107,6 +119,7 @@ export async function createControlUiPrecompressedAssetVariants(
       source: Buffer.from(gzip(body, 11)),
     },
   ];
+  return variants.filter((variant) => variant.source.byteLength < body.byteLength);
 }
 
 function normalizeBase(input: string): string {
@@ -558,6 +571,14 @@ function controlUiBuildOutputPlugin(
       if (!buildOutDir) {
         this.error("Control UI build requires an output directory");
       }
+      const startupAssets = new Set(
+        extractControlUiStartupAssetPaths(
+          selectControlUiRoutePreloads(
+            fs.readFileSync(path.join(buildOutDir, "index.html"), "utf8"),
+            null,
+          ),
+        ),
+      );
       const logger = this.environment.logger;
       let completed = 0;
       let sidecars = 0;
@@ -568,7 +589,11 @@ function controlUiBuildOutputPlugin(
         // later generateBundle hook. Read from disk here so sidecars always
         // encode the exact final bytes that the identity response serves.
         const source = fs.readFileSync(path.join(buildOutDir, output.fileName));
-        const variants = await createControlUiPrecompressedAssetVariants(output.fileName, source);
+        const variants = await createControlUiPrecompressedAssetVariants(
+          output.fileName,
+          source,
+          startupAssets,
+        );
         if (variants.length === 0) {
           return;
         }

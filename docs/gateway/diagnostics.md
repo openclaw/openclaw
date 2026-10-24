@@ -649,7 +649,9 @@ Heap and CPU profiles label dependency frames as `[dep:<pkg>]` with URL
 versions, filenames, and absolute paths stay hidden. URLs with query or fragment
 markers remain redacted. Frames with script ID `0`,
 an empty URL, and a negative line number use `[native]`, except for known V8
-engine labels such as `(root)`. This bucket identifies missing JavaScript source
+engine labels such as `(root)`, `(V8 API)`, `(GC)`, and `(PARSER)`. Preserving those
+VM states distinguishes no-stack engine work without exposing private symbols.
+The `[native]` bucket identifies missing JavaScript source
 attribution, not a specific native allocator or external Buffer bytes. Other
 unrecognized frames remain `[redacted]`; `redactedNodeCount` excludes dependency
 and native labels (CPU nodes with hidden deoptimization reasons still count).
@@ -780,6 +782,13 @@ transport. If a worker cannot handle port messages, native V8 interrupts still
 refresh its heap and external counters; ArrayBuffer coverage remains unavailable
 until the worker responds. Memory pressure warnings include these counters and the external-memory
 limit caveat; Node does not provide a worker limit for external/native allocations.
+
+`postgresBridgeCount` separately counts live PostgreSQL bridge isolates, including
+bridges inside registered worker parents. The count updates when a bridge exits,
+without waiting for a heap sample, and drops the parent's bridges when that parent
+exits. It includes direct bridges already present in `workerCount`; do not add the
+two counts together. Worker heap totals and coverage still describe the registered
+workers, so this count does not imply heap coverage for nested bridges.
 
 Linux samples add anonymous-page counters asynchronously. Worker sample ages
 include that delay; coverage and heap counters describe acquisition. These fields

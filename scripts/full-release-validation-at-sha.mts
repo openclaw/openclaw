@@ -869,10 +869,14 @@ function warnCandidateToolingLag(candidateSha: string) {
       `${candidateSha}...${mainSha}`,
     ]),
   );
-  const changedPaths = run("git", ["diff", "--no-renames", "--name-only", candidateSha, mainSha])
-    .split(/\r?\n/u)
-    .filter(Boolean);
-  if (commitCount > 0 && changedPaths.length > 0) {
+  // Long-lived release branches can differ from main by tens of thousands of
+  // paths; --shortstat keeps the count bounded instead of buffering every name.
+  const changedPathCount = Number(
+    /^\s*(\d+) files? changed/u.exec(
+      run("git", ["diff", "--no-renames", "--shortstat", candidateSha, mainSha]),
+    )?.[1] ?? 0,
+  );
+  if (commitCount > 0 && changedPathCount > 0) {
     const changedAreas = run("git", [
       "diff",
       "--no-renames",
@@ -888,7 +892,7 @@ function warnCandidateToolingLag(candidateSha: string) {
         candidateSha,
         mainSha,
         commitCount,
-        changedPaths.length,
+        changedPathCount,
         changedAreas,
       ),
     );

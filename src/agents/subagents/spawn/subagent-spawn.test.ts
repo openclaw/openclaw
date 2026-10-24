@@ -198,6 +198,28 @@ describe("spawnSubagentDirect seam flow", () => {
     },
   );
 
+  it.each([false, true])(
+    "rejects invalid worktree names before reserving native work (collect=%s)",
+    async (collect) => {
+      const onSpawnEffectsStart = vi.fn();
+      const result = await spawn(
+        {
+          task: "inspect",
+          worktree: true,
+          worktreeName: "codex/qa-telemetry-prompt-cache-20261016",
+          collect,
+        },
+        { ...collectorContext, onSpawnEffectsStart },
+      );
+      expect(onSpawnEffectsStart).not.toHaveBeenCalled();
+      expectNoChildSpawnSideEffects();
+      expect(result).toEqual({
+        status: "error",
+        error: "worktree name must match [a-z0-9][a-z0-9-]{0,63}",
+      });
+    },
+  );
+
   it("rejects private collector completion before child effects", async () => {
     const result = await spawn({ task: "private work", completionTarget: "parent", collect: true });
     expect(result).toMatchObject({
@@ -300,6 +322,7 @@ describe("spawnSubagentDirect seam flow", () => {
 
     expect(result.status).toBe("accepted");
     expect(result.sessionKey).toBe(result.childSessionKey);
+    expect(result.groupId).toBe("swarm:agent:main:main:parent-run");
     expect(result.expectsCompletionMessage).toBe(false);
     const registerInput = firstRegisteredSubagentRun();
     expect(registerInput).toMatchObject({
@@ -373,7 +396,7 @@ describe("spawnSubagentDirect seam flow", () => {
       { agentSessionKey: "agent:main:other", requesterRunId: "parent-run" },
     );
 
-    expect(result).toMatchObject({ status: "accepted" });
+    expect(result).toMatchObject({ status: "accepted", groupId: "swarm:replay" });
     expect(result.runId).toMatch(/^swarm_[0-9a-f]{32}$/u);
     expect(otherRequesterResult).toMatchObject({ status: "accepted" });
     expect(otherRequesterResult.runId).toMatch(/^swarm_[0-9a-f]{32}$/u);

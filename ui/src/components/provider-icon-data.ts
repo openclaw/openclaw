@@ -2,6 +2,7 @@ import { takeGraphemes } from "../lib/graphemes.ts";
 
 const PROVIDER_ICON_NAMES = new Set([
   "abacus",
+  "abliteration",
   "alibaba",
   "amp",
   "antigravity",
