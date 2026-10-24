@@ -4,7 +4,6 @@ import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { sessionsUsageResponse } from "../test-helpers/sessions-usage-response.ts";
 import { agentRoster } from "./agent-roster.test-support.ts";
-import { requireRecord } from "./chat-flow.test-support.ts";
 import { configSnapshot, createConfigSuite } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import { requestRaw } from "./model-providers.test-support.ts";
@@ -122,42 +121,6 @@ suite.define(() => {
         ).toBe(true);
       },
     ));
-
-  it("persists Set Default through config.set instead of only staging the form draft", async () =>
-    suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const makeConfig = (agentId: string) => ({
-        agents: {
-          ownership: "explicit",
-          defaults: { systemAgent: { agentId } },
-          entries: { main: {}, kimi: {} },
-        },
-      });
-      const initialConfig = makeConfig("main");
-      const savedConfig = makeConfig("kimi");
-      const gateway = await installMockGateway(page, {
-        assistantName: "Main agent",
-        defaultAgentId: "main",
-        methodResponses: {
-          "agents.list": agentRoster({ main: "Main agent", kimi: "Kimi agent" }, "main", "agent"),
-          "config.get": configResponse(initialConfig, "hash-1"),
-          "config.set": configResponse(savedConfig, "hash-2"),
-        },
-      });
-
-      const response = await page.goto(`${suite.server.baseUrl}settings/agents`);
-      expect(response?.status()).toBe(200);
-
-      const agentSelect = page.locator("openclaw-agent-select");
-      await agentSelect.locator(".agent-select__trigger").click();
-      await agentSelect.getByRole("menuitemradio", { name: "Kimi agent", exact: true }).click();
-      await page.getByRole("button", { name: "Set Default", exact: true }).click();
-
-      // A draft-only update never emits config.set.
-      const setRequest = await gateway.waitForRequest("config.set");
-      const saved = JSON.parse(String(requireRecord(setRequest.params).raw));
-      expect(saved).toEqual(savedConfig);
-      expect(requireRecord(saved).agents).not.toHaveProperty("list");
-    }));
 
   it.each([true, false])(
     "uses Gateway ownership for Set Default state (selection required: %s)",

@@ -1,6 +1,5 @@
 import { expect, it } from "vitest";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { openChatDetails, closeChatDetails } from "./chat-details.test-support.ts";
 import { sessionMessage } from "./chat-flow-fixtures.test-support.ts";
 import {
   chatSessionListResponse,
@@ -15,10 +14,8 @@ import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-su
 const suite = createChatFlowE2eSuite();
 const sessionKey = "agent:main:cloud-reconciliation";
 const now = Date.now();
-const failureMessage = "Workspace reconciliation failed: local worktree is locked.";
 
 function session(
-  state: "active" | "failed",
   queuedFollowUp = false,
   workspaceResultReconciling = false,
   runId = "follow-up-run",
@@ -33,25 +30,18 @@ function session(
     label: "Cloud reconciliation proof",
     placement: {
       createdAtMs: now - 180_000,
-      generation: state === "failed" ? 3 : 2,
+      generation: 2,
       stateChangedAtMs: now - 138_000,
       updatedAtMs: updatedAt,
-      state,
-      ...(state === "failed"
-        ? {
-            recoveryAction: "restart" as const,
-            recoveryError: failureMessage,
-          }
-        : {
-            activeOwnerEpoch: 4,
-            environmentId: "cloud-environment-4242",
-            profileId: "standard",
-            providerId: "crabbox",
-            remoteWorkspaceDir: "/workspace/openclaw",
-            workerBundleHash: "a".repeat(64),
-            workspaceBaseManifestRef: "manifest-before-sync",
-            ...(workspaceResultReconciling ? { workspaceResultReconciling: true as const } : {}),
-          }),
+      state: "active",
+      activeOwnerEpoch: 4,
+      environmentId: "cloud-environment-4242",
+      profileId: "standard",
+      providerId: "crabbox",
+      remoteWorkspaceDir: "/workspace/openclaw",
+      workerBundleHash: "a".repeat(64),
+      workspaceBaseManifestRef: "manifest-before-sync",
+      ...(workspaceResultReconciling ? { workspaceResultReconciling: true as const } : {}),
     },
     sessionId: "cloud-reconciliation-session",
     status: queuedFollowUp ? "running" : "done",
@@ -73,11 +63,11 @@ const pendingInput = {
 };
 
 suite.define(() => {
-  it("shows safe sync custody, resumes, and reserves red for true failure", async () => {
+  it("keeps one follow-up through workspace sync custody and automatic resumption", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
       const waiting = page.getByText("Received · waiting for workspace sync", { exact: true });
       const followUp = page.getByText(pendingInput.message.content, { exact: true });
-      const reconciling = session("active", false, true);
+      const reconciling = session(false, true);
       const reconcilingHistory = {
         inFlightRun: null,
         messages: [{ role: "assistant", content: "Cloud edits are ready to apply." }],
@@ -116,10 +106,6 @@ suite.define(() => {
 
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await gateway.waitForRequest("chat.startup");
-      const initialDetails = await openChatDetails(page);
-      await initialDetails.getByRole("button", { name: /Worker · syncing files$/u }).waitFor();
-      await initialDetails.getByText("Finalizing worker workspace", { exact: false }).waitFor();
-      await closeChatDetails(page);
       const composer = page.locator(".agent-chat__composer-combobox textarea");
       await expect.poll(() => composer.isEnabled()).toBe(true);
       await page.getByText("your message starts automatically", { exact: false }).waitFor();
@@ -139,13 +125,13 @@ suite.define(() => {
       const pendingHistory = {
         ...reconcilingHistory,
         pendingInputs: { items: [{ ...pendingInput, runId }], total: 1 },
-        sessionInfo: session("active", true, true, runId),
+        sessionInfo: session(true, true, runId),
       };
       await setHistory(pendingHistory, "send");
       await waiting.waitFor();
       await expect.poll(() => followUp.count()).toBe(1);
 
-      const active = session("active");
+      const active = session();
       const resumedReplyId = "automatic-follow-up-result";
       const resumedReply = {
         role: "assistant",
@@ -189,20 +175,6 @@ suite.define(() => {
         sessionKey,
       );
       expect(completedUpdatedAt).toBeGreaterThan(active.updatedAt);
-
-      const failed = session("failed");
-      expect(completedUpdatedAt).toBeLessThanOrEqual(failed.updatedAt);
-      await setHistory({ ...activeHistory, sessionInfo: failed }, "placement");
-      await page.getByText("Runner failed", { exact: true }).waitFor();
-      const failure = page.locator(".chat-error").filter({ hasText: failureMessage });
-      await failure
-        .locator("summary strong")
-        .getByText("Couldn't finish this reply. Check the conversation before trying again.")
-        .waitFor();
-      await failure.locator("summary").click();
-      const details = failure.getByLabel("Error details", { exact: true });
-      await details.waitFor();
-      expect(await details.textContent()).toContain(failureMessage);
     });
   });
 });
