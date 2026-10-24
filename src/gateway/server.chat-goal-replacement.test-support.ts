@@ -21,10 +21,6 @@ import * as partials from "./server-methods/chat-transcript-persistence.js";
 import type { RespondFn, GatewayRequestContext, GatewayClient } from "./server-methods/types.js";
 import { gatewayProfile } from "./server/client-fixtures.test-support.js";
 
-function agentMeta(sessionId: string) {
-  return { sessionId, provider: "test", model: "test", usage: { input: 1, output: 1 } };
-}
-
 export function registerGoalReplacementCases(
   scope: () => { agentId: string; sessionKey: string; sessionId: string; storePath: string },
   runEmbeddedAgent: MockInstance<typeof executeEmbeddedAgent>,
@@ -38,24 +34,23 @@ export function registerGoalReplacementCases(
   getContext: () => GatewayRequestContext,
   client: GatewayClient,
 ) {
-  // Mode, state after interruption, objective source, injected failure, eventual resume.
   it.each([
-    ["success", "active", "replacement", undefined, true],
-    ["pause-retry", "active", "original", "pause", true],
-    ["edit-retry", "paused", "original", "edit", true],
-    ["resume-retry", "paused", "replacement", undefined, true],
-    ["concurrent-edit", "paused", "concurrent", undefined, false],
-    ["abort-warning", "active", "original", undefined, false],
-    ["allowed-principal", "active", "replacement", undefined, true],
-    ["denied-session", "active", "original", undefined, false],
-    ["revoke-settlement", "active", "original", undefined, false],
-    ["revoke-pause", "paused", "original", undefined, false],
-    ["revoke-edit", "paused", "replacement", undefined, false],
-    ["revoke-resume", "paused", "replacement", undefined, false],
-    ["revoke-recovery", "paused", "original", "edit", false],
+    "success",
+    "pause-retry",
+    "edit-retry",
+    "resume-retry",
+    "concurrent-edit",
+    "abort-warning",
+    "allowed-principal",
+    "denied-session",
+    "revoke-settlement",
+    "revoke-pause",
+    "revoke-edit",
+    "revoke-resume",
+    "revoke-recovery",
   ] as const)(
     "settles the exact executing turn before pause/edit/resume (%s)",
-    async (mode, interruptedStatus, objectiveSource, failure, resumes) => {
+    async (mode) => {
       const secured =
         mode === "allowed-principal" || mode === "denied-session" || mode.startsWith("revoke-");
       const initialConfig = getContext().getRuntimeConfig();
@@ -125,7 +120,12 @@ export function registerGoalReplacementCases(
               .spyOn(partials, "persistAbortedPartials")
               .mockResolvedValue(ABORTED_PARTIAL_PERSISTENCE_WARNING)
           : undefined;
-      let failStage: "edit" | "pause" | undefined = failure;
+      let failStage =
+        mode === "edit-retry" || mode === "revoke-recovery"
+          ? "edit"
+          : mode === "pause-retry"
+            ? "pause"
+            : undefined;
       let resumeReadObserved = false;
       let attemptedResume: (goals.SessionGoalOperation & { action: "resume" }) | undefined;
       const resume = chatHandler.handleSessionGoalResumeChat;
@@ -170,8 +170,6 @@ export function registerGoalReplacementCases(
         });
       }
       runEmbeddedAgent.mockImplementation(async (params) => {
-        const { sessionId: id, sessionFile: file, replyOperation: operation } = params;
-        const { sessionKey } = scope();
         const first = runEmbeddedAgent.mock.calls.length === 1;
         if (first) {
           originalRun = params.runId!;
@@ -191,14 +189,26 @@ export function registerGoalReplacementCases(
             isCompacting: () => false,
             queueMessage: async () => {},
           };
-          operation?.attachBackend(backend);
-          runs.attachActiveEmbeddedRun(id, backend, sessionKey, file, "main", operation);
+          params.replyOperation?.attachBackend(backend);
+          runs.attachActiveEmbeddedRun(
+            params.sessionId,
+            backend,
+            scope().sessionKey,
+            params.sessionFile,
+            "main",
+            params.replyOperation,
+          );
           started.resolve();
           try {
             await physicalRelease.promise;
           } finally {
-            runs.detachActiveEmbeddedRun(id, backend, sessionKey, file);
-            operation?.detachBackend(backend);
+            runs.detachActiveEmbeddedRun(
+              params.sessionId,
+              backend,
+              scope().sessionKey,
+              params.sessionFile,
+            );
+            params.replyOperation?.detachBackend(backend);
           }
           oldSettled = true;
           order.push("settled");
@@ -213,7 +223,12 @@ export function registerGoalReplacementCases(
               durationMs: 0,
               aborted: true,
               stopReason: "aborted",
-              agentMeta: agentMeta(id),
+              agentMeta: {
+                sessionId: params.sessionId,
+                provider: "test",
+                model: "test",
+                usage: { input: 1, output: 1 },
+              },
             },
           };
         }
@@ -226,7 +241,15 @@ export function registerGoalReplacementCases(
         }));
         return {
           payloads: [{ text: "The updated checklist is complete." }],
-          meta: { durationMs: 0, agentMeta: agentMeta(id) },
+          meta: {
+            durationMs: 0,
+            agentMeta: {
+              sessionId: params.sessionId,
+              provider: "test",
+              model: "test",
+              usage: { input: 1, output: 1 },
+            },
+          },
         };
       });
       let replace: Promise<MockInstance<RespondFn>> | undefined;
@@ -235,13 +258,16 @@ export function registerGoalReplacementCases(
           setRuntimeConfigSnapshot(policy);
         }
         await patchSessionEntryCore(scope(), () => ({ totalTokens: 100, totalTokensFresh: true }));
-        const start = await rpc(
-          "chat.send",
-          goalStart("Finish the original checklist"),
-          undefined,
-          mode === "allowed-principal" ? requester : originalRequester,
-        );
-        expect(start.mock.calls[0]?.[0]).toBe(true);
+        expect(
+          (
+            await rpc(
+              "chat.send",
+              goalStart("Finish the original checklist"),
+              undefined,
+              mode === "allowed-principal" ? requester : originalRequester,
+            )
+          ).mock.calls[0]?.[0],
+        ).toBe(true);
         await started.promise;
         if (secured && mode !== "allowed-principal") {
           // The revoked replacement caller does not own the original turn. Role
@@ -286,6 +312,7 @@ export function registerGoalReplacementCases(
           const denied = await updateGoal(request);
           expect(denied.mock.calls[0]?.[0]).toBe(false);
           expect(order).toEqual([]);
+          expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
           expect(loadSessionEntry(scope())?.goal).toMatchObject(original);
           return;
         }
@@ -317,6 +344,7 @@ export function registerGoalReplacementCases(
               });
               expect(rejected.mock.calls[0]?.[0]).toBe(false);
               expect(order).toEqual([]);
+              expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
               expect(unrelatedInterrupted).not.toHaveBeenCalled();
             }
           } finally {
@@ -348,14 +376,22 @@ export function registerGoalReplacementCases(
         let response = await replace;
         if (mode !== "success" && mode !== "allowed-principal") {
           expect(response.mock.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
-          expect(order).not.toContain("resumed");
+          expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
           expect(loadSessionEntry(scope())?.goal).toMatchObject({
             id: original.id,
-            status: interruptedStatus,
+            status:
+              mode === "pause-retry" || mode === "abort-warning" || mode === "revoke-settlement"
+                ? "active"
+                : "paused",
             objective:
-              objectiveSource === "original"
+              mode === "edit-retry" ||
+              mode === "pause-retry" ||
+              mode === "abort-warning" ||
+              mode === "revoke-settlement" ||
+              mode === "revoke-pause" ||
+              mode === "revoke-recovery"
                 ? original.objective
-                : objectiveSource === "concurrent"
+                : mode === "concurrent-edit"
                   ? "A newer operator decision"
                   : request.objective,
           });
@@ -365,6 +401,7 @@ export function registerGoalReplacementCases(
             const denied = await updateGoal(request);
             expect(denied.mock.calls[0]?.[0]).toBe(false);
             expect(order).toEqual(before);
+            expect(runEmbeddedAgent).toHaveBeenCalledTimes(1);
             return;
           }
           if (mode === "revoke-resume") {
@@ -406,8 +443,8 @@ export function registerGoalReplacementCases(
           status: "active",
           objective: request.objective,
           tokenStart: original.tokenStart,
-          tokenBudget: original.tokenBudget,
         });
+        expect(updated.tokenBudget).toBe(original.tokenBudget);
         expect(order.indexOf("settled")).toBeLessThan(order.indexOf("pause"));
         expect(order.indexOf("pause")).toBeLessThan(order.indexOf("edit"));
         expect(order.indexOf("edit")).toBeLessThan(order.indexOf("resumed"));
@@ -416,6 +453,7 @@ export function registerGoalReplacementCases(
           true,
           { action: "replace", replayed: true },
         ]);
+        expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
         expect(order.filter((stage) => stage === "interrupt")).toHaveLength(1);
       } finally {
         physicalRelease.resolve();
@@ -432,6 +470,13 @@ export function registerGoalReplacementCases(
           setRuntimeConfigSnapshot(initialConfig);
           expect((await waitForGatewayActiveWork(30_000)).drained).toBe(true);
         }
+        const resumes = [
+          "success",
+          "pause-retry",
+          "edit-retry",
+          "resume-retry",
+          "allowed-principal",
+        ].includes(mode);
         expect(runEmbeddedAgent).toHaveBeenCalledTimes(resumes ? 2 : 1);
       }
     },

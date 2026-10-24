@@ -5,13 +5,13 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { GatewayServiceStopUnsafeError } from "../../daemon/service-inspection-error.js";
 import { GatewayServiceAuthorityError } from "../../daemon/service-update-authority.js";
 import * as gatewayOwner from "../../infra/gateway-owner-lease.js";
+import type { PackageLauncherFingerprint } from "../../infra/package-update-integrity.js";
 import { stopSupervisedPredecessorGateway } from "../../infra/update-candidate-predecessor-stop.js";
 import * as updateLedger from "../../infra/update-run-ledger.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import * as updateWriter from "../../infra/update-run-write.async.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import { updateResult } from "./update-command-maintenance-fixtures.test-support.js";
 import * as postUpdateMaintenance from "./update-command-post-update-maintenance.js";
 import { registerServiceStartRefusalFinalizationTests } from "./update-command-post-update-runtime-refresh.test-support.js";
 import {
@@ -22,7 +22,10 @@ import {
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import * as rollbackModule from "./update-command-rollback.js";
 import * as nativeCommand from "./update-command-service-command.js";
-import type { PreManagedServiceStop } from "./update-command-service-context-types.js";
+import type {
+  OriginalManagedServiceRuntime,
+  PreManagedServiceStop,
+} from "./update-command-service-context-types.js";
 import * as serviceMaintenance from "./update-command-service-maintenance.js";
 import * as serviceOperations from "./update-command-service.js";
 
@@ -187,19 +190,21 @@ export function registerBoundaryFinalizationControls({
     const receiptEntered = createDeferred();
     const releaseReceipt = createDeferred();
     const write = updateWriter.recordUpdateRunStepAsync;
-    vi.spyOn(updateWriter, "recordUpdateRunStepAsync").mockImplementation(async (...args) => {
-      if (scenario.startsWith("receipt-pending")) {
-        receiptEntered.resolve();
-        await releaseReceipt.promise;
-      }
-      if (scenario === "receipt-write-failed") {
-        throw failure;
-      }
-      if (scenario === "receipt-and-stop-failed") {
-        throw receiptFailure;
-      }
-      return write(...args);
-    });
+    const writer = vi
+      .spyOn(updateWriter, "recordUpdateRunStepAsync")
+      .mockImplementation(async (...args) => {
+        if (scenario.startsWith("receipt-pending")) {
+          receiptEntered.resolve();
+          await releaseReceipt.promise;
+        }
+        if (scenario === "receipt-write-failed") {
+          throw failure;
+        }
+        if (scenario === "receipt-and-stop-failed") {
+          throw receiptFailure;
+        }
+        return write(...args);
+      });
     vi.spyOn(serviceMaintenance, "maybeStopManagedServiceBeforeMutableUpdate").mockImplementation(
       async (params) => {
         params.assertCurrent?.();
@@ -267,6 +272,9 @@ export function registerBoundaryFinalizationControls({
     } else {
       await expect(stopping).resolves.toBe(scenario !== "not-stopped");
     }
+    expect(writer).toHaveBeenCalledTimes(
+      ["not-stopped", "native-unsafe"].includes(scenario) ? 0 : 1,
+    );
     expect(warn).toHaveBeenCalledTimes(
       ["joined-error", "receipt-pending-native-error"].includes(scenario) ? 1 : 0,
     );
@@ -346,7 +354,11 @@ export function registerBoundaryFinalizationControls({
         ...serviceFixture("/tmp/openclaw-update"),
         serviceEnv: env,
       };
-      const legacy = scenario.startsWith("legacy-") || scenario === "failed-uninspected";
+      const legacy =
+        scenario === "legacy-stopped" ||
+        scenario === "legacy-no-stop" ||
+        scenario.startsWith("legacy-stop-") ||
+        scenario === "failed-uninspected";
       const transferred: PreManagedServiceStop = legacy
         ? {
             stopped: false,
@@ -358,8 +370,9 @@ export function registerBoundaryFinalizationControls({
           }
         : originalService;
       mockSupervisedOwner();
-      vi.spyOn(serviceMaintenance, "maybeStopManagedServiceBeforeMutableUpdate").mockImplementation(
-        async (params) => {
+      const inspect = vi
+        .spyOn(serviceMaintenance, "maybeStopManagedServiceBeforeMutableUpdate")
+        .mockImplementation(async (params) => {
           params.assertCurrent?.();
           if (scenario === "owned-selectors") {
             expect(process.env.OPENCLAW_STATE_DIR).toBe(env.OPENCLAW_STATE_DIR);
@@ -379,9 +392,9 @@ export function registerBoundaryFinalizationControls({
           currentExecutor = scenario !== "executor-revoked";
           currentRequester = scenario !== "requester-revoked";
           if (
-            ["inspection-threw", "inspection-uncertain", "inspection-native-authority"].includes(
-              scenario,
-            )
+            scenario === "inspection-threw" ||
+            scenario === "inspection-uncertain" ||
+            scenario === "inspection-native-authority"
           ) {
             throw stopFailure;
           }
@@ -396,8 +409,7 @@ export function registerBoundaryFinalizationControls({
               fingerprint: scenario === "replaced-service" ? "replacement" : "sealed",
             },
           };
-        },
-      );
+        });
       mocks.readServiceState.mockResolvedValue(managedServiceState(env));
       const recover = vi
         .spyOn(serviceOperations, "maybeRestartServiceAfterFailedMutableUpdate")
@@ -425,6 +437,9 @@ export function registerBoundaryFinalizationControls({
               warn: vi.fn(),
             },
           );
+          expect(getUpdateRun(record.runId, { env })?.steps).toContainEqual(
+            expect.objectContaining({ step: "finalize:predecessor-stop:7:1000:631:sealed" }),
+          );
         }
         if (scenario === "already-running") {
           running = true;
@@ -433,6 +448,7 @@ export function registerBoundaryFinalizationControls({
           vi.stubEnv("OPENCLAW_PROFILE", "other");
           vi.stubEnv("OPENCLAW_STATE_DIR", path.join(home, ".openclaw-other"));
         }
+        inspect.mockClear();
         const finishing = finishSuccessfulPackageSwitch(
           {
             restartEnvironment: env,
@@ -448,25 +464,30 @@ export function registerBoundaryFinalizationControls({
             preManagedServiceStop: transferred,
             ...(scenario === "failed-uninspected"
               ? {
-                  result: updateResult({
-                    status: "error",
+                  result: {
+                    status: "error" as const,
                     reason: "package-install",
+                    mode: "npm" as const,
                     root: originalService.serviceUpdateVerdict.root,
+                    steps: [],
                     durationMs: 0,
                     recovery: {
-                      serviceRestartSafe: false,
-                      reason: "runtime-verification-failed",
+                      serviceRestartSafe: false as const,
+                      reason: "runtime-verification-failed" as const,
                     },
-                  }),
+                  },
                 }
               : {}),
             ...(scenario.startsWith("legacy-stop-")
               ? {
-                  result: updateResult({
+                  result: {
+                    status: "ok" as const,
+                    mode: "npm" as const,
                     root: originalService.serviceUpdateVerdict.root,
+                    steps: [],
                     durationMs: 0,
-                    recovery: { serviceRestartSafe: true, version: "2.0.0" },
-                  }),
+                    recovery: { serviceRestartSafe: true as const, version: "2.0.0" },
+                  },
                 }
               : {}),
           },
@@ -481,9 +502,11 @@ export function registerBoundaryFinalizationControls({
           expect(recover).toHaveBeenCalledOnce();
           expect(failure).toMatchObject({ name: "UpdateCommandFailure", cause: stopFailure });
         } else if (
-          scenario.endsWith("uncertain") ||
-          scenario.endsWith("native-authority") ||
-          scenario === "legacy-stop-revoked"
+          scenario === "legacy-stop-uncertain" ||
+          scenario === "legacy-stop-revoked" ||
+          scenario === "legacy-stop-native-authority" ||
+          scenario === "inspection-uncertain" ||
+          scenario === "inspection-native-authority"
         ) {
           const failure = await finishing.then(
             () => undefined,
@@ -497,7 +520,9 @@ export function registerBoundaryFinalizationControls({
           expectNoCalls(recover, mocks.restartService);
           expect(running).toBe(false);
         } else if (
-          ["inspection-unavailable", "runtime-unverified", "inspection-threw"].includes(scenario)
+          scenario === "inspection-unavailable" ||
+          scenario === "runtime-unverified" ||
+          scenario === "inspection-threw"
         ) {
           await expect(finishing).rejects.toMatchObject({
             name: "UpdateCommandPendingRecoveryFailure",
@@ -528,6 +553,11 @@ export function registerBoundaryFinalizationControls({
             expect(process.env.OPENCLAW_STATE_DIR).toBe(path.join(home, ".openclaw-other"));
           }
         }
+        expect(inspect.mock.calls.map(([params]) => params.phase)).toEqual(
+          scenario === "no-receipt" || scenario === "failed-uninspected"
+            ? []
+            : [legacy ? "prepare" : "inspect"],
+        );
       } finally {
         identity.restore();
       }
@@ -545,6 +575,33 @@ export function registerBoundaryFinalizationControls({
           path.join(home, "package.json"),
           JSON.stringify({ name: "openclaw", type: "module" }),
         );
+        const launcherFingerprint: PackageLauncherFingerprint = {
+          type: "file",
+          mode: "33188",
+          uid: "0",
+          gid: "0",
+          contents: "fixture",
+        };
+        const original: OriginalManagedServiceRuntime = {
+          root: home,
+          nodeRunner: process.execPath,
+          version: "2026.9.3",
+          verified: true,
+          definition: {
+            command: { programArguments: [process.execPath, path.join(home, "dist/index.js")] },
+            fingerprint: "fixture-original",
+            runtimePin: { revision: "fixture-no-runtime-pin", stored: false },
+          },
+          service: { serviceEnv: { HOME: home } },
+          packageIdentity: { identity: "fixture-directory", version: "2026.9.3" },
+          launcher: {
+            path: "fixture",
+            realPath: "fixture",
+            fingerprint: launcherFingerprint,
+            targetFingerprint: launcherFingerprint,
+          },
+          nodeIdentity: "fixture-node",
+        };
         mocks.readServiceState.mockResolvedValue(managedServiceState(process.env));
         const actual = await vi.importActual<typeof import("./update-command-service.js")>(
           "./update-command-service.js",
@@ -565,23 +622,19 @@ export function registerBoundaryFinalizationControls({
             refreshServiceEnv: true,
             serviceRuntimeRefreshRequired: true,
             serviceInstallEnv: {},
+            originalManagedServiceRuntime: original,
             serviceUpdateVerdict: undefined,
             result: { ...params.result, root: home },
           }),
         );
         const rollback = vi
           .spyOn(rollbackModule, "rollbackFailedUpdate")
-          .mockImplementationOnce(async ({ result }) => ({
-            result,
-            rolledBack: false,
-            originalServiceRecovery: "healthy",
-          }));
+          .mockImplementationOnce(async ({ result, originalManagedServiceRuntime }) => {
+            expect(originalManagedServiceRuntime).toBe(original);
+            return { result, rolledBack: false, originalServiceRecovery: "healthy" };
+          });
         const finishing = finishSuccessfulPackageSwitch(undefined, {
-          packageTransaction: {
-            backupRoot: home,
-            rollback: vi.fn(),
-            complete: vi.fn(async () => {}),
-          },
+          originalManagedServiceRuntime: original,
         });
         if (scenario === "missing-entrypoint") {
           await expect(finishing).rejects.toMatchObject({
@@ -596,6 +649,12 @@ export function registerBoundaryFinalizationControls({
           });
           expect(rollback).not.toHaveBeenCalled();
         }
+        expect(command).toHaveBeenCalledOnce();
+        await expect(command.mock.results[0]?.value).rejects.toMatchObject(
+          scenario === "missing-entrypoint"
+            ? { message: `updated install entrypoint not found under ${home}` }
+            : { name: "UpdateCommandRecoveryPendingError" },
+        );
       } finally {
         identity.restore();
       }

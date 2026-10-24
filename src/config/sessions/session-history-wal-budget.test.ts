@@ -44,13 +44,14 @@ import {
 import { resolveMaintenanceConfigFromInput } from "./store-maintenance.js";
 
 const warn = vi.hoisted(() => vi.fn());
+const info = vi.hoisted(() => vi.fn());
 vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../logging/subsystem.js")>();
   return {
     ...actual,
     createSubsystemLogger: (name: string) => {
       const logger = actual.createSubsystemLogger(name);
-      return name === "sessions/history-eviction" ? { ...logger, warn } : logger;
+      return name === "sessions/history-eviction" ? { ...logger, warn, info } : logger;
     },
   };
 });
@@ -133,20 +134,27 @@ async function fixture(scenario: "minimal" | "empty" = "minimal", prefix = "wal-
   return { options, database, sessions, storePath: path.join(sessions, "sessions.json") };
 }
 
-function observePruning(after: (facts: SqliteSessionArchivePruningDiagnostics) => void) {
+function observePruning(after?: (facts: SqliteSessionArchivePruningDiagnostics) => void) {
+  const diagnostics: SqliteSessionArchivePruningDiagnostics[] = [];
   const observe = archivePruningDiagnostics.observeSessionArchivePruning;
   vi.spyOn(archivePruningDiagnostics, "observeSessionArchivePruning").mockImplementation(
     async <T>(...args: Parameters<typeof observe<T>>) => {
-      const result = await observe(...args);
-      after(args[0]);
-      return result;
+      try {
+        const result = await observe(...args);
+        after?.(args[0]);
+        return result;
+      } finally {
+        diagnostics.push(structuredClone(args[0]));
+      }
     },
   );
+  return diagnostics;
 }
 
-it.each(["newer-frames", "deleted-rows", "recovery-during-handoff"] as const)(
+it.each(["checkpointed", "newer-frames", "deleted-rows", "recovery-during-handoff"] as const)(
   "prunes archives after checkpoint recovery: %s",
   async (kind) => {
+    const newerFrames = kind !== "checkpointed";
     const canonical = kind === "deleted-rows";
     const { options, database, storePath } = await fixture("minimal", "wal-budget-checkpointed-");
     const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
@@ -162,47 +170,69 @@ it.each(["newer-frames", "deleted-rows", "recovery-during-handoff"] as const)(
     // Settle schema and initial allocation before measuring steady-state traffic.
     write.run(Buffer.from("committed-init"), -1);
     expect(database.walMaintenance.checkpoint()).toBe(true);
+    warn.mockClear();
+    info.mockClear();
     try {
-      write.run(Buffer.from("committed"), 0);
-      reader.exec("BEGIN");
-      readTraffic(reader);
-      const file = path.join(state.sessionsDir(), "traffic.jsonl.deleted.2020-01-01T00-00-00.000Z");
-      fs.writeFileSync(file, Buffer.alloc(256 * 1024));
-      if (canonical) {
-        insertArchive(database, 0, path.basename(file));
-      }
-      const before = await measureSessionPhysicalDiskUsage(storePath);
-      const { enforce } = budget(storePath, limit(before.totalBytes - 128 * 1024), options);
-      write.run(Buffer.from("pending"), 1);
-      const recover = () => {
-        reader.exec("ROLLBACK");
-        expect(database.walMaintenance.checkpoint()).toBe(true);
+      for (let tick = 0; tick < 3; tick++) {
+        if (reader.isTransaction) {
+          reader.exec("ROLLBACK");
+        }
+        write.run(Buffer.from(`committed-${tick}`), tick);
         reader.exec("BEGIN");
         readTraffic(reader);
-        write.run(Buffer.from("newer"), 2);
-      };
-      if (kind === "recovery-during-handoff") {
-        pendingRecovery = recover;
+        const file = path.join(
+          state.sessionsDir(),
+          `traffic-${tick}.jsonl.deleted.2020-01-01T00-00-00.000Z`,
+        );
+        fs.writeFileSync(file, Buffer.alloc(256 * 1024, tick));
+        if (canonical) {
+          insertArchive(database, tick, path.basename(file));
+        }
+        const before = await measureSessionPhysicalDiskUsage(storePath);
+        const { enforce } = budget(storePath, limit(before.totalBytes - 128 * 1024), options);
+        if (newerFrames) {
+          write.run(Buffer.from(`pending-${tick}`), tick);
+          const recover = () => {
+            reader.exec("ROLLBACK");
+            expect(database.walMaintenance.checkpoint()).toBe(true);
+            reader.exec("BEGIN");
+            readTraffic(reader);
+            write.run(Buffer.from(`newer-${tick}`), tick);
+          };
+          if (kind === "recovery-during-handoff") {
+            pendingRecovery = recover;
+          }
+          await expect(enforce()).resolves.toMatchObject({ ...deferred, freedBytes: 0 });
+          expect(fs.existsSync(file)).toBe(true);
+          if (kind === "recovery-during-handoff") {
+            expect(pendingRecovery).toBeUndefined();
+          } else {
+            recover();
+          }
+        }
+        const result = await enforce();
+        expect(result?.deferredReason).toBe(canonical ? "checkpoint-incomplete" : undefined);
+        expect(result?.removedFiles).toBe(1);
+        if (canonical) {
+          const retry = await enforce();
+          expect(retry).toMatchObject({ removedFiles: 0, overBudget: false });
+          expect(retry?.deferredReason).toBeUndefined();
+        } else {
+          expect(result?.freedBytes).toBeGreaterThanOrEqual(256 * 1024);
+        }
+        expect(fs.existsSync(file)).toBe(false);
+        expect(readTraffic(reader)).toEqual(
+          new Uint8Array(Buffer.from(`${newerFrames ? "pending" : "committed"}-${tick}`)),
+        );
       }
-      await expect(enforce()).resolves.toMatchObject({ ...deferred, freedBytes: 0 });
-      expect(fs.existsSync(file)).toBe(true);
-      if (kind === "recovery-during-handoff") {
-        expect(pendingRecovery).toBeUndefined();
-      } else {
-        recover();
+      if (!canonical) {
+        expect(warn).toHaveBeenCalledTimes(newerFrames ? 3 : 0);
+        expect(info).toHaveBeenCalledTimes(3);
+        expect(info).toHaveBeenLastCalledWith(
+          "session history disk budget cleanup completed",
+          expect.objectContaining({ removedFiles: 1, removedEntries: 0 }),
+        );
       }
-      const result = await enforce();
-      expect(result?.deferredReason).toBe(canonical ? "checkpoint-incomplete" : undefined);
-      expect(result?.removedFiles).toBe(1);
-      if (canonical) {
-        const retry = await enforce();
-        expect(retry).toMatchObject({ removedFiles: 0, overBudget: false });
-        expect(retry?.deferredReason).toBeUndefined();
-      } else {
-        expect(result?.freedBytes).toBeGreaterThanOrEqual(256 * 1024);
-      }
-      expect(fs.existsSync(file)).toBe(false);
-      expect(readTraffic(reader)).toEqual(new Uint8Array(Buffer.from("pending")));
     } finally {
       reader.close();
     }
@@ -274,6 +304,7 @@ it.each(["transaction", "iterator"] as const)(
         reader.exec("ROLLBACK");
       }
     };
+    const diagnostics = observePruning();
     warn.mockClear();
     try {
       const write = traffic(database);
@@ -292,6 +323,15 @@ it.each(["transaction", "iterator"] as const)(
         walBytesAfter: before.databaseWalBytes,
         checkpoint: { state: "blocked", ...readerFacts },
       });
+      expect(diagnostics).toEqual([
+        expect.objectContaining({
+          completed: false,
+          checkpointCalls: 2,
+          checkpointIncomplete: 1,
+          walBytesBefore: before.databaseWalBytes,
+          walBytesAfter: before.databaseWalBytes,
+        }),
+      ]);
       assert(blocked?.checkpoint);
       // A delayed worker fact remains older even when its wall clock was ahead.
       publishSqliteWalCheckpointObservation(database.path, {
@@ -302,7 +342,9 @@ it.each(["transaction", "iterator"] as const)(
           lastCompletedAtMs: blocked.checkpoint.observedAtMs + 3600_000,
         },
       });
-      await expect(enforce()).resolves.toMatchObject(deferred);
+      for (let hour = 1; hour <= 3; hour++) {
+        await expect(enforce()).resolves.toMatchObject(deferred);
+      }
       expect((await measure()).databaseWalBytes).toBe(before.databaseWalBytes);
       expect(files.every((name) => fs.existsSync(path.join(sessions, name)))).toBe(true);
       expect(warn).toHaveBeenCalledOnce();
@@ -328,6 +370,10 @@ it.each(["transaction", "iterator"] as const)(
       const recovered = await enforce();
       expect(recovered?.deferredReason).toBeUndefined();
       expect(recovered?.totalBytesAfter).toBeLessThanOrEqual(maintenance.highWaterBytes!);
+      expect(diagnostics.at(-1)).toMatchObject({ completed: true, checkpointIncomplete: 0 });
+      expect(() =>
+        JSON.stringify({ blocked, recovered, diagnostics, health: database.walMaintenance.health }),
+      ).not.toThrow();
     } finally {
       release();
       reader.close();
@@ -343,11 +389,16 @@ it("retries retained WAL after a complete passive checkpoint and reader release 
   const reader = openNodeSqliteDatabase(database.path, { readOnly: true });
   reader.exec("BEGIN");
   expect(readTraffic(reader)).toEqual(new Uint8Array(payload));
+  const diagnostics = observePruning();
   const { enforce, inspect, measure, kick } = budget(storePath, limit(), options);
   try {
     await enforce();
     await expect(enforce()).resolves.toMatchObject({ ...noWork, freedBytes: 0 });
-    expect(database.walMaintenance.health.state).toBe("complete");
+    expect(diagnostics.at(-1)).toMatchObject({
+      checkpointCalls: 2,
+      checkpointIncomplete: 0,
+      checkpoint: { state: "complete" },
+    });
     expect(database.db.prepare("PRAGMA freelist_count").get()?.freelist_count).toBe(0);
     const before = await measure();
     expect(before.databaseWalBytes).toBeGreaterThan(0);
