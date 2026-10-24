@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 // Production-renderer warm interactions. Trace once for attribution; compare untraced AB pairs.
+// --thread-cpu-time excludes renderer descheduling from duration metrics.
 import { createHash } from "node:crypto";
 import { readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
@@ -33,6 +34,7 @@ const { values } = parseArgs({
     viewport: { type: "string", default: "both" },
     pairs: { type: "string", default: "1" },
     trace: { type: "boolean", default: false },
+    "thread-cpu-time": { type: "boolean", default: false },
     "invalidation-tracking": { type: "boolean", default: false },
   },
 });
@@ -91,6 +93,7 @@ type Result = {
   bundle: number;
   pair: number;
   status: "passed" | "failed";
+  hostLoadAverage: number[];
   wallMs?: number;
   scriptMs?: number;
   taskMs?: number;
@@ -99,11 +102,21 @@ type Result = {
   requests?: Record<string, number>;
   domBefore?: { nodes: number; menuItems: number };
   domAfter?: { nodes: number; menuItems: number };
+  rowIdentity?: { initial: number; created: number; retained: number; final: number };
   trace?: ReturnType<typeof summarizeInteractionTrace>;
   error?: string;
   artifactPrefix: string;
 };
 const results: Result[] = [];
+const pairHostObservations: Array<{
+  step: string;
+  viewport: string;
+  pair: number;
+  startedAt: string;
+  startLoad: number[];
+  endedAt: string;
+  endLoad: number[];
+}> = [];
 const servers: Array<{
   directory: string;
   build: { buildId: string; version: string };
@@ -147,6 +160,7 @@ try {
         collection: values.trace
           ? "CDP trace + 1ms CPU profiler (overhead included)"
           : "untraced CDP metrics",
+        metricTimeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
         invalidationTracking: values.trace && values["invalidation-tracking"],
         fixture: { sessions: 1000, messagesPerSession: 400, models: 1000, cronJobs: 500 },
         acceptance:
@@ -171,6 +185,8 @@ try {
   for (const viewport of viewports) {
     for (const scenario of scenarios) {
       for (let pair = 0; pair < pairs; pair++) {
+        const startedAt = new Date().toISOString();
+        const startLoad = os.loadavg();
         for (const [bundle, slot] of servers.entries()) {
           const context = await browser.newContext({
             viewport: { width: viewport.width, height: viewport.height },
@@ -189,6 +205,7 @@ try {
             pair,
             bundle,
             status: "failed",
+            hostLoadAverage: os.loadavg(),
             artifactPrefix,
           };
           let cdp: CDPSession | undefined;
@@ -219,7 +236,9 @@ try {
             await page.evaluate(() => document.fonts.ready.then(() => undefined));
             await settle(page);
             cdp = await context.newCDPSession(page);
-            await cdp.send("Performance.enable");
+            await cdp.send("Performance.enable", {
+              timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
+            });
             if (values.trace) {
               cdp.on("Tracing.dataCollected", ({ value }: { value: unknown[] }) =>
                 events.push(...value),
@@ -246,6 +265,34 @@ try {
                 menuItems: document.querySelectorAll('[role^="menuitem"]').length,
               }));
             result.domBefore = await countDom();
+            const rowProbe = scenario.rowSelector
+              ? await page.evaluateHandle((selector) => {
+                  const original = [...document.querySelectorAll(selector)];
+                  const seen = new WeakSet(original);
+                  const state = { original, created: 0 };
+                  const observer = new MutationObserver((records) => {
+                    for (const record of records) {
+                      for (const node of record.addedNodes) {
+                        if (!(node instanceof Element)) {
+                          continue;
+                        }
+                        const rows = [...node.querySelectorAll(selector)];
+                        if (node.matches(selector)) {
+                          rows.push(node);
+                        }
+                        for (const row of rows) {
+                          if (!seen.has(row)) {
+                            seen.add(row);
+                            state.created++;
+                          }
+                        }
+                      }
+                    }
+                  });
+                  observer.observe(document.body, { childList: true, subtree: true });
+                  return { state, observer };
+                }, scenario.rowSelector)
+              : undefined;
             const before = await metrics(cdp);
             await page.evaluate(() => performance.mark("interaction:start"));
             const start = performance.now();
@@ -255,6 +302,19 @@ try {
             await page.evaluate(() => performance.mark("interaction:end"));
             const after = await metrics(cdp);
             result.domAfter = await countDom();
+            if (rowProbe && scenario.rowSelector) {
+              result.rowIdentity = await rowProbe.evaluate(({ state, observer }, selector) => {
+                observer.disconnect();
+                const current = new Set(document.querySelectorAll(selector));
+                return {
+                  initial: state.original.length,
+                  created: state.created,
+                  retained: state.original.filter((row) => current.has(row)).length,
+                  final: current.size,
+                };
+              }, scenario.rowSelector);
+              await rowProbe.dispose();
+            }
             for (const [key, name] of [
               ["scriptMs", "ScriptDuration"],
               ["taskMs", "TaskDuration"],
@@ -361,6 +421,19 @@ try {
           await writeFile(path.join(artifactDir, "results.json"), JSON.stringify(results, null, 2));
           console.log(JSON.stringify(result));
         }
+        pairHostObservations.push({
+          step: scenario.id,
+          viewport: viewport.name,
+          pair,
+          startedAt,
+          startLoad,
+          endedAt: new Date().toISOString(),
+          endLoad: os.loadavg(),
+        });
+        await writeFile(
+          path.join(artifactDir, "pair-host-load.json"),
+          JSON.stringify(pairHostObservations, null, 2),
+        );
       }
     }
   }

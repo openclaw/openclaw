@@ -1,5 +1,26 @@
 # Team-shaped synthetic state
 
+## Retained heap
+
+Use the [heap retention runbook](heap-retention-runbook.md) to capture a main-isolate
+snapshot and run the streaming analyzer in aggregate-only mode with bounded host
+resources. It covers dominators, collections, duplicate strings, and session-key
+scaling without exporting snapshot payloads.
+
+## Private-array copies
+
+`node --expose-gc scripts/perf/private-array-copies-measure.mjs <baseline-root> <candidate-root>`
+measures six alternating samples per side with collected-object heap sampling.
+The roots need only the five source files listed in the script; no build or install
+is needed. It measures the task-audience result build/sort site, the complete
+subagent topology patch owner, and one scope canonicalization (both reader sites
+must match). Synthetic inputs cover 1/100/5,000 task rows, 100/5,000 historical runs
+per child with absent/shared/distinct memory rows, and reordered or changed scopes.
+These are owner/site allocation bytes per call, not whole-Gateway or GC claims.
+Output includes source hashes, call counts, allocation sample counts, every sample,
+and absolute/relative mean deltas. Run on an approved benchmark host under its
+shared guard; equivalent results and reduced allocation are the acceptance rule.
+
 ## Limited-scope Control UI RPCs
 
 `control-ui-forbidden-rpc-measure.ts` opens the real Control UI against a synthetic,
@@ -367,6 +388,41 @@ Run concurrent pairs under one quiet lock and the production guard, with separat
 fixtures and ports, then swap interleaved CPU placements. Start deadlines must
 allow both preparation phases to finish. Apply the campaign's sample-count and
 paired-delta rules; the 70 first-read samples alone cannot qualify p95 or p99.
+
+Add `--startup-admission --waves 20` to the cold-row command to attribute the
+operator request-start backlog. This uses a fixed 20 batches per client instead
+of `--seconds`. Each batch sends a scoped `models.list` before an event-only
+`sessions.subscribe`, immediately followed on the same socket by the
+sidebar, roster, Board, `sessions.resolve`, `sessions.messages.subscribe`, and
+keyed `chat.startup` requests. Batches await all replies and retain the
+`--poll-ms` pacing. There are no artificial handler delays or held preparations.
+Each client uses a distinct shared, unarchived fixture session for catalog,
+resolution, message subscription, and startup reads; Board uses the common seeded
+session. Results record each client's session key and exact request parameters.
+The first batch remains separate from later warm traffic in the latency report.
+The explicit catalog RPC reproduces the server's catalog-bootstrap admission
+order; this does not exercise capability negotiation or `models.snapshot` delivery.
+
+The `admission` result contains sample counts, total duration, p50/p90/p95/p99,
+and maxima for each method's queue wait, admission, handler, and first response.
+Queue wait is the operator RPC start scheduler, while admission also includes
+work before handler entry. Existing `gateway.chat.startup.*` timeline spans are
+sampled in memory through the private source loader; they do not enable timeline
+file writes. Additional `startup-boundary.*` samples cover pending-input reads
+and optional subagent snapshot preparation across all callers in the measured
+window; they are attribution context, not exclusive startup-handler phases.
+The difference between handler duration and its observed spans may
+include uninstrumented waits; overlapping spans must not be summed as exclusive
+time. All responses are checked, including roster pages, event enrollment, session
+resolution, message subscription, and startup history page. Diagnostics overflow
+or absent startup-handler evidence fails the run. This compact settled fixture
+measures reconnect contention, not interrupted agent-turn recovery or large
+transcript hydration. Keep identical instrumentation for A/A and A/B runs, use
+the campaign's untraced cost gates, and collect promotion separately with
+`--trace-gc` and its own controls.
+Use `--request-start-owner /path/to/request-start.ts` to compare scheduler
+revisions in the same installation. The source loader verifies the selected
+file's SHA-256 at load time and records it in the result.
 
 Use `scripts/bench-gateway-startup.ts` and `scripts/bench-gateway-restart.ts`
 against an exact-head build and isolated synthetic state. Record the Node version,
@@ -3947,6 +4003,13 @@ WebSockets, then seeds mentions with real `chat.send` turns against a synthetic
 loopback model. The measured paths are `mentions.list` and mentioned-session
 label changes that produce `mentions.changed` for every viewer. Inbox item counts,
 model completion, and broadcast delivery are checked before and after measurement.
+Add `--clients 70 --sidebar-limit 200` to refresh each viewer's sidebar after every
+broadcast using the real Control UI conditional-row decoder over WebSockets. Each
+refresh must decode 200 rows and show the patched session title. The fixture has
+70 recipient connections for one profile plus one sender; the existing list owner
+can coalesce their identical sidebar requests. Its 5,000-session base fixture
+remains independent of the selected page size. Omit `--sidebar-limit` to isolate
+Inbox publication.
 
 ```sh
 node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
@@ -3958,12 +4021,17 @@ node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
 
 Use one task-owned source checkout and `--owner-dir /path/to/baseline-owners` to
 select baseline copies of `mention-inbox-targets.ts`, `mention-inbox.ts`,
-`mention-inbox-projection.ts`, and `mention-inbox-recording.ts`. The module URLs
+`mention-inbox-projection.ts`, `mention-inbox-recording.ts`, and
+`session-row-presentation.ts`. The module URLs
 and relative imports remain unchanged. Source hooks count `readTarget`,
-`currentTarget`, and `readView`; no production instrumentation is required.
+`currentTarget`, `readView`, and `shareSidebarSessionRows`; no production
+instrumentation is required. The report also counts full, delta, and unchanged
+sidebar wire responses.
 `--count-only` runs setup plus one list and one broadcast without profiling.
-`--start-at` schedules the warmed allocation pass, `--cpu-start-at` the unprofiled
-list pass, and `--broadcast-start-at` the unprofiled broadcast pass. Each rejects
+`--start-at` schedules the warmed list allocation pass,
+`--broadcast-allocation-start-at` the broadcast allocation pass,
+`--cpu-start-at` the unprofiled list pass, and `--broadcast-start-at` the unprofiled
+broadcast pass. Each rejects
 a missed preparation deadline. For sequential preparation followed by concurrent
 measurement, `--barrier-dir <shared-pair-directory> --side baseline|candidate`
 writes `<phase>.<side>.ready` and waits for `<phase>.start` containing a future
@@ -3987,9 +4055,15 @@ time. Always report both sides' maximum pause; the candidate maximum exceeding
 max(50 ms, twice baseline maximum) retains its gate. Guard-interrupted pairs are
 discarded and rerun; use the shared production guard without a stricter threshold.
 
-Sampled allocation includes collected objects and reports whole-process and
-target-read attribution per Inbox read, plus a rate normalized to the measured
-minute. CPU/GC/loop observations are separate from sampling; process CPU includes
+Sampled allocation includes collected objects in the main isolate, including the
+in-process WebSocket and UI driver, and reports owner attribution per Inbox read
+and per broadcast, plus a rate normalized to the measured minute. Worker-isolate
+allocations are not sampled. Broadcast allocation also reports bytes per recipient
+viewer. Owner subtrees (`readTarget`, `readView`, `shareSidebarSessionRows`) can
+overlap, so do not sum them. The broadcast profile is saved as
+`<output>.broadcast.heapprofile`; the list profile keeps `<output>.heapprofile`.
+With sidebar refresh enabled, broadcast latency includes delivery and all
+conditional list responses and client decoding, not only event transmission. CPU/GC/loop observations are separate from sampling; process CPU includes
 workers and in-process WebSocket clients, with main-thread CPU reported separately.
 Pass `--trace-log /path/to/captured-stdout.log` with `--trace-gc-nvp` to include
 promotion from the existing Gateway trace parser. Synchronous identification
@@ -4149,3 +4223,94 @@ and paired-delta rules. Worker byte counts are partial and retain their
 sampling excludes worker heaps and external Buffer backing stores. RSS includes
 workers. This isolates the cleanup boundary; it is not a full Gateway throughput
 or retained-memory soak result.
+
+## Private diagnostic dispatch
+
+`diagnostic-private-data-measure.ts` exercises the real asynchronous diagnostic
+emitter and drain with synthetic private model content. It registers 1, 2, or 4
+private consumers (the first marked as OTel), a metadata-only consumer, and a
+filtered skill consumer. The default payload contains 64 messages and 128 KiB of
+text. One-event clone counting is separate from the warm, untraced CPU pass and
+inspector allocation pass, which includes collected objects.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/diagnostic-private-data-measure.ts \
+  --listeners 2 --events 12000 --payload-kib 128 \
+  --start-at <cpu-epoch-ms> --allocation-start-at <allocation-epoch-ms>
+```
+
+Use identical prepared sources and fixtures, at least six paired samples per
+listener count, synchronized starts, and swapped interleaved CPU sets under the
+shared quiet-slot lock and guard. Compare clones, sampled bytes, and CPU per event;
+this workload does not establish whole-Gateway, GC, or promotion results. A normal
+OTel + Prometheus setup has one private model-content consumer: Prometheus opts
+out. The 2/4-consumer cells measure fanout scaling. Accept reduced duplicate clones
+and multi-consumer allocation only with intact isolation and no material
+single-consumer CPU/allocation regression. Report sample counts and absolute as
+well as relative deltas; short-sample percentiles are context only.
+
+## Plugin inspection retirement
+
+`plugin-inspection-retention.ts` loads 44 synthetic plugins through the real
+inspection loader for 20 generations. It keeps the released handles reachable
+and counts surviving inspection caches using `WeakRef` after four forced
+collections separated by event-loop turns. Separate borrower and paused-disposal
+controls assert that caches remain reachable while physical custody is live.
+
+```sh
+mkdir -p /path/to/isolated/home /path/to/isolated/state /path/to/isolated/tmp
+HOME=/path/to/isolated/home OPENCLAW_STATE_DIR=/path/to/isolated/state \
+  TMPDIR=/path/to/isolated/tmp node --expose-gc --import ./scripts/tsx.mjs \
+  scripts/perf/plugin-inspection-retention.ts --plugins 44 --generations 20 \
+  --gateway --port 41660
+```
+
+Run baseline and candidate on an approved benchmark host with the same fixture
+size and source dependencies. Accept collection of completed caches while the
+borrower and pending-disposal controls retain theirs until disposal finishes.
+Report cache counts and absolute retained-heap bytes; whole-process heap includes
+loader/module overhead and the deliberately retained registry handles. This is
+an inspection-lifecycle probe in a real Gateway main isolate when `--gateway` is
+set, not Gateway RPC throughput or a production old-generation plateau
+measurement. Omit `--gateway` for the loader-only control.
+
+## Compressed WebSocket broadcast fanout
+
+`ws-compression-measure.ts` sends fresh synthetic publications through the production
+broadcaster and WebSocket transport to 70 negotiated `permessage-deflate` clients.
+It prepares 32 varied payloads before warmup; one quarter stay below the compression
+threshold and the remainder target 16 KiB of text (JSON escaping adds bytes).
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/ws-compression-measure.ts \
+  --clients 70 --profiles 70 --batches 30000 --port 41649
+```
+
+Use `--profiles 1` for matching recipient envelopes, and `--size 512` or
+`--size 2048` for smaller payloads. Sequence counters start aligned; matching
+profiles therefore exercise the best case for whole-frame sharing. Distinct
+profiles exercise separate envelopes even with aligned counters.
+`--warm-start-at <epoch-ms>` synchronizes the
+100-broadcast warmup; `--start-at <epoch-ms>` synchronizes measurement after it.
+A missed deadline fails the run. `--ready-file <path>` records completed fixture
+and connection preparation. Run baseline and candidate with separate state,
+ports, identical counts, counterbalanced launch order, and swapped interleaved
+CPU placements under the campaign's quiet lock and production guard.
+
+Results report CPU per broadcast for the process, main thread, and synchronous
+broadcast call; exact server socket wire bytes; decoded frame bytes; latency and
+event-loop tails with sample counts; natural GC totals, per-kind counts/tails,
+and all maximum pauses. Every client's decoded-frame SHA256 must match its expected
+payloads, sequence, and recipient profile. Client inflation shares the measured
+process, so use `sendThreadCpuUsPerBroadcast` to attribute synchronous broadcast
+work and retain overall CPU/latency as context. Deferred socket writes are outside
+the synchronous interval. This is transport-boundary proof with synthetic admitted
+recipients, not a full Gateway authentication, agent, or maintenance workload.
+
+No collections are forced. Use untraced runs for timing/GC gates. A separate
+`--trace-gc-nvp` process measures promotion between `WS_COMPRESSION_MEASURE_START`
+and `WS_COMPRESSION_MEASURE_END`, with its own matched baseline controls. Calibrate
+at least four identical-source pairs before interpreting adverse GC/promotion/max
+pause signals; noisy controls make the protocol inconclusive. Keep all valid
+samples and report both absolute and relative deltas under the campaign's sample
+count and maximum-pause rules.

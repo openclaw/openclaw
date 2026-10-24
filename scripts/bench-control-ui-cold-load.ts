@@ -1,5 +1,6 @@
 // Opt-in production-bundle benchmark; real delays model wire delivery, not test synchronization.
 // --cpu-profile: source-mapped reload/live/streaming tables and per-run/median cpu-profile.json.
+// --thread-cpu-time excludes renderer descheduling from CDP duration metrics.
 // --cpu-profile-compare <baseline cpu-profile.json>: profile and diff against that report.
 // --allocations --untraced --live-events: collected-object renderer bytes per event.
 // --streaming-allocations: sampled allocation bytes including collected objects during deltas.
@@ -215,6 +216,7 @@ function summarizeSidebarWindows(
 const { values } = parseArgs({
   options: {
     "cpu-profile": { type: "boolean", default: false },
+    "thread-cpu-time": { type: "boolean", default: false },
     "cpu-profile-compare": { type: "string" },
     allocations: { type: "boolean", default: false },
     "warm-reload": { type: "boolean", default: false },
@@ -1246,7 +1248,9 @@ try {
     let collectedTrace = rawTrace;
     cdp.on("Tracing.dataCollected", (data) => collectedTrace.push(...data.value));
     if (cpuProfile) {
-      await cdp.send("Performance.enable");
+      await cdp.send("Performance.enable", {
+        timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
+      });
     }
     if (traced || cpuProfile) {
       await cdp.send("Profiler.enable");
@@ -1523,7 +1527,9 @@ try {
     if (streamingReply) {
       const composer = page.locator(".agent-chat__composer-combobox textarea").last();
       await composer.focus();
-      await cdp.send("Performance.enable");
+      await cdp.send("Performance.enable", {
+        timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
+      });
       let previousCpu = (await cdp.send("Performance.getMetrics")).metrics;
       let previousDelivered = 0;
       const cpu: Array<{
@@ -1711,7 +1717,9 @@ try {
       );
     if (values["live-events"]) {
       const before = await readLivePresentation();
-      await cdp.send("Performance.enable");
+      await cdp.send("Performance.enable", {
+        timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
+      });
       const cpuBefore = (await cdp.send("Performance.getMetrics")).metrics;
       const liveTrace: unknown[] = [];
       collectedTrace = liveTrace;
@@ -1937,7 +1945,9 @@ try {
       const rpcOffset = await page.evaluate(
         () => Reflect.get(window, "__coldLoad").read().rpcs.length,
       );
-      await cdp.send("Performance.enable");
+      await cdp.send("Performance.enable", {
+        timeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
+      });
       const cpuBefore = (await cdp.send("Performance.getMetrics")).metrics;
       if (cpuProfile) {
         await cdp.send("Profiler.start");
@@ -2106,6 +2116,7 @@ try {
         chromiumArgs,
         isolatedSandboxOrigin,
         cpuProfile,
+        metricTimeDomain: values["thread-cpu-time"] ? "threadTicks" : "timeTicks",
         cpuProfileCompare: values["cpu-profile-compare"],
         sidebarRowTransfer,
         sidebarComparison: values["sidebar-list-churn"]

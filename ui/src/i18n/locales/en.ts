@@ -1656,6 +1656,9 @@ const startupEnglish = {
     },
     sessionHeader: {},
     board: {},
+    codexSupervisionDisabled:
+      "Codex supervision is off. Enable it in plugin settings to continue this session.",
+    openCodexSettings: "Open settings",
     catalog: {},
     taskSuggestions: {},
     pullRequests: {

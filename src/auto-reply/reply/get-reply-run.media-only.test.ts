@@ -17,6 +17,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
+import { buildPrAttributionPrompt } from "../../agents/pr-attribution.js";
 import { createCronTool } from "../../agents/tools/cron-tool.js";
 import {
   getGatewayToolCallerIdentity,
@@ -26,6 +27,7 @@ import * as gatewayModule from "../../agents/tools/gateway.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import type { AgentRuntimeIdentity } from "../../gateway/agent-runtime-identity-token.js";
 import {
   getCronManagementAuthority,
@@ -70,6 +72,7 @@ import {
   baseParams,
   cleanupPreparedReplyFixtures,
   createInboundBody,
+  jsonContext,
   createInboundTurn,
   createPreparedReplyTurn as turn,
   createSessionBody,
@@ -77,6 +80,9 @@ import {
   createProviderSurface,
   createTelegramGroupSession,
   ownerParams,
+  nonReasoningModelState,
+  preparedTarget,
+  resetPreparedReplySessionStore,
 } from "./get-reply-run.test-support.js";
 import { buildGroupIntro, buildSourceConversationContext } from "./groups.js";
 import {
@@ -84,7 +90,6 @@ import {
   buildInboundUserContextPrefix,
   resolveInboundUserContextPromptJoiner,
 } from "./inbound-meta.js";
-import { createModelSelectionStateFixture } from "./model-selection.test-support.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import { getExistingFollowupQueue, clearFollowupQueue } from "./queue/state.js";
@@ -428,17 +433,6 @@ const ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE =
 
 type ReplyRunParams = Parameters<typeof runPreparedReply>[0];
 
-function nonReasoningModelState(): ReplyRunParams["modelState"] {
-  return {
-    ...createModelSelectionStateFixture({ agentCfg: {}, provider: "openai", model: "chat-latest" }),
-    resolveDefaultThinkingLevel: async () => "high",
-    resolveThinkingCatalog: async () => [
-      { provider: "openai", id: "chat-latest", name: "Chat Latest", reasoning: false },
-    ],
-    allowedModelCatalog: [{ provider: "openai", id: "chat-latest", name: "Chat Latest" }],
-  };
-}
-
 async function embeddedRuntime() {
   return vi.mocked(await import("../../agents/embedded-agent.runtime.js"));
 }
@@ -485,15 +479,6 @@ async function prepareActiveQueue(
   return { runtime, operation };
 }
 
-function preparedTarget(sessionId: string) {
-  return captureSessionTarget({
-    storeScope: resolveSessionStorePathCore(undefined, { agentId: "default" }),
-    sessionKey: "session-key",
-    incarnation: sessionId,
-    agentId: "default",
-  });
-}
-
 function runPrepared(overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {}) {
   return runPreparedReply(baseParams(overrides));
 }
@@ -520,9 +505,8 @@ function expectTurnText(call: ReturnType<typeof requireRunReplyAgentCall>, text:
   });
 }
 
-function jsonContext(label: string, value: unknown) {
-  return [label, "```json", JSON.stringify(value, null, 2), "```"].join("\n");
-}
+const PR_ATTRIBUTION_OFF = `PR attribution: ⟦openclaw:ctx⟧
+${buildPrAttributionPrompt(false)}`;
 
 describe("runPreparedReply media-only handling", () => {
   describe.each(["followup", "collect"] as const)("queued owner authority: %s", (mode) => {
@@ -571,6 +555,13 @@ describe("runPreparedReply media-only handling", () => {
         let completedRuns = 0;
         vi.mocked(runReplyAgent).mockImplementationOnce(async ({ followupRun, opts }) => {
           capturedOpts = opts;
+          if (refreshOwner) {
+            // The synthetic queued admission below needs the session a real admission initializes.
+            await replaceSessionEntry(
+              { agentId: "default", sessionKey: key, storePath: resolveSessionStorePathCore() },
+              { sessionId: followupRun.run.sessionId, updatedAt: 1 },
+            );
+          }
           if (kind === "without-source-factory") {
             followupRun.createChannelCronAuthority = undefined;
           }
@@ -958,6 +949,7 @@ describe("runPreparedReply media-only handling", () => {
     preparedReplyMockState.unexpectedCalls.length = 0;
     loadSessionEntryMock.mockReset();
     vi.clearAllMocks();
+    resetPreparedReplySessionStore();
     vi.mocked(buildSourceConversationContext).mockReturnValue("");
     vi.mocked(buildGroupIntro).mockReturnValue("");
     vi.mocked(buildInboundUserContextPrefix).mockReset().mockReturnValue("");
@@ -1138,6 +1130,7 @@ describe("runPreparedReply media-only handling", () => {
     expectTurnText(call, "please answer here");
     expect(call.followupRun.currentInboundContext?.text).toBe(
       [
+        PR_ATTRIBUTION_OFF,
         "Current message:\nchat_id=-100123\ninbound_event_kind: user_request",
         MESSAGE_TOOL_ONLY_DELIVERY_HINT,
       ].join("\n\n"),
@@ -2401,7 +2394,9 @@ describe("runPreparedReply media-only handling", () => {
 
     const followupRun = requireRunReplyAgentCall().followupRun;
     const context = followupRun.currentInboundContext;
-    expect(followupRun.prompt).toBe("A new session was started via /new or /reset.");
+    expect(followupRun.prompt).toBe(
+      [PR_ATTRIBUTION_OFF, "A new session was started via /new or /reset."].join("\n\n"),
+    );
     for (const event of [
       "Slack reaction added: :eyes:",
       "Slack message in #claw-test from Alice",

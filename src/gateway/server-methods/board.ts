@@ -170,6 +170,12 @@ export function createBoardHandlers(store: BoardStore): GatewayRequestHandlers {
       validateBoardWidgetPutParams,
       async (invocation) => {
         const { params: requestParams, respond, context } = invocation;
+        if (requestParams.content.kind === "registered") {
+          throw new BoardValidationError(
+            "invalid_operation",
+            "Registered board widgets were removed; use HTML widgets instead.",
+          );
+        }
         const boardAuthority = captureBoardRequestAuthority(invocation);
         let requester: Awaited<ReturnType<typeof captureGatewayOperatorRunAuthority>>;
         const authority = {

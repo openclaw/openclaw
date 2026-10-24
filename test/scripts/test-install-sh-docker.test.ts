@@ -982,7 +982,10 @@ printf 'status=%s\\n' "$status"
       [
         "ENV PLAYWRIGHT_BROWSERS_PATH=/home/node/.cache/ms-playwright",
         'mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"',
-        "node /app/node_modules/playwright-core/cli.js install --with-deps chromium",
+        'node /app/node_modules/playwright-core/cli.js install --with-deps "$@" chromium',
+        "1) set -- ;;",
+        "chromium) set -- --no-shell",
+        "headless-shell) set -- --only-shell",
       ],
     ],
   ] as const)("root Dockerfile preserves %s", (_contract, fragments) => {

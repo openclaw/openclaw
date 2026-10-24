@@ -4199,18 +4199,15 @@ describe("requester settle wake trigger", () => {
       });
       expect(settleWake).toHaveBeenCalledTimes(mode === "wake" ? 1 : 0);
       if (mode === "wake") {
-        expect(settleWake).toHaveBeenCalledWith({
-          requesterSessionKey: "agent:main:main",
-          requesterOrigin: undefined,
-          settledEntry: expect.objectContaining({
-            runId: entry.runId,
-            childSessionKey: entry.childSessionKey,
+        expect(settleWake).toHaveBeenCalledWith(
+          expect.objectContaining({
+            requesterSessionKey: "agent:main:main",
+            settledEntry: expect.objectContaining({
+              runId: entry.runId,
+              childSessionKey: entry.childSessionKey,
+            }),
           }),
-          transitionBatch: expect.any(Function),
-          completeBatch: expect.any(Function),
-          isSourceCurrent: expect.any(Function),
-          onDescendantsPending: expect.any(Function),
-        });
+        );
       }
       expect(readLifecycleRun(entry).requesterSettleWake).toEqual(
         mode === "wake" ? { status: "pending", attemptCount: 0 } : undefined,

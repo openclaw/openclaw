@@ -1,8 +1,8 @@
 diff --git a/dist/web.dev.js b/dist/web.dev.js
-index 8e15c711fdd11b891821334cc6a791279fce8682..ae4f88da75dac638b310329e412f2cd0d43a0468 100644
+index 1938546f3cbadf1a14c0a7c29e8d4b8431dc5bf1..f7488cd364b497be6e4f2f2f08494ef22f6c16a7 100644
 --- a/dist/web.dev.js
 +++ b/dist/web.dev.js
-@@ -2073,18 +2073,19 @@ function writeSelectValue(node, value) {
+@@ -2125,18 +2125,19 @@ function writeSelectValue(node, value) {
      return queueMicrotask(() => node.value = value) || (node.value = value);
    }
    node._$v = value;
@@ -33,10 +33,10 @@ index 8e15c711fdd11b891821334cc6a791279fce8682..ae4f88da75dac638b310329e412f2cd0
    value = flatten(value, {
      skipNonRendered: true,
 diff --git a/dist/web.js b/dist/web.js
-index 8f5fa7bddc55802447a254ee8a9b77d7bbdeca31..0f0767ed881a35082f4b3dbeaa210829169a5304 100644
+index 0be292d8529aed07b9d16d395a35d9f2af4ca215..93051d649c1e145e6e2953eaf678fd8e4206a486 100644
 --- a/dist/web.js
 +++ b/dist/web.js
-@@ -1810,18 +1810,19 @@ function writeSelectValue(node, value) {
+@@ -1813,18 +1813,19 @@ function writeSelectValue(node, value) {
      return queueMicrotask(() => node.value = value) || (node.value = value);
    }
    node._$v = value;
@@ -67,10 +67,10 @@ index 8f5fa7bddc55802447a254ee8a9b77d7bbdeca31..0f0767ed881a35082f4b3dbeaa210829
    value = flatten(value, {
      skipNonRendered: true,
 diff --git a/dist/web.observe.js b/dist/web.observe.js
-index 4e9d4d992d1e09552166fc7e1f467df3956582f5..433be400d3674059df440d13b8080fe7237f501e 100644
+index a5636430d19170a4e7ebd42efcd983bd1eaa8577..af7360b6719a288858f1a590c528917311f95dc1 100644
 --- a/dist/web.observe.js
 +++ b/dist/web.observe.js
-@@ -1861,18 +1861,19 @@ function writeSelectValue(node, value) {
+@@ -1864,18 +1864,19 @@ function writeSelectValue(node, value) {
      return queueMicrotask(() => node.value = value) || (node.value = value);
    }
    node._$v = value;
