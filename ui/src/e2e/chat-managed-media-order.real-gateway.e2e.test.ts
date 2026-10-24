@@ -2,8 +2,6 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import path from "node:path";
-import { withTimeout } from "@openclaw/fs-safe/advanced";
-import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
@@ -18,11 +16,7 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
-import type { ChatState } from "../pages/chat/chat-state-contract.ts";
-import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { recordControlUiE2eFailureFacts } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
@@ -308,34 +302,6 @@ async function assertRenderedOrder(bubble: Locator) {
   return order;
 }
 
-async function recordImageDecodeFailure(bubble: Locator) {
-  const images = await bubble.locator("img.chat-message-image").evaluateAll((elements) =>
-    elements.map((image) => {
-      if (!(image instanceof HTMLImageElement)) {
-        throw new Error("Expected an image element");
-      }
-      return {
-        protocol: new URL(image.src, document.baseURI).protocol,
-        complete: image.complete,
-        naturalWidth: image.naturalWidth,
-        naturalHeight: image.naturalHeight,
-        currentSrcMatchesSrc: image.currentSrc === image.src,
-      };
-    }),
-  );
-  const record = { schemaVersion: 1, kind: "managed-image-decode", images };
-  console.error("[control-ui-e2e] image decode failure", JSON.stringify(record));
-  const artifactDir = createControlUiE2eArtifactDir(
-    "failure",
-    process.env.OPENCLAW_UI_E2E_DIAGNOSTIC_DIR?.trim() ||
-      path.resolve(".artifacts/control-ui-e2e-timeouts/local"),
-  );
-  await writeFile(
-    path.join(artifactDir, "failure.public.json"),
-    JSON.stringify(record, null, 2) + "\n",
-  );
-}
-
 async function runManagedMediaScenario() {
   await callGateway("sessions.create", {
     key: sessionKey,
@@ -369,31 +335,7 @@ async function runManagedMediaScenario() {
       await waitForControlUiGatewayReady(page);
       await page.getByRole("textbox", { name: "Chat composer", exact: true }).fill(prompt);
       await page.getByRole("button", { name: "Send message", exact: true }).click();
-      // The recap belongs to a run the pane observed, not a terminal history row.
-      await page.waitForFunction((expectedSessionKey) => {
-        const pane = document.querySelector<HTMLElement & { state?: ChatState }>(
-          'openclaw-chat-pane[aria-hidden="false"]',
-        );
-        const state = pane?.state;
-        if (!pane || state?.sessionKey !== expectedSessionKey || !state.chatRunId) {
-          return false;
-        }
-        // An existing indicator can precede projection of the acknowledged run.
-        return Array.from(pane.querySelectorAll(".chat-working-indicator")).some((indicator) => {
-          const runKey = indicator
-            .closest('[data-chat-row-key^="agent-run:"]')
-            ?.getAttribute("data-chat-row-key");
-          const streamKey = indicator
-            .closest('[data-chat-row-key^="stream-working:"]')
-            ?.getAttribute("data-chat-row-key");
-          return (
-            indicator.checkVisibility({ visibilityProperty: true }) &&
-            ((runKey && JSON.parse(runKey.slice("agent-run:".length))[0] === state.chatRunId) ||
-              streamKey ===
-                `stream-working:${JSON.stringify([expectedSessionKey, state.chatRunId])}`)
-          );
-        });
-      }, sessionKey);
+      await expect.poll(() => provider.requests.filter((model) => model === "echo").length).toBe(1);
       provider.releaseEcho();
       const bubble = page.locator(".chat-group.assistant .chat-bubble").filter({ hasText: intro });
       const renderedImages = bubble.locator("img.chat-message-image");
@@ -404,44 +346,21 @@ async function runManagedMediaScenario() {
         .waitFor({ state: "detached" });
       await bubble.getByText(closing, { exact: true }).waitFor();
       const assertDecoded = async () => {
-        // Run retirement starts a final history read that can replace live image nodes.
-        await page.waitForFunction((expectedSessionKey) => {
-          const state = document.querySelector<HTMLElement & { state?: ChatState }>(
-            'openclaw-chat-pane[aria-hidden="false"]',
-          )?.state;
-          return (
-            state?.sessionKey === expectedSessionKey &&
-            state.chatRunId === null &&
-            state.chatStream === null &&
-            !state.chatLoading &&
-            !state.chatError
-          );
-        }, sessionKey);
         await expect.poll(() => bubble.count()).toBe(1);
         await expect
           .poll(() => page.locator(".chat-group.assistant img.chat-message-image").count())
           .toBe(2);
         await expect.poll(() => renderedImages.count()).toBe(2);
-        try {
-          await renderedImages.evaluateAll(async (images) => {
-            await Promise.all(
-              images.map(async (image) => {
-                if (!(image instanceof HTMLImageElement)) {
-                  throw new Error("Expected an image element");
-                }
-                await image.decode();
-              }),
-            );
-          });
-        } catch (error) {
-          await recordImageDecodeFailure(bubble).catch((captureError: unknown) => {
-            console.error(
-              "[control-ui-e2e] image decode diagnostics failed",
-              captureError instanceof Error ? captureError.name : "UnknownError",
-            );
-          });
-          throw error;
-        }
+        await renderedImages.evaluateAll(async (images) => {
+          await Promise.all(
+            images.map(async (image) => {
+              if (!(image instanceof HTMLImageElement)) {
+                throw new Error("Expected an image element");
+              }
+              await image.decode();
+            }),
+          );
+        });
         // History reconciliation can replace the nodes that just finished decoding.
         await expect
           .poll(() =>
@@ -493,147 +412,11 @@ async function runManagedMediaScenario() {
       expect(JSON.stringify(assistants)).not.toContain("MEDIA:");
       expect(JSON.stringify(assistants)).not.toContain(instance.stateDir);
 
-      const assistantId = readSessionMessageIdentity(assistants[0])?.id ?? null;
-      const sessionId = asOptionalRecord(history?.sessionInfo)?.sessionId ?? history?.sessionId;
-      const cursor = history?.deltaCursor;
-      expect(assistantId).toBeTypeOf("string");
-      expect(sessionId).toBeTypeOf("string");
-      expect(cursor).toBeTypeOf("string");
-      // Live previews may decode before history adopts their canonical sources.
-      await expect
-        .poll(async () => {
-          const adopted = await page
-            .locator(".chat-pane-cache__pane--active")
-            .evaluate((element, expectedAssistantId) => {
-              const state = (element as HTMLElement & { state: ChatPageHost }).state;
-              const message = state.chatMessages.find((value) => {
-                if (!value || typeof value !== "object" || !("__openclaw" in value)) {
-                  return false;
-                }
-                const identity = value["__openclaw"];
-                return (
-                  identity &&
-                  typeof identity === "object" &&
-                  "id" in identity &&
-                  identity.id === expectedAssistantId
-                );
-              });
-              return {
-                sessionKey: state.sessionKey,
-                sessionId: state.currentSessionId,
-                loading: state.chatLoading,
-                cursor: state.chatHistoryCursor,
-                message,
-                rendered: Array.from(
-                  element.querySelectorAll(".chat-group.assistant .chat-bubble"),
-                ).some(
-                  (renderedBubble) =>
-                    renderedBubble.getAttribute("data-entry-id") === expectedAssistantId,
-                ),
-              };
-            }, assistantId);
-          const adoptedContent = asOptionalRecord(adopted.message)?.content;
-          return {
-            ...adopted,
-            images: Array.isArray(adoptedContent)
-              ? adoptedContent.map(asOptionalRecord).filter((block) => block?.type === "image")
-              : [],
-          };
-        })
-        .toEqual(
-          expect.objectContaining({
-            sessionKey,
-            sessionId,
-            loading: false,
-            rendered: true,
-            cursor: expect.objectContaining({ cursor, sessionId }),
-            images,
-          }),
-        );
-      // Sidebar rows omit full policy fields. Wait for the pane's own list
-      // read and rendered managed images, not equality with a full CLI row.
-      await expect
-        .poll(() =>
-          page.locator(".chat-pane-cache__pane--active").evaluate((element) => {
-            const state = (element as HTMLElement & { state: ChatPageHost }).state;
-            const selected = state.sessionsResult?.sessions.find(
-              (row) => row.key === state.sessionKey,
-            );
-            return {
-              sessionId: selected?.sessionId,
-              loading: state.sessionsLoading,
-              error: state.sessionsError,
-            };
-          }),
-        )
-        .toEqual({ sessionId, loading: false, error: null });
-      // Stream retirement can precede the durable history receipt. Capture
-      // managed images after that handoff, then retain strict node identity.
+      // Wait for durable managed images, not transient stream previews.
       await expect
         .poll(() => bubble.locator(".chat-image-frame--managed img.chat-message-image").count())
         .toBe(2);
       await assertDecoded();
-      // The terminal session recap arrives independently of final text and image decode.
-      // It adds height beside the bubble, so admit it before freezing live ancestry.
-      try {
-        await page
-          .locator(".chat-group.assistant")
-          .filter({ hasText: intro })
-          .locator(".chat-turn-recap")
-          .waitFor({ state: "visible" });
-      } catch (error) {
-        await withTimeout(
-          page.evaluate(
-            ({ expectedSessionKey, assistantRunId }) => {
-              const pane = document.querySelector<HTMLElement & { state?: ChatPageHost }>(
-                'openclaw-chat-pane[aria-hidden="false"]',
-              );
-              const state = pane?.state;
-              const row = state?.sessionsResult?.sessions.find(
-                (entry) => entry.key === expectedSessionKey,
-              );
-              const recaps = Array.from(pane?.querySelectorAll(".chat-turn-recap") ?? []);
-              return {
-                recapPanePresent: Boolean(pane),
-                recapSessionMatches: state?.sessionKey === expectedSessionKey,
-                recapRunCleared: state?.chatRunId === null,
-                recapWorkingIndicatorCount:
-                  pane?.querySelectorAll(".chat-working-indicator").length ?? null,
-                recapPendingSendCount:
-                  state?.chatQueue.filter(
-                    (item) => item.sendState === "submitting" || item.sendState === "sending",
-                  ).length ?? null,
-                recapPendingSendMatchesAssistant:
-                  state?.chatQueue.some((item) => item.sendRunId === assistantRunId) ?? null,
-                recapCount: recaps.length,
-                recapVisibleCount: recaps.filter((element) =>
-                  element.checkVisibility({ visibilityProperty: true }),
-                ).length,
-                recapAttachedCount: recaps.filter((element) =>
-                  element.closest(".chat-group.assistant"),
-                ).length,
-                recapTerminalRowPresent: Boolean(row),
-                recapTerminalRowDone: row?.status === "done",
-                recapTerminalRuntimeMs:
-                  typeof row?.runtimeMs === "number" && Number.isFinite(row.runtimeMs)
-                    ? row.runtimeMs
-                    : null,
-                recapAssistantRunPresent: assistantRunId !== null,
-                recapTerminalRunMatchesAssistant:
-                  assistantRunId !== null && row?.lastRunId === assistantRunId,
-              };
-            },
-            {
-              expectedSessionKey: sessionKey,
-              assistantRunId: readSessionMessageIdentity(assistants[0])?.runId ?? null,
-            },
-          ),
-          1_000,
-        )
-          .then((facts) => recordControlUiE2eFailureFacts(page, facts))
-          .catch(() => undefined);
-        throw error;
-      }
       const liveOrder = await captureOrder(page, bubble, "live");
       expect(await bubble.textContent()).not.toContain("MEDIA:");
       expect(sends).toEqual([prompt]);

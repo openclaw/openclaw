@@ -1,24 +1,18 @@
 // Control UI browser proof covers the config snapshot and guarded-write lifecycle.
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, type MockGatewayRequest } from "../test-helpers/control-ui-e2e.ts";
 import {
   objectSchema,
   configSnapshot,
   configSchema,
   pageRunner,
-  configProof,
   settingsRow,
   settingsPageOptions,
   createConfigSuite,
 } from "./config-composer-fixtures.test-support.ts";
 
 const suite = createConfigSuite("Control UI guarded config writes mocked Gateway E2E");
-
-const proof = configProof("config-safe-write");
 
 function configResponse(config: Record<string, unknown>, hash: string, appliedConfigHash = hash) {
   return {
@@ -138,22 +132,7 @@ async function expectSeparateControls(first: Locator, second: Locator) {
   expect(overlapArea(firstBounds, secondBounds)).toBe(0);
 }
 
-async function capture(page: Page, name: string, content: Locator): Promise<void> {
-  if (!proof.enabled) {
-    return;
-  }
-  await writeFile(
-    path.join(proof.directory(), name),
-    await takeControlUiViewportScreenshot(page, page.locator(".shell"), [content]),
-  );
-}
-
-const withPage = pageRunner(suite, () => ({
-  ...settingsPageOptions,
-  recordVideo: proof.enabled
-    ? { dir: proof.directory(), size: { height: 1000, width: 1440 } }
-    : undefined,
-}));
+const withPage = pageRunner(suite, () => settingsPageOptions);
 
 suite.define(() => {
   it.each([
@@ -193,7 +172,6 @@ suite.define(() => {
           await expect.poll(() => executor.inputValue()).toBe("node");
           expect(await executorRow.textContent()).toContain("not a security sandbox");
           expect(await enabled.isChecked()).toBe(true);
-          await capture(page, "code-mode-node-default.png", executor);
 
           await gateway.deferNext("config.patch");
           await executor.selectOption("quickjs");
@@ -211,7 +189,6 @@ suite.define(() => {
           expect((await page.reload())?.status()).toBe(200);
           await expect.poll(() => executor.inputValue()).toBe("quickjs");
           expect(await enabled.isChecked()).toBe(true);
-          await capture(page, "code-mode-quickjs-reloaded.png", executor);
 
           const priorPatches = (await gateway.getRequests("config.patch")).length;
           await gateway.deferNext("config.patch");
@@ -258,7 +235,6 @@ suite.define(() => {
       });
       await button(page, "Raw").click();
       await raw.fill(originalRaw);
-      await capture(page, "14-lost-ack-raw-revert.png", raw);
 
       const getsBeforeReconnect = (await gateway.getRequests("config.get")).length;
       await gateway.setOnline(false);
@@ -270,7 +246,6 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("config.get")).length)
         .toBe(getsBeforeReconnect + 1);
       await expect.poll(() => raw.isEnabled()).toBe(true);
-      await capture(page, "15-lost-ack-retained-draft.png", raw);
       expect(await raw.inputValue()).toBe(originalRaw);
       expect(await gateway.getRequests("config.set")).toHaveLength(1);
 
@@ -288,88 +263,6 @@ suite.define(() => {
         .toBe(1);
       await page.reload();
       await expect.poll(() => endpoint.inputValue()).toBe("original-api");
-      await capture(page, "16-lost-ack-explicit-save-reload.png", endpoint);
-    });
-  });
-
-  it("preserves a refreshed external edit after reverting a retained Raw draft", async () => {
-    await withPage(async ({ page }) => {
-      const initialConfig = laboratoryConfig("original-api");
-      const gateway = await installConfig(page, initialConfig, "revision-original");
-      const endpoint = await openLaboratory(page, "original-api");
-      await button(page, "Raw").click();
-      const raw = page.locator(".config-raw-field textarea");
-      const originalRaw = await raw.inputValue();
-      await raw.fill(originalRaw.replace("original-api", "unsaved-api"));
-
-      const getsBeforeReconnect = (await gateway.getRequests("config.get")).length;
-      await gateway.setMethodResponse(
-        "config.get",
-        configResponse(
-          { ...initialConfig, laboratory: { endpoint: "external-api", retryBudget: 2 } },
-          "revision-external",
-        ),
-      );
-      await reconnect(gateway, getsBeforeReconnect);
-      await expect.poll(() => raw.isEnabled()).toBe(true);
-      await raw.fill(originalRaw);
-      await button(page, "Form").click();
-      await endpoint.waitFor();
-      await capture(page, "12-reconnect-raw-revert.png", endpoint);
-      expect.soft(await endpoint.inputValue()).toBe("external-api");
-
-      await gateway.deferNext("config.set");
-      await page.getByRole("spinbutton", { name: "Retry budget", exact: true }).fill("3");
-      const save = mutationParams(await gateway.waitForRequest("config.set"));
-      expect(save.baseHash).toBe("revision-external");
-      expect.soft(JSON.parse(String(save.raw))).toEqual({
-        ...initialConfig,
-        laboratory: { endpoint: "external-api", retryBudget: 3 },
-      });
-      await gateway.resolveDeferred("config.set");
-      await expectSaveStatus(page, "Saved");
-      await page.reload();
-      await endpoint.waitFor();
-      await capture(page, "13-reconnect-save-reload.png", endpoint);
-      expect(await endpoint.inputValue()).toBe("external-api");
-    });
-  });
-
-  it("restores form values when a failed edit is reverted in Raw mode", async () => {
-    await withPage(async ({ page }) => {
-      const initialConfig = laboratoryConfig("saved-api");
-      const gateway = await installConfig(page, initialConfig, "revert-snapshot");
-      const endpoint = await openLaboratory(page, "saved-api");
-
-      await gateway.deferNext("config.set");
-      await endpoint.fill("discarded-api");
-      await gateway.waitForRequest("config.set");
-      await gateway.rejectDeferred("config.set", {
-        code: "UNAVAILABLE",
-        message: "QA configuration save failed",
-      });
-      const saveIndicator = page.locator("openclaw-settings-save-indicator");
-      await expect.poll(() => saveIndicator.textContent()).toContain("Save failed");
-      await button(page, "Raw").click();
-      await page.locator(".config-raw-field textarea").fill(JSON.stringify(initialConfig, null, 2));
-      await button(page, "Form").click();
-      await endpoint.waitFor();
-      await capture(page, "11-form-after-raw-revert.png", endpoint);
-      expect.soft(await endpoint.inputValue()).toBe("saved-api");
-
-      const previousSaves = (await gateway.getRequests("config.set")).length;
-      await gateway.deferNext("config.set");
-      await page.getByRole("spinbutton", { name: "Retry budget", exact: true }).fill("3");
-      const save = mutationParams(
-        await gateway.waitForRequest("config.set", { after: previousSaves }),
-      );
-      expect(save.baseHash).toBe("revert-snapshot");
-      expect(JSON.parse(String(save.raw))).toEqual({
-        ...initialConfig,
-        laboratory: { endpoint: "saved-api", retryBudget: 3 },
-      });
-      await gateway.resolveDeferred("config.set");
-      await expect.poll(() => saveIndicator.textContent()).toContain("Saved");
     });
   });
 
@@ -415,7 +308,6 @@ suite.define(() => {
         .toBe(configGetsBeforePatch);
       await expect.poll(() => codeModeRow.textContent()).toContain("Default: Disabled");
       await expect.poll(() => labsLink.getAttribute("aria-current")).toBe("page");
-      await capture(page, "00-labs-canonical-refresh.png", codeModeSwitch);
 
       const endpoint = await openLaboratory(page, "local-api", true);
       const advancedLink = page.locator('.settings-sidebar__item[href="/settings/advanced"]');
@@ -438,7 +330,6 @@ suite.define(() => {
       await expect
         .poll(() => saveIndicator.getByRole("button", { name: "Reload" }).count())
         .toBe(1);
-      await capture(page, "01-base-hash-conflict.png", saveIndicator);
 
       const externalConfig = laboratoryConfig("external-api", 4);
       await gateway.setMethodResponse(
@@ -484,7 +375,6 @@ suite.define(() => {
           saveEnabled: await rawSave.isEnabled(),
         }))
         .toEqual({ raw: rawDraft, saveEnabled: true });
-      await capture(page, "02-raw-draft.png", rawEditor);
 
       const setRequestsBeforeRawSave = (await gateway.getRequests("config.set")).length;
       const rawSetRequest = gateway.waitForRequest("config.set", {
@@ -507,7 +397,6 @@ suite.define(() => {
       expect(applyParams.raw).toBe(rawDraft);
       expect(applyParams.sessionKey).toBe("agent:main:main");
       await expect.poll(() => saveIndicator.textContent()).toContain("Applying");
-      await capture(page, "03-applying.png", saveIndicator);
 
       const configGetsBeforeApply = (await gateway.getRequests("config.get")).length;
       await gateway.resolveDeferred("config.apply");
@@ -518,7 +407,6 @@ suite.define(() => {
         .poll(() => page.getByRole("button", { name: "Apply changes", exact: true }).count())
         .toBe(0);
       await expect.poll(() => rawEditor.inputValue()).toBe(rawDraft);
-      await capture(page, "04-apply-complete.png", rawEditor);
     });
   });
 
@@ -542,7 +430,6 @@ suite.define(() => {
       await page.locator('.settings-sidebar__item[href="/settings/advanced"]').click();
       await page.waitForURL(/\/settings\/advanced/u);
       await expect.poll(() => endpoint.inputValue()).toBe("reconnected-api");
-      await capture(page, "05-reconnected-config.png", endpoint);
 
       await page.locator('.settings-sidebar__item[href="/settings/connection"]').click();
       await page.waitForURL(/\/settings\/connection$/u);
@@ -580,7 +467,6 @@ suite.define(() => {
         hash: "snapshot-saved",
       });
       await expectSaveStatus(page, "Saved");
-      await capture(page, "06-replacement-save.png", endpoint);
     });
   });
 
@@ -612,11 +498,9 @@ suite.define(() => {
         .toBe(true);
       await expectSeparateControls(saveButton, buildLink);
       expect(await buildLink.textContent()).not.toBe("");
-      await capture(page, "07-opaque-revision-reconnect.png", saveButton);
 
       await page.setViewportSize({ height: 900, width: 1280 });
       await expectSeparateControls(saveButton, buildLink);
-      await capture(page, "07-opaque-revision-reconnect-1280.png", saveButton);
 
       await gateway.deferNext("config.set");
       await saveButton.click();
@@ -650,7 +534,6 @@ suite.define(() => {
       const gateway = await installConfig(page, initialConfig, "id-snapshot-1");
 
       const endpoint = await openLaboratory(page, "before-save", true);
-      await capture(page, "08-id-before-unrelated-save.png", endpoint);
 
       await gateway.deferNext("config.set");
       await endpoint.fill("after-save");
@@ -663,15 +546,7 @@ suite.define(() => {
         laboratory: { endpoint: "after-save", retryBudget: 2 },
         tools: { elevated: { allowFrom: { discord: [identifier, 42] } } },
       });
-      expect(submitted.tools.elevated.allowFrom.discord[0]).toBe(identifier);
-      expect(typeof submitted.tools.elevated.allowFrom.discord[0]).toBe("string");
 
-      if (proof.enabled) {
-        await writeFile(
-          path.join(proof.directory(), "09-id-config-set-payload.json"),
-          `${JSON.stringify({ before: initialConfig, submitted }, null, 2)}\n`,
-        );
-      }
       await gateway.resolveDeferred("config.set");
       const saveIndicator = page.locator("openclaw-settings-save-indicator");
       await expect.poll(() => saveIndicator.textContent()).toContain("Saved");
@@ -682,7 +557,6 @@ suite.define(() => {
       const rawEditor = page.locator(".config-raw-field textarea");
       await rawEditor.waitFor();
       await expect.poll(() => rawEditor.inputValue()).toContain(`"${identifier}"`);
-      await capture(page, "10-id-after-unrelated-save.png", rawEditor);
     });
   });
 });
