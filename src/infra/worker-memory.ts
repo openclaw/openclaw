@@ -8,6 +8,7 @@ import {
   observeGcSamples,
   type GcSample,
 } from "./gc-observer.js";
+import { localPostgresBridgeCountBuffer } from "./worker-cpu.js";
 
 export type WorkerGcStorm = {
   workerId?: string;
@@ -149,7 +150,11 @@ export function serveWorkerMemorySamples(
   port1.on("messageerror", () => port1.close());
   port1.unref();
   sample();
-  parent.postMessage({ status: "memory", port: port2 }, [port2]);
+  // Publish only direct bridges; the host retains this view until the parent exits.
+  parent.postMessage(
+    { status: "memory", port: port2, postgresBridgeCount: localPostgresBridgeCountBuffer },
+    [port2],
+  );
   return {
     setTaskMetrics(enabled: boolean) {
       taskMetrics = enabled;

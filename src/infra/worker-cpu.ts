@@ -16,6 +16,7 @@ import {
 } from "./worker-diagnostic-script.js";
 import type { WorkerGcStorm } from "./worker-memory.js";
 import {
+  canObserveWorkerMessages,
   recordWorkerMessage,
   observeWorkerMessage,
   workerMessagePayloadBytes,
@@ -64,6 +65,7 @@ type WorkerSource = {
   };
   heapPending?: boolean;
   memoryPort?: MessagePort;
+  postgresBridgeCount?: Int32Array<SharedArrayBuffer>;
   memoryPending?: boolean;
   memoryUnavailable?: boolean;
   memoryFlush?: ReturnType<typeof createRetainedOperation<void>>;
@@ -93,6 +95,7 @@ const trackedWorkers = resolveGlobalSingleton(Symbol.for("openclaw.workerCpuSour
     gcObserver: undefined as
       | ((samples: GcSample[], thread: string, workerSlot?: number) => void)
       | undefined,
+    postgresBridgeCount: new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT)),
     revision: 0,
     nextPoolId: 0,
     poolIds: new WeakMap<object, number>(),
@@ -121,7 +124,16 @@ export function trackNativeWorkerForCpu(
   // Register explicitly on Bun; Node may already have reported the Worker during construction.
   trackWorker(worker);
   const source = trackedWorkers.workers.get(worker)!;
-  source.script = workerScriptName(filename, evalSource);
+  const script = workerScriptName(filename, evalSource);
+  if (source.script !== script) {
+    if (source.script === "bridge.worker.js") {
+      Atomics.sub(trackedWorkers.postgresBridgeCount, 0, 1);
+    }
+    if (script === "bridge.worker.js") {
+      Atomics.add(trackedWorkers.postgresBridgeCount, 0, 1);
+    }
+    source.script = script;
+  }
   if (source.script === "code-mode-node.worker.js" && source.workerSlot === undefined) {
     // Reuse slots only after native exit; overflow keeps the script-level attribution.
     const occupied = new Set([...trackedWorkers.workers.values()].map((entry) => entry.workerSlot));
@@ -136,6 +148,18 @@ export function trackNativeWorkerForCpu(
   source.lifecycleMessages =
     source.script === "openclaw-state-lease-heartbeat.worker.js" ||
     source.script === "gateway-state-owner-heartbeat.worker.js";
+}
+
+export const localPostgresBridgeCountBuffer = trackedWorkers.postgresBridgeCount.buffer;
+
+function getTrackedPostgresBridgeCount(): number {
+  let count = Atomics.load(trackedWorkers.postgresBridgeCount, 0);
+  for (const source of trackedWorkers.workers.values()) {
+    if (source.postgresBridgeCount) {
+      count += Atomics.load(source.postgresBridgeCount, 0);
+    }
+  }
+  return count;
 }
 
 /** Pool identity follows its live Workers without retaining the pool itself. */
@@ -195,6 +219,7 @@ export function getTrackedWorkerPoolSnapshot() {
   }
   return {
     workerCount: trackedWorkers.workers.size,
+    postgresBridgeCount: getTrackedPostgresBridgeCount(),
     workerPoolCount: pools.size,
     workerPools: [...pools.values()]
       .toSorted((a, b) => b.workerCount - a.workerCount || a.poolId - b.poolId)
@@ -210,6 +235,9 @@ function forgetWorker(worker: WorkerCpuHandle): void {
   const counts = countWorkerStart(source);
   const reason = source.retirementReason ?? "exit";
   counts.retired.set(reason, (counts.retired.get(reason) ?? 0) + 1);
+  if (source.script === "bridge.worker.js") {
+    Atomics.sub(trackedWorkers.postgresBridgeCount, 0, 1);
+  }
   source.memoryFlush?.resolve();
   source.memoryPort?.close();
   trackedWorkers.workers.delete(worker);
@@ -276,29 +304,6 @@ export function flushWorkerDiagnostics(worker: WorkerCpuHandle, reason: WorkerRe
     completion.resolve();
   }
   return completion.operation;
-}
-
-function canObserveWorkerMessages(worker: Worker): boolean {
-  if (!Object.isExtensible(worker)) {
-    return false;
-  }
-  for (const method of ["postMessage", "emit"]) {
-    let owner: object | null = worker;
-    while (owner) {
-      const descriptor = Object.getOwnPropertyDescriptor(owner, method);
-      if (descriptor) {
-        if (!descriptor.writable || typeof descriptor.value !== "function") {
-          return false;
-        }
-        break;
-      }
-      owner = Reflect.getPrototypeOf(owner);
-    }
-    if (!owner) {
-      return false;
-    }
-  }
-  return true;
 }
 
 function trackWorker(worker: WorkerCpuHandle): void {
@@ -515,6 +520,12 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
     port.close();
     return true;
   }
+  if (
+    message.postgresBridgeCount instanceof SharedArrayBuffer &&
+    message.postgresBridgeCount.byteLength === Int32Array.BYTES_PER_ELEMENT
+  ) {
+    source.postgresBridgeCount = new Int32Array(message.postgresBridgeCount);
+  }
   source.memoryPort = port;
   source.memoryPending = true;
   const close = () => {
@@ -656,6 +667,7 @@ export function getTrackedWorkerLifecycleSnapshot() {
   pruneExitedWorkers();
   return {
     workerCount: trackedWorkers.workers.size,
+    postgresBridgeCount: getTrackedPostgresBridgeCount(),
     workerLifecycle: [...trackedWorkers.lifecycle].map(([script, counts]) => ({
       script,
       started: counts.started,

@@ -113,6 +113,8 @@ export type DiagnosticMemoryUsage = {
   arrayBuffersBytes: number;
   heapSpaces?: HeapSpaceInfo[];
   workerCount?: number;
+  /** Live PostgreSQL bridges, including children of workers with diagnostic registration. */
+  postgresBridgeCount?: number;
   workerHeapSampledCount?: number;
   workerHeapTotalBytes?: number;
   workerHeapUsedBytes?: number;
