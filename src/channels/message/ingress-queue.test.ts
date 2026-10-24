@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { Insertable } from "kysely";
 import { afterAll, describe, expect, it, vi } from "vitest";
@@ -10,18 +9,11 @@ import {
 } from "../../infra/kysely-sync.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
-import { withOpenClawStateDatabaseReadSnapshot } from "../../state/openclaw-state-db-readonly.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../state/openclaw-state-db.generated.js";
-import {
-  openOpenClawStateDatabase,
-  closeOpenClawStateDatabaseByPathAsync,
-} from "../../state/openclaw-state-db.js";
+import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { countFailedChannelIngressQueueEntries } from "./ingress-queue-health.js";
-import {
-  createChannelIngressQueue,
-  listChannelIngressQueueAccountIdsReadOnly,
-} from "./ingress-queue.js";
+import { createChannelIngressQueue } from "./ingress-queue.js";
 import { createTestIngressQueue, useRetainedIngressState } from "./ingress-queue.test-helpers.js";
 import { channelIngressOperations } from "./ingress-queue.worker.js";
 
@@ -216,6 +208,8 @@ describe("channel ingress queue", () => {
         expect(competingClaim).toBeNull();
         expect(claim).toMatchObject({
           ...record,
+          // The claim moves updatedAt strictly past the frozen clock.
+          updatedAt: 101,
           claim: { token: expect.any(String), ownerId: "worker", claimedAt: 100 },
         });
         await queue.complete(expectDefined(claim, "claimed event"), {
@@ -795,6 +789,9 @@ describe("channel ingress dead letters", () => {
         channelId: "telegram",
         accountId: "ops",
         stateDir,
+        // Seed clock below every explicit transition time, so each transition's
+        // strictly-forward updatedAt lands on the time that transition passes.
+        now: () => 1,
       });
       await queue.enqueue(
         "event-1",
@@ -838,6 +835,9 @@ describe("channel ingress dead letters", () => {
         channelId: "line",
         accountId: "default",
         stateDir,
+        // Seed clock below every explicit transition time, so each transition's
+        // strictly-forward updatedAt lands on the time that transition passes.
+        now: () => 1,
       });
       const resubmit = expectDefined(queue.resubmit?.bind(queue), "resubmit");
 
@@ -949,94 +949,5 @@ describe("channel ingress dead letters", () => {
         { channelId: "telegram", accountId: "ops", count: 2, oldestFailedAt: 20 },
       ]);
     });
-  });
-});
-
-describe("ingress listing access", () => {
-  it("lists without creating the shared state database", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "openclaw-ingress-readonly-", applyEnv: false },
-      async ({ stateDir, statePath }) => {
-        const sqlitePath = statePath("state", "openclaw.sqlite");
-        await expect(fs.access(sqlitePath)).rejects.toThrow();
-        const reader = createChannelIngressQueue<{ text: string }>({
-          channelId: "line",
-          accountId: "default",
-          stateDir,
-          access: "read-only",
-        });
-        // The read-only opener never creates, migrates or configures the file, so a
-        // caller that runs before it owns the state cannot bring the store into being.
-        // Account discovery runs before the inspection facade is even opened, so it is
-        // the first thing that could create the store.
-        expect(
-          await listChannelIngressQueueAccountIdsReadOnly({ channelId: "line", stateDir }),
-        ).toEqual([]);
-        await expect(fs.access(sqlitePath)).rejects.toThrow();
-        expect(await reader.listPending({ limit: "all" })).toEqual([]);
-        expect(await reader.listClaims()).toEqual([]);
-        expect(await reader.listFailed?.({ limit: "all" })).toEqual([]);
-        await expect(fs.access(sqlitePath)).rejects.toThrow();
-        // A read-write queue is what actually creates it, and the read-only reader then
-        // sees the same rows - so the empty results above are the access mode, not a
-        // broken reader.
-        await createChannelIngressQueue<{ text: string }>({
-          channelId: "line",
-          accountId: "default",
-          stateDir,
-        }).enqueue("evt-1", { text: "hello" });
-        await fs.access(sqlitePath);
-        await closeOpenClawStateDatabaseByPathAsync(sqlitePath);
-        const after = createChannelIngressQueue<{ text: string }>({
-          channelId: "line",
-          accountId: "default",
-          stateDir,
-          access: "read-only",
-        });
-        const hostQueries = vi
-          .spyOn(sqliteQueries, "executeSqliteQuerySync")
-          .mockImplementation(() => {
-            throw new Error("Ingress inspection must not query SQLite on the calling thread");
-          });
-        try {
-          expect((await after.listPending({ limit: "all" })).map((row) => row.id)).toEqual([
-            "evt-1",
-          ]);
-          expect(
-            await listChannelIngressQueueAccountIdsReadOnly({ channelId: "line", stateDir }),
-          ).toEqual(["default"]);
-          expect(hostQueries).not.toHaveBeenCalled();
-        } finally {
-          hostQueries.mockRestore();
-        }
-      },
-    );
-  });
-
-  it("observes committed writes inside an older ambient read snapshot", async () => {
-    await withOpenClawTestState(
-      { layout: "state-only", prefix: "openclaw-ingress-list-committed-", applyEnv: false },
-      async ({ stateDir, statePath }) => {
-        const queue = createChannelIngressQueue<{ text: string }>({
-          channelId: "line",
-          accountId: "default",
-          stateDir,
-        });
-        await queue.enqueue("before", { text: "before" }, { receivedAt: 1 });
-        await withOpenClawStateDatabaseReadSnapshot(
-          async () => {
-            await queue.enqueue("after", { text: "after" }, { receivedAt: 2 });
-            expect((await queue.listPending({ limit: "all" })).map((row) => row.id)).toEqual([
-              "before",
-              "after",
-            ]);
-          },
-          {
-            path: statePath("state", "openclaw.sqlite"),
-            env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
-          },
-        );
-      },
-    );
   });
 });

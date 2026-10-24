@@ -13,9 +13,14 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeNullableString as nonEmptyString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { Client } from "../internal/discord.js";
+import type { DiscordGatewayChannelInfo } from "../internal/gateway-channel-inventory.js";
 import { mapGatewayDispatchData } from "../internal/gateway-dispatch.js";
 import { getDiscordRuntime } from "../runtime.js";
+import { getGateway } from "./gateway-registry.js";
+import { createDiscordStaleAmbientPendingDisposition } from "./ingress-stale-policy.js";
+import { asStoredDiscordMessage } from "./ingress-stored-message.js";
 import type { DiscordMessageEvent } from "./listeners.js";
+import type { DiscordLivePolicyReader } from "./live-policy.js";
 
 const DISCORD_INGRESS_PAYLOAD_VERSION = 1;
 const DISCORD_INGRESS_DRAIN_INTERVAL_MS = 1_000;
@@ -69,18 +74,23 @@ function decodeDiscordIngressPayload(
     throw new DiscordIngressPayloadError("Discord ingress payload must be an object");
   }
   const candidate = payload as Partial<DiscordIngressPayload>;
+  const rawMessage = candidate.rawMessage;
   try {
-    inspectDiscordMessage(candidate.rawMessage);
+    inspectDiscordMessage(rawMessage);
   } catch (error) {
     throw new DiscordIngressPayloadError(`Discord ingress payload ${claimedId} is invalid`, {
       cause: error,
     });
   }
+  if (!rawMessage) {
+    // inspectDiscordMessage already refused a missing frame; this narrows the type.
+    throw new DiscordIngressPayloadError(`Discord ingress payload ${claimedId} is invalid`);
+  }
   return {
     version: candidate.version,
     body: {
       receivedAt: candidate.receivedAt as number,
-      rawMessage: candidate.rawMessage as APIMessage,
+      rawMessage: asStoredDiscordMessage(rawMessage),
     },
   };
 }
@@ -104,8 +114,15 @@ export function createDiscordIngressMonitor(params: {
   client: Client;
   runtime: Pick<RuntimeEnv, "error" | "log">;
   dispatch: DiscordIngressDispatch;
+  botUserId?: string;
+  /** Live published policy; without it the pre-claim stale policy is off. */
+  readPolicy?: DiscordLivePolicyReader;
+  /** Defaults to the live gateway inventory registered for this account. */
+  resolveChannelInfo?: (channelId: string) => DiscordGatewayChannelInfo | undefined;
+  isChannelInventoryHydrating?: (guildId: string) => boolean;
   queue?: ChannelIngressQueue<DiscordIngressPayload>;
 }): DiscordIngressMonitor {
+  const readPolicy = params.readPolicy;
   const queue =
     params.queue ??
     getDiscordRuntime().state.openChannelIngressQueue<DiscordIngressPayload>({
@@ -167,6 +184,25 @@ export function createDiscordIngressMonitor(params: {
     appendRetryDelaysMs: [0],
     drain: {
       deferredLaneOccupancy: "release",
+      ...(readPolicy
+        ? {
+            resolvePendingDisposition: createDiscordStaleAmbientPendingDisposition({
+              botUserId: params.botUserId,
+              client: params.client,
+              readPolicy,
+              resolveChannelInfo:
+                params.resolveChannelInfo ??
+                ((channelId) => getGateway(params.accountId)?.getGatewayChannelInfo(channelId)),
+              // The drain starts before the provider registers the gateway: no
+              // gateway means "cannot answer yet", not "resolved".
+              isChannelInventoryHydrating:
+                params.isChannelInventoryHydrating ??
+                ((guildId) =>
+                  getGateway(params.accountId)?.isGatewayChannelInventoryHydrating(guildId) ??
+                  true),
+            }),
+          }
+        : {}),
       retryPolicy: {
         maxAttempts: DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS,
         deadLetterMinAgeMs: 0,

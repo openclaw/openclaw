@@ -248,6 +248,7 @@ function livePresencePolicy(users?: string[], channelId = "channel-1"): DiscordL
   };
   return {
     isCurrent: () => true,
+    isConfigCurrent: () => true,
     cfg: {},
     accountId: "molty",
     discordConfig: { guilds: guildEntries },

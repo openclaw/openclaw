@@ -3,13 +3,13 @@ import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   countChannelIngressQueuePressureInDatabase,
   countFailedChannelIngressQueueEntriesInDatabase,
+  listChannelIngressAccountsInDatabase,
 } from "./ingress-queue-health.kernel.js";
 import type {
   ChannelIngressHealthSnapshot,
   ChannelIngressReadCommand,
   ChannelIngressReadReply,
 } from "./ingress-queue-read-contract.js";
-import { listChannelIngressAccountsInDatabase } from "./ingress-queue.kernel.js";
 
 export function readChannelIngressInDatabase(
   db: EngineConnection,

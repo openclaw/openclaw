@@ -119,3 +119,18 @@ export function countChannelIngressQueuePressureInDatabase(
   });
   return { pressure, nextClaimExpiryAtMs };
 }
+
+export function listChannelIngressAccountsInDatabase(
+  db: EngineConnection,
+  input: { channelId: string },
+): string[] {
+  return executeSqliteQuerySync(
+    db,
+    getNodeSqliteKysely<Pick<OpenClawStateKyselyDatabase, "channel_ingress_events">>(db)
+      .selectFrom("channel_ingress_events")
+      .select("account_id")
+      .distinct()
+      .where("channel_id", "=", input.channelId)
+      .orderBy("account_id", "asc"),
+  ).rows.map((row) => row.account_id);
+}
