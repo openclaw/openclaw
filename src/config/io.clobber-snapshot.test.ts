@@ -82,4 +82,39 @@ describe("config clobber snapshots", () => {
       expect(contents).toContain(`polluted-${limit + 2}\n`);
     },
   );
+
+  it.each([
+    ["EPERM", 1],
+    ["ENOENT", 0],
+  ])("lock release failing with %s warns %i time(s)", async (code, warnings) => {
+    const f = fixture();
+    const error = Object.assign(new Error(`${code}: release failed`), { code });
+    const deps = {
+      fs: {
+        ...fs,
+        rmdirSync: () => {
+          throw error;
+        },
+        promises: {
+          ...fsp,
+          rmdir: async () => {
+            throw error;
+          },
+        },
+      },
+      logger: { warn: f.warn },
+    };
+    for (const persist of [
+      persistBoundedClobberedConfigSnapshot,
+      persistBoundedClobberedConfigSnapshotSync,
+    ]) {
+      f.warn.mockClear();
+      fs.rmSync(path.join(f.dir, "openclaw.json.clobber.lock"), { recursive: true, force: true });
+      expect(await persist({ ...f.params(0), deps })).not.toBeNull();
+      expect(f.warn).toHaveBeenCalledTimes(warnings);
+      if (warnings) {
+        expect(f.warn).toHaveBeenCalledWith(expect.stringContaining("clobber.lock"));
+      }
+    }
+  });
 });
