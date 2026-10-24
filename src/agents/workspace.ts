@@ -911,6 +911,7 @@ export async function loadWorkspaceBootstrapFiles(
   }
   return result;
 }
+
 async function* walkWorkspaceFiles(
   workspaceDir: string,
   initialRelativeDir: string,

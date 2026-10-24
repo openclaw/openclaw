@@ -8,6 +8,7 @@ import {
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
+import { ensureStatePostgresFragment } from "../state/openclaw-state-db-engine.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import { parseSkillSelectionAuditRow } from "./audit-event-store.skill-selection.js";
@@ -112,6 +113,11 @@ function ensureSkillSelectionAuditSchemaOnce(db: EngineConnection): void {
   if (skillSelectionSchemaEstablished.has(db)) {
     return;
   }
+  if (isPostgresSqlConnection(db)) {
+    ensureStatePostgresFragment(db, "audit_skill_selection_events");
+    skillSelectionSchemaEstablished.add(db);
+    return;
+  }
   if (!tableExists(db, "audit_skill_selection_events")) {
     ensureSkillSelectionAuditSchema(db);
   }
@@ -207,8 +213,8 @@ function normalizeSequenceHighWater(value: unknown): number {
 
 function readAuditSequenceHighWater(db: EngineConnection): number {
   const kysely = getSkillSelectionAuditKysely(db);
-  // sqlite_sequence is SQLite-only; Postgres derives the high-water mark
-  // from MAX(sequence) below.
+  // sqlite_sequence is SQLite-only; PostgreSQL allocation uses its canonical
+  // audit_events identity sequence in allocateAuditSequence below.
   const sequenceRow = isPostgresSqlConnection(db)
     ? undefined
     : executeSqliteQueryTakeFirstSync(
@@ -235,14 +241,15 @@ function readAuditSequenceHighWater(db: EngineConnection): number {
 }
 
 function allocateAuditSequence(db: EngineConnection): number {
+  if (isPostgresSqlConnection(db)) {
+    const row = db
+      .prepare("SELECT nextval(pg_get_serial_sequence('audit_events', 'sequence')) AS sequence")
+      .get();
+    return normalizeSequenceHighWater(row?.sequence);
+  }
   const nextSequence = readAuditSequenceHighWater(db) + 1;
   if (!Number.isSafeInteger(nextSequence) || nextSequence < 1) {
     throw new Error("audit event sequence is outside the supported integer range");
-  }
-  if (isPostgresSqlConnection(db)) {
-    // No sqlite_sequence on Postgres; the AUTOINCREMENT/sequence-backed
-    // column owns allocation and MAX(sequence) above keeps us ahead.
-    return nextSequence;
   }
   const kysely = getSkillSelectionAuditKysely(db);
   const updated = executeSqliteQuerySync(

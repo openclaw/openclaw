@@ -1,3 +1,4 @@
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type { SkillTelemetrySource } from "./types.js";
 
 export type RuntimeSkillSelectionMarker = {
@@ -33,23 +34,29 @@ const skillNameByteEncoder = new TextEncoder();
  * A leading `-` would read as a CLI flag, so it is prefixed to `x-…`.
  * Output fits the audit projector (`^[A-Za-z0-9._][A-Za-z0-9._-]{0,127}$`).
  * The output is built from complete encoding tokens only: a token is
- * appended solely when it fits the 128-char bound, so truncation can
- * never cut inside an escape and no suffix stripping is needed. Names
- * longer than the bound stay prefix-distinguishable.
+ * appended solely when it fits the bounded prefix budget, so truncation can
+ * never cut inside an escape. Truncated names receive a digest suffix so
+ * distinct names with the same encoded prefix remain distinct.
  */
 function sanitizeSkillName(value: string): string {
-  const trimmed = value.trim().slice(0, SKILL_NAME_MAX_INPUT_CHARS);
-  if (!trimmed) {
+  const normalized = value.trim();
+  if (!normalized) {
     return "unknown";
   }
+  const trimmed = normalized.slice(0, SKILL_NAME_MAX_INPUT_CHARS);
+  const digestSuffix = `-${sha256Hex(normalized).slice(0, 10)}`;
   // A leading `-` would read as a CLI flag, so such output is prefixed to
-  // `x-…`. Reserve those 3 chars up front so the bound always holds.
+  // `x-…`. Reserve the prefix and digest space up front so the bound always
+  // holds when the encoded name is truncated.
   const firstChar = trimmed.slice(0, 1);
   const needsFlagPrefix = firstChar === "-" || !/[A-Za-z0-9._]/u.test(firstChar);
-  const budget = needsFlagPrefix ? ENCODED_SKILL_NAME_MAX_CHARS - 3 : ENCODED_SKILL_NAME_MAX_CHARS;
+  const prefixLength = needsFlagPrefix ? 3 : 0;
+  const budget = ENCODED_SKILL_NAME_MAX_CHARS - prefixLength - digestSuffix.length;
   let encoded = "";
+  let truncated = false;
   const pushToken = (token: string): boolean => {
     if (encoded.length + token.length > budget) {
+      truncated = true;
       return false;
     }
     encoded += token;
@@ -83,7 +90,7 @@ function sanitizeSkillName(value: string): string {
   if (!encoded || !/^[A-Za-z0-9._]/u.test(encoded)) {
     return "unknown";
   }
-  return encoded;
+  return truncated ? `${encoded}${digestSuffix}` : encoded;
 }
 
 export function buildRuntimeSkillSelectionMarker(params: {

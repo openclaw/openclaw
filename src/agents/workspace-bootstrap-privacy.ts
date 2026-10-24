@@ -4,24 +4,26 @@
  */
 import path from "node:path";
 import type { ChatType } from "../channels/chat-type.js";
-import { CANONICAL_ROOT_MEMORY_FILENAME } from "../memory/root-memory-files.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
 import { resolveUserPath } from "../utils.js";
+import {
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_USER_FILENAME,
+  resolveWorkspaceBootstrapPath,
+  type WorkspaceBootstrapFile,
+} from "./workspace-bootstrap-policy.js";
 
-// Leaf contract (structural copy of WorkspaceBootstrapFile) to avoid a
-// workspace.ts <-> workspace-bootstrap-privacy.ts import cycle.
-// Keep fields in sync with WorkspaceBootstrapFile in ./workspace.ts.
-export type WorkspaceBootstrapPrivacyFile = {
-  name: string;
-  path: string;
-  content?: string;
-  missing: boolean;
-};
-
-const ROOT_MEMORY_ONLY = new Set([CANONICAL_ROOT_MEMORY_FILENAME]);
-const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set(["AGENTS.md"]);
-const CRON_BOOTSTRAP_ALLOWLIST = new Set(["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"]);
+const SUBAGENT_BOOTSTRAP_ALLOWLIST = new Set([DEFAULT_AGENTS_FILENAME]);
+const CRON_BOOTSTRAP_ALLOWLIST = new Set([
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_USER_FILENAME,
+]);
 
 type BootstrapSessionContext = {
   sessionKey?: string;
@@ -29,23 +31,15 @@ type BootstrapSessionContext = {
   workspaceDir?: string;
 };
 
-function resolveBootstrapSessionContext(
-  session?: string | BootstrapSessionContext,
-): BootstrapSessionContext {
-  return typeof session === "string" ? { sessionKey: session } : (session ?? {});
-}
-
-function filterRootMemoryBootstrapFiles<T extends WorkspaceBootstrapPrivacyFile>(
-  files: T[],
+function filterRootMemoryBootstrapFiles(
+  files: WorkspaceBootstrapFile[],
   workspaceRoot?: string,
-): T[] {
+): WorkspaceBootstrapFile[] {
   if (!workspaceRoot) {
-    return files.filter((file) => !ROOT_MEMORY_ONLY.has(file.name));
+    return files.filter((file) => file.name !== DEFAULT_MEMORY_FILENAME);
   }
   const resolvedWorkspaceRoot = resolveUserPath(workspaceRoot);
-  const rootMemoryPaths = new Set(
-    [...ROOT_MEMORY_ONLY].map((name) => path.join(resolvedWorkspaceRoot, name)),
-  );
+  const rootMemoryPath = path.join(resolvedWorkspaceRoot, DEFAULT_MEMORY_FILENAME);
   return files.filter((file) => {
     if (typeof file.path !== "string") {
       return true;
@@ -54,25 +48,22 @@ function filterRootMemoryBootstrapFiles<T extends WorkspaceBootstrapPrivacyFile>
     if (!filePath) {
       return true;
     }
-    const resolvedPath = path.isAbsolute(filePath)
-      ? path.resolve(filePath)
-      : filePath.startsWith("~")
-        ? resolveUserPath(filePath)
-        : path.resolve(resolvedWorkspaceRoot, filePath);
-    return !rootMemoryPaths.has(resolvedPath);
+    const resolvedPath = resolveWorkspaceBootstrapPath(resolvedWorkspaceRoot, filePath);
+    return resolvedPath !== rootMemoryPath;
   });
 }
 
-export function filterBootstrapFilesForSession<T extends WorkspaceBootstrapPrivacyFile>(
-  files: T[],
+export function filterBootstrapFilesForSession(
+  files: WorkspaceBootstrapFile[],
   session?: string | BootstrapSessionContext,
-): T[] {
-  const { sessionKey, chatType, workspaceDir } = resolveBootstrapSessionContext(session);
+): WorkspaceBootstrapFile[] {
+  const { sessionKey, chatType, workspaceDir }: BootstrapSessionContext =
+    typeof session === "string" ? { sessionKey: session } : (session ?? {});
   const isSubagent = isSubagentSessionKey(sessionKey);
   const isCron = isCronSessionKey(sessionKey);
   const effectiveChatType = chatType ?? deriveSessionChatTypeFromKey(sessionKey);
-  const isSharedContext = effectiveChatType === "group" || effectiveChatType === "channel";
-  const isNonPrivate = isSubagent || isCron || isSharedContext;
+  const isNonPrivate =
+    isSubagent || isCron || effectiveChatType === "group" || effectiveChatType === "channel";
   const privacyFilteredFiles = isNonPrivate
     ? filterRootMemoryBootstrapFiles(files, workspaceDir)
     : files;

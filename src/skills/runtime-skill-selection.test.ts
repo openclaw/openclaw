@@ -65,6 +65,26 @@ describe("runtime skill selection marker", () => {
     expect(marker.selectedSkill).toMatch(/^[A-Za-z0-9._][A-Za-z0-9._-]*$/u);
   });
 
+  it("keeps truncated identities distinct when their prefixes match", () => {
+    const prefix = "中".repeat(20);
+    const first = buildRuntimeSkillSelectionMarker({
+      skillName: `${prefix}-alpha`,
+      skillSource: "workspace",
+      activation: "read",
+    });
+    const second = buildRuntimeSkillSelectionMarker({
+      skillName: `${prefix}-beta`,
+      skillSource: "workspace",
+      activation: "read",
+    });
+
+    expect(first.selectedSkill).not.toBe(second.selectedSkill);
+    expect(first.selectedSkill.length).toBeLessThanOrEqual(128);
+    expect(second.selectedSkill.length).toBeLessThanOrEqual(128);
+    expect(first.selectedSkill).toMatch(/-[0-9a-f]{10}$/u);
+    expect(second.selectedSkill).toMatch(/-[0-9a-f]{10}$/u);
+  });
+
   it("returns unknown for empty skill names", () => {
     const marker = buildRuntimeSkillSelectionMarker({
       skillName: "   ",
