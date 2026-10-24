@@ -166,6 +166,132 @@ it.each(["worker", "gateway", "optional", "account"] as const)(
   },
 );
 
+it("keeps a retained keyless OpenClaw pin usable for required worker inference on re-selection", async () => {
+  const cfg: OpenClawConfig = {
+    ...custom,
+    cloudWorkers: {
+      requiredProfile: "node",
+      profiles: {
+        node: {
+          provider: "device",
+          settings: { device: "node-b", inference: "worker" },
+        },
+      },
+    },
+  };
+  const apiEntry: ModelCatalogEntry = {
+    provider: "fixture",
+    id: "model",
+    name: "Model",
+    reasoning: false,
+    api: "openai-completions",
+    baseUrl: "https://custom.invalid/v1",
+  };
+  const nativeEntry: ModelCatalogEntry = { ...apiEntry, nativeRuntime: "native-test" };
+  const registry = createEmptyPluginRegistry();
+  registry.agentHarnesses.push({
+    pluginId: "native-test",
+    source: "fixture",
+    harness: {
+      id: "native-test",
+      label: "Native test",
+      authBootstrap: "harness",
+      executionEnvironment: "host-only",
+      supports: () => ({ supported: true }),
+      readModelCatalogReadiness: () => ({ accountType: "oauth", authMode: "oauth" }),
+      runAttempt: vi.fn(),
+    },
+  });
+  const owner = createModelRuntimeChoiceOwnerFixture(cfg, () => true, {
+    pluginRegistry: registry,
+    modelCatalog: { entries: [nativeEntry], routeVariants: [apiEntry, nativeEntry] },
+  });
+  // No gateway credentials at all: they correctly live on the worker.
+  bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+  published.owner = owner;
+  const entry: SessionEntry = {
+    sessionId: "worker-retained-session",
+    updatedAt: 0,
+    providerOverride: "fixture",
+    modelOverride: "model",
+    agentRuntimeOverride: "openclaw",
+  };
+  const selection = await prepareModelSelectionRuntime({
+    cfg,
+    ...request,
+    sessionEntry: entry,
+    catalog: [apiEntry, nativeEntry],
+    hydrateThinkingCatalog: false,
+  });
+  expect(selection.status).toBe("ready");
+  if (selection.status === "ready") {
+    expect(selection.runtime).toEqual({ kind: "unchanged" });
+    expect(selection.validateRuntimeSelection).toBeUndefined();
+  }
+});
+
+it("keeps an unpinned session usable for required worker inference on re-selection", async () => {
+  const cfg: OpenClawConfig = {
+    ...custom,
+    cloudWorkers: {
+      requiredProfile: "node",
+      profiles: {
+        node: {
+          provider: "device",
+          settings: { device: "node-b", inference: "worker" },
+        },
+      },
+    },
+  };
+  const apiEntry: ModelCatalogEntry = {
+    provider: "fixture",
+    id: "model",
+    name: "Model",
+    reasoning: false,
+    api: "openai-completions",
+    baseUrl: "https://custom.invalid/v1",
+  };
+  const nativeEntry: ModelCatalogEntry = { ...apiEntry, nativeRuntime: "native-test" };
+  const registry = createEmptyPluginRegistry();
+  registry.agentHarnesses.push({
+    pluginId: "native-test",
+    source: "fixture",
+    harness: {
+      id: "native-test",
+      label: "Native test",
+      authBootstrap: "harness",
+      executionEnvironment: "host-only",
+      supports: () => ({ supported: true }),
+      readModelCatalogReadiness: () => ({ accountType: "oauth", authMode: "oauth" }),
+      runAttempt: vi.fn(),
+    },
+  });
+  const owner = createModelRuntimeChoiceOwnerFixture(cfg, () => true, {
+    pluginRegistry: registry,
+    modelCatalog: { entries: [nativeEntry], routeVariants: [apiEntry, nativeEntry] },
+  });
+  bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+  published.owner = owner;
+  const entry: SessionEntry = {
+    sessionId: "worker-unpinned-session",
+    updatedAt: 0,
+    providerOverride: "fixture",
+    modelOverride: "model",
+  };
+  const selection = await prepareModelSelectionRuntime({
+    cfg,
+    ...request,
+    sessionEntry: entry,
+    catalog: [apiEntry, nativeEntry],
+    hydrateThinkingCatalog: false,
+  });
+  expect(selection.status).toBe("ready");
+  if (selection.status === "ready") {
+    expect(selection.runtime).toEqual({ kind: "unchanged" });
+    expect(selection.validateRuntimeSelection).toBeUndefined();
+  }
+});
+
 it("reports missing sign-in instead of a catalog refresh", async () => {
   const owner = createModelRuntimeChoiceOwnerFixture(custom);
   bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
@@ -396,6 +522,110 @@ it("validates off-catalog host routes without granting an incompatible runtime",
   ).toMatchObject({ kind: "unavailable" });
   current = false;
   expect(choice.validate()).toContain("not available");
+});
+
+it("does not silently switch from a stored openclaw preference pinned while signed out to a signed-in native runtime", async () => {
+  const apiEntry: ModelCatalogEntry = {
+    provider: "fixture",
+    id: "model",
+    name: "Model",
+    reasoning: false,
+    api: "openai-completions",
+    baseUrl: "https://custom.invalid/v1",
+  };
+  const nativeEntry: ModelCatalogEntry = { ...apiEntry, nativeRuntime: "native-test" };
+  const registry = createEmptyPluginRegistry();
+  registry.agentHarnesses.push({
+    pluginId: "native-test",
+    source: "fixture",
+    harness: {
+      id: "native-test",
+      label: "Native test",
+      authBootstrap: "harness",
+      executionEnvironment: "host-only",
+      supports: () => ({ supported: true }),
+      readModelCatalogReadiness: () => ({ accountType: "oauth", authMode: "oauth" }),
+      runAttempt: vi.fn(),
+    },
+  });
+  const owner = createModelRuntimeChoiceOwnerFixture({}, () => true, {
+    pluginRegistry: registry,
+    // Prepared snapshots publish the native row as primary; picker catalogs
+    // may still list the API row first for the same model.
+    modelCatalog: { entries: [nativeEntry], routeVariants: [apiEntry, nativeEntry] },
+  });
+  // The API route has no credential; only the native (subscription) route is
+  // signed in. The stored openclaw preference is still the user's chosen
+  // runtime, so selection must fail with sign-in guidance for that runtime
+  // instead of silently switching to the native one.
+  bindPreparedModelRuntimeAuth(owner, { store: { version: 1, profiles: {} } });
+  published.owner = owner;
+  const selection = await prepareModelSelectionRuntime({
+    ...request,
+    cfg: {},
+    catalog: [apiEntry, nativeEntry],
+    sessionEntry: { agentRuntimeOverride: "openclaw" },
+    thinkingPolicyRequired: false,
+  });
+  expect(selection).toEqual({
+    status: "rejected",
+    reason: "invalid-runtime",
+    message:
+      'Runtime "openclaw" is not available for fixture/model: sign-in needed. Connect its provider account, or choose another model.',
+  });
+});
+
+it("keeps a stored openclaw preference when its route is still signed in", async () => {
+  const apiEntry: ModelCatalogEntry = {
+    provider: "fixture",
+    id: "model",
+    name: "Model",
+    reasoning: false,
+    api: "openai-completions",
+    baseUrl: "https://custom.invalid/v1",
+  };
+  const nativeEntry: ModelCatalogEntry = { ...apiEntry, nativeRuntime: "native-test" };
+  const registry = createEmptyPluginRegistry();
+  registry.agentHarnesses.push({
+    pluginId: "native-test",
+    source: "fixture",
+    harness: {
+      id: "native-test",
+      label: "Native test",
+      authBootstrap: "harness",
+      executionEnvironment: "host-only",
+      supports: () => ({ supported: true }),
+      readModelCatalogReadiness: () => ({ accountType: "oauth", authMode: "oauth" }),
+      runAttempt: vi.fn(),
+    },
+  });
+  const owner = createModelRuntimeChoiceOwnerFixture({}, () => true, {
+    pluginRegistry: registry,
+    modelCatalog: { entries: [nativeEntry], routeVariants: [apiEntry, nativeEntry] },
+  });
+  // Both routes are signed in: the API profile exists and the native account
+  // is observed. A stored openclaw preference is a deliberate choice here and
+  // must keep winning over the native alternative.
+  bindPreparedModelRuntimeAuth(owner, {
+    store: {
+      version: 1,
+      profiles: {
+        "fixture:default": { type: "token", provider: "fixture", token: "synthetic-token" },
+      },
+    },
+  });
+  published.owner = owner;
+  const selection = await prepareModelSelectionRuntime({
+    ...request,
+    cfg: {},
+    catalog: [apiEntry, nativeEntry],
+    sessionEntry: { agentRuntimeOverride: "openclaw" },
+    thinkingPolicyRequired: false,
+  });
+  expect(selection).toMatchObject({ status: "ready" });
+  if (selection.status === "ready") {
+    expect(selection.runtime).toEqual({ kind: "set", runtime: "openclaw" });
+  }
 });
 
 it("rejects a stale native observation without renewing it", async () => {

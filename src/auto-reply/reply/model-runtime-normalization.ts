@@ -153,27 +153,42 @@ export async function prepareModelSelectionRuntime(params: {
       cfg: params.cfg,
       sessionEntry,
     });
-    if (runtime.kind === "clear" || !sessionEntry?.agentRuntimeOverride) {
-      inheritedCliRuntime = resolveCliRuntimeExecutionProvider({
-        cfg: params.cfg,
-        agentId: params.agentId,
-        provider: params.provider,
-        modelId: params.model,
-        authProfileId: sessionEntry?.authProfileOverride,
-      });
-    }
+    // Discover a claiming CLI/native runtime even when the session carries a
+    // stored override, so runtime-choice preparation can validate the stored
+    // preference against current availability. The stored override is passed
+    // as a pin below: it never silently switches to the discovered runtime.
+    inheritedCliRuntime = resolveCliRuntimeExecutionProvider({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      provider: params.provider,
+      modelId: params.model,
+      authProfileId: sessionEntry?.authProfileOverride,
+    });
+    // Dual-route models may list the API row first; a native variant for the
+    // same model must still go through runtime-choice preparation or the
+    // stored/API runtime wins by default forever.
+    const providerId = normalizeProviderId(params.provider);
+    const hasNativeVariant = params.catalog.some(
+      (entry) =>
+        normalizeProviderId(entry.provider) === providerId &&
+        entry.id.trim() === params.model.trim() &&
+        entry.nativeRuntime !== undefined &&
+        entry.nativeRuntime !== "openclaw",
+    );
     needsRuntimeChoice = Boolean(
       selected?.nativeRuntime ||
+      hasNativeVariant ||
       effectiveRuntime !== "openclaw" ||
       inheritedCliRuntime ||
       (policy.forcedByEnvironment && policy.runtime !== "openclaw"),
     );
   }
-  if (
-    runtime.kind === "set" &&
-    runtime.runtime === "openclaw" &&
-    !sessionEntry?.authProfileOverride
-  ) {
+  // Without an explicit non-openclaw runtime request, a required worker
+  // profile keeps ownership of runtime selection (pinned or not): discovery
+  // above must not route the turn through gateway credential validation when
+  // the credentials correctly live on the worker.
+  const noExplicitRuntimeChoice = runtime.kind !== "set" || runtime.runtime === "openclaw";
+  if (noExplicitRuntimeChoice && !sessionEntry?.authProfileOverride) {
     const requiredProfile = params.cfg.cloudWorkers?.requiredProfile;
     const workerProfile = requiredProfile
       ? params.cfg.cloudWorkers?.profiles?.[requiredProfile]
@@ -192,14 +207,18 @@ export async function prepareModelSelectionRuntime(params: {
   if (needsRuntimeChoice) {
     const { preparePublishedModelRuntimeChoice } =
       await import("../../agents/model-runtime-choice.js");
+    const sessionRuntimePin =
+      runtime.kind === "unchanged"
+        ? normalizeOptionalAgentRuntimeId(sessionEntry?.agentRuntimeOverride)
+        : undefined;
     const choice = await preparePublishedModelRuntimeChoice({
       ...params,
       sessionEntry,
       runtimeId: runtime.kind === "set" ? runtime.runtime : undefined,
-      preferredRuntimeId:
-        (runtime.kind === "unchanged"
-          ? normalizeOptionalAgentRuntimeId(sessionEntry?.agentRuntimeOverride)
-          : undefined) ?? inheritedCliRuntime,
+      pinnedRuntimeId: sessionRuntimePin,
+      // Mirrors the pin for callers that only read a preference; the pinned
+      // field above is what forbids falling through to another runtime.
+      preferredRuntimeId: sessionRuntimePin ?? inheritedCliRuntime,
     });
     if (choice.kind === "unavailable") {
       return { status: "rejected", reason: "invalid-runtime", message: choice.message };

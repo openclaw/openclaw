@@ -325,6 +325,13 @@ export async function preparePublishedModelRuntimeChoice(params: {
   model: string;
   runtimeId?: string;
   preferredRuntimeId?: string;
+  /**
+   * A stored session runtime preference. Unlike preferredRuntimeId it never
+   * falls through to another available runtime: when it no longer evaluates
+   * available, selection fails with sign-in guidance instead of silently
+   * switching runtimes.
+   */
+  pinnedRuntimeId?: string;
   /** Session creation supplies its bounded wait; config mutations remain passive. */
   prepareNativeCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   sessionEntry?: Pick<
@@ -355,7 +362,8 @@ export async function preparePublishedModelRuntimeChoice(params: {
         catalog.loadPublishedPreparedModelCatalogOwnerSnapshot(catalogParams),
       )
     : getPublishedPreparedModelCatalogOwnerSnapshot(catalogParams);
-  const unavailableSubject = `${params.runtimeId ? `Runtime "${params.runtimeId}"` : "A runtime"} is not available for ${params.provider}/${params.model}`;
+  const subjectRuntimeId = params.runtimeId ?? params.pinnedRuntimeId;
+  const unavailableSubject = `${subjectRuntimeId ? `Runtime "${subjectRuntimeId}"` : "A runtime"} is not available for ${params.provider}/${params.model}`;
   const unavailable = `${unavailableSubject}. Refresh the model catalog and choose again.`;
   if (!published) {
     return { kind: "unavailable", message: unavailable };
@@ -369,6 +377,7 @@ export async function preparePublishedModelRuntimeChoice(params: {
     );
     const selectedRuntimeId =
       params.runtimeId ??
+      params.pinnedRuntimeId ??
       params.preferredRuntimeId ??
       resolveAgentHarnessPolicy({
         config: published.config,
@@ -462,13 +471,12 @@ export async function preparePublishedModelRuntimeChoice(params: {
     const { resolveModelAsync } = await loadModelResolver();
     const { modelCatalogRowToEntry } = await loadModelCatalogEntry();
     const requestedEntry = { provider: params.provider, id: params.model, name: params.model };
+    const preferredRuntimeId = params.pinnedRuntimeId ?? params.preferredRuntimeId;
     const materializationRuntime =
       params.runtimeId ??
-      (params.preferredRuntimeId &&
-      decisions
-        .runtimeChoices(requestedEntry, [requestedEntry])
-        ?.includes(params.preferredRuntimeId)
-        ? params.preferredRuntimeId
+      (preferredRuntimeId &&
+      decisions.runtimeChoices(requestedEntry, [requestedEntry])?.includes(preferredRuntimeId)
+        ? preferredRuntimeId
         : undefined);
     const selectedAuth = decisions.evaluateEntry(requestedEntry, undefined, materializationRuntime);
     const authProfileMode = resolveProviderModelMaterializationAuthMode(
@@ -511,13 +519,23 @@ export async function preparePublishedModelRuntimeChoice(params: {
   );
   const entryVariants = variants.length ? variants : [entry];
   const choices = decisions.runtimeChoices(entry, entryVariants);
+  // runtimeChoices only contains runtimes that evaluated available. A stored
+  // (pinned) preference that is still available always wins, and one that is
+  // not fails below instead of silently switching; only an unpinned
+  // preference (for example a discovered CLI runtime) falls through to the
+  // first available choice.
   const runtimeId =
     params.runtimeId ??
-    (params.preferredRuntimeId && choices?.includes(params.preferredRuntimeId)
-      ? params.preferredRuntimeId
-      : choices?.[0]);
+    (params.pinnedRuntimeId
+      ? choices?.includes(params.pinnedRuntimeId)
+        ? params.pinnedRuntimeId
+        : undefined
+      : params.preferredRuntimeId && choices?.includes(params.preferredRuntimeId)
+        ? params.preferredRuntimeId
+        : choices?.[0]);
   if (!runtimeId || !choices?.includes(runtimeId)) {
-    const requestedRuntimeId = params.runtimeId ?? params.preferredRuntimeId;
+    const requestedRuntimeId =
+      params.runtimeId ?? params.pinnedRuntimeId ?? params.preferredRuntimeId;
     const evaluation = decisions.evaluateNative(
       entry,
       decisions.evaluateEntry(entry, entryVariants, requestedRuntimeId),
