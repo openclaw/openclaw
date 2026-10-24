@@ -860,7 +860,23 @@ runpy.run_path(os.environ["BASE_REAL_POLICY_PATH"], run_name="__main__")
     expect(commitProbes.length).toBeGreaterThan(1);
     expect(commitProbes.every(({ args }) => args.at(-1) === `${baseSha}^{commit}`)).toBe(true);
     const fetches = commands.filter(({ args }) => args.includes("fetch"));
-    expect(fetches.every(({ args }) => args.includes("--filter=blob:none"))).toBe(true);
+    expect(fetches.map(({ args }) => args)).toEqual([
+      ["-c", "protocol.version=2", ...baseFetchArgs("--depth=1", "origin", baseSha)],
+      ...[25, 100, 300, 1000].map((deepenBy) =>
+        ["-c", "protocol.version=2"].concat(
+          baseFetchArgs(`--deepen=${deepenBy}`, "origin", "--", "main"),
+        ),
+      ),
+      ...(blockDeepen
+        ? [
+            [
+              "-c",
+              "protocol.version=2",
+              ...baseFetchArgs(...(shallow ? ["--unshallow"] : []), "origin", "--", "main"),
+            ],
+          ]
+        : []),
+    ]);
     expect(fetches.every(({ noLazyFetch }) => noLazyFetch === "unset")).toBe(true);
     expect(fetches.some(({ args }) => args.includes("--unshallow"))).toBe(shallow && blockDeepen);
     if (unavailable) {
@@ -924,40 +940,6 @@ linuxIt.for([
       baseAvailableAfter: 0,
     });
     expectReport(report, { code, fetches: [] }, { commands });
-  },
-);
-
-linuxIt.for([1, 2, 6, undefined])(
-  "base policy preserves exact/deepen/plain-ref order (available after %s)",
-  { timeout: 55_000 },
-  async (baseAvailableAfter, { signal }) => {
-    const report = await runBase(signal, [0, 23, 0, 23, 0, 0], {
-      baseAvailableAfter,
-      commandResults: {
-        "rev-parse --is-shallow-repository": { code: 0, output: "false\n" },
-      },
-      poisonPython: true,
-    });
-    expect(report.code, report.output).toBe(baseAvailableAfter ? 0 : 1);
-    const expected = [
-      baseFetchArgs("--depth=1", "origin", base),
-      ...[25, 100, 300, 1000].map((depth) =>
-        baseFetchArgs(`--deepen=${depth}`, "origin", "--", "fixture-base"),
-      ),
-      baseFetchArgs("origin", "--", "fixture-base"),
-    ].slice(0, baseAvailableAfter ?? 6);
-    expect(report.fetches.map(({ args }) => args)).toEqual(expected);
-    expect(
-      report.fetches.every(
-        ({ configuration }) => configuration?.join(" ") === "protocol.version=2",
-      ),
-    ).toBe(true);
-    expect(
-      report.commands.filter(({ args }) => args[0] === "rev-parse" && args[1] === "--verify"),
-    ).toHaveLength(expected.length + 1);
-    if (!baseAvailableAfter) {
-      expect(report.output).toContain("::error title=ensure-base-commit missing base::");
-    }
   },
 );
 

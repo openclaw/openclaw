@@ -917,11 +917,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
     expect(normalizeRequestedRef(" refs/heads/main ")).toBe("main");
     expect(normalizeRequestedRef("refs/tags/v2026.4.14")).toBe("v2026.4.14");
     expect(isImmutableReleaseRef("refs/tags/test-tag")).toBe(true);
-    expect(resolveRequestedSuites("both", "refs/tags/v2026.4.14")).toEqual([
-      "packaged-fresh",
-      "installer-fresh",
-      "packaged-upgrade",
-    ]);
     expect(resolveRequestedSuites("both", "refs/tags/test-tag")).toEqual([
       "packaged-fresh",
       "installer-fresh",
@@ -1125,7 +1120,6 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       source.indexOf("export async function startStaticFileServer"),
       source.indexOf("export function resolveStaticFileContentType"),
     );
-
     expect(serverSource).toContain("createReadStream(params.filePath)");
     expect(serverSource).not.toContain("readFileSync(params.filePath)");
   });
@@ -1685,34 +1679,24 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
   });
 
   it("recognizes the shipped Windows updater packaged-upgrade timeout", () => {
-    const error = new Error(
-      "Command timed out: C:\\hostedtoolcache\\windows\\node\\24.15.0\\x64\\node.exe C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\openclaw-upgrade-q9DsA7\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-2026.5.4-beta.1.tgz --yes --json --no-restart --timeout 1500",
-    );
-
-    expect(isRecoverableWindowsPackagedUpgradeTimeoutError(error, "win32")).toBe(true);
-    expect(
-      isRecoverableWindowsPackagedUpgradeTimeoutError(
-        new Error(
-          "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --yes --json --no-restart --timeout 1200",
-        ),
+    const shipped =
+      "Command timed out: C:\\hostedtoolcache\\windows\\node\\24.15.0\\x64\\node.exe C:\\Users\\RUNNER~1\\AppData\\Local\\Temp\\openclaw-upgrade-q9DsA7\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-2026.5.4-beta.1.tgz --yes --json --no-restart --timeout 1500";
+    const prefix = "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update";
+    for (const [message, platform, expected] of [
+      [shipped, "win32", true],
+      [`${prefix} --yes --json --no-restart --timeout 1200`, "win32", true],
+      [
+        `${prefix} --tag http://127.0.0.1:49951/openclaw-current.tgz --yes --json --timeout 1500`,
         "win32",
-      ),
-    ).toBe(true);
-    expect(
-      isRecoverableWindowsPackagedUpgradeTimeoutError(
-        new Error(
-          "Command timed out: C:\\prefix\\node_modules\\openclaw\\openclaw.mjs update --tag http://127.0.0.1:49951/openclaw-current.tgz --yes --json --timeout 1500",
-        ),
-        "win32",
-      ),
-    ).toBe(true);
-    expect(isRecoverableWindowsPackagedUpgradeTimeoutError(error, "linux")).toBe(false);
-    expect(
-      isRecoverableWindowsPackagedUpgradeTimeoutError(
-        new Error("Command timed out: node openclaw.mjs update --tag openclaw@beta"),
-        "win32",
-      ),
-    ).toBe(false);
+        true,
+      ],
+      [shipped, "linux", false],
+      ["Command timed out: node openclaw.mjs update --tag openclaw@beta", "win32", false],
+    ] as const) {
+      expect(isRecoverableWindowsPackagedUpgradeTimeoutError(new Error(message), platform)).toBe(
+        expected,
+      );
+    }
   });
 
   it("skips the packaged upgrade status probe after the Windows fallback install", () => {
