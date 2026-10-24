@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   ErrorCodes,
@@ -111,19 +112,16 @@ async function createCatalog(restricted: boolean) {
     id: owner.authenticatedUserProfile!.profileId,
   });
   const entryRef = (sessionKey = key) => ({ agentId: "main", sessionKey });
-  const entry = () => loadSessionEntryReadOnly(entryRef());
   const updateNative = (update: Parameters<typeof upsertSessionEntryCore>[1]) =>
     upsertSessionEntryCore(entryRef(nativeKey), update);
-  const seedNative = () =>
-    updateNative({
+  if (restricted) {
+    await updateNative({
       sessionId: "native-source",
       updatedAt: 1,
       pluginOwnerId: "fixture",
       createdVia: "operator",
       createdActor: actor(),
     });
-  if (restricted) {
-    await seedNative();
   }
   const source: SessionCatalogTranscriptItem[] = [
     { id: "question", type: "userMessage", text: "Synthetic imported question" },
@@ -240,41 +238,35 @@ async function createCatalog(restricted: boolean) {
         })
       : [];
   };
-  const transcript = () => transcriptFor(key);
-  const expectImport = async (created: boolean, importedItems = 2, totalItems = 2) => {
-    expect(await call()).toHaveBeenCalledWith(true, {
-      sessionKey: key,
-      importedItems,
-      totalItems,
-      complete: true,
-      created,
-    });
-  };
-  const precreate = async (owner = client) => {
-    const created = await sessionCreation.createGatewaySession({
-      cfg: config,
-      agentId: "main",
-      key,
-      commandSource: "test",
-      operatorRoleActor: { kind: "system" },
-      creation: {
-        via: "operator",
-        actor: actor(owner),
-      },
-    });
-    expect(created.ok).toBe(true);
-    await projection.ensureMaterialized();
-    await projection.prepareMembership();
-  };
   return {
     actor,
-    entry,
+    entry: () => loadSessionEntryReadOnly(entryRef()),
     entryRef,
     updateNative,
-    expectImport,
+    async expectImport(created: boolean, importedItems = 2, totalItems = 2) {
+      expect(await call()).toHaveBeenCalledWith(true, {
+        sessionKey: key,
+        importedItems,
+        totalItems,
+        complete: true,
+        created,
+      });
+    },
     context,
     other,
-    precreate,
+    async precreate(owner = client) {
+      const created = await sessionCreation.createGatewaySession({
+        cfg: config,
+        agentId: "main",
+        key,
+        commandSource: "test",
+        operatorRoleActor: { kind: "system" },
+        creation: { via: "operator", actor: actor(owner) },
+      });
+      expect(created.ok).toBe(true);
+      await projection.ensureMaterialized();
+      await projection.prepareMembership();
+    },
     config,
     client,
     source,
@@ -289,7 +281,7 @@ async function createCatalog(restricted: boolean) {
     setPreparedModelCatalogReader: (reader: () => Promise<typeof readyModelCatalogSnapshot>) => {
       readPreparedModelCatalog = reader;
     },
-    transcript,
+    transcript: () => transcriptFor(key),
     transcriptFor,
   };
 }
@@ -464,14 +456,13 @@ describe("sessions.catalog.import with durable Gateway owners", () => {
         sessionKey: expect.stringMatching(/^agent:main:/),
       });
       const response = retried.mock.calls.find(([ok]) => ok)?.[1];
-      if (
-        !response ||
-        typeof response !== "object" ||
-        !("sessionKey" in response) ||
-        typeof response.sessionKey !== "string"
-      ) {
-        throw new Error("retry did not return a session key");
-      }
+      assert(
+        response &&
+          typeof response === "object" &&
+          "sessionKey" in response &&
+          typeof response.sessionKey === "string",
+        "retry did not return a session key",
+      );
       const sessionKey = response.sessionKey;
       expect(sessionKeys()).toEqual([...before, sessionKey].toSorted());
       expect(loadSessionEntryReadOnly({ agentId: "main", sessionKey })).toMatchObject({
