@@ -383,6 +383,9 @@ describe("crabline transport", () => {
         mode: "off",
         block: { enabled: false },
       });
+      expect(matrixGatewayConfig.channels?.matrix?.["groups"]).toMatchObject({
+        "*": { enabled: true, requireMention: false },
+      });
       expect(matrixGatewayConfig.channels?.matrix?.blockStreaming).toBeUndefined();
       expect(transport.createRuntimeEnvPatch?.()).toMatchObject({
         MATRIX_ACCESS_TOKEN: expect.any(String),

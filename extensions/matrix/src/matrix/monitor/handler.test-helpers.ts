@@ -84,6 +84,13 @@ type MatrixHandlerTestHarnessOptions = {
   mediaMaxBytes?: number;
   needsRoomAliasesForConfig?: boolean;
   isDirectMessage?: boolean;
+  directTracker?: {
+    isDirectMessage: (check: {
+      roomId: string;
+      senderId: string;
+      selfUserId: string;
+    }) => Promise<boolean>;
+  };
   historyLimit?: number;
   readAllowFromStore?: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["readAllowFromStore"];
   upsertPairingRequest?: MatrixMonitorHandlerParams["core"]["channel"]["pairing"]["upsertPairingRequest"];
@@ -386,7 +393,7 @@ export function createMatrixHandlerTestHarness(
     dmEnabled: options.dmEnabled ?? true,
     dmPolicy,
     mediaMaxBytes: options.mediaMaxBytes ?? 10_000_000,
-    directTracker: {
+    directTracker: options.directTracker ?? {
       isDirectMessage: async () => options.isDirectMessage ?? true,
     },
     getRoomInfo: options.getRoomInfo ?? (async () => ({ altAliases: [] })),

@@ -517,6 +517,19 @@ export async function createQaCrablineTransportAdapter(params: {
             },
           };
         } else {
+          if (selection.channel === "matrix") {
+            const matrix = config.channels?.matrix;
+            if (matrix) {
+              matrix.groups = {
+                ...matrix.groups,
+                "*": {
+                  ...matrix.groups?.["*"],
+                  enabled: true,
+                  requireMention: false,
+                },
+              };
+            }
+          }
           if (selection.channel !== "telegram") {
             return config as QaTransportGatewayConfig;
           }
