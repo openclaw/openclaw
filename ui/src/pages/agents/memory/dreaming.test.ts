@@ -486,6 +486,57 @@ describe("dreaming controller", () => {
     );
   });
 
+  it.each(["dreamingStatus", "dreamDiary"] as const)(
+    "replaces an in-flight %s read after a successful mutation",
+    async (resource) => {
+      const method =
+        resource === "dreamingStatus"
+          ? "doctor.memory.resetGroundedShortTerm"
+          : "doctor.memory.resetDreamDiary";
+      const readMethod =
+        resource === "dreamingStatus" ? "doctor.memory.status" : "doctor.memory.dreamDiary";
+      const { state, request } = createActionState(
+        method,
+        { removedEntries: 1, removedShortTermEntries: 7 },
+        { found: false, path: "DREAMS.md" },
+      );
+      const previousRead = createDeferred<unknown>();
+      request.mockImplementationOnce(() => previousRead.promise);
+      const loading = loadDreamingResource(state, resource);
+
+      await expect(runDreamDiaryAction(state, method)).resolves.toBe(true);
+      previousRead.resolve(
+        resource === "dreamingStatus"
+          ? { dreaming: { enabled: true, shortTermCount: 7 } }
+          : { found: true, path: "DREAMS.md", content: "removed diary entry" },
+      );
+      await loading;
+
+      expect(request.mock.calls.filter(([called]) => called === readMethod)).toHaveLength(2);
+      expect(state.dreamingStatus).toBeNull();
+      if (resource === "dreamDiary") {
+        expect(state.dreamDiaryContent).toBeNull();
+      }
+      expect(state.dreamDiaryActionMessage?.kind).toBe("success");
+      expect(state.dreamDiaryActionLoading).toBe(false);
+    },
+  );
+
+  it("keeps a pending status read authoritative when the mutation fails", async () => {
+    const { state, request } = createActionState("doctor.memory.resetGroundedShortTerm", {});
+    const pending = createDeferred<unknown>();
+    request.mockImplementationOnce(() => pending.promise);
+    const loading = loadDreamingResource(state, "dreamingStatus");
+    request.mockRejectedValueOnce(new Error("clear failed"));
+    await expect(runDreamDiaryAction(state, "doctor.memory.resetGroundedShortTerm")).resolves.toBe(
+      false,
+    );
+    pending.resolve({ dreaming: { enabled: true, shortTermCount: 7 } });
+    await loading;
+    expect(state.dreamingStatus?.shortTermCount).toBe(7);
+    expect(state.dreamDiaryActionMessage).toEqual({ kind: "error", text: "clear failed" });
+  });
+
   it("repairs dreaming artifacts and reloads only dreaming status", async () => {
     const { state, request } = createActionState("doctor.memory.repairDreamingArtifacts", {
       action: "repairDreamingArtifacts",
