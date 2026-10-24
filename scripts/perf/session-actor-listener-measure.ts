@@ -70,7 +70,7 @@ const fixtures = Array.from({ length: 32 }, (_, index) => {
     skillsSnapshot: { prompt: "Synthetic saved instructions. ".repeat(1024), skills: [] },
     pluginExtensions: {
       synthetic: {
-        results: Array.from({ length: 16 }, (_, item) => ({
+        results: Array.from({ length: 16 }, (_result, item) => ({
           id: `result-${item}`,
           text: `Synthetic result ${index}/${item}. `.repeat(16),
         })),
@@ -151,7 +151,9 @@ try {
     }
   };
   verify();
-  for (let index = 0; index < 2000; index++) emit(index);
+  for (let index = 0; index < 2000; index++) {
+    emit(index);
+  }
   await inspector.post("HeapProfiler.collectGarbage");
   if (startAt) {
     assert(Date.now() < startAt, "Missed synchronized warm start");
@@ -175,7 +177,9 @@ try {
     const before = performance.now();
     emit(index);
     latency.push(performance.now() - before);
-    if (index % 32 === 31) await setImmediate();
+    if (index % 32 === 31) {
+      await setImmediate();
+    }
   }
   const elapsedMs = performance.now() - started;
   const cpuUsed = process.cpuUsage(cpu);
@@ -220,16 +224,17 @@ try {
       const durations = statistics
         .filter((sample) => sample.gcType === kind)
         .map((sample) => sample.cost / 1000);
-      return {
-        kind,
-        totalMs: durations.reduce((sum, value) => sum + value, 0),
-        ...quantiles(durations),
-      };
+      return Object.assign(
+        { kind, totalMs: durations.reduce((sum, value) => sum + value, 0) },
+        quantiles(durations),
+      );
     }),
     scope:
       "Prepared immutable metadata receipts through real notify/install; excludes producer decoding, Gateway and RPC",
   };
-  if (values.output) await writeFile(values.output, `${JSON.stringify(result, null, 2)}\n`);
+  if (values.output) {
+    await writeFile(values.output, `${JSON.stringify(result, null, 2)}\n`);
+  }
   console.log(JSON.stringify(result, null, 2));
 } finally {
   inspector.disconnect();
