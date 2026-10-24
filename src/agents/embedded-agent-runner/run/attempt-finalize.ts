@@ -233,6 +233,7 @@ export async function completeEmbeddedAttemptAfterTurn(
     }
     await finalizeHarnessContextEngineTurn({
       ...attempt,
+      abortSignal: input.runAbortController.signal,
       contextEngine: activeContextEngine,
       promptError: Boolean(promptError),
       aborted: lifecycleState.aborted,
