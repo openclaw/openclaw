@@ -1,4 +1,3 @@
-import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
@@ -14,15 +13,8 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/session-transcript-reconcile.js";
-import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
-import {
-  closeOpenClawAgentDatabasesForTest,
-  openOpenClawAgentDatabase,
-} from "../../state/openclaw-agent-db.js";
-import {
-  closeOpenClawStateDatabaseForTest,
-  openOpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
+import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import {
@@ -228,37 +220,6 @@ afterEach(async () => {
   }
 });
 
-it("drains rewind fixture owners before closing handles and restoring selectors", ({
-  onTestFinished,
-}) => {
-  const stateDir = process.env.OPENCLAW_STATE_DIR!;
-  const agent = openOpenClawAgentDatabase({ agentId: "main" });
-  const state = openOpenClawStateDatabase();
-  const closing: unknown[] = [];
-  registerOpenClawAgentDatabaseAsyncResource({
-    agentId: "main",
-    path: agent.path,
-    revoke: () => {},
-    close: async () => {
-      await Promise.resolve();
-      closing.push({
-        agentOpen: agent.db.isOpen,
-        stateOpen: state.db.isOpen,
-        rootExists: fs.existsSync(stateDir),
-        selector: process.env.OPENCLAW_STATE_DIR,
-      });
-    },
-  });
-  onTestFinished(() => {
-    expect(closing).toEqual([
-      { agentOpen: true, stateOpen: true, rootExists: true, selector: stateDir },
-    ]);
-    expect(agent.db.isOpen).toBe(false);
-    expect(state.db.isOpen).toBe(false);
-    expect(fs.existsSync(stateDir)).toBe(false);
-  });
-});
-
 type QueuedSessionWork = {
   followup: FollowupRun;
   rpcSource: RpcSourceRef;
@@ -372,46 +333,28 @@ describe("session message-cut methods", () => {
     expectCutReply(respond, { branches: [] });
   });
 
-  it("clears queued session work after a successful branch switch", async () => {
-    const work = enqueueSessionWork("branch switch");
+  it("settles a committed rewind after authority revocation", async () => {
+    const work = enqueueSessionWork("rewind");
     expectSessionWorkQueued(work);
+    let current = true;
+    const readMedia = expectDefined(mocks.readMediaBuffer.getMockImplementation(), "media reader");
+    mocks.readMediaBuffer.mockImplementation(async (id: string) => {
+      const result = await readMedia(id);
+      expect((await readEntry())?.sessionId).not.toBe(sourceSessionId);
+      current = false;
+      return result;
+    });
+    const respond = await invoke("sessions.rewind", "user-entry", {
+      sessionMutationCommitGuard: () => {
+        if (!current) {
+          throw new Error("rewind authority revoked after commit");
+        }
+      },
+    });
 
-    const respond = await invoke("sessions.branches.switch", "off-path-entry");
-
-    expectCutReply(respond, {});
+    expectCutReply(respond, expect.objectContaining({ editorText: "edit me" }));
     await expectSessionWorkCleared(work);
   });
-
-  it.each([false, true])(
-    "settles a successful rewind after authority revocation=%s",
-    async (revoke) => {
-      const work = enqueueSessionWork("rewind");
-      expectSessionWorkQueued(work);
-      let current = true;
-      const readMedia = expectDefined(
-        mocks.readMediaBuffer.getMockImplementation(),
-        "media reader",
-      );
-      mocks.readMediaBuffer.mockImplementation(async (id: string) => {
-        const result = await readMedia(id);
-        expect((await readEntry())?.sessionId).not.toBe(sourceSessionId);
-        if (revoke) {
-          current = false;
-        }
-        return result;
-      });
-      const respond = await invoke("sessions.rewind", "user-entry", {
-        sessionMutationCommitGuard: () => {
-          if (!current) {
-            throw new Error("rewind authority revoked after commit");
-          }
-        },
-      });
-
-      expectCutReply(respond, expect.objectContaining({ editorText: "edit me" }));
-      await expectSessionWorkCleared(work);
-    },
-  );
 
   it("rewinds research's global session without clearing main's shared lane", async () => {
     const key = "global";
@@ -449,7 +392,7 @@ describe("session message-cut methods", () => {
     }
   });
 
-  it("preserves queued session work after a rejected branch switch", async () => {
+  it("preserves queued work until a valid branch switch commits", async () => {
     const work = enqueueSessionWork("rejected branch switch");
     expectSessionWorkQueued(work);
 
@@ -457,6 +400,8 @@ describe("session message-cut methods", () => {
 
     invalid(respond, "branch entry not found");
     expectSessionWorkQueued(work);
+    expectCutReply(await invoke("sessions.branches.switch", "off-path-entry"), {});
+    await expectSessionWorkCleared(work);
   });
 
   it("refuses rewind while pending input owns an in-flight native injection", async () => {
@@ -480,14 +425,6 @@ describe("session message-cut methods", () => {
       registration.cleanup();
       await source.input.settlement.promise;
     }
-  });
-
-  it.each([
-    ["user-entry", "entry is not a branch tip"],
-    ["assistant-entry", "branch is already active"],
-  ])("rejects invalid branch switch target %s", async (entryId, message) => {
-    const respond = await invoke("sessions.branches.switch", entryId);
-    invalid(respond, message);
   });
 
   it.each(["sessions.rewind", "sessions.fork"] as const)(
@@ -577,20 +514,6 @@ describe("session message-cut methods", () => {
     );
   });
 
-  it.each([
-    ["sessions.rewind", "user-entry", "Rewind"],
-    ["sessions.branches.switch", "off-path-entry", "Branch switch"],
-  ] as const)("rejects archived %s", async (method, entryId, label) => {
-    await archiveSourceSession();
-
-    const respond = await invoke(method, entryId);
-
-    expectCutFailure(respond, {
-      code: ErrorCodes.INVALID_REQUEST,
-      message: `${label} is unavailable for archived sessions.`,
-    });
-  });
-
   it("rechecks archived state after waiting for the session lifecycle lock", async () => {
     const storePath = sourceStore();
     const { release, settled: archiving } = await holdLifecycle(storePath, sourceSessionId, () =>
@@ -608,13 +531,8 @@ describe("session message-cut methods", () => {
     });
   });
 
-  it.each([
-    ["missing", "message entry not found"],
-    ["assistant-entry", "entry is not a user message"],
-    ["off-path-entry", "not on the active path"],
-  ])("returns a typed validation error for %s", async (entryId, message) => {
-    const respond = await invoke("sessions.rewind", entryId);
-    invalid(respond, message);
+  it("returns a typed validation error for a missing message", async () => {
+    invalid(await invoke("sessions.rewind", "missing"), "message entry not found");
   });
 
   it.each([

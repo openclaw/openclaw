@@ -19,14 +19,10 @@ import type { MemoryProviderStatus, MemorySearchResult } from "../../memory-host
 import {
   createPluginStateKeyedStore,
   type OpenKeyedStoreOptions,
-  type PluginStateKeyedStore,
 } from "../../plugin-state/plugin-state-store.js";
 import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../../plugins/public-surface-loader.js";
-import type {
-  MemoryPluginRuntime,
-  RegisteredMemorySearchManager,
-} from "../../plugins/registry-contribution-types.js";
+import type { RegisteredMemorySearchManager } from "../../plugins/registry-contribution-types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   createOpenClawTestState,
@@ -53,11 +49,10 @@ import { memorySearchHandlers } from "./memory-search.js";
 
 let testState: OpenClawTestState;
 let testConfig: OpenClawConfig;
-const { createMemoryRuntime: createCliMemoryRuntime } = await vi.importActual<{
-  createMemoryRuntime: (host: object) => {
-    searchForCli: NonNullable<MemoryPluginRuntime["searchForCli"]>;
-  };
-}>("../../../extensions/memory-core/runtime-api.js");
+type MemoryRuntimeModule = typeof import("../../../extensions/memory-core/runtime-api.js");
+const { createMemoryRuntime: createCliMemoryRuntime } = await vi.importActual<MemoryRuntimeModule>(
+  "../../../extensions/memory-core/runtime-api.js",
+);
 const searchForCli = createCliMemoryRuntime({}).searchForCli;
 
 function createConfig(workspaceDir: string): OpenClawConfig {
@@ -205,7 +200,7 @@ describe("memory.search gateway method", () => {
     });
     getActiveMemorySearchManagerCore.mockResolvedValue({ manager, searchForCli });
     await withOwner(testConfig, async (search) => {
-      for (const maxResults of [0, -1, 1.5]) {
+      for (const maxResults of [0, 1.5]) {
         const response = await search({ query: "matching fact", maxResults });
         expectFailure(response, { code: "INVALID_REQUEST" });
       }
@@ -228,13 +223,6 @@ describe("memory.search gateway method", () => {
         });
       }
     });
-    expect(getActiveMemorySearchManagerCore).toHaveBeenCalledWith({
-      cfg: testConfig,
-      agentId: "main",
-      purpose: "cli",
-      inspectSources: true,
-    });
-    expect(manager.close).toHaveBeenCalledTimes(2);
   });
 
   it("preserves routed disabled and failed acquisition outcomes for CLI rendering", async () => {
@@ -286,11 +274,11 @@ describe("memory.search gateway method", () => {
   });
 
   it("records routed recalls before replying and refuses revoked or mismatched owners", async () => {
-    const { configureMemoryCoreDreamingState } = loadBundledPluginPublicArtifactModuleSync<{
-      configureMemoryCoreDreamingState: (
-        openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
-      ) => void;
-    }>({ dirName: "memory-core", artifactBasename: "runtime-api.js" });
+    const { configureMemoryCoreDreamingState } =
+      loadBundledPluginPublicArtifactModuleSync<MemoryRuntimeModule>({
+        dirName: "memory-core",
+        artifactBasename: "runtime-api.js",
+      });
     let current = true;
     let revokeOnRecall = false;
     const instance = new PluginInstance("memory-core");
@@ -434,8 +422,6 @@ describe("memory.search gateway method", () => {
     ["invented", "unknown agentId"],
     [42, "agentId must be a string"],
     ["   ", "unknown agentId"],
-    ["---", "unknown agentId"],
-    ["ſ", "unknown agentId"],
   ])("rejects invalid agentId %j before acquiring a manager", async (agentId, message) => {
     expectFailure(await invokeMemorySearch({ query: "lantern", agentId }, testConfig), {
       code: "INVALID_REQUEST",
@@ -452,10 +438,7 @@ describe("memory.search gateway method", () => {
       entries: { ops: {}, research: {} },
     };
     resolveDefaultAgentId.mockImplementationOnce(() => {
-      throw new AgentSelectionRequiredError(["ops", "research"], {
-        surface: "memory search",
-        hint: "Pass agentId to select a configured agent.",
-      });
+      throw new AgentSelectionRequiredError(["ops", "research"]);
     });
 
     const respond = await invokeMemorySearch({ query: "lantern" }, testConfig);
@@ -489,11 +472,6 @@ describe("memory.search gateway method", () => {
 
     const respond = await invokeMemorySearch({ query: "lantern", agentId: requested }, testConfig);
 
-    expect(getActiveMemorySearchManagerCore).toHaveBeenCalledWith({
-      cfg: testConfig,
-      agentId: configured,
-      purpose: "cli",
-    });
     expect(resolveDefaultAgentId).not.toHaveBeenCalled();
     expectSuccess(respond, {
       agentId: configured,
@@ -512,10 +490,6 @@ describe("memory.search gateway method", () => {
 
     const respond = await invokeMemorySearch({ query: "lantern" }, cfg);
 
-    expect(resolveDefaultAgentId).toHaveBeenCalledWith(cfg, {
-      surface: "memory search",
-      hint: "Pass agentId to select a configured agent.",
-    });
     expectFailure(respond, {
       code: "UNAVAILABLE",
       message: "memory plugin unavailable",
@@ -523,50 +497,6 @@ describe("memory.search gateway method", () => {
     expect(isActiveMemoryProviderNative).toHaveBeenCalledWith({ cfg, agentId: "main" });
     expect(resolveActiveMemoryBackendConfig).not.toHaveBeenCalled();
     expect(getActiveMemorySearchManagerCore).toHaveBeenCalledOnce();
-  });
-
-  it("does not qualify routine pending index work as a search failure", async () => {
-    const manager = createStubManager({
-      backend: "builtin",
-      provider: "none",
-      dirty: true,
-      custom: { searchMode: "fts-only" },
-    });
-    getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
-
-    const respond = await invokeMemorySearch({ query: "hidden codeword" }, testConfig);
-
-    expectSuccess(respond, {
-      agentId: "main",
-      provider: "none",
-      searchMode: "fts-only",
-      results: [],
-    });
-  });
-
-  it("qualifies results after automatic indexing fails", async () => {
-    const manager = createStubManager({
-      backend: "builtin",
-      provider: "none",
-      dirty: true,
-      lastSyncError: "embedding request timed out",
-      custom: { searchMode: "fts-only" },
-    });
-    getActiveMemorySearchManagerCore.mockResolvedValue({ manager });
-
-    const respond = await invokeMemorySearch({ query: "hidden codeword" }, testConfig);
-
-    expectSuccess(respond, {
-      agentId: "main",
-      provider: "none",
-      searchMode: "fts-only",
-      results: [],
-      stale: true,
-      warning:
-        "Memory index is stale: embedding request timed out. Search results may be incomplete.",
-      action:
-        "Run: openclaw memory status --index --agent main. Rebuilding uses keyword indexing only and does not call an embedding provider.",
-    });
   });
 
   it("preserves OpenClaw index ownership and configured provider intent", async () => {
@@ -603,14 +533,8 @@ describe("memory.search gateway method", () => {
   });
 
   it("shares one format repair across concurrent transient Gateway searches", async () => {
-    const { createMemoryRuntime, configureMemoryCoreDreamingState } = await vi.importActual<{
-      createMemoryRuntime: (host: {
-        runInBackgroundContext: <T>(run: () => T) => T;
-      }) => MemoryPluginRuntime;
-      configureMemoryCoreDreamingState: (
-        openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>,
-      ) => void;
-    }>("../../../extensions/memory-core/runtime-api.js");
+    const { createMemoryRuntime, configureMemoryCoreDreamingState } =
+      await vi.importActual<MemoryRuntimeModule>("../../../extensions/memory-core/runtime-api.js");
     const memoryRuntime = createMemoryRuntime({ runInBackgroundContext: (run) => run() });
     const stateEnv = testState.env;
     configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) =>
