@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import photon from "@silvia-odwyer/photon-node";
 import { expect, it } from "vitest";
-import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -101,18 +101,37 @@ suite.define(() => {
                 "false",
               );
             }
-            const frame = await takeControlUiScreenshotFrame(page, meter, [meter], {
-              animations: "disabled",
-              elements: [meter, context],
-            });
+            // Settle ancestor entrance motion before taking crop bounds; the screenshot
+            // below finishes animations and would otherwise move the meter after measurement.
+            await waitForControlUiProofSurface(meter, [meter]);
+            const meterBounds = await meter.boundingBox();
+            const contextBounds = await context.boundingBox();
+            expect(meterBounds).not.toBeNull();
+            expect(contextBounds).not.toBeNull();
+            // Playwright flushes painting before capture; raw CDP capture can return
+            // an older native-meter frame after same-size session updates.
+            const screenshot = await page.screenshot({ animations: "disabled" });
+            const frame = photon.PhotonImage.new_from_byteslice(screenshot);
+            const crop = (bounds: NonNullable<typeof meterBounds>) =>
+              photon.crop(
+                frame,
+                Math.floor(bounds.x),
+                Math.floor(bounds.y),
+                Math.ceil(bounds.x + bounds.width),
+                Math.ceil(bounds.y + bounds.height),
+              );
+            const image = crop(meterBounds!);
             if (captureProof) {
               const name = `${percent}-${fresh ? "fresh" : "stale"}`;
-              await writeFile(path.join(suite.artifactDir, `${name}-page.png`), frame.png);
+              await writeFile(path.join(suite.artifactDir, `${name}-page.png`), screenshot);
+              const contextImage = crop(contextBounds!);
               await writeFile(
                 path.join(suite.artifactDir, `${name}-meter.png`),
-                frame.elements[1]!.png,
+                contextImage.get_bytes(),
               );
+              contextImage.free();
             }
+            frame.free();
             const expected = await meter.evaluate((element, property) => {
               const canvas = document.createElement("canvas");
               const drawing = canvas.getContext("2d")!;
@@ -122,7 +141,6 @@ suite.define(() => {
             }, token);
             // Native meter fills live in browser shadow DOM: assert painted pixels,
             // not a host style that could be ignored by the fill pseudo-element.
-            const image = photon.PhotonImage.new_from_byteslice(frame.elements[0]!.png);
             try {
               const pixels = image.get_raw_pixels();
               let matches = 0;
