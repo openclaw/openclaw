@@ -133,9 +133,10 @@ describe("production lint suppressions", () => {
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {
     expect(summarizeSuppressions(productionLintSuppressions)).toEqual(
       [
+        // These callbacks run only in the page and preserve page-thrown message coercion.
+        "extensions/browser/src/browser/page-function-runtime.ts|@typescript-eslint/no-base-to-string|1",
+        "extensions/browser/src/browser/page-function-runtime.ts|no-eval|2",
         "extensions/browser/src/browser/pw-tools-core.activity.ts|unicorn/prefer-dom-node-text-content|1",
-        "extensions/browser/src/browser/pw-tools-core.interactions.actions.ts|@typescript-eslint/no-implied-eval|2",
-        "extensions/browser/src/browser/pw-tools-core.interactions.content.ts|@typescript-eslint/no-implied-eval|1",
         "extensions/codex/session-history-worker-runtime.ts|no-warning-comments|1",
         "extensions/codex/src/app-server/run-attempt-turn-request.ts|preserve-caught-error|1",
         "extensions/diffs/src/viewer-client.ts|eslint/no-underscore-dangle|1",
