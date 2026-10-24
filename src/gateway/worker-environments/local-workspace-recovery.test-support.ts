@@ -44,22 +44,22 @@ export async function proveOversizedWorkspaceRecovery({
   const first = await prepareSandbox();
   expect(first).toBeDefined();
   const projection = first!.workspaceDir;
-  const artifact = path.join(projection, ".openclaw/tmp/browsers/chrome");
+  const relativePath = ".artifacts/beta's build/package.tgz";
+  const artifact = path.join(projection, relativePath);
+  const guidance =
+    `Pending workspace changes were preserved. Ask a Gateway administrator to run:\n` +
+    `openclaw sandbox recover --session '${owner.sessionKey}' --path '.artifacts/beta'"'"'s build/package.tgz'`;
   await fs.mkdir(path.dirname(artifact), { recursive: true });
   await fs.writeFile(artifact, "retained binary contents\n");
   await fs.truncate(artifact, 64 * 1024 * 1024 + 1);
   await fs.writeFile(path.join(projection, "source.txt"), "guest source remains recoverable\n");
-  await expect(first!.checkpoint()).rejects.toThrow(
-    "Cloud workspace result is too large: .openclaw/tmp/browsers/chrome",
-  );
+  const failures: unknown[] = [await first!.checkpoint().catch((error: unknown) => error)];
   first![Symbol.dispose]();
   const pending = await readLocalWorkspaceProjection(owner.worktree.id);
   expect(pending).toMatchObject({ pending_target: "canonical" });
   expect(pending!.pending_ref).toBeTruthy();
-  for (const message of ["Hello", "Continue"]) {
-    await expect(prepareSandbox(), message).rejects.toThrow(
-      "Cloud workspace result is too large: .openclaw/tmp/browsers/chrome",
-    );
+  for (let attempt = 0; attempt < 2; attempt++) {
+    failures.push(await prepareSandbox().catch((error: unknown) => error));
     expect((await readLocalWorkspaceProjection(owner.worktree.id))!.pending_ref).toBe(
       pending!.pending_ref,
     );
@@ -70,7 +70,7 @@ export async function proveOversizedWorkspaceRecovery({
   const recovery = {
     cfg,
     sessionKey: owner.sessionKey,
-    path: ".openclaw/tmp/browsers/chrome",
+    path: relativePath,
     recoveryId: randomUUID(),
     assertCurrent: owner.assertCurrent,
   };
@@ -85,6 +85,9 @@ export async function proveOversizedWorkspaceRecovery({
   await fs.unlink(path.join(projection, "alias"));
   await fs.link(artifact, path.join(projection, "hardlink"));
   await expect(recoverLocalWorkspaceFile(recovery)).rejects.toThrow();
+  const linkedFailure = await prepareSandbox().catch((error: unknown) => error);
+  expect(linkedFailure).toBeInstanceOf(Error);
+  expect(String(linkedFailure)).not.toContain("openclaw sandbox recover");
   await fs.unlink(path.join(projection, "hardlink"));
   const recovered = await recoverLocalWorkspaceFile(recovery);
   expect(await recoverLocalWorkspaceFile(recovery)).toEqual(recovered);
@@ -111,4 +114,16 @@ export async function proveOversizedWorkspaceRecovery({
     pending_ref: null,
     pending_target: null,
   });
+  // Existing source must not be advertised as eligible for artifact relocation.
+  const source = path.join(projection, "source.txt");
+  await fs.truncate(source, 64 * 1024 * 1024 + 1);
+  const sourceFailure = await resumed!.checkpoint().catch((error: unknown) => error);
+  await fs.writeFile(source, "guest source remains recoverable\n");
+  await resumed!.checkpoint();
+  expect(sourceFailure).toBeInstanceOf(Error);
+  expect(String(sourceFailure)).toBe("Error: Cloud workspace result is too large: source.txt");
+  for (const failure of failures) {
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toContain(guidance);
+  }
 }
