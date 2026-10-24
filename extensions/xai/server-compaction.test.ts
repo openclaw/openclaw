@@ -38,15 +38,12 @@ const model = xaiModel({
 function prepareRequests(
   context: Context,
   targetModel: Model<"openai-responses"> = model,
-  wrapper: { fastMode?: boolean; clientVersion?: string } = {},
+  wrapper: { fastMode?: boolean } = {},
 ) {
-  const streamFn = wrapXaiProviderStream(
-    {
-      streamFn: createOpenAIResponsesTransportStreamFn(),
-      extraParams: { fastMode: wrapper.fastMode, tool_stream: false },
-    } as never,
-    wrapper,
-  );
+  const streamFn = wrapXaiProviderStream({
+    streamFn: createOpenAIResponsesTransportStreamFn(),
+    extraParams: { fastMode: wrapper.fastMode, tool_stream: false },
+  } as never);
   if (!streamFn) {
     throw new Error("expected xAI stream wrapper");
   }
@@ -128,7 +125,6 @@ it("uses the same OAuth proxy headers as a normal turn", async () => {
   const requests = prepareRequests(
     { messages: [{ role: "user", content: "hello", timestamp: 1 }] },
     { ...model, id: "grok-4.5", baseUrl: "https://cli-chat-proxy.grok.com/v1" },
-    { clientVersion: "2026.7.2" },
   );
   await requests.compact();
   const compactHeaders = sdkState.clients[0]?.defaultHeaders;
@@ -139,7 +135,7 @@ it("uses the same OAuth proxy headers as a normal turn", async () => {
   expect(compactHeaders).toEqual(normalHeaders);
   expect(Object.fromEntries(new Headers(omitNullRequestHeaders(compactHeaders)))).toMatchObject({
     "x-existing": "kept",
-    "x-grok-client-version": "2026.7.2",
+    "x-grok-client-version": "1.0.13",
     "x-grok-model-override": "grok-4.5",
     "x-xai-token-auth": "xai-grok-cli",
   });

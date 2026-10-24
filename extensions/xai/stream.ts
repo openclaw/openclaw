@@ -14,22 +14,20 @@ import { XAI_BASE_URL } from "./model-definitions.js";
 import { isXaiGrokProxyBaseUrl } from "./provider-catalog.js";
 import { isXaiProviderId } from "./provider-id.js";
 
+/**
+ * Floor advertised by the Grok OAuth proxy. A missing `x-grok-client-version`
+ * is reported as `(none)`; an OpenClaw version is rejected the same way.
+ */
+export const XAI_GROK_OAUTH_CLIENT_VERSION = "1.0.13";
+
 function isXaiEndpoint(model: Parameters<StreamFn>[0], endpoint: string): boolean {
   return isXaiProviderId(model.provider) && model.baseUrl?.trim().replace(/\/+$/u, "") === endpoint;
 }
 
-function createXaiGrokOAuthHeadersWrapper(
-  baseStreamFn: StreamFn | undefined,
-  clientVersion: string | undefined,
-): StreamFn {
+function createXaiGrokOAuthHeadersWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   const underlying = baseStreamFn ?? streamSimple;
-  const normalizedClientVersion = clientVersion?.trim();
   return (model, context, options) => {
-    if (
-      !normalizedClientVersion ||
-      !isXaiProviderId(model.provider) ||
-      !isXaiGrokProxyBaseUrl(model.baseUrl)
-    ) {
+    if (!isXaiProviderId(model.provider) || !isXaiGrokProxyBaseUrl(model.baseUrl)) {
       return underlying(model, context, options);
     }
     // The Grok OAuth proxy requires its CLI identity and a concrete catalog model.
@@ -38,7 +36,7 @@ function createXaiGrokOAuthHeadersWrapper(
       ...options,
       headers: mergeTransportHeaders(options?.headers, {
         "X-XAI-Token-Auth": "xai-grok-cli",
-        "x-grok-client-version": normalizedClientVersion,
+        "x-grok-client-version": XAI_GROK_OAUTH_CLIENT_VERSION,
         "x-grok-model-override": model.id,
       }),
     });
@@ -199,15 +197,12 @@ function createXaiToolPayloadCompatibilityWrapper(baseStreamFn: StreamFn | undef
   });
 }
 
-export function wrapXaiProviderStream(
-  ctx: ProviderWrapStreamFnContext,
-  runtime?: { clientVersion?: string },
-): StreamFn | undefined {
+export function wrapXaiProviderStream(ctx: ProviderWrapStreamFnContext): StreamFn | undefined {
   const extraParams = ctx.extraParams;
   const toolStreamEnabled = extraParams?.tool_stream !== false;
   return composeProviderStreamWrappers(
     ctx.streamFn,
-    (streamFn) => createXaiGrokOAuthHeadersWrapper(streamFn, runtime?.clientVersion),
+    (streamFn) => createXaiGrokOAuthHeadersWrapper(streamFn),
     createXaiToolPayloadCompatibilityWrapper,
     Boolean(
       extraParams &&
@@ -232,5 +227,16 @@ export function wrapXaiProviderStream(
       }),
     createPlainTextToolCallCompatWrapper,
     (streamFn) => createToolStreamWrapper(streamFn, toolStreamEnabled),
+  );
+}
+
+/** Probes and other tool-less completions never enter `wrapStreamFn`. */
+export function wrapXaiSimpleCompletionStream(
+  ctx: ProviderWrapStreamFnContext,
+): StreamFn | undefined {
+  return composeProviderStreamWrappers(
+    ctx.streamFn,
+    (streamFn) => createXaiGrokOAuthHeadersWrapper(streamFn),
+    createXaiToolPayloadCompatibilityWrapper,
   );
 }

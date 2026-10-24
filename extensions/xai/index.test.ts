@@ -703,7 +703,7 @@ describe("xai provider plugin", () => {
             Authorization: "Bearer oauth-token",
             Accept: "application/json",
             "x-grok-client-mode": "cli",
-            "x-grok-client-version": "1.0.4",
+            "x-grok-client-version": "1.0.13",
           });
           return makeResponse(200, { ...tier, config });
         });

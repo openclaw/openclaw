@@ -59,7 +59,11 @@ import {
   type XaiToolAuthContext,
 } from "./src/tool-auth-shared.js";
 import { resolveEffectiveXSearchConfig } from "./src/x-search-config.js";
-import { wrapXaiProviderStream } from "./stream.js";
+import {
+  wrapXaiProviderStream,
+  wrapXaiSimpleCompletionStream,
+  XAI_GROK_OAUTH_CLIENT_VERSION,
+} from "./stream.js";
 import { createXaiWebSearchProvider } from "./web-search.js";
 import {
   buildMissingXSearchApiKeyPayload,
@@ -73,7 +77,6 @@ import {
 
 const SUPERGROK_BILLING_URL = "https://cli-chat-proxy.grok.com/v1/billing?format=credits";
 const SUPERGROK_CLIENT_MODE = "cli";
-const SUPERGROK_CLIENT_VERSION = "1.0.4";
 const MAX_PLAN_CHARS = 128;
 const MAX_EXACT_INTEGER = 9_007_199_254_740_991;
 
@@ -327,7 +330,7 @@ export default defineSingleProviderPluginEntry({
   id: "xai",
   name: "xAI Plugin",
   description: "Bundled xAI plugin",
-  provider: (pluginApi) => ({
+  provider: () => ({
     label: "xAI",
     aliases: ["x-ai"],
     docsPath: "/providers/xai",
@@ -420,10 +423,8 @@ export default defineSingleProviderPluginEntry({
     },
     ...buildProviderReplayFamilyHooks({ family: "openai-compatible" }),
     prepareExtraParams: (ctx) => defaultToolStreamExtraParams(ctx.extraParams),
-    wrapStreamFn: (ctx) =>
-      wrapXaiProviderStream(ctx, {
-        clientVersion: pluginApi.runtime.version,
-      }),
+    wrapStreamFn: (ctx) => wrapXaiProviderStream(ctx),
+    wrapSimpleCompletionStreamFn: (ctx) => wrapXaiSimpleCompletionStream(ctx),
     // Provider-specific fallback auth stays owned by the xAI plugin so core
     // auth/discovery code can consume it generically without parsing xAI's
     // private config layout. Callers may receive a real key from the active
@@ -458,7 +459,7 @@ export default defineSingleProviderPluginEntry({
             Authorization: `Bearer ${ctx.token}`,
             Accept: "application/json",
             "x-grok-client-mode": SUPERGROK_CLIENT_MODE,
-            "x-grok-client-version": SUPERGROK_CLIENT_VERSION,
+            "x-grok-client-version": XAI_GROK_OAUTH_CLIENT_VERSION,
           },
         },
         ctx.timeoutMs,
