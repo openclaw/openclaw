@@ -1,8 +1,10 @@
 import { createAsyncLock } from "@openclaw/fs-safe/advanced";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
 import {
   getRuntimeConfigAppliedHash,
   hashRuntimeConfigValue,
 } from "../../config/runtime-snapshot.js";
+import { runOutsidePluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { enqueueCommandInLane, setCommandLaneConcurrency } from "../../process/command-queue.js";
 import { CommandLane } from "../../process/lanes.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
@@ -34,7 +36,9 @@ export async function runSystemAgentGatewayTask<T>(task: () => Promise<T>): Prom
     // Bound expensive detection, activation, and agent turns without hiding
     // accepted work from restart draining. This also makes session eviction and
     // setup writes atomic with respect to other OpenClaw gateway requests.
-    withSystemAgentExecution(task),
+    runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+      runOutsidePluginRuntimeGenerationScope(() => withSystemAgentExecution(task)),
+    ),
   );
 }
 
