@@ -208,7 +208,7 @@ export function createSessionRowMaterializer(owner: {
       withAgentRosterFactsBatch(cfg, () => {
         for (const id of ids) {
           const current = owner.rows.get(id);
-          const databaseFacts = facts.get(id);
+          let databaseFacts = facts.get(id);
           const row =
             current &&
             owner.acquireEntry(
@@ -222,6 +222,10 @@ export function createSessionRowMaterializer(owner: {
                 : current,
               databaseFacts?.entry,
             );
+          // Equal rereads keep the canonical entry; retained facets must share that identity.
+          if (row?.storedEntry && databaseFacts && databaseFacts.entry !== row.storedEntry) {
+            databaseFacts = { ...databaseFacts, entry: row.storedEntry };
+          }
           if (row && databaseFacts) {
             row.preparedAcpMeta = databaseFacts.acpMeta;
             row.preparedRuntimeOwnership = databaseFacts.runtimeOwnership;
