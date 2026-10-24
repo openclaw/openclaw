@@ -1673,11 +1673,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["ui/src/styles/app-sidebar.css"],
   ),
   pageWatch(
-    "ui/src/e2e/session-management.filtered-errors.e2e.test.ts",
-    ["chat", "sessions"],
-    [...sessionMenuOwnerRoots, "ui/src/pages/sessions/sessions-page.ts"],
-  ),
-  pageWatch(
     "ui/src/e2e/session-management.group-identity.e2e.test.ts",
     ["chat", "sessions"],
     sessionMenuOwnerRoots,
