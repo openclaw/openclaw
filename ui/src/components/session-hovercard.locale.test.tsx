@@ -8,6 +8,38 @@ import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 import { SessionHovercard } from "./session-hovercard-solid.tsx";
 
+it("uses the visible translated Create PR text in its name and tooltip", async () => {
+  const restoreI18n = captureI18nStateForTesting();
+  await i18n.setLocale("fr");
+  const label = "Créer une demande de fusion";
+  const branch = {
+    owner: "example",
+    repo: "project",
+    branch: "feature/translated-label",
+    createUrl: "https://github.com/example/project/pull/new/feature/translated-label",
+  };
+  const view = mountSolid(() => (
+    <SessionHovercard
+      pullRequests={{ status: "ready", pullRequests: [], rateLimited: false, branch }}
+    />
+  ));
+  onTestFinished(async () => {
+    view.unmount();
+    await restoreI18n();
+  });
+  await waitForSolid(() => {
+    const link = view.container.querySelector<HTMLAnchorElement>(
+      ".session-hovercard__branch-action",
+    );
+    const name = link?.getAttribute("aria-label");
+    expect(link?.textContent).toBe(label);
+    expect(name).toContain(label);
+    expect(name).toContain(branch.branch);
+    expect(link?.title).toBe(name);
+    expect(link?.href).toBe(branch.createUrl);
+  });
+});
+
 function mountCard(
   initial: SidebarSessionHovercardRow,
   automationLink?: Parameters<typeof SessionHovercard>[0]["automationLink"],

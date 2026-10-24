@@ -203,37 +203,6 @@ export function resolveConfiguredProviderConfig(
   );
 }
 
-/** Merge authored rates after discovery; runtime defaults must not become price pins. */
-function mergeConfiguredModelCost(params: {
-  provider: string;
-  cfg?: OpenClawConfig;
-  configuredModel?: NonNullable<InlineProviderConfig["models"]>[number];
-  catalogCost?: Model["cost"];
-  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
-}): Model["cost"] {
-  let authoredCost = params.configuredModel?.cost;
-  if (params.cfg && params.configuredModel) {
-    const source = projectConfigOntoRuntimeSourceSnapshot(params.cfg);
-    if (source !== params.cfg) {
-      // Source aliases resolve once; the selected runtime ID already names its row.
-      const modelId = params.configuredModel.id.trim();
-      const sourceModel = materializeConfiguredProviderModelRows(
-        { models: resolveConfiguredProviderConfig(source, params.provider)?.models ?? [] },
-        (id) =>
-          normalizeConfiguredProviderCatalogModelId(
-            params.provider,
-            id,
-            params.providerMetadataOwners?.modelIdNormalizationPolicies,
-          ),
-      ).models.find((model) => model.id === modelId);
-      if (sourceModel) {
-        authoredCost = sourceModel.cost;
-      }
-    }
-  }
-  return normalizeResolvedPricing(mergeModelCost(params.catalogCost, authoredCost) ?? {});
-}
-
 export function mergeCatalogInlineModel(
   catalogModel: ProviderRuntimeModel | undefined,
   inlineModel: Model,
@@ -277,48 +246,6 @@ function mergeModelParams(
 ): Record<string, unknown> | undefined {
   const merged = Object.assign({}, ...entries);
   return Object.keys(merged).length > 0 ? merged : undefined;
-}
-
-function findConfiguredAgentModelParams(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  modelId: string;
-}): Record<string, unknown> | undefined {
-  const configuredModels = params.cfg?.agents?.defaults?.models;
-  if (!configuredModels) {
-    return undefined;
-  }
-  const directKeys = [
-    modelKey(params.provider, params.modelId),
-    `${params.provider}/${params.modelId}`,
-  ];
-  for (const key of directKeys) {
-    const direct = readModelParams(configuredModels[key]?.params);
-    if (direct) {
-      return direct;
-    }
-  }
-
-  const normalizedProvider = normalizeProviderId(params.provider);
-  const normalizedModelId = normalizeStaticProviderModelId(normalizedProvider, params.modelId)
-    .trim()
-    .toLowerCase();
-  for (const [rawKey, entry] of Object.entries(configuredModels)) {
-    const slashIndex = rawKey.indexOf("/");
-    if (slashIndex <= 0) {
-      continue;
-    }
-    const candidateProvider = rawKey.slice(0, slashIndex);
-    const candidateModelId = rawKey.slice(slashIndex + 1);
-    if (
-      normalizeProviderId(candidateProvider) === normalizedProvider &&
-      normalizeStaticProviderModelId(normalizedProvider, candidateModelId).trim().toLowerCase() ===
-        normalizedModelId
-    ) {
-      return readModelParams(entry.params);
-    }
-  }
-  return undefined;
 }
 
 function clampModelMaxTokensToContextWindow(
@@ -365,7 +292,44 @@ export function applyConfiguredProviderOverrides(params: {
   const requestTimeoutMs = finiteSecondsToTimerSafeMilliseconds(providerConfig?.timeoutSeconds, {
     floorSeconds: true,
   });
-  const defaultModelParams = findConfiguredAgentModelParams(params);
+  const defaultModelParams = (() => {
+    const configuredModels = params.cfg?.agents?.defaults?.models;
+    if (!configuredModels) {
+      return undefined;
+    }
+    const directKeys = [
+      modelKey(params.provider, params.modelId),
+      `${params.provider}/${params.modelId}`,
+    ];
+    for (const key of directKeys) {
+      const direct = readModelParams(configuredModels[key]?.params);
+      if (direct) {
+        return direct;
+      }
+    }
+
+    const normalizedProvider = normalizeProviderId(params.provider);
+    const normalizedModelId = normalizeStaticProviderModelId(normalizedProvider, params.modelId)
+      .trim()
+      .toLowerCase();
+    for (const [rawKey, entry] of Object.entries(configuredModels)) {
+      const slashIndex = rawKey.indexOf("/");
+      if (slashIndex <= 0) {
+        continue;
+      }
+      const candidateProvider = rawKey.slice(0, slashIndex);
+      const candidateModelId = rawKey.slice(slashIndex + 1);
+      if (
+        normalizeProviderId(candidateProvider) === normalizedProvider &&
+        normalizeStaticProviderModelId(normalizedProvider, candidateModelId)
+          .trim()
+          .toLowerCase() === normalizedModelId
+      ) {
+        return readModelParams(entry.params);
+      }
+    }
+    return undefined;
+  })();
   const discoveredHeaders = sanitizeModelHeaders(discoveredModel?.headers);
   const requestParams = {
     provider: params.provider,
@@ -637,11 +601,35 @@ export function applyConfiguredProviderOverrides(params: {
           baseUrl: requestConfig.baseUrl ?? discoveredModel?.baseUrl,
           reasoning: resolvedReasoning,
           input: normalizedInput,
-          cost: mergeConfiguredModelCost({
-            ...params,
-            configuredModel: metadataOverrideModel,
-            catalogCost: discoveredModel?.cost ?? configuredStaticCatalogModel?.cost,
-          }),
+          // Runtime defaults must not become authored price pins.
+          cost: (() => {
+            const catalogCost = discoveredModel?.cost ?? configuredStaticCatalogModel?.cost;
+            let authoredCost = metadataOverrideModel?.cost;
+            if (params.cfg && metadataOverrideModel) {
+              const authoredSource = projectConfigOntoRuntimeSourceSnapshot(params.cfg);
+              if (authoredSource !== params.cfg) {
+                // Source aliases resolve once; the selected runtime ID already names its row.
+                const authoredModelId = metadataOverrideModel.id.trim();
+                const sourceModel = materializeConfiguredProviderModelRows(
+                  {
+                    models:
+                      resolveConfiguredProviderConfig(authoredSource, params.provider)?.models ??
+                      [],
+                  },
+                  (id) =>
+                    normalizeConfiguredProviderCatalogModelId(
+                      params.provider,
+                      id,
+                      params.providerMetadataOwners?.modelIdNormalizationPolicies,
+                    ),
+                ).models.find((model) => model.id === authoredModelId);
+                if (sourceModel) {
+                  authoredCost = sourceModel.cost;
+                }
+              }
+            }
+            return normalizeResolvedPricing(mergeModelCost(catalogCost, authoredCost) ?? {});
+          })(),
           contextWindow,
           contextTokens:
             metadataOverrideModel?.contextTokens ??

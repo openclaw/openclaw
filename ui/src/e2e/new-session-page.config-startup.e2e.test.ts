@@ -156,7 +156,7 @@ suite.define(() => {
         .toBeGreaterThan(1);
       await gateway.resolveDeferred("config.get");
       await composer.getByRole("button", { name: "Add attachment" }).click();
-      await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
+      await menu.getByRole("menuitem", { name: /^Plugins/ }).click();
       await expect.poll(() => github.isEnabled()).toBe(true);
       expect(await message.inputValue()).toBe("Keep this draft after the config error");
       const recoveredReads = (await gateway.getRequests("config.get")).length;

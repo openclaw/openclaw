@@ -23,7 +23,7 @@ class ClawWorkspaceWriteError extends Error {
   }
 }
 
-async function readClawWorkspaceActionSource(params: {
+export async function readClawWorkspaceActionSource(params: {
   action: ClawAddPlanAction;
   packageRoot: string;
   sourceRoot: Root;

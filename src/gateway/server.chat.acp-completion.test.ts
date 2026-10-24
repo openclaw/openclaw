@@ -21,6 +21,7 @@ import { readAssistantDisplayContent } from "../shared/assistant-display-content
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import type { Deferred } from "../shared/deferred.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import { widgetResult } from "./server-chat.agent-events.test-harness.js";
 import {
   dispatchInboundMessageMock,
   installGatewayTestHooks,
@@ -86,15 +87,6 @@ function readTranscriptMessages(scope: Parameters<typeof loadTranscriptEventsSyn
 
 function acpSessionEntry(sessionId: string) {
   return { sessionId, updatedAt: Date.now(), acp: createAcpSessionMeta({ agent: "main" }) };
-}
-
-function widgetResult(id: string) {
-  const widget = {
-    kind: "canvas",
-    presentation: { target: "assistant_message", title: "Status", sandbox: "scripts" },
-    view: { id, url: `/__openclaw__/canvas/documents/${id}/index.html` },
-  };
-  return { content: [{ type: "text", text: JSON.stringify(widget) }] };
 }
 
 describe("Gateway ACP completion ownership", () => {
@@ -198,7 +190,7 @@ describe("Gateway ACP completion ownership", () => {
             data: {
               phase: "result",
               name: "show_widget",
-              result: widgetResult(activeRunId),
+              result: widgetResult(activeRunId, "assistant_message", "Status"),
             },
           });
         }

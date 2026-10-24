@@ -8,7 +8,7 @@ import type {
   WorkboardCard,
   WorkboardStatus,
   WorkboardUiState,
-} from "../../lib/workboard/index.ts";
+} from "../../lib/workboard/types.ts";
 import { formatStatusLabel } from "./view-helpers.tsx";
 import { workboardPopoverRef } from "./view-popover.ts";
 import type { WorkboardSelectOption } from "./workboard-select.ts";

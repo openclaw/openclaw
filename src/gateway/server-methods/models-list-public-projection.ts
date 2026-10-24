@@ -1,14 +1,83 @@
+import { normalizeModelFamily } from "@openclaw/model-catalog-core/model-catalog-types";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asPositiveSafeInteger as resolvePositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import type {
   ModelCatalogProviderOutcome,
   ModelChoice,
 } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type { ModelAuthAvailabilityEvaluation } from "../../agents/model-auth-availability.js";
 import { isLocalBaseUrl } from "../../agents/model-catalog-route.js";
-import { resolveModelCatalogServiceTiers } from "../../agents/model-catalog-service-tiers.js";
-import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../../agents/model-catalog.types.js";
+import { modelMatchesProviderModelRoute } from "../../agents/provider-model-route.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { supportsOpenAIResponsesFastMode } from "../../llm/providers/openai-fast-mode.js";
 import type { ProviderCatalogOutcome } from "../../plugins/provider-catalog.types.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";
+
+/** Account observations are never model metadata donors or native-login readiness. */
+function resolveModelCatalogServiceTiers(params: {
+  snapshot: ModelCatalogSnapshot;
+  entry: Pick<ModelCatalogEntry, "provider" | "id">;
+  evaluation: ModelAuthAvailabilityEvaluation;
+  runtimeId?: string;
+  modelServiceTiers?: readonly string[];
+  isCurrent: () => boolean;
+}): string[] | undefined {
+  const { snapshot, entry, evaluation, runtimeId } = params;
+  const route = evaluation.selectedRoute;
+  const credential = evaluation.selectedCredential;
+  if (
+    !params.isCurrent() ||
+    evaluation.availability !== true ||
+    !credential ||
+    credential.source === "harness" ||
+    !route ||
+    !runtimeId
+  ) {
+    return undefined;
+  }
+  // API-key Responses tiers are a route contract; the ChatGPT catalog cannot describe them.
+  if (
+    runtimeId === "openclaw" &&
+    normalizeProviderId(entry.provider) === "openai" &&
+    credential.requirement === "api-key" &&
+    route.authRequirement === "api-key" &&
+    route.api === "openai-responses" &&
+    supportsOpenAIResponsesFastMode({ provider: "openai", ...route })
+  ) {
+    return [...(params.modelServiceTiers ?? ["priority", "ultrafast"])];
+  }
+  if (
+    credential.source !== "profile" ||
+    route.requestTransportOverrides === "present" ||
+    snapshot.refreshFailed ||
+    snapshot.pendingProviders?.some(
+      (provider) => normalizeProviderId(provider) === normalizeProviderId(entry.provider),
+    )
+  ) {
+    return undefined;
+  }
+  const outcome = snapshot.providerOutcomes?.find(
+    (candidate) =>
+      normalizeProviderId(candidate.provider) === normalizeProviderId(entry.provider) &&
+      candidate.profileId === credential.profileId,
+  );
+  if (outcome?.status !== "ready") {
+    return undefined;
+  }
+  const observation = outcome.modelServiceTiers?.find(
+    (candidate) =>
+      candidate.modelId === entry.id &&
+      candidate.runtimeId === runtimeId &&
+      modelMatchesProviderModelRoute({
+        provider: entry.provider,
+        api: candidate.api,
+        baseUrl: candidate.baseUrl,
+        route,
+      }),
+  );
+  return observation ? [...observation.serviceTiers] : undefined;
+}
 
 /** Harness policy can remove tiers from account/route evidence, never grant new ones. */
 export function projectModelServiceTiers(
@@ -46,14 +115,14 @@ export function buildPublicModelProjection(
   options: { includeDetails?: boolean } = {},
 ): ModelChoice {
   const contextWindow = resolvePositiveSafeInteger(entry.contextWindow);
-  const contextTokens = options.includeDetails
-    ? resolvePositiveSafeInteger(entry.contextTokens)
-    : undefined;
+  const contextTokens = resolvePositiveSafeInteger(entry.contextTokens);
+  const family = normalizeModelFamily(entry.family);
   return {
     id: entry.id,
     name: entry.name,
     provider: entry.provider,
     ...(entry.alias ? { alias: entry.alias } : {}),
+    ...(family ? { family } : {}),
     ...(contextWindow ? { contextWindow } : {}),
     ...(contextTokens ? { contextTokens } : {}),
     ...(options.includeDetails && entry.baseUrl ? { local: isLocalBaseUrl(entry.baseUrl) } : {}),

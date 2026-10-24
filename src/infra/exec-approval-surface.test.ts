@@ -53,7 +53,7 @@ vi.mock("../utils/message-channel.js", () => ({
 
 describe("resolveExecApprovalInitiatingSurfaceStateAsync", () => {
   beforeEach(() => {
-    loadConfigMock.mockReset();
+    loadConfigMock.mockReset().mockReturnValue({});
     getChannelPluginMock.mockReset();
     isDeliverableMessageChannelMock.mockReset();
     normalizeMessageChannelMock.mockReset();
@@ -93,7 +93,7 @@ describe("resolveExecApprovalInitiatingSurfaceStateAsync", () => {
         kind === "plugin" ? { kind: "disabled" as const } : { kind: "enabled" as const },
     );
     plugin(label, { native: {}, getExecInitiatingSurfaceState, getActionAvailabilityState });
-    const params = { channel, accountId: "default", cfg: {} };
+    const params = { channel, accountId: "default" };
     const result =
       approvalKind === "exec"
         ? await resolveExecApprovalInitiatingSurfaceStateAsync(params)
@@ -126,7 +126,6 @@ describe("resolveExecApprovalInitiatingSurfaceStateAsync", () => {
     const result = resolveExecApprovalInitiatingSurfaceStateAsync({
       channel: "matrix",
       accountId: "default",
-      cfg: {},
     });
     expect(supportsNativeExecApprovalClient("matrix")).toBe(true);
     availability.resolve({ kind: "disabled" });

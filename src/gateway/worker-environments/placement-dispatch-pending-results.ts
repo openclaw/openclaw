@@ -379,7 +379,7 @@ export async function recoverPendingWorkspaceResults(
                 "beforeComplete" | "complete" | "afterComplete"
               > = { beforeComplete: destroyResultEnvironment, complete: completeResult },
             ) => {
-              const finalized = await finalizeWorkspaceResultConflicts({
+              const conflictRetained = await finalizeWorkspaceResultConflicts({
                 assertCurrent: recovery.assertCurrent,
                 placements,
                 turnClaim,
@@ -395,7 +395,7 @@ export async function recoverPendingWorkspaceResults(
                 turnClaim,
                 workspace,
                 stagedResultRef: result.stagedResultRef,
-                conflictRetained: finalized.conflictRetained,
+                conflictRetained,
                 ...completion,
               });
             };

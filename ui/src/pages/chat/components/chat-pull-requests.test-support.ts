@@ -1,11 +1,35 @@
 import { createComponent, createSignal, flush, merge } from "solid-js";
-import type { ControlUiSessionBranch } from "../../../../../src/gateway/control-ui-contract.js";
+import type {
+  ControlUiSessionBranch,
+  ControlUiSessionPullRequest,
+} from "../../../../../src/gateway/control-ui-contract.js";
 import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { ChatPullRequests, type ChatPullRequestsProps } from "./chat-pull-requests.tsx";
+import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
+import { ChatPullRequestsContent } from "./chat-pull-requests-content.tsx";
+
+export function pullRequest(
+  overrides: Partial<ControlUiSessionPullRequest> = {},
+): ControlUiSessionPullRequest {
+  return {
+    number: 103469,
+    owner: "openclaw",
+    repo: "openclaw",
+    branch: "claude/browser-tabs-tighter-header",
+    title: "fix(macos): tighten the link-browser tab header",
+    url: "https://github.com/openclaw/openclaw/pull/103469",
+    state: "open",
+    additions: 4,
+    deletions: 3,
+    checks: { state: "passing", passed: 5, failed: 0, skipped: 1, running: 0 },
+    checksUrl: "https://github.com/openclaw/openclaw/pull/103469/checks",
+    ...overrides,
+  };
+}
 
 export function publication(overrides: Partial<GitHubPublicationView> = {}): GitHubPublicationView {
   return {
+    readiness: { read: null, retired: new Promise(() => {}) },
     activity: null,
     canPublishShared: true,
     canPublishPersonal: true,
@@ -55,7 +79,7 @@ export function paintChatPullRequests(props: ChatPullRequestsProps, container: H
       () => {
         const [current, setCurrent] = createSignal(props);
         update = setCurrent;
-        return createComponent(ChatPullRequests, merge(current));
+        return createComponent(ChatPullRequestsContent, merge(current));
       },
       { container },
     );

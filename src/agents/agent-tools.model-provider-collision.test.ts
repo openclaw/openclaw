@@ -3,7 +3,6 @@ import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { createOpenClawCodingTools } from "./agent-tools.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
@@ -56,12 +55,6 @@ function selectedTools(
 function toolNames(tools: { name: string }[]): string[] {
   return tools.map((tool) => tool.name);
 }
-const leanConfig: OpenClawConfig = {
-  agents: {
-    defaults: { experimental: { localModelLean: true } },
-    entries: { main: { experimental: { localModelLean: false } }, gemma: {} },
-  },
-};
 
 it("keeps web_search for OpenRouter xAI model ids so OpenClaw tool routing stays authoritative", () => {
   const filtered = selectedTools(baseTools, {
@@ -115,27 +108,3 @@ it.each([true, false])(
     expect(toolNames(filtered)).toEqual(["read", "exec"]);
   },
 );
-
-it("applies inherited lean mode to the session agent", () => {
-  const filtered = selectedTools(["read", "browser", "automations", "message", "exec"], {
-    config: leanConfig,
-    sessionKey: "agent:gemma:main",
-    modelProvider: "lmstudio",
-    modelApi: "openai-compatible",
-    modelId: "gemma-4-e4b-it",
-  });
-
-  expect(toolNames(filtered)).toEqual(["read", "exec"]);
-});
-
-it("lets a current agent disable inherited lean local-model mode", () => {
-  const filtered = selectedTools(["read", "browser", "automations", "message", "exec"], {
-    config: leanConfig,
-    agentId: "main",
-    modelProvider: "openai",
-    modelApi: "openai-responses",
-    modelId: "gpt-5.4",
-  });
-
-  expect(toolNames(filtered)).toEqual(["read", "browser", "automations", "message", "exec"]);
-});

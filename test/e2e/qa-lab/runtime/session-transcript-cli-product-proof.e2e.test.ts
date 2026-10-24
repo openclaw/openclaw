@@ -13,7 +13,6 @@ import type {
   TranscriptUtterance,
 } from "../../../../src/transcripts/provider-types.js";
 import { TranscriptsStore } from "../../../../src/transcripts/store.js";
-import { summarizeTranscripts } from "../../../../src/transcripts/summary.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -79,8 +78,6 @@ async function seedTranscript(stateDir: string, env: NodeJS.ProcessEnv) {
   const store = new TranscriptsStore(path.join(stateDir, "transcripts"), { env });
   await store.writeSession(session);
   await store.appendUtteranceForSession(session, utterance);
-  await store.writeSummary(summarizeTranscripts({ session, utterances: [utterance] }), session);
-  return session;
 }
 
 it("manages canonical sessions and transcript artifacts through the CLI", async () => {
@@ -92,7 +89,7 @@ it("manages canonical sessions and transcript artifacts through the CLI", async 
     { agentId: "main", sessionKey: SESSION_KEY },
     { sessionId: SESSION_ID, updatedAt: Date.now() - 60_000 },
   );
-  const transcriptSession = await seedTranscript(instance.stateDir, instance.env);
+  await seedTranscript(instance.stateDir, instance.env);
   await closeDatabases();
 
   const sessionsBefore = await cliJson<SessionsJson>("sessions");
@@ -111,26 +108,6 @@ it("manages canonical sessions and transcript artifacts through the CLI", async 
 
   const sessionsAfter = await cliJson<SessionsJson>("sessions");
   expect(sessionsAfter.sessions.map(({ key }) => key)).not.toContain(SESSION_KEY);
-
-  const transcriptList = await cliJson<unknown[]>("transcripts", "list");
-  expect(transcriptList).toContainEqual(
-    expect.objectContaining({
-      sessionId: TRANSCRIPT_ID,
-      selector: "2026-08-03/qa-cli-transcript",
-      title: "CLI transcript proof",
-    }),
-  );
-
-  const transcriptShow = await cliJson<{ summary: string | null }>(
-    "transcripts",
-    "show",
-    TRANSCRIPT_ID,
-  );
-  expect(transcriptShow).toMatchObject({
-    selector: "2026-08-03/qa-cli-transcript",
-    session: transcriptSession,
-  });
-  expect(transcriptShow.summary).toContain(TRANSCRIPT_TEXT);
 
   const transcriptPath = await cliJson<TranscriptPathJson>(
     "transcripts",

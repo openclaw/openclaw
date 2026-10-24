@@ -18,10 +18,7 @@ import {
 import { readSessionEntryReadOnlyInWorker } from "../config/sessions/session-entry-read-runtime.js";
 import { getGatewayRecoveryRuntime } from "../gateway/server-recovery-runtime-context.js";
 import { emitDiagnosticEvent } from "../infra/diagnostic-events.js";
-import {
-  resolveExternalBestEffortDeliveryTarget,
-  type ExternalBestEffortDeliveryTarget,
-} from "../infra/outbound/best-effort-delivery.js";
+import { resolveExternalBestEffortDeliveryTarget } from "../infra/outbound/best-effort-delivery.js";
 import { sendMessage } from "../infra/outbound/message.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { stringifyRouteThreadId } from "../plugin-sdk/channel-route.js";
@@ -294,72 +291,6 @@ async function waitForAgentFollowupRun(params: {
   }
 }
 
-function shouldPrefixDirectFollowupWithSessionResumeFailure(params: {
-  resultText: string;
-  sessionError: unknown;
-}): boolean {
-  if (!params.sessionError) {
-    return false;
-  }
-  const parsed = parseExecApprovalResultText(params.resultText);
-  if (parsed.kind !== "finished") {
-    return true;
-  }
-  return !normalizeLowercaseStringOrEmpty(parsed.metadata).includes("code 0");
-}
-
-async function sendDirectFollowupFallback(params: {
-  approvalId: string;
-  agentId?: string;
-  deliveryTarget: ExternalBestEffortDeliveryTarget;
-  resultText: string;
-  sessionError: unknown;
-  allowDenied?: boolean;
-}): Promise<boolean> {
-  const directText = formatDirectExecApprovalFollowupText(params.resultText, {
-    allowDenied: params.allowDenied ?? params.sessionError !== null,
-  });
-  if (!params.deliveryTarget.deliver || !directText) {
-    return false;
-  }
-
-  const prefix =
-    !params.allowDenied && shouldPrefixDirectFollowupWithSessionResumeFailure(params)
-      ? "Automatic session resume failed, so sending the status directly.\n\n"
-      : "";
-  const availableBodyUnits =
-    DIRECT_FOLLOWUP_MAX_UTF16_UNITS - prefix.length - DIRECT_FOLLOWUP_TRUNCATION_MARKER.length - 1;
-  const content =
-    `${prefix}${directText}`.length <= DIRECT_FOLLOWUP_MAX_UTF16_UNITS
-      ? `${prefix}${directText}`
-      : `${prefix}${DIRECT_FOLLOWUP_TRUNCATION_MARKER}\n${sliceUtf16Safe(
-          directText,
-          Math.max(0, directText.length - Math.max(1, availableBodyUnits)),
-        )}`;
-  const deliveryIntentId = `exec-approval-followup:${params.approvalId}`;
-  const sendResult = await sendMessage({
-    channel: params.deliveryTarget.channel,
-    to: params.deliveryTarget.to ?? "",
-    accountId: params.deliveryTarget.accountId,
-    threadId: params.deliveryTarget.threadId,
-    content,
-    agentId: params.agentId,
-    gatewayOwnedDelivery: true,
-    idempotencyKey: deliveryIntentId,
-    deliveryIntentId,
-    reusePendingDeliveryIntent: true,
-    completionRetention: DIRECT_FOLLOWUP_COMPLETION_RETENTION,
-  });
-  if (sendResult.deliveryStatus === "suppressed") {
-    throw new Error(
-      sendResult.suppressionReason === "adapter_returned_no_identity"
-        ? "exec approval followup delivery could not be confirmed: adapter returned no identity"
-        : `exec approval followup delivery was suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
-    );
-  }
-  return true;
-}
-
 /** Sends an exec approval follow-up via session resume or safe direct delivery. */
 export async function sendExecApprovalFollowup(
   params: ExecApprovalFollowupParams,
@@ -513,16 +444,50 @@ export async function sendExecApprovalFollowup(
     return false;
   }
 
-  if (
-    await sendDirectFollowupFallback({
-      approvalId: params.approvalId,
+  const directText = formatDirectExecApprovalFollowupText(resultText, {
+    allowDenied: isDenied || sessionError !== null,
+  });
+  if (deliveryTarget.deliver && directText) {
+    const parsed = !isDenied && sessionError ? parseExecApprovalResultText(resultText) : undefined;
+    const prefix =
+      parsed &&
+      (parsed.kind !== "finished" ||
+        !normalizeLowercaseStringOrEmpty(parsed.metadata).includes("code 0"))
+        ? "Automatic session resume failed, so sending the status directly.\n\n"
+        : "";
+    const availableBodyUnits =
+      DIRECT_FOLLOWUP_MAX_UTF16_UNITS -
+      prefix.length -
+      DIRECT_FOLLOWUP_TRUNCATION_MARKER.length -
+      1;
+    const content =
+      `${prefix}${directText}`.length <= DIRECT_FOLLOWUP_MAX_UTF16_UNITS
+        ? `${prefix}${directText}`
+        : `${prefix}${DIRECT_FOLLOWUP_TRUNCATION_MARKER}\n${sliceUtf16Safe(
+            directText,
+            Math.max(0, directText.length - Math.max(1, availableBodyUnits)),
+          )}`;
+    const deliveryIntentId = `exec-approval-followup:${params.approvalId}`;
+    const sendResult = await sendMessage({
+      channel: deliveryTarget.channel,
+      to: deliveryTarget.to ?? "",
+      accountId: deliveryTarget.accountId,
+      threadId: deliveryTarget.threadId,
+      content,
       agentId: params.agentId,
-      deliveryTarget,
-      resultText,
-      sessionError,
-      ...(isDenied ? { allowDenied: true } : {}),
-    })
-  ) {
+      gatewayOwnedDelivery: true,
+      idempotencyKey: deliveryIntentId,
+      deliveryIntentId,
+      reusePendingDeliveryIntent: true,
+      completionRetention: DIRECT_FOLLOWUP_COMPLETION_RETENTION,
+    });
+    if (sendResult.deliveryStatus === "suppressed") {
+      throw new Error(
+        sendResult.suppressionReason === "adapter_returned_no_identity"
+          ? "exec approval followup delivery could not be confirmed: adapter returned no identity"
+          : `exec approval followup delivery was suppressed: ${sendResult.suppressionReason ?? "unknown reason"}`,
+      );
+    }
     return true;
   }
 

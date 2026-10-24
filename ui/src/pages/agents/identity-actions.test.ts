@@ -30,7 +30,7 @@ function host(): Parameters<typeof resetIdentityDraft>[0] {
   return {
     identityDraft: { name: null, emoji: null, avatar: null },
     identitySaving: false,
-    identityError: null,
+    identityOutcome: null,
   };
 }
 
@@ -85,7 +85,7 @@ describe("agent identity actions", () => {
     const state = host();
     selectIdentityAvatar(state, {} as File, config);
     expect(fileToAvatarDataUrlMock).not.toHaveBeenCalled();
-    expect(state.identityError).toBe(uploadsDisabledMessage());
+    expect((await state.identityOutcome)?.error).toBe(uploadsDisabledMessage());
 
     config.current.uploadsEnabled = true;
     let resolveAvatar!: (value: avatarImage.AvatarDataUrlResult) => void;
@@ -99,7 +99,7 @@ describe("agent identity actions", () => {
     resolveAvatar({ ok: true, dataUrl: "data:image/png;base64,aA==" });
     await Promise.resolve();
     expect(state.identityDraft.avatar).toBeNull();
-    expect(state.identityError).toBe(uploadsDisabledMessage());
+    expect((await state.identityOutcome)?.error).toBe(uploadsDisabledMessage());
   });
 
   it("does not dispatch an already selected avatar after uploads are disabled", async () => {
@@ -114,7 +114,7 @@ describe("agent identity actions", () => {
       runtimeConfig: { runExternalMutation } as unknown as ApplicationContext["runtimeConfig"],
     });
     expect(runExternalMutation).not.toHaveBeenCalled();
-    expect(state.identityError).toBe(uploadsDisabledMessage());
+    expect((await state.identityOutcome)?.error).toBe(uploadsDisabledMessage());
   });
   it("keeps unsupported blank edits visible without sending an update", async () => {
     const state = host();
@@ -157,7 +157,7 @@ describe("agent identity actions", () => {
     await Promise.resolve();
     await Promise.resolve();
 
-    expect(state.identityError).toContain(message);
+    expect((await state.identityOutcome)?.error).toContain(message);
     expect(state.identityDraft.avatar).toBeNull();
   });
 
@@ -268,7 +268,7 @@ describe("agent identity actions", () => {
     });
 
     expect(request).not.toHaveBeenCalled();
-    expect(state.identityError).toContain(
+    expect((await state.identityOutcome)?.error).toContain(
       `${changed} changed before the agent identity update started.`,
     );
   });
@@ -296,7 +296,9 @@ describe("agent identity actions", () => {
 
     expect(runExternalMutation).toHaveBeenCalledOnce();
     expect(state.identityDraft).toEqual({ name: null, emoji: null, avatar: null });
-    expect(state.identityError).toContain("config.get failed after identity commit");
+    expect((await state.identityOutcome)?.error).toContain(
+      "config.get failed after identity commit",
+    );
   });
 
   it("preserves edits made while an autosave is in flight", async () => {

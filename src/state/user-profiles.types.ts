@@ -117,6 +117,7 @@ export type UserProfileAccessFacts = Readonly<{
   profileId: string;
   emails: readonly string[];
   githubAccountIds?: readonly number[];
+  enterpriseGitHubAccounts?: ReadonlyArray<Readonly<{ host: string; accountId: number }>>;
   assignedRole: string | null;
   githubLogin?: string | null;
 }>;
@@ -180,6 +181,8 @@ export type ProfileDisplayRow = Pick<
 > & {
   has_avatar: SqlBool;
   githubAccountIds?: readonly number[];
+  /** The canonical Enterprise reader's proof-validated host/account pairs; aliases alone never set them. */
+  enterpriseGitHubAccounts?: ReadonlyArray<Readonly<{ host: string; accountId: number }>>;
   githubLogin?: string | null;
   githubIdentity?: UserProfileListItem["githubIdentity"];
   /** Present only for the canonical row with its exact local-owner identity binding. */

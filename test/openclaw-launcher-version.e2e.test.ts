@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { stageLauncherFixture } from "./helpers/openclaw-launcher-fixture.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const packageVersion = "1.2.3-test";
@@ -21,13 +22,7 @@ type LauncherVersionFixtureOptions = {
 async function fixture(options: LauncherVersionFixtureOptions = {}): Promise<string> {
   const fixtureRoot = roots.make("openclaw-launcher-version-");
   const write = (name: string, value: string) => fs.writeFile(path.join(fixtureRoot, name), value);
-  for (const name of `openclaw cli-invocation node-host-launcher node-compile-cache
-    node-version node-sqlite node-runtime-update node-runtime-recovery cli-parent-lifetime
-    node-runtime-env cli-root-options gateway-run-argv gateway-shutdown-budget`.split(/\s+/u)) {
-    const filename = `${name}.mjs`;
-    await fs.copyFile(path.resolve(filename), path.join(fixtureRoot, filename));
-  }
-  await fs.mkdir(path.join(fixtureRoot, "dist"), { recursive: true });
+  await stageLauncherFixture(fixtureRoot);
   await write("package.json", JSON.stringify({ name: "openclaw", version: packageVersion }));
   await write(
     "dist/entry.js",

@@ -6,6 +6,7 @@ import net from "node:net";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareStartupClientCredentials } from "../commands/startup-client-credentials.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -98,7 +99,10 @@ async function listenApp(
 it("serializes first creation, preserves the winner and cancels queued writes without shared state", async () => {
   const { root, env } = fixture();
   const first = storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity(123), 456);
-  const second = storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity(789), 999);
+  const second = {
+    ...storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity(789), 999),
+    private_key_pem: "competing-candidate",
+  };
   const controller = new AbortController();
   const one = runClientCredentialOperationAsync(env, { kind: "identity.create", identity: first });
   const two = runClientCredentialOperationAsync(env, { kind: "identity.create", identity: second });
@@ -230,6 +234,7 @@ it.runIf(process.platform === "darwin")(
     const child = await holdStore(env);
     let released: Promise<void> | undefined;
     try {
+      await prepareStartupClientCredentials({ env });
       expect(
         await runClientCredentialOperationAsync(env, {
           kind: "identity.read",
@@ -254,7 +259,7 @@ it.runIf(process.platform === "darwin")(
         }),
       ).rejects.toThrow("did not reply");
       await released;
-      expect(requests).toHaveLength(2);
+      expect(requests).toHaveLength(3);
       expect(
         runClientCredentialOperation(env, {
           kind: "token.read",
@@ -273,11 +278,13 @@ it.runIf(process.platform === "darwin")(
 );
 
 it.runIf(process.platform === "darwin").each([
-  { code: "credential_root_unowned", fallback: true },
-  { code: "invalid_request", fallback: false },
+  { code: "credential_root_unowned", message: "synthetic refusal", fallback: true },
+  // Released apps without the credential route refuse it before dispatch.
+  { code: "invalid_request", message: "Unknown control operation.", fallback: true },
+  { code: "invalid_request", message: "synthetic refusal", fallback: false },
 ])(
-  "uses offline custom-root custody only for explicit $code refusal",
-  async ({ code, fallback }) => {
+  "uses offline custom-root custody only for predispatch $code refusal: $message",
+  async ({ code, message, fallback }) => {
     const { root, env: homeEnv } = fixture();
     const customRoot = path.join(root, "unrelated-client");
     const env = { ...homeEnv, OPENCLAW_STATE_DIR: customRoot };
@@ -290,9 +297,7 @@ it.runIf(process.platform === "darwin").each([
     };
     const server = await listenApp(root, (request, socket) => {
       expect(request.credentialRoot).toBe(customRoot);
-      socket.end(
-        `${JSON.stringify({ ok: false, error: { code, message: "synthetic refusal" } })}\n`,
-      );
+      socket.end(`${JSON.stringify({ ok: false, error: { code, message } })}\n`);
     });
     try {
       const result = runClientCredentialOperationAsync(env, {

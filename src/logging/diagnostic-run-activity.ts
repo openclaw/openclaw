@@ -91,10 +91,10 @@ let embeddedRunSequence = 0;
 function touchSemanticSessionActivity(
   activity: SessionActivity,
   reason: string,
-  params: { runId?: string; now?: number } = {},
+  runId: string | undefined,
 ): void {
-  clearRepeatedRequestActivity(activity, { runId: params.runId });
-  touchSessionActivity(activity, reason, params.now);
+  clearRepeatedRequestActivity(activity, { runId });
+  touchSessionActivity(activity, reason);
 }
 
 function toolKey(event: {
@@ -252,10 +252,6 @@ function recordModelStarted(
       sessionKey: event.sessionKey,
       sequence: event.seq,
       requestTimeoutMs: provenance.requestTimeoutMs,
-      deadlineAtMs:
-        provenance.requestTimeoutMs === undefined
-          ? undefined
-          : (event.ts ?? Date.now()) + provenance.requestTimeoutMs,
     });
     activity.activeCoreModelCalls.set(provenance.generation, calls);
     touchSessionActivity(activity, "model_call:started");
@@ -357,9 +353,7 @@ function applyRunProgress(
   if (typeof provenance === "object") {
     const registration = resolveCurrentDiagnosticOwner(provenance);
     if (registration) {
-      touchSemanticSessionActivity(registration.activity, params.reason, {
-        runId: provenance.runId,
-      });
+      touchSemanticSessionActivity(registration.activity, params.reason, provenance.runId);
     }
     return;
   }
@@ -378,7 +372,7 @@ function applyRunProgress(
     touchSessionActivity(activity, params.reason);
     return;
   }
-  touchSemanticSessionActivity(activity, params.reason, { runId });
+  touchSemanticSessionActivity(activity, params.reason, runId);
 }
 
 function recordRunCompleted(
@@ -401,7 +395,7 @@ function recordRunCompleted(
   embeddedRunIndex.clear(activity);
   clearArgumentChurnActivity(activity, { runId: event.runId });
   clearArgumentChurnPolicyWaits(activity, { runId: event.runId });
-  touchSemanticSessionActivity(activity, "run:completed", { runId: event.runId });
+  touchSemanticSessionActivity(activity, "run:completed", event.runId);
 }
 
 export function createDiagnosticEmbeddedRunOwner(params: {
@@ -500,13 +494,12 @@ export function isDiagnosticEmbeddedRunOwnerClosed(owner: DiagnosticEmbeddedRunO
 export function markDiagnosticEmbeddedRunEnded(params: {
   sessionId: string;
   sessionKey?: string;
-  workKey?: string;
 }): void {
   const activity = resolveSessionActivity(params);
   if (!activity) {
     return;
   }
-  embeddedRunIndex.remove(activity, params.workKey ?? params.sessionId);
+  embeddedRunIndex.remove(activity, params.sessionId);
   activity.activeTools.clear();
   activity.activeModelCalls.clear();
   activity.activeCoreModelCalls.clear();

@@ -89,7 +89,7 @@ export function setSessionCatalogEntries(
   sessionStore = next;
 }
 
-export function createSessionCatalogTestContext(
+function createSessionCatalogTestContext(
   config: OpenClawConfig = {},
   overrides: Record<string, unknown> = {},
 ) {

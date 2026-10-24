@@ -28,6 +28,13 @@ const state = vi.hoisted(() => ({
   repositoryWorkspaceId: undefined as string | undefined,
   prepare: vi.fn(),
 }));
+function sessionEntry() {
+  return {
+    sessionId: state.sessionId,
+    execNode: state.execNode,
+    repositoryWorkspaceId: state.repositoryWorkspaceId,
+  };
+}
 vi.mock("./mcp-app-extension-runtime.js", () => ({
   prepareMcpAppExtensionRuntime: state.prepare,
 }));
@@ -66,11 +73,7 @@ vi.mock("./session-utils.js", async (importOriginal) => ({
     agentId: "main",
     canonicalKey: sessionKey,
     storePath: state.root,
-    entry: {
-      sessionId: state.sessionId,
-      execNode: state.execNode,
-      repositoryWorkspaceId: state.repositoryWorkspaceId,
-    },
+    entry: sessionEntry(),
   }),
 }));
 vi.mock("../config/sessions/session-entry-read-facts.js", async (importOriginal) => ({
@@ -78,23 +81,13 @@ vi.mock("../config/sessions/session-entry-read-facts.js", async (importOriginal)
   readRetainedSessionEntryFacts: (_database: unknown, request: { sessionKeys: string[] }) => ({
     entries: request.sessionKeys.map((sessionKey) => ({
       sessionKey,
-      entry: {
-        sessionId: state.sessionId,
-        execNode: state.execNode,
-        repositoryWorkspaceId: state.repositoryWorkspaceId,
-      },
+      entry: sessionEntry(),
     })),
   }),
 }));
 // mock-isolation: Host-file tests supply the bound session identity without opening session storage.
 vi.mock("./session-utils-store-worker.js", () => ({
-  loadGatewaySessionEntryReadOnlyInWorker: async () => ({
-    entry: {
-      sessionId: state.sessionId,
-      execNode: state.execNode,
-      repositoryWorkspaceId: state.repositoryWorkspaceId,
-    },
-  }),
+  loadGatewaySessionEntryReadOnlyInWorker: async () => ({ entry: sessionEntry() }),
 }));
 vi.mock("../agents/agent-bundle-mcp-manager-cleanup.js", () => ({
   completeDeferredSessionMcpRuntimeRetirement: async () => false,

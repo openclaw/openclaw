@@ -265,7 +265,14 @@ suite.define(() => {
         cached ? ".chat-history-error--inline" : ".chat-history-error",
       );
       await historyError.waitFor({ state: "visible", timeout: 5_000 });
-      expect(await historyError.textContent()).toContain(failure);
+      if (cached) {
+        expect(await historyError.textContent()).toContain(failure);
+      } else {
+        expect(await historyError.textContent()).toContain("Couldn’t load this conversation");
+        expect(
+          await historyError.locator("[aria-description]").getAttribute("aria-description"),
+        ).toContain(failure);
+      }
       if (cached) {
         // Failed refreshes must leave the stale transcript available throughout retry.
         await transcript.waitFor({ state: "visible" });

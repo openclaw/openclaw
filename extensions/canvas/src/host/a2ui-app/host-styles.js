@@ -22,11 +22,11 @@ export const hostStyles = `
       padding-bottom: var(--openclaw-a2ui-scroll-pad-bottom, 0px);
     }
 
-    openclaw-a2ui-host .status {
+    openclaw-a2ui-host .status,
+    openclaw-a2ui-host .toast {
       position: absolute;
       left: 50%;
       transform: translateX(-50%);
-      top: var(--openclaw-a2ui-status-top, 12px);
       display: inline-flex;
       align-items: center;
       gap: 8px;
@@ -48,30 +48,12 @@ export const hostStyles = `
       z-index: 5;
     }
 
+    openclaw-a2ui-host .status {
+      top: var(--openclaw-a2ui-status-top, 12px);
+    }
+
     openclaw-a2ui-host .toast {
-      position: absolute;
-      left: 50%;
-      transform: translateX(-50%);
       bottom: var(--openclaw-a2ui-toast-bottom, 12px);
-      display: inline-flex;
-      align-items: center;
-      gap: 8px;
-      padding: 8px 10px;
-      border-radius: 12px;
-      background: rgba(0, 0, 0, 0.45);
-      border: 1px solid rgba(255, 255, 255, 0.18);
-      color: rgba(255, 255, 255, 0.92);
-      font:
-        13px/1.2 system-ui,
-        -apple-system,
-        BlinkMacSystemFont,
-        "Roboto",
-        sans-serif;
-      pointer-events: none;
-      backdrop-filter: blur(${statusBlur});
-      -webkit-backdrop-filter: blur(${statusBlur});
-      box-shadow: ${statusShadow};
-      z-index: 5;
     }
 
     openclaw-a2ui-host .toast.error {

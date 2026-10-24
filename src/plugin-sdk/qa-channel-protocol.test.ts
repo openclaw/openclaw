@@ -18,6 +18,9 @@ const targets: Array<[string, QaTargetParts["chatType"], string, string?]> = [
   ["dm:Alice", "direct", "Alice"],
   ["group:Room", "group", "Room"],
   ["channel:CaseSensitive", "channel", "CaseSensitive"],
+  ["dm:Case/Room", "direct", "Case/Room"],
+  ["group:Case/Room", "group", "Case/Room"],
+  ["channel:Case/Room", "channel", "Case/Room"],
   ["thread:Room/Topic", "channel", "Room", "Topic"],
   ["thread:/v1/dm/Alice/Topic", "direct", "Alice", "Topic"],
   ["thread:/v1/group/Room%2FOne/Topic%2FTwo", "group", "Room/One", "Topic/Two"],
@@ -77,6 +80,8 @@ it("parses canonical targets without folding ids or prefix casing", () => {
   expect(() => parseQaTarget("CHANNEL:CaseSensitive")).toThrow(
     "qa-channel target prefixes must be lowercase",
   );
+  expect(() => parseQaTarget("")).toThrow("qa-channel target is required");
+  expect(() => parseQaTarget("dm:")).toThrow("invalid qa-channel dm target");
   const invalidThread = "invalid qa-channel thread target";
   expect(() => parseQaTarget("thread:Room/")).toThrow(invalidThread);
   expect(() => parseQaTarget("thread:/v1/group/Room/%GG")).toThrow(invalidThread);

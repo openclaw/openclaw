@@ -84,7 +84,6 @@ describe("discord command argument fallback", () => {
         responseEphemeral: false,
         accountId: "default",
         sessionPrefix: "discord:slash",
-        preferFollowUp: true,
         dispatchReplyFromConfig,
       }),
     );

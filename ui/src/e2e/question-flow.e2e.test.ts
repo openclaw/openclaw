@@ -10,6 +10,7 @@ import {
   installMockGateway,
   type MockGatewayControls,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { defineQuestionFooterTests } from "./question-footer.test-support.ts";
@@ -246,7 +247,7 @@ suite.define(() => {
     const request = questionRecord("sidebar-touch-question", { isOther: false });
 
     await gateway.emitGatewayEvent("question.requested", request);
-    await page.locator(".topbar-nav-toggle:visible, .chat-pane__nav-toggle:visible").first().tap();
+    await navigationDrawerToggle(page).tap();
     await expectQuestionAttention(page, request.questions[0]!.question);
     // The drawer's initial focus move must finish before opening the tooltip.
     await page.locator(".shell-nav:focus, .shell-nav :focus").waitFor();

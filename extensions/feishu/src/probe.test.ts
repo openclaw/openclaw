@@ -48,8 +48,8 @@ describe("probeFeishu", () => {
     },
   ])("bounds $name request timeouts", async ({ run, expected }) => {
     createFeishuClientMock.mockReturnValue({ request: vi.fn(() => new Promise(() => {})) });
-    const promise = run(DEFAULT_CREDS, { timeoutMs: 1_000 });
-    await vi.advanceTimersByTimeAsync(1_000);
+    const promise = run(DEFAULT_CREDS, run === probeFeishu ? { timeoutMs: 1_000 } : {});
+    await vi.advanceTimersByTimeAsync(FEISHU_PROBE_REQUEST_TIMEOUT_MS);
     await expect(promise).resolves.toEqual(expected);
   });
 

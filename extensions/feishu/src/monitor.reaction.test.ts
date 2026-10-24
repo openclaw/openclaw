@@ -10,7 +10,7 @@ import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runt
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime } from "../runtime-api.js";
 import { parseFeishuMessageEvent, type FeishuMessageEvent } from "./bot.js";
-import { withFeishuRuntimeDefaults } from "./bot.test-support.js";
+import { createFeishuTestEvent, withFeishuRuntimeDefaults } from "./bot.test-support.js";
 import { FeishuConfigSchema } from "./config-schema.js";
 import * as dedup from "./dedup.js";
 import {
@@ -169,18 +169,17 @@ function createTextEvent(params: {
   mentions?: FeishuMention[];
   threadId?: string;
 }): FeishuMessageEvent {
-  return {
-    sender: { sender_id: { open_id: "ou_sender" }, sender_type: "user" },
+  return createFeishuTestEvent({
+    ...params,
+    senderOpenId: "ou_sender",
+    senderType: "user",
+    chatId: "oc_group_1",
+    chatType: "group",
     message: {
-      message_id: params.messageId,
-      chat_id: "oc_group_1",
-      chat_type: "group",
-      message_type: "text",
-      content: JSON.stringify({ text: params.text }),
       mentions: params.mentions,
       ...(params.threadId ? { thread_id: params.threadId } : {}),
     },
-  };
+  });
 }
 function mention(openId: string, name: string, key = "@_user_1"): FeishuMention {
   return { key, id: { open_id: openId }, name };
@@ -250,8 +249,7 @@ describe("resolveReactionSyntheticEvent", () => {
       event: makeReactionEvent({ user_id: { user_id: "u_actor_only" }, chat_type: "bogus" }),
     });
     expect(result?.sender.sender_id).toEqual({ user_id: "u_actor_only" });
-    expect(result?.message.chat_id).toBe("oc_group_from_lookup");
-    expect(result?.message.chat_type).toBe("group");
+    expect(result?.message).toMatchObject({ chat_id: "oc_group_from_lookup", chat_type: "group" });
     expect(parseFeishuMessageEvent(result!, "ou_bot").senderOpenId).toBe("u_actor_only");
   });
 
@@ -290,8 +288,7 @@ describe("resolveReactionSyntheticEvent", () => {
     const result = await resolveReaction({
       fetchMessage: async () => fetchedMessage({ chatId: "", chatType: "p2p" }),
     });
-    expect(result?.message.chat_id).toBe("p2p:ou_user1");
-    expect(result?.message.chat_type).toBe("p2p");
+    expect(result?.message).toMatchObject({ chat_id: "p2p:ou_user1", chat_type: "p2p" });
   });
 
   it("drops reactions without chat context when lookup does not provide chat_type", async () => {

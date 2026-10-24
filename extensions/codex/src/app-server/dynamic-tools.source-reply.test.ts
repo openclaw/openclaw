@@ -8,28 +8,14 @@ import {
 import { afterEach, expect, it, vi } from "vitest";
 import { toCodexDynamicToolProtocolResponse } from "./dynamic-tool-execution.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
+import {
+  createBridge,
+  createTool,
+  callTool,
+  installResultMiddleware,
+  textToolResult,
+} from "./dynamic-tools.test-support.js";
 import type { CodexDynamicToolCallResponse, JsonObject, JsonValue } from "./protocol.js";
-
-function installResultMiddleware(
-  handler: ReturnType<
-    typeof createEmptyPluginRegistry
-  >["agentToolResultMiddlewares"][number]["handler"],
-) {
-  const registry = createEmptyPluginRegistry();
-  registry.agentToolResultMiddlewares.push({
-    pluginId: "test-result",
-    pluginName: "Test result",
-    rawHandler: handler,
-    handler,
-    runtimes: ["codex"],
-    source: "test",
-  });
-  setActivePluginRegistry(registry);
-}
-
-function textToolResult(text: string, details: unknown = {}): AgentToolResult<unknown> {
-  return { content: [{ type: "text", text }], details };
-}
 
 function bridgeForResult(
   result: AgentToolResult<unknown> | AnyAgentTool["execute"],
@@ -37,19 +23,14 @@ function bridgeForResult(
     sourceReplyDeliveryMode: "automatic",
   },
 ) {
-  return createCodexDynamicToolBridge({
-    tools: [
-      {
-        name: "message",
-        label: "Message",
-        description: "Send a message.",
-        parameters: { type: "object", properties: {}, additionalProperties: true },
+  return createBridge(
+    [
+      createTool("message", {
         execute: typeof result === "function" ? result : vi.fn(async () => result),
-      },
+      }),
     ],
-    signal: new AbortController().signal,
-    hookContext,
-  });
+    { hookContext },
+  );
 }
 
 function deliveredResult(text = "Sent.", details = {}, delivery = {}) {
@@ -77,14 +58,7 @@ async function callMessage(
   arguments_: JsonValue,
   callId = "call-1",
 ) {
-  return bridge.handleToolCall({
-    threadId: "thread-1",
-    turnId: "turn-1",
-    callId,
-    namespace: null,
-    tool: "message",
-    arguments: arguments_,
-  });
+  return callTool(bridge, "message", arguments_, callId);
 }
 
 afterEach(() => {

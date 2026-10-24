@@ -16,6 +16,7 @@ import {
   SessionTranscriptWriterClaimReboundError,
   withOwnedSessionTranscriptWriterFence,
 } from "../../../config/sessions/transcript-write-context.js";
+import { SessionWorkStartChangedError } from "../../../config/sessions/work-start-error.js";
 import { readNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import type {
   PersistedUserTurnMessage,
@@ -287,7 +288,9 @@ export async function preparePersistedCurrentUserTurn(params: {
           throw new SessionTranscriptWriterClaimReboundError();
         }
         if (prepared && !facts.contextValidated) {
-          throw new Error("Persisted user turn changed before replay admission");
+          throw new SessionWorkStartChangedError(
+            "Persisted user turn changed before replay admission. Retry the turn.",
+          );
         }
         // Consume under the reader's writer FIFO and native mutation witness.
         const anchor = facts.anchors[0];
@@ -297,7 +300,9 @@ export async function preparePersistedCurrentUserTurn(params: {
     );
     assertCurrent();
     if (!accepted) {
-      throw new Error("Persisted user turn changed before replay admission");
+      throw new SessionWorkStartChangedError(
+        "Persisted user turn changed before replay admission. Retry the turn.",
+      );
     }
   };
   const readCurrentTurn = (
@@ -395,7 +400,9 @@ export async function preparePersistedCurrentUserTurn(params: {
         prepared.anchor.entryId !== initial.entryId ||
         prepared.anchor.generation !== initial.generation
       ) {
-        throw new Error("Persisted user turn changed before replay admission");
+        throw new SessionWorkStartChangedError(
+          "Persisted user turn changed before replay admission. Retry the turn.",
+        );
       }
       if (onAdmitted) {
         if (!pending) {

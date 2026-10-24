@@ -1,5 +1,6 @@
 import { createCipheriv, createHash } from "node:crypto";
-import { setImmediate as yieldTurn } from "node:timers/promises";
+import { readFile } from "node:fs/promises";
+import { setImmediate as yieldTurn, setTimeout as delay } from "node:timers/promises";
 import type { TranscriptEvent } from "../../src/config/sessions/session-accessor.sqlite-contract.js";
 import { writeSessionEntry } from "../../src/config/sessions/session-accessor.sqlite-entry-store.js";
 import { replaceSessionOwnerInTransaction } from "../../src/config/sessions/session-accessor.sqlite-owner.js";
@@ -22,6 +23,8 @@ export type TeamShapeSessionsOptions = {
   now: number;
   /** Total message text bytes before transcript compression and envelope overhead. */
   transcriptBytes?: number;
+  longTranscriptEntries?: number;
+  longTranscriptSessions?: number;
 };
 
 const MESSAGE_BYTES = 64 * 1024;
@@ -34,14 +37,35 @@ export function teamShapeRootSessionCount(sessions: number): number {
   return Math.max(1, Math.ceil(sessions / 5));
 }
 
+/** Sequential fixture writes share a filesystem with production on the benchmark host. */
+export async function waitForTeamShapeWriteBudget() {
+  if (process.platform !== "linux") {
+    return;
+  }
+  for (;;) {
+    const dirtyKb = Number(/^Dirty:\s+(\d+)/m.exec(await readFile("/proc/meminfo", "utf8"))?.[1]);
+    if (!Number.isFinite(dirtyKb) || dirtyKb >= 2 * 1024 * 1024) {
+      throw new Error("Fixture stopped: Linux Dirty memory is unavailable or reached 2 GiB");
+    }
+    if (dirtyKb < 1024 * 1024) {
+      return;
+    }
+    await delay(1_000);
+  }
+}
+
 /** Offline fixture writer: the caller owns an empty, isolated state directory and closes it. */
 export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
   const started = performance.now();
   const transcriptBytes = options.transcriptBytes ?? 64 * 1024 * 1024;
+  const longTranscriptEntries = options.longTranscriptEntries ?? 0;
+  const longTranscriptSessions = Math.min(options.longTranscriptSessions ?? 4, options.sessions);
   for (const [label, value] of Object.entries({
     sessions: options.sessions,
     retainedRuns: options.retainedRuns,
     transcriptBytes,
+    longTranscriptEntries,
+    longTranscriptSessions,
     now: options.now,
   })) {
     if (!Number.isSafeInteger(value) || value < 0) {
@@ -159,12 +183,15 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
     await yieldTurn();
   }
   let logicalTranscriptBytes = 0;
+  let baselineTranscriptBytes = 0;
+  let thinkingSignatureBytes = 0;
   let transcriptMessages = 0;
   let cumulativeWeight = 0;
   for (const [index, session] of sessions.entries()) {
     cumulativeWeight += weights[index]!;
     const target = Math.floor((cumulativeWeight / totalWeight) * transcriptBytes);
-    let remaining = target - logicalTranscriptBytes;
+    let remaining = target - baselineTranscriptBytes;
+    let longEntriesRemaining = index < longTranscriptSessions ? longTranscriptEntries : 0;
     let messageIndex = 0;
     let parentId: string | null = null;
     let events: TranscriptEvent[] = [
@@ -185,21 +212,38 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
       events = [];
       batchBytes = 0;
     };
-    while (remaining > 0) {
-      const bytes = Math.min(MESSAGE_BYTES, remaining);
+    while (remaining > 0 || longEntriesRemaining > 0) {
+      const longEntry = remaining === 0;
+      const bytes = longEntry ? 1024 : Math.min(MESSAGE_BYTES, remaining);
       const text = content
         .update(zeros.subarray(0, Math.ceil((bytes * 3) / 4)))
         .toString("base64")
         .slice(0, bytes);
       const id = `team-shape-message-${index}-${messageIndex}`;
+      const assistant = messageIndex % 2 === 1;
+      const thinkingSignature =
+        longEntry && assistant
+          ? content.update(zeros.subarray(0, 12 * 1024)).toString("base64")
+          : undefined;
       events.push({
         type: "message",
         id,
         parentId,
         timestamp: new Date(timestamps[index]!).toISOString(),
         message: {
-          role: messageIndex % 2 === 0 ? "user" : "assistant",
-          content: [{ type: "text", text }],
+          role: assistant ? "assistant" : "user",
+          content: [
+            ...(thinkingSignature
+              ? [
+                  {
+                    type: "thinking",
+                    thinking: "Inspecting the synthetic task.",
+                    thinkingSignature,
+                  },
+                ]
+              : []),
+            { type: "text", text },
+          ],
           timestamp: timestamps[index]!,
         },
       });
@@ -207,10 +251,19 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
       messageIndex++;
       transcriptMessages++;
       logicalTranscriptBytes += bytes;
-      remaining -= bytes;
-      batchBytes += bytes;
+      if (longEntry) {
+        longEntriesRemaining--;
+      } else {
+        remaining -= bytes;
+        baselineTranscriptBytes += bytes;
+      }
+      thinkingSignatureBytes += thinkingSignature?.length ?? 0;
+      batchBytes += bytes + (thinkingSignature?.length ?? 0);
       if (batchBytes >= TRANSACTION_BYTES) {
         flush();
+        if (longTranscriptEntries > 0) {
+          await waitForTeamShapeWriteBudget();
+        }
         await yieldTurn();
       }
     }
@@ -226,6 +279,9 @@ export async function seedTeamShapeSessions(options: TeamShapeSessionsOptions) {
     sessions,
     logicalTranscriptBytes,
     transcriptMessages,
+    longTranscriptEntries,
+    longTranscriptSessions: longTranscriptEntries > 0 ? longTranscriptSessions : 0,
+    thinkingSignatureBytes,
     visibilityCounts,
     ownerCount,
     participantCount,

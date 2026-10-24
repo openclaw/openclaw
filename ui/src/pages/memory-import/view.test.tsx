@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { createMemo } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -6,7 +7,7 @@ import { flush } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { MemoryImport } from "./view.tsx";
 
-type MemoryImportProps = Parameters<typeof MemoryImport>[0];
+type MemoryImportProps = Omit<Parameters<typeof MemoryImport>[0], "readPlan" | "readScope">;
 
 const summary = {
   total: 2,
@@ -66,7 +67,7 @@ function createProps(overrides: Partial<MemoryImportProps> = {}): MemoryImportPr
     backfillTo: "",
     backfillBusy: null,
     backfillError: null,
-    backfillPreview: null,
+    readPreview: () => null,
     backfillProgress: null,
     backfillRollbackResult: null,
     backfillRollbackPending: false,
@@ -92,7 +93,16 @@ function renderView(
   overrides: Partial<MemoryImportProps> = {},
   container = document.createElement("div"),
 ) {
-  mountSolid(() => <MemoryImport {...createProps(overrides)} />, { container });
+  mountSolid(
+    () => {
+      const props = createProps(overrides);
+      const readPlan = createMemo(() =>
+        props.loading && !props.plan ? new Promise<never>(() => {}) : props.plan,
+      );
+      return <MemoryImport {...props} readPlan={readPlan} readScope={props} />;
+    },
+    { container },
+  );
   flush();
   return container;
 }
@@ -173,7 +183,7 @@ describe("renderMemoryImport", () => {
     const container = document.createElement("div");
     renderView(
       {
-        backfillPreview: {
+        readPreview: () => ({
           days: 1,
           candidates: 2,
           staged: 0,
@@ -185,7 +195,7 @@ describe("renderMemoryImport", () => {
               sample: ["Remember the release checklist", "Use the main agent"],
             },
           ],
-        },
+        }),
         backfillProgress: { days: 3, candidates: 7, staged: 4, complete: true },
       },
       container,

@@ -61,11 +61,10 @@ type PreparationOverrides = Partial<Omit<PreparationInput, "attempt" | "runParam
   runParams?: Partial<PreparationInput["runParams"]>;
   admittedRunContext?: PreparationInput["runParams"]["admittedRunContext"];
   sourceReplyDeliveryMode?: "message_tool_only";
-  heartbeat?: { continuesConversation: boolean };
 };
 
 function preparationInput(input: PreparationOverrides): PreparationInput {
-  const { admittedRunContext, sourceReplyDeliveryMode, heartbeat, runParams, ...overrides } = input;
+  const { admittedRunContext, sourceReplyDeliveryMode, runParams, ...overrides } = input;
   return {
     runParams: {
       admittedRunContext: admittedRunContext ?? createTestAdmittedRunContext("run-focused"),
@@ -73,8 +72,7 @@ function preparationInput(input: PreparationOverrides): PreparationInput {
       runId: "run-focused",
       workspaceDir: "/tmp/openclaw-test",
       prompt: "hi",
-      trigger: heartbeat ? "heartbeat" : "user",
-      ...(heartbeat?.continuesConversation ? { continuesConversation: true } : {}),
+      trigger: "user",
       timeoutMs: 60_000,
       ...(sourceReplyDeliveryMode ? { sourceReplyDeliveryMode } : {}),
       ...runParams,

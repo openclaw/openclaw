@@ -513,6 +513,9 @@ it.each([false, true])(
     expect(getChatHistoryLoadState(state).phase).toBe("failed");
     const older = h.holdManaged();
     renderCurrent();
+    expect(container.querySelector(".chat-history-error__stage p")?.textContent).toContain(
+      "Temporary history failure",
+    );
     const retry = expectDefined(
       container.querySelector<HTMLButtonElement>(".chat-history-error button"),
       "Retry button",

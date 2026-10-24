@@ -1,5 +1,5 @@
-// Doctor bootstrap-size tests cover prompt-context budget warnings and note rendering.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
+import { buildBootstrapContextFiles } from "../agents/embedded-agent-helpers/bootstrap.js";
 import type { OpenClawConfig } from "../config/config.js";
 
 const note = vi.hoisted(() => vi.fn());
@@ -12,9 +12,8 @@ const resolveBootstrapContextForDiagnostics = vi.hoisted(() => vi.fn());
 const resolveBootstrapMaxChars = vi.hoisted(() => vi.fn(() => 20_000));
 const resolveBootstrapTotalMaxChars = vi.hoisted(() => vi.fn(() => 150_000));
 
-vi.mock("../../packages/terminal-core/src/note.js", () => ({
-  note,
-}));
+// mock-isolation: Capture Doctor diagnostics without writing to the operator's terminal.
+vi.mock("../../packages/terminal-core/src/note.js", () => ({ note }));
 
 vi.mock("../agents/agent-scope.js", () => ({
   listAgentIds,
@@ -36,148 +35,124 @@ vi.mock("../agents/embedded-agent-helpers/bootstrap.js", async () => ({
 
 import { noteBootstrapFileSize } from "./doctor-bootstrap-size.js";
 
-describe("noteBootstrapFileSize", () => {
-  beforeEach(() => {
-    note.mockClear();
-    resolveBootstrapContextForDiagnostics.mockReset();
-    resolveBootstrapContextForDiagnostics.mockResolvedValue({
-      bootstrapFiles: [],
-      contextFiles: [],
-    });
-    listAgentIds.mockReturnValue(["main"]);
-  });
+function bootstrapFile(name: string, size: number, filePath = `/tmp/workspace/${name}`) {
+  return { name, path: filePath, content: "a".repeat(size), missing: false };
+}
 
-  it("reports a budget-dropped file that repeats a sibling basename as fully truncated", async () => {
-    resolveBootstrapTotalMaxChars.mockReturnValueOnce(1_000);
-    resolveBootstrapContextForDiagnostics.mockResolvedValue({
-      bootstrapFiles: [
-        {
-          name: "AGENTS.md",
-          path: "/tmp/workspace/AGENTS.md",
-          content: "a".repeat(1_000),
-          missing: false,
-        },
-        {
-          name: "AGENTS.md",
-          path: "/tmp/workspace/packages/core/AGENTS.md",
-          content: "b".repeat(500),
-          missing: false,
-        },
-      ],
-      contextFiles: [{ path: "/tmp/workspace/AGENTS.md", content: "a".repeat(1_000) }],
-    });
-    await noteBootstrapFileSize({} as OpenClawConfig);
-    expect(note).toHaveBeenCalledTimes(1);
-    expect(note.mock.calls[0]?.[0]).toBe(
+function context(bootstrapFiles: ReturnType<typeof bootstrapFile>[], sizes: number[]) {
+  return {
+    bootstrapFiles,
+    contextFiles: bootstrapFiles.flatMap(({ path, content }, i) =>
+      sizes[i] ? [{ path, content: content.slice(0, sizes[i]) }] : [],
+    ),
+  };
+}
+
+async function message() {
+  await noteBootstrapFileSize({});
+  expect(note).toHaveBeenCalledTimes(1);
+  return note.mock.calls[0]?.[0];
+}
+
+beforeEach(() => {
+  note.mockClear();
+  resolveBootstrapContextForDiagnostics.mockReset();
+  resolveBootstrapContextForDiagnostics.mockResolvedValue(context([], []));
+  listAgentIds.mockReturnValue(["main"]);
+});
+
+it("reports a budget-dropped file that repeats a sibling basename as fully truncated", async () => {
+  resolveBootstrapTotalMaxChars.mockReturnValueOnce(1_000);
+  resolveBootstrapContextForDiagnostics.mockResolvedValue(
+    context(
       [
-        "Workspace bootstrap files exceed limits and will be truncated:",
-        "- AGENTS.md: 500 raw / 0 injected (100% truncated; max/total)",
-        "Total bootstrap injected chars: 1,000 (100% of max/total 1,000).",
-        "Total bootstrap raw chars (before truncation): 1,500.",
-        "",
-        "- Tip: tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback, for total-budget limits.",
-      ].join("\n"),
-    );
-  });
-
-  it("explains the fixed cap for a near-limit, untruncated USER.md", async () => {
-    resolveBootstrapContextForDiagnostics.mockResolvedValue({
-      bootstrapFiles: [
-        {
-          name: "USER.md",
-          path: "/tmp/workspace/USER.md",
-          content: "u".repeat(3_500),
-          missing: false,
-        },
+        bootstrapFile("AGENTS.md", 1_000),
+        bootstrapFile("AGENTS.md", 500, "/tmp/workspace/packages/core/AGENTS.md"),
       ],
-      contextFiles: [{ path: "/tmp/workspace/USER.md", content: "u".repeat(3_500) }],
-    });
-    await noteBootstrapFileSize({} as OpenClawConfig);
-    expect(note).toHaveBeenCalledTimes(1);
-    const [message] = note.mock.calls[0] ?? [];
-    expect(message).toContain("Workspace bootstrap files are near configured limits:");
-    expect(message).toContain("- USER.md: 3,500 chars (88% of max/file 4,000)");
-    expect(message).toContain(
-      "USER.md has a fixed 4,000-character bootstrap cap; keep it compact.",
-    );
-    expect(message).not.toContain("bootstrapMaxChars");
+      [1_000, 0],
+    ),
+  );
+  expect(await message()).toBe(
+    [
+      "Workspace bootstrap files exceed limits and will be truncated:",
+      "- AGENTS.md: 500 raw / 0 injected (100% truncated; max/total)",
+      "  No content from this file reaches the model.",
+      "Total bootstrap injected chars: 1,000 (100% of max/total 1,000).",
+      "Total bootstrap raw chars (before truncation): 1,500.",
+      "",
+      "- Tip: tune `agents.entries.*.bootstrapTotalMaxChars` for this agent, or `agents.defaults.bootstrapTotalMaxChars` as fallback, for total-budget limits.",
+    ].join("\n"),
+  );
+});
+
+it("explains the retained excerpts using the real bootstrap output", async () => {
+  const bootstrapFiles = [
+    {
+      ...bootstrapFile("AGENTS.md", 25_000),
+      content: "# Rules\n- Never lose rules.\n".repeat(1_000),
+    },
+    bootstrapFile("SOUL.md", 25_000),
+  ];
+  resolveBootstrapContextForDiagnostics.mockResolvedValue({
+    bootstrapFiles,
+    contextFiles: buildBootstrapContextFiles(bootstrapFiles, { maxChars: 20_000 }),
   });
+  const text = await message();
+  expect(text).toContain(
+    "The model receives start/end excerpts as space permits, plus a bounded policy digest when available; other middle text is omitted.",
+  );
+  expect(text).toContain(
+    "The model receives start/end excerpts as space permits; middle text is omitted.",
+  );
+  expect(text).toContain("agents.defaults.bootstrapMaxChars");
+});
 
-  it("keeps the tuning tip when another file hits a configurable per-file limit", async () => {
-    resolveBootstrapContextForDiagnostics.mockResolvedValue({
-      bootstrapFiles: [
-        {
-          name: "USER.md",
-          path: "/tmp/workspace/USER.md",
-          content: "u".repeat(5_000),
-          missing: false,
-        },
-        {
-          name: "AGENTS.md",
-          path: "/tmp/workspace/AGENTS.md",
-          content: "a".repeat(25_000),
-          missing: false,
-        },
-      ],
-      contextFiles: [
-        { path: "/tmp/workspace/USER.md", content: "u".repeat(4_000) },
-        { path: "/tmp/workspace/AGENTS.md", content: "a".repeat(20_000) },
-      ],
-    });
-    await noteBootstrapFileSize({} as OpenClawConfig);
-    expect(note).toHaveBeenCalledTimes(1);
-    const [message] = note.mock.calls[0] ?? [];
-    expect(message).toContain(
-      "USER.md has a fixed 4,000-character bootstrap cap; keep it compact.",
-    );
-    expect(message).toContain("tune `agents.entries.*.bootstrapMaxChars`");
-  });
+it.each([
+  { scenario: "near fixed cap", sizes: [3_500], injected: [3_500], cap: 20_000 },
+  {
+    scenario: "mixed fixed and configurable caps",
+    sizes: [5_000, 25_000],
+    injected: [4_000, 20_000],
+    cap: 20_000,
+  },
+  { scenario: "lower configured cap", sizes: [5_000], injected: [2_000], cap: 2_000 },
+])("explains tuning for $scenario", async ({ sizes, injected, cap }) => {
+  resolveBootstrapMaxChars.mockReturnValueOnce(cap);
+  resolveBootstrapContextForDiagnostics.mockResolvedValue(
+    context(
+      sizes.map((size, i) => bootstrapFile(i ? "AGENTS.md" : "USER.md", size)),
+      injected,
+    ),
+  );
+  const text = await message();
+  const fixedCapTip = "USER.md has a fixed 4,000-character bootstrap cap; keep it compact.";
+  const tuningTip = "tune `agents.entries.*.bootstrapMaxChars`";
+  if (cap === 2_000) {
+    expect(text).toContain(tuningTip);
+    expect(text).not.toContain("fixed 4,000-character bootstrap cap");
+  } else {
+    expect(text).toContain(fixedCapTip);
+    if (sizes.length > 1) {
+      expect(text).toContain(tuningTip);
+    } else {
+      expect(text).toContain("Workspace bootstrap files are near configured limits:");
+      expect(text).toContain("- USER.md: 3,500 chars (88% of max/file 4,000)");
+      expect(text).not.toContain("bootstrapMaxChars");
+    }
+  }
+});
 
-  it("keeps the tuning tip when USER.md sits under an explicitly lower configured cap", async () => {
-    resolveBootstrapMaxChars.mockReturnValueOnce(2_000);
-    resolveBootstrapContextForDiagnostics.mockResolvedValue({
-      bootstrapFiles: [
-        {
-          name: "USER.md",
-          path: "/tmp/workspace/USER.md",
-          content: "u".repeat(5_000),
-          missing: false,
-        },
-      ],
-      contextFiles: [{ path: "/tmp/workspace/USER.md", content: "u".repeat(2_000) }],
-    });
-    await noteBootstrapFileSize({} as OpenClawConfig);
-    expect(note).toHaveBeenCalledTimes(1);
-    const [message] = note.mock.calls[0] ?? [];
-    expect(message).toContain("tune `agents.entries.*.bootstrapMaxChars`");
-    expect(message).not.toContain("fixed 4,000-character bootstrap cap");
-  });
-
-  it("labels a secondary agent whose bootstrap files exceed the limit", async () => {
-    listAgentIds.mockReturnValue(["main", "secondary"]);
-    resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/tmp/${agentId}`);
-    resolveBootstrapContextForDiagnostics.mockImplementation(async ({ agentId }) => ({
-      bootstrapFiles:
-        agentId === "secondary"
-          ? [
-              {
-                name: "AGENTS.md",
-                path: "/tmp/secondary/AGENTS.md",
-                content: "a".repeat(25_000),
-                missing: false,
-              },
-            ]
-          : [],
-      contextFiles:
-        agentId === "secondary"
-          ? [{ path: "/tmp/secondary/AGENTS.md", content: "a".repeat(20_000) }]
-          : [],
-    }));
-
-    await noteBootstrapFileSize({} as OpenClawConfig);
-
-    expect(note).toHaveBeenCalledTimes(1);
-    expect(note.mock.calls[0]?.[0]).toContain('Agent "secondary":');
-    expect(resolveBootstrapContextForDiagnostics).toHaveBeenCalledTimes(2);
-  });
+it("labels a secondary agent whose bootstrap files exceed the limit", async () => {
+  listAgentIds.mockReturnValue(["main", "secondary"]);
+  resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => `/tmp/${agentId}`);
+  resolveBootstrapContextForDiagnostics.mockImplementation(async ({ agentId }) =>
+    context(
+      agentId === "secondary"
+        ? [bootstrapFile("AGENTS.md", 25_000, "/tmp/secondary/AGENTS.md")]
+        : [],
+      [20_000],
+    ),
+  );
+  expect(await message()).toContain('Agent "secondary":');
+  expect(resolveBootstrapContextForDiagnostics).toHaveBeenCalledTimes(2);
 });

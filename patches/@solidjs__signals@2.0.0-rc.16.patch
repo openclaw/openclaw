@@ -1,0 +1,52 @@
+diff --git a/dist/dev-shared.js b/dist/dev-shared.js
+index c88a696f7878254934174b016708bbd21e8e565c..157b249ca77e97b3534f146237f3e978300f3d23 100644
+--- a/dist/dev-shared.js
++++ b/dist/dev-shared.js
+@@ -2428,7 +2428,8 @@ function disposeChildren(node, self = false, zombie) {
+     // Nothing else re-examines a dead node, so make sure a seam comes.
+     if (
+       (node._statusFlags & STATUS_PENDING && node._x?._transaction != null) ||
+-      flags & REACTIVE_FRAME_READ
++      flags & REACTIVE_FRAME_READ ||
++      node._config & CONFIG_STAGED
+     )
+       schedule();
+   }
+diff --git a/dist/observe/core/owner.js b/dist/observe/core/owner.js
+index 2ef8c6abaf4536922121c5f2eb374e0b72937be2..77efc0178ab03d53dc76701b13ff0035860d30d9 100644
+--- a/dist/observe/core/owner.js
++++ b/dist/observe/core/owner.js
+@@ -1,4 +1,4 @@
+-import { defaultContext, CONFIG_TRANSPARENT, REACTIVE_NONE, REACTIVE_DISPOSED, CONFIG_AUTO_DISPOSE, STATUS_PENDING, REACTIVE_FRAME_READ, REACTIVE_ZOMBIE } from "./constants.js";
++import { defaultContext, CONFIG_TRANSPARENT, REACTIVE_NONE, REACTIVE_DISPOSED, CONFIG_AUTO_DISPOSE, CONFIG_STAGED, STATUS_PENDING, REACTIVE_FRAME_READ, REACTIVE_ZOMBIE } from "./constants.js";
+ 
+ import { context, runWithOwner, tracking } from "./core.js";
+ 
+@@ -56,7 +56,7 @@ function disposeChildren(e, n = false, t) {
+         // flight's — a transaction's or a lane's (its `_x._transaction`) — or a
+         // stale reader's (REACTIVE_FRAME_READ — a frame that derived from one).
+         // Nothing else re-examines a dead node, so make sure a seam comes.
+-                if (e.m & STATUS_PENDING && e.T?.Je != null || i & REACTIVE_FRAME_READ) schedule();
++                if (e.m & STATUS_PENDING && e.T?.Je != null || i & REACTIVE_FRAME_READ || e.l & CONFIG_STAGED) schedule();
+     }
+     let r = t ? e.T.Nt : e.ze;
+     if (t) e.T.Nt = null; else e.ze = null;
+diff --git a/dist/prod/core/owner.js b/dist/prod/core/owner.js
+index bc45d53fe14af4aed1daeb3d188cd8cc033e00a1..6f079e629dfffa9f4cd6235ac2133fdc9a067e4f 100644
+--- a/dist/prod/core/owner.js
++++ b/dist/prod/core/owner.js
+@@ -1,4 +1,4 @@
+-import { defaultContext, CONFIG_TRANSPARENT, REACTIVE_NONE, REACTIVE_DISPOSED, CONFIG_AUTO_DISPOSE, STATUS_PENDING, REACTIVE_FRAME_READ, REACTIVE_ZOMBIE } from "./constants.js";
++import { defaultContext, CONFIG_TRANSPARENT, REACTIVE_NONE, REACTIVE_DISPOSED, CONFIG_AUTO_DISPOSE, CONFIG_STAGED, STATUS_PENDING, REACTIVE_FRAME_READ, REACTIVE_ZOMBIE } from "./constants.js";
+ 
+ import { context, runWithOwner, tracking } from "./core.js";
+ 
+@@ -53,7 +53,7 @@ function disposeChildren(e, n = false, t) {
+         // flight's — a transaction's or a lane's (its `_x._transaction`) — or a
+         // stale reader's (REACTIVE_FRAME_READ — a frame that derived from one).
+         // Nothing else re-examines a dead node, so make sure a seam comes.
+-                if (e.m & STATUS_PENDING && e.T?.Re != null || i & REACTIVE_FRAME_READ) schedule();
++                if (e.m & STATUS_PENDING && e.T?.Re != null || i & REACTIVE_FRAME_READ || e.l & CONFIG_STAGED) schedule();
+     }
+     let l = t ? e.T.Ue : e.De;
+     if (t) e.T.Ue = null; else e.De = null;

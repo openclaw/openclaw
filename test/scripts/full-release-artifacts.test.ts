@@ -450,7 +450,7 @@ function publicationReuseFixture(changedReceipt = false) {
     schema: "openclaw.release-validation-evidence/v4",
     valid: true,
     directRoot: true,
-    conclusions: { allRequiredSucceeded: true },
+    current: { conclusion: "success" },
     root: { runId: "51", targetSha: TOOLING_SHA },
     manifest: {
       workflowName: "Full Release Validation",

@@ -2,11 +2,17 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { assertAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import {
   bindReplyToolAuthorityCallerRead,
+  captureReplyToolAuthorityCallerBinding,
   prepareReplyToolAuthorityCallerRead,
 } from "../agents/harness/host-private-capabilities.js";
+import {
+  MessageInjectionPolicyMismatchError,
+  MessageInjectionTargetUnavailableError,
+} from "../auto-reply/reply/message-injection-authority.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { warnPluginSdkDeprecation } from "../plugins/sdk-deprecation.js";
 import type {
+  EmbeddedRunToolAuthorityBinding,
   ReplyOperation,
   ReplyToolAuthorityOverlay,
   ReplyToolAuthorityRequester,
@@ -17,6 +23,7 @@ import type {
 } from "./session-controller.contracts.js";
 import {
   getAttachedBackend,
+  getAttachedBackendAttachment,
   isCurrentSessionControllerOperation,
 } from "./session-controller.state.js";
 
@@ -439,7 +446,7 @@ export function createReplyOperationToolAuthority(lifecycle: {
   };
   bindReplyToolAuthorityCallerRead(
     result.projectToolAuthorityFingerprintAsync,
-    async (caller, expected, _route, assertActive) => {
+    (caller, expected, _route, assertActive) => {
       const selected = snapshot;
       const selectedRoute = route;
       const assertOwner = captureCurrent();
@@ -457,7 +464,7 @@ export function createReplyOperationToolAuthority(lifecycle: {
         }
       };
       assertCurrent();
-      return await prepareReplyToolAuthorityCallerRead(
+      return captureReplyToolAuthorityCallerBinding(
         caller && "requesterOrigin" in caller
           ? selected?.projectRequesterAsync
           : selected?.projectAsync,
@@ -469,4 +476,69 @@ export function createReplyOperationToolAuthority(lifecycle: {
     },
   );
   return result;
+}
+
+/** Bind current caller preparation to this exact captured execution and policy owner. */
+export function bindCapturedReplyToolAuthorityCallerRead(params: {
+  projector: object;
+  operation: ReplyOperation;
+  backendAttachment: NonNullable<ReturnType<typeof getAttachedBackendAttachment>>;
+  toolAuthority?: ReturnType<EmbeddedRunToolAuthorityBinding>;
+}): void {
+  const { operation, backendAttachment, toolAuthority } = params;
+  const attemptAuthority = toolAuthority?.source === "attempt";
+  bindReplyToolAuthorityCallerRead(params.projector, (caller, expected, _route, assertSource) => {
+    const route = operation.toolAuthorityRoute;
+    const assertCaptured = () => {
+      assertSource();
+      if (
+        !isCurrentSessionControllerOperation(operation) ||
+        operation.result ||
+        operation.abortSignal.aborted ||
+        (!attemptAuthority &&
+          (operation.toolAuthorityRoute !== route ||
+            operation.toolAuthorityFingerprint !== expected)) ||
+        getAttachedBackendAttachment(operation) !== backendAttachment
+      ) {
+        throw new MessageInjectionTargetUnavailableError(
+          "Reply steering target is no longer running",
+        );
+      }
+      toolAuthority?.assertActive();
+    };
+    assertCaptured();
+    if (!attemptAuthority && caller && "kind" in caller) {
+      const selected = operation.requestedToolAuthorityRoute;
+      const active = operation.toolAuthorityRoute;
+      const fallback = operation.automaticFallbackRoute;
+      const selectionChanged =
+        selected !== undefined &&
+        (selected.provider !== caller.selectedRoute.provider ||
+          selected.model !== caller.selectedRoute.model);
+      const activeDiffers =
+        active !== undefined &&
+        (active.provider !== caller.selectedRoute.provider ||
+          active.model !== caller.selectedRoute.model);
+      const compatibleFallback =
+        selected &&
+        !selectionChanged &&
+        caller.fallbackAvailability.kind !== "disabled_by_model_override" &&
+        caller.fallbackAvailability.kind !== "disabled_by_model_selection_lock" &&
+        fallback?.provider === active?.provider &&
+        fallback?.model === active?.model;
+      if (selectionChanged || (activeDiffers && !compatibleFallback)) {
+        throw new MessageInjectionPolicyMismatchError(
+          "model-fallback-changed",
+          "The selected model changed before steering",
+        );
+      }
+    }
+    return captureReplyToolAuthorityCallerBinding(
+      toolAuthority?.projectAsync ?? operation.projectToolAuthorityFingerprintAsync,
+      caller,
+      expected,
+      operation.toolAuthorityRoute,
+      assertCaptured,
+    );
+  });
 }

@@ -33,6 +33,7 @@ import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import { retainGatewaySessionEntryReadOnly } from "../session-utils-read-lifetime.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
+import { respondError } from "./response.js";
 import type {
   GatewayClient,
   GatewayRequestContext,
@@ -99,7 +100,7 @@ function createGitHubReadHandler<
             section !== "files" &&
             section !== "discussion")))
     ) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `invalid ${method} params`));
+      respondError(respond, ErrorCodes.INVALID_REQUEST, `invalid ${method} params`);
       return;
     }
     const resolved = resolveAgentIdOrRespondError({
@@ -396,11 +397,7 @@ export const controlUiHandlers: GatewayRequestHandlers = {
       ? parseControlUiLinkPreviewUrl(params.url)
       : null;
     if (!url) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid controlUi.linkPreview params"),
-      );
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid controlUi.linkPreview params");
       return;
     }
     const preview = await loadControlUiLinkPreview(url, isEnabled, scope);
@@ -431,11 +428,7 @@ export const controlUiHandlers: GatewayRequestHandlers = {
   }) => {
     const sessionKey = parseSessionPreviewKey(params);
     if (!sessionKey) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "invalid controlUi.sessionPreview params"),
-      );
+      respondError(respond, ErrorCodes.INVALID_REQUEST, "invalid controlUi.sessionPreview params");
       return;
     }
     try {
@@ -458,13 +451,10 @@ export const controlUiHandlers: GatewayRequestHandlers = {
   "controlUi.sessionPullRequests.checks": async ({ params, client, context, respond, signal }) => {
     const parsed = parseCheckDetailsParams(params);
     if (!parsed) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "invalid controlUi.sessionPullRequests.checks params",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "invalid controlUi.sessionPullRequests.checks params",
       );
       return;
     }
@@ -472,6 +462,7 @@ export const controlUiHandlers: GatewayRequestHandlers = {
     try {
       const reader = client
         ? createControlUiSessionPrRead({
+            allowOwnImportedPullRequest: true,
             client,
             sessionKey: parsed.sessionKey,
             getRuntimeConfig: context.getRuntimeConfig,
@@ -490,10 +481,15 @@ export const controlUiHandlers: GatewayRequestHandlers = {
       if (!binding) {
         throw new gitHubPublicApi.ControlUiGitHubError(404, "Session CI details unavailable");
       }
+      let assertReadAuthority: (() => void) | undefined;
+      let readCredential:
+        | import("../control-ui-session-pr-request.js").SessionPullRequestReadCredential
+        | undefined;
       const assertCurrent = () => {
         let identityCurrent = false;
         try {
           binding.assertCurrent?.();
+          assertReadAuthority?.();
           identityCurrent = true;
         } catch {
           // The read owner reports retired selections and grants as assertion failures.
@@ -517,10 +513,19 @@ export const controlUiHandlers: GatewayRequestHandlers = {
             { ...parsed, agentId: binding.params.agentId },
             {
               sessionScope: binding.identity,
+              credential: () => readCredential,
               assertCurrent: assertReadCurrent,
               loadPullRequests: (request) =>
                 loadControlUiSessionPullRequests(request, {
-                  read: { target: binding, sourceIdentity, assertCurrent: assertReadCurrent },
+                  read: {
+                    target: binding,
+                    sourceIdentity,
+                    assertCurrent: assertReadCurrent,
+                    retainReadAuthority: (guard, credential) => {
+                      assertReadAuthority = guard;
+                      readCredential = credential;
+                    },
+                  },
                 }),
             },
           );
@@ -542,23 +547,20 @@ export const controlUiHandlers: GatewayRequestHandlers = {
   "controlUi.sessionPullRequests.subscribe": async ({ params, client, context, respond }) => {
     const parsed = parseControlUiSessionPullRequestsSubscribeParams(params);
     if (!parsed) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "invalid controlUi.sessionPullRequests.subscribe params",
-        ),
+      respondError(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "invalid controlUi.sessionPullRequests.subscribe params",
       );
       return;
     }
     const connId = client?.connId?.trim();
     const subscriptions = context.controlUiSessionPullRequests;
     if (!connId || !subscriptions) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.UNAVAILABLE, "session pull request subscriptions unavailable"),
+      respondError(
+        respond,
+        ErrorCodes.UNAVAILABLE,
+        "session pull request subscriptions unavailable",
       );
       return;
     }

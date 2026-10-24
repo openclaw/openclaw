@@ -15,7 +15,6 @@
  * @module @openclaw/oc-path/universal
  */
 
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { isMap, isSeq, type Node } from "yaml";
 import type { MdAst } from "./ast.js";
 import { OcPathEditError } from "./edit-error.js";
@@ -144,13 +143,14 @@ export function resolveOcPath(ast: OcAst, path: OcPath): OcMatch | null {
   return resolveYamlToUniversal(ast, path);
 }
 
+function resolveUniversalRoot(ast: OcAst, match: { kind: "root" } | null): OcMatch | null {
+  return match === null ? null : { kind: "root", ast, line: 1 };
+}
+
 function resolveMdToUniversal(ast: MdAst, path: OcPath): OcMatch | null {
   const m = resolveMdOcPath(ast, path);
-  if (m === null) {
-    return null;
-  }
-  if (m.kind === "root") {
-    return { kind: "root", ast, line: 1 };
+  if (m === null || m.kind === "root") {
+    return resolveUniversalRoot(ast, m);
   }
   if (m.kind === "frontmatter") {
     return { kind: "leaf", valueText: m.node.value, leafType: "string", line: m.node.line };
@@ -163,11 +163,8 @@ function resolveMdToUniversal(ast: MdAst, path: OcPath): OcMatch | null {
 
 function resolveJsoncToUniversal(ast: JsoncAst, path: OcPath): OcMatch | null {
   const m = resolveJsoncOcPath(ast, path);
-  if (m === null) {
-    return null;
-  }
-  if (m.kind === "root") {
-    return { kind: "root", ast, line: 1 };
+  if (m === null || m.kind === "root") {
+    return resolveUniversalRoot(ast, m);
   }
   if (m.kind === "object-entry") {
     return jsoncValueToMatch(m.node.value, m.node.line);
@@ -189,11 +186,8 @@ function jsoncValueToMatch(value: JsoncValue, line: number): OcMatch {
 
 function resolveJsonlToUniversal(ast: JsonlAst, path: OcPath): OcMatch | null {
   const m = resolveJsonlOcPath(ast, path);
-  if (m === null) {
-    return null;
-  }
-  if (m.kind === "root") {
-    return { kind: "root", ast, line: 1 };
+  if (m === null || m.kind === "root") {
+    return resolveUniversalRoot(ast, m);
   }
   if (m.kind === "line") {
     return { kind: "node", descriptor: "jsonl-line", line: m.node.line };
@@ -208,11 +202,8 @@ function resolveJsonlToUniversal(ast: JsonlAst, path: OcPath): OcMatch | null {
 
 function resolveYamlToUniversal(ast: YamlAst, path: OcPath): OcMatch | null {
   const m = resolveYamlOcPath(ast, path);
-  if (m === null) {
-    return null;
-  }
-  if (m.kind === "root") {
-    return { kind: "root", ast, line: 1 };
+  if (m === null || m.kind === "root") {
+    return resolveUniversalRoot(ast, m);
   }
   if (m.kind === "scalar" || m.kind === "pair") {
     return yamlScalarToMatch(m.value, yamlLine(ast, m.node));
@@ -483,11 +474,11 @@ function setMdInsertion(ast: MdAst, info: InsertionInfo, value: string): OcAst {
     if (info.marker !== "+") {
       throw new OcPathEditError("not-writable", "md section insertion uses bare `+`");
     }
-    const section = expectDefined(p.section, "Markdown section insertion has a section");
-    const blockIdx = ast.blocks.findIndex((b) => b.slug === section.toLowerCase());
-    if (blockIdx === -1) {
+    const match = resolveMdOcPath(ast, p);
+    if (match?.kind !== "block") {
       throw new OcPathEditError("unresolved");
     }
+    const blockIdx = ast.blocks.indexOf(match.node);
     const kv = parseMdItemKeyValue(value);
     const itemLine = `- ${value}`;
     const nextBlock = ast.blocks[blockIdx + 1];

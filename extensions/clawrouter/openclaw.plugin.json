@@ -1,5 +1,6 @@
 {
   "id": "clawrouter",
+  "capabilityCatalogEntry": "./capability-catalog.ts",
   "categories": [
     "models"
   ],
@@ -13,13 +14,25 @@
   "providers": [
     "clawrouter"
   ],
+  "mediaUnderstandingProviderMetadata": {
+    "clawrouter": {
+      "capabilities": ["audio"],
+      "defaultModels": { "audio": "gpt-4o-transcribe" }
+    }
+  },
   "contracts": {
+    "mediaUnderstandingProviders": ["clawrouter"],
+    "imageGenerationProviders": ["clawrouter"],
+    "speechProviders": ["clawrouter"],
     "usageProviders": [
       "clawrouter"
     ],
     "decisionProviders": [
       "clawrouter"
     ]
+  },
+  "imageGenerationProviderMetadata": {
+    "clawrouter": { "authSignals": [{ "provider": "clawrouter" }] }
   },
   "setup": {
     "providers": [
@@ -63,6 +76,8 @@
     ]
   },
   "modelCatalog": {
+    "discovery": { "clawrouter": "runtime" },
+    "runtimeAugment": true,
     "providers": {
       "clawrouter": {
         "baseUrl": "https://clawrouter.openclaw.ai/v1",
@@ -71,6 +86,9 @@
           {
             "id": "openai/gpt-6-luna",
             "name": "GPT-6 Luna via ClawRouter",
+            "compat": {
+              "codeMode": "capable"
+            },
             "inference": {
               "chat": false,
               "decision": {
@@ -102,7 +120,7 @@
                 },
                 "confidence": "provider-specific",
                 "limits": {
-                  "maxQuestions": 200,
+                  "maxQuestions": 400,
                   "image": {
                     "maxBytes": 4194304,
                     "mimeTypes": [

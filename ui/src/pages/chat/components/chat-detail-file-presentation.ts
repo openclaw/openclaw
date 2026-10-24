@@ -355,6 +355,7 @@ export function createFilePresentationActions(context: {
 }
 
 export function renderFilePanelPresentation(context: {
+  fileAttachment?: import("./chat-file-session-attachment.ts").FileSessionAttachment;
   props: ChatDetailPanelProps;
   presentation: FilePresentationState;
   htmlPreview: ReturnType<typeof createFileHtmlPreview>;
@@ -417,6 +418,7 @@ export function renderFilePanelPresentation(context: {
     error: file ? null : state.error,
     onRetry: context.actions.retryFileEditor,
     fileView: {
+      fileAttachment: context.fileAttachment,
       htmlPreview: context.htmlPreview.controls({
         error: state.error,
         onRetry: context.actions.retryFileEditor,
@@ -425,6 +427,7 @@ export function renderFilePanelPresentation(context: {
         mode: context.props.embedSandboxMode,
       }),
       presentation: context.props.filePresentation ?? "desktop",
+      onScrollPortRef: context.props.onScrollPortRef,
       back: context.props.fileBack ?? undefined,
       active: context.props.filePresented !== false,
       workspace: context.props.fileWorkspace ?? undefined,
@@ -442,7 +445,6 @@ export function renderFilePanelPresentation(context: {
           ? {
               content: context.actions.currentFileText(),
               options: {
-                ...context.props.githubContext,
                 codeBlockInteraction: "interactive",
                 fileLinks: true,
                 sessionLinks: true,
@@ -472,7 +474,9 @@ export function renderFilePanelPresentation(context: {
       matches,
       query: presentation.fileSearchQuery,
       saveNotice: state.fileSaveNotice,
-      saving: state.fileSaving,
+      get saving() {
+        return state.fileSaving;
+      },
       searchOpen: presentation.fileSearchOpen,
       wrap: presentation.fileWrap,
       onCopy: (action) => {
@@ -500,7 +504,6 @@ export function renderFilePanelPresentation(context: {
     canvasPluginSurfaceUrl: context.props.canvasPluginSurfaceUrl,
     embedSandboxMode: context.props.embedSandboxMode,
     allowExternalEmbedUrls: context.props.allowExternalEmbedUrls,
-    ...context.props.githubContext,
     embedded: context.props.embedded,
     filePresentation: context.props.filePresentation ?? "desktop",
     fileBack: context.props.fileBack ?? undefined,
@@ -515,6 +518,8 @@ export function renderFilePanelPresentation(context: {
 }
 
 export const chatDetailPanelProperties = {
+  attachmentChat: { default: undefined, attribute: false },
+  onScrollPortRef: { default: undefined, attribute: false },
   panelPresentation: { default: undefined, attribute: false },
   panelActive: { default: true, type: Boolean },
   filePresentation: { default: "desktop" },
@@ -531,7 +536,6 @@ export const chatDetailPanelProperties = {
   canvasPluginSurfaceUrl: { default: null },
   embedSandboxMode: { default: "scripts" },
   allowExternalEmbedUrls: { default: false },
-  githubContext: { default: {}, attribute: false },
   embedded: { default: false },
   onOpenWorkspaceFile: { default: null, attribute: false },
   onOpenSessionLink: { default: null, attribute: false },

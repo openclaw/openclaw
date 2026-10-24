@@ -167,6 +167,25 @@ it("adds a configured MCP server from flags without replacing operator knobs", a
   });
 });
 
+it.each(["node", " node "])("preserves literal stdio paths from add flags: %j", async (name) => {
+  const command = path.join(workspaceDir, name);
+  const cwd = path.join(workspaceDir, `${name}-workspace `);
+  await mcp(
+    "add",
+    "literal",
+    "--command",
+    command,
+    "--arg",
+    "server.mjs",
+    "--cwd",
+    cwd,
+    "--no-probe",
+  );
+  const saved = JSON.parse(await fs.readFile(configPath, "utf8"));
+  expect(saved.mcp.servers.literal).toEqual({ command, args: ["server.mjs"], cwd });
+  expect(await readServer("literal")).toEqual({ command, args: ["server.mjs"], cwd });
+});
+
 it.each([
   { mode: "existing", script: "existing.mjs" },
   { mode: "race", script: "winner.mjs" },

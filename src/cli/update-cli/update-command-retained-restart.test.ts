@@ -38,8 +38,8 @@ vi.mock("../../daemon/launchd.js", async (importOriginal) => ({
   restartLaunchAgent: async (args: GatewayServiceControlArgs) =>
     (await import("../../daemon/systemd-lifecycle.js")).restartSystemdService(args),
 }));
-vi.mock("../../daemon/schtasks.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../daemon/schtasks.js")>()),
+vi.mock("../../daemon/schtasks-control.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/schtasks-control.js")>()),
   restartScheduledTask: async (args: GatewayServiceControlArgs) =>
     (await import("../../daemon/systemd-lifecycle.js")).restartSystemdService(args),
 }));
@@ -128,44 +128,40 @@ function restartOwned() {
 }
 
 describe.skipIf(process.platform === "win32")("retained POSIX native restart", () => {
-  it.for(["native drain", "readiness failure"] as const)(
-    "restarts retained A with a real child and keeps both owners until %s",
-    async (outcome, { signal }) => {
-      const effect = path.join(a, "effect");
-      const receipts = await openFixtureReceiptChannel();
-      const definition = path.join(a, "unit");
-      fs.writeFileSync(definition, "original Node A and service definition");
-      let pid = 0;
-      let complete = false;
-      let work: Promise<void> | undefined;
-      const readinessError = new Error("fixture readiness observer failed");
-      const releaseChild = () => receipts.release("native", "release");
-      // Directory notifications can coalesce. Keep readiness and release outside
-      // native custody so a failed observer can still unblock the owned child.
-      const started = receipts.waitFor("native", "pid:").then(async () => {
-        pid = Number(fs.readFileSync(effect, "utf8"));
-        await receipts.waitFor("native", `pid:${pid}:`);
-        expect(pid).toBeGreaterThan(0);
-        expect(pid).not.toBe(process.pid);
-        if (outcome === "readiness failure") {
-          throw readinessError;
-        }
-      });
-      await runQaGatewayFixture(
-        async () => {
-          const native = vi
-            .spyOn(systemdExec, "execSystemctlUser")
-            .mockImplementation(async (_env, args, _timeout, assertCurrent) => {
-              assertCurrent?.();
-              assertGatewayServiceUpdateCurrent();
-              if (args[0] === "reset-failed") {
-                return success;
-              }
-              expect(args).toEqual(["restart", "fixture-A.service"]);
-              return await execFileUtf8(process.execPath, [
-                "--input-type=module",
-                "-e",
-                `
+  it("restarts retained A with a real child and keeps both owners until native drain", async ({
+    signal,
+  }) => {
+    const effect = path.join(a, "effect");
+    const receipts = await openFixtureReceiptChannel();
+    const definition = path.join(a, "unit");
+    fs.writeFileSync(definition, "original Node A and service definition");
+    let pid = 0;
+    let complete = false;
+    let work: Promise<void> | undefined;
+    const releaseChild = () => receipts.release("native", "release");
+    // Directory notifications can coalesce. Keep readiness and release outside
+    // native custody so a failed observer can still unblock the owned child.
+    const started = receipts.waitFor("native", "pid:").then(async () => {
+      pid = Number(fs.readFileSync(effect, "utf8"));
+      await receipts.waitFor("native", `pid:${pid}:`);
+      expect(pid).toBeGreaterThan(0);
+      expect(pid).not.toBe(process.pid);
+    });
+    await runQaGatewayFixture(
+      async () => {
+        const native = vi
+          .spyOn(systemdExec, "execSystemctlUser")
+          .mockImplementation(async (_env, args, _timeout, assertCurrent) => {
+            assertCurrent?.();
+            assertGatewayServiceUpdateCurrent();
+            if (args[0] === "reset-failed") {
+              return success;
+            }
+            expect(args).toEqual(["restart", "fixture-A.service"]);
+            return await execFileUtf8(process.execPath, [
+              "--input-type=module",
+              "-e",
+              `
       import fs from "node:fs";
       ${fixtureReceiptClientSource(receipts.endpoint)}
         fs.writeFileSync(${JSON.stringify(effect + ".tmp")}, String(process.pid));
@@ -174,53 +170,46 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
         await awaitRelease("native", "release");
         process.stdout.write("drained");
     `,
-              ]);
-            });
-          const running = owned(async (run) => {
-            const onGatewayStartAttempted = vi.fn();
-            expect(
-              await commands.restartRetainedUpdateGatewayService({
-                ...request(run),
-                onGatewayStartAttempted,
-                signal,
-              }),
-            ).toEqual({ outcome: "completed" });
-            expect(onGatewayStartAttempted).toHaveBeenCalledOnce();
-          }).then(() => {
-            complete = true;
+            ]);
           });
-          work = running;
-          const observe = async () => {
-            await withinTest(Promise.race([started, running]), signal);
-            expect(complete).toBe(false);
-            expectOwners("busy");
-            expect(createManagedHandoffLeaseStore().read(c)).toEqual({ kind: "absent" });
-          };
-          try {
-            if (outcome === "readiness failure") {
-              await expect(observe()).rejects.toBe(readinessError);
-            } else {
-              await observe();
-            }
-          } finally {
-            releaseChild();
-            await running.catch(() => undefined);
-          }
-          await running;
-          expect(native.mock.calls.map((call) => call[1][0])).toEqual(["reset-failed", "restart"]);
-          expect(fs.readFileSync(definition, "utf8")).toBe(
-            "original Node A and service definition",
-          );
-          expectOwners("absent");
-        },
-        async () => {
+        const running = owned(async (run) => {
+          const onGatewayStartAttempted = vi.fn();
+          expect(
+            await commands.restartRetainedUpdateGatewayService({
+              ...request(run),
+              onGatewayStartAttempted,
+              signal,
+            }),
+          ).toEqual({ outcome: "completed" });
+          expect(onGatewayStartAttempted).toHaveBeenCalledOnce();
+        }).then(() => {
+          complete = true;
+        });
+        work = running;
+        const observe = async () => {
+          await withinTest(Promise.race([started, running]), signal);
+          expect(complete).toBe(false);
+          expectOwners("busy");
+          expect(createManagedHandoffLeaseStore().read(c)).toEqual({ kind: "absent" });
+        };
+        try {
+          await observe();
+        } finally {
           releaseChild();
-          await work?.catch(() => undefined);
-        },
-        () => receipts.close(),
-      );
-    },
-  );
+          await running.catch(() => undefined);
+        }
+        await running;
+        expect(native.mock.calls.map((call) => call[1][0])).toEqual(["reset-failed", "restart"]);
+        expect(fs.readFileSync(definition, "utf8")).toBe("original Node A and service definition");
+        expectOwners("absent");
+      },
+      async () => {
+        releaseChild();
+        await work?.catch(() => undefined);
+      },
+      () => receipts.close(),
+    );
+  });
 
   it.each([
     "A",
@@ -366,7 +355,6 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
   });
 
   it("retained-root query uses actual delegated authority", async () => {
-    const proceed = path.join(a, "proceed");
     const effect = path.join(a, "delegated-effect");
     const ownerUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor);
     const sourceArgs = ownerUrl.pathname.endsWith(".ts")
@@ -374,26 +362,16 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
       : [];
     const script = `
       import fs from "node:fs";
-      import {setTimeout} from "node:timers/promises";
+      import {json} from "node:stream/consumers";
       import {withDelegatedUpdateCommandExecutor,assertRetainedUpdateCommandRoot,captureUpdateCommandExecutorAuthority} from ${JSON.stringify(ownerUrl.href)};
-      // The parent binds child identity before sending the grant; stdin can be nonblocking.
-      process.stdin.setEncoding("utf8");
-      let input="";
-      for await(const chunk of process.stdin)input+=chunk;
-      const {grant,a,b,proceed,effect}=JSON.parse(input);
-      try {
-        await withDelegatedUpdateCommandExecutor(grant,grant.runId,grant.root,async fence=>{
-          assertRetainedUpdateCommandRoot(fence,a);
-          if(captureUpdateCommandExecutorAuthority(fence).installKey!==b)throw Error("B identity lost");
-          process.stdout.write("ADMITTED");
-          while(!fs.existsSync(proceed))await setTimeout(10);
-          assertRetainedUpdateCommandRoot(fence,a);
-          fs.writeFileSync(effect,"live retained A with original B");
-        });
-      } catch(error) {process.stderr.write(error.message);process.exitCode=1;}
+      const {grant,a,b,effect}=await json(process.stdin);
+      await withDelegatedUpdateCommandExecutor(grant,grant.runId,grant.root,async fence=>{
+        assertRetainedUpdateCommandRoot(fence,a);
+        if(captureUpdateCommandExecutorAuthority(fence).installKey!==b)throw Error("B identity lost");
+        fs.writeFileSync(effect,"live retained A with original B");
+      });
     `;
-    let childAdmitted = false;
-    const work = owned(async (run) => {
+    await owned(async (run) => {
       const fence = run.executorFence;
       if (!fence) {
         throw new Error("Missing fixture fence");
@@ -402,24 +380,16 @@ describe.skipIf(process.platform === "win32")("retained POSIX native restart", (
         runUtf8CommandWithTimeout(
           [process.execPath, ...sourceArgs, "--input-type=module", "-e", script],
           {
-            input: JSON.stringify({ grant, a, b, proceed, effect }),
+            input: JSON.stringify({ grant, a, b, effect }),
             beforeInput,
             timeoutMs: 15000,
             killProcessTree: true,
             requireProcessTreeExtinction: true,
-            onOutputChunk(chunk, stream) {
-              if (!childAdmitted && stream === "stdout" && chunk.toString() === "ADMITTED") {
-                childAdmitted = true;
-                fs.writeFileSync(proceed, "");
-              }
-            },
           },
         ),
       );
       expect(result.code, result.stderr).toBe(0);
     });
-    await work;
     expect(fs.readFileSync(effect, "utf8")).toBe("live retained A with original B");
-    expect(childAdmitted).toBe(true);
   });
 });

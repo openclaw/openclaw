@@ -1,5 +1,6 @@
 import { A2uiMessageProcessor } from "@a2ui/web_core/v0_8";
-import { For, Show, createSignal, onCleanup, untrack } from "solid-js";
+import { For, Show, untrack } from "solid-js";
+import { observeSource } from "./catalog-primitives.jsx";
 import { CatalogNode, catalogStyles } from "./catalog-v0.8.jsx";
 import { hostStyles } from "./host-styles.js";
 import { defineHost } from "./host.jsx";
@@ -211,15 +212,15 @@ class A2UIModel {
 
 function A2UIApp(props) {
   const model = untrack(() => props.model);
-  const [revision, setRevision] = createSignal(0);
-  model.notify = () => setRevision((value) => value + 1);
-  onCleanup(() => {
-    model.notify = () => {};
-  });
-  const read = () => {
-    revision();
-    return model;
-  };
+  const { read, revision } = observeSource(
+    () => model,
+    (notify) => {
+      model.notify = notify;
+      return () => {
+        model.notify = () => {};
+      };
+    },
+  );
   const statusText = () => {
     const action = read().pendingAction;
     return action ? `${action.phase === "sent" ? "Working" : "Sending"}: ${action.name}` : "";

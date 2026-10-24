@@ -45,6 +45,8 @@ The variables below are the supported environment contract for operators. Undocu
 | `OPENCLAW_INCLUDE_ROOTS`  | Allow `$include` to resolve from additional roots.                                                   |
 | `OPENCLAW_SQLITE_LIBRARY` | Override the SQLite library for [Bun on macOS](/install/bun-compatibility#sqlite-library-selection). |
 
+A named `OPENCLAW_PROFILE` uses `~/.openclaw-<profile>` for state and config defaults, even before that profile has a config file. Explicit `OPENCLAW_STATE_DIR` and `OPENCLAW_CONFIG_PATH` values take precedence. An explicit CLI `--profile` selects the requested profile as described in [Global flags](/cli#global-flags).
+
 #### `OPENCLAW_HOME`
 
 When set, `OPENCLAW_HOME` replaces the system home directory (`$HOME` / `os.homedir()`) for internal OpenClaw path defaults. This includes the default state directory, config path, agent directories, credentials, installer onboarding workspace, and the default dev checkout used by `openclaw update --channel dev`.

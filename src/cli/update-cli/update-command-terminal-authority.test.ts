@@ -7,6 +7,7 @@ import { writePackageDistInventory } from "../../../scripts/lib/package-dist-inv
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { clearRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
+import { captureGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import * as activationJournal from "../../infra/package-update-activation-journal.js";
 import { packageActivationRuntimeForTest } from "../../infra/package-update-activation-runtime.test-support.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-swap-contract.js";
@@ -206,6 +207,7 @@ it.skipIf(process.platform === "win32").each([
     const rename = vi.spyOn(fs, "rename");
     let postReleaseRenames = 0;
     let postReleaseRead: { mockRestore: () => void } | undefined;
+    const postReleaseReadOwners: Array<string | undefined> = [];
     const writeSentinel = sentinel.writeControlPlaneUpdateRestartSentinel;
     let before: ReturnType<typeof beforeRelease> | undefined;
     let afterRelease: ReturnType<typeof releasedState> | undefined;
@@ -279,7 +281,8 @@ it.skipIf(process.platform === "win32").each([
         }).catch((error: unknown) => error);
         expect(createManagedHandoffLeaseStore().read(fixture.packageRoot).kind).toBe("absent");
         expectUnpublished(onResult);
-        // A successor must not make the outer publisher re-read or mutate old state.
+        // Publication cannot reuse released update authority after a successor.
+        // Optional cleanup must acquire its own state custody and only add diagnostics.
         await publishNext();
         expectPublication(anchor);
         afterRelease = releasedState(run, anchor);
@@ -288,6 +291,11 @@ it.skipIf(process.platform === "win32").each([
         postReleaseRead = vi
           .spyOn(snapshot, "prepareSqliteReadOnlyLocationSync")
           .mockImplementation(() => {
+            postReleaseReadOwners.push(
+              captureGatewayStateOwner(
+                path.join(run.env.OPENCLAW_STATE_DIR!, "state", "openclaw.sqlite"),
+              )?.role,
+            );
             throw new Error("released terminal publication cannot reopen history");
           });
         if (operationFailure !== undefined) {
@@ -337,7 +345,31 @@ it.skipIf(process.platform === "win32").each([
       expect(afterRelease?.run?.status).toBe("succeeded");
       expect(afterRelease?.report).toBeDefined();
     }
-    expect(readRun(run)).toEqual(afterRelease?.run);
+    const recorded = readRun(run);
+    if (cancel) {
+      expect(recorded).toEqual(afterRelease?.run);
+      expect(postReleaseReadOwners).toEqual([]);
+    } else {
+      assert(recorded && afterRelease?.run);
+      expect(postReleaseReadOwners.length).toBeGreaterThan(0);
+      expect(postReleaseReadOwners.every((role) => role === "agent-embedded")).toBe(true);
+      const cleanupSteps = new Set([
+        "recovery-artifact-cleanup",
+        "warning:recovery-artifact-cleanup",
+      ]);
+      expect({
+        ...recorded,
+        updatedAtMs: afterRelease.run.updatedAtMs,
+        steps: recorded.steps.filter((step) => !cleanupSteps.has(step.step)),
+      }).toEqual(afterRelease.run);
+      expect(recorded.steps).toContainEqual(
+        expect.objectContaining({
+          step: "warning:recovery-artifact-cleanup",
+          status: "completed",
+          detail: expect.stringContaining("released terminal publication cannot reopen history"),
+        }),
+      );
+    }
     expect(rename.mock.calls).toHaveLength(postReleaseRenames);
     expect(await readRestartSentinelReadOnly(run.env)).toEqual(before?.sentinel);
     expect(readJournal(anchor)).toEqual(afterRelease?.journal);

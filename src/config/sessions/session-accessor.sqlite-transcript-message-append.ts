@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { resolveTimestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { AssistantMessage } from "../../llm/types.js";
 import { canonicalizePersistedUserMessageMedia } from "../../media/media-facts.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type {
@@ -38,6 +39,7 @@ import {
   readTranscriptAppendPostimage,
   retainTranscriptAppendPostimage,
 } from "./session-transcript-append-postimage.js";
+import { createSessionTranscriptHeader } from "./transcript-header.js";
 import { normalizeTranscriptJsonValue } from "./transcript-json.js";
 import { messagesMatchForIdempotentReplay } from "./transcript-message-equality.js";
 import { readMessageIdempotencyKey } from "./transcript-message-identity.js";
@@ -91,6 +93,54 @@ export function prepareTranscriptMessageAppendForWorker<TMessage extends object>
     "",
   ) as TMessage; // SAFETY: JSON normalization preserves the admitted message's storage shape.
   return { messageJson: JSON.stringify(persistedMessage), persistedMessage };
+}
+
+function createTranscriptMessageEvent<TMessage>(params: {
+  message: TMessage;
+  messageId: string;
+  parentId: string | null;
+  now: number;
+  appendMode?: "side";
+  supersedesEntryId?: string;
+}) {
+  return {
+    type: "message" as const,
+    id: params.messageId,
+    parentId: params.parentId,
+    ...(params.appendMode ? { appendMode: params.appendMode } : {}),
+    ...(params.supersedesEntryId ? { supersedesEntryId: params.supersedesEntryId } : {}),
+    timestamp: resolveTimestampMsToIsoString(params.now),
+    message: params.message,
+  };
+}
+
+/** A new session commits these prepared bytes with its row through the creation owner. */
+export function prepareInitialAssistantTranscript(params: {
+  sessionId: string;
+  cwd?: string;
+  message: AssistantMessage;
+  idempotencyKey?: string;
+}) {
+  const prepared = prepareTranscriptMessageAppendForWorker({
+    message: {
+      ...params.message,
+      ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+    },
+  });
+  const now = Date.now();
+  return [
+    createSessionTranscriptHeader({
+      sessionId: params.sessionId,
+      cwd: params.cwd,
+      timestamp: resolveTimestampMsToIsoString(now),
+    }),
+    createTranscriptMessageEvent({
+      message: prepared.persistedMessage,
+      messageId: randomUUID(),
+      parentId: null,
+      now,
+    }),
+  ];
 }
 
 export function appendTranscriptMessageInTransaction<TMessage>(
@@ -220,15 +270,14 @@ export function appendTranscriptMessageInTransaction<TMessage>(
   }
   ensureTranscriptHeader(database, resolved, options.cwd, projection);
   const parentId = resolveTranscriptMessageAppendParent(database, resolved.sessionId, options);
-  const event = {
-    type: "message" as const,
-    id: messageId,
+  const event = createTranscriptMessageEvent({
+    messageId,
     parentId: parentId ?? null,
-    ...(options.appendMode ? { appendMode: options.appendMode } : {}),
-    ...(options.supersedesEntryId ? { supersedesEntryId: options.supersedesEntryId } : {}),
-    timestamp: resolveTimestampMsToIsoString(now),
+    appendMode: options.appendMode,
+    supersedesEntryId: options.supersedesEntryId,
+    now,
     message: storagePreparation?.persistedMessage ?? finalMessage,
-  };
+  });
   let eventJson: string | undefined;
   if (storagePreparation) {
     // The parent is authoritative only after BEGIN; serialize just its small envelope here.

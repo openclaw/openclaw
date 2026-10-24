@@ -1,8 +1,9 @@
 /* @vitest-environment jsdom */
 import { createComponent, createMemo, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { admitHostQueueItems, idleChatHistory } from "./chat-outbox-recovery.test-support.ts";
@@ -18,7 +19,6 @@ import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
-import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
@@ -135,10 +135,12 @@ it("shows connected review waits without changing delivery versions or crossing 
   await resumeStoredChatOutboxes(host);
   expect(host.chatQueue).toEqual(before);
   draw();
-  expect(container.textContent).toContain("Waiting for reconnect");
-  expect(container.querySelector(".chat-queue__badge")?.textContent).toContain(
-    "Waiting for reconnect",
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-queue__badge")?.textContent).toContain(
+      "Waiting for reconnect",
+    ),
   );
+  expect(container.textContent).toContain("Waiting for reconnect");
   expect(container.querySelector(".chat-send-status")?.textContent).toContain(
     "Waiting for reconnect",
   );

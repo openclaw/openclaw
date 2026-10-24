@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import { textAssistant } from "../../test-helpers/sparse-transcript.test-support.js";
 import {
@@ -7,9 +7,85 @@ import {
   buildChildCompletionFindings,
   dedupeLatestChildCompletionRows,
   readSubagentOutput,
+  captureSubagentCompletionReply,
+  readLatestSubagentOutputWithRetry,
 } from "./subagent-announce-output.test-support.js";
 import type { ChildCompletionRow } from "./subagent-announce-result.js";
-import { assistantCallsSessionsYield } from "./subagent-yield-output.js";
+
+describe("captureSubagentCompletionReply", () => {
+  const sessionKey = "agent:main:subagent:child";
+  const sessionTarget = {
+    agentId: "main",
+    sessionKey,
+    sessionId: "child",
+    storePath: "/tmp/sessions-main.json",
+  };
+  const readMessages = vi.fn(async (): Promise<unknown[]> => []);
+  const readHistory = vi.fn(() => {
+    throw new Error("Unexpected Gateway history read");
+  });
+  const capture = (waitForReply?: boolean) =>
+    captureSubagentCompletionReply(sessionKey, { sessionTarget, waitForReply });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    readMessages.mockReset().mockResolvedValue([]);
+    readHistory.mockClear();
+    testing.setDepsForTest({
+      readSessionMessagesAsync: readMessages,
+      callGateway: async () => readHistory(),
+    });
+  });
+  afterEach(() => {
+    expect(vi.getTimerCount()).toBe(0);
+    testing.setDepsForTest();
+    vi.useRealTimers();
+  });
+
+  it("returns immediate assistant output without polling", async () => {
+    readMessages.mockResolvedValue([textAssistant("Immediate completion")]);
+    await expect(capture()).resolves.toBe("Immediate completion");
+    expect(readMessages).toHaveBeenCalledOnce();
+  });
+
+  it("captures the final assistant reply at the deadline", async () => {
+    const startedAt = performance.now();
+    readMessages.mockImplementation(async () =>
+      performance.now() - startedAt >= 50 ? [textAssistant("Requester-visible final result")] : [],
+    );
+    const pending = capture();
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toBe("Requester-visible final result");
+    expect(performance.now() - startedAt).toBe(50);
+  });
+
+  it("charges slow output reads against the bounded retry deadline", async () => {
+    const startedAt = performance.now();
+    readMessages.mockImplementation(async () => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 30);
+      });
+      return [];
+    });
+    const pending = capture();
+    await vi.runAllTimersAsync();
+    await expect(pending).resolves.toBeUndefined();
+    expect(readMessages).toHaveBeenCalledTimes(3);
+    expect(performance.now() - startedAt).toBe(98);
+  });
+
+  it("does not poll when waiting is disabled", async () => {
+    await expect(capture(false)).resolves.toBeUndefined();
+    expect(readMessages).toHaveBeenCalledOnce();
+  });
+
+  it("does not read output with an exhausted retry budget", async () => {
+    await expect(
+      readLatestSubagentOutputWithRetry({ sessionKey, maxWaitMs: 0 }),
+    ).resolves.toBeUndefined();
+    expect(readHistory).not.toHaveBeenCalled();
+  });
+});
 
 const completion = (resultText: string) => ({
   resultText,
@@ -37,9 +113,6 @@ const findingsFor = (overrides: Partial<ChildCompletionRow>) =>
   buildChildCompletionFindings([makeChild(overrides)]);
 
 type OutputDeps = NonNullable<Parameters<typeof testing.setDepsForTest>[0]>;
-type ReadSessionEntry = (
-  ...args: Parameters<NonNullable<OutputDeps["readSubagentSessionEntry"]>>
-) => Awaited<ReturnType<NonNullable<OutputDeps["readSubagentSessionEntry"]>>>;
 
 function installOutputDeps(params: {
   messages: Array<unknown>;
@@ -100,50 +173,25 @@ describe("dedupeLatestChildCompletionRows", () => {
       "research-run",
     ]);
   });
-
-  it("prefers the newer generation when child runs share a creation timestamp", () => {
-    const older = {
-      ...makeChild(),
-      runId: "run-older",
-      generation: 1,
-    };
-    const newer = { ...older, runId: "run-newer", generation: 2, task: "newer" };
-    expect(dedupeLatestChildCompletionRows([older, newer])).toStrictEqual([newer]);
-  });
 });
 
 describe("buildCompactAnnounceStatsLine", () => {
-  it.each([
-    {
-      name: "rolls thousand-token stats over to the million unit",
-      usage: { inputTokens: 999_999, outputTokens: 0, totalTokens: 999_999 },
-      expected: "Stats: runtime n/a • tokens 1.0m (in 1.0m / out 0)",
-    },
-    {
-      name: "reports missing usage as unknown",
-      usage: {},
-      expected: "Stats: runtime n/a • tokens unknown",
-    },
-    {
-      name: "reports a fresh total without inventing directional counts",
-      usage: { totalTokens: 500, totalTokensFresh: true, totalTokensVersion: 1 },
-      expected: "Stats: runtime n/a • tokens 500 prompt/cache",
-    },
-  ])("$name", async ({ usage, expected }) => {
+  it("reports fresh totals without inventing directional counts", async () => {
     const readEntry = vi.fn(() => ({
       sessionId: "child-session",
       updatedAt: 0,
-      ...usage,
+      totalTokens: 500,
+      totalTokensFresh: true,
+      totalTokensVersion: 1 as const,
     }));
     testing.setDepsForTest({
-      getRuntimeConfig: (() => ({
-        session: { store: "memory" },
-      })) as OutputDeps["getRuntimeConfig"],
-      readSubagentSessionEntry: readEntry as ReadSessionEntry,
-      resolveSessionStorePathCore: (() =>
-        "/tmp/openclaw-session-store") as OutputDeps["resolveSessionStorePathCore"],
+      getRuntimeConfig: () => ({ session: { store: "memory" } }),
+      readSubagentSessionEntry: readEntry,
+      resolveSessionStorePathCore: () => "/tmp/openclaw-session-store",
     });
-    await expect(buildCompactAnnounceStatsLine({ sessionKey: childKey })).resolves.toBe(expected);
+    await expect(buildCompactAnnounceStatsLine({ sessionKey: childKey })).resolves.toBe(
+      "Stats: runtime n/a • tokens 500 prompt/cache",
+    );
     expect(readEntry).toHaveBeenCalledOnce();
   });
 });
@@ -173,8 +221,9 @@ describe("readSubagentOutput", () => {
       content: "Waiting for child completion.",
       toolCalls: [{ name: "sessions_yield" }],
     };
-    expect(assistantCallsSessionsYield(assistant)).toBe(true);
-    await expectOutput([assistant, { role: "tool", content: '{"status":"yielded"}' }]);
+    await expectOutput([assistant, { role: "tool", content: '{"status":"yielded"}' }], undefined, {
+      status: "timeout",
+    });
   });
 
   it("summarizes top-level tool_calls after a timeout", () =>

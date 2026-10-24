@@ -297,7 +297,7 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionStore: { [sessionKey]: sessionEntry },
       sessionKey,
       storePath: path.join(rootDir, "sessions.json"),
-      isHeartbeat: false,
+
       replyOperation: createReplyOperation(),
       ...overrides,
     });
@@ -317,7 +317,7 @@ describe("runMemoryFlushIfNeeded", () => {
       sessionStore: sessionEntry ? { [sessionKey]: sessionEntry } : undefined,
       sessionKey,
       storePath: path.join(rootDir, "sessions.json"),
-      isHeartbeat: false,
+
       ...createCompactionLifecycle(createReplyOperation()),
       ...overrides,
     });

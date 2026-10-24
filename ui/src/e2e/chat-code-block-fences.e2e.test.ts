@@ -1,5 +1,8 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { chatMessage, requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { polledAttribute } from "./chat-presentation.test-support.ts";
@@ -73,6 +76,127 @@ async function setThemeMode(page: Page, mode: "dark" | "light"): Promise<void> {
 }
 
 suite.define(() => {
+  it.each([
+    { key: "Enter", theme: "dark", width: 1440 },
+    { key: "Space", theme: "light", width: 390 },
+  ] as const)(
+    "keeps keyboard focus on revealed code after $key at $width px",
+    async ({ key, theme, width }) => {
+      await suite.withPage(
+        { ...desktop, colorScheme: theme, viewport: { width, height: 900 } },
+        async ({ page }) => {
+          const source = Array.from(
+            { length: 12 },
+            (_, index) => `const check${index + 1} = true;`,
+          ).join("\n");
+          await installMockGateway(page, {
+            agentModel: "openai/gpt-4o",
+            models: [{ id: "gpt-4o", name: "gpt-4o", provider: "openai" }],
+            historyMessages: [
+              { role: "user", content: "Show the deployment checks.", timestamp: 1000 },
+              { role: "assistant", content: `\`\`\`ts\n${source}\n\`\`\``, timestamp: 2000 },
+            ],
+          });
+          await page.goto(`${suite.server.baseUrl}chat`);
+          await setThemeMode(page, theme);
+          const wrapper = page.locator(".chat-thread .code-block-wrapper");
+          const expand = wrapper.getByRole("button", {
+            name: "Show 5 hidden lines",
+            includeHidden: true,
+          });
+          const viewport = wrapper.locator(".code-block-viewport");
+          await expand.waitFor();
+          // Reach the disclosure through native tab order, not a synthetic click.
+          await wrapper.getByRole("button", { name: "Copy code", exact: true }).focus();
+          await page.keyboard.press("Tab");
+          expect(await expand.evaluate((button) => button === document.activeElement)).toBe(true);
+          expect(await expand.getAttribute("aria-controls")).toBe(
+            await viewport.getAttribute("id"),
+          );
+          expect(await expand.getAttribute("aria-expanded")).toBe("false");
+          await page.keyboard.press(key);
+          const frame = await takeControlUiScreenshotFrame(page, wrapper, [viewport], {
+            animations: "disabled",
+          });
+          await writeFile(
+            path.join(suite.artifactDir, `keyboard-reveal-${theme}-${width}.png`),
+            frame.png,
+          );
+          expect(await viewport.evaluate((element) => element === document.activeElement)).toBe(
+            true,
+          );
+          expect(await viewport.evaluate((element) => element.matches(":focus-visible"))).toBe(
+            true,
+          );
+          expect(await viewport.evaluate((element) => getComputedStyle(element).outlineStyle)).toBe(
+            "solid",
+          );
+          expect(await expand.getAttribute("aria-expanded")).toBe("true");
+          expect(await viewport.locator("code").textContent()).toBe(`${source}\n`);
+          await page.keyboard.press("Shift+Tab");
+          expect(
+            await wrapper
+              .getByRole("button", { name: "Copy code", exact: true })
+              .evaluate((button) => button === document.activeElement),
+          ).toBe(true);
+        },
+      );
+    },
+  );
+
+  it("keeps native horizontal reading and copying after keyboard reveal", async () => {
+    await suite.withPage(
+      { ...desktop, permissions: ["clipboard-read", "clipboard-write"] },
+      async ({ page }) => {
+        const source = Array.from(
+          { length: 12 },
+          (_, index) =>
+            `const deploymentCheck${index} = "${"staging deployment verification ".repeat(6)}";`,
+        ).join("\n");
+        await installMockGateway(page, {
+          agentModel: "openai/gpt-4o",
+          models: [{ id: "gpt-4o", name: "gpt-4o", provider: "openai" }],
+          historyMessages: [
+            { role: "assistant", content: "```ts\n" + source + "\n```", timestamp: 2000 },
+          ],
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        const block = page.locator(".chat-thread .code-block-wrapper");
+        const viewport = block.locator(".code-block-viewport");
+        const copy = block.getByRole("button", { name: "Copy code", exact: true });
+        await copy.focus();
+        // The overflowing reading surface is a native tab stop before disclosure.
+        await page.keyboard.press("Tab");
+        expect(await viewport.evaluate((element) => element === document.activeElement)).toBe(true);
+        const scrolled = viewport.evaluate(
+          (element) =>
+            new Promise<void>((resolve) => {
+              element.addEventListener("scrollend", () => resolve(), { once: true });
+            }),
+        );
+        await page.keyboard.press("ArrowRight");
+        await scrolled;
+        const before = await viewport.evaluate((element) => element.scrollLeft);
+        expect(before).toBeGreaterThan(0);
+        await page.keyboard.press("Tab");
+        const expand = block.locator(".code-block-expand");
+        expect(await expand.evaluate((element) => element === document.activeElement)).toBe(true);
+        await page.keyboard.press("Enter");
+        await expand.waitFor({ state: "hidden" });
+        expect(await viewport.evaluate((element) => element === document.activeElement)).toBe(true);
+        expect(await viewport.evaluate((element) => element.scrollLeft)).toBe(before);
+        await page.keyboard.press("ArrowRight");
+        await expect
+          .poll(() => viewport.evaluate((element) => element.scrollLeft))
+          .toBeGreaterThan(before);
+        await page.keyboard.press("Shift+Tab");
+        expect(await copy.evaluate((element) => element === document.activeElement)).toBe(true);
+        await page.keyboard.press("Enter");
+        await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(source);
+      },
+    );
+  });
+
   it("retains code controls when a streaming fence closes", async () => {
     await suite.withPage(desktop, async ({ page }) => {
       const gateway = await installMockGateway(page);
@@ -85,11 +209,19 @@ suite.define(() => {
         ).join("\n");
       await emitDelta(gateway, runId, initial, initial);
       const wrapper = page.locator(".chat-bubble.streaming .code-block-wrapper");
-      await wrapper.locator(".code-block-expand").click();
+      const code = wrapper.locator("code.language-ts");
+      expect(await code.locator("span").count()).toBe(0);
+      expect(await code.getAttribute("class")).not.toContain("hljs");
+      const expand = wrapper.locator(".code-block-expand");
+      await expand.focus();
+      await page.keyboard.press("Enter");
+      const viewport = wrapper.locator(".code-block-viewport");
+      expect(await viewport.evaluate((element) => element === document.activeElement)).toBe(true);
       await wrapper.locator(".code-block-wrap").click();
+      await polledAttribute(wrapper, "class").toContain("is-wrapped");
+      await viewport.focus();
       const retained = await wrapper.elementHandle();
       await polledAttribute(wrapper, "class").toContain("is-expanded");
-      await polledAttribute(wrapper, "class").toContain("is-wrapped");
       const suffix = "\n```\n\nAll deployment checks are ready.";
       await emitDelta(gateway, runId, initial + suffix, suffix);
       await expect
@@ -97,8 +229,23 @@ suite.define(() => {
         .toContain("All deployment checks are ready.");
       expect(await retained?.evaluate((element) => element.isConnected)).toBe(true);
       expect(await wrapper.count()).toBe(1);
-      expect(await wrapper.getAttribute("class")).toContain("is-wrapped");
       expect(await wrapper.getAttribute("class")).toContain("is-expanded");
+      expect(await viewport.evaluate((element) => element === document.activeElement)).toBe(true);
+      expect(await expand.getAttribute("aria-expanded")).toBe("true");
+      expect(await expand.getAttribute("aria-controls")).toBe(await viewport.getAttribute("id"));
+      expect(await wrapper.getAttribute("class")).toContain("is-wrapped");
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      await composer.focus();
+      await emitDelta(gateway, runId, initial + suffix + " More checks.", " More checks.");
+      await expect
+        .poll(() => page.locator(".chat-bubble.streaming .chat-text").textContent())
+        .toContain("More checks.");
+      expect(await composer.evaluate((element) => element === document.activeElement)).toBe(true);
+      expect(await wrapper.getAttribute("class")).toContain("is-wrapped");
+      await polledAttribute(code, "class").toContain("hljs");
+      expect(await code.locator("span").count()).toBeGreaterThan(0);
+      await gateway.emitChatFinal({ runId, text: initial + suffix + " More checks." });
+      await expect.poll(() => page.locator(".chat-thread code.language-ts.hljs").count()).toBe(1);
     });
   });
 
@@ -184,29 +331,6 @@ suite.define(() => {
           .toContain("*first\n\nsecond\n");
       },
     );
-  });
-
-  it("highlights a streamed code fence only after its closing marker arrives", async () => {
-    await suite.withPage(desktop, async ({ page }) => {
-      const gateway = await installMockGateway(page);
-
-      const runId = await startRun(page, gateway, "show TypeScript");
-      const openFence = "```ts\nconst value = 1 < 2;";
-      await emitDelta(gateway, runId, openFence, openFence, Date.now());
-      const streamingCode = page.locator(".chat-bubble.streaming code.language-ts");
-      await expect.poll(() => streamingCode.textContent()).toContain("const value = 1 < 2;");
-      expect(await streamingCode.locator("span").count()).toBe(0);
-      expect(await streamingCode.evaluate((code) => code.classList.contains("hljs"))).toBe(false);
-      expect(await page.locator(".chat-bubble.streaming .code-block-copy").count()).toBe(1);
-
-      const completedFence = `${openFence}\n\`\`\``;
-      await emitDelta(gateway, runId, completedFence, "\n```", Date.now());
-      await polledAttribute(streamingCode, "class").toContain("hljs");
-      expect(await streamingCode.locator("span").count()).toBeGreaterThan(0);
-
-      await gateway.emitChatFinal({ runId, text: completedFence });
-      await expect.poll(() => page.locator(".chat-thread code.language-ts.hljs").count()).toBe(1);
-    });
   });
 
   it("releases hidden transcript observations and resumes them on the retained code", async () => {
@@ -396,7 +520,13 @@ suite.define(() => {
         expect(visibleCodeHeight.height).toBe(7 * visibleCodeHeight.lineHeight);
         await expand.click();
         await polledAttribute(longWrapper, "class").toContain("is-expanded");
+        // Pointer reveal retains the one-way control's UX, without moving focus into code.
         expect(await expand.isVisible()).toBe(false);
+        expect(
+          await longWrapper
+            .locator(".code-block-viewport")
+            .evaluate((element) => element === document.activeElement),
+        ).toBe(false);
         expect(
           await longWrapper
             .locator(".code-block-viewport")

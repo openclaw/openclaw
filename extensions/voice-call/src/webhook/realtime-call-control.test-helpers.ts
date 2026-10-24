@@ -2,11 +2,12 @@ import type {
   RealtimeVoiceBridge,
   RealtimeVoiceProviderPlugin,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type { CallManager } from "../manager.js";
 import { createVoiceCallBaseConfig } from "../test-fixtures.js";
 import type { CallRecord } from "../types.js";
 import { RealtimeCallHandler } from "./realtime-handler.js";
+import { StreamDisconnectGrace } from "./stream-disconnect-grace.js";
 
 export function makeCall(providerCallId: string, overrides: Partial<CallRecord> = {}): CallRecord {
   return {
@@ -76,6 +77,7 @@ export function makeHandler(params: {
     getCallForStream: vi.fn(async () => params.call),
     getCallByProviderCallId: vi.fn(() => params.call),
   } as unknown as CallManager;
+  const streamDisconnectLifecycle = new StreamDisconnectGrace(() => {});
   const handler = new RealtimeCallHandler(
     config,
     manager,
@@ -87,8 +89,15 @@ export function makeHandler(params: {
       capabilities: provider.capabilities,
     }),
     "/voice/webhook",
-    { connect: () => {}, disconnect: () => {}, retire: () => {} },
+    streamDisconnectLifecycle,
   );
+  onTestFinished(async () => {
+    try {
+      await handler.close();
+    } finally {
+      streamDisconnectLifecycle.close();
+    }
+  });
   handler.setPublicUrl("https://public.example/voice/webhook");
   return { handler, manager, processEvent, endCall };
 }

@@ -38,7 +38,7 @@ import {
 } from "./sqlite-database-admission-seal.js";
 import { createSqliteDatabaseWriteReceipts } from "./sqlite-database-write-receipts.js";
 import { getSqliteNativeAdmissionFacts } from "./sqlite-native-admission.js";
-import { stageSqliteTransactionState } from "./sqlite-post-commit.js";
+import { hasSqlitePostCommitScope, stageSqliteTransactionState } from "./sqlite-post-commit.js";
 
 export {
   readSqliteDatabaseAdmissions,
@@ -130,6 +130,7 @@ export const {
   getSqliteDatabaseAdmission,
   getSqliteDatabaseSchemaRevision,
   getOrLoadSqliteDatabaseAdmissionForPath,
+  peekSqliteDatabaseAdmissionForPath,
   hasSqliteDatabaseSchemaAdmissionForPath,
   getSqliteDatabaseAdmissionIdentityForPath,
   hasSqliteDatabaseSchemaAdmissionForIdentity,
@@ -571,7 +572,7 @@ export function publishSqliteDatabaseAdmission<T>(
     ? undefined
     : getSqliteNativeAdmissionFacts(database);
   const admitted = admitSqliteDatabaseFactValue(key, value);
-  if (!native && !database.isTransaction) {
+  if (!native && !database.isTransaction && !hasSqlitePostCommitScope(database)) {
     publishFact(record, key, admitted, revision);
     return;
   }

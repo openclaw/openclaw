@@ -299,10 +299,20 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     );
   });
 
-  it(
-    "correlates concurrent caretaker replies with their original requests",
-    withFixturePage(async (page) => {
+  describe("Gateway fixture contracts", () => {
+    // These RPC contracts share one mounted preview; UI flows keep fresh pages.
+    let page: Page;
+
+    beforeAll(async () => {
+      page = await browser.newPage();
       await openPreviewChat(page);
+    });
+
+    afterAll(async () => {
+      await page?.close();
+    });
+
+    it("correlates concurrent caretaker replies with their original requests", async () => {
       const replies = await requestPreviewGateway(page, [
         { method: "openclaw.chat", params: { sessionId: "delayed", message: "hello" } },
         { method: "openclaw.chat", params: { sessionId: "welcome" } },
@@ -311,33 +321,35 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         { sessionId: "delayed", reply: expect.stringContaining("demo turn 0") },
         { sessionId: "welcome", reply: expect.stringContaining("system caretaker") },
       ]);
-    }),
-  );
+    });
 
-  it(
-    "keeps renamed preview groups authoritative across reads and reloads",
-    withFixturePage(async (page) => {
-      await openPreviewChat(page);
-      await requestPreviewGateway(page, [
-        { method: "sessions.groups.rename", params: { name: "Research", to: "Reviewed" } },
+    it("keeps generated search-session metadata in the canonical fixture catalog", async () => {
+      const replies = await requestPreviewGateway(
+        page,
+        ["telegram", "claude"].map((search) => ({
+          method: "sessions.list",
+          params: { search },
+        })),
+      );
+      expect(replies).toMatchObject([
+        {
+          sessions: expect.arrayContaining([
+            expect.objectContaining({ label: "Telegram investigation 001", model: "gpt-5-mini" }),
+          ]),
+        },
+        {
+          sessions: expect.arrayContaining([
+            expect.objectContaining({
+              label: "Model search result 001",
+              model: "claude-sonnet-4-6",
+            }),
+          ]),
+        },
       ]);
-      for (const reload of [false, true]) {
-        if (reload) {
-          await page.reload();
-          await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
-        }
-        expect(await requestPreviewGateway(page, [{ method: "sessions.groups.list" }])).toEqual([
-          { groups: [{ name: "Reviewed", position: 0 }], sectionOrder: [] },
-        ]);
-      }
-    }),
-  );
+    });
 
-  it(
-    "serves preview session agent:main:tax-research through both chat entry points",
-    withFixturePage(async (page) => {
+    it("serves preview session agent:main:tax-research through both chat entry points", async () => {
       const sessionKey = "agent:main:tax-research";
-      await openPreviewChat(page);
       const sampledAt = 1_790_598_431_356;
       await page.clock.setFixedTime(sampledAt);
       const [description] = (await requestPreviewGateway(page, [
@@ -384,6 +396,25 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           snapshotAt: sampledAt + 2,
         },
       });
+    });
+  });
+
+  it(
+    "keeps renamed preview groups authoritative across reads and reloads",
+    withFixturePage(async (page) => {
+      await openPreviewChat(page);
+      await requestPreviewGateway(page, [
+        { method: "sessions.groups.rename", params: { name: "Research", to: "Reviewed" } },
+      ]);
+      for (const reload of [false, true]) {
+        if (reload) {
+          await page.reload();
+          await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+        }
+        expect(await requestPreviewGateway(page, [{ method: "sessions.groups.list" }])).toEqual([
+          { groups: [{ name: "Reviewed", position: 0 }], sectionOrder: [] },
+        ]);
+      }
     }),
   );
 
@@ -402,35 +433,6 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         },
       ]);
       await page.getByRole("button", { name: "Stop generating" }).waitFor();
-    }),
-  );
-
-  it(
-    "keeps generated search-session metadata in the canonical fixture catalog",
-    withFixturePage(async (page) => {
-      await openPreviewChat(page);
-      const replies = await requestPreviewGateway(
-        page,
-        ["telegram", "claude"].map((search) => ({
-          method: "sessions.list",
-          params: { search },
-        })),
-      );
-      expect(replies).toMatchObject([
-        {
-          sessions: expect.arrayContaining([
-            expect.objectContaining({ label: "Telegram investigation 001", model: "gpt-5-mini" }),
-          ]),
-        },
-        {
-          sessions: expect.arrayContaining([
-            expect.objectContaining({
-              label: "Model search result 001",
-              model: "claude-sonnet-4-6",
-            }),
-          ]),
-        },
-      ]);
     }),
   );
 
@@ -480,17 +482,23 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
         await selectAllSidebarSessions(page);
         await page.getByText("OpenClaw work checkout", { exact: true }).click();
         await page.getByRole("button", { name: "Write a message to send." }).waitFor();
-        await page.screenshot({ path: path.join(artifacts, "chat.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifacts, "chat.png") });
+        }
         await page.goto(`${origin}/profile`, { waitUntil: "networkidle" });
         await expect
           .poll(() => page.getByRole("textbox", { name: "Display name", exact: true }).inputValue())
           .toBe("Riley");
-        await page.screenshot({ path: path.join(artifacts, "profile.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifacts, "profile.png") });
+        }
         await page.goto(`${origin}/focus/terminal`, { waitUntil: "networkidle" });
         const terminal = page.locator("openclaw-terminal-panel");
         await terminal.locator(".tabstrip-tab.is-live").waitFor();
         await terminal.locator(".tp-host canvas").waitFor({ state: "visible" });
-        await page.screenshot({ path: path.join(artifacts, "terminal.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifacts, "terminal.png") });
+        }
         expect(
           escaped,
           "standalone mock must not attempt Gateway HTTP or external requests",
@@ -608,7 +616,9 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           body: { error: "Standalone mock has no HTTP fixture for this route." },
         });
         outcomes.missing = missing;
-        await page.screenshot({ path: path.join(artifacts, "board.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifacts, "board.png") });
+        }
         expect(escaped).toEqual([]);
         expect(received).toEqual([]);
         expect(connections).toBe(0);
@@ -661,7 +671,9 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           width: 640,
           policy: expect.stringContaining("worker-src 'self'"),
         });
-        await page.screenshot({ path: path.join(artifacts, "attachments.png") });
+        if (captureUiProof) {
+          await page.screenshot({ path: path.join(artifacts, "attachments.png") });
+        }
         expect(escaped).toEqual([]);
         await writeFile(
           path.join(artifacts, "network.json"),
@@ -897,10 +909,16 @@ describeStandaloneMockServer("standalone native plugin preview", () => {
         )
         .toEqual(
           expect.arrayContaining([
-            expect.objectContaining({ pluginId: "workboard", status: "activated" }),
+            {
+              reports: expect.arrayContaining([
+                expect.objectContaining({ pluginId: "workboard", status: "activated" }),
+              ]),
+            },
           ]),
         );
-      await page.screenshot({ path: path.join(artifactDir, "native-page.png"), fullPage: true });
+      if (captureUiProof) {
+        await page.screenshot({ path: path.join(artifactDir, "native-page.png"), fullPage: true });
+      }
 
       await page.goto(
         controlUiSessionUrl(
@@ -912,7 +930,12 @@ describeStandaloneMockServer("standalone native plugin preview", () => {
       const widget = page.locator('[data-test-id="workboard-board-widget"]');
       await widget.getByText("Capture customer feedback themes", { exact: true }).waitFor();
       expect(await page.getByText("Unknown plugin widget", { exact: false }).count()).toBe(0);
-      await page.screenshot({ path: path.join(artifactDir, "native-widget.png"), fullPage: true });
+      if (captureUiProof) {
+        await page.screenshot({
+          path: path.join(artifactDir, "native-widget.png"),
+          fullPage: true,
+        });
+      }
     } finally {
       await page.screenshot({ path: path.join(artifactDir, "final.png"), fullPage: true });
       await context.close();

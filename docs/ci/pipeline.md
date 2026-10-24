@@ -444,14 +444,14 @@ newest patch. Compare exact versions when measuring a toolchain change, and
 measure setup separately from the test body.
 
 Preflight's manifest bootstrap uses the exact `NODE_VERSION` pin in `ci.yml`
-(24.21.0). Unlike the repository helper, `actions/setup-node` can satisfy a
+(24.22.1). Unlike the repository helper, `actions/setup-node` can satisfy a
 `24.x` request from an older cached patch below OpenClaw's support floor.
 
 CI's execution version does not define the supported user runtime matrix.
-`package.json` accepts Node 24.16+ and Node 26.1+. The full manual CI graph checks
-the Node 24.16.0 floor; `node-runtime-compat.yml` checks Node 26.1.0 weekly and on
+`package.json` accepts Node 24.22.1+ and Node 26.12.1+. The full manual CI graph checks
+the Node 24.22.1 floor; `node-runtime-compat.yml` checks Node 26.12.1 weekly and on
 dispatch. Current packaged fresh-install and upgrade checks run on both
-Node 24.21.0 and Node 26.1.0, with Windows Node 24 fresh-install proof on 24.16.0.
+Node 24.22.1 and Node 26.12.1, with Windows Node 24 fresh-install proof on 24.22.1.
 Both runtime variants use the same candidate package. These support cells stay
 independent of changes to the ordinary execution pin; source/build smoke alone
 does not prove an installed upgrade. See the
@@ -484,6 +484,13 @@ separate package graphs previously ran before the app build in one job; a hosted
 baseline spent 7m57s on them in a 21m48s job. Separating them gives app compilation
 and tests their own 30-minute budget without removing coverage or increasing
 test-process parallelism.
+
+Package tests start after preflight and do not consume the Linux runtime artifact.
+App tests wait for `build-artifacts` before allocating their macOS runner, so Linux
+runner queueing cannot consume the native test job's 30-minute budget. They download
+the producer's artifact by its output ID and verify the selected checkout SHA before
+execution. Failed-job reruns retain the successful producer's artifact output.
+The aggregate CI gate still requires the Linux checks and both native phases.
 
 Full nonpublishing manual validation also stages the exact candidate runtime and runs
 ordinary bundled recovery and relaunch through two fresh `.app` test-host processes.
@@ -1114,6 +1121,11 @@ installed Node, Vite, and dependencies. The temporary base's CSS sidecars are
 normalized through the candidate's pinned compressor before comparison. The
 report identifies both revisions and the toolchain. There is no manually updated
 CSS baseline, and the cumulative ceilings still bound a series of small changes.
+If a base already exceeds a size ceiling, the head may hold or reduce that
+surface, but growth beyond 64 bytes of gzip build variance fails the check.
+Request counts have no variance allowance. Locale comparisons track each locale
+separately, so shrinking one catalog cannot hide growth in another. Absolute
+checks and newly introduced violations fail locally and in GitHub Actions.
 
 Run the same comparison locally after installing dependencies:
 

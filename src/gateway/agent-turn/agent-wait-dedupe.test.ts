@@ -1,17 +1,28 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../../test/helpers/promise.js";
+import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
+import { enqueueFollowupRun, reserveSteerCandidate } from "../../auto-reply/reply/queue/enqueue.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
-import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import {
+  bindGatewayContextResolver,
+  withPluginRuntimeGatewayContextResolver,
+} from "../../plugins/runtime/gateway-request-scope.js";
+import {
+  beginSessionControllerSourceInjection,
+  bindSessionControllerSource,
   claimSessionControllerTask,
   releaseSessionControllerClaim,
   type SessionControllerMailboxClaim,
 } from "../../sessions/session-controller.mailbox.js";
-import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
+import {
+  registerRpcSource,
+  type RpcSourceRef,
+} from "../../sessions/session-controller.rpc-sources.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -29,6 +40,7 @@ import { replayAgentTurnIfCached } from "./agent-dedupe.js";
 import * as agentJobs from "./agent-job.js";
 import { setGatewayDedupeEntry, waitForAgentJob } from "./agent-job.js";
 import { createAgentTurnService } from "./agent-turn-service.js";
+import { prepareAgentWaitForTurn } from "./agent-wait.js";
 import { createTestRpcSource, testRpcSourceController } from "./rpc-source.test-support.js";
 
 type WaitArgs = Parameters<NonNullable<(typeof agentHandlers)["agent.wait"]>>[0];
@@ -67,7 +79,6 @@ const pendingResult = (runId: string) => ({
 });
 const hardTimeout = { status: "timeout", endedAt: 200, timeoutPhase: "provider" };
 const userCancellation = { status: "error", endedAt: 150, stopReason: "rpc" };
-const supersession = { status: "error", endedAt: 150, stopReason: "superseded" };
 
 function lifecycle(runId: string, data: Record<string, unknown>) {
   emitAgentEvent({ runId, stream: "lifecycle", data });
@@ -224,6 +235,146 @@ function terminalReceipt(runId: string) {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+function queueFixture(runId: string) {
+  const identity = {
+    runId,
+    agentId: "main",
+    sessionKey: "agent:main:queue-admission",
+    sessionId: runId,
+    storeScope: `/synthetic/agent-wait/${runId}/sessions`,
+  };
+  const context = createGatewayRequestContext(makeContextParams());
+  const publish = (status: "accepted" | "ok") =>
+    writeObservation(context.dedupe, runId, { status }, { source: "chat" });
+  const bindRun = (source: ReturnType<typeof createRpcSourceForTest>) => {
+    const run = createQueueTestRun({ prompt: "queued source" });
+    Object.assign(run.run, {
+      agentId: identity.agentId,
+      sessionKey: identity.sessionKey,
+      sessionId: identity.sessionId,
+      config: { ...run.run.config, session: { store: identity.storeScope } },
+    });
+    bindSessionControllerSource(source.input, run);
+    return run;
+  };
+  return { context, identity, publish, bindRun };
+}
+
+it("keeps its Gateway when a foreign scope publishes queue admission", async ({ signal }) => {
+  const runId = "cross-gateway-queue-publication";
+  const { context, identity, bindRun, publish } = queueFixture(runId);
+  const resolveGatewayContext = () => context;
+  const resolveForeign = () => undefined;
+  const source = withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
+    createRpcSourceForTest({ kind: "chat-send" }, identity),
+  );
+  const foreign = withPluginRuntimeGatewayContextResolver(resolveForeign, () =>
+    createRpcSourceForTest(
+      { kind: "chat-send" },
+      { ...identity, storeScope: "/synthetic/foreign-queue/sessions" },
+    ),
+  );
+  registerRpcSource(runId, source);
+  registerRpcSource(runId, foreign);
+  const run = bindRun(source);
+  run.turnAdoptionLifecycle = {
+    onAdopted: () => {},
+    onDeferred: () => publish("accepted"),
+  };
+  vi.useFakeTimers();
+  const waiting = prepareAgentWaitForTurn(
+    { dedupe: context.dedupe, resolveGatewayContext },
+    { runId, timeoutMs: 30_000 },
+  ).wait();
+  try {
+    withPluginRuntimeGatewayContextResolver(resolveForeign, () => {
+      const enqueued = enqueueFollowupRun(
+        identity.sessionKey,
+        run,
+        { mode: "followup" },
+        "none",
+        undefined,
+        false,
+      );
+      expect(enqueued).toBe(true);
+    });
+    await expect(withinTest(waiting, signal)).resolves.toMatchObject({
+      session: { sessionId: identity.sessionId },
+      result: pendingResult(runId),
+    });
+  } finally {
+    publish("ok");
+    await waiting;
+  }
+});
+
+it.each([
+  { name: "direct claim waiting", enqueued: false, injecting: false },
+  { name: "direct native injection", enqueued: false, injecting: true },
+  { name: "enqueued follow-up", enqueued: true, injecting: false },
+  { name: "enqueued native injection", enqueued: true, injecting: true },
+])("reports admitted queue state: $name", async ({ name, enqueued, injecting }) => {
+  const runId = `queue-admission-${name}`;
+  const { context, identity, bindRun, publish } = queueFixture(runId);
+  let blocker: SessionControllerMailboxClaim | undefined;
+  if (!enqueued && !injecting) {
+    const blockingSource = createRpcSourceForTest({}, identity);
+    blocker = await claimSessionControllerTask(blockingSource.input, () => {});
+  }
+  const source = createRpcSourceForTest(
+    { kind: "chat-send" },
+    { ...identity, runId, phase: enqueued && !injecting ? "waiting" : "preparing" },
+  );
+  rpcSourceTesting.set(runId, source);
+  const directClaim = blocker ? claimSessionControllerTask(source.input, () => {}) : undefined;
+  const injection =
+    injecting && !enqueued ? beginSessionControllerSourceInjection(source.input) : undefined;
+  let queuedInjection: ReturnType<typeof reserveSteerCandidate>;
+  if (enqueued && injecting) {
+    const run = bindRun(source);
+    queuedInjection = reserveSteerCandidate(
+      identity.sessionKey,
+      run,
+      { mode: "steer" },
+      async () => {},
+    );
+  }
+  const respond = vi.fn();
+  let waiting: Promise<void> | void = undefined;
+  try {
+    if (enqueued && injecting) {
+      expect(await queuedInjection?.admit()).toBe("steer");
+      queuedInjection?.accepted(true);
+    }
+    if (injection) {
+      expect(await injection.admit()).toBe(true);
+      injection.accepted(true);
+    }
+    vi.useFakeTimers();
+    waiting = invokeWait(context, runId, 30_000, null, false, respond).promise;
+    await vi.advanceTimersByTimeAsync(0);
+    if (enqueued) {
+      expect(respond).toHaveBeenCalledWith(true, expect.objectContaining(pendingResult(runId)));
+    } else {
+      expect(respond).not.toHaveBeenCalled();
+    }
+  } finally {
+    queuedInjection?.consume("consumed");
+    injection?.finish(true);
+    if (blocker) {
+      releaseSessionControllerClaim(blocker);
+    }
+    if (directClaim) {
+      releaseSessionControllerClaim(await directClaim);
+    }
+    publish("ok");
+    await waiting;
+  }
+  if (!enqueued) {
+    expect(respond).toHaveBeenCalledWith(true, expect.objectContaining({ runId, status: "ok" }));
+  }
 });
 
 it("keeps whitespace-distinct protocol run IDs separate", async () => {
@@ -601,37 +752,34 @@ it.each([undefined, "agent", "chat"] as const)(
 
 it("retires only its scope's observer without ending the shared run", async () => {
   const { runId, complete, job } = runFixture();
-  const first = new AsyncWorkScope();
-  const second = new AsyncWorkScope();
-  let firstSettled = false;
-  let secondSettled = false;
-  const firstWait = first
-    .track(() => waitForAgentJob({ runId, timeoutMs: 600_000 }))
-    .then((result) => {
-      firstSettled = true;
-      return result;
-    });
-  const secondWait = second
-    .track(() => waitForAgentJob({ runId, timeoutMs: 600_000 }))
-    .then((result) => {
-      secondSettled = true;
-      return result;
-    });
+  const observer = () => {
+    const scope = new AsyncWorkScope();
+    const settled = vi.fn();
+    const wait = scope
+      .track(() => waitForAgentJob({ runId, timeoutMs: 600_000 }))
+      .then((result) => {
+        settled();
+        return result;
+      });
+    return { scope, settled, wait };
+  };
+  const first = observer();
+  const second = observer();
   try {
-    first.beginClose();
+    first.scope.beginClose();
     await nextTurn();
-    expect(firstSettled).toBe(true);
-    expect(secondSettled).toBe(false);
-    expect(await firstWait).toBeNull();
+    expect(first.settled).toHaveBeenCalledOnce();
+    expect(second.settled).not.toHaveBeenCalled();
+    expect(await first.wait).toBeNull();
     complete();
-    await expect(secondWait).resolves.toMatchObject({ status: "ok", endedAt: 200 });
+    await expect(second.wait).resolves.toMatchObject({ status: "ok", endedAt: 200 });
     await expect(job()).resolves.toMatchObject({ status: "ok", endedAt: 200 });
   } finally {
     // The old owner has no shutdown observer: release it without waiting ten minutes.
-    if (!firstSettled || !secondSettled) {
+    if (!first.settled.mock.calls.length || !second.settled.mock.calls.length) {
       complete();
     }
-    await Promise.all([firstWait, secondWait, first.drain(), second.drain()]);
+    await Promise.all([first.wait, second.wait, first.scope.drain(), second.scope.drain()]);
   }
 });
 
@@ -671,10 +819,8 @@ it.each([
 
 it.each([
   ["late completion", { status: "ok", endedAt: 300 }, hardTimeout],
-  ["late restart", { status: "error", endedAt: 300, stopReason: "restart" }, hardTimeout],
-  ["earlier user cancellation", userCancellation, userCancellation],
-  ["earlier supersession", supersession, supersession],
-] as const)("merges %s across agent and chat observations", async (name, payload, expected) => {
+  ["earlier cancellation", userCancellation, userCancellation],
+] as const)("merges %s across agent and chat observations", async (_name, payload, expected) => {
   for (const timeoutFirst of [true, false]) {
     const { runId, write, wait } = runFixture();
     const timeout = () => write({ ...hardTimeout, startedAt: 100 }, { ts: 200, ok: false });
@@ -683,11 +829,9 @@ it.each([
         { ...payload, startedAt: 100 },
         { ts: 300, ok: payload.status === "ok", source: "chat" },
       );
-
-    for (const observation of timeoutFirst ? [timeout, other] : [other, timeout]) {
-      observation();
+    for (const observe of timeoutFirst ? [timeout, other] : [other, timeout]) {
+      observe();
     }
-
     await expectReply(wait(), expect.objectContaining({ runId, ...expected }));
   }
 });

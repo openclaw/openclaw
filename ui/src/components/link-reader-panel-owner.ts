@@ -23,11 +23,11 @@ import {
   type ReaderTab,
   type ReaderSection,
   createReaderReadyView,
+  readerTabMetadata,
 } from "./link-reader-panel-view.ts";
 import {
   LINK_READER_METADATA_UPDATED_EVENT,
   linkReaderResponseMatchesTarget,
-  type LinkReaderMetadataUpdate,
 } from "./link-reader-response.ts";
 import {
   resolveLinkReaderTarget,
@@ -83,6 +83,14 @@ export function createLinkReaderPanel(
   }
   function currentTarget(): LinkReaderTarget | null {
     return tabTarget(activeTab());
+  }
+
+  function publishMetadata(tabs = state.tabs): void {
+    if (lifecycle.active() && host.isConnected && props.available) {
+      for (const detail of readerTabMetadata(props, tabs)) {
+        window.dispatchEvent(new CustomEvent(LINK_READER_METADATA_UPDATED_EVENT, { detail }));
+      }
+    }
   }
 
   function panelPresented(): boolean {
@@ -510,11 +518,7 @@ export function createLinkReaderPanel(
   async function loadDetail(section?: ReaderSection, refresh = refreshRequested): Promise<void> {
     const target = currentTarget();
     const tab = activeTab();
-    const client = props.client;
-    const agentId = props.agentId;
-    const sessionKey = props.sessionKey;
-    const generation = client?.connectionGeneration;
-    const requestRecoveryScope = client?.recoveryScope;
+    const { client, agentId, sessionKey } = props;
     if (
       !lifecycle.active() ||
       !target ||
@@ -525,6 +529,8 @@ export function createLinkReaderPanel(
     ) {
       return;
     }
+    const generation = client.connectionGeneration;
+    const requestRecoveryScope = client.recoveryScope;
     const previous = tab.view.status === "ready" ? tab.view : undefined;
     if (section && (!previous || previous.refreshing || previous.sections[section] !== "idle")) {
       return;
@@ -620,7 +626,11 @@ export function createLinkReaderPanel(
           publish();
           return;
         }
-        const next = createReaderReadyView(detail, previous);
+        const next = createReaderReadyView(
+          detail,
+          { client, agentId, sessionKey, generation, recoveryScope: requestRecoveryScope },
+          previous,
+        );
         const imageMethod = target.reader.linkReader.imageMethod;
         next.images = imageMethod
           ? new LinkReaderImages(
@@ -645,13 +655,7 @@ export function createLinkReaderPanel(
           void loadDetail("files");
         }
         publish();
-        if (!detail.stale) {
-          window.dispatchEvent(
-            new CustomEvent<LinkReaderMetadataUpdate>(LINK_READER_METADATA_UPDATED_EVENT, {
-              detail: { client, agentId, sessionKey, target, preview: detail },
-            }),
-          );
-        }
+        publishMetadata([tab]);
       }
     } catch (error) {
       if (isCurrent()) {
@@ -679,6 +683,7 @@ export function createLinkReaderPanel(
   return {
     state,
     props,
+    publishMetadata,
     dockLayout,
     activeTab,
     target: currentTarget,

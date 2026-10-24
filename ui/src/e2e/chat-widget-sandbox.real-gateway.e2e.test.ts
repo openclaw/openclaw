@@ -3,6 +3,7 @@ import { createCanvasDocument } from "../../../src/canvas/documents.js";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { appendTranscriptMessage } from "../../../src/config/sessions/session-accessor.js";
 import { ensureGatewayOwnerProfile } from "../../../src/state/user-profiles.js";
+import { withEnvAsync } from "../../../src/test-utils/env.js";
 import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
@@ -68,20 +69,16 @@ async function sessionUrl(key: string, face: "chat" | "dashboard") {
 }
 
 function canvasDocument(
-  id: string,
   title: string,
   body: string,
   options?: Parameters<typeof buildWidgetDocument>[2],
 ) {
-  return createCanvasDocument(
-    {
-      id,
+  return withEnvAsync({ OPENCLAW_STATE_DIR: gatewayOwner().stateDir }, () =>
+    createCanvasDocument({
       title,
       html: buildWidgetDocument(title, body, options),
       cspSandbox: "scripts",
-      surface: "assistant_message",
-    },
-    { stateDir: gatewayOwner().stateDir },
+    }),
   );
 }
 
@@ -108,14 +105,11 @@ async function cliJson(args: string[]): Promise<Record<string, unknown>> {
 suite.define(() => {
   it("reads persisted Canvas bytes through an authenticated browser connection", async () => {
     const sessionKey = "agent:main:widget-live-proof";
-    const docId = "widget-live-proof";
     const sessionId = await createSession(sessionKey, "Synthetic widget proof");
-    await canvasDocument(
-      docId,
+    const { id: docId } = await canvasDocument(
       "Live widget proof",
       `<h1>Live widget proof</h1><label>Local note <input aria-label="Local note"></label>`,
     );
-    const a2uiDocId = `${docId}-a2ui`;
     const a2uiBundlePath = "/__openclaw__/a2ui/a2ui-v0.9.bundle.js";
     const a2uiBoot = JSON.stringify({
       messages: [
@@ -139,8 +133,7 @@ suite.define(() => {
       ],
       actionTier: "state",
     }).replaceAll("<", "\\u003c");
-    await canvasDocument(
-      a2uiDocId,
+    const { id: a2uiDocId } = await canvasDocument(
       "A2UI live proof",
       `<script>globalThis.openclawA2UIBoot=${a2uiBoot};</script><style>html,body{height:100%;overflow:hidden;background:transparent}openclaw-a2ui-host{display:block;height:100%}</style><openclaw-a2ui-host></openclaw-a2ui-host><script>(()=>{const match=location.pathname.match(/^\\/__openclaw__\\/cap\\/[^/]+/u);const script=document.createElement("script");script.src=(match?.[0]??"")+${JSON.stringify(a2uiBundlePath)};document.head.appendChild(script);})();</script>`,
       { scriptOrigins: ["'self'"] },

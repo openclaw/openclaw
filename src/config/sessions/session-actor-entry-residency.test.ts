@@ -1,7 +1,10 @@
-import { expect, it, vi } from "vitest";
+import { serialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareSessionCostUsageRefreshLock } from "../../infra/session-cost-usage-cache.sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import * as participantCache from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
@@ -27,7 +30,10 @@ import {
   type Fixture,
   type Mutation,
 } from "./session-actor-worker.test-support.js";
-import type { SessionEntryPatchGuard } from "./session-entry-patch.types.js";
+import type {
+  SessionEntryPatchCommitted,
+  SessionEntryPatchGuard,
+} from "./session-entry-patch.types.js";
 import { readSessionEntryPatchSnapshot } from "./session-entry-patch.worker.js";
 import { readSessionTranscriptAccountingFromProjection } from "./session-transcript-accounting.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
@@ -345,6 +351,13 @@ it("keeps transcript residency across entry patches without losing either owner'
     );
     f.writeEntry({
       ...f.nativeEntry()!,
+      skillsSnapshot: {
+        prompt: "synthetic snapshot",
+        skills: Array.from({ length: 256 }, (_, index) => ({
+          name: `fixture-${index}`,
+          requiredEnv: [`SYNTHETIC_${index}`],
+        })),
+      },
       activitySummary: {
         version: 1,
         text: "Retained input",
@@ -388,7 +401,28 @@ it("keeps transcript residency across entry patches without losing either owner'
           : null,
     );
     try {
+      let candidate: SessionEntryPatchCommitted | undefined;
+      const transfer = createSqliteWorkerTransferCollector("patch", (value) => {
+        // The real patch kernel owns this candidate; the collector decodes its wire bytes.
+        candidate = value as SessionEntryPatchCommitted;
+      });
+      f.hooks.admit = (_stage, facts) => {
+        if (isRecord(facts) && facts.transfer) {
+          transfer.accept(facts.transfer);
+        }
+      };
       entryPatch({ label: "entry owner committed", model: "updated-model" });
+      delete f.hooks.admit;
+      assert(transfer.completed && candidate?.entry?.skillsSnapshot);
+      // The mutable caller result and retained publication each need one snapshot copy.
+      expect(serialize(candidate).byteLength).toBeLessThan(
+        serialize(candidate.entry).byteLength * 2.5,
+      );
+      candidate.entry.skillsSnapshot.prompt = "caller-owned edit";
+      expect(
+        candidate.publication?.fullEntries?.get(f.target.sessionKey)?.skillsSnapshot?.prompt,
+      ).toBe("synthetic snapshot");
+      expect(f.read().entry?.skillsSnapshot?.prompt).toBe("synthetic snapshot");
       expect(reads.counts.watermark).toBe(0);
       expect(reads.counts.select).toBe(0);
       runSqliteImmediateTransactionSync(f.database.db, () =>

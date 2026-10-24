@@ -6,8 +6,7 @@ import type {
 } from "../../../infra/sqlite-worker-operation-admission.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { closeSwarmScheduler } from "../swarm/swarm-scheduler.js";
-import { testing as schedulerTesting } from "../swarm/swarm-scheduler.test-support.js";
+import { observeSwarmSchedulerWork } from "../swarm/swarm-scheduler.lifecycle.test-support.js";
 import {
   mutateSubagentRuns,
   restoreSubagentRunsFromDisk,
@@ -19,6 +18,7 @@ import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixtur
 import type { SubagentRegistrationScope, SubagentRunRecord } from "./subagent-registry.types.js";
 
 function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecord>()) {
+  const schedulerWork = observeSwarmSchedulerWork();
   const pending: Promise<unknown>[] = [];
   const track = <T>(work: T | Promise<T>): Promise<T> => {
     const promise = Promise.resolve(work);
@@ -203,11 +203,10 @@ function createQueuedRegistrationFixture(runs = new Map<string, SubagentRunRecor
         hold.gate.resolve();
       }
       await Promise.allSettled(pending);
-      await closeSwarmScheduler();
+      await schedulerWork.close();
       worker.mockRestore();
       await restoreSubagentRunsFromDisk({ runs });
       runs.clear();
-      schedulerTesting.reset();
     },
   };
 }

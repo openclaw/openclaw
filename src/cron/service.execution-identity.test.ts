@@ -14,6 +14,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { prepareCronRunAdmission } from "./run-admission.js";
+import { TEST_SCHEDULED_EXECUTION } from "./scheduled-occurrence.test-support.js";
 import type { CronService } from "./service.js";
 import { createCronServiceWithStateForTest, createNoopLogger } from "./service.test-harness.js";
 import type { CronServiceDeps } from "./service/state.js";
@@ -53,6 +54,7 @@ describe("scheduled cron execution identity", () => {
       const runIsolatedAgentJob = vi.fn<CronServiceDeps["runIsolatedAgentJob"]>(async (params) => {
         for (const stage of ["trigger", "payload"]) {
           const admission = prepareCronRunAdmission({
+            scheduledExecution: TEST_SCHEDULED_EXECUTION,
             cfg,
             agentId: "main",
             runId: `${stage}-${params.job.id}`,
@@ -78,7 +80,6 @@ describe("scheduled cron execution identity", () => {
         nowMs: () => clock.now,
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob,
       });
       cron = service.cron;

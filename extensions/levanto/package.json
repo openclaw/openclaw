@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/levanto",
-  "version": "2026.10.4",
+  "version": "2026.10.6",
   "description": "OpenClaw Levanto Sage native decision provider",
   "repository": {
     "type": "git",
@@ -21,11 +21,11 @@
       "minHostVersion": ">=2026.9.6"
     },
     "compat": {
-      "pluginApi": ">=2026.10.4"
+      "pluginApi": ">=2026.10.6"
     },
     "build": {
       "bundledDist": false,
-      "openclawVersion": "2026.10.4"
+      "openclawVersion": "2026.10.6"
     },
     "release": {
       "publishToClawHub": true,

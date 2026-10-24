@@ -238,7 +238,7 @@ suite.define(() => {
       const requestsBeforeOpen = (await gateway.getRequests("models.list")).length;
       const sessionRequestsBeforeOpen = (await gateway.getRequests("sessions.list")).length;
       await trigger.click();
-      await revealChatModelOption(currentRow);
+      await revealChatModelOption(picker, "fixture/session-current");
       await expect.poll(() => currentRow.isVisible()).toBe(true);
       expect(await picker.textContent()).toContain("Pinned session account");
       expect(await picker.locator("[data-chat-model-refresh]").textContent()).toContain(
@@ -259,7 +259,7 @@ suite.define(() => {
       expect(await picker.textContent()).toContain("Pinned session account");
       await trigger.click();
       await trigger.click();
-      await revealChatModelOption(currentRow);
+      await revealChatModelOption(picker, "fixture/session-current");
       await expect.poll(() => currentRow.isVisible()).toBe(true);
       expect(await gateway.getRequests("models.list")).toHaveLength(requestsBeforeOpen);
       expect(await gateway.getRequests("sessions.list")).toHaveLength(sessionRequestsBeforeOpen);
@@ -394,7 +394,7 @@ suite.define(() => {
           await expect.poll(() => account.isVisible()).toBe(true);
           await expect.poll(() => account.textContent()).toContain("Account A");
           const row = picker.locator('[data-chat-model-option="fixture/first"]');
-          await revealChatModelOption(row);
+          await revealChatModelOption(picker, "fixture/first");
           await expect.poll(() => row.isVisible()).toBe(true);
           expect(await row.isEnabled()).toBe(true);
           expect(catalogRequests.size).toBe(requestsBeforeOpen);
@@ -403,7 +403,7 @@ suite.define(() => {
           heldReplies.splice(0).forEach((send) => send());
           await trigger.click();
           await trigger.click();
-          await revealChatModelOption(row);
+          await revealChatModelOption(picker, "fixture/first");
           await expect.poll(() => row.isVisible()).toBe(true);
           expect(catalogRequests.size).toBe(requestsBeforeOpen);
           return;
@@ -450,7 +450,7 @@ suite.define(() => {
         await trigger.click();
         await expect.poll(() => account.textContent()).toContain("Account B");
         const selectedRow = picker.locator('[data-chat-model-option="fixture/second"]');
-        await revealChatModelOption(selectedRow);
+        await revealChatModelOption(picker, "fixture/second");
         await expect.poll(() => selectedRow.isVisible()).toBe(true);
         expect(await selectedRow.isEnabled()).toBe(true);
         expect(await account.textContent()).not.toContain("Account A");

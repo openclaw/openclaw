@@ -40,8 +40,8 @@ const settings = {
   "API key": [...configPath, "apiKey"],
   Accounts: [...configPath, "accounts"],
 };
-const publish = (context: Context, owner: object, current = plugin, overview = true) =>
-  publishPluginHelpContext(context, owner, current, { overview, installed: true });
+const publish = (context: Context, owner: object, current = plugin) =>
+  publishPluginHelpContext(context, owner, current, { installed: true });
 type Setting = keyof typeof settings;
 function ask(context: Context, label: Setting, value: unknown, sensitive = false, target = plugin) {
   const request = createPluginHelpRequest(context, target);
@@ -95,7 +95,7 @@ it.each(["cold", "startup", "metadata"] as const)("retains %s drafts", async (ph
   }
   const { context, setPathname, setGatewaySnapshot } = createContext(request);
   setPathname("/settings/plugins/example");
-  publish(context, {}, plugin, false);
+  publish(context, {}, plugin);
   const agentsList = context.agents.state.agentsList;
   if (phase === "metadata") {
     context.agents.state.agentsList = null;
@@ -127,7 +127,7 @@ it.each(["cold", "startup", "metadata"] as const)("retains %s drafts", async (ph
     const edited = store.input;
     await store.send();
     expect(request).toHaveBeenCalledOnce();
-    store.retry();
+    await store.retry();
     await waitForFast(() => expect(store.canSend).toBe(true));
     expect(store.input).toBe(edited);
   }
@@ -414,7 +414,7 @@ it.each([
   expect(request).toHaveBeenCalledTimes(live ? 2 : 1);
   const draft = live ? "Next question" : "Keep my draft";
   store.setInput(draft);
-  store.retry();
+  await store.retry();
   await waitForFast(() => expect(store.messages.at(-1)?.text).toBe(live ? "Recovered." : "Ready."));
   expect(store).toMatchObject({ input: draft, error: null });
   expect(request).toHaveBeenCalledTimes(live ? 3 : 2);

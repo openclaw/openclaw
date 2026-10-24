@@ -11,6 +11,7 @@ import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
+import { expectWorkspaceFiles } from "./workspace-recovery.test-support.js";
 import {
   applyStagedWorkerWorkspaceResult,
   hasWorkerWorkspaceResultRef,
@@ -126,6 +127,7 @@ describe("unchanged local workspace reconciliation", () => {
     const journal = {
       ...emptyJournal(),
       commit: async (ref: string) => {
+        expect(remoteRef).toBe(ref);
         committedRef = ref;
       },
     };
@@ -246,6 +248,10 @@ describe("unchanged local workspace reconciliation", () => {
         expect.objectContaining({ manifestRef: applied?.manifestRef, manifest: applied?.manifest }),
       );
       expect(applied?.conflictPaths).toEqual([]);
+      await expectWorkspaceFiles(root, {
+        "untracked.txt": "unadmitted host bytes\n",
+        "private.txt": "ignored host bytes\n",
+      });
     },
   );
 

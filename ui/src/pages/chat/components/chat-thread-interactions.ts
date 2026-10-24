@@ -97,6 +97,7 @@ export type ChatThreadProps = Omit<
   ChatSendStatusActions &
   SubagentRoster & {
     applicationContext?: ApplicationContext;
+    onScrollPortRef?: (element: HTMLElement) => void | (() => void);
     messageReactions?: ReadonlyMap<string, MessageReactionSummary[]>;
     onReact?: (messageId: string, emoji: string, remove: boolean) => void;
     branding?: ThemeBranding;
@@ -110,6 +111,7 @@ export type ChatThreadProps = Omit<
     transcriptVisible?: PresentationValue;
     gatewayClient?: GatewayBrowserClient | null;
     selectedSession: GatewaySessionRow | undefined;
+    swarm?: import("./chat-swarm-progress-types.ts").ChatSwarmProgressProps;
     transcriptMetadata?: ChatTranscriptMetadata;
     announceTranscript?: boolean;
     loading: boolean;
@@ -255,8 +257,6 @@ export function resetTranscriptSession(paneId: string, owner?: ParentNode): void
   }
   if (state) {
     state.asyncQuestionDrafts = new Map();
-    // Parked rows must commit fresh bindings on return even when visible props match.
-    state.transcriptRenderDependencies = [];
     // Search input belongs to the outgoing transcript; pane preferences survive.
     state.search.reset();
   }

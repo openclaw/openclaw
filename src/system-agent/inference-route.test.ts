@@ -1,10 +1,15 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
+import { visitModuleSpecifiers } from "../../scripts/lib/ts-guard-utils.mts";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { selectAgentHarness } from "../agents/harness/selection.js";
 import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import {
   projectInferenceRoute,
@@ -12,17 +17,7 @@ import {
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
 
-function model(id: string) {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text" as const],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 8_192,
-    maxTokens: 2_048,
-  };
-}
+const model = (id: string) => buildCatalogModel(id, { contextWindow: 8192, maxTokens: 2048 });
 
 async function expectSameProjection(
   before: OpenClawConfig,
@@ -76,6 +71,19 @@ function utilityConfig(primary?: string): OpenClawConfig {
 afterEach(clearAgentHarnesses);
 
 describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
+  it("does not directly load completion execution to select a configured route", () => {
+    const root = path.resolve(import.meta.dirname, "../..");
+    const entry = path.join(root, "src/system-agent/inference-route.ts");
+    using parser = createNativeTypeScriptParser({ cwd: root });
+    const [source] = parser.parseSourceFiles([
+      { fileName: entry, text: readFileSync(entry, "utf8") },
+    ]);
+    assert(source);
+    const specifiers: string[] = [];
+    visitModuleSpecifiers(source, ({ specifier }) => specifiers.push(specifier));
+    expect(specifiers).not.toContain("../agents/simple-completion-runtime.js");
+  });
+
   it.each([false, true])("preserves implicit catalog @ IDs (ACP=%s)", async (acp) => {
     const config = utilityConfig();
     const agent = config.agents?.entries?.dev;
@@ -221,6 +229,26 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
         }).agentId,
       ).toBe(agentId);
     }
+  });
+
+  it("admits an uncreated owner only for an explicit primary preflight", async () => {
+    const config = devConfig();
+    const before = structuredClone(config);
+    const agentId = "bot-uncreated";
+    const ordinary = await resolveRoute(config, agentId);
+    const candidate = await resolveRoute(config, agentId, {
+      modelTarget: "primary",
+    });
+    assert(ordinary && candidate);
+    expect(() =>
+      resolveRunWorkspaceDir({ workspaceDir: undefined, agentId, config: ordinary.runConfig }),
+    ).toThrow("not present in the configured roster");
+    expect(
+      resolveRunWorkspaceDir({ workspaceDir: undefined, agentId, config: candidate.runConfig })
+        .agentId,
+    ).toBe(agentId);
+    expect(candidate.sourceConfig).toBe(config);
+    expect(config).toEqual(before);
   });
 
   it("keeps implicit harness selection fallible while forcing explicit policy", async () => {

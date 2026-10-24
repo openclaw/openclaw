@@ -29,29 +29,6 @@ import {
 import { runMessageAction } from "../infra/outbound/message-action-runner.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
 
-function buildMessageCliJson(result: Awaited<ReturnType<typeof runMessageAction>>) {
-  const messageId = resolveMessageActionMessageId(result.payload);
-  const sendResult = result.kind === "send" ? result.sendResult : undefined;
-  const outcome = resolveMessageActionOutcome(result);
-  return {
-    ...(result.kind === "broadcast"
-      ? { ok: outcome.ok }
-      : !outcome.ok
-        ? {
-            ...formatCliJsonFailure(outcome.error),
-            ...(sendResult ? { deliveryStatus: sendResult.deliveryStatus } : {}),
-            ...(outcome.sentBeforeError ? { sentBeforeError: true } : {}),
-          }
-        : {}),
-    action: result.action,
-    channel: result.channel,
-    dryRun: result.dryRun,
-    handledBy: result.handledBy,
-    ...(messageId ? { messageId } : {}),
-    payload: result.payload,
-  };
-}
-
 export async function messageCommand(
   opts: Record<string, unknown>,
   deps: CliDeps,
@@ -150,7 +127,26 @@ export async function messageCommand(
     : await run();
 
   if (json) {
-    writeRuntimeJson(runtime, buildMessageCliJson(result));
+    const messageId = resolveMessageActionMessageId(result.payload);
+    const sendResult = result.kind === "send" ? result.sendResult : undefined;
+    const outcome = resolveMessageActionOutcome(result);
+    writeRuntimeJson(runtime, {
+      ...(result.kind === "broadcast"
+        ? { ok: outcome.ok }
+        : !outcome.ok
+          ? {
+              ...formatCliJsonFailure(outcome.error),
+              ...(sendResult ? { deliveryStatus: sendResult.deliveryStatus } : {}),
+              ...(outcome.sentBeforeError ? { sentBeforeError: true } : {}),
+            }
+          : {}),
+      action: result.action,
+      channel: result.channel,
+      dryRun: result.dryRun,
+      handledBy: result.handledBy,
+      ...(messageId ? { messageId } : {}),
+      payload: result.payload,
+    });
     return result;
   }
 

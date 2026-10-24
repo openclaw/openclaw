@@ -144,6 +144,17 @@ function logVerbose(core: ZaloCoreRuntime, runtime: ZaloRuntimeEnv, message: str
   }
 }
 
+function withZaloRouteFallback(handle: typeof tryHandleHostedZaloMediaRequest) {
+  return async (req: Parameters<typeof handle>[0], res: Parameters<typeof handle>[1]) => {
+    const handled = await handle(req, res);
+    if (!handled && !res.headersSent) {
+      res.statusCode = 404;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Not Found");
+    }
+  };
+}
+
 async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> {
   const { update, ...sharedContext } = params;
   const { account, core, runtime } = sharedContext;
@@ -154,8 +165,13 @@ async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> 
 
   switch (event_name) {
     case "message.text.received":
+    case "message.unsupported.received":
       if (message.text?.trim()) {
         await processMessageWithPipeline({ message, text: message.text, ...sharedContext });
+      } else if (event_name === "message.unsupported.received") {
+        runtime.log?.(
+          `[${account.accountId}] Zalo unsupported message has no recoverable text; ask the sender to resend as plain text.`,
+        );
       }
       break;
     case "message.image.received":
@@ -166,13 +182,6 @@ async function processUpdate(params: ZaloUpdateProcessingParams): Promise<void> 
       break;
     case "message.sticker.received":
       logVerbose(core, runtime, `[${account.accountId}] Received sticker from ${message.from.id}`);
-      break;
-    case "message.unsupported.received":
-      logVerbose(
-        core,
-        runtime,
-        `[${account.accountId}] Received unsupported message type from ${message.from.id}`,
-      );
       break;
   }
 }
@@ -657,17 +666,12 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
         })
       : undefined;
 
-  let stopped = false;
   const stopHandlers: Array<() => void> = [];
   let stopIngress: (() => Promise<void>) | undefined;
   let cleanupWebhook: (() => Promise<void>) | undefined;
 
   const stop = () => {
-    if (stopped) {
-      return;
-    }
-    stopped = true;
-    for (const handler of stopHandlers) {
+    for (const handler of stopHandlers.splice(0)) {
       handler();
     }
   };
@@ -678,11 +682,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
   };
 
   if (abortSignal.aborted) {
-    // The signal is already aborted — trigger cleanup in non-webhook mode
-    // and return before acquiring any resources (hosted-media routes,
-    // webhook registration, or polling). This avoids registering cleanup
-    // handlers after stop() has already set stopped=true, which would
-    // skip them in the finally block and leak plugin HTTP routes.
+    // Return before acquiring routes or polling for an already-aborted monitor.
     stopOnAbort();
     return;
   }
@@ -717,14 +717,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
         log: runtime.log,
         reuseExistingSameOwner: true,
         throwOnFailure: true,
-        handler: async (req, res) => {
-          const handled = await tryHandleHostedZaloMediaRequest(req, res);
-          if (!handled && !res.headersSent) {
-            res.statusCode = 404;
-            res.setHeader("Content-Type", "text/plain; charset=utf-8");
-            res.end("Not Found");
-          }
-        },
+        handler: withZaloRouteFallback(tryHandleHostedZaloMediaRequest),
       });
       stopHandlers.push(unregisterHostedMediaRoute);
     }
@@ -785,14 +778,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
             accountId: account.accountId,
             log: runtime.log,
             throwOnFailure: true,
-            handler: async (req, res) => {
-              const handled = await handleZaloWebhookRequest(req, res);
-              if (!handled && !res.headersSent) {
-                res.statusCode = 404;
-                res.setHeader("Content-Type", "text/plain; charset=utf-8");
-                res.end("Not Found");
-              }
-            },
+            handler: withZaloRouteFallback(handleZaloWebhookRequest),
           },
         },
       );
@@ -855,7 +841,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
     );
 
     const poll = async (): Promise<void> => {
-      if (stopped || abortSignal.aborted) {
+      if (abortSignal.aborted) {
         return undefined;
       }
 
@@ -865,7 +851,7 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
           { timeout: pollTimeout, signal: abortSignal },
           fetcher,
         );
-        if (stopped || abortSignal.aborted) {
+        if (abortSignal.aborted) {
           return undefined;
         }
         if (response.ok) {
@@ -881,16 +867,16 @@ export async function monitorZaloProvider(options: ZaloMonitorOptions): Promise<
       } catch (err) {
         if (err instanceof ZaloApiError && err.isPollingTimeout) {
           // no updates
-        } else if (!stopped && !abortSignal.aborted) {
+        } else if (!abortSignal.aborted) {
           const error = formatZaloError(err);
           runtime.error?.(`[${account.accountId}] Zalo polling error: ${error}`);
           statusSink?.({ connected: false, lifecycle: "recovering", lastError: error });
-          // Abort-aware backoff; bottom poll reschedule already checks stopped/aborted.
+          // Abort-aware backoff; bottom poll reschedule already checks the signal.
           await sleepWithAbort(5000, abortSignal).catch(() => undefined);
         }
       }
 
-      if (!stopped && !abortSignal.aborted) {
+      if (!abortSignal.aborted) {
         setImmediate(() => {
           void poll();
         });

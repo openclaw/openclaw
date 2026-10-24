@@ -107,6 +107,55 @@ it("archives uninterpretable cron definitions with actionable recovery instead o
   });
 });
 
+it.each(["jobs", "runtime"] as const)(
+  "rejects malformed UTF-8 %s without importing replacement characters",
+  async (source) => {
+    await withOpenClawTestState({ label: "cron-malformed-utf8" }, async (fixture) => {
+      const legacy = {
+        id: "legacy",
+        name: source === "jobs" ? "CORRUPT" : "valid name",
+        enabled: true,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        schedule: { kind: "every", everyMs: 60_000 },
+        sessionTarget: "main",
+        wakeMode: "now",
+        payload: { kind: "systemEvent", text: "keep me" },
+        state: {},
+      };
+      const storePath = await fixture.writeText(
+        "cron/jobs.json",
+        JSON.stringify({ version: 1, jobs: [legacy] }),
+      );
+      const runtimePath = await fixture.writeText(
+        "cron/jobs-state.json",
+        JSON.stringify({ version: 1, jobs: { legacy: { state: { lastError: "CORRUPT" } } } }),
+      );
+      const corruptPath = source === "jobs" ? storePath : runtimePath;
+      const bytes = Buffer.from(
+        (await fs.readFile(corruptPath, "utf8")).replace("CORRUPT", "\x80"),
+        "latin1",
+      );
+      await fs.writeFile(corruptPath, bytes);
+
+      const result = await repairLegacyCronStoreWithoutPrompt({
+        cfg: { cron: { store: storePath } } as OpenClawConfig,
+      });
+
+      expect(await fs.readFile(`${corruptPath}.migrated`)).toEqual(bytes);
+      const jobs = (await loadCronStore(storePath)).jobs;
+      if (source === "jobs") {
+        expect(jobs).toEqual([]);
+        expect(result.warnings.join("\n")).toContain("must be valid UTF-8");
+      } else {
+        expect(jobs).toHaveLength(1);
+        expect(jobs[0]?.state.lastError).toBeUndefined();
+        expect(result.warnings.join("\n")).toContain("Unrecognized legacy cron runtime state");
+      }
+    });
+  },
+);
+
 it.each(["load", "commit"])(
   "retains cron sources after a SQLite %s failure and archives only after retry",
   async (phase) => {

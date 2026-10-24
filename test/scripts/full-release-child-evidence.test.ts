@@ -9,6 +9,7 @@ import {
   releaseChildSpec,
 } from "../../scripts/full-release-validation-policy.mjs";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { child } from "./full-release-validation-state.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const SCRIPT = resolve("scripts/full-release-child-evidence.mjs");
@@ -136,18 +137,7 @@ describe("full release child evidence producer", () => {
     const snapshot = () =>
       classifyReleaseSnapshot({
         children: [
-          {
-            key,
-            selected: true,
-            required: true,
-            result: "success",
-            source: "fresh",
-            runId: "101",
-            runAttempt: 1,
-            status: "completed",
-            conclusion: "success",
-            jobs: [workload, metadata],
-          },
+          child(key, { status: "completed", conclusion: "success", jobs: [workload, metadata] }),
         ],
         releaseProfile: "stable",
         workflowRef: "main",

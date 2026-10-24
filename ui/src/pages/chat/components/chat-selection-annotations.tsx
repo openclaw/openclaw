@@ -1,5 +1,6 @@
-import { For, Show, onCleanup, untrack } from "solid-js";
+import { For, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { CommentPreviewChip, CommentPreviewRow } from "./chat-comment-preview.tsx";
@@ -30,6 +31,15 @@ export function ChatSelectionAnnotations(props: ChatAttachmentControlsProps) {
   let preview: HTMLElement | undefined;
   let trigger: HTMLButtonElement | undefined;
   const deleteButtons = new Map<string, HTMLButtonElement>();
+  const deleteRef = (id: string) =>
+    elementRef((element: HTMLButtonElement) => {
+      deleteButtons.set(id, element);
+      return () => {
+        if (deleteButtons.get(id) === element) {
+          deleteButtons.delete(id);
+        }
+      };
+    });
   const focusDelete = (id: string) => {
     if (preview?.isConnected && preview.hasAttribute("open")) {
       deleteButtons.get(id)?.focus({ preventScroll: true });
@@ -52,8 +62,6 @@ export function ChatSelectionAnnotations(props: ChatAttachmentControlsProps) {
         <ol class="chat-comment-preview__list" role="list">
           <For each={comments()} keyed={(attachment) => attachment.id}>
             {(attachment, index) => {
-              const initialId = untrack(() => attachment().id);
-              onCleanup(() => deleteButtons.delete(initialId));
               return (
                 <Show when={attachment().selectionAnnotation}>
                   {(annotation) => (
@@ -74,7 +82,7 @@ export function ChatSelectionAnnotations(props: ChatAttachmentControlsProps) {
                           <Icon name="pencil" />
                         </button>
                         <button
-                          ref={(element) => deleteButtons.set(initialId, element)}
+                          ref={[deleteRef(attachment().id)]}
                           type="button"
                           data-comment-delete={attachment().id}
                           aria-label={t("chat.messages.deleteAnnotation")}

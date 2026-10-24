@@ -1,5 +1,10 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
+import {
+  openChatConversationOptions,
+  selectChatLayoutAction,
+} from "../test-helpers/chat-layout-menu.ts";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
@@ -91,7 +96,7 @@ suite.define(() => {
           }
           await page.locator('[data-chat-model-select="true"]').click();
           const option = page.locator('[data-chat-model-option="openai/gpt-5.5"]');
-          await revealChatModelOption(option);
+          await revealChatModelOption(page, "openai/gpt-5.5");
           await polledVisible(option).toBe(true);
           if (blocked) {
             await polledAttribute(option, "data-chat-model-setup").toBe("true");
@@ -181,6 +186,7 @@ suite.define(() => {
         buffer: Buffer.from("mobile composer attachment"),
       });
       await composer.locator(".chat-attachments-preview").waitFor({ state: "visible" });
+      await composer.locator("textarea").click();
       for (const [kind, trigger] of [
         ["model", '[data-chat-model-select="true"]'],
         ["effort", '[data-chat-thinking-select="true"]'],
@@ -322,7 +328,9 @@ suite.define(() => {
       const camera = composerShell.locator(".agent-chat__camera-btn");
       const takePhoto = composerShell.getByRole("menuitem", { name: "Take photo" });
       const settings = page.locator(".chat-header-session-menu__trigger");
-      const layout = exactButton(page, "Layout");
+      const panels = page
+        .locator(".sidebar-region__panels-toggle")
+        .getByRole("button", { name: "Panels", exact: true });
       const voice = page.getByRole("button", { name: "Start voice input" });
       const send = page.getByRole("button", { name: "Send message" });
       const mobileDictation = page.getByRole("button", { name: "Dictation" });
@@ -349,8 +357,7 @@ suite.define(() => {
       await polledVisible(contextUsage).toBe(true);
       await polledVisible(usage).toBe(false);
       await polledVisible(settings).toBe(true);
-      await polledVisible(layout).toBe(true);
-      await polledAncestor(layout, ".chat-pane__header").toBe(true);
+      await polledVisible(panels).toBe(true);
       await polledVisible(attach).toBe(true);
       await polledVisible(camera).toBe(false);
       await polledVisible(voice).toBe(true);
@@ -483,6 +490,7 @@ suite.define(() => {
         "GPT-5.4 Pro",
       );
       const anthropicModels = composer.locator('[data-chat-model-provider-group="anthropic"]');
+      await revealChatModelOption(composer, "anthropic/claude-sonnet-4-6");
       await polledVisible(anthropicModels).toBe(true);
       await polledText(anthropicModels).toContain("Claude Sonnet 4.6");
       await model.click();
@@ -529,8 +537,12 @@ suite.define(() => {
         .toBe(true);
 
       await page.setViewportSize({ width: 1280, height: 900 });
-      // Details releases its reserved column after the resize reaches its layout owner.
-      await page.locator(".chat-details--docked").waitFor({ state: "detached" });
+      // Details keeps its DOM when it releases its reserved column.
+      await page.locator(".chat-details--docked").waitFor({ state: "hidden" });
+      await waitForLayoutSettled(
+        page,
+        ".chat-pane-cache__pane--active :is(.chat-main__conversation, .agent-chat__composer-shell)",
+      );
       const [compactChatMainBox, compactComposerShellBox] = await Promise.all([
         layoutBox(chatMain),
         layoutBox(composerShell),
@@ -613,7 +625,7 @@ suite.define(() => {
       await polledVisible(page.getByText("Working on it.").first()).toBe(true);
       await polledCount(spark).toBe(0);
       await polledText(announcement).toBe("");
-      await polledVisible(layout).toBe(true);
+      await polledVisible(panels).toBe(true);
       await polledVisible(model).toBe(true);
       await textarea.fill("Steer this queued follow-up");
       const followUp = page.getByRole("button", {
@@ -622,6 +634,7 @@ suite.define(() => {
       await polledVisible(followUp).toBe(true);
       await polledCount(page.locator(".chat-send-btn--stop")).toBe(0);
       await page.setViewportSize({ width: 393, height: 852 });
+      await textarea.click();
 
       await textarea.fill("");
       const stop = page.getByRole("button", { name: "Stop generating" });
@@ -638,6 +651,11 @@ suite.define(() => {
       expect(activeMobileStopBox?.width).toBeCloseTo(32, 2);
       expect(activeMobileStopBox?.height).toBeCloseTo(32, 2);
       expect(await composerShell.locator(".agent-chat__composer-run-status").count()).toBe(0);
+      // Escape dismisses an active tooltip before it reaches the composer.
+      await page.mouse.move(0, 0);
+      await polledCount(page.locator("openclaw-tooltip[open]")).toBe(0);
+      await polledVisible(stop).toBe(true);
+      await polledFocus(textarea).toBe(true);
       await textarea.press("Escape");
       const abortRequest = await gateway.waitForRequest("chat.abort");
       expect(abortRequest.params).toMatchObject({
@@ -730,7 +748,7 @@ suite.define(() => {
       await textarea.fill("");
       await polledCount(camera).toBe(0);
       await openChatModelPicker(composer);
-      await revealChatModelOption(composer.locator('[data-chat-model-option="openai/gpt-5.5"]'));
+      await revealChatModelOption(composer, "openai/gpt-5.5");
       const mobilePickerBox = await layoutBox(composer.locator(".chat-controls__model-menu"));
       expect(mobilePickerBox.x).toBeGreaterThanOrEqual(0);
       expect(right(mobilePickerBox)).toBeLessThanOrEqual(393);
@@ -744,10 +762,12 @@ suite.define(() => {
       await effort.click();
       await polledVisible(composer.locator(".chat-controls__effort-menu")).toBe(true);
       await page.keyboard.press("Escape");
-      await settings.click();
-      await polledVisible(viewMenu).toBe(true);
-      await settings.click();
-      await polledVisible(viewMenu).toBe(false);
+      const mobileOptions = await openChatConversationOptions(page);
+      await polledVisible(
+        mobileOptions.getByRole("button", { name: "Reasoning", exact: true }),
+      ).toBe(true);
+      await selectChatLayoutAction(page, "Side panel");
+      await polledVisible(mobileOptions).toBe(false);
 
       await page.setViewportSize({ width: 1280, height: 900 });
       await gateway.setOnline(false);

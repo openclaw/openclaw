@@ -219,7 +219,6 @@ it("waits for recovery release before admitting a queued successor", async () =>
   const successor = observe(admitStored(storePath, { kind: "queued_followup" }));
   await Promise.resolve();
   expect(successor.settled).toBe(false);
-  await expect(admitStored(storePath, { kind: "heartbeat" })).resolves.toEqual(activeRunSkipped);
   release.release();
   owned(await successor.promise).complete();
   await expectRecoveryReleased(storePath);

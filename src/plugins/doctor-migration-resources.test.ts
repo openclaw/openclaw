@@ -7,6 +7,7 @@ import { coercePluginDoctorContractModule } from "./doctor-contract-module.js";
 import type { PluginDoctorStateMigration } from "./doctor-contract-module.js";
 import { preparePluginDoctorMigrationBackupResources } from "./doctor-contract-registry.js";
 import { clearPluginDoctorContractRegistryCache } from "./doctor-contract-registry.test-fixtures.js";
+import { writeDoctorFiles } from "./doctor-contract.test-support.js";
 import {
   type PluginDoctorMigrationResourceCollectionParams,
   preparePluginDoctorMigrationResources,
@@ -16,6 +17,16 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 
 let noDataMigrations: { pluginId: string; migration: PluginDoctorStateMigration }[];
 let recoveryMigrations: { pluginId: string; migration: PluginDoctorStateMigration }[];
+async function bundledMigrations(pluginIds: string[]) {
+  const result: typeof noDataMigrations = [];
+  for (const pluginId of pluginIds) {
+    const { stateMigrations } = await loadBundledPluginFacade<{
+      stateMigrations: PluginDoctorStateMigration[];
+    }>({ pluginId, artifactBasename: "doctor-contract-api.ts" });
+    result.push(...stateMigrations.map((migration) => ({ pluginId, migration })));
+  }
+  return result;
+}
 beforeAll(async () => {
   const ids = new Set([
     "crabbox-warm-profile-v3",
@@ -23,24 +34,10 @@ beforeAll(async () => {
     "memory-core-qmd-workspace-retired",
     "memory-core-qmd-file-locks-to-sqlite-leases",
   ]);
-  noDataMigrations = [];
-  for (const pluginId of ["crabbox", "workboard", "memory-core"]) {
-    const { stateMigrations } = await loadBundledPluginFacade<{
-      stateMigrations: PluginDoctorStateMigration[];
-    }>({ pluginId, artifactBasename: "doctor-contract-api.ts" });
-    noDataMigrations.push(
-      ...stateMigrations
-        .filter((migration) => ids.has(migration.id))
-        .map((migration) => ({ pluginId, migration })),
-    );
-  }
-  recoveryMigrations = [];
-  for (const pluginId of ["codex", "voice-call"]) {
-    const { stateMigrations } = await loadBundledPluginFacade<{
-      stateMigrations: PluginDoctorStateMigration[];
-    }>({ pluginId, artifactBasename: "doctor-contract-api.ts" });
-    recoveryMigrations.push(...stateMigrations.map((migration) => ({ pluginId, migration })));
-  }
+  noDataMigrations = (await bundledMigrations(["crabbox", "workboard", "memory-core"])).filter(
+    ({ migration }) => ids.has(migration.id),
+  );
+  recoveryMigrations = await bundledMigrations(["codex", "voice-call"]);
 });
 
 const tempDirs: string[] = [];
@@ -260,16 +257,14 @@ it.each(["undeclared", "declared", "malformed"] as const)(
     const pluginId = "warning-fixture";
     const pluginRoot = path.join(stateDir, "plugin");
     const resourcePath = path.join(stateDir, "private.sqlite");
-    fs.mkdirSync(pluginRoot);
-    fs.writeFileSync(
-      path.join(pluginRoot, "openclaw.plugin.json"),
-      JSON.stringify({
+    writeDoctorFiles(pluginRoot, {
+      "openclaw.plugin.json": {
         id: pluginId,
         configSchema: {},
         doctorContract: { stateMigrations: true },
-      }),
-    );
-    fs.writeFileSync(path.join(pluginRoot, "index.cjs"), "module.exports = {};\n");
+      },
+      "index.cjs": "module.exports = {};\n",
+    });
     const inventory =
       declaration === "undeclared"
         ? ""

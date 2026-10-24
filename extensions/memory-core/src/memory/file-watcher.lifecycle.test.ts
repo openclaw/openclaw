@@ -22,9 +22,8 @@ const calls = (...spies: { mock: { calls: unknown[] } }[]) =>
 function unavailable(entry: Observation, operation: "scan" | "watch", error: Error, code?: string) {
   entry.health({ state: "unavailable", failure: { operation, error, code } });
 }
-vi.mock("openclaw/plugin-sdk/memory-core-host-engine-foundation", async (original) => {
-  const actual =
-    await original<typeof import("openclaw/plugin-sdk/memory-core-host-engine-foundation")>();
+vi.mock("openclaw/plugin-sdk/diagnostic-runtime", async (original) => {
+  const actual = await original<typeof import("openclaw/plugin-sdk/diagnostic-runtime")>();
   return {
     ...actual,
     createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => ({

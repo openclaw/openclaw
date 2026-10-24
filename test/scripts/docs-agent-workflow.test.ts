@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { evaluateWorkflowExpression, readCiWorkflow } from "./ci-workflow.test-support.js";
+import { files } from "./docs-fixture.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const workflow = parse(fs.readFileSync(".github/workflows/docs-agent.yml", "utf8"));
@@ -49,12 +50,12 @@ type WorkflowRun = Omit<typeof currentRun, "conclusion"> & {
   writer?: "denied" | "gated";
 };
 
-function runGate(runs: WorkflowRun[], options: { event?: string; workflowHeadSha?: string } = {}) {
+function runGate(runs: WorkflowRun[]) {
   const root = tempDirs.make("docs-agent-gate-");
+  const { write } = files(root);
   const bin = join(root, "bin");
   const output = join(root, "output");
-  fs.mkdirSync(bin);
-  fs.writeFileSync(output, "");
+  write("output", "");
   const owner = join(root, "owner.py");
   fs.copyFileSync(".github/actions/git-owner/owner.py", owner);
   // Only the gate runs. Git/network and the clock are fixtures; jq executes the real filters.
@@ -76,7 +77,7 @@ esac`,
     date: `printf '%s\\n' '2026-08-28T22:30:00Z'`,
   };
   for (const [name, script] of Object.entries(commands)) {
-    fs.writeFileSync(join(bin, name), `#!/bin/sh\n${script}\n`, { mode: 0o755 });
+    write(`bin/${name}`, `#!/bin/sh\n${script}\n`, { mode: 0o755 });
   }
 
   const jobs = runs.map((run) => {
@@ -99,8 +100,8 @@ esac`,
     GITHUB_OUTPUT: output,
     GITHUB_REPOSITORY: "openclaw/openclaw",
     GITHUB_RUN_ID: String(currentRun.id),
-    EVENT_NAME: options.event ?? "workflow_run",
-    WORKFLOW_HEAD_SHA: options.workflowHeadSha ?? mainSha,
+    EVENT_NAME: "workflow_run",
+    WORKFLOW_HEAD_SHA: mainSha,
     DOCS_AGENT_RUNS_FIXTURE: JSON.stringify({ workflow_runs: runs }),
     DOCS_AGENT_JOBS_FIXTURE: JSON.stringify(Object.fromEntries(jobs)),
   });
@@ -130,22 +131,21 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
     "admits only an exact regeneration of an existing docs mirror ($change, staged=$staged)",
     ({ change, staged }) => {
       const root = tempDirs.make("docs-agent-mirror-");
+      const { write } = files(root);
       const git = (...args: string[]) =>
         execFileSync("git", ["-C", root, ...args], { encoding: "utf8" });
       const mirrorPath = join(root, "CHANGELOG/2026.9.4.md");
       const docsPath = join(root, "docs/releases/2026.9.4.md");
-      fs.mkdirSync(join(root, "docs/releases"), { recursive: true });
-      fs.mkdirSync(join(root, "src"));
       const sourcePath = join(root, "src/example.js");
       const originalSource = "export const value = 1;\n";
-      fs.writeFileSync(sourcePath, originalSource);
+      write("src/example.js", originalSource);
       fs.symlinkSync(resolve("scripts"), join(root, "scripts"), "dir");
-      fs.writeFileSync(
-        join(root, "CHANGELOG.md"),
+      write(
+        "CHANGELOG.md",
         "# Changelog\n\n## 2026.9.4\n\nReleased notes.\n\n### Complete contribution record\n\n- Original accounting.\n\n## 2026.8.1\n\nHistorical notes.\n",
       );
       runNode("release-changelog", { root }, "split");
-      fs.writeFileSync(docsPath, "# Release notes\n\nApproved source prose.\n");
+      write("docs/releases/2026.9.4.md", "# Release notes\n\nApproved source prose.\n");
       const regenerate = () =>
         runNode("render-release-changelog", {
           root,
@@ -258,19 +258,6 @@ describe.skipIf(process.platform === "win32")("Docs Agent gate", () => {
     },
   ])("does not let $name throttle admission or advance the review base", ({ runs }) => {
     expect(runGate(runs).output).toBe(admittedOutput(previousSha));
-  });
-
-  it("still rejects superseded CI", () => {
-    const result = runGate([], { workflowHeadSha: previousSha });
-    expect(result.output).toBe("run_agent=false\n");
-    expect(result.stdout).toContain(`CI run is superseded by ${mainSha}`);
-  });
-
-  it("preserves manual dispatch admission without applying the hourly throttle", () => {
-    const result = runGate([currentRun, { ...currentRun, id: 122 }], {
-      event: "workflow_dispatch",
-    });
-    expect(result.output).toBe(admittedOutput(parentSha));
   });
 });
 

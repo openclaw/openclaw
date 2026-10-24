@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import type { IncomingMessage } from "node:http";
 import type { AddressInfo } from "node:net";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -21,9 +22,12 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { makeClient as makePresenceClient } from "./server-broadcast.test-helpers.js";
+import { broadcastFor as broadcaster } from "./server-broadcast.test-support.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
 import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
+import { installGatewayDeflateCodec } from "./server/ws-compression.js";
+import { createGatewayWebSocketTransport } from "./server/ws-transport.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import * as transcriptReaders from "./session-transcript-readers.js";
@@ -64,16 +68,6 @@ const profile = (profileId: string, displayName: string | null = null, updatedAt
   avatarRevision: "1",
   hasAvatar: false,
 });
-
-function broadcaster(
-  peers: ReturnType<typeof makeClient>[],
-  options: Omit<Parameters<typeof createGatewayBroadcaster>[0], "clients"> = {},
-) {
-  return createGatewayBroadcaster({
-    clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
-    ...options,
-  });
-}
 
 async function seedSession(
   sessionKey: string,
@@ -430,8 +424,13 @@ describe("broadcast serialization failures", () => {
       const accepted = once(server, "connection");
       const peer = new WebSocket(`ws://127.0.0.1:${address.port}`);
       await once(peer, "open");
-      const [socket] = (await accepted) as [WebSocket];
-      return { peer, socket };
+      const [socket, request] = (await accepted) as [WebSocket, IncomingMessage];
+      const transport = createGatewayWebSocketTransport(
+        socket,
+        request.socket,
+        installGatewayDeflateCodec(socket),
+      );
+      return { peer, socket, stream: request.socket, transport };
     };
     const retired = await connectPeer();
     const broken = await connectPeer();
@@ -442,11 +441,11 @@ describe("broadcast serialization failures", () => {
       binaryFrames.push(isBinary);
       delivered.push(JSON.parse(rawDataToString(data)) as { event: string; seq: number });
     });
-    const makeRealClient = (connId: string, socket: WebSocket): GatewayWsClient =>
+    const makeRealClient = (connId: string, socket: typeof healthy.transport): GatewayWsClient =>
       Object.assign(makeClient(connId).client, { socket });
-    const retiredClient = makeRealClient("real-retired", retired.socket);
-    const brokenClient = makeRealClient("real-broken", broken.socket);
-    const healthyClient = makeRealClient("real-healthy", healthy.socket);
+    const retiredClient = makeRealClient("real-retired", retired.transport);
+    const brokenClient = makeRealClient("real-broken", broken.transport);
+    const healthyClient = makeRealClient("real-healthy", healthy.transport);
     const clients = new GatewayClientRegistry([retiredClient, brokenClient, healthyClient]);
     const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({ clients });
 
@@ -454,7 +453,7 @@ describe("broadcast serialization failures", () => {
       warnSpy.mockClear();
       const brokenPeerClosed = vi.fn();
       broken.peer.once("close", brokenPeerClosed);
-      vi.spyOn(broken.socket, "send").mockImplementationOnce(() => {
+      vi.spyOn(broken.stream, "write").mockImplementationOnce(() => {
         throw new Error("injected synchronous send failure");
       });
       retired.socket.close(1000, "retiring peer");
@@ -707,7 +706,6 @@ describe("presence payload encoding", () => {
     expect(byteEncodings.length).toBeLessThanOrEqual(2);
     expect(project).toHaveBeenCalledTimes(4);
     for (const [index, peer] of peers.entries()) {
-      expect(Buffer.isBuffer(peer.socket.send.mock.lastCall![0])).toBe(true);
       expectFrame(
         peer,
         "presence",

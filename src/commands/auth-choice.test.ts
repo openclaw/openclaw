@@ -71,15 +71,15 @@ vi.mock("./auth-choice.apply.api-providers.js", () => {
   };
 });
 
-vi.mock("../agents/agent-scope.js", () => ({
+vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
   resolveDefaultAgentId: () => "main",
   resolveAgentDir: (configForTest: unknown, agentId: string) =>
     `${process.env.OPENCLAW_STATE_DIR ?? "/tmp/openclaw-state"}/agents/${agentId}/agent`,
   resolveAgentWorkspaceDir: (configForTest: unknown, agentId: string) =>
     `/tmp/openclaw-workspaces/${agentId}`,
   // Required by src/agents/model-runtime-policy.ts, which is transitively
-  // imported through provider-auth-choice -> copilot-runtime-plugin-install ->
-  // copilot-routing -> model-runtime-policy.
+  // imported through provider-auth-choice -> runtime-plugin-install.
   resolveSessionAgentIds: () => ({ defaultAgentId: "main", sessionAgentId: "main" }),
   listAgentEntries: () => [],
 }));

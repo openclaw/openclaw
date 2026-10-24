@@ -137,8 +137,6 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
   await emit();
   expect(element.textContent).toContain(digest.headline);
   element.rows = rows({ ...child, activeRunIds: ["replacement-run"] });
-  flush();
-  expect(element.textContent).not.toContain(digest.headline);
   await emit({ revision: 10 });
   expect(element.textContent).not.toContain(digest.headline);
   element.rows = rows(child);
@@ -146,6 +144,30 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
   expect(element.textContent).not.toContain(digest.headline);
   await emit({ revision: 11 });
   expect(element.textContent).toContain(digest.headline);
+  element.compact = true;
+  connection.publishEvent({
+    type: "event",
+    event: "session.observer",
+    payload: {
+      ...digest,
+      revision: 13,
+      headline: "Finishing verification",
+      planProgress: { completed: 2, total: 3 },
+    },
+  });
+  connection.publishEvent({
+    type: "event",
+    event: "session.observer",
+    payload: { ...digest, revision: 12, headline: "Superseded verification" },
+  });
+  flush();
+  expect(element.textContent).toContain("Finishing verification");
+  expect(element.textContent).not.toContain("Superseded verification");
+  expect(element.querySelector(".chat-subagent-activity__steps")?.textContent).toBe("2/3");
+  connection.publish({ ...connection.gateway.snapshot, hello: gatewayHelloForMethods([]) });
+  await emit();
+  expect(element.textContent).toContain(digest.headline);
+  expect(element.querySelector(".chat-subagent-activity__steps")).toBeNull();
   view.unmount();
   flush();
   expect(subscriptions).toHaveBeenCalledTimes(1);

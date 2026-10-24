@@ -2,11 +2,7 @@
 import { AsyncResource } from "node:async_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  awaitGateBeforeSettlement,
-  createDeferred,
-  withinTest,
-} from "../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import {
   clearTestEmbeddedRun as clearActiveEmbeddedRun,
   registerTestEmbeddedRun as setActiveEmbeddedRun,
@@ -375,135 +371,6 @@ describe("dispatchReplyFromConfig", () => {
       );
     },
   );
-
-  it("skips a Telegram topic heartbeat turn while a reply operation is active", async () => {
-    setNoAbort();
-    const sessionKey = "agent:main:telegram:group:-1003774691294:topic:3731";
-    const activeOperation = createReplyOperation({
-      sessionKey,
-      sessionId: "user-session",
-      resetTriggered: false,
-    });
-    activeOperation.setPhase("running");
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(
-      async () => ({ text: "heartbeat should not run" }) satisfies ReplyPayload,
-    );
-
-    const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "telegram",
-        Surface: "telegram",
-        OriginatingChannel: "telegram",
-        SessionKey: sessionKey,
-        ChatType: "group",
-        IsForum: true,
-        MessageSid: "heartbeat",
-        MessageThreadId: 3731,
-        TransportThreadId: 3731,
-        To: "telegram:-1003774691294:topic:3731",
-        BodyForAgent: "[OpenClaw heartbeat poll]",
-      }),
-      cfg: automaticGroupReplyConfig,
-      dispatcher,
-      replyOptions: { isHeartbeat: true },
-      replyResolver,
-    });
-
-    expect(result).toMatchObject({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    });
-    expect(replyResolver).not.toHaveBeenCalled();
-    expect(dispatchHarness.getSessionControllerOperation(sessionKey)).toBe(activeOperation);
-    expect(messageAuditMocks.emitTrustedMessageAuditEvent).toHaveBeenCalledOnce();
-    expect(messageAuditEvents()[0]).toEqual(
-      expect.objectContaining({
-        status: "blocked",
-        outcome: "skipped",
-        reasonCode: "reply_operation_active",
-      }),
-    );
-    activeOperation.complete();
-  });
-
-  it("lets a visible source supersede an active heartbeat before waiting for its mailbox claim", async ({
-    signal,
-  }) => {
-    setNoAbort();
-    const sessionKey = "agent:main:discord:direct:heartbeat-yield";
-    const heartbeat = createReplyOperation({
-      sessionKey,
-      sessionId: "heartbeat-session",
-      turnKind: "heartbeat",
-      resetTriggered: false,
-    });
-    const cancelled = createDeferred();
-    const releaseProducer = createDeferred();
-    const events: string[] = [];
-    const backend = {
-      kind: "embedded" as const,
-      cancel: vi.fn(() => {
-        events.push("heartbeat-cancelled");
-        cancelled.resolve();
-      }),
-    };
-    heartbeat.attachBackend(backend);
-    heartbeat.setPhase("running");
-    const producer = (async () => {
-      await releaseProducer.promise;
-      events.push("heartbeat-producer-settled");
-      heartbeat.detachBackend(backend);
-      heartbeat.complete();
-    })();
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async () => {
-      events.push("visible-resolver-started");
-      return { text: "The visible request completed." } satisfies ReplyPayload;
-    });
-    const dispatch = dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Provider: "discord",
-        Surface: "discord",
-        SessionKey: sessionKey,
-        ChatType: "direct",
-        BodyForAgent: "Please answer the visible request.",
-      }),
-      cfg: automaticDirectReplyConfig,
-      dispatcher,
-      replyResolver,
-    });
-    try {
-      await withinTest(
-        awaitGateBeforeSettlement(
-          cancelled.promise,
-          dispatch,
-          "Visible dispatch completed without preempting its heartbeat",
-        ),
-        signal,
-      );
-      expect(backend.cancel).toHaveBeenCalledExactlyOnceWith("superseded");
-      expect(heartbeat.abortSignal.aborted).toBe(true);
-      expect(dispatchHarness.getSessionControllerOperation(sessionKey)).toBe(heartbeat);
-      expect(replyResolver).not.toHaveBeenCalled();
-      releaseProducer.resolve();
-      await producer;
-      await expect(dispatch).resolves.toMatchObject({ queuedFinal: true });
-      expect(events).toEqual([
-        "heartbeat-cancelled",
-        "heartbeat-producer-settled",
-        "visible-resolver-started",
-      ]);
-      expect(replyResolver).toHaveBeenCalledOnce();
-      expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith({
-        text: "The visible request completed.",
-      });
-    } finally {
-      releaseProducer.resolve();
-      await producer;
-      await Promise.allSettled([dispatch]);
-    }
-  });
 
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
     setNoAbort();

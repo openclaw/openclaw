@@ -9,7 +9,10 @@ import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 export function createSqliteSchemaEnsurer(
   schemaSql: () => string,
   objects: { tables: readonly string[]; indexes?: readonly string[] },
-): (database: EngineConnection) => void {
+): (
+  database: EngineConnection,
+  runWrite?: (install: (database: EngineConnection) => void) => void,
+) => void {
   const present = (database: DatabaseSync): boolean => {
     const facts = getAdmittedSqliteSchemaFacts(database);
     return (
@@ -18,7 +21,7 @@ export function createSqliteSchemaEnsurer(
       (objects.indexes?.every((index) => facts.indexes.has(index)) ?? true)
     );
   };
-  return (database) => {
+  return (database, runWrite) => {
     if (isPostgresSqlConnection(database)) {
       requireNativeDatabaseFile("postgres", "repair");
     }
@@ -26,11 +29,13 @@ export function createSqliteSchemaEnsurer(
       if (present(database)) {
         return;
       }
-      const install = () => database.exec(schemaSql()); // sqlite-allow-raw -- Canonical additive DDL only.
-      if (database.isTransaction) {
-        install();
+      const install = (db: EngineConnection) => db.exec(schemaSql()); // sqlite-allow-raw -- Canonical additive DDL only.
+      if (runWrite) {
+        runWrite(install);
+      } else if (database.isTransaction) {
+        install(database);
       } else {
-        runSqliteImmediateTransactionSync(database, install);
+        runSqliteImmediateTransactionSync(database, () => install(database));
       }
     });
   };

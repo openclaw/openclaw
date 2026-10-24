@@ -1,3 +1,4 @@
+import { createEffect } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
@@ -16,7 +17,7 @@ import { readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import {
   openSessionWorkspacePreview,
   pinSessionWorkspacePreview,
-  closeSessionWorkspacePreview,
+  requestCloseSessionWorkspacePreview,
   selectSessionWorkspacePreview,
   getSessionWorkspace,
   loadSessionWorkspace,
@@ -86,6 +87,49 @@ function nextWorkspaceUpdate(state: SessionWorkspaceHost) {
 beforeEach(installResizeObserverStub);
 afterEach(() => document.body.replaceChildren());
 describe("workspace file tabs", () => {
+  it("opens a file while the catalog refresh is pending", async () => {
+    const state = host();
+    const workspace = getSessionWorkspace(state);
+    workspace.list = {
+      sessionKey: state.sessionKey,
+      root: "/workspace",
+      files: [],
+      browser: { path: "", entries: [{ name: "reports", path: "reports", kind: "directory" }] },
+    };
+    const pending = createDeferred<NonNullable<typeof workspace.list>>();
+    state.sessions.listFiles = vi.fn().mockReturnValue(pending.promise);
+    state.sessions.getFile = vi
+      .fn()
+      .mockResolvedValue(textResponse(state, "inventory.csv", "notebooks"));
+    const panel = document.createElement("openclaw-chat-files-panel");
+    panel.tabsInHeader = false;
+    panel.presentation = "desktop";
+    panel.renderDetail = ({ content }) =>
+      content.kind === "file" ? content.content : content.kind;
+    const sync = () => {
+      panel.workspace = createSessionWorkspaceProps(state, { presentation: "desktop" });
+      panel.previews = workspace.previews;
+      panel.activeId = workspace.activePreviewId;
+    };
+    const stop = sessionWorkspaceForHost(state).subscribe(sync);
+    onTestFinished(() => {
+      stop();
+      pending.resolve(workspace.list!);
+    });
+    sync();
+    document.body.append(panel);
+    await waitForSolid(() => expect(panel.textContent).toContain("reports"));
+    loadSessionWorkspace(state, workspace);
+    await waitForSolid(() => expect(state.sessions.listFiles).toHaveBeenCalledOnce());
+    await openSessionWorkspaceFile(state, { path: "inventory.csv" });
+    await waitForSolid(() => expect(panel.textContent).toContain("notebooks"));
+    expect(
+      panel.querySelector(".chat-files-panel__page:not(.chat-files-panel__catalog):not([hidden])")
+        ?.textContent,
+    ).toContain("notebooks");
+    expect(panel.querySelector('button[aria-label="reports"]')).not.toBeNull();
+  });
+
   it("revalidates a clean file on explicit reopen without replacing its tab", async () => {
     const state = host();
     const getFile = vi
@@ -124,7 +168,7 @@ describe("workspace file tabs", () => {
       }
       void openSessionWorkspaceFile(state, { path: "draft.md" });
       if (timing === "during read") {
-        expect(getFile).toHaveBeenCalledTimes(2);
+        await vi.waitFor(() => expect(getFile).toHaveBeenCalledTimes(2));
         setFileDraft(content, { content: "UNSAVED", expectedHash: "old" });
         const updated = nextWorkspaceUpdate(state);
         read.resolve({ ...initial, file: { ...initial.file, content: "NEW", hash: "new" } });
@@ -153,7 +197,7 @@ describe("workspace file tabs", () => {
       const preview = getSessionWorkspace(state).previews[0]!;
       const content = preview.content;
       void openSessionWorkspaceFile(state, { path: "stale.md" });
-      expect(getFile).toHaveBeenCalledTimes(2);
+      await vi.waitFor(() => expect(getFile).toHaveBeenCalledTimes(2));
       if (change === "session") {
         state.sessionKey = "agent:main:other";
       }
@@ -161,7 +205,7 @@ describe("workspace file tabs", () => {
         state.connectionEpoch += 1;
       }
       if (change === "closed") {
-        closeSessionWorkspacePreview(state, preview.id);
+        await requestCloseSessionWorkspacePreview(state, preview.id);
       }
       const workspace = getSessionWorkspace(state);
       read.resolve({ ...initial, file: { ...initial.file, content: "STALE" } });
@@ -209,6 +253,7 @@ describe("workspace file tabs", () => {
       const retained = getSessionWorkspace(state).previews[0]!;
       void openSessionWorkspaceFile(state, { path: olderPath });
       void openSessionWorkspaceFile(state, { path: "/workspace/notes.md" });
+      await vi.waitFor(() => expect(pending.size).toBe(2));
       const older = () => {
         const request = pending.get(olderPath)!;
         if (failed) {
@@ -243,6 +288,52 @@ describe("workspace file tabs", () => {
       expect(getSessionWorkspace(state).error).toBe(unrelatedError ? "List failed" : null);
     },
   );
+
+  it("renders newer alias content before an older canonical read settles", async () => {
+    const state = host();
+    const initial = {
+      ...textResponse(state, "notes.md", "INITIAL", { workspacePath: "notes.md" }),
+      root: "/workspace",
+    };
+    const older = createDeferred<SessionWorkspaceGetResult>();
+    const newer = createDeferred<SessionWorkspaceGetResult>();
+    state.sessions.getFile = vi
+      .fn()
+      .mockResolvedValueOnce(initial)
+      .mockReturnValueOnce(older.promise)
+      .mockReturnValueOnce(newer.promise);
+    const panel = document.createElement("openclaw-chat-files-panel");
+    panel.renderDetail = (props) => {
+      const node = document.createElement("div");
+      createEffect(
+        () => (props.content.kind === "file" ? props.content.content : ""),
+        (value) => {
+          node.textContent = value;
+        },
+      );
+      return node;
+    };
+    const sync = () => {
+      const workspace = getSessionWorkspace(state);
+      panel.previews = workspace.previews;
+      panel.activeId = workspace.activePreviewId;
+    };
+    const stop = sessionWorkspaceForHost(state).subscribe(sync);
+    onTestFinished(() => {
+      stop();
+      older.resolve(initial);
+    });
+    document.body.append(panel);
+    void openSessionWorkspaceFile(state, { path: "notes.md" });
+    await waitForSolid(() => expect(panel.textContent).toContain("INITIAL"));
+    const preview = getSessionWorkspace(state).previews[0]!;
+    void openSessionWorkspaceFile(state, { path: "notes.md" });
+    void openSessionWorkspaceFile(state, { path: "/workspace/notes.md" });
+    newer.resolve({ ...initial, file: { ...initial.file, content: "CURRENT" } });
+    await waitForSolid(() => expect(panel.textContent).toContain("CURRENT"));
+    expect(getSessionWorkspace(state).previews).toEqual([preview]);
+    expect(state.sessions.getFile).toHaveBeenCalledTimes(3);
+  });
 
   it.each([
     ["README.md", "/workspace/README.md", false],
@@ -283,17 +374,13 @@ describe("workspace file tabs", () => {
       expect(readFileDraft(originalContent)?.content).toBe("Unsaved buffer");
     }
     expect(getSessionWorkspace(state).activePreviewId).toBe(retained.id);
-    void openSessionWorkspaceFile(state, { path: aliasPath, line: 9 });
-    expect(getFile).toHaveBeenCalledTimes(dirty ? 2 : 3);
+    const revalidation = openSessionWorkspaceFile(state, { path: aliasPath, line: 9 });
     expect(retained.content).toMatchObject({ navigation: { line: 9 } });
-    closeSessionWorkspacePreview(state, retained.id);
-    void openSessionWorkspaceFile(state, { path: aliasPath });
-    const updated = nextWorkspaceUpdate(state);
-    // A clean line-9 revalidation also settles after close; join both pending reads.
-    if (!dirty) {
-      await nextWorkspaceUpdate(state);
-    }
-    await updated;
+    await vi.waitFor(() => expect(getFile).toHaveBeenCalledTimes(dirty ? 2 : 3));
+    // Finish the draft-retention scenario before exercising the public close path.
+    setFileDraft(originalContent, null);
+    await requestCloseSessionWorkspacePreview(state, retained.id);
+    await Promise.all([revalidation, openSessionWorkspaceFile(state, { path: aliasPath })]);
     expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("file");
     expect(getFile).toHaveBeenCalledTimes(dirty ? 3 : 4);
   });
@@ -314,6 +401,7 @@ describe("workspace file tabs", () => {
     };
     void openSessionWorkspaceFile(state, { path: "README.md", line: 2 });
     void openSessionWorkspaceFile(state, { path: "/workspace/README.md", line: 7 });
+    await vi.waitFor(() => expect(pending.size).toBe(2));
     const aliasUpdated = nextWorkspaceUpdate(state);
     pending.get("/workspace/README.md")!(response);
     await aliasUpdated;
@@ -331,9 +419,9 @@ describe("workspace file tabs", () => {
     expect(getSessionWorkspace(state).activePreviewId).toBe("attachment:other");
     expect(retained.content).toMatchObject({ navigation: { line: 7 } });
     void openSessionWorkspaceFile(state, { path: "README.md", line: 9 });
-    expect(getFile).toHaveBeenCalledTimes(3);
     expect(getSessionWorkspace(state).activePreviewId).toBe(retained.id);
     expect(retained.content).toMatchObject({ navigation: { line: 9 } });
+    await vi.waitFor(() => expect(getFile).toHaveBeenCalledTimes(3));
   });
 
   it.each(["image", "unsupported"] as const)(
@@ -434,7 +522,43 @@ describe("workspace file tabs", () => {
     expect(getSessionWorkspace(state).previews).toHaveLength(1);
   });
 
-  it("deduplicates stable identities, closes only the selected preview, and scopes tabs to reconnect", () => {
+  it.each(["preview", undefined] as const)(
+    "opens the first file with its tree collapsed and preserves an explicit toggle (%s)",
+    async (disposition) => {
+      const state = host();
+      state.sessions.getFile = vi
+        .fn()
+        .mockImplementation(async (_sessionKey, path) =>
+          textResponse(state, path, "File contents"),
+        );
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(true);
+      await openSessionWorkspaceFile(state, { path: "first.txt" }, disposition);
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(false);
+      expect(getSessionWorkspace(state).previews[0]?.content).toMatchObject({
+        kind: "file",
+        content: "File contents",
+      });
+      selectSessionWorkspacePreview(state, null);
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(true);
+      selectSessionWorkspacePreview(state, "file:first.txt");
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(false);
+      createSessionWorkspaceProps(state).onTreeVisibleChange(true);
+      await openSessionWorkspaceFile(state, { path: "second.txt" }, disposition);
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(true);
+      selectSessionWorkspacePreview(state, null);
+      selectSessionWorkspacePreview(state, "file:second.txt");
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(true);
+      createSessionWorkspaceProps(state).onTreeVisibleChange(false);
+      await openSessionWorkspaceFile(state, { path: "third.txt" }, disposition);
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(false);
+      selectSessionWorkspacePreview(state, null);
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(true);
+      await openSessionWorkspaceFile(state, { path: "fourth.txt" }, disposition);
+      expect(createSessionWorkspaceProps(state).navigation.treeVisible).toBe(false);
+    },
+  );
+
+  it("deduplicates stable identities, closes only the selected preview, and scopes tabs to reconnect", async () => {
     const state = host();
     const first = openSessionWorkspacePreview(state, "file:a", "a.txt", {
       kind: "markdown",
@@ -443,7 +567,7 @@ describe("workspace file tabs", () => {
     openSessionWorkspacePreview(state, "file:b", "b.txt", { kind: "markdown", content: "B" });
     expect(openSessionWorkspacePreview(state, "file:a", "a.txt", { kind: "loading" })).toBe(first);
     expect(getSessionWorkspace(state).previews).toHaveLength(2);
-    closeSessionWorkspacePreview(state, "file:a");
+    await requestCloseSessionWorkspacePreview(state, "file:a");
     expect(getSessionWorkspace(state).activePreviewId).toBe("file:b");
     selectSessionWorkspacePreview(state, null);
     expect(getSessionWorkspace(state).previews).toHaveLength(1);
@@ -479,7 +603,7 @@ describe("workspace file tabs", () => {
     if (content.kind !== "file") {
       throw new Error("Expected loaded file");
     }
-    closeSessionWorkspacePreview(state, loaded.id);
+    await requestCloseSessionWorkspacePreview(state, loaded.id);
     const retained = openSessionWorkspacePreview(
       state,
       loaded.id,
@@ -522,7 +646,7 @@ describe("workspace file tabs", () => {
     expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("file");
     expect(getSessionWorkspace(state).activePreviewId).toBe("attachment:b");
     void openSessionWorkspaceFile(state, { path: "c.txt" });
-    closeSessionWorkspacePreview(state, "file:c.txt");
+    await requestCloseSessionWorkspacePreview(state, "file:c.txt");
     const closedUpdated = nextWorkspaceUpdate(state);
     resolve(textResponse(state, "c.txt", "C"));
     await closedUpdated;
@@ -532,20 +656,47 @@ describe("workspace file tabs", () => {
     ]);
   });
 
-  it("retries an unavailable file without duplicating its tab", async () => {
+  it("shows a held preview and recovers an unavailable file without duplicating its tab", async () => {
     const state = host();
-    const getFile = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("temporary failure"))
-      .mockResolvedValueOnce(textResponse(state, "retry.txt", "Ready"));
+    const first = createDeferred<SessionWorkspaceGetResult>();
+    const retry = createDeferred<SessionWorkspaceGetResult>();
+    const getFile = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
     state.sessions.getFile = getFile;
+    const panel = document.createElement("openclaw-chat-files-panel");
+    panel.presentation = "desktop";
+    const sync = () => {
+      const workspace = getSessionWorkspace(state);
+      panel.previews = workspace.previews;
+      panel.activeId = workspace.activePreviewId;
+    };
+    panel.renderDetail = () =>
+      Object.assign(document.createElement("div"), { textContent: "Ready" });
+    const stop = sessionWorkspaceForHost(state).subscribe(sync);
+    onTestFinished(stop);
     void openSessionWorkspaceFile(state, { path: "retry.txt" });
-    await nextWorkspaceUpdate(state);
-    expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("unavailable");
+    sync();
+    document.body.append(panel);
+    await waitForSolid(() =>
+      expect(panel.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull(),
+    );
+    const preview = getSessionWorkspace(state).previews[0]!;
+    first.reject(new Error("temporary failure"));
+    await waitForSolid(() => expect(panel.textContent).toContain("temporary failure"));
+    expect(preview.content.kind).toBe("unavailable");
+    const paths = [...panel.querySelectorAll<HTMLElement>(".sidebar-file-view__path")];
+    expect(paths).toHaveLength(2);
+    panel.previews = [{ ...preview, label: "renamed.txt" }];
+    await panel.updateComplete;
+    expect([...panel.querySelectorAll(".sidebar-file-view__path")]).toEqual(paths);
+    expect(paths.map((path) => [path.textContent, path.title])).toEqual([
+      ["renamed.txt", "renamed.txt"],
+      ["renamed.txt", "renamed.txt"],
+    ]);
     void openSessionWorkspaceFile(state, { path: "retry.txt" });
-    await nextWorkspaceUpdate(state);
-    expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("file");
-    expect(getSessionWorkspace(state).previews).toHaveLength(1);
+    retry.resolve(textResponse(state, "retry.txt", "Ready"));
+    await waitForSolid(() => expect(panel.textContent).toContain("Ready"));
+    expect(panel.textContent).not.toContain("temporary failure");
+    expect(getSessionWorkspace(state).previews).toEqual([preview]);
     expect(getFile).toHaveBeenCalledTimes(2);
   });
 
@@ -570,10 +721,11 @@ describe("workspace file tabs", () => {
       activeId: "a",
       renderDetail: Draft,
       onSelect: (id: string | null) => selectSessionWorkspacePreview(state, id),
-      onClose: (id: string) => closeSessionWorkspacePreview(state, id),
+      onClose: (id: string) => requestCloseSessionWorkspacePreview(state, id),
     });
     document.body.append(panel);
     await panel.updateComplete;
+    await waitForSolid(() => expect(panel.querySelector("textarea")).not.toBeNull());
     const textarea = panel.querySelector("textarea")!;
     textarea.value = "unsaved";
     pinSessionWorkspacePreview(state, a.id);
@@ -642,6 +794,7 @@ describe("workspace file tabs", () => {
           label: "Parts tray",
           content: {
             kind: "mcp-app",
+            observeRetirement: () => () => {},
             title: "Parts tray",
             launch: {
               owner: createGatewayBrowserClientFixture(),

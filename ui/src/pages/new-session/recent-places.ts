@@ -6,17 +6,15 @@ type RecentPlaceSource = {
   worktree?: { repoRoot?: unknown } | null;
 };
 
-type RecentPlace = {
-  folder: string;
-};
-
 export function recentPlaces(
   rows: readonly RecentPlaceSource[],
   opts: {
     workspace: string;
     allowGatewayFolder: (folder: string) => boolean;
   },
-): RecentPlace[] {
+): {
+  folder: string;
+}[] {
   const folders = new Set<string>();
 
   for (const row of rows) {

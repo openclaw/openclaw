@@ -19,12 +19,14 @@ import {
   createSessionCapabilityFixture,
   createTestChatPane,
   connectPaneTestView,
+  getPaneTestRuntime,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { applySelectedChatAgent } from "./chat-state-refresh.ts";
 import { createMessageGroupHarness } from "./components/chat-message-native.test-support.tsx";
 import { createMessageGroup } from "./components/chat-message.test-support.ts";
+import { retainSessionWorkspaceArtifacts } from "./components/chat-session-workspace-state.ts";
 import * as chatThread from "./components/chat-thread-interactions.ts";
 import {
   getChatSessionProjection,
@@ -104,6 +106,64 @@ function disconnect(pane: TestChatPane) {
 }
 
 describe("chat pane connection lifecycle", () => {
+  it("keeps explicit mobile Outputs available during pending history only while presented", async () => {
+    const { pane, state, request } = reconnectPane(new Promise<ChatHistoryResult>(() => {}));
+    getPaneTestRuntime(pane).mergedChrome = true;
+    pane.connectedClient = null;
+    pane.presented = false;
+    pane.applyGatewaySnapshot(pane.context.gateway.snapshot);
+    await waitForSolid(() => expect(requestCalls(request, "chat.startup")).toHaveLength(1));
+    expect(chatHistoryRequests(state).historyLoad.phase).toBe("in-flight");
+    const readDemand = () =>
+      pane.render().layout?.header?.header.header.detailsControl?.chat?.retainOutputs;
+    expect(readDemand()).toBeUndefined();
+    expect(requestCalls(request, "artifacts.list")).toHaveLength(0);
+
+    pane.presented = true;
+    const retain = readDemand();
+    expect(retain).toBeTypeOf("function");
+    const release = retain!();
+    onTestFinished(() => release?.());
+    expect(requestCalls(request, "artifacts.list")).toHaveLength(1);
+    expect(chatHistoryRequests(state).historyLoad.phase).toBe("in-flight");
+    pane.presented = false;
+    expect(readDemand()).toBeUndefined();
+    expect(retain!()).toBeUndefined();
+    expect(requestCalls(request, "artifacts.list")).toHaveLength(1);
+  });
+
+  it("retires only Details Outputs demand before replacing connected clients", async () => {
+    const { pane, state, request } = reconnectPane({
+      messages: [],
+      sessionId: "outputs-session",
+    });
+    await loadChatHistory(state, { startup: true });
+    const retain = pane.render().layout?.header?.header.header.detailsControl?.chat?.retainOutputs;
+    expect(retain).toBeTypeOf("function");
+    const releaseDetails = retain!();
+    const releaseFiles = retainSessionWorkspaceArtifacts(state);
+    onTestFinished(() => {
+      releaseDetails?.();
+      releaseFiles();
+    });
+    expect(requestCalls(request, "artifacts.list")).toHaveLength(2);
+
+    for (let replacement = 0; replacement < 2; replacement += 1) {
+      const nextRequest = createReconnectRequest(new Promise<ChatHistoryResult>(() => {}));
+      pane.applyGatewaySnapshot({
+        ...pane.context.gateway.snapshot,
+        client: createTestGatewayClient(nextRequest),
+      });
+      await waitForSolid(() => expect(requestCalls(nextRequest, "chat.startup")).toHaveLength(1));
+      const artifactReads = requestCalls(nextRequest, "artifacts.list");
+      expect(artifactReads).toHaveLength(1);
+      expect(artifactReads[0]![1]).not.toHaveProperty("messageRole");
+      // A retired UI cleanup must not release the still-visible Files consumer.
+      releaseDetails?.();
+      releaseDetails?.();
+    }
+  });
+
   it("adopts a persisted draft when recovery becomes ready without a transcript event", async () => {
     const text = "Saved draft from the previous tab";
     const request = createReconnectRequest({ messages: [], sessionId: "empty-session" });
@@ -282,8 +342,11 @@ describe("chat pane connection lifecycle", () => {
         );
       };
       renderReply();
-      expect(view.querySelector(".chat-message-image")?.getAttribute("src")).toBe(
-        "data:image/png;base64,cGFpcmluZy1maXh0dXJl",
+      await vi.dynamicImportSettled();
+      await waitForSolid(() =>
+        expect(view.querySelector(".chat-message-image")?.getAttribute("src")).toBe(
+          "data:image/png;base64,cGFpcmluZy1maXh0dXJl",
+        ),
       );
       const cached = {
         messages: [live],

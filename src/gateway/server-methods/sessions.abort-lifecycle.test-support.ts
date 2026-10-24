@@ -93,6 +93,14 @@ export function expectStopResult(respond: { mock: { calls: unknown[][] } }, stat
   ]);
 }
 
+export function expectCancelledSession(
+  entry: unknown,
+  lastRunId: string,
+  fields: Record<string, unknown> = {},
+) {
+  expect(entry).toMatchObject({ status: "killed", abortedLastRun: true, lastRunId, ...fields });
+}
+
 export function expectAbortFailure(
   respond: { mock: { calls: unknown[][] } },
   message: unknown,

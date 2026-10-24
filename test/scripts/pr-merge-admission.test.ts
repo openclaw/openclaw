@@ -7,6 +7,8 @@ import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-suppor
 const { fixture, outcomeRef, lockRef, describePosix, unknownProjection } =
   createMergeOutcomeFixtureHarness();
 const knownProjection = { mergeable: "MERGEABLE", mergeStateStatus: "CLEAN" };
+const credit = "Co-authored-by: Fixture Contributor <contributor@example.com>";
+const creditedFixture = () => fixture(`Source change\n\n${credit}\n`);
 type Fixture = ReturnType<typeof fixture>;
 type State = ReturnType<Fixture["state"]>;
 type Observation = State["observations"][number];
@@ -175,12 +177,12 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
   it.each([
     { auto: false, mergeStateStatus: "CLEAN", route: "immediate" },
     { auto: true, mergeStateStatus: "BLOCKED", route: "auto" },
-    { auto: false, mergeStateStatus: "CLEAN", route: "immediate", statusFirst: true },
+    { auto: false, mergeStateStatus: "HAS_HOOKS", route: "immediate", statusFirst: true },
     { auto: false, mergeStateStatus: "CLEAN", route: "immediate", unknownReads: 5 },
   ])(
     "settles UNKNOWN before pinned dispatch: %j",
     ({ auto, mergeStateStatus, route, statusFirst, unknownReads }) => {
-      const f = proof.configuredFixture(fixture, {
+      const f = proof.configuredFixture(creditedFixture, {
         observations: unknownReads
           ? [
               ...Array.from({ length: unknownReads }, () => ({ pr: unknownProjection })),
@@ -195,6 +197,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       proof.expectExit(f.run(auto));
       const state = f.state();
       proof.expectPinnedMerge(f, route);
+      expect(state.mergeBody).toBe(`Fixture body\n\n${credit}\n`);
       expect(state).toMatchObject({
         mutations: 1,
         posts: 1,
@@ -219,7 +222,7 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
       ],
     }).flatMap(([route, stages]) => stages.map((stage) => ({ route, stage }))),
   )("lands $route squash when main advances during $stage admission", ({ route, stage }) => {
-    const f = fixture();
+    const f = route === "Crabbox" && stage === "final" ? creditedFixture() : fixture();
     const main = f.commit(f.tree("before\n", "advanced\n"), [f.base]);
     const mergeStateStatus = route === "auto" ? "BLOCKED" : "CLEAN";
     const settled = { pr: { mergeable: "MERGEABLE", mergeStateStatus } };
@@ -249,6 +252,10 @@ describePosix("native merge outcome with real Git and supervised lock recovery",
     });
 
     proof.expectExit(f.run(route === "auto"));
+    if (route === "Crabbox" && stage === "final") {
+      proof.expectPinnedMerge(f, "admin");
+      expect(f.state().mergeBody).toBe(`Fixture body\n\n${credit}\n`);
+    }
     expect(f.record()).toMatchObject({
       phase: "complete",
       route: route === "Crabbox" ? "admin" : route === "auto" ? "auto" : "immediate",

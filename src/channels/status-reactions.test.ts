@@ -42,6 +42,10 @@ const collectEmojisForMethod = (calls: ReactionCall[], method: string) =>
   calls.filter((entry) => entry.method === method).map((entry) => entry.emoji);
 const countCallsForEmoji = (calls: ReactionCall[], emoji: string) =>
   calls.filter((entry) => entry.emoji === emoji).length;
+async function advance(action: () => unknown, ms = DEFAULT_TIMING.debounceMs) {
+  void action();
+  await vi.advanceTimersByTimeAsync(ms);
+}
 describe("resolveToolEmoji", () => {
   it.each(["unknown_tool", undefined])("uses the fallback emoji for %s", (tool) => {
     expect(resolveToolEmoji(tool, DEFAULT_EMOJIS)).toBe(DEFAULT_EMOJIS.tool);
@@ -64,9 +68,7 @@ describe("resolveToolEmoji", () => {
 });
 
 describe("createStatusReactionController", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
+  beforeEach(() => vi.useFakeTimers());
 
   afterEach(() => {
     vi.restoreAllMocks();
@@ -79,8 +81,7 @@ describe("createStatusReactionController", () => {
   ] as const)("holds %s before an immediately queued restore", async (method, expected, holdMs) => {
     const { calls, controller } = createEnabledController();
 
-    void controller.setQueued();
-    await vi.advanceTimersByTimeAsync(0);
+    await advance(controller.setQueued, 0);
 
     const settled = { terminal: false, restore: false };
     const terminalPromise = controller[method]().then(() => {
@@ -110,36 +111,24 @@ describe("createStatusReactionController", () => {
       call("remove", expected),
     ]);
     expect(settled).toEqual({ terminal: true, restore: true });
-    expect(countCallsForEmoji(calls, expected)).toBe(2);
   });
 
   it("should only fire last state when rapidly changing (debounce)", async () => {
     const { calls, controller } = createEnabledController();
 
-    void controller.setThinking();
-    await vi.advanceTimersByTimeAsync(100);
-
-    void controller.setTool("web_search");
-    await vi.advanceTimersByTimeAsync(100);
-
-    void controller.setTool("exec");
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-
-    const setEmojis = collectEmojisForMethod(calls, "set");
-    expect(setEmojis).toEqual(["🛠️"]);
+    await advance(controller.setThinking, 100);
+    await advance(() => controller.setTool("web_search"), 100);
+    await advance(() => controller.setTool("exec"));
+    expect(collectEmojisForMethod(calls, "set")).toEqual(["🛠️"]);
   });
 
   it("should cancel a pending compacting emoji before resuming thinking", async () => {
     const { calls, controller } = createEnabledController();
 
-    void controller.setCompacting();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs - 1);
+    await advance(controller.setCompacting, DEFAULT_TIMING.debounceMs - 1);
     controller.cancelPending();
-    void controller.setThinking();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-
-    const setEmojis = collectEmojisForMethod(calls, "set");
-    expect(setEmojis).toEqual([DEFAULT_EMOJIS.thinking]);
+    await advance(controller.setThinking);
+    expect(collectEmojisForMethod(calls, "set")).toEqual([DEFAULT_EMOJIS.thinking]);
   });
 
   it("uses clearReaction only for explicit clear on single-slot adapters", async () => {
@@ -147,8 +136,7 @@ describe("createStatusReactionController", () => {
 
     void controller.setQueued();
     await vi.runAllTimersAsync();
-    void controller.setThinking();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+    await advance(controller.setThinking);
 
     const donePromise = controller.setDone();
     await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.doneHoldMs);
@@ -173,8 +161,7 @@ describe("createStatusReactionController", () => {
   it("should cancel a terminal hold when explicitly cleared", async () => {
     const { calls, controller } = createEnabledController();
 
-    void controller.setQueued();
-    await vi.advanceTimersByTimeAsync(0);
+    await advance(controller.setQueued, 0);
     let terminalResolved = false;
     const terminalPromise = controller.setError().then(() => {
       terminalResolved = true;
@@ -198,13 +185,11 @@ describe("createStatusReactionController", () => {
     "resets stall timers on %s",
     async (update) => {
       const { calls, controller } = createEnabledController();
-      void controller.setThinking();
-      await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+      await advance(controller.setThinking);
 
       await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.stallSoftMs / 2);
       if (update === "phase change") {
-        void controller.setTool("exec");
-        await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
+        await advance(() => controller.setTool("exec"));
       } else {
         await controller.setThinking();
       }

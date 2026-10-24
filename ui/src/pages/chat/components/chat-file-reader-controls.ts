@@ -20,6 +20,8 @@ export type FileReaderChromeProps = {
 };
 
 export type FileViewControls = {
+  fileAttachment?: import("./chat-file-session-attachment.ts").FileSessionAttachment;
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
   presentation?: "desktop" | "mobile";
   back?: MobileFileBack;
   active?: boolean;

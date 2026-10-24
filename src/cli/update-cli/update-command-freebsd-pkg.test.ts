@@ -96,7 +96,7 @@ describe("FreeBSD pkg update admission", () => {
         const command = vi
           .spyOn(exec, "runCommandWithTimeout")
           .mockResolvedValue(createCommandResult({ stdout: `${path.dirname(root)}\n` }));
-        const runCommand = vi.fn<typeof exec.runCommandBuffered>().mockResolvedValue(
+        vi.spyOn(exec, "runCommandBuffered").mockResolvedValue(
           pkgQueryResult(
             ownership === "owned" ? `${root}/package.json\n` : "",
             ownership === "missing"
@@ -113,7 +113,7 @@ describe("FreeBSD pkg update admission", () => {
           root,
           installKind: "package",
           timeoutMs: 1000,
-          pkgOwnership: createSystemPackageOwnershipInspection(1000, { runCommand, onWarning }),
+          pkgOwnership: createSystemPackageOwnershipInspection(1000, { onWarning }),
         });
         if (ownership !== "owned") {
           await expect(admission).resolves.toBe("npm");

@@ -61,6 +61,7 @@ export function resolveCopilotForwardCompatModel(
     // image payloads for text-only models rather than failing silently.
     input: staticOverride?.input ?? ["text", "image"],
     cost: staticOverride?.cost ?? { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    ...(staticOverride?.family ? { family: staticOverride.family } : {}),
     contextWindow: staticOverride?.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
     // Only the unknown-model estimate is replaceable; curated static sizing stays authoritative.
     ...(staticOverride?.contextWindow === undefined ? { contextWindowSource: "synthetic" } : {}),
@@ -217,6 +218,25 @@ function resolveCopilotApi(
   );
 }
 
+// Copilot `/models` vendor labels for the developers OpenClaw catalogs. Azure OpenAI
+// serves OpenAI's models. Other labels leave the family to the manifest row, or unknown.
+const COPILOT_VENDOR_FAMILIES = new Map([
+  ["anthropic", "anthropic"],
+  ["azure openai", "openai"],
+  ["google", "google"],
+  ["moonshot ai", "moonshot"],
+  ["openai", "openai"],
+  ["xai", "xai"],
+]);
+
+function resolveCopilotModelFamily(entry: CopilotApiModelEntry, id: string): string | undefined {
+  const vendor = normalizeOptionalLowercaseString(entry.vendor);
+  return (
+    (vendor ? COPILOT_VENDOR_FAMILIES.get(vendor) : undefined) ??
+    resolveStaticCopilotModelOverride(id)?.family
+  );
+}
+
 function mergeCopilotCompat(
   base: ModelDefinitionConfig["compat"] | undefined,
   reasoningEfforts: string[] | null | undefined,
@@ -283,10 +303,12 @@ function mapCopilotApiModelToDefinition(
         }
       : undefined;
   const thinkingLevelMap = resolveCopilotThinkingLevelMap(id, compat, api, params);
+  const family = resolveCopilotModelFamily(entry, id);
 
   const definition: CopilotCatalogModel = {
     id,
     name: entry.name?.trim() || id,
+    ...(family ? { family } : {}),
     api,
     reasoning,
     input,
@@ -322,8 +344,6 @@ type FetchCopilotModelCatalogParams = {
   /** Resolved baseUrl from the same token-exchange response. */
   baseUrl: string;
   headers?: Record<string, string>;
-  /** Optional AbortSignal; defaults to a 10s timeout. */
-  signal?: AbortSignal;
 };
 
 /**
@@ -346,16 +366,14 @@ export async function fetchCopilotModelCatalog(
     throw new Error("fetchCopilotModelCatalog: copilotApiToken required");
   }
   const url = `${trimmedBase}/models`;
-  const controller = params.signal ? undefined : new AbortController();
-  const timeoutId = controller
-    ? setTimeout(() => controller.abort(), COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS)
-    : undefined;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), COPILOT_MODELS_LIST_DEFAULT_TIMEOUT_MS);
   let release: (() => Promise<void>) | undefined;
   try {
     const guarded = await fetchWithSsrFGuard({
       url,
       policy: ssrfPolicyFromHttpBaseUrlAllowedOrigin(trimmedBase),
-      signal: params.signal ?? controller?.signal,
+      signal: controller.signal,
       init: {
         method: "GET",
         headers: {
@@ -386,9 +404,7 @@ export async function fetchCopilotModelCatalog(
     }
     return out;
   } finally {
-    if (timeoutId !== undefined) {
-      clearTimeout(timeoutId);
-    }
+    clearTimeout(timeoutId);
     await release?.();
   }
 }

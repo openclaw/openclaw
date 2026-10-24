@@ -1,5 +1,6 @@
 import { StatementSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
+import type { WorkerEnvironmentStartStatus } from "../../../packages/gateway-protocol/src/schema/environments.js";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { SqliteBoardStore } from "../../boards/sqlite-board-store.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -151,26 +152,15 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       nodeDeviceId: "row-device",
     });
     let placement = await placements.startDispatch(identity);
-    for (const step of [
-      { to: "provisioning", patch: { environmentId: "row-environment" } },
-      { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
-      {
-        to: "starting",
-        patch: {
-          workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
-          remoteWorkspaceDir: "/workspace",
-        },
-      },
-      { to: "active", patch: { activeOwnerEpoch: 7 } },
-    ] as const) {
-      placement = await placements.transition({
-        sessionId: identity.sessionId,
-        from: placement.state,
-        expectedGeneration: placement.generation,
-        ...step,
-      });
-    }
+    placement = await placements.transition({
+      sessionId: identity.sessionId,
+      from: placement.state,
+      expectedGeneration: placement.generation,
+      to: "provisioning",
+      patch: { environmentId: "row-environment" },
+    });
     let machine = { cpu: 4, memoryGb: 16 };
+    let startStatus: WorkerEnvironmentStartStatus | undefined = { mode: "snapshot" };
     const environments = {
       get(environmentId: string) {
         const record = environmentStore.get(environmentId);
@@ -180,6 +170,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
               desktopAvailable: false,
               desktopApps: [],
               tunnelStatus: "stopped" as const,
+              startStatus,
             }
           : undefined;
       },
@@ -202,10 +193,11 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       startedAtMs: 10,
       updatedAtMs: 11,
     };
+    let runtimeInstallVersion = 0;
     const context = {
       workerSessionPlacementService: placements,
       workerEnvironmentService: environments,
-      workerPlacementDiskSpaceReader: { read: () => disk, version: () => 0 },
+      workerPlacementDiskSpaceReader: { read: () => disk, version: () => disk.observedAtMs },
       workerPlacementRunnerAvailabilityReader: createWorkerPlacementRunnerAvailabilityReader({
         environments,
         hasCurrentDeviceRunner: () => runnerAvailable,
@@ -216,7 +208,7 @@ it("refreshes selected placement/environment facts by revision and reuses them w
           readInstall: (nodeId) => (nodeId === runtimeInstall.nodeId ? runtimeInstall : undefined),
           readInstallForEnvironment: (id) =>
             runtimeInstall.environmentIds.includes(id) ? runtimeInstall : undefined,
-          version: () => runtimeInstall.updatedAtMs,
+          version: () => runtimeInstallVersion,
         },
       }),
     };
@@ -242,10 +234,42 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       placementFactsReader: preparedPlacements,
       databaseFacts: { hasBoard: false },
     });
+    const starting = facts.present();
+    expect(facts.present()).toBe(starting);
+    expect(starting.placement).toMatchObject({
+      state: "provisioning",
+      startStatus: { mode: "snapshot" },
+    });
+    startStatus = { mode: "snapshot", phase: "saving" };
+    expect(facts.present().placement).toMatchObject({ startStatus });
+    expect(starting.placement).not.toHaveProperty("startStatus.phase");
+    startStatus = undefined;
+    expect(facts.present().placement).not.toHaveProperty("startStatus");
+    for (const step of [
+      { to: "syncing", patch: { workerBundleHash: "a".repeat(64) } },
+      {
+        to: "starting",
+        patch: {
+          workspaceBaseManifestRef: `sha256:${"b".repeat(64)}`,
+          remoteWorkspaceDir: "/workspace",
+        },
+      },
+      { to: "active", patch: { activeOwnerEpoch: 7 } },
+    ] as const) {
+      placement = await placements.transition({
+        sessionId: identity.sessionId,
+        from: placement.state,
+        expectedGeneration: placement.generation,
+        ...step,
+      });
+    }
+    await refreshPlacements();
     const reads = observeMainThreadReads();
     const finishPermissionChange = beginSessionPermissionChange(identity.sessionId);
     try {
       const first = facts.present();
+      expect(facts.present()).toBe(first);
+      expect(Object.isFrozen(first.placement)).toBe(true);
       expect(first.permissionModePending).toBe(true);
       expect(first.placement).toMatchObject({
         state: "active",
@@ -264,22 +288,32 @@ it("refreshes selected placement/environment facts by revision and reuses them w
       });
       expect(first.placement).not.toHaveProperty("workerRuntimeInstall.bundleHash");
       disk = { ...disk, availableBytes: 5_000, observedAtMs: 11 };
+      expect(facts.present().placement).toMatchObject({
+        diskSpace: { availableBytes: 5_000, observedAtMs: 11 },
+      });
       runnerAvailable = false;
+      context.workerPlacementRunnerAvailabilityReader.markChanged();
+      expect(facts.present().placement).toMatchObject({ runner: { status: "offline" } });
       runtimeInstall = {
         ...runtimeInstall,
         phase: "installing",
         transferredBytes: 1_000,
         updatedAtMs: 12,
       };
-      expect(facts.present().placement).toMatchObject({
+      runtimeInstallVersion++;
+      const updated = facts.present();
+      expect(facts.present()).toBe(updated);
+      expect(updated.placement).toMatchObject({
         diskSpace: { status: "ok", availableBytes: 5_000, observedAtMs: 11 },
         runner: { status: "offline" },
         workerRuntimeInstall: { phase: "installing", transferredBytes: 1_000, updatedAtMs: 12 },
       });
       expect(first.placement).toHaveProperty("workerRuntimeInstall.transferredBytes", 100);
       runtimeInstall = { ...runtimeInstall, bundleHash: placement.workerBundleHash! };
+      runtimeInstallVersion++;
       expect(facts.present().placement).not.toHaveProperty("workerRuntimeInstall");
       runtimeInstall = { ...runtimeInstall, bundleHash: "c".repeat(64) };
+      runtimeInstallVersion++;
       expect(first.placement).toMatchObject({ diskSpace: { availableBytes: 6_000 } });
       finishPermissionChange();
       expect(facts.present().permissionModePending).toBe(false);

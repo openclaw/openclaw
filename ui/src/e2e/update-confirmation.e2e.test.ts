@@ -1,7 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { installMockGateway, waitForConfirmModal } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { createUpdateRunFixture } from "./update-run.test-support.ts";
 
@@ -236,6 +236,7 @@ suite.define(() => {
         const card = updateCard(page);
         await card.locator("summary").click();
         await card.locator(".sidebar-update-card__action").click();
+        await waitForConfirmModal(page);
 
         if (owner === "native") {
           await restoreNative(page);
@@ -247,6 +248,7 @@ suite.define(() => {
           ).toHaveLength(0);
           await button(page, "Update Mac app and restart").click();
           expect(await page.locator("html").getAttribute("data-native-update-posted")).toBe("yes");
+          expect(await gateway.getRequests("update.run")).toHaveLength(0);
           return;
         }
 
@@ -555,7 +557,7 @@ suite.define(() => {
       expect((await page.goto(`${suite.server.baseUrl}settings/updates`))?.status()).toBe(200);
       await gateway.waitForRequest("config.get");
       await gateway.emitGatewayEvent("update.available", { updateAvailable: UPDATE_AVAILABLE });
-      await button(page, "Update now").click();
+      await button(page, "Update Gateway…").click();
 
       const dialog = confirmationDialog(page);
       await dialog.waitFor();

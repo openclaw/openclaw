@@ -62,6 +62,17 @@ import { ircSetupContract } from "./setup-core.js";
 import { ircSetupWizard } from "./setup-surface.js";
 import type { CoreConfig, IrcProbe } from "./types.js";
 
+function ircAccountDetails(account: ResolvedIrcAccount) {
+  return {
+    host: account.host,
+    port: account.port,
+    tls: account.tls,
+    nick: account.nick,
+    passwordSource: account.passwordSource,
+    tokenStatus: account.tokenStatus,
+  };
+}
+
 function toIrcMessageResult({ target, ...result }: SendIrcResult) {
   return {
     ...result,
@@ -285,14 +296,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
         describeAccountSnapshot({
           account,
           configured: account.configured,
-          extra: {
-            host: account.host,
-            port: account.port,
-            tls: account.tls,
-            nick: account.nick,
-            passwordSource: account.passwordSource,
-            tokenStatus: account.tokenStatus,
-          },
+          extra: ircAccountDetails(account),
         }),
     },
     secrets: {
@@ -392,14 +396,7 @@ export const ircPlugin: ChannelPlugin<ResolvedIrcAccount, IrcProbe> = createChat
         name: account.name,
         enabled: account.enabled,
         configured: account.configured,
-        extra: {
-          host: account.host,
-          port: account.port,
-          tls: account.tls,
-          nick: account.nick,
-          passwordSource: account.passwordSource,
-          tokenStatus: account.tokenStatus,
-        },
+        extra: ircAccountDetails(account),
       }),
     }),
     gateway: {

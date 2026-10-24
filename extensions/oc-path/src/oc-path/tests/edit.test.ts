@@ -1,5 +1,6 @@
-// OC Path tests cover edit plugin behavior.
 import { describe, expect, it } from "vitest";
+// OC Path tests cover edit plugin behavior.
+import { parse as parseYaml } from "yaml";
 import { parseOcPath } from "../oc-path.js";
 import { parseMd } from "../parse.js";
 import { OcEmitSentinelError, REDACTED_SENTINEL } from "../sentinel.js";
@@ -28,6 +29,30 @@ Body ${REDACTED_SENTINEL}.`;
     const ast = parseMd("---\nx: a\n---\n");
     const r = setOcPath(ast, parseOcPath("oc://AGENTS.md/[frontmatter]/x"), "has: colon");
     expect(r.raw).toContain('x: "has: colon"');
+  });
+
+  it.each(["1.10", "0123", "true", "~", "null", "- draft"])(
+    "keeps the string %s readable as the same string",
+    (value) => {
+      const ast = parseMd("---\nversion: 9.9\n---\n");
+      const r = setOcPath(ast, parseOcPath("oc://note.md/[frontmatter]/version"), value);
+      expect(r.raw).toContain(`version: ${JSON.stringify(value)}`);
+      expect(parseYaml(r.raw.split(/^---$/m)[1] ?? "").version).toBe(value);
+    },
+  );
+
+  it.each(["café", "$1", "plain value"])("writes the ordinary string %s unquoted", (value) => {
+    const ast = parseMd("---\nversion: 9.9\n---\n");
+    const r = setOcPath(ast, parseOcPath("oc://note.md/[frontmatter]/version"), value);
+    expect(r.raw).toContain(`version: ${value}`);
+    expect(parseYaml(r.raw.split(/^---$/m)[1] ?? "").version).toBe(value);
+  });
+
+  it("keeps an inserted frontmatter value a string", () => {
+    const ast = parseMd("---\nname: x\n---\n");
+    const r = setOcPath(ast, parseOcPath("oc://note.md/[frontmatter]/+version"), "1.10");
+    expect(r.raw).toContain('version: "1.10"');
+    expect(parseYaml(r.raw.split(/^---$/m)[1] ?? "").version).toBe("1.10");
   });
 });
 

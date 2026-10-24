@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
@@ -7,63 +8,52 @@ import {
 } from "../node-host/invoke-payload.js";
 import type { NodeInvokeRequestPayload } from "../node-host/invoke-types.js";
 import { prepareNodeHostRuntime } from "../node-host/runtime.js";
+import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
+import type { RealtimeVoiceBrowserSessionCreateRequest } from "../talk/provider-types.js";
 import { pairDeviceIdentity } from "./device-authz.test-helpers.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 
-// One signed node transport runs the same source runtime as CLI/native nodes.
-// No fabricated prepare plans, approval verdicts or node.invoke.result frames.
+// Use the signed CLI/native runtime, not fabricated plans, approvals or result frames.
 export async function createTalkParityNodeFixture(
   config: OpenClawConfig,
   port: number,
   token: string,
 ) {
-  const commands = [
-    "system.run",
-    "system.run.prepare",
-    "system.which",
-    "system.execApprovals.get",
-    "system.execApprovals.set",
-  ];
   const prepared = await prepareNodeHostRuntime({
     config,
-    commands,
+    commands: expectDefined(config.gateway?.nodes?.commands?.allow, "parity node commands"),
     enableAgentRuns: false,
     installedAppsSharingEnabled: false,
     desktopSharingEnabled: false,
   });
+  const nodeMeta = { clientId: "node-host", clientMode: "node", platform: "linux" } as const;
+  const { caps, commands } = prepared.manifest;
   const identity = await pairDeviceIdentity({
+    ...nodeMeta,
     name: "talk-parity-node",
     role: "node",
     scopes: [],
-    clientId: "node-host",
-    clientMode: "node",
-    platform: "linux",
   });
-  const pairing = await requestNodePairing({
-    nodeId: identity.identity.deviceId,
-    clientId: "node-host",
-    clientMode: "node",
-    platform: "linux",
-    caps: prepared.manifest.caps,
-    commands: prepared.manifest.commands,
-  });
+  const nodeId = identity.identity.deviceId;
+  const pairing = await requestNodePairing({ ...nodeMeta, nodeId, caps, commands });
   const approved = await approveNodePairing(pairing.request.requestId, {
     callerScopes: ["operator.admin"],
   });
   expect(approved).toHaveProperty("node");
   const tasks: Promise<void>[] = [];
   const invokes: NodeInvokeRequestPayload[] = [];
+  const url = "ws://127.0.0.1:" + port;
   const client = await connectGatewayClient({
-    url: "ws://127.0.0.1:" + port,
+    url,
     token,
     deviceIdentity: identity.identity,
     role: "node",
     scopes: [],
-    clientName: "node-host",
-    mode: "node",
-    platform: "linux",
-    caps: prepared.manifest.caps,
-    commands: prepared.manifest.commands,
+    clientName: nodeMeta.clientId,
+    mode: nodeMeta.clientMode,
+    platform: nodeMeta.platform,
+    caps,
+    commands,
     onEvent: (event) => {
       if (event.event === "node.invoke.cancel") {
         const cancel = coerceNodeInvokeCancelPayload(event.payload);
@@ -84,9 +74,9 @@ export async function createTalkParityNodeFixture(
     },
   });
   const active = prepared.start({ client });
-  active.updateGatewayConnection({ url: "ws://127.0.0.1:" + port });
+  active.updateGatewayConnection({ url });
   return {
-    nodeId: identity.identity.deviceId,
+    nodeId,
     invokes,
     async close() {
       try {
@@ -99,24 +89,16 @@ export async function createTalkParityNodeFixture(
   };
 }
 
-// Only the external voice transport is replaced. The registered create handler
-// still owns caller retention, voice binding, readiness and consult admission.
+// Replace only voice transport; the registered handler retains admission and ownership.
 export async function installTalkParityProviderFixture(publicOnly = false) {
-  const {
-    captureActivePluginRegistrySnapshot,
-    getActivePluginRegistry,
-    restoreActivePluginRegistrySnapshot,
-    setActivePluginRegistry,
-  } = await import("../plugins/runtime.js");
-  const snapshot = captureActivePluginRegistrySnapshot();
-  const registry = getActivePluginRegistry();
+  const plugins = await import("../plugins/runtime.js");
+  const snapshot = plugins.captureActivePluginRegistrySnapshot();
+  const registry = plugins.getActivePluginRegistry();
   if (!registry) {
     throw new Error("Missing suite plugin registry");
   }
-  let request:
-    | import("../talk/provider-types.js").RealtimeVoiceBrowserSessionCreateRequest
-    | undefined;
-  const provider: import("../plugins/types.js").RealtimeVoiceProviderPlugin = {
+  let request: RealtimeVoiceBrowserSessionCreateRequest | undefined;
+  const provider: RealtimeVoiceProviderPlugin = {
     id: "openai",
     label: "Synthetic browser transport",
     isConfigured: () => publicOnly,
@@ -154,7 +136,7 @@ export async function installTalkParityProviderFixture(publicOnly = false) {
       },
     });
   }
-  setActivePluginRegistry({
+  plugins.setActivePluginRegistry({
     ...registry,
     realtimeVoiceProviders: [
       ...registry.realtimeVoiceProviders.filter((entry) => entry.provider.id !== "openai"),
@@ -169,7 +151,7 @@ export async function installTalkParityProviderFixture(publicOnly = false) {
       return request.runAgentConsult({ prompt });
     },
     restore() {
-      restoreActivePluginRegistrySnapshot(snapshot);
+      plugins.restoreActivePluginRegistrySnapshot(snapshot);
     },
   };
 }

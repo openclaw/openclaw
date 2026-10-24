@@ -16,11 +16,8 @@ import type {
   MemoryEmbeddingCacheEntry,
   MemoryEmbeddingCacheMutation,
 } from "./manager-publication-task.js";
-import {
-  MemoryManagerSyncOps,
-  type MemoryIndexWorkItem,
-  type MemorySemanticProviderGeneration,
-} from "./manager-sync-ops.js";
+import type { MemoryIndexWorkItem, MemorySemanticProviderGeneration } from "./manager-sync-base.js";
+import { MemoryManagerSyncOps } from "./manager-sync-ops.js";
 
 type MemoryIndexEntry = MemoryIndexWorkItem["entry"];
 

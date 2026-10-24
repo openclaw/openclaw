@@ -91,8 +91,29 @@ Commands: /goal edit <objective>, /goal pause, /goal complete, /goal clear
 | `/goal blocked [note]`                              | Alias for `block`.                                                       |
 | `/goal clear`                                       | Remove the goal from the session.                                        |
 
-Only one goal can exist on a session at a time. Starting a second goal fails
-with `Goal error: goal already exists` until the current one is cleared.
+Only one goal can exist on a session at a time. In the Control UI, submitting
+a new objective through `/goal <objective>` or the Goal composer asks whether
+to replace the current objective. For an idle or paused goal, confirming uses
+**Edit** and preserves its status. For an executing active goal, confirming
+interrupts that exact turn, waits for its work to settle, pauses and edits the
+same goal, then resumes it through normal continuation admission. Its identity,
+token accounting, budget, and history are retained; replacement does not reset
+an exhausted budget. Canceling leaves running work untouched and keeps the
+proposed objective in the composer. Completed goals cannot be edited.
+
+The decision is bound to the displayed session, goal revision, and executing
+turn. If those change before interruption, review the current goal and confirm
+again; a stale decision never interrupts a newer turn. If a later stage fails,
+replacement stops there without automatically resuming. The saved request can
+reconcile or retry completed stages using their existing durable receipts.
+Changing the goal with another control invalidates that recovery decision. If
+interruption cannot be verified, review the stopped or running goal and use its
+explicit controls; replacement never guesses that it is safe to resume. A warning
+that interrupted output could not be saved also stops replacement before the
+objective is edited or resumed; copy any visible text as the warning instructs.
+
+In textual CLI/TUI commands, starting a second goal still fails with
+`Goal error: goal already exists` until the current one is cleared.
 
 `/goal start` does not take a token-budget flag. Only the model-facing `create_goal` tool can set a budget.
 
@@ -313,7 +334,9 @@ delivery-route overrides are rejected. Goal work uses the session settings and
 local delivery so recovery keeps the same contract. Objectives
 must contain non-whitespace text and are limited to 16,000 characters.
 
-`sessions.goal.update` accepts `edit` with `objective`, or `pause`, `resume`,
+`sessions.goal.update` accepts `replace` with `objective`, the session ID,
+`expectedGoalUpdatedAt`, and `expectedRunId` for a confirmed executing-goal
+replacement; `edit` with `objective`; or `pause`, `resume`,
 `block`, and `complete` with an optional `note` of at most 2,000 characters.
 `sessions.goal.clear` removes the Goal. Both methods require `sessionKey`,
 `goalId`, `operationId`, and `issuedAtMs`. `agentId` and `sessionId` can pin the

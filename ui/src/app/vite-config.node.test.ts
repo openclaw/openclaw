@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { brotliDecompressSync, gunzipSync } from "node:zlib";
-import type { Alias } from "vite";
+import { createServer, type Alias } from "vite";
 import { expect, it, vi } from "vitest";
 import {
   hashControlUiTranslationText,
@@ -211,8 +211,15 @@ it("emits Brotli and gzip variants only for bundled compressible assets", async 
   expect(brotliDecompressSync(variants[0]?.source ?? Buffer.alloc(0)).toString()).toBe(source);
   expect(gunzipSync(variants[1]?.source ?? Buffer.alloc(0)).toString()).toBe(source);
   expect(createHash("sha256").update(variants[1]!.source).digest("hex")).toBe(
-    "32dab2f3598992a8a8b595f5da60f10907fc181c2abfa27380d562d9b539b85d",
+    "aabdc80dc704c3abc609a76c6ac3e9ae872cf023770c6ea5fbb29ffe56adfcab",
   );
+  // No timestamp, filename, or host OS field may make the pinned gzip bytes host-dependent.
+  expect(variants[1]!.source.subarray(0, 10).toString("hex")).toBe("1f8b08000000000002ff");
+  const repeated = await createControlUiPrecompressedAssetVariants(
+    "assets/app-AbCd1234.js",
+    Buffer.from(source),
+  );
+  expect(repeated).toEqual(variants);
   expect(await createControlUiPrecompressedAssetVariants("index.html", source)).toEqual([]);
   expect(await createControlUiPrecompressedAssetVariants("assets/logo.png", source)).toEqual([]);
   expect(await createControlUiPrecompressedAssetVariants("assets/app.js.map", source)).toEqual([]);
@@ -235,6 +242,32 @@ it("uses the supplied artifact identity without reading Git metadata", () => {
     JSON.stringify(buildInfo),
   );
   expect(childProcessMocks.execFileSync).not.toHaveBeenCalled();
+});
+
+it("selects a polling watcher when the existing environment opt-in is enabled", async ({
+  onTestFinished,
+}) => {
+  vi.stubEnv("CHOKIDAR_USEPOLLING", "1");
+  onTestFinished(() => {
+    vi.unstubAllEnvs();
+  });
+  const root = await mkdtemp(path.join(os.tmpdir(), "openclaw-ui-watcher-"));
+  onTestFinished(() => rm(root, { recursive: true, force: true }));
+  const config = controlUiViteConfig({ command: "serve", buildInfo: resolveBuildInfo() });
+  const server = await createServer({
+    configFile: false,
+    root,
+    logLevel: "silent",
+    optimizeDeps: { noDiscovery: true },
+    server: { ...config.server, middlewareMode: true, hmr: false },
+  });
+  try {
+    // Chokidar can report polling enabled while still choosing FSEvents on macOS.
+    expect(server.watcher.options.usePolling).toBe(true);
+    expect(server.watcher.options.useFsEvents).toBe(false);
+  } finally {
+    await server.close();
+  }
 });
 
 it("embeds one canonical artifact identity from explicit build inputs", () => {

@@ -95,7 +95,6 @@ export async function dispatchMattermostInboundTurn(
         client,
         channelId,
         rootId: effectiveReplyToId,
-        throttleMs: 1200,
         chunkText: (value) =>
           core.channel.text.chunkMarkdownTextWithMode(
             core.channel.text.convertMarkdownTables(value, tableMode),
@@ -290,9 +289,6 @@ export async function dispatchMattermostInboundTurn(
             account.accountId,
             channelId,
             effectiveReplyToId,
-            {
-              agentId: route.agentId,
-            },
           );
         }
       };

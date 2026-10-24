@@ -14,7 +14,7 @@ import { createEmbeddingProvider, resolveEmbeddingProviderIndexIdentity } from "
 import type { IndexedMemoryChunk } from "./manager-chunk-writer.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
 import { MemoryManagerEmbeddingOps } from "./manager-embedding-ops.js";
-import type { MemoryIndexWorkItem, MemorySemanticProviderGeneration } from "./manager-sync-ops.js";
+import type { MemoryIndexWorkItem, MemorySemanticProviderGeneration } from "./manager-sync-base.js";
 
 type CapturedRequest = {
   method: string | undefined;

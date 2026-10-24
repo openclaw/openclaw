@@ -304,6 +304,23 @@ The accepted spawn receipt describes this path: collect the result with
 `agents_wait`, or await `agents.run()` in OpenClaw Code Mode. Do not use
 `sessions_yield` to wait for collector children. They do not send completion notifications.
 
+The collected result is the child's complete final answer, read from its recorded
+transcript, including after delete-mode cleanup archives the session. Run lifecycle
+events carry only a 4,096-character preview of a reply; the collected result does
+not stop there. One result is bounded at 100 KB. A longer answer keeps its first
+100 KB and ends with a `[truncated: frozen completion output exceeded 100KB ...]`
+notice. If the complete answer is no longer available, the result is the preview
+followed by a `[truncated: the complete child answer is unavailable ...]` notice.
+Both cases set `resultTruncated: true` on the `agents_wait` item. For reports that
+may exceed the bound, have the child write the report to a file and return its path.
+
+Collector children are one-shot. They accept no steering or follow-up input, including
+after they finish or time out. A `sessions_send` to a collector child fails with an
+error that says so, and no run starts. To continue the work, start a new child with
+the context it needs. Give it a larger `runTimeoutSeconds` if the previous child timed
+out, and omit `collect` if the work needs follow-up turns: ordinary children accept
+`sessions_send` follow-ups after they finish.
+
 If OpenClaw cannot recover the requester for a queued collector after a restart,
 it records a failed launch and asks you to submit the task again. This can affect
 queued collectors created by older versions.
@@ -332,7 +349,6 @@ it can be spawned but cannot start swarms from its own top-level sessions:
   agents: {
     ownership: "explicit",
     defaults: {
-      heartbeat: { agentId: "main" },
       systemAgent: { agentId: "main" },
     },
     entries: {
@@ -580,6 +596,7 @@ type AgentsWaitResult = {
     runId: string;
     status: "done" | "failed" | "killed" | "timeout";
     result: string;
+    resultTruncated?: true;
     structured?: unknown;
     error?: string;
     schemaError?: string;
@@ -605,6 +622,12 @@ run/status fallback.
 `reason: "yielded_without_result"` marks a collector that the registry settled as
 failed after a legacy yield with no recorded outcome. Branch on it rather than on
 `error` text; every other completion omits it.
+
+`resultTruncated: true` marks a `result` that may be incomplete: the child's answer
+exceeded the 100 KB result bound, or its complete answer was no longer available and
+only the 4,096-character preview remained. Each case ends `result` with a
+`[truncated: ...]` notice. Do not treat a truncated result as the child's whole report,
+and do not parse it as complete structured data.
 
 Individual failed items do not make a mixed `agents_wait` poll a top-level tool
 error. The poll remains a successful JSON result so callers can process its

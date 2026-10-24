@@ -12,7 +12,7 @@ import {
   resolvePluginRootPublicSurfacePath,
 } from "./public-surface-runtime.js";
 import { writeArtifact } from "./public-surface.test-support.js";
-import { createTestPluginRegistry } from "./registry-runtime.test-helpers.js";
+import { createEmptyPluginRegistry } from "./registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "./runtime/gateway-request-scope.js";
 import { createPluginRecord } from "./status.test-helpers.js";
 
@@ -52,24 +52,21 @@ describe("bundled plugin public surface runtime", () => {
         writeArtifact(path.join(rootDir, relativePath), "export default {};\n");
       }
       const cache = createPluginCache();
-      const builder = createTestPluginRegistry();
+      const registry = createEmptyPluginRegistry();
       const record = createPluginRecord({
         id: "captured-path-probes",
         rootDir,
         source,
         origin: "global",
       });
-      builder.registry.plugins.push(record);
-      const instance = new PluginInstance(record.id, { record, registry: builder.registry });
-      const provider = { id: record.id, label: "Captured path probes", auth: [] };
+      registry.plugins.push(record);
+      const instance = new PluginInstance(record.id, { record, registry });
       try {
         withPluginCache(cache, () => {
           bindPluginInstanceModuleLoader({ instance, origin: record.origin, source, rootDir });
-          instance.run(() => builder.createApi(record, { config: {} }).registerProvider(provider));
         });
-        expect(builder.registry.providers[0]?.provider.id).toBe(record.id);
         const hasSource = vi.spyOn(instance, "hasModuleSource");
-        const resolved = withPluginRuntimeRegistryScope(builder.registry, () =>
+        const resolved = withPluginRuntimeRegistryScope(registry, () =>
           withPluginCache(cache, () =>
             resolvePluginRootPublicSurfacePath({
               pluginRoot: rootDir,

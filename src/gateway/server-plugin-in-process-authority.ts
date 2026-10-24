@@ -4,6 +4,7 @@ import {
   captureGatewayToolCallerAssertion,
   getGatewayToolCallerIdentity,
   resolveGatewayToolOperatorSelection,
+  withGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
@@ -139,12 +140,21 @@ export function runWithOperatorToolGatewayCleanupContext<T>(run: () => T): T {
 }
 
 /** Captured while live; its accepting owner, not the original invocation, releases it. */
-export function captureOperatorToolGatewayContinuationContext(target?: {
-  sessionKey: string;
-  agentId?: string;
-}) {
+export function captureOperatorToolGatewayContinuationContext(
+  target?: { sessionKey: string; agentId?: string },
+  options?: { retainRequester?: true },
+) {
   const scope = getPluginRuntimeGatewayRequestScope();
   const caller = getGatewayToolCallerIdentity();
+  const requester =
+    options?.retainRequester && caller
+      ? {
+          agentId: caller.agentId,
+          sessionKey: caller.sessionKey,
+          origin: resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true })
+            .requesterOrigin,
+        }
+      : undefined;
   const resolveGatewayContext = caller?.gatewayContextResolver ?? scope?.resolveGatewayContext;
   if (!getInProcessGatewayRequestContext(resolveGatewayContext)) {
     return undefined;
@@ -210,15 +220,19 @@ export function captureOperatorToolGatewayContinuationContext(target?: {
         lifetime.signal.throwIfAborted();
         captured?.authority.assertCurrent();
         if (captured) {
-          if (
-            (resolveGatewayContext ? resolveGatewayContext() : scope?.context) !== resolved.context
-          ) {
-            throw new Error("Gateway continuation instance binding is no longer active");
-          }
+          resolved.assertGatewayCurrent();
         } else {
           resolved.assertSourceCurrent();
         }
         lifetime.signal.throwIfAborted();
+      };
+      const runInScope = <T>(run: () => T): T => {
+        assertCurrent();
+        return withoutGatewayToolCallerIdentity(() =>
+          runOutsideOperatorToolGatewayAuthority(() =>
+            withPluginRuntimeGatewayRequestScope(continuationScope, run),
+          ),
+        );
       };
       return {
         assertCurrent,
@@ -226,12 +240,28 @@ export function captureOperatorToolGatewayContinuationContext(target?: {
         scopes: resolved.client.connect.scopes,
         signal: lifetime.signal,
         release,
-        run<T>(run: () => T): T {
-          assertCurrent();
-          return withoutGatewayToolCallerIdentity(() =>
-            runOutsideOperatorToolGatewayAuthority(() =>
-              withPluginRuntimeGatewayRequestScope(continuationScope, run),
-            ),
+        run: runInScope,
+        /** Re-enter only the requester selected before transfer, under this retained source. */
+        runWithRequester<T>(run: () => Promise<T>): Promise<T> {
+          return runInScope(() =>
+            requester?.origin
+              ? withGatewayToolCallerIdentity(
+                  {
+                    agentId: requester.agentId,
+                    sessionKey: requester.sessionKey,
+                    requesterOrigin: requester.origin,
+                    operatorAuthority: captured?.authority,
+                    personalToolIdentityScoped: true,
+                    personalToolSelection: Object.freeze({
+                      operatorAuthority: captured?.authority,
+                      requesterOrigin: requester.origin,
+                      assertCurrent,
+                    }),
+                    gatewayContextResolver: resolveGatewayContext,
+                  },
+                  run,
+                )
+              : run(),
           );
         },
       };
@@ -608,18 +638,19 @@ export function resolveInProcessGatewayDispatch(
     }
     bindInProcessSubagentResume(client.internal, resume);
   }
-  const assertSourceCurrent = composeSessionSourceAssertion(
-    [operatorRunAuthority?.assertCurrent],
-    (assertSource) => {
-      assertSource();
-      if ((resolveGatewayContext ? resolveGatewayContext() : scope?.context) !== context) {
-        throw new Error(
-          `In-process gateway dispatch requires a current gateway instance binding (method: ${method}).`,
-        );
-      }
-    },
-  );
+  const assertGatewayCurrent = () => {
+    if ((resolveGatewayContext ? resolveGatewayContext() : scope?.context) !== context) {
+      throw new Error(
+        `In-process gateway dispatch requires a current gateway instance binding (method: ${method}).`,
+      );
+    }
+  };
+  const assertSourceCurrent = composeSessionSourceAssertion([
+    operatorRunAuthority?.assertCurrent,
+    assertGatewayCurrent,
+  ]);
   return {
+    assertGatewayCurrent,
     assertSourceCurrent,
     assertInvocationCurrent,
     assertContextCurrent: composeSessionSourceAssertion([

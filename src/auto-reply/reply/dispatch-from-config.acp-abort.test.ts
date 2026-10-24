@@ -40,9 +40,9 @@ import { createAcpRuntime } from "./dispatch-from-config.test-support.js";
 import { expectedNoQueuedReplyResult } from "./dispatch-result-expectations.test-support.js";
 import {
   REPLY_OPERATION_RUN_STATE,
-  resolveReplyOperationAgentTurn,
   type ReplyOperationRunState,
 } from "./reply-operation-run-state.js";
+import { resolveReplyOperationAgentTurn } from "./reply-operation-run-state.test-support.js";
 import { requestCurrentSessionStop } from "./reply-run-stop.test-support.js";
 import { prepareReplySourceInput } from "./reply-source-binding.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -561,7 +561,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
         sessionId: "older-" + hook,
         resetTriggered: false,
       });
-      const prepared = prepareReplySourceInput(ctx, cfg, { abortSignal: origin.signal });
+      const prepared = await prepareReplySourceInput(ctx, cfg, { abortSignal: origin.signal });
       const input = prepared.input;
       if (!input) {
         throw new Error("missing prepared source");

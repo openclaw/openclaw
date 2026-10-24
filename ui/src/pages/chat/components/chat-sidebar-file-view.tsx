@@ -1,4 +1,4 @@
-import { createMemo, Show } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import { createMarkdownRef } from "../../../components/markdown-dom-ref.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
@@ -64,6 +64,14 @@ export function computeFileMatches(content: string, query: string): number[] {
 function FileMarkdown(props: { controls: FileViewControls; onSelect: (event: Event) => void }) {
   let scroll!: HTMLDivElement;
   let article!: HTMLElement;
+  onSettled(() => {
+    const releaseScroll = props.controls.onScrollPortRef?.(scroll);
+    const releaseArticle = props.controls.onScrollPortRef?.(article);
+    return () => {
+      releaseScroll?.();
+      releaseArticle?.();
+    };
+  });
   const markdownRef = createMarkdownRef(() => ({
     incremental: true,
     content: toSanitizedMarkdownHtml(
@@ -169,6 +177,7 @@ export function SidebarFile(props: {
                       scopeKey={[
                         props.runtime?.sessionKey,
                         props.content.path,
+                        props.content.sessionFileSource?.messageEntryId,
                         props.runtime?.connectionEpoch,
                       ].join("\0")}
                       download={(signal) => download()(signal)}
@@ -276,7 +285,7 @@ export function SidebarFile(props: {
           >
             <Show when={desktop()}>
               <div class="sidebar-file-view__floating-copy">
-                <FileCopyButton action="contents" controls={props.controls} />
+                <FileCopyButton controls={props.controls} />
               </div>
             </Show>
             <Show when={props.controls?.markdown && props.controls.readingMode === "preview"}>

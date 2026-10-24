@@ -18,7 +18,7 @@ import { workboardPortProvider } from "./workboard-port.js";
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 export const connection = typeof configured === "string" ? configured : undefined;
 export const payload = ' {"first":1,"first":2,"escaped":"\\u0000"} \n';
-export const credentialRef = { source: "env", provider: "default", id: "OPENCLAW_P36_TEST_TOKEN" };
+const credentialRef = { source: "env", provider: "default", id: "OPENCLAW_P36_TEST_TOKEN" };
 export const injected = "postgres://private-user:private-secret@example.invalid/payload";
 export const portConfig = {
   plugins: { $include: "plugins.json" },
@@ -86,7 +86,7 @@ export async function dropPortSchemas(client: Client, manifests: string[], extra
     ),
   ]);
   for (const namespace of namespaces) {
-    assert.match(namespace, /^(port|restore)_[a-f0-9]+$/);
+    assert.match(namespace, /^(?:(port|restore)_[a-f0-9]+|[a-z_][a-z0-9_]*_[a-f0-9]{16})$/);
     await client.query(`DROP SCHEMA IF EXISTS "${namespace}" CASCADE`);
   }
 }

@@ -5,6 +5,7 @@ import {
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { navigationDrawerToggle } from "../test-helpers/control-ui-navigation.ts";
 import { createControlUiChatHistoryMessage as historyMessage } from "../test-helpers/control-ui-session-fixtures.ts";
 import { openPicker, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { selectFileAction } from "./chat-file-actions.test-support.ts";
@@ -286,7 +287,7 @@ suite.define(() => {
     await page.goBack();
     await page.locator(".agent-chat__composer-combobox textarea").waitFor();
     await expectChrome(chatColor);
-    await page.locator(".chat-pane__nav-toggle").first().click();
+    await navigationDrawerToggle(page).click();
     await page.locator("openclaw-app-sidebar .sidebar-rail .sidebar-new-session").click();
     await page.locator(".new-session-page__message").waitFor();
     await expectChrome(chatColor);

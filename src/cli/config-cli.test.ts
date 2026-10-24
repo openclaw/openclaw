@@ -12,6 +12,7 @@ import {
   createPluginManifestRecordFixture as createPluginManifestRecord,
   createPluginMetadataSnapshotFixture as createPluginMetadataSnapshot,
 } from "../plugins/plugin-metadata.test-support.js";
+import { configCliMutationRejectionCases } from "./config-cli-rejections.test-support.js";
 import { registerConfigJsonOutputTests } from "./config-cli.json-output.test-support.js";
 import { registerConfigMutationSchemaTests } from "./config-cli.mutation-schema.test-support.js";
 import {
@@ -128,6 +129,7 @@ vi.mock("./config-model-validation.js", () => ({
   checkTouchedTextModelRefs: (...args: unknown[]) => mockCheckTouchedTextModelRefs(...args),
 }));
 
+// mock-isolation: CLI output tests use fixed policy; Gateway reload tests cover policy decisions.
 vi.mock("../gateway/config-reload-plan.js", () => ({
   buildGatewayReloadPlan: (changedPaths: string[]) => {
     const hotReasons = changedPaths.filter(
@@ -147,7 +149,6 @@ vi.mock("../gateway/config-reload-plan.js", () => ({
       reloadHooks: false,
       restartGmailWatcher: false,
       restartCron: false,
-      restartHeartbeat: hotReasons.length > 0,
       reloadPlugins: false,
       restartChannels: new Set(),
       disposeMcpRuntimes: false,
@@ -908,65 +909,7 @@ describe("config cli", () => {
       expectErrorIncludes('Secret provider "runner" is not configured');
     });
 
-    it.each([
-      {
-        name: "exponent-style provider integers",
-        args: [
-          "secrets.providers.runner",
-          "--provider-source",
-          "exec",
-          "--provider-command",
-          "op",
-          "--provider-timeout-ms",
-          "1e3",
-        ],
-        message: "--provider-timeout-ms must be a positive integer.",
-      },
-      {
-        name: "allow-exec without dry-run",
-        args: ["--batch-file", "/nonexistent/openclaw-config-batch.json", "--allow-exec"],
-        message: "config set mode error: --allow-exec requires --dry-run.",
-      },
-      {
-        name: "unset allow-exec without dry-run",
-        command: "unset",
-        args: ["tools.alsoAllow", "--allow-exec"],
-        message: "--allow-exec can only be used with --dry-run.",
-      },
-      {
-        name: "combined ref and provider builders",
-        args: [
-          "channels.discord.token",
-          "--ref-provider",
-          "default",
-          "--ref-source",
-          "env",
-          "--ref-id",
-          "DISCORD_BOT_TOKEN",
-          "--provider-source",
-          "env",
-        ],
-        message: "config set mode error: choose exactly one mode",
-      },
-      {
-        name: "combined batch and builder modes",
-        args: [
-          "--batch-json",
-          "[]",
-          "--ref-provider",
-          "default",
-          "--ref-source",
-          "env",
-          "--ref-id",
-          "DISCORD_BOT_TOKEN",
-        ],
-        message: "config set mode error: batch mode (--batch-json/--batch-file) cannot be combined",
-      },
-      {
-        name: "malformed expected JSON",
-        args: ["gateway.port", "19001", "--expect-current-json", "{bad"],
-      },
-    ])(
+    it.each(configCliMutationRejectionCases)(
       "rejects config mutations with $name before loading config",
       async ({ command, args, message }) => {
         await expect(runConfigCommand(["config", command ?? "set", ...args])).rejects.toThrow(

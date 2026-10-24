@@ -1,17 +1,45 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createSignal, Errored, lazy, Loading, onSettled, Show } from "solid-js";
+import {
+  isStaleChunkImportError,
+  retryStaleChunkReloadWhenReachable,
+} from "../../app/stale-chunk-reload.ts";
+import { registerBoardDocumentEnglish } from "../../i18n/locales/en-board-document.ts";
 import { registerBoardEnglish } from "../../i18n/locales/en-board.ts";
 import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { LazyViewError } from "../solid/lazy-view-error.tsx";
+
+registerEnglishCatalog(registerBoardDocumentEnglish);
 
 registerEnglishCatalog(registerBoardEnglish);
 
 type ReadyAppView = Extract<BoardWidgetAppViewState, { status: "ready" }>;
-type RetiringAppView = HTMLElement & {
-  teardown?: () => Promise<void>;
-  restartAfterTeardown?: () => void;
-};
+const McpAppView = lazy(() => import("../mcp-app-view.tsx"), { export: "McpAppView" });
+
+function McpAppLoadError(props: { error: unknown; active: boolean; reset: () => void }) {
+  let connected = true;
+  onSettled(() => () => {
+    connected = false;
+  });
+  const retry = async () => {
+    const reloading =
+      isStaleChunkImportError(props.error) &&
+      (await retryStaleChunkReloadWhenReachable({ canReload: () => connected && props.active }));
+    if (connected && props.active && !reloading) {
+      props.reset();
+    }
+  };
+  return (
+    <LazyViewError
+      error={props.error}
+      stale={isStaleChunkImportError(props.error)}
+      subtitle={t("board.widget.kindMcp")}
+      onRetry={() => void retry()}
+    />
+  );
+}
 
 export function BoardMcpAppContent(props: {
   accessNotice: SolidJSX.Element;
@@ -28,7 +56,7 @@ export function BoardMcpAppContent(props: {
   retired?: () => void;
   viewRef: (element: HTMLElementTagNameMap["mcp-app-view"] | undefined) => void;
 }) {
-  let element: RetiringAppView | undefined;
+  let element: HTMLElementTagNameMap["mcp-app-view"] | undefined;
   let generation = 0;
   const [presented, setPresented] = createSignal<ReadyAppView | undefined>(undefined, {
     ownedWrite: true,
@@ -46,17 +74,17 @@ export function BoardMcpAppContent(props: {
       const current = ++generation;
       if (next) {
         setPresented(next);
-        element?.restartAfterTeardown?.();
+        element?.restartAfterTeardown();
         return;
       }
-      const retirement = element?.teardown?.();
+      const retirement = element?.teardown();
       if (retirement) {
         void retirement.then(() => {
           if (current === generation) {
             setPresented(undefined);
             props.retired?.();
           } else {
-            element?.restartAfterTeardown?.();
+            element?.restartAfterTeardown();
           }
         });
       } else {
@@ -65,11 +93,15 @@ export function BoardMcpAppContent(props: {
       }
     },
   );
-  onCleanup(() => {
-    generation += 1;
-    props.viewRef(undefined);
+  onSettled(() => {
+    // Preserve preloading before the lease arrives; Errored owns a failed read when rendered.
+    void McpAppView.preload().catch(() => undefined);
+    return () => {
+      generation += 1;
+      props.viewRef(undefined);
+    };
   });
-  const Loading = () => (
+  const McpAppLoading = () => (
     <div class="board-widget__app-loading" data-test-id="board-mcp-app-loading">
       {t("board.widget.appLoading")}
     </div>
@@ -82,7 +114,7 @@ export function BoardMcpAppContent(props: {
         fallback={
           <Show
             when={props.nearVisible && props.appView?.status === "stale"}
-            fallback={<Loading />}
+            fallback={<McpAppLoading />}
           >
             <div class="board-widget__stale" data-test-id="board-mcp-app-stale">
               <strong>{t("board.widget.appStaleTitle")}</strong>
@@ -110,19 +142,27 @@ export function BoardMcpAppContent(props: {
         }
       >
         {(ready) => (
-          <mcp-app-view
-            ref={(node) => {
-              element = node;
-              props.viewRef(node);
-            }}
-            class="board-widget__mcp-app-view"
-            prop:sessionKey={props.sessionKey}
-            prop:viewId={ready().viewId}
-            prop:fillContainer={true}
-            prop:surface="board"
-            title={props.widget.title || props.widget.name}
-            onOpenclaw-mcp-app-view-expired={() => props.expired()}
-          />
+          <Errored
+            fallback={(error, reset) => (
+              <McpAppLoadError error={error()} active={props.active} reset={reset} />
+            )}
+          >
+            <Loading fallback={<McpAppLoading />}>
+              <McpAppView
+                ref={(node) => {
+                  element = node;
+                  props.viewRef(node);
+                }}
+                class="board-widget__mcp-app-view"
+                sessionKey={props.sessionKey}
+                viewId={ready().viewId}
+                fillContainer={true}
+                surface="board"
+                title={props.widget.title || props.widget.name}
+                onOpenclaw-mcp-app-view-expired={() => props.expired()}
+              />
+            </Loading>
+          </Errored>
         )}
       </Show>
     </div>

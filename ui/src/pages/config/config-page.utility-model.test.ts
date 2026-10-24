@@ -57,7 +57,7 @@ it("reads a utility chain and preserves its remaining fallbacks when Activity ch
     const context = { gateway, runtimeConfig } as unknown as ApplicationContext;
     const { state } = mountConfigPageState(context);
     expect(state.configProps().sessionObserverUtilityModel).toBe("fixture/utility");
-    state.configProps().setSessionObserverUtilityModel?.({
+    await state.configProps().setSessionObserverUtilityModel?.({
       kind: "model",
       model: "fixture/backup",
     });

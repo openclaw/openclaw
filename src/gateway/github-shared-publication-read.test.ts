@@ -88,7 +88,7 @@ function holdObservation(onRead: (count: number) => void = () => {}) {
     .spyOn(stateReads, "executeExistingOpenClawStateRead")
     .mockImplementation(async (...args) => {
       const result = await execute(...args);
-      if (args[1].type === "githubPublication.sharedObservation") {
+      if (args[1].type === "githubPublications.sharedObservation") {
         entered.resolve();
         onRead(held.mock.calls.length);
         await release.promise;
@@ -126,6 +126,24 @@ function prohibitPublicationWork() {
       throw new Error("A status read must not publish or inspect credentials");
     });
   }
+}
+
+function expectNoPublicationWork() {
+  for (const mock of [mocks.prepareIdentity, mocks.refreshIdentity, mocks.runCommand]) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
+
+async function expectSessionIsolation(
+  coordinator: ReturnType<typeof sharedPublicationCoordinator>,
+  requestId: string,
+) {
+  const location = { agentId: "main", sessionKey: "agent:main:dashboard:other" };
+  replaceSessionEntrySync(location, { ...mocks.loadSession(SESSION_KEY).entry });
+  expect(await coordinator.sharedStatus({ ...session, ...location }, requestId)).toBeUndefined();
+  await expect(
+    coordinator.sharedStatus({ ...session, agentId: "other" }, requestId),
+  ).rejects.toThrow("GitHub publication session lifecycle changed.");
 }
 
 async function createPrivatePublicationSession(sessionKey: string) {
@@ -352,13 +370,11 @@ describe("shared worktree receipt observation", () => {
     expect(await coordinator.latestShared(session, "accepted")).toEqual(expected);
     expect(
       reads.mock.calls.filter(
-        ([, command]) => command.type === "githubPublication.sharedObservation",
+        ([, command]) => command.type === "githubPublications.sharedObservation",
       ),
     ).toHaveLength(3);
     expect(observer).not.toHaveBeenCalled();
-    expect(mocks.prepareIdentity).not.toHaveBeenCalled();
-    expect(mocks.refreshIdentity).not.toHaveBeenCalled();
-    expect(mocks.runCommand).not.toHaveBeenCalled();
+    expectNoPublicationWork();
     expect(
       sql.queries.filter((query) =>
         /\b(?:github_publication_requests|github_repository_publication_requests|github_publication_session_lifecycles|session_repository_workspaces|worktrees)\b/.test(
@@ -525,19 +541,7 @@ describe("shared worktree receipt observation", () => {
   it("does not reveal receipts to other logical sessions or agents", async () => {
     const coordinator = sharedPublicationCoordinator();
     publishWorktree(insertSharedWorktreeReceipt("private-to-session"));
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: "agent:main:dashboard:other" },
-      { ...mocks.loadSession(SESSION_KEY).entry },
-    );
-    expect(
-      await coordinator.sharedStatus(
-        { ...session, sessionKey: "agent:main:dashboard:other" },
-        "private-to-session",
-      ),
-    ).toBeUndefined();
-    await expect(
-      coordinator.sharedStatus({ ...session, agentId: "other" }, "private-to-session"),
-    ).rejects.toThrow("GitHub publication session lifecycle changed.");
+    await expectSessionIsolation(coordinator, "private-to-session");
     changeSession({ sessionId: "rotated-before-read" });
     await expect(coordinator.latestShared(session)).rejects.toThrow(/session.*changed/i);
   });
@@ -681,9 +685,7 @@ describe("shared repository receipt observation", () => {
     );
     expect(readRepositoryGitHubPublicationFixture(row.request_id)).toEqual(before);
     expect(observer).not.toHaveBeenCalled();
-    expect(mocks.prepareIdentity).not.toHaveBeenCalled();
-    expect(mocks.runCommand).not.toHaveBeenCalled();
-    expect(mocks.refreshIdentity).not.toHaveBeenCalled();
+    expectNoPublicationWork();
   });
 
   it("discovers terminal outcomes by creation order and recovers exact older invocations", async () => {
@@ -769,19 +771,7 @@ describe("shared repository receipt observation", () => {
       headCommit: OLD_HEAD,
       url,
     });
-    replaceSessionEntrySync(
-      { agentId: "main", sessionKey: "agent:main:dashboard:other" },
-      { ...mocks.loadSession(SESSION_KEY).entry },
-    );
-    expect(
-      await coordinator.sharedStatus(
-        { ...session, sessionKey: "agent:main:dashboard:other" },
-        row.request_id,
-      ),
-    ).toBeUndefined();
-    await expect(
-      coordinator.sharedStatus({ ...session, agentId: "other" }, row.request_id),
-    ).rejects.toThrow("GitHub publication session lifecycle changed.");
+    await expectSessionIsolation(coordinator, row.request_id);
   });
 
   it("excludes personal rows before decoding even when their stored digest is corrupt", async () => {

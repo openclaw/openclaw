@@ -114,7 +114,6 @@ async function invokeHost(overrides: Partial<Parameters<typeof runBrowserNativeH
     callerOrigin: ORIGIN,
     expectedOrigins: [ORIGIN],
     input: chunks(frame(requestJson())),
-    write: () => {},
     buildPairing: pairing,
     ensureRelay: async () => "skipped",
     ...overrides,

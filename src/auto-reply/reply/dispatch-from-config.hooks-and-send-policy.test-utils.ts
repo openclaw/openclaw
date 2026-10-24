@@ -569,7 +569,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     },
   );
 
-  it.each(["heartbeat", "internal event"] as const)(
+  it.each(["internal event"] as const)(
     "does not add a missing-answer backstop after an empty %s",
     async (kind) => {
       setNoAbort();
@@ -588,7 +588,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         }),
         cfg: emptyConfig,
         dispatcher,
-        replyOptions: { isHeartbeat: kind === "heartbeat" },
+        replyOptions: {},
         replyResolver: async (_ctx, opts) => {
           const runState = resolveReplyOperationRunState(opts);
           if (!runState) {
@@ -1100,7 +1100,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       replyResolver,
     });
 
-    // A routed media-only block increments neither blockCount (text-only counter)
+    // A routed media-only block contributes no accumulated text
     // nor dispatcher counts; the delivered-routed-block fact must suppress the
     // fallback so users never see failure text after valid media.
     const fallbackCall = mocks.routeReply.mock.calls.find(

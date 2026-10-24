@@ -2,8 +2,6 @@ import type { SessionCatalogPullRequestSummary } from "../../../../packages/gate
 import { CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT } from "../../../../src/gateway/control-ui-contract.js";
 import { registerListener } from "../../../../src/shared/listeners.js";
 import type { SessionsListResult } from "../../api/types.ts";
-import type { BootRecord } from "../../app/boot-record.ts";
-import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootstrap.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { type SelectedAgentSource, watchSelectedAgent } from "../agents/watch-selected-agent.ts";
 import { formatUiError } from "../format-error.ts";
@@ -14,6 +12,7 @@ import { captureBootRoster } from "./session-boot-roster.ts";
 import { createSessionBootSnapshot } from "./session-boot-snapshot.ts";
 import {
   createSessionState,
+  type SessionCacheOptions,
   type SessionCapability,
   type SessionGateway,
   type SessionState,
@@ -71,10 +70,7 @@ export type {
 export function createSessionCapability(
   gateway: SessionGateway,
   agentSelection: SelectedAgentSource,
-  cacheOptions: {
-    bootRecord?: BootRecord | null;
-    connectionBootstrap?: ConnectionBootstrapCoordinator;
-  } = {},
+  cacheOptions: SessionCacheOptions = {},
 ): SessionCapability {
   let state = createSessionState(cacheOptions.bootRecord);
   let presentation: SessionCapability["presentation"] = { result: null, agentId: null };
@@ -135,7 +131,7 @@ export function createSessionCapability(
   let hydratedSelfUserId: string | null = null;
   let connectionClient = gateway.snapshot.client;
   let sessionEventSubscriptionError: string | null = null;
-  let publishedErrorSource: "session-observer" | "operation" | null = null;
+  let publishedErrorSource: "session-observer" | "operation" | "list" | null = null;
 
   const notifySubscribers = () => {
     publicationRevision += 1;
@@ -144,7 +140,7 @@ export function createSessionCapability(
     }
   };
 
-  const publish = (next: SessionState, errorSource?: "session-observer" | "operation") => {
+  const publish = (next: SessionState, errorSource?: "session-observer" | "operation" | "list") => {
     if (next.error === null) {
       publishedErrorSource = null;
     } else if (errorSource || next.error !== state.error) {
@@ -387,12 +383,9 @@ export function createSessionCapability(
     });
 
   const publishReconciledState = (next: SessionState) => {
-    const operationOwnsError = publishedErrorSource === "operation";
-    const error = operationOwnsError ? state.error : sessionEventSubscriptionError;
-    publish(
-      { ...next, error },
-      error === null ? undefined : operationOwnsError ? "operation" : "session-observer",
-    );
+    const source = publishedErrorSource ?? "session-observer";
+    const error = source === "session-observer" ? sessionEventSubscriptionError : state.error;
+    publish({ ...next, error }, source);
   };
 
   const reconcileRunTerminal = (terminal: SessionRunTerminal): boolean => {
@@ -633,6 +626,9 @@ export function createSessionCapability(
     get eventSubscriptionError() {
       return sessionEventSubscriptionError;
     },
+    get canonicalListError() {
+      return publishedErrorSource === "list" ? state.error : null;
+    },
     get presentation() {
       return presentation.result
         ? presentation
@@ -640,6 +636,9 @@ export function createSessionCapability(
     },
     get canonicalListRevision() {
       return canonicalListRevision;
+    },
+    get canonicalListReady() {
+      return canonicalListRevision > 0 && reconnectListRevision === null;
     },
     githubPublication,
     get cachedRoutingDefaults() {

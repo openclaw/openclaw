@@ -90,20 +90,6 @@ export function normalizeOpenAIReasoningEffort(effort: string): string {
   return CANONICAL_REASONING_EFFORTS.has(folded) ? folded : trimmed;
 }
 
-function readCompatReasoningEfforts(compat: unknown): OpenAIApiReasoningEffort[] | undefined {
-  if (!compat || typeof compat !== "object") {
-    return undefined;
-  }
-  if ((compat as { supportsReasoningEffort?: unknown }).supportsReasoningEffort === false) {
-    return [];
-  }
-  const raw = (compat as { supportedReasoningEfforts?: unknown }).supportedReasoningEfforts;
-  if (!Array.isArray(raw)) {
-    return undefined;
-  }
-  return normalizeUniqueTrimmedStringList(raw);
-}
-
 function isDisabledReasoningEffort(effort: string): boolean {
   return effort === "none" || effort === "off";
 }
@@ -119,9 +105,15 @@ export function resolveOpenAISupportedReasoningEfforts(
 export function resolveOpenAIModelReasoningEfforts(
   model: OpenAIReasoningModel,
 ): readonly OpenAIApiReasoningEffort[] | undefined {
-  const compatEfforts = readCompatReasoningEfforts(model.compat);
-  if (compatEfforts) {
-    return compatEfforts;
+  const compat = model.compat;
+  if (compat && typeof compat === "object") {
+    if ((compat as { supportsReasoningEffort?: unknown }).supportsReasoningEffort === false) {
+      return [];
+    }
+    const raw = (compat as { supportedReasoningEfforts?: unknown }).supportedReasoningEfforts;
+    if (Array.isArray(raw)) {
+      return normalizeUniqueTrimmedStringList(raw);
+    }
   }
 
   const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);

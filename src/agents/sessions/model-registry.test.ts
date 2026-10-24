@@ -1,4 +1,3 @@
-// Model registry tests cover models.json auth modes and SQLite-cached plugin catalogs.
 import {
   chmodSync,
   existsSync,
@@ -9,10 +8,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import { getApiProvider } from "@openclaw/ai/internal/runtime";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { CUSTOM_LOCAL_AUTH_MARKER } from "../model-auth-markers.js";
 import {
   loadPersistedPluginModelCatalogsReadOnly,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -27,94 +26,103 @@ import {
   pluginOwnerSnapshotEntries,
 } from "./model-registry.test-support.js";
 
-const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
-
-const { writeModelsJson, writeModelsJsonWithPluginCatalog, writeModelsJsonWithPluginCatalogs } =
-  installModelRegistryTestFixtures();
 const providerConfig = (models: unknown[], config: Record<string, unknown> = {}) => ({
   baseUrl: "https://models.example/v1",
   api: "openai-completions",
   models,
   ...config,
 });
-const nvidia = { baseUrl: "https://integrate.api.nvidia.com/v1", apiKey: "NVIDIA_API_KEY" };
 
-const zai = {
-  baseUrl: "https://api.z.ai/api/paas/v4",
-  api: "openai-completions",
-  apiKey: "ZAI_API_KEY",
-  models: [{ id: "glm-5.1", name: "GLM 5.1" }],
-};
-const custom = providerConfig([{ id: "authored-model", name: "Authored Model" }], {
-  apiKey: "authored-provider-test-key",
-});
 function catalog(providers: Record<string, unknown>) {
   return { generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY, providers };
 }
-function pluginCatalog(pluginId: string, providers: Record<string, unknown>) {
-  return {
-    pluginRelativePath: join("plugins", pluginId, PLUGIN_MODEL_CATALOG_FILE),
-    pluginCatalog: catalog(providers),
-  };
-}
-function writeCatalogs(providers: Record<string, unknown>, root: unknown = { providers: {} }) {
-  return writeModelsJsonWithPluginCatalogs({
-    root,
-    pluginCatalogs: Object.entries(providers).map(([id, provider]) =>
-      pluginCatalog(id, { [id]: provider }),
-    ),
-  });
-}
-const oauthIds = (auth: AuthStorage) => auth.getOAuthProviders().map((provider) => provider.id);
-const createRegistry = (
-  modelsPath: string,
-  options: Parameters<typeof ModelRegistry.create>[2] = {},
-  auth = AuthStorage.inMemory(),
-) => ModelRegistry.create(auth, modelsPath, options);
-const exampleCatalog = (apiKey?: string) =>
-  writeModelsJson({
-    providers: {
-      custom: providerConfig([{ id: "example-model" }], { api: "openai-responses", apiKey }),
-    },
-  });
 
-const ownerSnapshot = (...ids: string[]) =>
-  pluginOwnerSnapshotEntries(ids.map((id) => ({ providerId: id, pluginId: id })));
-async function generatedRegistry(
-  providers: Record<string, unknown>,
+const authResult = (apiKey?: string, headers?: Record<string, string | null>) => ({
+  ok: true,
+  apiKey,
+  headers,
+});
+const capturedRegistry = (
+  providers: Record<string, unknown> | null,
   auth = AuthStorage.inMemory(),
-) {
-  return createRegistry(
-    await writeCatalogs(providers),
-    { pluginMetadataSnapshot: ownerSnapshot(...Object.keys(providers)) },
-    auth,
-  );
-}
-
-function oauthProviderConfig(name: string, apiKeyPrefix: string): ProviderConfigInput {
-  return {
-    oauth: {
-      name,
-      login: async () => ({
-        access: "test-token-placeholder",
-        refresh: "test-token-placeholder",
-        expires: Date.now() + 60_000,
-      }),
-      async refreshToken(credentials) {
-        return {
-          ...credentials,
-          access: "test-token-placeholder",
-          expires: Date.now() + 60_000,
-        };
-      },
-      getApiKey: (credentials) => `${apiKeyPrefix}:${credentials.access}`,
-    },
-  };
-}
+  options: Parameters<typeof ModelRegistry.fromCapturedSources>[2] = { pluginCatalogs: [] },
+) =>
+  ModelRegistry.fromCapturedSources(auth, "/unused/models.json", {
+    modelsJsonContents: providers === null ? null : JSON.stringify({ providers }),
+    ...options,
+  });
 
 describe("ModelRegistry", () => {
+  const PLUGIN_MODEL_CATALOG_FILE = "catalog.json";
+
+  const { writeModelsJson, writeModelsJsonWithPluginCatalog, writeModelsJsonWithPluginCatalogs } =
+    installModelRegistryTestFixtures();
+  const writeRoot = (providers: Record<string, unknown> = {}) => writeModelsJson({ providers });
+  const nvidia = { baseUrl: "https://integrate.api.nvidia.com/v1", apiKey: "NVIDIA_API_KEY" };
+
+  const zai = {
+    baseUrl: "https://api.z.ai/api/paas/v4",
+    api: "openai-completions",
+    apiKey: "ZAI_API_KEY",
+    models: [{ id: "glm-5.1", name: "GLM 5.1" }],
+  };
+  const custom = providerConfig([{ id: "authored-model", name: "Authored Model" }], {
+    apiKey: "authored-provider-test-key",
+  });
+  function pluginCatalog(pluginId: string, providers: Record<string, unknown>) {
+    return {
+      pluginRelativePath: join("plugins", pluginId, PLUGIN_MODEL_CATALOG_FILE),
+      pluginCatalog: catalog(providers),
+    };
+  }
+  function writeCatalogs(providers: Record<string, unknown>, root: unknown = { providers: {} }) {
+    return writeModelsJsonWithPluginCatalogs({
+      root,
+      pluginCatalogs: Object.entries(providers).map(([id, provider]) =>
+        pluginCatalog(id, { [id]: provider }),
+      ),
+    });
+  }
+  const oauthIds = (auth: AuthStorage) => auth.getOAuthProviders().map((provider) => provider.id);
+  const createRegistry = (
+    modelsPath: string,
+    options: Parameters<typeof ModelRegistry.create>[2] = {},
+    auth = AuthStorage.inMemory(),
+  ) => ModelRegistry.create(auth, modelsPath, options);
+  const exampleCatalog = (apiKey?: string) =>
+    writeRoot({
+      custom: providerConfig([{ id: "example-model" }], { api: "openai-responses", apiKey }),
+    });
+  const ownerSnapshot = (...ids: string[]) =>
+    pluginOwnerSnapshotEntries(ids.map((id) => ({ providerId: id, pluginId: id })));
+  async function generatedRegistry(
+    providers: Record<string, unknown>,
+    auth = AuthStorage.inMemory(),
+  ) {
+    return createRegistry(
+      await writeCatalogs(providers),
+      { pluginMetadataSnapshot: ownerSnapshot(...Object.keys(providers)) },
+      auth,
+    );
+  }
+
+  function oauthProviderConfig(name: string, apiKeyPrefix: string): ProviderConfigInput {
+    const credentials = () => ({
+      access: "test-token-placeholder",
+      expires: Date.now() + 60_000,
+    });
+    return {
+      oauth: {
+        name,
+        login: async () => ({ ...credentials(), refresh: "test-token-placeholder" }),
+        refreshToken: async (current) => ({ ...current, ...credentials() }),
+        getApiKey: (current) => `${apiKeyPrefix}:${current.access}`,
+      },
+    };
+  }
+
   it("names the async unregister replacement once and keeps async unregister silent", async () => {
-    const modelsPath = writeModelsJson({ providers: {} });
+    const modelsPath = writeRoot();
     const registry = await ModelRegistry.createAsync(AuthStorage.inMemory(), modelsPath);
     const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     try {
@@ -140,35 +148,20 @@ describe("ModelRegistry", () => {
   });
 
   it("accepts Bedrock AWS SDK auth without apiKey", async () => {
-    // AWS SDK credential resolution is provider-owned; requiring an apiKey here
-    // would make Bedrock catalogs impossible to express in models.json.
-    const modelsPath = writeModelsJson({
-      providers: {
-        "amazon-bedrock": {
-          baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
-          api: "bedrock-converse-stream",
-          auth: "aws-sdk",
-          models: [
-            {
-              id: "anthropic.claude-sonnet-4-5-20250929-v1:0",
-              name: "Claude Sonnet 4.5",
-            },
-          ],
-        },
-      },
+    const modelsPath = writeRoot({
+      "amazon-bedrock": providerConfig([{ id: "bedrock-model" }], {
+        baseUrl: "https://bedrock-runtime.us-east-1.amazonaws.com",
+        api: "bedrock-converse-stream",
+        auth: "aws-sdk",
+      }),
     });
 
     const registry = ModelRegistry.create(AuthStorage.inMemory(), modelsPath);
-    const model = registry.find("amazon-bedrock", "anthropic.claude-sonnet-4-5-20250929-v1:0");
+    const model = registry.find("amazon-bedrock", "bedrock-model");
 
     expect(registry.getError()).toBeUndefined();
-    expect(model).toBeDefined();
     expect(registry.getAvailable()).toEqual([model]);
-    await expect(registry.getApiKeyAndHeaders(model!)).resolves.toEqual({
-      ok: true,
-      apiKey: undefined,
-      headers: undefined,
-    });
+    await expect(registry.getApiKeyAndHeaders(model!)).resolves.toEqual(authResult());
     expect(registry.getProviderAuthStatus("amazon-bedrock")).toEqual({
       configured: true,
       source: "models_json_key",
@@ -194,14 +187,11 @@ describe("ModelRegistry", () => {
 
     const firstModel = first.find("custom", "example-model");
     const secondModel = second.find("custom", "example-model");
-    expect(firstModel).toBeDefined();
-    expect(secondModel).toBeDefined();
     firstModel!.input.push("image");
     firstModel!.cost.input = 42;
-    expect(secondModel!.input).toEqual(["text"]);
-    expect(secondModel!.cost.input).toBe(0);
-    expect(template.find("custom", "example-model")!.input).toEqual(["text"]);
-    expect(template.find("custom", "example-model")!.cost.input).toBe(0);
+    for (const model of [secondModel, template.find("custom", "example-model")]) {
+      expect(model).toMatchObject({ input: ["text"], cost: { input: 0 } });
+    }
 
     first.unregisterProvider("first-only");
     expect(first.find("custom", "example-model")).toBeDefined();
@@ -212,13 +202,10 @@ describe("ModelRegistry", () => {
     const fork = template.fork(AuthStorage.inMemory());
     const model = fork.find("custom", "example-model");
 
-    expect(model).toBeDefined();
     await expect(fork.getApiKeyForProvider("custom")).resolves.toBe("test-token-placeholder");
-    await expect(fork.getApiKeyAndHeaders(model!)).resolves.toEqual({
-      ok: true,
-      apiKey: "test-token-placeholder",
-      headers: undefined,
-    });
+    await expect(fork.getApiKeyAndHeaders(model!)).resolves.toEqual(
+      authResult("test-token-placeholder"),
+    );
   });
 
   it("skips native presence while resolving configured HTTP credentials", async () => {
@@ -237,11 +224,9 @@ describe("ModelRegistry", () => {
     await expect(registry.getApiKeyForProvider("custom")).resolves.toBe(
       "synthetic-configured-api-key",
     );
-    await expect(registry.getApiKeyAndHeaders(model)).resolves.toEqual({
-      ok: true,
-      apiKey: "synthetic-configured-api-key",
-      headers: undefined,
-    });
+    await expect(registry.getApiKeyAndHeaders(model)).resolves.toEqual(
+      authResult("synthetic-configured-api-key"),
+    );
   });
 
   it("does not restore a source provider after unregistering it from a fork", () => {
@@ -256,8 +241,6 @@ describe("ModelRegistry", () => {
   });
 
   it.each(["persisted", "registered"] as const)("preserves %s model metadata", (source) => {
-    // Synthetic providers deliberately share an id but not a prompt budget.
-    // Native window and output capacity must remain separate from that budget.
     const model = {
       id: "shared-model",
       name: "Shared model",
@@ -265,6 +248,7 @@ describe("ModelRegistry", () => {
       input: ["text"] as const,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       parameterCount: 4_000_000_000,
+      family: "meta",
       maxTokens: 128_000,
     };
     const windows = [
@@ -283,7 +267,7 @@ describe("ModelRegistry", () => {
     );
     const registry =
       source === "persisted"
-        ? createRegistry(writeModelsJson({ providers }))
+        ? createRegistry(writeRoot(providers))
         : ModelRegistry.inMemory(AuthStorage.inMemory());
     if (source === "registered") {
       for (const [provider, config] of Object.entries(providers)) {
@@ -298,19 +282,36 @@ describe("ModelRegistry", () => {
     }
   });
 
+  it("drops a malformed persisted family without rejecting the catalog", () => {
+    const registry = createRegistry(
+      writeRoot({
+        "family-fixture": {
+          api: "openai-responses",
+          baseUrl: "https://models.example/v1",
+          models: [
+            { id: "spaced", family: "Open AI" },
+            { id: "cased", family: " Meta " },
+          ],
+        },
+      }),
+    );
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find("family-fixture", "spaced")).not.toHaveProperty("family");
+    expect(registry.find("family-fixture", "cased")?.family).toBe("meta");
+  });
+
   it("keeps estimates out of SQLite catalog metadata and reconstructs them on reload", async () => {
     const provider = "window-fixture";
     const modelsPath = await writeCatalogs({
-      [provider]: {
-        api: "openai-responses",
-        baseUrl: "https://models.example/v1",
-        models: [
+      [provider]: providerConfig(
+        [
           { id: "unknown" },
           { id: "prompt-only", contextTokens: 777_000 },
           { id: "reported", contextWindow: 128_000, contextTokens: 777_000 },
           { id: "authored", contextWindow: 64_000 },
         ],
-      },
+        { api: "openai-responses" },
+      ),
     });
     const pluginCatalogs = loadPersistedPluginModelCatalogsReadOnly(dirname(modelsPath));
     expect(pluginCatalogs).toHaveLength(1);
@@ -347,7 +348,7 @@ describe("ModelRegistry", () => {
   });
 
   it("loads only lifecycle-captured generated catalogs when the root catalog is absent", () => {
-    const modelsPath = writeModelsJson({ providers: {} });
+    const modelsPath = writeRoot();
     rmSync(modelsPath);
     const capturedCatalog = {
       pluginId: "zai",
@@ -371,7 +372,7 @@ describe("ModelRegistry", () => {
   });
 
   it("keeps authored provider models available when the plugin catalog database is corrupt", () => {
-    const modelsPath = writeModelsJson({ providers: { custom } });
+    const modelsPath = writeRoot({ custom });
     writeFileSync(join(dirname(modelsPath), "openclaw-agent.sqlite"), "not a SQLite database");
 
     const registry = createRegistry(modelsPath);
@@ -381,28 +382,20 @@ describe("ModelRegistry", () => {
   });
 
   it("loads richer generated catalog metadata without widening runtime inputs", async () => {
-    // Generated catalogs can report video/audio support. Keep those rows while
-    // projecting their metadata to the runtime execution contract.
     const registry = await generatedRegistry(
       {
-        minimax: {
+        minimax: providerConfig([{ id: "video", input: ["text", "image", "video"] }], {
           baseUrl: "https://api.minimaxi.com/v1",
-          api: "openai-completions",
           apiKey: "MINIMAX_API_KEY",
-          models: [{ id: "MiniMax-M3", input: ["text", "image", "video"] }],
-        },
-        nvidia: {
-          ...nvidia,
-          api: "openai-completions",
-          models: [
-            {
-              id: "microsoft/phi-4-multimodal-instruct",
-              input: ["text", "image", "audio"],
-            },
+        }),
+        nvidia: providerConfig(
+          [
+            { id: "audio", input: ["text", "image", "audio"] },
             { id: "audio-only", input: ["audio"] },
             { id: "explicit-empty", input: [] },
           ],
-        },
+          nvidia,
+        ),
       },
       AuthStorage.inMemory({
         minimax: { type: "api_key", key: "sk-minimax" },
@@ -411,11 +404,8 @@ describe("ModelRegistry", () => {
     );
 
     expect(registry.getError()).toBeUndefined();
-    expect(registry.find("minimax", "MiniMax-M3")?.input).toEqual(["text", "image"]);
-    expect(registry.find("nvidia", "microsoft/phi-4-multimodal-instruct")?.input).toEqual([
-      "text",
-      "image",
-    ]);
+    expect(registry.find("minimax", "video")?.input).toEqual(["text", "image"]);
+    expect(registry.find("nvidia", "audio")?.input).toEqual(["text", "image"]);
     expect(registry.find("nvidia", "audio-only")).toBeUndefined();
     expect(registry.find("nvidia", "explicit-empty")?.input).toEqual([]);
     const availableRefs = registry.getAvailable().map((model) => `${model.provider}/${model.id}`);
@@ -439,13 +429,7 @@ describe("ModelRegistry", () => {
             baseUrl: "https://us-central1-aiplatform.googleapis.com/v1",
             api: "google-vertex",
             apiKey: "GOOGLE_API_KEY",
-            models: [
-              {
-                id: "gemini-3.1-pro-preview",
-                name: "Gemini 3.1 Pro",
-                contextWindow: 0,
-              },
-            ],
+            models: [{ id: "gemini-3.1-pro-preview", contextWindow: 0 }],
           },
         }),
         pluginCatalog("zai", { zai }),
@@ -583,9 +567,8 @@ describe("ModelRegistry", () => {
   });
 
   it("leaves released provider catalogs for Doctor", async () => {
-    // A synthetic provider keeps host credentials out of this migration fixture.
     const providerId = "migrated-catalog-provider";
-    const modelsPath = writeModelsJson({ providers: {} });
+    const modelsPath = writeRoot();
     const agentDir = dirname(modelsPath);
     const catalogPath = join(
       agentDir,
@@ -630,12 +613,11 @@ describe("ModelRegistry", () => {
     const modelsPath = await writeModelsJsonWithPluginCatalog({
       root: { providers: { custom } },
       ...pluginCatalog("anthropic", {
-        anthropic: {
+        anthropic: providerConfig([{ id: "healthy-model", name: "Healthy Model" }], {
           baseUrl: "https://anthropic.example/v1",
           api: "anthropic-messages",
           apiKey: "healthy-provider-test-key",
-          models: [{ id: "healthy-model", name: "Healthy Model" }],
-        },
+        }),
       }),
     });
     const sourcePath = join(dirname(modelsPath), "plugins", "zai", PLUGIN_MODEL_CATALOG_FILE);
@@ -670,63 +652,377 @@ describe("ModelRegistry", () => {
       chmodSync(sourcePath, 0o600);
     }
   });
+});
 
-  it.each(["generated", "persisted"])("preserves %s catalogs across refresh", async (source) => {
-    const modelsPath = await writeCatalogs({
-      nvidia: {
-        ...nvidia,
-        models: [
+describe("ModelRegistry source composition", () => {
+  const provider = "registry-source-example";
+  const pluginId = "registry-source-owner";
+  const rootUrl = "https://authored.example.test/v1";
+  const catalogUrl = "https://catalog.example.test/v1";
+  const authoredCompat = { maxTokensField: "max_tokens", supportsDeveloperRole: false };
+  const generatedCompat = {
+    maxTokensField: "max_completion_tokens",
+    openRouterRouting: { order: ["provider-default"], allow_fallbacks: false },
+    vercelGatewayRouting: { order: ["provider-default"], only: ["shared-route"] },
+  };
+  const authoredHeaders = { "X-Authored-Provider": "root", "X-Authored-Model": "root" };
+  const authored = {
+    api: "openai-completions",
+    baseUrl: rootUrl,
+    apiKey: "authored-fixture-key",
+    headers: { "X-Authored-Provider": "root" },
+    models: [
+      { id: "shared", name: "Authored", maxTokens: 2048, headers: { "X-Authored-Model": "root" } },
+      { id: "Shared", name: "Case-distinct authored model" },
+    ],
+  };
+  const generated = {
+    api: "openai-completions",
+    baseUrl: catalogUrl,
+    apiKey: "cached-fixture-key",
+    auth: "aws-sdk",
+    authHeader: true,
+    headers: { "X-Cached-Provider": "cache" },
+    models: [
+      {
+        id: "shared",
+        name: "Generated",
+        input: ["text", "image"],
+        maxTokens: 8192,
+        headers: { "X-Cached-Model": "cache" },
+      },
+      { id: "generated-only", maxTokens: 4096 },
+    ],
+  };
+  const getAuth = (registry: ModelRegistry, id = "shared", owner = provider) =>
+    registry.getApiKeyAndHeaders(registry.find(owner, id)!);
+
+  function sourceRegistry(
+    options: {
+      authoredProvider?: string;
+      authored?: Record<string, unknown> | null;
+      generated?: Record<string, unknown>;
+      authoredModels?: unknown[];
+      generatedModels?: unknown[];
+      credentials?: Parameters<typeof AuthStorage.inMemory>[0];
+    } = {},
+  ) {
+    const root = options.authoredModels
+      ? { ...authored, models: options.authoredModels }
+      : options.authored === undefined
+        ? authored
+        : options.authored;
+    const cached = options.generatedModels
+      ? { ...generated, models: options.generatedModels }
+      : (options.generated ?? generated);
+    return capturedRegistry(
+      root === null ? null : { [options.authoredProvider ?? provider]: root },
+      AuthStorage.inMemory(options.credentials ?? {}),
+      {
+        pluginCatalogs: [
           {
-            id: "meta-llama/llama-3.3-70b-instruct",
-            name: "Llama 3.3 70B Instruct",
+            pluginId,
+            contents: JSON.stringify(catalog({ [provider]: cached })),
           },
         ],
+        pluginMetadataSnapshot: pluginOwnerSnapshot(provider, pluginId),
       },
-      zai,
-    });
-    const snapshot = ownerSnapshot("nvidia", "zai");
-    if (source === "persisted") {
-      const database = new DatabaseSync(join(dirname(modelsPath), "openclaw-agent.sqlite"));
-      try {
-        database
-          .prepare(
-            "UPDATE cache_entries SET value_json = ?, updated_at = 42 WHERE scope = ? AND key = ?",
-          )
-          .run(
-            JSON.stringify(
-              catalog({
-                nvidia: {
-                  ...nvidia,
-                  models: [{ id: "missing-api" }],
-                },
-              }),
-            ),
-            "plugin-model-catalog-v1",
-            "nvidia",
-          );
-      } finally {
-        database.close();
-      }
-    }
-    const before = loadPersistedPluginModelCatalogsReadOnly(dirname(modelsPath));
-
-    const errors = Array.from({ length: 3 }, () => {
-      const registry = createRegistry(modelsPath, {
-        pluginMetadataSnapshot: snapshot,
-      });
-      registry.refresh();
-      expect(registry.find("nvidia", "meta-llama/llama-3.3-70b-instruct")).toBeUndefined();
-      expect(registry.find("zai", "glm-5.1")?.name).toBe("GLM 5.1");
-      return registry.getError();
-    });
-
-    expect(errors).toEqual(
-      Array(3).fill(
-        source === "persisted"
-          ? expect.stringContaining('Provider nvidia, model missing-api: no "api" specified')
-          : undefined,
-      ),
     );
-    expect(loadPersistedPluginModelCatalogsReadOnly(dirname(modelsPath))).toEqual(before);
+  }
+
+  it.each([rootUrl, catalogUrl])(
+    "preserves source-route compatibility and context choices at %s",
+    (baseUrl) => {
+      const contextWindows = [
+        { id: "200k", label: "200K", contextWindow: 200000 },
+        { id: "1m", label: "1M", contextWindow: 1000000 },
+      ];
+      const registry = sourceRegistry({
+        authored: {
+          ...authored,
+          compat: authoredCompat,
+          models: [{ id: "shared" }, { id: "authored-only" }],
+        },
+        generated: {
+          ...generated,
+          baseUrl,
+          compat: generatedCompat,
+          models: [
+            { id: "shared", contextWindows, contextWindowDefault: "1m" },
+            { id: "generated-only" },
+            {
+              id: "model-override",
+              compat: {
+                maxTokensField: "max_tokens",
+                openRouterRouting: { order: ["model-route"] },
+                vercelGatewayRouting: { order: ["model-route"] },
+              },
+            },
+          ],
+        },
+      });
+      expect(registry.find(provider, "generated-only")?.compat).toEqual(generatedCompat);
+      expect(registry.find(provider, "model-override")?.compat).toEqual({
+        maxTokensField: "max_tokens",
+        openRouterRouting: { order: ["model-route"], allow_fallbacks: false },
+        vercelGatewayRouting: { order: ["model-route"], only: ["shared-route"] },
+      });
+      expect(registry.find(provider, "authored-only")?.compat).toEqual(authoredCompat);
+      const model = registry.find(provider, "shared");
+      if (baseUrl === rootUrl) {
+        expect(model).toMatchObject({ contextWindows, contextWindowDefault: "1m" });
+      } else {
+        expect(model).toHaveProperty("contextWindows", undefined);
+        expect(model).toHaveProperty("contextWindowDefault", undefined);
+      }
+      expect(model?.compat).toEqual(baseUrl === rootUrl ? generatedCompat : authoredCompat);
+    },
+  );
+
+  it("keeps model headers separate for literal provider/model pairs with delimiters", async () => {
+    const authoredProvider = `${provider}:variant`;
+    const registry = sourceRegistry({
+      authoredProvider,
+      authoredModels: [{ id: "shared", headers: { "X-Authored-Model": "private" } }],
+      generatedModels: [{ id: "variant:shared" }],
+      credentials: { [provider]: { type: "api_key", key: "current-store-key" } },
+    });
+    await expect(getAuth(registry, "variant:shared")).resolves.toEqual(
+      authResult("current-store-key"),
+    );
+    await expect(getAuth(registry, "shared", authoredProvider)).resolves.toMatchObject({
+      headers: { "X-Authored-Model": "private" },
+    });
+  });
+
+  it.each([rootUrl, catalogUrl])(
+    "scopes generated-only request settings to authored endpoints at %s",
+    async (baseUrl) => {
+      const registry = sourceRegistry({
+        generated: { ...generated, baseUrl, models: [{ id: "generated-only" }] },
+      });
+      const model = registry.find(provider, "generated-only");
+      expect(registry.hasConfiguredAuth(model!)).toBe(baseUrl === rootUrl);
+      expect(registry.getAvailable().some((entry) => entry.id === "generated-only")).toBe(
+        baseUrl === rootUrl,
+      );
+      await expect(getAuth(registry, "generated-only")).resolves.toEqual(
+        authResult(
+          baseUrl === rootUrl ? "authored-fixture-key" : undefined,
+          baseUrl === rootUrl ? { "X-Authored-Provider": "root" } : undefined,
+        ),
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "keeps authored routes on generated conflicts (model pin: %s)",
+    (modelPin) => {
+      const expectedApi = modelPin ? "openai-responses" : "openai-completions";
+      const expectedUrl = modelPin ? "https://model-pin.example.test/v1" : rootUrl;
+      const registry = sourceRegistry({
+        authoredModels: [
+          { id: "shared", ...(modelPin ? { api: expectedApi, baseUrl: expectedUrl } : {}) },
+        ],
+        generatedModels: [
+          {
+            id: "shared",
+            api: "anthropic-messages",
+            baseUrl: "https://conflicting.example.test/v1",
+          },
+        ],
+      });
+      expect(registry.find(provider, "shared")).toMatchObject({
+        api: expectedApi,
+        baseUrl: expectedUrl,
+      });
+    },
+  );
+
+  it("keeps distinct literal SDK model IDs when their trimmed spelling matches", () => {
+    const registry = sourceRegistry({
+      authoredModels: [{ id: "shared", name: "Authored" }],
+      generatedModels: [{ id: " shared ", name: "Distinct generated model" }],
+    });
+    expect(registry.getAll().map((model) => model.id)).toEqual(["shared", " shared "]);
+    expect(registry.find(provider, "shared")?.name).toBe("Authored");
+    expect(registry.find(provider, " shared ")?.name).toBe("Distinct generated model");
+  });
+
+  it("keeps generated-only inventory without adopting its credential or bearer headers", async () => {
+    const registry = sourceRegistry({ authored: null });
+    const model = registry.find(provider, "shared");
+    expect(model).toBeDefined();
+    expect(registry.hasConfiguredAuth(model!)).toBe(false);
+    expect(registry.getAvailable()).toEqual([]);
+    expect(registry.getProviderAuthStatus(provider).configured).toBe(false);
+    await expect(registry.getApiKeyForProvider(provider)).resolves.toBeUndefined();
+    await expect(getAuth(registry)).resolves.toEqual(authResult());
+  });
+
+  it("preserves raw SDK authored request authority for custom APIs", async () => {
+    const api = "operator-custom-api";
+    const registry = sourceRegistry({
+      authored: {
+        ...authored,
+        api,
+        authHeader: true,
+        models: [{ ...authored.models[0], baseUrl: catalogUrl }],
+      },
+      generated: {
+        api: "openai-completions",
+        baseUrl: catalogUrl,
+        models: [{ id: "generated-only" }],
+      },
+    });
+    const model = registry.find(provider, "shared");
+    expect(model).toMatchObject({ api, baseUrl: catalogUrl });
+    await expect(getAuth(registry)).resolves.toEqual(
+      authResult("authored-fixture-key", {
+        ...authoredHeaders,
+        Authorization: "Bearer authored-fixture-key",
+      }),
+    );
+  });
+
+  it("forks the composed inventory and request headers while isolating current credentials", async () => {
+    const registry = sourceRegistry();
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find(provider, "shared")).toMatchObject({
+      name: "Authored",
+      input: ["text", "image"],
+      maxTokens: 2048,
+      maxTokensSource: "configured",
+    });
+    expect(registry.find(provider, "generated-only")).toMatchObject({
+      baseUrl: catalogUrl,
+      maxTokens: 4096,
+      maxTokensSource: "discovered",
+    });
+    const fork = (key: string) =>
+      registry.fork(AuthStorage.inMemory({ [provider]: { type: "api_key", key } }));
+    const first = fork("first-request-key");
+    const second = fork("second-request-key");
+    first.refresh();
+    expect(first.getAll().map((model) => model.id)).toEqual(["shared", "Shared", "generated-only"]);
+    await expect(getAuth(first)).resolves.toEqual(authResult("first-request-key", authoredHeaders));
+    await expect(getAuth(second)).resolves.toEqual(
+      authResult("second-request-key", authoredHeaders),
+    );
+  });
+});
+
+describe("ModelRegistry no-auth", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
+  function noAuthRegistry(params: {
+    providerApi?: "openai-completions" | "openai-responses";
+    modelApi?: "openai-completions" | "openai-responses";
+    auth?: "none";
+    storedKey?: boolean;
+    inlineKey?: boolean;
+    authorization?: string;
+  }) {
+    const authStorage = AuthStorage.inMemory(
+      params.storedKey ? { custom: { type: "api_key", key: "stored-key" } } : {},
+    );
+    const getApiKey = vi.spyOn(authStorage, "getApiKey");
+    const modelConfig = {
+      id: "model",
+      api: params.modelApi ?? "openai-completions",
+      headers: { authorization: params.authorization ?? "Bearer model", "X-Model": "model" },
+    };
+    const provider = {
+      baseUrl: "https://inference.example.invalid/v1",
+      api: params.providerApi ?? "openai-completions",
+      auth: params.auth,
+      ...(params.inlineKey === false ? {} : { apiKey: "inline-key" }),
+      authHeader: true,
+      headers: {
+        Authorization: params.authorization ?? "Bearer provider",
+        "X-Provider": "provider",
+      },
+      models: [modelConfig],
+    };
+    const registry = capturedRegistry({ custom: provider }, authStorage, {
+      pluginCatalogs: [],
+      includePluginCatalogs: false,
+    });
+    const model = registry.find("custom", "model");
+    if (!model) {
+      throw new Error(registry.getError() ?? "Expected custom model");
+    }
+    return { registry, model, getApiKey };
+  }
+
+  it.each(["openai-completions", "openai-responses"] as const)(
+    "keeps registry no-auth terminal with provider adapter %s and an effective Completions route",
+    async (providerApi) => {
+      const { registry, model, getApiKey } = noAuthRegistry({
+        providerApi,
+        auth: "none",
+        storedKey: true,
+      });
+      const requestModel = {
+        ...model,
+        headers: {
+          Authorization: "Bearer upper-runtime",
+          authorization: "Bearer lower-runtime",
+          "X-Runtime": "runtime",
+        },
+      };
+      const auth = await registry.getApiKeyAndHeaders(requestModel);
+      expect(getApiKey).not.toHaveBeenCalled();
+      // sdk.no-auth.test.ts owns the OpenAI wire proof after caller-header merging.
+      expect(auth).toEqual(
+        authResult(CUSTOM_LOCAL_AUTH_MARKER, {
+          Authorization: null,
+          authorization: null,
+          "X-Provider": "provider",
+          "X-Model": "model",
+          "X-Runtime": "runtime",
+        }),
+      );
+    },
+  );
+
+  it.each([true, false])(
+    "resolves registry credentials and headers with auth:none=%s",
+    async (noAuth) => {
+      vi.stubEnv("OPENCLAW_TEST_UNUSED_AUTHORIZATION", "");
+      const { registry, model, getApiKey } = noAuthRegistry({
+        auth: noAuth ? "none" : undefined,
+        inlineKey: !noAuth,
+        storedKey: !noAuth,
+        authorization: noAuth ? "OPENCLAW_TEST_UNUSED_AUTHORIZATION" : undefined,
+      });
+      expect(registry.getAvailable()).toContain(model);
+      await expect(registry.getApiKeyAndHeaders(model)).resolves.toMatchObject({
+        ok: true,
+        apiKey: noAuth ? CUSTOM_LOCAL_AUTH_MARKER : "stored-key",
+        headers: { Authorization: noAuth ? null : "Bearer stored-key" },
+      });
+      if (noAuth) {
+        expect(getApiKey).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("rejects an effective Responses override before registry credential lookup", async () => {
+    const { registry, model, getApiKey } = noAuthRegistry({
+      modelApi: "openai-responses",
+      auth: "none",
+      storedKey: true,
+    });
+    expect(registry.getAvailable()).not.toContain(model);
+    await expect(registry.getApiKeyAndHeaders(model)).resolves.toEqual({
+      ok: false,
+      error:
+        'Provider "custom" with auth: "none" requires the openai-completions adapter. Select that adapter or configure an API key.',
+    });
+    expect(getApiKey).not.toHaveBeenCalled();
   });
 });

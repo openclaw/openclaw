@@ -86,12 +86,8 @@ function observeAdmission(database: DatabaseSync): string[] {
 }
 
 function withDatabase<T>(location: string, readOnly: boolean, run: (db: DatabaseSync) => T): T {
-  const database = openNodeSqliteDatabase(location, { readOnly });
-  try {
-    return run(database);
-  } finally {
-    database.close();
-  }
+  using database = openNodeSqliteDatabase(location, { readOnly });
+  return run(database);
 }
 
 function countAbsentHostLookups(database: DatabaseSync): number {

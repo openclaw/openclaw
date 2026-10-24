@@ -3,7 +3,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { hasConfiguredSecretInput } from "openclaw/plugin-sdk/setup";
 import { resolveClickClackAccount } from "./accounts.js";
-import { createClickClackClient } from "./http-client.js";
+import { ClickClackHttpError, createClickClackClient } from "./http-client.js";
 import { findClickClackWorkspace } from "./resolve.js";
 import type { CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
@@ -19,15 +19,6 @@ const GATEWAY_RUNNING_MESSAGE = "OpenClaw is running — ClickClack will connect
 const GATEWAY_NOT_RUNNING_MESSAGE = "Start OpenClaw to connect: openclaw gateway";
 const GATEWAY_UNKNOWN_MESSAGE =
   "If OpenClaw is running it connects automatically; otherwise start it with: openclaw gateway";
-
-function isHttpStatus(error: unknown, status: number): boolean {
-  return (
-    typeof error === "object" &&
-    error !== null &&
-    "status" in error &&
-    (error as { status?: unknown }).status === status
-  );
-}
 
 function usesUnavailableImplicitEnvToken(
   account: ResolvedClickClackAccount,
@@ -79,7 +70,7 @@ export async function checkClickClackSetupConnection(params: {
       workspaceName: workspace.name,
     };
   } catch (error) {
-    if (isHttpStatus(error, 401)) {
+    if (error instanceof ClickClackHttpError && error.status === 401) {
       return { status: "invalid-token" };
     }
     return {

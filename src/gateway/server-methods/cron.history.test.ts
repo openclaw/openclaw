@@ -178,7 +178,6 @@ async function setup() {
     defaultAgentId: "main",
     cronEnabled: false,
     enqueueSystemEvent() {},
-    requestHeartbeat() {},
     runIsolatedAgentJob: async () => ({ status: "ok" }),
   });
   const created = await cron.add(createHistoryJob("main", baseKey, "History job"), {

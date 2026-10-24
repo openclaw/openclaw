@@ -6,12 +6,10 @@ import { cliCleanupRetirementEntrypoints } from "./cli-entrypoint.test-support.j
 import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
 const directories = useAutoCleanupTempDirTracker(afterEach);
-const entries = Object.fromEntries(
-  Object.entries(cliCleanupRetirementEntrypoints).map(([name, entry]) => [
-    name,
-    resolveRuntimeWorkerUrl(entry).href,
-  ]),
-);
+const entries: Record<string, string> = {};
+for (const [name, entry] of Object.entries(cliCleanupRetirementEntrypoints)) {
+  entries[name] = resolveRuntimeWorkerUrl(entry).href;
+}
 
 it.each(["success", "failure"])(
   "drains executable resources after source replacement without changing %s",
@@ -38,8 +36,7 @@ it.each(["success", "failure"])(
           ]));
           const originals = new Map([...copies].map(([source, copy]) => [copy, source]));
           for (const [source, copy] of copies) copyFileSync(new URL(source), new URL(copy));
-          // Copied owners move; other imports retain the prepared graph. Node still
-          // checks each copy exists, including already imported cleanup modules.
+          // Redirect only copied owners, retaining the rest of the prepared import graph.
           let executableAdmission = false;
           let skillsResolutions = 0;
           const hooks = registerHooks({
@@ -55,8 +52,7 @@ it.each(["success", "failure"])(
             },
           });
           const { withCliProcessScope, withCliCommandCleanup } = await import(entries.scope);
-          // The ordinary entry loads cleanup elsewhere first; this does not prime
-          // the cleanup scope's distinct resolution after its files disappear.
+          // Importing cleanup here must not prime the scope's resolution after retirement.
           const { closeCliResources, waitForPendingCliDisposers } = await import(entries.cleanup);
           const { registerOpenClawStateDatabaseAsyncResource } = await import(entries.database);
           const { createRetainedNativeWorker, closeDefaultRetainedNativeWorkerSource } =
@@ -71,27 +67,23 @@ it.each(["success", "failure"])(
           await once(worker, "message");
           assert(supervisors.length > 0);
           assert(supervisors.every(worker => worker.threadId !== -1));
-          let closed = false;
+          const closed = { database: false, watchers: false };
           const unregister = registerOpenClawStateDatabaseAsyncResource({
-            async close() { await worker.terminate(); closed = true; unregister(); },
+            async close() { await worker.terminate(); closed.database = true; unregister(); },
           });
           const commandError = new Error("synthetic command failure");
-          let watchersClosed = false;
           executableAdmission = true;
           try {
             const command = withCliProcessScope(() => withCliCommandCleanup(false, async cleanup => {
               assert(skillsResolutions > 0, "watcher callback was not retained before dispatch");
-              assert.equal(typeof cleanup.closeSkillsWatchers, "function");
               const closeWatchers = cleanup.closeSkillsWatchers;
-              let releaseWatchers;
-              let watcherCloseStarted;
-              const watcherGate = new Promise(resolve => { releaseWatchers = resolve; });
-              const watcherStarted = new Promise(resolve => { watcherCloseStarted = resolve; });
+              const watcherGate = Promise.withResolvers();
+              const watcherStarted = Promise.withResolvers();
               cleanup.closeSkillsWatchers = async () => {
-                watcherCloseStarted();
-                await watcherGate;
+                watcherStarted.resolve();
+                await watcherGate.promise;
                 await closeWatchers();
-                watchersClosed = true;
+                closed.watchers = true;
               };
               try {
                 for (const copy of copies.values()) unlinkSync(new URL(copy));
@@ -100,9 +92,9 @@ it.each(["success", "failure"])(
               } finally {
                 let settled = false;
                 const closing = closeCliResources(cleanup).then(() => { settled = true; });
-                await watcherStarted;
+                await watcherStarted.promise;
                 assert.equal(settled, false, "watcher retirement was not joined");
-                releaseWatchers();
+                watcherGate.resolve();
                 await closing;
                 await cleanup.pluginResources.release();
               }
@@ -113,8 +105,7 @@ it.each(["success", "failure"])(
               assert.equal(await command, "command-result");
             }
             await waitForPendingCliDisposers();
-            assert.equal(closed, true);
-            assert.equal(watchersClosed, true);
+            assert.deepEqual(closed, { database: true, watchers: true });
             assert(supervisors.every(worker => worker.threadId === -1));
             console.log("cleanup joined after source retirement");
           } finally {

@@ -3,7 +3,6 @@ import type { OpenClawConfig } from "../../config/types.js";
 import type { GatewayProbeResult } from "../../gateway/probe.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import {
-  buildNetworkHints,
   extractConfigSummary,
   isProbeReachable,
   isPostConnectProbeFailure,
@@ -177,26 +176,20 @@ describe("probe reachability classification", () => {
   });
 });
 describe("gateway-status local target scheme", () => {
-  it("uses wss for local loopback targets and network hints when gateway TLS is enabled", () => {
+  it("uses wss for local loopback targets when gateway TLS is enabled", () => {
     const cfg: OpenClawConfig = { gateway: { mode: "local", tls: { enabled: true } } };
 
     const targets = resolveTargets(cfg);
     const localLoopbackTarget = targets.find((target) => target.id === "localLoopback");
     expect(localLoopbackTarget?.url).toBe("wss://127.0.0.1:18789");
-
-    const hints = buildNetworkHints(cfg);
-    expect(hints.localLoopbackUrl).toBe("wss://127.0.0.1:18789");
   });
 
-  it("uses a local port override for loopback targets and network hints", () => {
+  it("uses a local port override for loopback targets", () => {
     const cfg: OpenClawConfig = { gateway: { mode: "local", port: 18789 } };
 
     const targets = resolveTargets(cfg, undefined, 19080);
     const localLoopbackTarget = targets.find((target) => target.id === "localLoopback");
     expect(localLoopbackTarget?.url).toBe("ws://127.0.0.1:19080");
-
-    const hints = buildNetworkHints(cfg, 19080);
-    expect(hints.localLoopbackUrl).toBe("ws://127.0.0.1:19080");
   });
 
   it("preserves explicit URL targets when a local port override is also present", () => {

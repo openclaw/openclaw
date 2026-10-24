@@ -35,23 +35,6 @@ function hasGeneratedFallbackFingerprint(model: Record<string, unknown>): boolea
   );
 }
 
-function directlyAuthoredModel(params: {
-  authoredRoot: unknown;
-  providerId: string;
-  modelIndex: number;
-  modelId: string;
-}): Record<string, unknown> | undefined {
-  const provider = getRecord(getRecord(getRecord(params.authoredRoot)?.models)?.providers)?.[
-    params.providerId
-  ];
-  const models = getRecord(provider)?.models;
-  if (!Array.isArray(models)) {
-    return undefined;
-  }
-  const model = getRecord(models[params.modelIndex]);
-  return model?.id === params.modelId ? model : undefined;
-}
-
 function isHistoricalMaterializingWriter(record: ConfigWriteRecord): boolean {
   const updateFinalize = record.argv.some(
     (arg, index) => arg === "update" && record.argv[index + 1] === "finalize",
@@ -111,12 +94,14 @@ export function repairGeneratedModelMetadataCorruption(params: {
     if (!modelId || !hasGeneratedFallbackFingerprint(model)) {
       continue;
     }
-    const authoredModel = directlyAuthoredModel({
-      authoredRoot: params.authoredRoot,
-      providerId,
-      modelIndex,
-      modelId,
-    });
+    const authoredProvider = getRecord(
+      getRecord(getRecord(params.authoredRoot)?.models)?.providers,
+    )?.[providerId];
+    const authoredModels = getRecord(authoredProvider)?.models;
+    const authoredCandidate = Array.isArray(authoredModels)
+      ? getRecord(authoredModels[modelIndex])
+      : undefined;
+    const authoredModel = authoredCandidate?.id === modelId ? authoredCandidate : undefined;
     const catalog = resolveConfiguredModelCatalogOwnership({ providerId, provider, model });
     if (
       !catalog ||

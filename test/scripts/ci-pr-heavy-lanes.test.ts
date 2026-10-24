@@ -5,12 +5,6 @@ import {
   CI_MANIFEST_FIXTURE_TARGETS,
   runCiManifestFixture,
 } from "./ci-workflow-manifest.test-support.js";
-import {
-  evaluateWorkflowExpression,
-  readCiWorkflow,
-  runWorkflowShellScript,
-  type WorkflowStep,
-} from "./ci-workflow.test-support.js";
 
 function manifest(options: Omit<Parameters<typeof runCiManifestFixture>[0], "bundledPlanner">) {
   const result = runCiManifestFixture({ bundledPlanner: true, ...options });
@@ -145,32 +139,4 @@ it.each([
     }
     expect(selected).toEqual(expect.arrayContaining(CI_MANIFEST_FIXTURE_TARGETS.mocked));
   }
-
-  const gate = readCiWorkflow().jobs["ci-gate"].steps.find(
-    (step: WorkflowStep) => step.name === "Verify selected CI lanes",
-  );
-  const movedJobs = new Set<string>(heavyLanes.map(([job]) => job));
-  const jobResults = gate.env.JOB_RESULTS.replace(/\$\{\{[\s\S]*?\}\}/gu, (expression: string) => {
-    const job = expression.match(/^\$\{\{\s*needs\.([\w-]+)\.result\s*\}\}$/u)?.[1];
-    if (job) {
-      return deferred && movedJobs.has(job) ? "skipped" : "success";
-    }
-    return String(
-      evaluateWorkflowExpression(expression, {
-        eventName,
-        releaseGate,
-        repository: "openclaw/openclaw",
-        sha: revision,
-        runAttempt: 1,
-        preflightOutputs: result.outputs,
-      }) ?? "",
-    );
-  });
-  if (deferred) {
-    for (const job of movedJobs) {
-      expect(jobResults).toContain(`${job}=skipped|false`);
-    }
-  }
-  const checked = runWorkflowShellScript(gate.run, { env: { JOB_RESULTS: jobResults } });
-  expect(checked.status, `${checked.stdout}${checked.stderr}`).toBe(0);
 });

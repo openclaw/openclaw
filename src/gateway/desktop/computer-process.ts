@@ -9,7 +9,7 @@ import {
   type ComputerUseCapabilityDescriptor,
 } from "../../plugins/computer-use-contract.js";
 import { getProcessSupervisor } from "../../process/supervisor/index.js";
-import type { ManagedRun, ProcessSupervisor, RunExit } from "../../process/supervisor/types.js";
+import type { ManagedRun, RunExit } from "../../process/supervisor/types.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { createPendingRequestRegistry } from "../../shared/pending-request-registry.js";
 import {
@@ -31,9 +31,8 @@ export function startComputerHostProcess(params: {
   env: NodeJS.ProcessEnv;
   pluginIds: string[];
   assertCurrent(): void;
-  supervisor?: ProcessSupervisor;
 }) {
-  const supervisor = params.supervisor ?? getProcessSupervisor();
+  const supervisor = getProcessSupervisor();
   const scopeKey = `gateway-computer:${randomUUID()}`;
   const cleanupScope = supervisor.acquireScopeCleanup(scopeKey, { processTree: "owned-only" });
   const ready = createDeferredCore<ComputerUseCapabilityDescriptor>();

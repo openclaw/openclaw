@@ -49,29 +49,6 @@ import {
   resolvePortListeningAddresses,
 } from "./status.gather.js";
 
-function formatConnectionLine(
-  connection: NonNullable<DaemonStatus["connections"]>["established"][number],
-) {
-  const pid = connection.pid ? `pid=${connection.pid}` : "pid=?";
-  const ppid = connection.ppid ? ` ppid=${connection.ppid}` : "";
-  const direction = ` ${connection.direction}`;
-  const command = connection.command ? ` ${connection.command}` : "";
-  const address = connection.address ? ` ${connection.address}` : "";
-  const commandLine = connection.commandLine
-    ? ` cmd=${shortenHomePath(connection.commandLine)}`
-    : "";
-  return `${pid}${ppid}${direction}${command}${address}${commandLine}`;
-}
-
-function formatProbeEventLoop(
-  eventLoop: NonNullable<NonNullable<DaemonStatus["rpc"]>["eventLoop"]>,
-) {
-  const state = eventLoop.degraded ? "degraded" : "ok";
-  return `${state} max=${Math.round(eventLoop.delayMaxMs)}ms p99=${Math.round(
-    eventLoop.delayP99Ms,
-  )}ms util=${eventLoop.utilization} cpu=${eventLoop.cpuCoreRatio}`;
-}
-
 export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; deep?: boolean }) {
   if (opts.json) {
     defaultRuntime.writeJson({
@@ -171,7 +148,9 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         (runtimeNeedsAttention
           ? `Recommendation: run "${formatCliCommand("openclaw doctor")}" interactively to resolve the runtime findings before reinstalling. Reinstalling alone may select the same runtime.`
           : `Recommendation: run "${formatCliCommand("openclaw doctor")}" interactively for guided checks, or reinstall with "${reinstallCommand}".`));
-    printWarning(recommendation);
+    if (service.configAudit.issues.some((issue) => issue.repair !== "host")) {
+      printWarning(recommendation);
+    }
   }
 
   if (status.config) {
@@ -365,9 +344,12 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
         `${label(probeLabel)} ${rpc.timedOut ? warnText(timeoutStatus) : errorText("failed")}`,
       );
       if (rpc.timedOut && rpc.eventLoop) {
-        defaultRuntime.error(
-          `${label("Gateway event loop:")} ${warnText(formatProbeEventLoop(rpc.eventLoop))}`,
-        );
+        const eventLoop = rpc.eventLoop;
+        const state = eventLoop.degraded ? "degraded" : "ok";
+        const eventLoopLine = `${state} max=${Math.round(eventLoop.delayMaxMs)}ms p99=${Math.round(
+          eventLoop.delayP99Ms,
+        )}ms util=${eventLoop.utilization} cpu=${eventLoop.cpuCoreRatio}`;
+        defaultRuntime.error(`${label("Gateway event loop:")} ${warnText(eventLoopLine)}`);
       }
       if (rpc.url) {
         defaultRuntime.error(`${label("Check target:")} ${rpc.url}`);
@@ -410,7 +392,16 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
   if (status.connections?.established.length) {
     printInfo("Established clients:", String(status.connections.established.length));
     for (const connection of status.connections.established.slice(0, 8)) {
-      defaultRuntime.log(`  ${infoText(formatConnectionLine(connection))}`);
+      const pid = connection.pid ? `pid=${connection.pid}` : "pid=?";
+      const ppid = connection.ppid ? ` ppid=${connection.ppid}` : "";
+      const direction = ` ${connection.direction}`;
+      const command = connection.command ? ` ${connection.command}` : "";
+      const address = connection.address ? ` ${connection.address}` : "";
+      const commandLine = connection.commandLine
+        ? ` cmd=${shortenHomePath(connection.commandLine)}`
+        : "";
+      const connectionLine = `${pid}${ppid}${direction}${command}${address}${commandLine}`;
+      defaultRuntime.log(`  ${infoText(connectionLine)}`);
     }
     if (status.connections.established.length > 8) {
       defaultRuntime.log(
@@ -725,4 +716,5 @@ export function printDaemonStatus(status: DaemonStatus, opts: { json: boolean; d
 
   defaultRuntime.log(`${label("Troubles:")} run ${formatCliCommand("openclaw status")}`);
   defaultRuntime.log(`${label("Troubleshooting:")} https://docs.openclaw.ai/troubleshooting`);
+  defaultRuntime.log(`${label("Support:")} https://community.openclaw.ai/`);
 }

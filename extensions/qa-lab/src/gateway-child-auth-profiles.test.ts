@@ -23,6 +23,7 @@ const setup = createQaGatewaySetupHarness();
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN", undefined);
   vi.stubEnv("OPENCLAW_LIVE_SETUP_TOKEN_VALUE", undefined);
+  vi.stubEnv("OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN_PROFILE", undefined);
 });
 
 afterEach(async () => {
@@ -58,11 +59,11 @@ describe("QA Gateway auth profile staging", () => {
   it("stages a live Anthropic setup-token profile for isolated QA workers", async () => {
     const stateDir = await tempDirs.makeTempDir("qa-setup-token-state-");
     const token = `sk-ant-oat01-${"c".repeat(80)}`;
+    vi.stubEnv("OPENCLAW_LIVE_SETUP_TOKEN_VALUE", token);
 
     const cfg = await stageQaLiveAnthropicSetupToken({
       cfg: {},
       stateDir,
-      env: { OPENCLAW_LIVE_SETUP_TOKEN_VALUE: token },
     });
 
     expect(cfg.auth?.profiles?.["anthropic:qa-setup-token"]).toMatchObject({

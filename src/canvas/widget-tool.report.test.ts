@@ -86,7 +86,6 @@ it("pins, updates and reopens a report for a global agent without a document", a
   await createDashboardTool({
     agentSessionKey: target.sessionKey,
     agentId: target.agentId,
-    callGateway,
   }).execute("update-report", {
     action: "widget_put",
     name,

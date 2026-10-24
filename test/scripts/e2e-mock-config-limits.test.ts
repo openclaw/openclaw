@@ -836,6 +836,31 @@ describe("mock OpenAI response markers", () => {
     });
   });
 
+  it("streams a lane-owned chat tool call in argument chunks before its text", async (ctx) => {
+    const args = { path: "turn-0.ts", content: "export const value = { ok: [1, 2] };" };
+    await withControl(
+      ctx,
+      { text: "written", toolCall: { name: "write", arguments: args, argumentChunkChars: 4 } },
+      async (baseUrl) => {
+        const user = inputMessage("write the generated file");
+        const calls = chatMessages(
+          await requestApi(baseUrl, "chat/completions", true, [user]),
+          true,
+        ).flatMap((delta) => delta.tool_calls ?? []);
+        const chunks = calls.map((call) => call.function.arguments);
+        expect(calls[0]).toMatchObject({ type: "function", function: { name: "write" } });
+        expect(Math.max(...chunks.map((chunk) => chunk.length))).toBe(4);
+        expect(JSON.parse(chunks.join(""))).toStrictEqual(args);
+        const final = await requestApi(baseUrl, "chat/completions", true, [
+          user,
+          { role: "assistant", tool_calls: [calls[0]] },
+          { role: "tool", tool_call_id: calls[0].id, content: "ok" },
+        ]);
+        expect(apiText(final, "chat/completions", true)).toBe("written");
+      },
+    );
+  });
+
   it("consumes scripted responses in order and logs the selected entries", async (ctx) => {
     const script = {
       scriptVersion: "script-1",

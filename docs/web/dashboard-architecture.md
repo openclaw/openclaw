@@ -466,7 +466,7 @@ Inline HTML and MCP App previews share a widget-card renderer that dispatches
 on content kind. Eligible previews expose the same **Pin to dashboard**
 affordance. Generated widget names let the card recognize an existing pin and
 avoid offering a duplicate. The renderer and pin paths live in
-`ui/src/pages/chat/components/widget-card.ts`.
+`ui/src/pages/chat/components/widget-card-view.tsx`.
 
 Widgets compose through grid adjacency: an agent-authored widget and an MCP App
 can occupy neighboring cells on one tab. Each keeps its own sandbox and bridge

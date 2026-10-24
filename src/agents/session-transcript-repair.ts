@@ -126,6 +126,7 @@ type ErroredAssistantResultPolicy = "preserve" | "drop";
 type ToolUseResultPairingOptions = {
   erroredAssistantResultPolicy?: ErroredAssistantResultPolicy;
   missingToolResultText?: string;
+  missingToolResultTimestamp?: "assistant";
   // A valid Responses checkpoint may split a call from its later output.
   // Only that replay owner may retain results that normal repair treats as orphaned.
   preserveUnframedToolResults?: boolean;
@@ -285,7 +286,11 @@ export function sanitizeToolUseResultPairing(
   messages: AgentMessage[],
   options?: ToolUseResultPairingOptions,
 ): AgentMessage[] {
-  return repairToolUseResultPairing(messages, options).messages;
+  // Replay-only repairs must not rewrite the prefix when the wall clock advances.
+  return repairToolUseResultPairing(messages, {
+    ...options,
+    missingToolResultTimestamp: "assistant",
+  }).messages;
 }
 
 export function sanitizeToolUseResultPairingForModel(
@@ -351,6 +356,11 @@ export function repairToolUseResultPairing(
             toolCallId: occurrence.id,
             toolName: occurrence.name,
             text: options?.missingToolResultText,
+            // Sparse legacy turns have no recorded time; use a stable sentinel in projections.
+            timestamp:
+              options?.missingToolResultTimestamp === "assistant"
+                ? (frame.assistant.timestamp ?? 0)
+                : undefined,
           });
           occurrence.result = missing;
           added.push(missing);

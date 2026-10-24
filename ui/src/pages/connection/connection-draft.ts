@@ -18,11 +18,36 @@ import {
   readSystemInfo,
   SYSTEM_INFO_POLL_INTERVAL_MS,
 } from "../../lib/system-info.ts";
-import {
-  CONNECTION_PING_SAMPLE_LIMIT,
-  summarizeConnectionPing,
-  type ConnectionPingSummary,
-} from "./latency.ts";
+
+const CONNECTION_PING_SAMPLE_LIMIT = 100;
+
+type ConnectionPingSummary = {
+  count: number;
+  averageMs: number;
+  p50Ms: number;
+  p95Ms: number;
+  p99Ms: number;
+};
+
+function summarizeConnectionPing(samples: readonly number[]): ConnectionPingSummary | null {
+  if (samples.length === 0) {
+    return null;
+  }
+  const sorted = samples.toSorted((a, b) => a - b);
+  const percentile = (fraction: number) => sorted[Math.ceil(sorted.length * fraction) - 1]!;
+  return {
+    count: samples.length,
+    averageMs: samples.reduce((total, sample) => total + sample, 0) / samples.length,
+    p50Ms: percentile(0.5),
+    p95Ms: percentile(0.95),
+    p99Ms: percentile(0.99),
+  };
+}
+
+type DiagnosticRequest = {
+  controller: AbortController;
+  completion: PromiseWithResolvers<boolean | null> | null;
+};
 
 export class ConnectionDraft {
   settings: UiSettings = loadSettings();
@@ -33,10 +58,12 @@ export class ConnectionDraft {
   ping: ConnectionPingSummary | null = null;
   pingFailed = false;
   pingSamples: readonly SparklineSample[] = [];
-  pingRequest: AbortController | null = null;
+  pingRequest: DiagnosticRequest | null = null;
   statusHistory: readonly GatewayStatusSample[] = [];
   statusFailed = false;
-  systemInfoRequest: AbortController | null = null;
+  systemInfoRequest: DiagnosticRequest | null = null;
+  // Keep the accepted outcome readable through the next poll's pending phase.
+  systemInfoRead: Promise<boolean | null> | null = null;
   private sessionKeyBaseline = "";
   private sessionGatewayUrl = "";
   sessionSaved = false;
@@ -47,6 +74,16 @@ export class ConnectionDraft {
     readonly context: ApplicationContext,
     readonly changed: () => void,
   ) {}
+
+  private cancelDiagnostic(key: "pingRequest" | "systemInfoRequest") {
+    const request = this[key];
+    this[key] = null;
+    request?.controller.abort();
+    request?.completion?.resolve(null);
+    if (key === "systemInfoRequest") {
+      this.systemInfoRead = null;
+    }
+  }
 
   private get isActive() {
     // Lazy routes can bind before DOM insertion; the binding owns their lifetime.
@@ -80,8 +117,7 @@ export class ConnectionDraft {
       this.systemInfoUnavailable = !canReadSystemInfo(snapshot);
       if (this.systemInfoUnavailable) {
         this.gateway.invalidate();
-        this.systemInfoRequest?.abort();
-        this.systemInfoRequest = null;
+        this.cancelDiagnostic("systemInfoRequest");
         this.systemInfo = null;
         this.statusFailed = true;
       }
@@ -98,10 +134,8 @@ export class ConnectionDraft {
 
   private stopDiagnosticsPolling() {
     this.polling.stop();
-    this.pingRequest?.abort();
-    this.pingRequest = null;
-    this.systemInfoRequest?.abort();
-    this.systemInfoRequest = null;
+    this.cancelDiagnostic("pingRequest");
+    this.cancelDiagnostic("systemInfoRequest");
   }
 
   private resetDiagnostics() {
@@ -149,8 +183,14 @@ export class ConnectionDraft {
     ) {
       return;
     }
-    const request = new AbortController();
+    const request: DiagnosticRequest = {
+      controller: new AbortController(),
+      completion: isPing ? null : Promise.withResolvers<boolean | null>(),
+    };
     this[requestKey] = request;
+    if (!isPing) {
+      this.systemInfoRead = request.completion?.promise ?? null;
+    }
     this.changed();
     const isCurrent = () =>
       this[requestKey] === request &&
@@ -167,7 +207,7 @@ export class ConnectionDraft {
           {},
           {
             timeoutMs: SYSTEM_INFO_POLL_INTERVAL_MS,
-            signal: request.signal,
+            signal: request.controller.signal,
           },
         );
         if (!isCurrent()) {
@@ -180,7 +220,7 @@ export class ConnectionDraft {
         this.ping = summarizeConnectionPing(this.pingSamples.map((sample) => sample.value));
         this.pingFailed = false;
       } else {
-        const sample = await readSystemInfo(gatewaySource, request.signal);
+        const sample = await readSystemInfo(gatewaySource, request.controller.signal);
         if (!isCurrent()) {
           return;
         }
@@ -217,7 +257,10 @@ export class ConnectionDraft {
     } finally {
       if (this[requestKey] === request) {
         this[requestKey] = null;
+        request.completion?.resolve(this.statusFailed);
         this.changed();
+      } else {
+        request.completion?.resolve(null);
       }
     }
   }
@@ -295,7 +338,6 @@ export class ConnectionDraft {
       secret: this.settings.token || this.password,
       lastError: gateway.lastError,
       systemInfo: this.systemInfo,
-      systemInfoLoading: this.systemInfoRequest !== null,
       systemInfoUnavailable: this.systemInfoUnavailable,
       ping: this.ping,
       pingFailed: this.pingFailed,

@@ -54,7 +54,8 @@ import { prepareAgentWaitForTurn } from "./agent-wait.js";
 
 export function createAgentTurnService(
   { context, isWebchatConnect }: Pick<GatewayRequestHandlerOptions, "context" | "isWebchatConnect">,
-  assertContextCurrent?: () => void,
+  // Accepted execution outlives its caller: pass Gateway lifetime here, never caller authority.
+  assertGatewayLifetimeCurrent?: () => void,
 ) {
   const startTurn = async ({
     controllerInput,
@@ -136,7 +137,7 @@ export function createAgentTurnService(
       onCancelled: dedupeLifecycle.cancelOwnedReservation,
     });
     const assertRequestCurrent = composeSessionSourceAssertion([
-      assertContextCurrent,
+      assertGatewayLifetimeCurrent,
       assertAdmissionCurrent,
       () => {
         const signal = preparationSource.input?.abortSignal;
@@ -179,7 +180,7 @@ export function createAgentTurnService(
       if (!storageActive) {
         throw new Error("Agent session storage admission ended");
       }
-      assertContextCurrent?.();
+      assertGatewayLifetimeCurrent?.();
     };
     const sessionStorage = await acquireSessionActorStorage(
       { sessionKey: routing.requestedSessionKey, agentId: routing.agentId },
@@ -283,7 +284,7 @@ export function createAgentTurnService(
           admittedSessionId: requestedSessionId ?? runId,
           ...initialSessionGroups,
         };
-        let effectiveBootstrapContextRunKind = request.bootstrapContextRunKind;
+        let effectiveBootstrapContextRunKind = preflight.bootstrapContextRunKind;
         let restoredCronContinuationIdentity:
           | Pick<RestoredCronContinuation, "lifecycleRevision" | "sessionId">
           | undefined;
@@ -408,7 +409,7 @@ export function createAgentTurnService(
             // Replay can precede startup recovery. Restore the dead predecessor's
             // custody before this admission touches its row or replaces its claim.
             const { reconcileOrphanedGatewaySessionRecovery } =
-              await import("../session-recovery-service.js");
+              await import("../session-recovery-source.js");
             entry =
               (await reconcileOrphanedGatewaySessionRecovery({
                 cfg: cfgLocal,
@@ -668,7 +669,7 @@ export function createAgentTurnService(
               startAgentRunExecution({
                 ...runParams,
                 ...session,
-                assertContextCurrent,
+                assertGatewayLifetimeCurrent,
                 executionSource,
                 prepared: preparedDispatch,
                 mainRestartRecoveryOwnerLease,

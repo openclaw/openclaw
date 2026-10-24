@@ -24,22 +24,21 @@ function inboundEnvelope(options: Partial<Parameters<typeof formatInboundEnvelop
 
 describe("formatAgentEnvelope", () => {
   it("includes channel, from, ip, host, and timestamp", () => {
-    const body = agentEnvelope({
-      from: "user1",
-      host: "mac-mini",
-      ip: "10.0.0.5",
-      envelope: { timezone: "utc" },
-    });
-
-    expect(body).toBe("[WebChat user1 mac-mini 10.0.0.5 Thu 2025-01-02T03:04:05Z] hello");
+    expect(
+      agentEnvelope({
+        from: "user1",
+        host: "mac-mini",
+        ip: "10.0.0.5",
+        envelope: { timezone: "utc" },
+      }),
+    ).toBe("[WebChat user1 mac-mini 10.0.0.5 Thu 2025-01-02T03:04:05Z] hello");
   });
 
   it("formats timestamps in local timezone by default", () => {
     const ts = Date.UTC(2025, 0, 2, 3, 4);
-    const expectedTimestamp = stamp(ts, { timezone: "local" });
-    const body = agentEnvelope({ timestamp: ts });
-
-    expect(body).toBe(`[WebChat ${expectedTimestamp}] hello`);
+    expect(agentEnvelope({ timestamp: ts })).toBe(
+      `[WebChat ${stamp(ts, { timezone: "local" })}] hello`,
+    );
   });
 
   it("formats timestamps in UTC across date boundaries", () => {
@@ -49,21 +48,16 @@ describe("formatAgentEnvelope", () => {
       ["2025-01-01T00:00:00Z", "gmt", "Wed 2025-01-01T00:00:00Z"],
       ["2025-01-03T00:00:00Z", "utc", "Fri 2025-01-03T00:00:00Z"],
     ] as const) {
-      expect(
-        agentEnvelope({
-          timestamp: new Date(date),
-          envelope: { timezone },
-        }),
-      ).toBe(`[WebChat ${expected}] hello`);
+      expect(agentEnvelope({ timestamp: new Date(date), envelope: { timezone } })).toBe(
+        `[WebChat ${expected}] hello`,
+      );
     }
   });
 
   it("formats timestamps in user timezone when configured", () => {
-    const body = agentEnvelope({
-      envelope: { timezone: "user", userTimezone: "Europe/Vienna" },
-    });
-
-    expect(body).toMatch(/\[WebChat Thu 2025-01-02 04:04:05 [^\]]+\] hello/);
+    expect(
+      agentEnvelope({ envelope: { timezone: "user", userTimezone: "Europe/Vienna" } }),
+    ).toMatch(/\[WebChat Thu 2025-01-02 04:04:05 [^\]]+\] hello/);
   });
 
   it("falls back to the host timezone for an invalid configured user timezone", () => {
@@ -126,8 +120,7 @@ describe("formatInboundEnvelope", () => {
   });
 
   it("uses fixed envelope options while preserving the user timezone", () => {
-    const options = optionsFor("Europe/Vienna");
-    expect(options).toEqual({
+    expect(optionsFor("Europe/Vienna")).toEqual({
       timezone: "Europe/Vienna",
       includeTimestamp: true,
       includeElapsed: true,

@@ -89,7 +89,7 @@ function command(...args: string[]) {
   return [process.execPath, fixturePath, profileDir, ...args].map(quoteCliArg).join(" ");
 }
 
-async function writeProfile(token?: string) {
+async function writeProfile(token: string) {
   await fs.writeFile(
     path.join(profileDir, "hosts.yml"),
     JSON.stringify({ "github.com": { oauth_token: token } }),
@@ -99,7 +99,6 @@ async function writeProfile(token?: string) {
 
 describe.skipIf(process.platform === "win32")("selected GitHub profile authentication", () => {
   it.each([
-    { pty: false, service: false, profileState: "tokenless" },
     { pty: false, service: false, profileState: "available" },
     { pty: true, service: false, profileState: "deleted-after-launch" },
     { pty: false, service: true, profileState: "deleted-after-launch" },
@@ -119,7 +118,7 @@ describe.skipIf(process.platform === "win32")("selected GitHub profile authentic
         config: { tools: { github: { profileId } } },
         agentId: "main",
       });
-      await writeProfile(profileState === "tokenless" ? undefined : "managed-token");
+      await writeProfile("managed-token");
       const result = await tool.execute(`synthetic-auth-${profileState}`, {
         command: command(profileState, service ? "service" : "direct"),
         pty,
@@ -140,12 +139,6 @@ describe.skipIf(process.platform === "win32")("selected GitHub profile authentic
         for (const token of ["managed-token", "ambient-gh-token", "ambient-github-token"]) {
           expect(serialized).not.toContain(token);
         }
-      }
-      if (profileState === "tokenless") {
-        expect(result.details).toMatchObject({ exitCode: 1 });
-        expect(output).toContain("Reconnect or change GitHub Identity");
-        expect(output).not.toContain("synthetic-native-account");
-        return;
       }
       expect(result.details).toMatchObject({ status: "completed", exitCode: 0 });
       expect(JSON.parse(output)).toEqual({

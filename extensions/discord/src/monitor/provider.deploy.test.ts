@@ -1,20 +1,10 @@
-// Discord tests cover slash-command deploy REST logging behavior.
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { describe, expect, it, type Mock, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { Client } from "../internal/discord.js";
 import { runDiscordCommandDeployInBackground } from "./provider.deploy.js";
 
 type RestFn = (path: string, data?: unknown, query?: unknown) => Promise<unknown>;
-type RestMock = {
-  options: { timeout: number };
-  get: Mock<RestFn>;
-  post: Mock<RestFn>;
-  put: Mock<RestFn>;
-  patch: Mock<RestFn>;
-  delete: Mock<RestFn>;
-};
-
-function createRestMock(): RestMock {
+function createRestMock() {
   return {
     options: { timeout: 15_000 },
     get: vi.fn<RestFn>(async () => undefined),
@@ -24,13 +14,14 @@ function createRestMock(): RestMock {
     delete: vi.fn<RestFn>(async () => undefined),
   };
 }
+type RestMock = ReturnType<typeof createRestMock>;
 
-function runDeploy(params: { rest: RestMock; deployCommands: (rest: RestMock) => Promise<void> }) {
+function runDeploy(rest: RestMock, deployCommands: (rest: RestMock) => Promise<void>) {
   const log = vi.fn<(message: string) => void>();
   const error = vi.fn<(message: string) => void>();
   const client = {
-    rest: params.rest,
-    deployCommands: vi.fn(async () => params.deployCommands(params.rest)),
+    rest,
+    deployCommands: vi.fn(async () => deployCommands(rest)),
   };
   runDiscordCommandDeployInBackground({
     client: client as unknown as Client,
@@ -41,64 +32,44 @@ function runDeploy(params: { rest: RestMock; deployCommands: (rest: RestMock) =>
   return { log, error, client };
 }
 
-function joinedCalls(mock: Mock<(message: string) => void>): string {
-  return mock.mock.calls.map((call) => call[0]).join("\n");
-}
-
-describe("discord slash-command deploy REST logging", () => {
-  it("passes non-command REST traffic through without deploy labels", async () => {
-    const rest = createRestMock();
-    rest.get.mockImplementation(async (path: string) => {
-      if (path.includes("/voice-states/")) {
-        throw Object.assign(new Error("Unknown Voice State"), { status: 404 });
-      }
-      return undefined;
-    });
-    let deployFinished = false;
-    const { log, error } = runDeploy({
-      rest,
-      deployCommands: async (wrapped) => {
-        await wrapped.get("/applications/app-1/commands");
-        // Concurrent non-deploy traffic (voice-state probe) during the deploy
-        // window must keep its caller-owned error handling.
-        await expect(wrapped.get("/guilds/1/voice-states/2")).rejects.toThrow(
-          "Unknown Voice State",
-        );
-        deployFinished = true;
-      },
-    });
-
-    await vi.waitFor(() => expect(deployFinished).toBe(true));
-    const logged = joinedCalls(log);
-    expect(logged).not.toContain("voice-states");
-    expect(logged).not.toContain("slash command deploy failed");
-    expect(joinedCalls(error)).not.toContain("voice-states");
+it("passes non-command REST traffic through without deploy labels", async () => {
+  const rest = createRestMock();
+  rest.get.mockImplementation(async (path: string) => {
+    if (path.includes("/voice-states/")) {
+      throw Object.assign(new Error("Unknown Voice State"), { status: 404 });
+    }
+    return undefined;
+  });
+  let deployFinished = false;
+  const { log, error } = runDeploy(rest, async (wrapped) => {
+    await wrapped.get("/applications/app-1/commands");
+    // Concurrent voice traffic retains caller-owned error handling.
+    await expect(wrapped.get("/guilds/1/voice-states/2")).rejects.toThrow("Unknown Voice State");
+    deployFinished = true;
   });
 
-  it("logs one warning per deploy failure at default verbosity", async () => {
-    const rest = createRestMock();
-    const deployError = Object.assign(new Error("Missing Access"), {
-      status: 403,
-      discordCode: 50001,
-      rawBody: { message: "Missing Access", code: 50001 },
-    });
-    rest.post.mockRejectedValue(deployError);
-    const { log, error, client } = runDeploy({
-      rest,
-      deployCommands: async (wrapped) => {
-        await wrapped.post("/applications/app-1/commands", {
-          body: [{ name: "skill" }],
-        } as never);
-      },
-    });
+  await vi.waitFor(() => expect(deployFinished).toBe(true));
+  expect(log.mock.calls.flat().join("\n")).not.toMatch(/voice-states|slash command deploy failed/);
+  expect(error.mock.calls.flat().join("\n")).not.toContain("voice-states");
+});
 
-    await vi.waitFor(() => expect(client.deployCommands).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => expect(log).toHaveBeenCalled());
-    const warnings = log.mock.calls
-      .map((call) => call[0])
-      .filter((message) => message.includes("slash command deploy failed"));
-    expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("(message send/receive unaffected)");
-    expect(error).not.toHaveBeenCalled();
+it("logs one warning per deploy failure at default verbosity", async () => {
+  const rest = createRestMock();
+  const deployError = Object.assign(new Error("Missing Access"), {
+    status: 403,
+    discordCode: 50001,
+    rawBody: { message: "Missing Access", code: 50001 },
   });
+  rest.post.mockRejectedValue(deployError);
+  const { log, error, client } = runDeploy(rest, async (wrapped) => {
+    await wrapped.post("/applications/app-1/commands", { body: [{ name: "skill" }] } as never);
+  });
+
+  await vi.waitFor(() => expect(client.deployCommands).toHaveBeenCalledTimes(1));
+  await vi.waitFor(() => expect(log).toHaveBeenCalled());
+  const warnings = log.mock.calls
+    .map((call) => call[0])
+    .filter((message) => message.includes("slash command deploy failed"));
+  expect(warnings).toEqual([expect.stringContaining("(message send/receive unaffected)")]);
+  expect(error).not.toHaveBeenCalled();
 });

@@ -2,14 +2,17 @@ import {
   createContext,
   createMemo,
   createSignal,
+  createStore,
   createUniqueId,
   onCleanup,
   onSettled,
 } from "solid-js";
 import { registerMenuShortcuts } from "../../../components/menu-shortcuts.ts";
+import { elementRef } from "../../../lib/reactive/element-ref.ts";
 
 export type ChatModelSearchRow = {
   key: string;
+  list?: string;
   name: string;
   keywords?: string;
   providerLabel: string;
@@ -32,7 +35,9 @@ export type ChatModelSearchCatalog = {
 
 type SearchMatch = { row: ChatModelSearchRow; rank: number };
 type SearchView = {
+  matches(): SearchMatch[];
   selectable(): SearchMatch[];
+  reveal(key: string): void;
   highlighted(): string | undefined;
   highlight(value: string | undefined): void;
   providerOpen(provider: string): boolean;
@@ -40,7 +45,13 @@ type SearchView = {
   filtering(): boolean;
   empty(): boolean;
   controls(): string;
-  row(key: string): { hidden: boolean; rank: number | undefined; shortcut: number | undefined };
+  row(key: string): {
+    hidden: boolean;
+    rank: number | undefined;
+    shortcut: number | undefined;
+    position?: number;
+    size?: number;
+  };
   toggleProvider(provider: string): void;
   expandMore(provider: string, event: MouseEvent): void;
 };
@@ -48,6 +59,7 @@ type ModelSearchState = {
   details?: HTMLDetailsElement;
   summary?: HTMLElement;
   input?: HTMLInputElement;
+  focusRow?: string;
   rows: Map<string, HTMLButtonElement>;
   query(): string;
   setQuery(value: string): void;
@@ -82,11 +94,6 @@ export function createChatModelSearch() {
   const state: ModelSearchState = { rows: new Map(), query, setQuery };
   const optionId = (key: string) => `${prefix}-option-${encodeURIComponent(key)}`;
   const listId = (key: string) => `${prefix}-list-${encodeURIComponent(key)}`;
-  onCleanup(() => {
-    if (state.details) {
-      pickers.delete(state.details);
-    }
-  });
   onSettled(() =>
     state.details
       ? registerMenuShortcuts(state.details, () =>
@@ -103,23 +110,23 @@ export function createChatModelSearch() {
     optionId,
     listId,
     setOpen,
-    detailsRef(element: HTMLDetailsElement) {
+    detailsRef: elementRef<HTMLDetailsElement>((element) => {
       state.details = element;
       pickers.set(element, state);
-    },
+      return () => pickers.delete(element);
+    }),
     summaryRef(this: void, element: HTMLElement) {
       state.summary = element;
     },
     inputRef() {
-      let current: HTMLInputElement | undefined;
-      onCleanup(() => {
-        if (state.input === current) {
-          state.input = undefined;
-        }
+      return elementRef<HTMLInputElement>((element) => {
+        state.input = element;
+        return () => {
+          if (state.input === element) {
+            state.input = undefined;
+          }
+        };
       });
-      return (element: HTMLInputElement) => {
-        state.input = current = element;
-      };
     },
     rowRef(readKey: () => string) {
       let element: HTMLButtonElement;
@@ -127,6 +134,12 @@ export function createChatModelSearch() {
         // The keyed row keeps this identity for its mounted lifetime.
         const initialKey = readKey();
         state.rows.set(initialKey, element);
+        if (state.focusRow === initialKey) {
+          state.focusRow = undefined;
+          if (state.details?.open) {
+            element.focus({ preventScroll: true });
+          }
+        }
         return () => {
           if (state.rows.get(initialKey) === element) {
             state.rows.delete(initialKey);
@@ -140,7 +153,7 @@ export function createChatModelSearch() {
     },
     highlighted: () => state.view?.highlighted(),
     /** Initialize derivations under the retained lazy panel, without moving its catalog into boot. */
-    createView(read: () => ChatModelSearchCatalog) {
+    createView(read: () => ChatModelSearchCatalog, reveal: (key: string) => void) {
       const scope = createMemo(
         () => ({ active: read().activeProvider, providers: read().providers }),
         {
@@ -148,33 +161,37 @@ export function createChatModelSearch() {
             a.active === b.active && a.providers.join("\0") === b.providers.join("\0"),
         },
       );
-      // Selection changes reset provider disclosure defaults; refreshes retain explicit choices.
-      const [groups, setGroups] = createSignal(
-        (previous?: { active?: string; choices: ReadonlyMap<string, boolean> }) => {
+      // Selection resets provider defaults; catalog refreshes retain each surviving choice.
+      const [disclosure, updateDisclosure] = createStore<{
+        active: string | undefined;
+        groups: Record<string, { open?: boolean; more: boolean }>;
+      }>(
+        (draft) => {
           const current = scope();
-          return {
-            active: current.active,
-            choices: new Map(
-              previous && previous.active === current.active
-                ? [...previous.choices].filter(([key]) => current.providers.includes(key))
-                : [],
-            ),
-          };
+          const selectionChanged = draft.active !== current.active;
+          draft.active = current.active;
+          for (const provider of Object.keys(draft.groups)) {
+            if (!current.providers.includes(provider)) {
+              delete draft.groups[provider];
+            }
+          }
+          for (const provider of current.providers) {
+            const group = (draft.groups[provider] ??= { more: false });
+            if (selectionChanged) {
+              delete group.open;
+            }
+          }
         },
-      );
-      // All models is a one-way disclosure for each mounted provider.
-      const [more, setMore] = createSignal(
-        (previous: ReadonlySet<string> = new Set()) =>
-          new Set([...previous].filter((key) => scope().providers.includes(key))),
+        { active: undefined, groups: {} },
       );
       const providerOpen = (provider: string) =>
-        groups().choices.get(provider) ?? groups().active === provider;
+        disclosure.groups[provider]?.open ?? disclosure.active === provider;
       const matches = createMemo(() => {
         const term = query().trim().toLocaleLowerCase();
         return read()
           .rows.flatMap((row, index) => {
             const visible = row.provider
-              ? providerOpen(row.provider) && (!row.more || more().has(row.provider))
+              ? providerOpen(row.provider) && (!row.more || disclosure.groups[row.provider]?.more)
               : row.visible !== false;
             const score = term ? modelMatchRank(row, term) : visible ? 0 : null;
             return score === null ? [] : [{ row, score, index }];
@@ -203,40 +220,71 @@ export function createChatModelSearch() {
               ),
           ),
       );
+      const positions = createMemo(() => {
+        const lists = new Map<string | undefined, string[]>();
+        for (const { row } of matches()) {
+          const list = lists.get(row.list) ?? [];
+          list.push(row.key);
+          lists.set(row.list, list);
+        }
+        return new Map(
+          [...lists.values()].flatMap((keys) =>
+            keys.map((key, index) => [key, { position: index + 1, size: keys.length }] as const),
+          ),
+        );
+      });
       const view = {
+        matches,
         selectable,
+        reveal,
         highlighted,
         highlight,
         providerOpen,
-        moreOpen: (provider: string) => more().has(provider),
+        moreOpen: (provider: string) => disclosure.groups[provider]?.more ?? false,
         filtering: () => Boolean(query().trim()),
         empty: () => Boolean(query().trim()) && matches().length === 0,
         controls: () => read().lists.map(listId).join(" "),
         row(key: string) {
           const match = byKey().get(key);
-          return { hidden: !match, rank: match?.rank, shortcut: shortcuts().get(key) };
+          return {
+            hidden: !match,
+            rank: match?.rank,
+            shortcut: shortcuts().get(key),
+            ...positions().get(key),
+          };
         },
         toggleProvider(provider: string) {
           const next = !providerOpen(provider);
-          setGroups((current) => ({
-            ...current,
-            choices: new Map(current.choices).set(provider, next),
-          }));
+          updateDisclosure((draft) => {
+            draft.groups[provider]!.open = next;
+          });
         },
         expandMore(provider: string, event: MouseEvent) {
           event.stopPropagation();
           const hadFocus = event.currentTarget === state.details?.ownerDocument.activeElement;
-          setMore((current) => new Set(current).add(provider));
+          updateDisclosure((draft) => {
+            draft.groups[provider]!.more = true;
+          });
           if (hadFocus) {
             onSettled(() => {
               const next = selectable().find(({ row }) => row.provider === provider && row.more);
-              ((next && state.rows.get(next.row.key)) || state.input)?.focus({
-                preventScroll: true,
-              });
+              if (next) {
+                // The ref completes keyboard focus when a virtual row mounts.
+                state.focusRow = next.row.key;
+                reveal(next.row.key);
+                const element = state.rows.get(next.row.key);
+                if (element) {
+                  state.focusRow = undefined;
+                  element.focus({ preventScroll: true });
+                }
+              } else {
+                state.input?.focus({ preventScroll: true });
+              }
             });
           }
         },
       };
+      // Rows read this synchronous bridge while mounting; cleanup belongs to this primitive.
       state.view = view;
       onCleanup(() => {
         if (state.view === view) {
@@ -281,6 +329,9 @@ export function updateModelSearch(input: HTMLInputElement): void {
 
 export function resetModelSearch(details: HTMLDetailsElement): void {
   const state = pickers.get(details);
+  if (state) {
+    state.focusRow = undefined;
+  }
   const rows = state?.view?.selectable() ?? [];
   // An unchanged empty query cannot invalidate the writable highlight derivation.
   const fallback = rows.find(({ row }) => row.selected) ?? rows[0];
@@ -337,7 +388,11 @@ export function handleModelSearchKeydown(event: KeyboardEvent): void {
   const next = rows[index < 0 ? 0 : (index + offset) % rows.length];
   if (next) {
     view.highlight(next.row.key);
-    state.rows.get(next.row.key)?.scrollIntoView?.({ block: "nearest" });
+    view.reveal(next.row.key);
+    onSettled(() => {
+      // Chromium returns a promise; settlement callbacks must not return it as cleanup.
+      state.rows.get(next.row.key)?.scrollIntoView?.({ block: "nearest" });
+    });
   }
 }
 

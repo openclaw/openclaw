@@ -3,7 +3,7 @@ import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/i
 import { SessionGoalOperationError } from "../../config/sessions/goals-operations.js";
 import { getRpcSourceForGateway } from "../../sessions/session-controller.rpc-sources.js";
 import { resolveChatRunExpiresAtMs } from "../chat-abort.js";
-import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "../server-shared.js";
+import type { DedupeEntry } from "../server-shared.js";
 import { readPreRegisteredRun, writePreRegisteredChatAbort } from "./chat-abort-authorization.js";
 import type { prepareGoalChatSendRetry } from "./chat-send-goal-retry.js";
 import type { ChatSendPreAdmissionParams } from "./chat-send-pre-admission.types.js";
@@ -29,7 +29,6 @@ export function createPendingChatSendReservationAccess(params: {
     readPreRegisteredRun({
       key,
       entry: params.context.dedupe.get(key),
-      keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
     });
   return {
     read,
@@ -138,7 +137,6 @@ export function inspectGoalChatSendRetry({
     const pending = readPreRegisteredRun({
       key: pendingChatSendKey,
       entry: context.dedupe.get(pendingChatSendKey),
-      keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
     });
     const retainedIdentity = context.dedupe.get(`chat:${clientRunId}`)?.requestIdentity;
     const identityConflict =

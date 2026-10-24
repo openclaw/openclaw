@@ -123,6 +123,9 @@ suite.define(() => {
             const label = `${resolved}-${route.replace("/", "-")}-${viewport}`;
             const artwork = await readArtwork(shell);
             expectAppArtwork(artwork, label);
+            expect(artwork.canvasOwner, label).toBe(
+              route === "chat" && viewport === "mobile" ? "native-mobile" : "shell-artwork",
+            );
             const minimumContrast = selection.family === "beacon" ? 7 : 4.5;
             expect
               .soft(artwork.canvasContrast, `${label}: muted text on app artwork`)

@@ -106,7 +106,6 @@ const migratedSessionAccessorFiles = new Set([
 const migratedBundledPluginSessionAccessorFiles = new Set([
   "extensions/codex/src/conversation-binding.ts",
   "extensions/discord/src/monitor/native-command-model-picker-ui.ts",
-  "extensions/discord/src/monitor/native-command-model-picker-apply.ts",
   "extensions/discord/src/monitor/thread-session-close.ts",
   "extensions/feishu/src/reasoning-preview.ts",
   "extensions/memory-core/src/dreaming-phases.ts",
@@ -186,7 +185,6 @@ const migratedTranscriptWriterFiles = new Set([
 const migratedSessionLifecycleCleanupFiles = new Set([
   "src/config/sessions/cleanup-service.ts",
   "src/cron/session-reaper.ts",
-  "src/infra/heartbeat-runner.ts",
 ]);
 
 export const readOnlyGatewaySessionAccessorFiles = new Set([

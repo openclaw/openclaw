@@ -10,7 +10,7 @@ import {
   stubGatewayStoreTestGlobals,
 } from "../../app/gateway-store.test-support.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
-import { page } from "./route.ts";
+import { page } from "./route.tsx";
 import type { UsageRouteData } from "./types.ts";
 
 const totals = {
@@ -190,6 +190,8 @@ describe("usage route", () => {
         mode: "specific",
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
         includeContextWeight: false,
+        sort: "cost",
+        sortDirection: "desc",
       });
     },
   );

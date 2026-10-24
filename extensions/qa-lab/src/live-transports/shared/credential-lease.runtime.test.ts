@@ -29,6 +29,22 @@ function acquireCi(fetchImpl: typeof fetch, env: NodeJS.ProcessEnv = ciEnv) {
   return acquireQaCredentialLease({ ...ciOptions, env, fetchImpl });
 }
 
+function acquireMaintainer(
+  overrides: Partial<Parameters<typeof acquireQaCredentialLease<CredentialPayload>>[0]> = {},
+  env: NodeJS.ProcessEnv = {},
+) {
+  return acquireQaCredentialLease({
+    ...convexOptions,
+    role: "maintainer",
+    ...overrides,
+    env: { ...maintainerEnv, ...env },
+  });
+}
+
+function brokerOperation(url: Parameters<typeof fetch>[0]) {
+  return new URL(url instanceof Request ? url.url : url).pathname.split("/").at(-1)!;
+}
+
 function acquired(payload: unknown, credentialId = "owned", leaseToken = "synthetic") {
   return { status: "ok", credentialId, leaseToken, payload };
 }
@@ -175,9 +191,7 @@ describe("credential lease runtime", () => {
           return {};
         },
         fetchImpl: async (url) => {
-          const operation = new URL(url instanceof Request ? url.url : url).pathname
-            .split("/")
-            .at(-1)!;
+          const operation = brokerOperation(url);
           operations.push(operation);
           return jsonResponse(
             operation === "acquire" ? { ...acquired({}), leaseTtlMs: 100 } : { status: "ok" },
@@ -200,9 +214,7 @@ describe("credential lease runtime", () => {
       resolveEnvPayload: () => ({}),
       parsePayload: () => ({}),
       fetchImpl: async (url) => {
-        const operation = new URL(url instanceof Request ? url.url : url).pathname
-          .split("/")
-          .at(-1)!;
+        const operation = brokerOperation(url);
         operations.push(operation);
         if (operation === "heartbeat") {
           return heartbeatReply.promise;
@@ -238,11 +250,7 @@ describe("credential lease runtime", () => {
     });
 
     expect(lease.source).toBe("env");
-    expect(lease.payload).toEqual({
-      groupId: "-100123",
-      driverToken: "driver",
-      sutToken: "sut",
-    });
+    expect(lease.payload).toEqual(credentials);
   });
 
   it("acquires, heartbeats, and releases convex credentials", async () => {
@@ -288,15 +296,13 @@ describe("credential lease runtime", () => {
     const broker = await startStreamingFailureBroker();
     try {
       await expect(
-        acquireQaCredentialLease({
-          ...convexOptions,
-          role: "maintainer",
-          env: {
+        acquireMaintainer(
+          {},
+          {
             OPENCLAW_QA_CONVEX_SITE_URL: broker.url,
-            OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
             OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1",
           },
-        }),
+        ),
       ).rejects.toThrow("Convex credential broker: text response exceeds 1048576 bytes");
 
       await broker.closePromise;
@@ -317,11 +323,7 @@ describe("credential lease runtime", () => {
 
     const lease = await acquireCi(fetchImpl);
 
-    expect(lease.payload).toEqual({
-      groupId: "-100123",
-      driverToken: "driv\u00e9r",
-      sutToken: "sut",
-    });
+    expect(lease.payload).toEqual({ ...credentials, driverToken: "driv\u00e9r" });
     expect(fetchImpl).toHaveBeenCalledTimes(3);
     expect(fetchUrl(fetchImpl, 1)).toBe(`${brokerUrl}/qa-credentials/v1/payload-chunk`);
     const chunkRequestBody = fetchInit(fetchImpl, 1).body;
@@ -334,27 +336,23 @@ describe("credential lease runtime", () => {
     });
   });
 
-  it("rejects chunked convex payload markers above the configured chunk cap", async () => {
-    const fetchImpl = replies(chunked(1, 3, "many-chunks"), { status: "ok" });
-
-    await expect(
-      acquireCi(fetchImpl, { ...ciEnv, OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_CHUNKS: "2" }),
-    ).rejects.toThrow("Chunked credential payload marker exceeds 2 chunks.");
-
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(fetchUrl(fetchImpl, 1)).toBe(`${brokerUrl}/qa-credentials/v1/release`);
-  });
-
-  it("rejects chunked convex payload markers above the configured byte cap", async () => {
-    const fetchImpl = replies(chunked(33, 1, "large-payload"), { status: "ok" });
-
-    await expect(
-      acquireCi(fetchImpl, { ...ciEnv, OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_BYTES: "32" }),
-    ).rejects.toThrow("Chunked credential payload marker exceeds 32 bytes.");
-
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(fetchUrl(fetchImpl, 1)).toBe(`${brokerUrl}/qa-credentials/v1/release`);
-  });
+  it.each([
+    [1, 3, "CHUNKS", "2", "2 chunks"],
+    [33, 1, "BYTES", "32", "32 bytes"],
+  ] as const)(
+    "rejects chunk markers (%i bytes, %i chunks)",
+    async (bytes, chunks, key, cap, error) => {
+      const fetchImpl = replies(chunked(bytes, chunks, "capped"), { status: "ok" });
+      await expect(
+        acquireCi(fetchImpl, {
+          ...ciEnv,
+          [`OPENCLAW_QA_CREDENTIAL_PAYLOAD_MAX_${key}`]: cap,
+        }),
+      ).rejects.toThrow(`Chunked credential payload marker exceeds ${error}.`);
+      expect(fetchImpl).toHaveBeenCalledTimes(2);
+      expect(fetchUrl(fetchImpl, 1)).toBe(`${brokerUrl}/qa-credentials/v1/release`);
+    },
+  );
 
   it("stops chunked convex payload hydration when chunk data exceeds the marker", async () => {
     const fetchImpl = replies(
@@ -386,101 +384,52 @@ describe("credential lease runtime", () => {
     expect(headers.authorization).toBe("Bearer ci-secret");
   });
 
-  it("retries convex acquire while the pool is exhausted", async () => {
-    const exhausted = { status: "error", code: "POOL_EXHAUSTED", message: "wait" };
-    const fetchImpl = replies(
-      exhausted,
-      exhausted,
-      acquired(
-        { groupId: "-100456", driverToken: "driver-2", sutToken: "sut-2" },
-        "cred-2",
-        "lease-2",
-      ),
-    );
+  it.each(["pool exhausted", "transport failure"])("retries acquire after %s", async (failure) => {
+    const fetchImpl = vi.fn<typeof fetch>();
+    const attempts = failure === "pool exhausted" ? 2 : 1;
+    for (let i = 0; i < attempts; i++) {
+      if (failure === "pool exhausted") {
+        fetchImpl.mockResolvedValueOnce(
+          jsonResponse({ status: "error", code: "POOL_EXHAUSTED", message: "wait" }),
+        );
+      } else {
+        fetchImpl.mockRejectedValueOnce(
+          new Error("fetch failed | Connect Timeout Error | UND_ERR_CONNECT_TIMEOUT"),
+        );
+      }
+    }
+    fetchImpl.mockResolvedValueOnce(jsonResponse(acquired(credentials, "retried")));
     const clock = retryClock();
-
-    const lease = await acquireQaCredentialLease({
-      ...convexOptions,
-      env: {
-        ...maintainerEnv,
-        OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "90000",
-      },
-      fetchImpl,
-      ...clock,
-    });
-
-    expect(lease.credentialId).toBe("cred-2");
-    expect(fetchImpl).toHaveBeenCalledTimes(3);
-    expect(clock.sleeps.length).toBe(2);
-    expect(clock.sleeps[0]).toBeGreaterThanOrEqual(100);
-    expect(clock.sleeps[1]).toBeGreaterThan(clock.sleeps[0] ?? 0);
+    const lease = await acquireMaintainer({ fetchImpl, ...clock, role: undefined });
+    expect(lease.credentialId).toBe("retried");
+    expect(fetchImpl).toHaveBeenCalledTimes(attempts + 1);
+    expect(clock.sleeps).toHaveLength(attempts);
+    if (attempts === 2) {
+      expect(clock.sleeps[0]).toBeGreaterThanOrEqual(100);
+      expect(clock.sleeps[1]).toBeGreaterThan(clock.sleeps[0] ?? 0);
+    }
   });
 
-  it("retries transient convex acquire transport failures", async () => {
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockRejectedValueOnce(
-        new Error("fetch failed | Connect Timeout Error | UND_ERR_CONNECT_TIMEOUT"),
-      )
-      .mockResolvedValueOnce(
-        jsonResponse(
-          acquired(
-            { groupId: "-100789", driverToken: "test", sutToken: "test" },
-            "cred-after-timeout",
-            "test",
-          ),
-        ),
-      );
-    const clock = retryClock();
-
-    const lease = await acquireQaCredentialLease({
-      ...convexOptions,
-      env: {
-        ...maintainerEnv,
-        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "test",
-        OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "90000",
-      },
-      fetchImpl,
-      ...clock,
-    });
-
-    expect(lease.credentialId).toBe("cred-after-timeout");
-    expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(clock.sleeps).toHaveLength(1);
-  });
-
-  it("rejects non-https convex site URLs unless local insecure opt-in is enabled", async () => {
-    await expect(
-      acquireQaCredentialLease({
-        ...convexOptions,
-        env: {
-          ...maintainerEnv,
-          OPENCLAW_QA_CONVEX_SITE_URL: "http://qa-cred.example.convex.site",
-        },
-      }),
-    ).rejects.toThrow("must use https://");
+  it.each([
+    [{ OPENCLAW_QA_CONVEX_SITE_URL: "http://qa-cred.example.convex.site" }, "must use https://"],
+    [
+      { OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX: "//evil.example" },
+      "OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX must be an absolute path",
+    ],
+    [{ OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "" }, "OPENCLAW_QA_CONVEX_SECRET_MAINTAINER"],
+  ])("rejects unsafe or unauthenticated broker config %j", async (env, error) => {
+    await expect(acquireMaintainer({}, env)).rejects.toThrow(error);
   });
 
   it("allows loopback http URLs when OPENCLAW_QA_ALLOW_INSECURE_HTTP is enabled", async () => {
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
-      jsonResponse({
-        status: "ok",
-        credentialId: "cred-local",
-        leaseToken: "lease-local",
-        payload: { groupId: "-100123", driverToken: "driver", sutToken: "sut" },
-      }),
-    );
-
-    await acquireQaCredentialLease({
-      ...convexOptions,
-      role: "maintainer",
-      env: {
+    const fetchImpl = replies(acquired(credentials, "cred-local", "lease-local"));
+    await acquireMaintainer(
+      { fetchImpl },
+      {
         OPENCLAW_QA_CONVEX_SITE_URL: "http://127.0.0.1:3210",
-        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
         OPENCLAW_QA_ALLOW_INSECURE_HTTP: "1",
       },
-      fetchImpl,
-    });
+    );
 
     expect(fetchUrl(fetchImpl)).toBe("http://127.0.0.1:3210/qa-credentials/v1/acquire");
   });
@@ -488,63 +437,25 @@ describe("credential lease runtime", () => {
   it("caps oversized convex HTTP timeouts before creating abort signals", async () => {
     const timeoutController = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValue(timeoutController.signal);
-    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
-      jsonResponse({
-        status: "ok",
-        credentialId: "cred-timeout",
-        leaseToken: "lease-timeout",
-        payload: { groupId: "-100123", driverToken: "driver", sutToken: "sut" },
-      }),
-    );
-
-    await acquireQaCredentialLease({
-      ...convexOptions,
-      role: "maintainer",
-      env: {
-        OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
-        OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
+    const fetchImpl = replies(acquired(credentials, "cred-timeout", "lease-timeout"));
+    await acquireMaintainer(
+      { fetchImpl },
+      {
         OPENCLAW_QA_CREDENTIAL_HTTP_TIMEOUT_MS: String(Number.MAX_SAFE_INTEGER),
       },
-      fetchImpl,
-    });
+    );
 
     expect(timeoutSpy).toHaveBeenCalledWith(MAX_TIMER_TIMEOUT_MS);
     expect(fetchInit(fetchImpl).signal).toBe(timeoutController.signal);
   });
 
-  it("rejects unsafe endpoint prefix overrides", async () => {
-    await expect(
-      acquireQaCredentialLease({
-        ...convexOptions,
-        env: {
-          ...maintainerEnv,
-          OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX: "//evil.example",
-        },
-      }),
-    ).rejects.toThrow("OPENCLAW_QA_CONVEX_ENDPOINT_PREFIX must be an absolute path");
-  });
-
   it("releases acquired lease when payload parsing fails", async () => {
-    const fetchImpl = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(
-        jsonResponse({
-          status: "ok",
-          credentialId: "cred-parse-fail",
-          leaseToken: "lease-parse-fail",
-          payload: { broken: true },
-        }),
-      )
-      .mockResolvedValueOnce(jsonResponse({ status: "ok" }));
+    const fetchImpl = replies(acquired({ broken: true }, "cred-parse-fail", "lease-parse-fail"), {
+      status: "ok",
+    });
 
     await expect(
-      acquireQaCredentialLease({
-        ...convexOptions,
-        role: "maintainer",
-        env: {
-          OPENCLAW_QA_CONVEX_SITE_URL: "https://qa-cred.example.convex.site",
-          OPENCLAW_QA_CONVEX_SECRET_MAINTAINER: "maintainer-secret",
-        },
+      acquireMaintainer({
         fetchImpl,
         parsePayload: () => {
           throw new Error("bad payload shape");
@@ -553,21 +464,7 @@ describe("credential lease runtime", () => {
     ).rejects.toThrow("bad payload shape");
 
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(fetchUrl(fetchImpl, 1)).toBe(
-      "https://qa-cred.example.convex.site/qa-credentials/v1/release",
-    );
-  });
-
-  it("fails convex mode when auth secret is missing", async () => {
-    await expect(
-      acquireQaCredentialLease({
-        ...convexOptions,
-        role: "maintainer",
-        env: {
-          OPENCLAW_QA_CONVEX_SITE_URL: brokerUrl,
-        },
-      }),
-    ).rejects.toThrow("OPENCLAW_QA_CONVEX_SECRET_MAINTAINER");
+    expect(fetchUrl(fetchImpl, 1)).toBe(`${brokerUrl}/qa-credentials/v1/release`);
   });
 
   it("captures heartbeat failures for fail-fast checks", async () => {

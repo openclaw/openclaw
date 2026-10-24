@@ -1494,7 +1494,7 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
       authProfileIdMap: recoveredMap,
     });
 
-    expect(repair.repairedSessions).toBe(1);
+    expect(repair.changes[0]).toContain("in 1 session across ");
     expect(loadSessionEntry({ storePath, sessionKey, env: state.env })).toMatchObject({
       authProfileOverride: "openai:chatgpt-default",
       authProfileOverrideSource: "user",
@@ -1648,7 +1648,7 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
       shouldRepair: true,
       authProfileIdMap: profileIdMap,
     });
-    expect(repair.repairedSessions).toBe(3);
+    expect(repair.changes[0]).toContain("in 3 sessions across ");
     for (const agentId of ["main", "inherited", "dedup"]) {
       expect(
         loadSessionEntry({
@@ -1692,7 +1692,6 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
         });
         expect(result).toMatchObject({
           scannedStores: 1,
-          repairedSessions: 0,
           warnings: [],
           changes: [],
         });
@@ -1744,8 +1743,6 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
 
     expect(preview).toMatchObject({
       scannedStores: 1,
-      repairedStores: 0,
-      repairedSessions: 0,
       changes: [],
     });
     expect(preview.warnings.join("\n")).toContain("Affected sessions: 1.");
@@ -1797,8 +1794,8 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
       shouldRepair: true,
     });
 
-    expect(preview).toMatchObject({ warnings: [], changes: [], repairedSessions: 0 });
-    expect(repair).toMatchObject({ warnings: [], changes: [], repairedSessions: 0 });
+    expect(preview).toMatchObject({ warnings: [], changes: [] });
+    expect(repair).toMatchObject({ warnings: [], changes: [] });
     const verifier = new DatabaseSync(sqlitePath, { readOnly: true });
     try {
       expect(
@@ -1948,14 +1945,14 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
       ),
     ).toEqual(expect.arrayContaining(["openai-codex:default", "openai-codex:peter"]));
     const preview = await maybeRepairCodexSessionRoutes({ ...repairParams, shouldRepair: false });
-    expect(preview.repairedSessions).toBe(0);
+    expect(preview.changes).toEqual([]);
     expect(preview.warnings.join("\n")).toContain("Affected sessions: 2.");
 
     const sessionRepair = await maybeRepairCodexSessionRoutes({
       ...repairParams,
       shouldRepair: true,
     });
-    expect(sessionRepair.repairedSessions).toBe(2);
+    expect(sessionRepair.changes[0]).toContain("in 2 sessions across ");
     const selectedSession = loadSessionEntry({ storePath, sessionKey, env: state.env });
     expect(selectedSession).toMatchObject({
       authProfileOverride: "openai:chatgpt-default",
@@ -1976,7 +1973,7 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
     });
     await expect(
       maybeRepairCodexSessionRoutes({ ...repairParams, shouldRepair: true }),
-    ).resolves.toMatchObject({ repairedSessions: 0, changes: [] });
+    ).resolves.toMatchObject({ changes: [] });
 
     await expectSelectedCodexAccountStatus({ cfg, state, sessionKey, storePath });
   });

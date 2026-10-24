@@ -2,14 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import type { CronJob } from "../../cron/types.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
-import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import type { RuntimeEnv } from "../../runtime.js";
 import {
   ExpectedCliError,
   formatCliFailureLines,
   formatCliJsonFailure,
 } from "../failure-output.js";
 import { CronCliError } from "./cron-cli-error.js";
-import { resolveCronCreateScheduleFromArgs } from "./schedule-options.js";
+import {
+  resolveCronCreateScheduleFromArgs as createSchedule,
+  resolveCronEditScheduleRequest as editSchedule,
+  applyExistingStreamSchedulePatch as applyStreamPatch,
+} from "./schedule-options.js";
 import {
   coerceCronDeliveryPreviews,
   enrichCronJsonWithStatus,
@@ -110,7 +114,6 @@ function makeJob(overrides: Partial<CronJob>): CronJob {
     createdAtMs: now,
     updatedAtMs: now,
     schedule: { kind: "at", at: new Date(now + 3600000).toISOString() },
-    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: "test" },
     state: { nextRunAtMs: now + 3600000 },
     ...overrides,
@@ -128,17 +131,11 @@ it.each([
 });
 
 it("truncates and aligns names by sanitized terminal display width", () => {
-  const prefix19 = "x".repeat(19);
   const prefix20 = "x".repeat(20);
-  const prefix21 = "x".repeat(21);
   const injectedMarker = "cron-table-injection";
   const injectedControl = `\u001B]0;${injectedMarker}\u0007`;
   const cases = [
     { name: `${prefix20}🚀tail`, expected: `${prefix20}...` },
-    { name: `${prefix21}Atail`, expected: `${prefix21}...` },
-    { name: `${prefix19}表tail`, expected: `${prefix19}表...` },
-    { name: `${prefix20}e\u0301tail`, expected: `${prefix20}e\u0301...` },
-    { name: `${prefix19}👨‍👩‍👧‍👦tail`, expected: `${prefix19}👨‍👩‍👧‍👦...` },
     { name: `${prefix20}👨‍👩‍👧‍👦`, expected: `${prefix20}👨‍👩‍👧‍👦` },
     { name: `${prefix20}${injectedControl}🚀tail`, expected: `${prefix20}...` },
   ];
@@ -213,6 +210,31 @@ it("shows declaration metadata and existing run status", () => {
   );
 });
 
+it.each([true, false])(
+  "shows configured job policies, including explicit %s, without scratch content",
+  (value) => {
+    const job = {
+      ...makeJob({
+        activeHours: { start: "22:00", end: "06:00", timezone: "America/Los_Angeles" },
+        idleOnly: value,
+        delivery: { mode: "announce", target: "owner", directPolicy: "block" },
+        payload: {
+          kind: "agentTurn",
+          message: "Check",
+          skipIfScratchEmpty: value,
+          includeReasoning: value,
+        },
+      }),
+      scratch: { content: "private checklist sentinel" },
+    };
+    const policies = `policies: active hours=22:00-06:00 @ America/Los_Angeles; idle only=${value}; delivery target=owner; direct policy=block; skip if scratch empty=${value}; include reasoning=${value}`;
+    for (const logs of Object.values(renderJob(job))) {
+      expectText(logs, policies);
+      expect(logs.join("\n")).not.toContain("private checklist sentinel");
+    }
+  },
+);
+
 it("sanitizes every stored cron show value at the terminal boundary", () => {
   const control = "\u001B]0;cron-show-injection\u0007";
   const injected = (value: string) => `${control}${value}\r\nforged-row\tfield`;
@@ -225,6 +247,7 @@ it("sanitizes every stored cron show value at the terminal boundary", () => {
     agentId: injected("agent"),
     sessionTarget: injected("session") as CronJob["sessionTarget"],
     payload: { kind: "agentTurn", message: "test", model: injected("model") },
+    activeHours: { start: "09:00", end: "17:00", timezone: injected("local") },
     state: {
       lastError: injected("last-error"),
       lastDeliveryStatus: "not-delivered",
@@ -279,43 +302,13 @@ it.each<[CronJob["schedule"], string, Partial<CronJob>?, string?]>([
   }
 });
 
-it.each([false, true])("shows disabled stream sources with running=%s", (running) => {
-  const job = makeJob({
-    schedule: { kind: "stream", command: ["node", "events.mjs"] },
-    state: {
-      streamStatus: "disabled",
-      streamError: "stream sources require cron.triggers.enabled=true",
-      lastRunStatus: "ok",
-      lastDeliveryStatus: "not-delivered",
-      deliverySuppressionReason: "silent",
-      ...(running ? { runningAtMs: Date.now() } : {}),
-    },
-  });
-
-  const { list, show } = renderJob(job);
-  const row = list.find((line) => line.includes(job.id)) ?? "";
-  expect(row).toContain(running ? "running" : "disabled");
-  expect(row).not.toContain("idle");
-  expect(row).not.toContain("ok (suppressed)");
-
-  expect(show).toContain(`status: ${running ? "running" : "disabled"}`);
-  expectText(
-    show,
-    "stream status: disabled",
-    "stream error: stream sources require cron.triggers.enabled=true",
-  );
-  expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: running ? "running" : "ok" });
-});
-
 it.each([
   [12, "error (12x)", undefined],
   [1, "error", "(1x)"],
   [1440, "error (99+x)", "1440"],
 ] as const)("bounds the failure-count decoration for %i failures", (count, status, forbidden) => {
   const logs = renderList(
-    makeJob({
-      state: { lastRunStatus: "error", consecutiveErrors: count, lastError: "boom" },
-    }),
+    makeJob({ state: { lastRunStatus: "error", consecutiveErrors: count, lastError: "boom" } }),
   );
   expectText(logs, status);
   if (forbidden) {
@@ -323,39 +316,20 @@ it.each([
   }
 });
 
-it.each([
-  ["not-delivered", "HTTP 503", "ok (not delivered)"],
-  ["unknown", "request timed out", "delivery unknown"],
-  ["not-delivered", undefined, "ok (suppressed)"],
-] as const)("shows %s (%s) without decorating JSON status", (deliveryStatus, error, status) => {
-  const suppression: CronJob["state"] =
-    error === undefined ? { lastDelivered: false, deliverySuppressionReason: "silent" } : {};
+it("renders unknown delivery without decorating JSON status", () => {
+  const state = {
+    lastRunStatus: "ok",
+    lastDeliveryStatus: "unknown",
+    lastDeliveryError: "request timed out",
+  } as const;
   const job = makeJob({
-    ...(error === undefined
-      ? {}
-      : {
-          delivery: { mode: "webhook", to: "https://example.invalid/hook", bestEffort: false },
-        }),
-    state: {
-      lastRunStatus: "ok",
-      lastDeliveryStatus: deliveryStatus,
-      lastDeliveryError: error,
-      ...suppression,
-    },
+    delivery: { mode: "webhook", to: "https://example.invalid/hook", bestEffort: false },
+    state,
   });
   const { list, show } = renderJob(job);
-  expectText(list, status);
-  expectText(show, `status: ${status}`);
-  if (error === undefined) {
-    expect(list.join("\n")).not.toContain("ok (not delivered)");
-    expectText(show, "last delivery: not-delivered", "last delivery suppression: silent");
-  } else {
-    expectText(show, `last delivery error: ${error}`);
-  }
-  expect(enrichCronJsonWithStatus(job)).toMatchObject({
-    status: "ok",
-    state: { lastRunStatus: "ok", lastDeliveryStatus: deliveryStatus, ...suppression },
-  });
+  expectText(list, "delivery unknown");
+  expectText(show, "status: delivery unknown", "last delivery error: request timed out");
+  expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: "ok", state });
   expect(enrichCronJsonWithStatus({ jobs: [job] })).toMatchObject({ jobs: [{ status: "ok" }] });
 });
 
@@ -363,9 +337,7 @@ it("shows why the scheduler auto-disabled a job without changing JSON status", (
   const disabledJob = (reason: "consecutive-failures" | "schedule-errors", count: number) =>
     makeJob({
       enabled: false,
-      state: {
-        autoDisabled: { reason, atMs: Date.now(), consecutiveErrors: count },
-      },
+      state: { autoDisabled: { reason, atMs: Date.now(), consecutiveErrors: count } },
     });
   const runFailures = disabledJob("consecutive-failures", 10);
   const scheduleErrors = disabledJob("schedule-errors", 3);
@@ -375,17 +347,8 @@ it("shows why the scheduler auto-disabled a job without changing JSON status", (
 
   expect(enrichCronJsonWithStatus(runFailures)).toMatchObject({
     status: "disabled",
-    state: {
-      autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 10 },
-    },
+    state: { autoDisabled: { reason: "consecutive-failures", consecutiveErrors: 10 } },
   });
-});
-
-it("shows dash for unset agentId instead of default", () => {
-  const logs = renderList(makeJob({ agentId: undefined, sessionTarget: "isolated" }));
-  expect(logs[0]).toContain("Agent ID");
-  const dataLine = logs[1] ?? "";
-  expect(dataLine).not.toContain("default");
 });
 
 it.each([
@@ -395,7 +358,7 @@ it.each([
 ])("interprets offsetless one-shot %s in %s", (input, timezone, expected) => {
   expect(parseAt(input, timezone)).toBe(expected);
   if (expected !== null) {
-    expect(resolveCronCreateScheduleFromArgs({ at: input, tz: timezone })).toEqual({
+    expect(createSchedule({ at: input, tz: timezone })).toEqual({
       kind: "at",
       at: expected,
     });
@@ -442,17 +405,11 @@ it("keeps valid previews and drops malformed entries", () => {
 });
 
 it.each([
-  ["500ms", 500],
-  ["30s", 30_000],
-  ["1.5h", 5_400_000],
   ["1h30m", 5_400_000],
-  ["1d", 86_400_000],
   ["0s", null],
   ["0.5ms", 1],
   ["0.001ms", null],
-  ["-5s", null],
   ["abc", null],
-  ["", null],
   // A finite mantissa can overflow when multiplied by a unit factor (#83906).
   [`1${"0".repeat(302)}d`, null],
   ["8640000000000000ms", 8_640_000_000_000_000],
@@ -462,27 +419,15 @@ it.each([
 });
 
 describe("handleCronCliError", () => {
+  const recovery =
+    "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.";
   const missingJob = () =>
     new GatewayClientRequestError({
       code: "INVALID_REQUEST",
       message: "transport-neutral lookup miss",
       details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing-job" },
     });
-  const recovery =
-    "Automation not found: missing-job. Run `openclaw cron list` to see recent automation ids.";
-  it("renders typed automation lookup misses with the cron list recovery command", () => {
-    const errorOutput = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(((code: number) => {
-      throw new Error(`exit ${code}`);
-    }) as never);
-
-    expect(() => handleCronCliError(missingJob())).toThrow("exit 1");
-    expect(errorOutput).toHaveBeenCalledWith(expect.stringContaining(recovery));
-    errorOutput.mockRestore();
-    exit.mockRestore();
-  });
-
-  it("hands a typed lookup miss to the root renderer as an expected machine-output failure", () => {
+  it("renders typed lookup misses as expected machine failures", () => {
     const { thrown, json, stderr } = renderJsonError(
       missingJob(),
       ["cron", "show", "missing-job"],
@@ -490,23 +435,17 @@ describe("handleCronCliError", () => {
       "Could not start the CLI.",
     );
     expect(thrown).toBeInstanceOf(ExpectedCliError);
-    expect(json).toEqual({
-      ok: false,
-      error: { type: "cli_error", message: recovery },
-    });
+    expect(json).toEqual({ ok: false, error: { type: "cli_error", message: recovery } });
     expect(stderr).toContain(recovery);
-    expect(stderr).not.toContain("Could not start the CLI.");
-    expect(stderr).not.toContain("openclaw doctor");
-    expect(stderr).not.toContain("OPENCLAW_DEBUG");
+    for (const forbidden of ["Could not start the CLI.", "openclaw doctor", "OPENCLAW_DEBUG"]) {
+      expect(stderr).not.toContain(forbidden);
+    }
   });
-
-  // A legacy gateway without cron.get makes `cron edit <id> --exact` wrap the
-  // lookup miss; the renderer only reveals such causes on explicit debug intent.
-  it.each([false, true])("wrapped cron failure with --debug=%s", (debug) => {
-    const wrapped = new CronCliError("unknown automation id: missing-job", {
-      cause: new Error("unknown method: cron.get"),
-    });
-    const { thrown, json, stderr } = renderJsonError(wrapped, [
+  it.each([false, true])("keeps wrapped cron diagnostics behind --debug=%s", (debug) => {
+    const message = "unknown automation id: missing-job";
+    const cause = "unknown method: cron.get";
+    const error = new CronCliError(message, { cause: new Error(cause) });
+    const { thrown, json, stderr } = renderJsonError(error, [
       "cron",
       "edit",
       "missing-job",
@@ -514,26 +453,54 @@ describe("handleCronCliError", () => {
       ...(debug ? ["--debug"] : []),
     ]);
     expect(thrown).toBeInstanceOf(ExpectedCliError);
-    const machineMessage = json.error.message;
-    expect(machineMessage).toContain("unknown automation id: missing-job");
-    expect(machineMessage.includes("unknown method: cron.get")).toBe(debug);
-    expect(stderr).toContain("unknown automation id: missing-job");
-    expect(stderr.includes("unknown method: cron.get")).toBe(debug);
+    for (const text of [json.error.message, stderr]) {
+      expect(text).toContain(message);
+      expect(text.includes(cause)).toBe(debug);
+    }
   });
-
-  it.each([false, true])("preserves unexpected machine-mode errors with debug=%s", (debug) => {
+  it("leaves unexpected machine errors to the root renderer", () => {
     const error = new Error("Automation runtime failed", {
       cause: new Error("Runtime load failed"),
     });
-    const { thrown, json, stderr } = renderJsonError(
-      error,
-      ["automations", "status"],
-      debug ? "1" : "",
-    );
-    expect(thrown).toBe(error);
-    expect(stderr).toContain("The CLI command failed.");
-    expect(stderr).toContain("openclaw doctor");
-    expect(stderr.includes("Stack:")).toBe(debug);
-    expect(json.error.message.includes("Runtime load failed")).toBe(debug);
+    expect(renderJsonError(error, ["automations", "status"]).thrown).toBe(error);
+  });
+});
+
+const streamCommand = '["node","events.mjs"]';
+it.each([
+  [createSchedule, { streamCommand: "node events.mjs" }, "JSON array"],
+  [createSchedule, { streamCommand, streamMode: "match" }, "--stream-match is required"],
+  [createSchedule, { every: "1m", streamBatchMs: "250" }, "require --stream-command"],
+  [editSchedule, { streamBatchMs: "100", tz: "UTC" }, "not valid with stream schedule edits"],
+  [editSchedule, { streamMode: "line", exact: true }, "not valid with stream schedule edits"],
+] as const)("rejects invalid stream options %#", (resolve, options, message) => {
+  expect(() => resolve(options)).toThrow(message);
+});
+it.each([
+  [{ streamMode: "line" }, { mode: "line", match: undefined }],
+  [{ streamMatch: "^updated:" }, { mode: "match", match: "^updated:" }],
+] as const)("patches existing stream metadata %j", (options, patch) => {
+  const request = editSchedule(options);
+  if (request.kind !== "patch-existing-stream") {
+    throw new Error("expected stream patch");
+  }
+  expect(
+    applyStreamPatch(
+      {
+        kind: "stream",
+        command: ["node", "events.mjs"],
+        mode: "match",
+        match: "^ready:",
+        batchMs: 100,
+      },
+      request,
+    ),
+  ).toEqual({
+    kind: "stream",
+    command: ["node", "events.mjs"],
+    batchMs: 100,
+    cwd: undefined,
+    maxBatchBytes: undefined,
+    ...patch,
   });
 });

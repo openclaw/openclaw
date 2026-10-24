@@ -157,7 +157,9 @@ suite.define(() => {
         const desktopBox = await pane(page).locator(".desktop-surface").boundingBox();
         expect(desktopBox!.width).toBeLessThanOrEqual(width);
         if (width === 390) {
-          expect(chatBox).toBeNull();
+          // Mobile discovery opens the panel dock while retaining Chat above it.
+          expect(chatBox!.height).toBeGreaterThan(100);
+          await pane(page).locator('.chat-mobile-host[data-mode="dock"]').waitFor();
           expect(desktopBox!.width).toBeGreaterThan(width - 32);
           expect(desktopBox!.height).toBeGreaterThan(100);
         } else {
@@ -236,6 +238,11 @@ suite.define(() => {
             nodeId: "worker-desktop",
           });
           expect(await desktopTab(page).isVisible()).toBe(false);
+          // Closing the sheet is temporary; closing its Desktop tab dismisses discovery.
+          await selectChatLayoutAction(pane(page), "Side panel");
+          await desktopTab(page).waitFor();
+          await pane(page).getByRole("button", { name: "Close Desktop", exact: true }).click();
+          await desktopTab(page).waitFor({ state: "hidden" });
           await page.reload();
           await ready(page);
           expect(await desktopTab(page).isVisible()).toBe(false);

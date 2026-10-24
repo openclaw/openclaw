@@ -1,6 +1,5 @@
 /* @vitest-environment jsdom */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { projectToolResultDetails } from "../../../../../src/gateway/chat-display-projection.canvas.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
@@ -13,7 +12,8 @@ import { latestBrowserTabCards } from "../../../lib/chat/browser-tab-preview.ts"
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { ApplicationProvider } from "../../../lib/reactive/context.ts";
 import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
-import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createInitializationContext } from "../chat-pane.test-support.ts";
 import { groupMessages } from "../chat-thread-grouping.ts";
@@ -22,7 +22,7 @@ import { ActivityGroup } from "./chat-message-group-view.tsx";
 
 const hosts: HTMLElement[] = [];
 type ActivityProps = Parameters<typeof ActivityGroup>[0];
-const activityGroups = new Map<HTMLElement, (props: ActivityProps) => void>();
+const activityGroups = new Map<HTMLElement, ReturnType<typeof mountSolid<ActivityProps>>>();
 type CardProps = Parameters<typeof BrowserTabCardHost>[0];
 const cards = new Map<
   HTMLElement,
@@ -34,26 +34,26 @@ const cards = new Map<
 >();
 
 function drawGroup(host: HTMLElement, props: ActivityProps, context?: ApplicationContext) {
-  const update = activityGroups.get(host);
-  if (update) {
-    update(props);
+  const view = activityGroups.get(host);
+  if (view) {
+    view.update(props);
   } else {
-    mountSolid(
-      () => {
-        const [current, setCurrent] = createSignal(props);
-        activityGroups.set(host, setCurrent);
-        return context ? (
-          <ApplicationProvider value={context}>
-            <ActivityGroup {...current()} />
-          </ApplicationProvider>
-        ) : (
-          <ActivityGroup {...current()} />
-        );
-      },
-      { container: host },
+    activityGroups.set(
+      host,
+      mountSolid(
+        (current: ActivityProps) =>
+          context ? (
+            <ApplicationProvider value={context}>
+              <ActivityGroup {...current} />
+            </ApplicationProvider>
+          ) : (
+            <ActivityGroup {...current} />
+          ),
+        props,
+        host,
+      ),
     );
   }
-  flush();
 }
 
 function updateCard(element: HTMLElement, patch: Partial<CardProps>) {
@@ -226,18 +226,13 @@ async function card(
     latest,
     context,
   } satisfies CardProps;
-  let update!: (props: CardProps) => void;
-  const view = mountSolid(
-    () => {
-      const [current, setCurrent] = createSignal<CardProps>(props);
-      update = setCurrent;
-      return <BrowserTabCardHost {...current()} />;
-    },
-    { container: container() },
-  );
-  flush();
+  const view = mountSolid<CardProps>(BrowserTabCardHost, props, container());
   const element = view.container.querySelector<HTMLElement>("openclaw-browser-tab-card")!;
-  cards.set(element, { props, update, unmount: view.unmount });
+  cards.set(element, {
+    props,
+    update: (next) => view.update(next),
+    unmount: () => view.dispose(),
+  });
   return element;
 }
 
@@ -470,6 +465,48 @@ describe("browser tab card", () => {
     flush();
     expect(element.querySelector(".title")?.textContent).toBe("example.com");
     expect(gateway.request).toHaveBeenCalledTimes(2);
+  });
+
+  it("retains failed images through screenshot refreshes and unavailable targets until a new target", async () => {
+    const gateway = gatewayContext(["browser.request"], ["operator.admin"], true);
+    const image = "data:image/png;base64,dGh1bWJuYWls";
+    gateway.request.mockImplementation(async (method: string) =>
+      method === "controlUi.linkPreview"
+        ? { imageDataUrl: image, faviconDataUrl: "data:image/png;base64,aWNvbg==" }
+        : { path: "/tmp/tab.png" },
+    );
+    const element = await card(gateway.context);
+    await waitForSolid(() => {
+      expect(element.querySelector(".shot img")?.getAttribute("src")).toBe(image);
+      expect(element.querySelector(".shot.social")).toBeNull();
+      expect(element.querySelector(".icon img")).not.toBeNull();
+    });
+    for (const img of element.querySelectorAll("img")) {
+      img.dispatchEvent(new Event("error"));
+    }
+    flush();
+    expect(element.querySelector("img")).toBeNull();
+
+    updateCard(element, { revision: "two" });
+    flush();
+    await waitForSolid(() => expect(gateway.fetchMock).toHaveBeenCalledTimes(2));
+    expect(element.querySelector("img")).toBeNull();
+
+    gateway.context.config.current.automaticallyFetchFavicons = false;
+    gateway.notify();
+    flush();
+    expect(element.querySelector("img")).toBeNull();
+    updatePreview(element, { url: "https://example.com/new" });
+    flush();
+    expect(element.querySelector("img")).toBeNull();
+
+    gateway.context.config.current.automaticallyFetchFavicons = true;
+    gateway.notify();
+    flush();
+    await waitForSolid(() => {
+      expect(element.querySelector(".shot img")?.getAttribute("src")).toBe(image);
+      expect(element.querySelector(".icon img")).not.toBeNull();
+    });
   });
 
   it("keeps the live screenshot ahead of the social image while using the favicon", async () => {

@@ -5,6 +5,7 @@ import { isSqliteSchemaMismatchError } from "../infra/sqlite-schema-issues.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import { getProcessGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { withArtifactPreservingStateReads } from "../state/openclaw-state-db-readonly.js";
 import {
   includeContributionOwnsAgentRoster,
@@ -166,9 +167,7 @@ async function readConfigSnapshot(
     const rawHash = await deps.measure("config.snapshot.read.hash", () => hashConfigRaw(raw));
     fallbackRaw = raw;
     fallbackHash = rawHash;
-    const parsedRes = await deps.measure("config.snapshot.read.parse", () =>
-      parseConfigJson5(raw, deps.json5),
-    );
+    const parsedRes = await deps.measure("config.snapshot.read.parse", () => parseConfigJson5(raw));
     if (!parsedRes.ok) {
       return await finalizeReadConfigSnapshotInternalResult(deps, {
         snapshot: invalidSourceSnapshot(
@@ -295,10 +294,18 @@ async function readConfigSnapshot(
         options.allowCurrentPluginMetadata !== false
           ? getProcessGatewayPluginMetadataSnapshot()
           : undefined);
+      // Cold Doctor contracts need worker-owned policy and inventory facts before derivation.
+      const preparePluginDiagnostics = availableSnapshot
+        ? undefined
+        : () => preparePluginMetadataMachineStateAsync({ env: deps.env });
       const collect = () =>
         context.options.pluginValidation === "core-only"
           ? findLegacyConfigIssues(effectiveConfigRaw, effectiveParsed)
-          : collectInvalidConfigLegacyIssues(effectiveConfigRaw, effectiveParsed);
+          : collectInvalidConfigLegacyIssues(
+              effectiveConfigRaw,
+              effectiveParsed,
+              preparePluginDiagnostics,
+            );
       const legacyIssues = await deps.measure("config.snapshot.read.legacy-issues", () =>
         availableSnapshot
           ? withPluginMetadataSnapshotScope(availableSnapshot, collect, {
@@ -620,7 +627,7 @@ export async function readSourceConfigBestEffortFromContext(
   // degradation records why the real config was not used.
   try {
     const raw = deps.fs.readFileSync(configPath, "utf-8");
-    const parsed = parseConfigJson5(raw, deps.json5);
+    const parsed = parseConfigJson5(raw);
     if (!parsed.ok) {
       deps.logger.warn(
         `Config (${configPath}): best-effort read ignored unparseable config: ${parsed.error}`,

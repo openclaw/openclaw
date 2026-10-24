@@ -31,12 +31,7 @@ let resolveSystemBin: ResolveSystemBin;
 let freshResolveSystemBinId = 0;
 
 let executables: Set<string>;
-
-function addExecutables(...paths: string[]): void {
-  for (const candidate of paths) {
-    executables.add(candidate);
-  }
-}
+const addExecutables = (...paths: string[]) => paths.forEach((entry) => executables.add(entry));
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -75,20 +70,19 @@ if (process.platform !== "win32") {
   });
 
   it("prefers /usr/bin over /usr/local/bin (first match wins)", () => {
-    executables.add("/usr/bin/openssl");
-    executables.add("/usr/local/bin/openssl");
+    addExecutables("/usr/bin/openssl", "/usr/local/bin/openssl");
     expect(resolveSystemBin("openssl")).toBe("/usr/bin/openssl");
   });
 
-  it("extraDirs results do not poison the cache for callers without extraDirs", () => {
-    const untrustedDir = "/home/user/.local/bin";
-    executables.add(`${untrustedDir}/ffmpeg`);
-
-    expect(resolveSystemBin("ffmpeg", { extraDirs: [untrustedDir] })).toBe(
-      `${untrustedDir}/ffmpeg`,
-    );
-    expect(resolveSystemBin("ffmpeg")).toBeNull();
-  });
+  it.each(["strict", "standard"] as const)(
+    "%s extraDirs results do not poison callers without extraDirs",
+    (trust) => {
+      const extra = "/home/user/.local/bin";
+      addExecutables(`${extra}/ffmpeg`);
+      expect(resolveSystemBin("ffmpeg", { trust, extraDirs: [extra] })).toBe(`${extra}/ffmpeg`);
+      expect(resolveSystemBin("ffmpeg", { trust })).toBeNull();
+    },
+  );
 }
 
 if (process.platform === "darwin" || process.platform === "linux") {
@@ -106,21 +100,14 @@ if (process.platform === "darwin" || process.platform === "linux") {
   });
 }
 
-if (process.platform === "darwin") {
-  it("standard trust results do not poison the strict cache", () => {
-    executables.add("/opt/homebrew/bin/ffmpeg");
+it.runIf(process.platform === "darwin")(
+  "standard trust results do not poison the strict cache",
+  () => {
+    addExecutables("/opt/homebrew/bin/ffmpeg");
     expect(resolveSystemBin("ffmpeg", { trust: "standard" })).toBe("/opt/homebrew/bin/ffmpeg");
     expect(resolveSystemBin("ffmpeg")).toBeNull();
-  });
-
-  it("extraDirs composes with standard trust", () => {
-    const customDir = "/opt/custom/bin";
-    executables.add(`${customDir}/mytool`);
-    expect(resolveSystemBin("mytool", { trust: "standard", extraDirs: [customDir] })).toBe(
-      `${customDir}/mytool`,
-    );
-  });
-}
+  },
+);
 
 it.each([
   ["linux", "strict", ""],

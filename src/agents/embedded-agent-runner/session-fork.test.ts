@@ -19,7 +19,7 @@ import {
 import * as guardedFetch from "../../infra/net/fetch-guard.js";
 import * as undiciRuntime from "../../infra/net/undici-runtime.js";
 import "../ai-transport-runtime-host.js";
-import type { Context, Model } from "../../llm/types.js";
+import type { Context, Message, Model } from "../../llm/types.js";
 import { createAssistantMessageEventStream } from "../../llm/utils/event-stream.js";
 import { withServer } from "../../plugin-sdk/test-helpers/http-test-server.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -70,16 +70,33 @@ async function complete(
   return (await parent(requestModel, requestContext, options)).result();
 }
 
-function publishedResult(toolCallId: string, toolName: string, text: string, details?: unknown) {
-  recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, {
+function toolResult(
+  toolCallId: string,
+  toolName: string,
+  text: string,
+  details?: unknown,
+  timestamp = 3,
+): Extract<Message, { role: "toolResult" }> {
+  return {
     role: "toolResult",
     toolCallId,
     toolName,
     content: [{ type: "text", text }],
     isError: false,
-    timestamp: 3,
+    timestamp,
     details,
-  });
+  };
+}
+const publish = (message: Message) =>
+  recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, message);
+const publishedResult = (...args: Parameters<typeof toolResult>) => publish(toolResult(...args));
+const history = (...messages: Message[]): Context => ({
+  ...context,
+  messages: [...context.messages, ...messages],
+});
+function parentTransport() {
+  const payloads: Record<string, unknown>[] = [];
+  return { payloads, parent: wrapStreamFnWithSessionFork(transport(payloads), identity) };
 }
 
 function transport(payloads: Record<string, unknown>[]): StreamFn {
@@ -248,8 +265,7 @@ it("keeps a captured prefix across suffix retries and replaces it after full-his
 it.each([false, true])(
   "prepares the next parent without reviving cleared state (cleared: %s)",
   async (cleared) => {
-    const payloads: Record<string, unknown>[] = [];
-    const parent = wrapStreamFnWithSessionFork(transport(payloads), identity);
+    const { payloads, parent } = parentTransport();
     await complete(parent);
     const review = cleared ? undefined : fork();
     const preparing = createDeferredCore();
@@ -366,26 +382,16 @@ it.each(["bigint", "cycle"])(
     const completed = await complete(parent, model, context, sseOptions);
     const cyclic: { self?: unknown } = {};
     cyclic.self = cyclic;
-    const parentContext: Context = {
-      ...context,
-      messages: [
-        ...context.messages,
-        {
-          ...completed,
-          stopReason: "toolUse",
-          content: [{ type: "toolCall", id: "completed", name: "lookup", arguments: {} }],
-        },
-        {
-          role: "toolResult",
-          toolCallId: "completed",
-          toolName: "lookup",
-          content: [{ type: "text", text: "Tool answer" }],
-          isError: false,
-          timestamp: 2,
-          details: kind === "bigint" ? { value: 1n } : cyclic,
-        },
-      ],
-    };
+    const parentContext = history(
+      { ...completed, stopReason: "toolUse", content: [toolCall("completed", "lookup")] },
+      toolResult(
+        "completed",
+        "lookup",
+        "Tool answer",
+        kind === "bigint" ? { value: 1n } : cyclic,
+        2,
+      ),
+    );
     const onPayload = vi.fn();
     const forkSent = createDeferredCore();
     const releaseFork = createDeferredCore();
@@ -436,7 +442,7 @@ it.each(["openai-responses", "anthropic-messages"] as const)(
       ...assistant,
       content: [{ type: "text" as const, text: "Published answer" }],
     };
-    recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, publication);
+    publish(publication);
     publication.content[0]!.text = "Changed after publication";
 
     for (let index = 0; index < 2; index++) {
@@ -486,7 +492,7 @@ it.each([
   const { parent, request } = guardedTransport(undefined, api);
   const requestModel = apiModel(api);
   const assistant = await complete(parent, requestModel, context, sseOptions);
-  recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, {
+  publish({
     ...assistant,
     stopReason: "toolUse",
     content: [
@@ -536,20 +542,17 @@ it.each([
       parent,
       requestModel,
       {
-        ...replayContext,
-        messages: [
-          ...replayContext.messages,
-          {
-            ...completed,
-            ...(api !== "openai-responses"
-              ? { provider: "prior-provider", model: "prior-model" }
-              : {}),
-            content: [
-              { type: "text", text: "Starting lookup" },
-              toolCall(sourceId, "lookup", {}, true),
-            ],
-          },
-        ],
+        ...history({
+          ...completed,
+          ...(api !== "openai-responses"
+            ? { provider: "prior-provider", model: "prior-model" }
+            : {}),
+          content: [
+            { type: "text", text: "Starting lookup" },
+            toolCall(sourceId, "lookup", {}, true),
+          ],
+        }),
+        tools: replayContext.tools,
       },
       { apiKey: "synthetic-key" },
     );
@@ -764,14 +767,7 @@ it("retains the full parent prefix when HTTP continuation sends only a suffix", 
   await complete(
     parent,
     requestModel,
-    {
-      ...context,
-      messages: [
-        ...context.messages,
-        completed,
-        { role: "user", content: "Continue parent", timestamp: 3 },
-      ],
-    },
+    history(completed, { role: "user", content: "Continue parent", timestamp: 3 }),
     options,
   );
   const continuation = await request(1).json();
@@ -795,29 +791,19 @@ it("rejects Bedrock forks before dispatch with an actionable unsupported API err
 });
 
 it("does not restore cleared context when an old publication arrives", async () => {
-  const payloads: Record<string, unknown>[] = [];
-  const parent = wrapStreamFnWithSessionFork(transport(payloads), identity);
+  const { payloads, parent } = parentTransport();
   const message = await complete(parent);
   cleanupSessionResources(identity.sessionId);
-  recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, message);
+  publish(message);
   await expect(fork()).rejects.toThrow("requires a parent turn");
   expect(payloads).toHaveLength(1);
 });
 
 it("retires optional replay if a published message cannot be retained", async () => {
-  const payloads: Record<string, unknown>[] = [];
-  const parent = wrapStreamFnWithSessionFork(transport(payloads), identity);
+  const { parent } = parentTransport();
   await complete(parent);
   expect(() =>
-    recordEmbeddedSessionForkMessage(identity.sessionId, identity.runId, {
-      role: "toolResult",
-      toolCallId: "lookup",
-      toolName: "lookup",
-      content: [],
-      isError: false,
-      timestamp: 2,
-      details: { callback: () => {} },
-    }),
+    publish({ ...toolResult("lookup", "lookup", "", { callback: () => {} }, 2), content: [] }),
   ).not.toThrow();
   await expect(fork()).rejects.toThrow("requires a parent turn");
 });

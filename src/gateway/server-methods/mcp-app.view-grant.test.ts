@@ -2,11 +2,10 @@ import { randomUUID } from "node:crypto";
 import http from "node:http";
 import { NodeStreamableHTTPServerTransport } from "@modelcontextprotocol/node";
 import { Server } from "@modelcontextprotocol/server";
-import { Type } from "typebox";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { createSessionMcpRuntime } from "../../agents/agent-bundle-mcp-runtime.js";
-import type { McpToolCatalog, SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
+import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import {
   fetchMcpAppView,
   getMcpAppViewLease,
@@ -42,6 +41,7 @@ import { SharedGatewaySessionGenerationState } from "../server-shared-auth-gener
 import { createTestRuntimeSecretsActivator } from "../server-startup-config.test-support.js";
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import { mcpAppHandlers } from "./mcp-app.js";
+import { appCatalog } from "./mcp-app.test-support.js";
 import { createPluginApprovalHandlers } from "./plugin-approval.js";
 import { expectRpcError } from "./rpc-response.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
@@ -119,27 +119,15 @@ const persistApproval = approvalStore.resolveOperatorApproval;
 const resolveApproval = vi.spyOn(approvalStore, "resolveOperatorApproval");
 
 function createRuntime() {
-  const catalog: McpToolCatalog = {
-    version: 1,
-    generatedAt: 1,
-    servers: {
-      parts: {
-        serverName: "parts",
-        launchSummary: "parts",
-        toolCount: 2,
-        pluginId: "parts-plugin",
-      },
-    },
-    tools: ["search", "details"].map((toolName) => ({
-      serverName,
-      safeServerName: serverName,
+  const catalog = appCatalog(
+    serverName,
+    ["search", "details"].map((toolName) => ({
       toolName,
-      inputSchema: Type.Object({}),
-      fallbackDescription: toolName,
-      uiVisibility: ["app"],
+      uiVisibility: ["app" as const],
       codexAnnotations: { readOnlyHint: true },
     })),
-  };
+    { pluginId: "parts-plugin" },
+  );
   return {
     sessionId: "session-parts",
     sessionKey,

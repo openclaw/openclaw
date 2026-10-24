@@ -183,6 +183,24 @@ describe("runtime auth profile snapshots", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 
+  it("bounds remembered revisions while refreshing a repeatedly cleared owner", () => {
+    const root = tempDirs.make("auth-snapshot-revisions-");
+    const first = path.join(root, "first");
+    const second = path.join(root, "second");
+    const metadataRevision = getMetadataRevision(first);
+    const snapshotRevision = getSnapshotRevision(first);
+    clearSnapshot(first);
+    clearSnapshot(second);
+    clearSnapshot(first);
+    for (let index = 0; index < 255; index += 1) {
+      clearSnapshot(path.join(root, `missing-${index}`));
+    }
+    expect(getMetadataRevision(first)).toBe(metadataRevision + 3);
+    expect(getSnapshotRevision(first)).toBe(snapshotRevision + 3);
+    expect(getMetadataRevision(second)).toBe(metadataRevision + 258);
+    expect(getSnapshotRevision(second)).toBe(snapshotRevision + 258);
+  });
+
   it.each(["replace", "remove"] as const)(
     "invalidates inherited runtimes after a shared-store %s publishes the complete roster",
     (operation) => {
@@ -308,7 +326,7 @@ describe("runtime auth profile snapshots", () => {
     expect(cleared.lastGood).toBe(worker.lastGood);
     expect(worker.usageStats["acme:primary"]).toEqual({ cooldownUntil: 20_000 });
 
-    const usage = { cooldownUntil: 30_000, failureCounts: { rate_limit: 2 } };
+    const usage = { cooldownUntil: 30_000, failureCounts: { timeout: 2 } };
     setUsage(published, agentDir, { "acme:primary": usage });
     const blocked = read(worker);
     expect(blocked.usageStats?.["acme:primary"]).toEqual(usage);

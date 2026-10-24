@@ -40,7 +40,7 @@ import {
   transport,
   withWorkspaceDrain,
   workspaceTransfer,
-  workspaceCommandPayload,
+  workspaceReply,
   tunnelLaunchPlan as plan,
 } from "./node-worker-tunnel.test-support.js";
 import { sameWorkerSessionTurnClaim } from "./placement-record.js";
@@ -82,10 +82,7 @@ async function expectPending(promise: Promise<unknown>) {
   expect(settled).not.toHaveBeenCalled();
 }
 const nullReply = { ok: true, payloadJSON: "null" };
-const drainReply = () => ({
-  ok: true,
-  payloadJSON: workspaceCommandPayload("/node/workspace", { stdout: "drained\n" }),
-});
+const drainReply = () => workspaceReply("/node/workspace", { stdout: "drained\n" });
 
 function receiptIdentity(input: NodeWorkerLaunchInput, planHash = "b".repeat(64)) {
   return {

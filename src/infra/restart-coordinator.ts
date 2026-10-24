@@ -65,14 +65,13 @@ export function createSafeGatewayRestartPreflight() {
 export function scheduleSafeGatewayRestart(
   opts: {
     reason?: string;
-    delayMs?: number;
     skipDeferral?: boolean;
   } = {},
 ): SafeGatewayRestartRequestResult {
   const preflight = createSafeGatewayRestartPreflight();
   const skipDeferral = opts.skipDeferral === true;
   const restart = scheduleGatewayRestart({
-    delayMs: opts.delayMs ?? 0,
+    delayMs: 0,
     reason: opts.reason ?? "gateway.restart.safe",
     ...(skipDeferral ? { preservePendingEmitHooksOnDeferralBypass: true, skipDeferral: true } : {}),
   });

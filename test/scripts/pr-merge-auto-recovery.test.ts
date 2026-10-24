@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { configureMerge, expectExit as expectStatus } from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 
 const { fixture, reuseCompletedSetup, outcomeRef, describePosix } =
@@ -6,11 +7,7 @@ const { fixture, reuseCompletedSetup, outcomeRef, describePosix } =
 type Fixture = ReturnType<typeof fixture>;
 type State = ReturnType<Fixture["state"]>;
 function update(f: Fixture, changes: Partial<State> = {}, pr: Partial<State["pr"]> = {}) {
-  const state = f.state();
-  f.save({ ...state, ...changes, pr: { ...state.pr, ...pr } });
-}
-function expectStatus(result: ReturnType<Fixture["run"]>, status = 0) {
-  expect(result.status, result.output).toBe(status);
+  configureMerge(f, { ...changes, pr: { ...changes.pr, ...pr } });
 }
 function expectEffects(f: Fixture, mutations: number, cancellations = 0, posts = 0) {
   expect(f.state()).toMatchObject({ mutations, cancellations, posts });
@@ -165,7 +162,7 @@ describePosix("native auto-merge recovery", () => {
 
   it("retires an absent request at an explicitly observed changed head without dispatch", () => {
     const f = autoFixture();
-    expect(f.run(true).status).toBe(0);
+    expectStatus(f.run(true));
     const accepted = receipt(f);
     const original = f.record();
     const captures = f.captures();
@@ -206,7 +203,7 @@ describePosix("native auto-merge recovery", () => {
     "retires the original auto request when mergeability settles %s",
     (phase) => {
       const f = autoFixture();
-      expect(f.run(true).status).toBe(0);
+      expectStatus(f.run(true));
       const accepted = receipt(f);
       update(f, {
         observations: [...(phase === "after cancellation" ? [{}, {}] : []), ...settled],
@@ -297,7 +294,7 @@ describePosix("native auto-merge recovery", () => {
   );
   it("never repeats an uncertain auto cancellation and confirms its later observed retirement", () => {
     const f = autoFixture("pending-error", "rejected");
-    expect(f.run(true).status).toBe(1);
+    expectStatus(f.run(true), 1);
     expect(f.recover()).toBe(false);
     expectStatus(f.cancel(receipt(f)), 1);
     expect(f.record().cancellation.state).toBe("requested");
@@ -313,7 +310,7 @@ describePosix("native auto-merge recovery", () => {
   });
   it("reconciles a concurrent merge during auto cancellation without a second merge", () => {
     const f = autoFixture("pending", "merged");
-    expect(f.run(true).status).toBe(0);
+    expectStatus(f.run(true));
     expectStatus(f.cancel(receipt(f)));
     expect(f.record()).toMatchObject({ phase: "merged", landed: f.state().pr.mergeCommit?.oid });
     expectEffects(f, 1, 1);
@@ -329,7 +326,7 @@ describePosix("native auto-merge recovery", () => {
     "preserves auto cancellation authority when %s changes %s dispatch",
     (change, stage) => {
       const f = autoFixture();
-      expect(f.run(true).status).toBe(0);
+      expectStatus(f.run(true));
       const accepted = receipt(f);
       const next = f.state();
       if (stage === "before") {

@@ -83,7 +83,6 @@ export function deriveSessionMetaPatch(params: {
   sessionKey: string;
   existing?: SessionEntry;
   groupResolution?: GroupKeyResolution | null;
-  preserveExistingDeliveryRoute?: boolean;
   skipSystemEventOrigin?: boolean;
 }): Partial<SessionEntry> | null {
   return projectSessionMetaPatch({
@@ -103,6 +102,12 @@ export function prepareSessionMetaPatch(params: {
   );
   return {
     group: prepareGroupSessionPatch(params),
+    privateTelegramTopicName:
+      params.ctx.ChatType === "direct" &&
+      params.ctx.MessageThreadId != null &&
+      sourceChannel === "telegram"
+        ? normalizeOptionalString(params.ctx.ThreadLabel)
+        : undefined,
     clearAvatar: params.ctx.ConversationAvatar === "",
     origin: deriveSessionOrigin(params.ctx, {
       skipSystemEventOrigin: params.skipSystemEventOrigin,

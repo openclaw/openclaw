@@ -35,6 +35,8 @@ type ContextHarness = {
   emitGatewayEvent: (event: Pick<GatewayEventFrame, "event" | "payload">) => void;
 };
 
+type OverlayListener = Parameters<ApplicationContext["overlays"]["subscribe"]>[0];
+
 export function createContext(
   request: Mock,
   methods: string[] = ["openclaw.chat"],
@@ -106,11 +108,13 @@ export function createContext(
     channelsLoadingProbe: null,
     channelsRefreshSeq: 0,
     channelsSnapshot: options.channelsSnapshot ?? null,
+    channelsRead: null,
     channelsError: null,
     channelsLastSuccess: options.channelsSnapshot ? Date.now() : null,
     pairingLoading: false,
     pairingRefreshSeq: 0,
     pairingSnapshot: null,
+    pairingRead: null,
     pairingError: null,
     pairingLastSuccess: null,
     pairingBusyRequestId: null,
@@ -120,14 +124,55 @@ export function createContext(
     whatsappLoginConnected: null,
     whatsappBusy: false,
   };
+  let settleChannels: ((error: string | null) => void) | undefined;
   const refreshChannels = vi.fn(() => {
+    settleChannels?.(null);
+    const { promise, resolve } = Promise.withResolvers<string | null>();
+    settleChannels = resolve;
+    channelState.channelsRead = { completion: promise };
     channelState.channelsLoading = true;
     for (const listener of channelListeners) {
       listener(channelState);
     }
-    return new Promise<void>(() => {});
+    return promise.then(() => undefined);
   });
   const routeListeners = new Set<() => void>();
+  const overlayListeners = new Set<OverlayListener>();
+  // The real overlay owner bootstraps against the Gateway. These tests account for
+  // Custodian RPCs, so provide only the per-context observation surface used by the
+  // real Inbox; its existing unsubscribe retires the listener with the mount.
+  const overlays = {
+    snapshot: {
+      updateAvailable: null,
+      updateSchedule: null,
+      heldUpdateCampaignId: null,
+      updateRunning: false,
+      updateStatusRefreshing: false,
+      updateCampaignStatusHydrated: true,
+      updateReconciliationPending: false,
+      updateStatusBanner: null,
+      updateStatusCheckBanner: null,
+      recordedUpdateAttempt: null,
+      diagnosableUpdateFailureId: null,
+      reportableUpdateFailureId: null,
+      updateFailureReportBusy: false,
+      updateFailureReportNotice: null,
+      updateRun: null,
+      updateRunAcknowledged: false,
+      controlUiRefreshRequired: false,
+      approvalQueue: [],
+      approvalBusy: false,
+      approvalCanGrant: false,
+      approvalErrors: new Map(),
+      devicePairSetupOpen: false,
+      devicePairSetupLifecycle: { phase: "selection", access: "full" },
+      devicePairPendingCount: 0,
+    },
+    subscribe: (listener: OverlayListener) => {
+      overlayListeners.add(listener);
+      return () => overlayListeners.delete(listener);
+    },
+  } satisfies Pick<ApplicationContext["overlays"], "snapshot" | "subscribe">;
   const context = {
     gateway,
     runtimeConfig: {
@@ -166,6 +211,7 @@ export function createContext(
         return () => channelListeners.delete(listener);
       },
     },
+    overlays,
     basePath: "",
     navigate: vi.fn(),
     replace: vi.fn(),
@@ -189,6 +235,8 @@ export function createContext(
       connection.token = credentials.token;
     },
     setChannelsConnected: (connected) => {
+      settleChannels?.(null);
+      channelState.channelsRead = null;
       channelState.connected = connected;
       channelState.channelsLoading = false;
       channelState.channelsError = null;
@@ -199,6 +247,9 @@ export function createContext(
     setChannelsSnapshot: (nextSnapshot) => {
       channelState.channelsSnapshot = nextSnapshot;
       channelState.channelsLastSuccess = nextSnapshot ? Date.now() : null;
+      channelState.channelsLoading = false;
+      channelState.channelsError = null;
+      settleChannels?.(null);
       for (const listener of channelListeners) {
         listener(channelState);
       }
@@ -206,6 +257,7 @@ export function createContext(
     setChannelsError: (error: string | null) => {
       channelState.channelsLoading = false;
       channelState.channelsError = error;
+      settleChannels?.(error);
       for (const listener of channelListeners) {
         listener(channelState);
       }

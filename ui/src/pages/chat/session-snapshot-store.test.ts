@@ -16,6 +16,7 @@ import {
   appendChatMessageToCache,
   cacheChatSessionSnapshot,
   observeChatCache,
+  readChatSessionSnapshot,
   type ChatMessageCache,
   type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
@@ -176,6 +177,24 @@ describe("persistent chat session snapshots", () => {
     expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
   });
 
+  it("does not present a cached board after its pending read is invalidated", async () => {
+    const sessionKey = key("agent:main:retired-dashboard");
+    await persist(writer, sessionKey, {
+      ...snapshot("retired conversation"),
+      historyState: { stateRevision: {}, commands: [] },
+      board: {
+        snapshot: { sessionKey: rawKey(sessionKey), revision: 1, tabs: [], widgets: [] },
+        receivedAtMs: 100,
+      },
+    });
+    const reader = new SessionSnapshotStore();
+    const presentBoard = vi.fn();
+    const reading = reader.read(sessionKey, presentBoard);
+    reader.forget(sessionKey);
+    expect(await reading).toBeNull();
+    expect(presentBoard).not.toHaveBeenCalled();
+  });
+
   it("persists board removal before any transcript is in memory", async () => {
     const memory: ChatMessageCache = new Map();
     const store = makeStore(memory);
@@ -211,7 +230,9 @@ describe("persistent chat session snapshots", () => {
         },
       },
     });
-    expect(await new SessionSnapshotStore().read(sessionKey)).toBeNull();
+    const presentBoard = vi.fn();
+    expect(await new SessionSnapshotStore().read(sessionKey, presentBoard)).toBeNull();
+    expect(presentBoard).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
@@ -398,6 +419,26 @@ describe("persistent chat session snapshots", () => {
     expect(await store.read(firstKey)).toBeNull();
     expect(await store.read(resolveChatSnapshotKey(other, target))).not.toBeNull();
     expect(await store.read(resolveChatSnapshotKey(second, target))).not.toBeNull();
+  });
+
+  it("isolates account-less snapshots by client or host identity", () => {
+    const memory: ChatMessageCache = new Map();
+    const target = { sessionKey: "agent:main:unowned" };
+    const client = { recoveryScope: "", recoveryScopeReady: false };
+    const host = { ...snapshotHost, client };
+    const clientSnapshot = snapshot("client-owned");
+    cacheChatSessionSnapshot(memory, host, target, clientSnapshot);
+    expect(readChatSessionSnapshot(memory, host, target)).toEqual(clientSnapshot);
+    expect(readChatSessionSnapshot(memory, { ...host }, target)).toEqual(clientSnapshot);
+    expect(readChatSessionSnapshot(memory, { ...host, client: { ...client } }, target)).toBeNull();
+
+    const noClientHost = { ...snapshotHost, client: undefined };
+    expect(readChatSessionSnapshot(memory, noClientHost, target)).toBeNull();
+    const hostSnapshot = snapshot("host-owned");
+    cacheChatSessionSnapshot(memory, noClientHost, target, hostSnapshot);
+    expect(readChatSessionSnapshot(memory, noClientHost, target)).toEqual(hostSnapshot);
+    expect(readChatSessionSnapshot(memory, { ...noClientHost }, target)).toBeNull();
+    expect(readChatSessionSnapshot(memory, host, target)).toEqual(clientSnapshot);
   });
 
   it("keeps Incognito history in memory without persisting snapshots or metadata", async () => {

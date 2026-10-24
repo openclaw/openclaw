@@ -106,8 +106,6 @@ suite.define(() => {
             const deferredSource =
               /components\/(terminal\/terminal-panel\.ts|browser\/browser-panel\.ts|desktop\/desktop-panel\.ts|assistant-panel-content\.ts)$|pages\/(chat\/chat-page|debug\/debug-overlay-content)\.ts$/;
             expect(sources.filter((source) => deferredSource.test(source))).toEqual([]);
-          }
-          if (panel.name === "terminal") {
             await page.keyboard.press("Control+Backquote");
           } else if (panel.name === "browser") {
             await gateway.emitGatewayEvent("ui.command", {
@@ -124,11 +122,14 @@ suite.define(() => {
           }
           const root = page.locator(panel.tag);
           const content = root.locator(panel.selector);
-          await content.waitFor();
           const deferredTag =
             panel.name === "custodian" ? "openclaw-assistant-panel-content" : panel.tag;
-          await page.locator(deferredTag).waitFor({ state: "attached" });
-          expect(await definitions()).toEqual([deferredTag]);
+          const expectOnlyRequestedPanel = async () => {
+            await content.waitFor();
+            await page.locator(deferredTag).waitFor({ state: "attached" });
+            expect(await definitions()).toEqual([deferredTag]);
+          };
+          await expectOnlyRequestedPanel();
           if (panel.name === "terminal") {
             // Reload an adopted PTY, and keep the mock Gateway's live inventory across reload.
             await root.locator(".tabstrip-tab.is-live").waitFor();
@@ -142,9 +143,7 @@ suite.define(() => {
             });
           }
           await page.reload();
-          await content.waitFor();
-          await page.locator(deferredTag).waitFor({ state: "attached" });
-          expect(await definitions()).toEqual([deferredTag]);
+          await expectOnlyRequestedPanel();
           if (panel.name === "terminal") {
             const attached = await gateway.waitForRequest("terminal.attach");
             expect(attached.params).toEqual({ sessionId: session.sessionId });

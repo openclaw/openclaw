@@ -35,7 +35,10 @@ import {
 import { probePortUsage } from "../../infra/ports-probe.js";
 import { resolveGatewayRestartDrainTimeoutMs } from "../../infra/restart-budget.js";
 import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
-import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import {
+  hasCommandProcessCleanupError,
+  ignoreNonCleanupCommandError,
+} from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createNullWriter } from "../../shared/null-writer.js";
@@ -153,8 +156,8 @@ async function stopGatewayWithoutServiceManager(
     if (portUsage !== "free") {
       throw new Error(
         portUsage === "busy"
-          ? `Port ${port} is in use but the owning process could not be identified. Run ${formatCliCommand("openclaw gateway status --deep")} to diagnose.`
-          : `Could not determine whether port ${port} is still in use, so the gateway cannot be confirmed stopped. Run ${formatCliCommand("openclaw gateway status --deep")} to diagnose.`,
+          ? `Port ${port} is in use but the owning process could not be identified.`
+          : `Could not determine whether port ${port} is still in use, so the gateway cannot be confirmed stopped.`,
       );
     }
     return null;
@@ -265,12 +268,26 @@ async function runExternalSupervisorRestart(opts: DaemonLifecycleOptions): Promi
   return true;
 }
 
+function renderGatewayServiceStopHints(): string[] {
+  return [
+    `Run ${formatCliCommand("openclaw gateway status --deep")} to inspect the service, then retry.`,
+  ];
+}
+
+function renderGatewayServiceUninstallHints(): string[] {
+  return [
+    ...renderGatewayServiceStopHints(),
+    "To remove the service manually, see https://docs.openclaw.ai/install/uninstall#manual-service-removal-cli-not-installed",
+  ];
+}
+
 /** Uninstall the managed Gateway service after stopping it. */
 export async function runDaemonUninstall(opts: DaemonLifecycleOptions = {}) {
   assertGatewayServiceMutationAllowed("uninstall the gateway service");
   return await runServiceUninstall({
     serviceNoun: "Gateway",
     service: resolveGatewayService(),
+    renderFailureHints: renderGatewayServiceUninstallHints,
     opts,
     stopBeforeUninstall: true,
     assertNotLoadedAfterUninstall: true,
@@ -383,16 +400,12 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
   return await runServiceStop({
     serviceNoun: "Gateway",
     service,
+    renderFailureHints: renderGatewayServiceStopHints,
     opts,
     stopWhenNotLoaded: process.platform === "darwin" && Boolean(opts.disable),
     onNotLoaded: async ({ stdout }) => {
       if (process.platform === "linux") {
-        const runtime = await service.readRuntime(process.env).catch((error: unknown) => {
-          if (hasCommandProcessCleanupError(error)) {
-            throw error;
-          }
-          return null;
-        });
+        const runtime = await service.readRuntime(process.env).catch(ignoreNonCleanupCommandError);
         if (runtime?.status === "running") {
           // systemd can run a disabled unit with Restart=always. Stop it through
           // systemctl so a process-level SIGTERM cannot trigger a respawn.
@@ -411,12 +424,7 @@ export async function runDaemonStop(opts: DaemonLifecycleOptions = {}) {
       const lock = await readActiveGatewayLockIdentity().catch(() => undefined);
       const ctx = lock
         ? null
-        : await resolveGatewayLifecycleContext(service).catch((error: unknown) => {
-            if (hasCommandProcessCleanupError(error)) {
-              throw error;
-            }
-            return null;
-          });
+        : await resolveGatewayLifecycleContext(service).catch(ignoreNonCleanupCommandError);
       const port = lock?.port ?? ctx?.port ?? (await resolveGatewayConfigPorts()).fallback;
       return await stopGatewayWithoutServiceManager(port, lock?.pid, ctx ?? undefined);
     },

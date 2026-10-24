@@ -1,4 +1,3 @@
-// OpenClaw assistant tests cover plan parsing and inference prompt construction.
 import { describe, expect, it } from "vitest";
 import {
   SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT,
@@ -8,51 +7,71 @@ import {
 } from "./assistant-prompts.js";
 import type { SystemAgentOverview } from "./overview.js";
 
-function overview(overrides: Partial<SystemAgentOverview["tools"]> = {}): SystemAgentOverview {
+function overview(configured = false): SystemAgentOverview {
   return {
     config: {
       path: "/tmp/openclaw.json",
-      exists: false,
-      valid: false,
+      exists: configured,
+      valid: configured,
       issues: [],
-      hash: null,
+      hash: configured ? "hash" : null,
     },
-    agents: [],
-    defaultAgentId: "default",
+    agents: configured
+      ? [
+          {
+            id: "main",
+            name: "Main",
+            isDefault: true,
+            model: "openai/gpt-5.5",
+            workspace: "/tmp/main",
+          },
+        ]
+      : [],
+    defaultAgentId: configured ? "main" : "default",
+    ...(configured ? { defaultModel: "openai/gpt-5.5" } : {}),
     tools: {
-      codex: { command: "codex", found: false },
+      codex: {
+        command: "codex",
+        found: configured,
+        ...(configured ? { version: "codex 1.0.0" } : {}),
+      },
       claude: { command: "claude", found: false },
       gemini: { command: "gemini", found: false },
-      apiKeys: { openai: false, anthropic: false },
-      ...overrides,
+      apiKeys: { openai: configured, anthropic: false },
     },
-    gateway: {
-      url: "ws://127.0.0.1:14567",
-      source: "local loopback",
-      reachable: false,
-    },
+    gateway: { url: "ws://127.0.0.1:14567", source: "local loopback", reachable: false },
     references: {
       docsUrl: "https://docs.openclaw.ai",
       sourceUrl: "https://github.com/openclaw/openclaw",
+      ...(configured ? { docsPath: "/tmp/openclaw/docs", sourcePath: "/tmp/openclaw" } : {}),
     },
   };
 }
 
+function expectContents(prompt: string, parts: string[]) {
+  for (const part of parts) {
+    expect(prompt).toContain(part);
+  }
+}
+
 describe("OpenClaw assistant", () => {
   it("teaches both planner and agent-loop prompts about hosted setup flows", () => {
-    const systemPrompt = buildSystemAgentSystemPrompt();
-    expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).toContain("- configure skills");
-    expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).toContain("- configure search");
-    expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).toContain("- open search wizard");
-    expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).toContain("- configure gateway");
-    expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).toContain("- open gateway wizard");
-    expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).toContain("- memory import");
-    expect(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT).toContain("copy-only hosted flow");
-    expect(systemPrompt).toContain("call configure_skills");
-    expect(systemPrompt).toContain("call configure_search");
-    expect(systemPrompt).toContain("call configure_gateway");
-    expect(systemPrompt).toContain("call import_memory");
-    expect(systemPrompt).toContain("default agent's existing workspace");
+    expectContents(SYSTEM_AGENT_ASSISTANT_SYSTEM_PROMPT, [
+      "- configure skills",
+      "- configure search",
+      "- open search wizard",
+      "- configure gateway",
+      "- open gateway wizard",
+      "- memory import",
+      "copy-only hosted flow",
+    ]);
+    expectContents(buildSystemAgentSystemPrompt(), [
+      "call configure_skills",
+      "call configure_search",
+      "call configure_gateway",
+      "call import_memory",
+      "default agent's existing workspace",
+    ]);
   });
 
   it("does not tell the fallback planner to solicit secrets", () => {
@@ -80,10 +99,7 @@ describe("OpenClaw assistant", () => {
       parseSystemAgentAssistantPlanText(
         'thinking... {"reply":"Aye aye.","command":"restart gateway"}',
       ),
-    ).toEqual({
-      reply: "Aye aye.",
-      command: "restart gateway",
-    });
+    ).toEqual({ reply: "Aye aye.", command: "restart gateway" });
   });
 
   it.each([
@@ -106,43 +122,16 @@ describe("OpenClaw assistant", () => {
   it("includes only operational summary context in planner prompts", () => {
     const prompt = buildSystemAgentAssistantUserPrompt({
       input: "fix my setup",
-      overview: {
-        ...overview({
-          codex: { command: "codex", found: true, version: "codex 1.0.0" },
-          apiKeys: { openai: true, anthropic: false },
-        }),
-        config: {
-          path: "/tmp/openclaw.json",
-          exists: true,
-          valid: true,
-          issues: [],
-          hash: "hash",
-        },
-        agents: [
-          {
-            id: "main",
-            name: "Main",
-            isDefault: true,
-            model: "openai/gpt-5.5",
-            workspace: "/tmp/main",
-          },
-        ],
-        defaultAgentId: "main",
-        defaultModel: "openai/gpt-5.5",
-        references: {
-          docsPath: "/tmp/openclaw/docs",
-          docsUrl: "https://docs.openclaw.ai",
-          sourcePath: "/tmp/openclaw",
-          sourceUrl: "https://github.com/openclaw/openclaw",
-        },
-      },
+      overview: overview(true),
     });
 
-    expect(prompt).toContain("User request: fix my setup");
-    expect(prompt).toContain("Default model: openai/gpt-5.5");
-    expect(prompt).toContain("id=main, name=Main, workspace=/tmp/main");
-    expect(prompt).toContain("OpenAI API key: found");
-    expect(prompt).toContain("OpenClaw docs: /tmp/openclaw/docs");
-    expect(prompt).toContain("OpenClaw source: /tmp/openclaw");
+    expectContents(prompt, [
+      "User request: fix my setup",
+      "Default model: openai/gpt-5.5",
+      "id=main, name=Main, workspace=/tmp/main",
+      "OpenAI API key: found",
+      "OpenClaw docs: /tmp/openclaw/docs",
+      "OpenClaw source: /tmp/openclaw",
+    ]);
   });
 });

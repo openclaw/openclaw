@@ -162,12 +162,8 @@ describe("legacy state migration snapshot identity", () => {
         );
         expect(database.prepare("SELECT value FROM held").all()).toEqual([{ value: "original" }]);
         if (journalMode === "WAL") {
-          const writer = new DatabaseSync(databasePath);
-          try {
-            writer.exec("INSERT INTO held VALUES ('later');");
-          } finally {
-            writer.close();
-          }
+          using writer = new DatabaseSync(databasePath);
+          writer.exec("INSERT INTO held VALUES ('later');");
         }
         expect(compete()).toEqual({ blocked: true });
 

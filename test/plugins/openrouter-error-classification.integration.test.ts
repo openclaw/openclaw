@@ -11,7 +11,6 @@ import {
 } from "../../src/agents/failover-error.js";
 import { makeProviderModelFixture } from "../../src/agents/test-helpers/provider-model-fixture.js";
 import { sleepWithAbort } from "../../src/infra/backoff.js";
-import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-public-surface.js";
 import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
 import {
   closeHttpServer,
@@ -19,6 +18,7 @@ import {
   readRequestText,
   respondJson,
 } from "../helpers/gateway-integration-fixtures.js";
+import { loadBundledProviderPlugin } from "../helpers/media-generation/bundled-provider-builders.js";
 
 vi.mock("../../src/infra/backoff.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../src/infra/backoff.js")>()),
@@ -28,13 +28,7 @@ vi.mock("../../src/infra/backoff.js", async (importOriginal) => ({
 let providerOwner: Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
 
 beforeAll(async () => {
-  const { default: openrouterPlugin } = await loadBundledPluginFacade<{
-    default: Parameters<typeof registerSingleProviderPlugin>[0];
-  }>({
-    pluginId: "openrouter",
-    artifactBasename: "index.js",
-  });
-  providerOwner = await registerSingleProviderPlugin(openrouterPlugin);
+  providerOwner = await registerSingleProviderPlugin(await loadBundledProviderPlugin("openrouter"));
 });
 
 const model = makeProviderModelFixture<"openai-completions">({
@@ -158,15 +152,13 @@ describe("OpenRouter runtime error classification", () => {
     });
     const fixture = await recover(result.assistant);
     expect(result.reason).toBe("rate_limit");
-    expect(fixture.recovery).toMatchObject({
+    const retryState = {
       action: "retry",
       lastRetryFailoverReason: "rate_limit",
-    });
+    };
+    expect(fixture.recovery).toMatchObject(retryState);
     for (let retry = 2; retry <= 9; retry++) {
-      expect(await fixture.recover()).toMatchObject({
-        action: "retry",
-        lastRetryFailoverReason: "rate_limit",
-      });
+      expect(await fixture.recover()).toMatchObject(retryState);
     }
     expect(await fixture.recover()).toEqual({ action: "proceed" });
     expectRetryEffects(fixture, 9);

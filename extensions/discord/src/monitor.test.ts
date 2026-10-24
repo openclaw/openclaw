@@ -304,7 +304,7 @@ it("discord reaction notification gating: applies mode-specific reaction notific
       },
       false,
     ],
-    ["allowlist misses", { mode: "allowlist", allowlist: [] }, false],
+    ["allowlist misses", { mode: "allowlist", guildInfo: { users: [] } }, false],
     [
       "allowlist id",
       {

@@ -120,9 +120,7 @@ export type BrowserInspectedNode = NonNullable<ReturnType<typeof readBrowserInsp
 type BrowserRequestEnvelope = {
   method: "GET" | "POST" | "DELETE";
   path: string;
-  query?: Record<string, unknown>;
   body?: unknown;
-  timeoutMs?: number;
 };
 
 function withoutBrowserTarget(value: unknown): Record<string, unknown> {
@@ -587,8 +585,5 @@ export async function fetchBrowserScreenshotDataUrl(params: {
   } finally {
     clearTimeout(timeout);
   }
-  return readBlobAsDataUrl(blob, {
-    readError: () => t("browser.errors.screenshotReadFailed"),
-    invalidResultError: () => t("browser.errors.screenshotReadFailed"),
-  });
+  return readBlobAsDataUrl(blob, () => t("browser.errors.screenshotReadFailed"));
 }

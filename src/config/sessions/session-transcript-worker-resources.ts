@@ -1,4 +1,3 @@
-import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { joinOwnedWorkerTasks } from "@openclaw/worker-runtime";
@@ -28,6 +27,7 @@ import {
   runOutsideOpenClawDatabaseMaintenanceScope,
 } from "../../state/openclaw-state-db-async-lifecycle.js";
 import { registerOpenClawStateDatabaseAsyncResource } from "../../state/openclaw-state-db-cache.js";
+import { createStateWorkerMemoryPressureSubscription } from "../../state/openclaw-state-worker-memory-pressure.js";
 import type {
   CombinedSessionStoreTopologyRequest,
   CombinedSessionStoreTopologyResult,
@@ -151,8 +151,14 @@ const historyWorkerLanes = [
   targetDiscoveryLane,
 ];
 
-const memoryPressure = channel("openclaw.memory.critical");
-let pressureSubscribed = false;
+export const refreshDatabaseWorkerPressureSubscription =
+  createStateWorkerMemoryPressureSubscription(
+    () =>
+      databaseWorkerLanes.some(
+        (lane) => lane.pending > 0 || lane.rotation !== undefined || lane.native,
+      ),
+    retireIdleDatabaseWorkers,
+  );
 
 registerOpenClawStateDatabaseAsyncResource({
   phase: "after-resources",
@@ -180,21 +186,6 @@ function retireIdleDatabaseWorkers(): void {
     void runInDetachedAsyncContext(() => rotateDatabaseWorkers(lane)).catch((error: unknown) => {
       process.emitWarning(`${lane.name} worker retirement failed: ${String(error)}`);
     });
-  }
-}
-
-export function refreshDatabaseWorkerPressureSubscription(): void {
-  const required = databaseWorkerLanes.some(
-    (lane) => lane.pending > 0 || lane.rotation !== undefined || lane.native,
-  );
-  if (required === pressureSubscribed) {
-    return;
-  }
-  pressureSubscribed = required;
-  if (required) {
-    memoryPressure.subscribe(retireIdleDatabaseWorkers);
-  } else {
-    memoryPressure.unsubscribe(retireIdleDatabaseWorkers);
   }
 }
 

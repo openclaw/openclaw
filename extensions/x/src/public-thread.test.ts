@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { createXApiClient, type XPage, type XPost } from "./api.js";
+import type { XPage, XPost } from "./api.js";
 import { verifyPublicXThread } from "./public-thread.js";
+import { createXTestApi as createXApiClient } from "./test-support/api-client.js";
 import { createXTestSpend } from "./test-support/spend.js";
 
 const post: XPost = { id: "1", author_id: "2", conversation_id: "1", text: "Public request" };

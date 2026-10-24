@@ -7,131 +7,67 @@ import {
 } from "./execution-environment.js";
 
 const input = { sessionId: "policy-session", provider: "fixture", modelId: "fixture-model" };
+type PolicyParams = Partial<Parameters<typeof preparePluginHarnessToolPolicies>[0]>;
+const prepare = (params: PolicyParams = {}) =>
+  preparePluginHarnessToolPolicies({ ...input, ...params, preparedSessionEntry: null });
+const trusted = { version: 1, mode: "trusted" } as const;
+const denyExec = { tools: { deny: ["exec"] } };
+const grant = { pluginId: "fixture", toolNames: ["fixture_lookup"] };
+const scheduled = (toolsAllow: string[], overrides: PolicyParams = {}): PolicyParams => ({
+  toolsAllow,
+  scheduledToolPolicy: trusted,
+  ...overrides,
+});
+const intersection = attachToolAllowlistIntersection(["*"], [["*"], ["read"]]);
+const coding = { tools: { profile: "coding" as const } };
+const account: PolicyParams = {
+  config: denyExec,
+  toolsAllow: ["*"],
+  scheduledToolPolicy: {
+    version: 1,
+    mode: "account",
+    ownerSessionKey: "agent:main:main",
+    ownerAccountId: "default",
+    ownerOrigin: { kind: "local" },
+  },
+};
+const sender: PolicyParams = {
+  config: { tools: { toolsBySender: { "*": { deny: ["exec"] } } } },
+  messageProvider: "webchat",
+  senderIsOwner: false,
+};
 
 describe("native harness tool policy", () => {
   it.each([
-    {
-      name: "conversation deny",
-      params: { config: { tools: { deny: ["exec"] } } },
-      scope: "conversation",
-      restricted: true,
+    ["conversation deny", { config: denyExec }, "conversation", true],
+    ["request allowlist", { toolsAllow: ["read"] }, "turn", true],
+    ["wildcard intersection", { toolsAllow: intersection }, "turn", true],
+    ["scheduled wildcard", scheduled(["*"]), "conversation", false],
+    ["scheduled finite", scheduled(["read"]), "turn", true],
+    ["scheduled deny", scheduled(["*"], { config: denyExec }), "conversation", true],
+    ["scheduled profile", scheduled(["*"], { config: coding }), "conversation", false],
+    ["account scheduled deny", account, "turn", true],
+    ["disabled tools despite wildcard", { disableTools: true, toolsAllow: ["*"] }, "turn", true],
+    ["run-owned plugin grant", { runtimePluginToolGrant: grant }, "turn", false],
+    ["unrestricted request allowlist", { toolsAllow: ["*"] }, "conversation", false],
+    ["scheduled grant", scheduled(["*"], { runtimePluginToolGrant: grant }), "turn", false],
+    ["sender deny", sender, "turn", true],
+  ] satisfies Array<[string, PolicyParams, "conversation" | "turn", boolean]>)(
+    "separates lifetime from restriction for %s",
+    async (_name, params, scope, restricted) => {
+      expect(await prepare(params)).toMatchObject({
+        toolPolicyScope: scope,
+        toolPolicyRestricted: restricted,
+      });
     },
-    {
-      name: "request allowlist",
-      params: { toolsAllow: ["read"] },
-      scope: "turn",
-      restricted: true,
-    },
-    {
-      name: "wildcard with a restrictive intersection",
-      params: { toolsAllow: attachToolAllowlistIntersection(["*"], [["*"], ["read"]]) },
-      scope: "turn",
-      restricted: true,
-    },
-    {
-      name: "unrestricted scheduled policy",
-      params: { toolsAllow: ["*"], scheduledToolPolicy: { version: 1, mode: "trusted" } },
-      scope: "conversation",
-      restricted: false,
-    },
-    {
-      name: "finite scheduled policy",
-      params: { toolsAllow: ["read"], scheduledToolPolicy: { version: 1, mode: "trusted" } },
-      scope: "turn",
-      restricted: true,
-    },
-    {
-      name: "unrestricted scheduled policy with conversation deny",
-      params: {
-        config: { tools: { deny: ["exec"] } },
-        toolsAllow: ["*"],
-        scheduledToolPolicy: { version: 1, mode: "trusted" },
-      },
-      scope: "conversation",
-      restricted: true,
-    },
-    {
-      name: "unrestricted scheduled policy with conversation profile",
-      params: {
-        config: { tools: { profile: "coding" } },
-        toolsAllow: ["*"],
-        scheduledToolPolicy: { version: 1, mode: "trusted" },
-      },
-      scope: "conversation",
-      restricted: false,
-    },
-    {
-      name: "account-scoped scheduled policy with conversation deny",
-      params: {
-        config: { tools: { deny: ["exec"] } },
-        toolsAllow: ["*"],
-        scheduledToolPolicy: {
-          version: 1,
-          mode: "account",
-          ownerSessionKey: "agent:main:main",
-          ownerAccountId: "default",
-          ownerOrigin: { kind: "local" },
-        },
-      },
-      scope: "turn",
-      restricted: true,
-    },
-    {
-      name: "disabled tools despite wildcard",
-      params: { disableTools: true, toolsAllow: ["*"] },
-      scope: "turn",
-      restricted: true,
-    },
-    {
-      name: "run-owned plugin grant",
-      params: { runtimePluginToolGrant: { pluginId: "fixture", toolNames: ["fixture_lookup"] } },
-      scope: "turn",
-      restricted: false,
-    },
-    {
-      name: "unrestricted request allowlist",
-      params: { toolsAllow: ["*"] },
-      scope: "conversation",
-      restricted: false,
-    },
-    {
-      name: "scheduled additive grant",
-      params: {
-        toolsAllow: ["*"],
-        scheduledToolPolicy: { version: 1, mode: "trusted" },
-        runtimePluginToolGrant: { pluginId: "fixture", toolNames: ["fixture_lookup"] },
-      },
-      scope: "turn",
-      restricted: false,
-    },
-    {
-      name: "sender deny",
-      params: {
-        config: { tools: { toolsBySender: { "*": { deny: ["exec"] } } } },
-        messageProvider: "webchat",
-        senderIsOwner: false,
-      },
-      scope: "turn",
-      restricted: true,
-    },
-  ] satisfies Array<{
-    name: string;
-    params: Partial<Parameters<typeof preparePluginHarnessToolPolicies>[0]>;
-    scope: "conversation" | "turn";
-    restricted: boolean;
-  }>)("separates lifetime from restriction for $name", async ({ params, scope, restricted }) => {
-    expect(
-      await preparePluginHarnessToolPolicies({ ...input, ...params, preparedSessionEntry: null }),
-    ).toMatchObject({ toolPolicyScope: scope, toolPolicyRestricted: restricted });
-  });
+  );
 
   it.each([true, false])(
     "uses the current delegated grant lifetime (active: %s)",
     async (active) => {
       const requester = "agent:front:main";
       const child = "agent:worker:dashboard:task";
-      const policies = await preparePluginHarnessToolPolicies({
-        ...input,
+      const policies = await prepare({
         config: {
           agents: {
             entries: {
@@ -144,7 +80,6 @@ describe("native harness tool policy", () => {
         },
         agentId: "worker",
         sessionKey: child,
-        preparedSessionEntry: null,
         preparedSessionCapabilityEntry: {
           sessionKey: child,
           entry: {

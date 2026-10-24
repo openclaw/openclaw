@@ -42,6 +42,19 @@ const fail = (message: string): never => {
 };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+function workerEnv(root: string): NodeJS.ProcessEnv {
+  return {
+    PATH: process.env.PATH,
+    SystemRoot: process.env.SystemRoot,
+    WINDIR: process.env.WINDIR,
+    HOME: root,
+    USERPROFILE: root,
+    TMPDIR: root,
+    TMP: root,
+    TEMP: root,
+  };
+}
+
 describe("worker deploy build plugin", () => {
   it("tracks the pinned fs-safe manifest and lock before relocation", () => {
     expect(resolveWorkerDeployGeneratorInputs()).toEqual(
@@ -285,15 +298,8 @@ try {
           path.join(relocated, "worker.mjs"),
         ],
         {
-          PATH: process.env.PATH,
-          SystemRoot: process.env.SystemRoot,
-          WINDIR: process.env.WINDIR,
-          HOME: root,
-          USERPROFILE: root,
+          ...workerEnv(root),
           OPENCLAW_STATE_DIR: path.join(root, "state"),
-          TMPDIR: root,
-          TMP: root,
-          TEMP: root,
         },
         30_000,
         { cwd: root },
@@ -383,15 +389,8 @@ console.log("relocated exec authorization persisted");
                 path.join(relocated, "worker.mjs"),
               ],
               {
-                PATH: process.env.PATH,
-                SystemRoot: process.env.SystemRoot,
-                WINDIR: process.env.WINDIR,
-                HOME: root,
-                USERPROFILE: root,
+                ...workerEnv(root),
                 OPENCLAW_STATE_DIR: path.join(root, "state"),
-                TMPDIR: root,
-                TMP: root,
-                TEMP: root,
               },
               30_000,
               { cwd: root, signal },
@@ -589,14 +588,7 @@ console.log("relocated worker facade activation follows the shared config snapsh
                 path.join(relocated, "worker.mjs"),
               ],
               {
-                PATH: process.env.PATH,
-                SystemRoot: process.env.SystemRoot,
-                WINDIR: process.env.WINDIR,
-                HOME: root,
-                USERPROFILE: root,
-                TMPDIR: root,
-                TMP: root,
-                TEMP: root,
+                ...workerEnv(root),
                 OPENCLAW_HOME: root,
                 OPENCLAW_STATE_DIR: path.join(root, "state"),
                 OPENCLAW_CONFIG_PATH: path.join(root, "missing-config.json"),
@@ -749,16 +741,7 @@ console.log("relocated computer observations, image operations, and file reads a
         {
           cwd: relocated,
           timeout: 30_000,
-          env: {
-            PATH: process.env.PATH,
-            SystemRoot: process.env.SystemRoot,
-            WINDIR: process.env.WINDIR,
-            HOME: root,
-            USERPROFILE: root,
-            TMPDIR: root,
-            TMP: root,
-            TEMP: root,
-          },
+          env: workerEnv(root),
         },
       );
       expect(result.stdout).toContain(
@@ -829,16 +812,7 @@ console.log("portable worker highlighting and shell analysis passed");
         {
           cwd: root,
           timeout: 30_000,
-          env: {
-            PATH: process.env.PATH,
-            SystemRoot: process.env.SystemRoot,
-            WINDIR: process.env.WINDIR,
-            HOME: root,
-            USERPROFILE: root,
-            TMPDIR: root,
-            TMP: root,
-            TEMP: root,
-          },
+          env: workerEnv(root),
         },
       );
       expect(result.stdout.trim()).toBe("portable worker highlighting and shell analysis passed");
@@ -920,16 +894,7 @@ console.log("relocated worker WebSocket and transcription passed");
             path.join(relocated, "worker/worker.mjs"),
             `ws://127.0.0.1:${address.port}`,
           ],
-          {
-            PATH: process.env.PATH,
-            SystemRoot: process.env.SystemRoot,
-            WINDIR: process.env.WINDIR,
-            HOME: root,
-            USERPROFILE: root,
-            TMPDIR: root,
-            TMP: root,
-            TEMP: root,
-          },
+          workerEnv(root),
           30_000,
           { cwd: relocated },
         );

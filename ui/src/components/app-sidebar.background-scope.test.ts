@@ -6,16 +6,12 @@ import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { createConnectionBootstrapCoordinator } from "../app/connection-bootstrap.ts";
 import { createSessionCapability } from "../lib/sessions/index.ts";
-import {
-  createTestSessionCapability,
-  sessionsResult,
-} from "../lib/sessions/session-capability.test-support.ts";
+import { sessionsResult } from "../lib/sessions/session-capability.test-support.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import {
   createContext,
   createGatewayHarness,
   createSidebarElement,
-  mountSidebar,
   TWO_AGENTS,
 } from "../test-helpers/app-sidebar.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
@@ -29,20 +25,29 @@ import {
 } from "../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
+import { childToggle, mountRoster } from "./app-sidebar-freshness.test-support.ts";
 import {
   storeSidebarSessionOwnerFilter,
   storeSidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import "./app-sidebar.tsx";
 
-async function mountSessionRoster(request: GatewayRequestHandler) {
-  const gateway = createGatewayHarness(createTestGatewayClient(request));
-  const sessions = createTestSessionCapability(gateway.gateway);
-  await sessions.refresh({ agentId: "main", force: true });
-  return {
-    ...(await mountSidebar(gateway.gateway, sessions, "panel", TWO_AGENTS)),
-    sessions,
+type Query = NonNullable<ReturnType<typeof asOptionalRecord>>;
+function mountSessionRoster(
+  list: (params: Query) => unknown,
+  describeSession?: (params: Query) => unknown,
+) {
+  const request: GatewayRequestHandler = async (method, raw) => {
+    const params = asOptionalRecord(raw) ?? {};
+    if (method === "sessions.list") {
+      return list(params);
+    }
+    if (method === "sessions.describe") {
+      return describeSession?.(params) ?? {};
+    }
+    return method === "sessions.subscribe" ? { subscribed: true } : {};
   };
+  return mountRoster(request, TWO_AGENTS);
 }
 
 describe("AppSidebar automatic list scope replacement", () => {
@@ -57,21 +62,12 @@ describe("AppSidebar automatic list scope replacement", () => {
     };
     const response = sessionsResult([row], 1);
     const pending = deferred<ReturnType<typeof sessionsResult>>();
-    const { sidebar, context, provider, sessions } = await mountSessionRoster(
-      async (method, raw) => {
-        const params = asOptionalRecord(raw);
-        if (method === "sessions.subscribe") {
-          return { subscribed: true };
-        }
-        if (method !== "sessions.list") {
-          return {};
-        }
-        return params?.archived === true
-          ? pending.promise
-          : params?.archived === "all"
-            ? response
-            : sessionsResult([], 0);
-      },
+    const { sidebar, context, provider, sessions } = await mountSessionRoster((params) =>
+      params.archived === true
+        ? pending.promise
+        : params.archived === "all"
+          ? response
+          : sessionsResult([], 0),
     );
     let unsubscribe: (() => void) | undefined;
     try {
@@ -120,23 +116,15 @@ describe("AppSidebar automatic list scope replacement", () => {
   });
 
   it("discovers current child parents after background work was queued", async () => {
-    const previousParent: GatewaySessionRow = {
-      key: "agent:main:previous-parent",
+    const makeParent = (name: string, childName: string, label?: string): GatewaySessionRow => ({
+      key: `agent:main:${name}`,
       kind: "direct",
-      label: "Previous parent",
-      childSessions: ["agent:main:previous-child"],
-    };
-    const nextParent: GatewaySessionRow = {
-      key: "agent:main:next-parent",
-      kind: "direct",
-      label: "Next parent",
-      childSessions: ["agent:main:next-child"],
-    };
-    const mainParent: GatewaySessionRow = {
-      key: "agent:main:main",
-      kind: "direct",
-      childSessions: ["agent:main:main-child"],
-    };
+      label,
+      childSessions: [`agent:main:${childName}`],
+    });
+    const previousParent = makeParent("previous-parent", "previous-child", "Previous parent");
+    const nextParent = makeParent("next-parent", "next-child", "Next parent");
+    const mainParent = makeParent("main", "main-child");
     const children: GatewaySessionRow[] = [previousParent, nextParent, mainParent].map(
       (parent) => ({
         key: parent.childSessions![0]!,
@@ -148,20 +136,8 @@ describe("AppSidebar automatic list scope replacement", () => {
     let roots = [previousParent];
     const parents: unknown[] = [];
     const { sidebar, context, provider, sessions } = await mountSessionRoster(
-      async (method, raw) => {
-        const params = asOptionalRecord(raw);
-        if (method === "sessions.subscribe") {
-          return { subscribed: true };
-        }
-        if (method === "sessions.describe") {
-          return {
-            session: [...roots, ...children].find((row) => row.key === params?.key) ?? null,
-          };
-        }
-        if (method !== "sessions.list") {
-          return {};
-        }
-        if (params?.spawnedBy) {
+      (params) => {
+        if (params.spawnedBy) {
           parents.push(params.spawnedBy);
           return sessionsResult(
             children.filter((row) => row.spawnedBy === params.spawnedBy),
@@ -170,6 +146,7 @@ describe("AppSidebar automatic list scope replacement", () => {
         }
         return sessionsResult(roots, 1);
       },
+      ({ key }) => ({ session: [...roots, ...children].find((row) => row.key === key) ?? null }),
     );
     try {
       context.connectionBootstrap.setForegroundRoute(undefined);
@@ -183,11 +160,7 @@ describe("AppSidebar automatic list scope replacement", () => {
       await sessions.refresh({ agentId: "main", force: true });
       await settleLitElement(sidebar);
       expect(parents).toEqual([]);
-      expect(
-        sidebar
-          .querySelector(`[data-child-session-toggle="${previousParent.key}"]`)
-          ?.getAttribute("aria-expanded"),
-      ).toBe("false");
+      expect(childToggle(sidebar, previousParent.key)?.getAttribute("aria-expanded")).toBe("false");
 
       context.connectionBootstrap.setForegroundRoute(null);
       await waitForFast(() =>
@@ -199,9 +172,7 @@ describe("AppSidebar automatic list scope replacement", () => {
       expect(sidebar.sessionData.childSessionRowsByParent[mainParent.key]?.[0]?.key).toBe(
         mainParent.childSessions![0],
       );
-      const expand = sidebar.querySelector<HTMLButtonElement>(
-        `[data-child-session-toggle="${nextParent.key}"]`,
-      );
+      const expand = childToggle(sidebar, nextParent.key);
       // The newly discovered child reveals its parent after the background queue drains.
       expect(expand?.getAttribute("aria-expanded")).toBe("true");
       expect(sidebar.textContent).toContain(`${nextParent.key} child`);
@@ -225,25 +196,16 @@ describe("AppSidebar automatic list scope replacement", () => {
           [{ key: `agent:${agentId}:archived`, kind: "direct", archived: true, label }],
           1,
         );
-      const { sidebar, context, provider, sessions } = await mountSessionRoster(
-        async (method, raw) => {
-          const params = asOptionalRecord(raw);
-          if (method === "sessions.subscribe") {
-            return { subscribed: true };
-          }
-          if (method !== "sessions.list") {
-            return {};
-          }
-          if (params?.archived !== true) {
-            return sessionsResult([], 0);
-          }
-          targets.push(params.agentId);
-          if (params.agentId === "research") {
-            return previous.promise;
-          }
-          return archived("main", `Main archived ${++mainReads}`);
-        },
-      );
+      const { sidebar, context, provider, sessions } = await mountSessionRoster((params) => {
+        if (params.archived !== true) {
+          return sessionsResult([], 0);
+        }
+        targets.push(params.agentId);
+        if (params.agentId === "research") {
+          return previous.promise;
+        }
+        return archived("main", `Main archived ${++mainReads}`);
+      });
       try {
         sidebar.connected = true;
         await settleLitElement(sidebar);
@@ -310,18 +272,8 @@ describe("AppSidebar automatic list scope replacement", () => {
       const parents: unknown[] = [];
       let primaryReads = 0;
       const { sidebar, context, provider, sessions } = await mountSessionRoster(
-        async (method, raw) => {
-          const params = asOptionalRecord(raw);
-          if (method === "sessions.subscribe") {
-            return { subscribed: true };
-          }
-          if (method === "sessions.describe") {
-            return { session: rows.find((row) => row.key === params?.key) ?? null };
-          }
-          if (method !== "sessions.list") {
-            return {};
-          }
-          if (params?.spawnedBy) {
+        (params) => {
+          if (params.spawnedBy) {
             parents.push(params.spawnedBy);
             return params.spawnedBy === mainParent
               ? previous.promise
@@ -340,6 +292,7 @@ describe("AppSidebar automatic list scope replacement", () => {
             1,
           );
         },
+        ({ key }) => ({ session: rows.find((row) => row.key === key) ?? null }),
       );
       try {
         sidebar.activeRouteId = "chat";
@@ -370,9 +323,7 @@ describe("AppSidebar automatic list scope replacement", () => {
           expect(sidebar.textContent).not.toContain("Stale Main child");
         }
         expect(parents).toEqual([mainParent, researchParent]);
-        const expand = sidebar.querySelector<HTMLButtonElement>(
-          `[data-child-session-toggle="${researchParent}"]`,
-        );
+        const expand = childToggle(sidebar, researchParent);
         expect(expand).not.toBeNull();
         // Only the cross-agent roster discovers a new child after the initial baseline.
         expect(expand?.getAttribute("aria-expanded")).toBe(nextAgent === "main" ? "false" : "true");
@@ -427,17 +378,13 @@ describe("AppSidebar initial managed-list hydration", () => {
       [{ key: "agent:main:primary", kind: "direct", label: "Canonical session" }],
       1,
     );
-    const filteredResult = sessionsResult(
-      [
-        {
-          key: "agent:main:mine",
-          kind: "direct",
-          label: "My session",
-          owner: { actor: { type: "human", id: "synthetic-operator" } },
-        },
-      ],
-      1,
-    );
+    const ownRow = (label: string): GatewaySessionRow => ({
+      key: "agent:main:mine",
+      kind: "direct",
+      label,
+      owner: { actor: { type: "human", id: "synthetic-operator" } },
+    });
+    const filteredResult = sessionsResult([ownRow("My session")], 1);
     const emptyGroups = { names: [], groups: [], sectionOrder: [] };
     const gateway = createGatewayHarness(
       createTestGatewayClient(async (method, raw) => {
@@ -460,17 +407,7 @@ describe("AppSidebar initial managed-list hydration", () => {
         if (matchesFilter(params)) {
           order.push("filtered:start");
           if (invalidate && listQueries.filter(matchesFilter).length > 1) {
-            return sessionsResult(
-              [
-                {
-                  key: "agent:main:mine",
-                  kind: "direct",
-                  label: "Updated session",
-                  owner: { actor: { type: "human", id: "synthetic-operator" } },
-                },
-              ],
-              2,
-            );
+            return sessionsResult([ownRow("Updated session")], 2);
           }
           return filtered.promise;
         }

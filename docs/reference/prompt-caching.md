@@ -4,7 +4,7 @@ title: "Prompt caching"
 read_when:
   - You want to reduce prompt token costs with cache retention
   - You need per-agent cache behavior in multi-agent setups
-  - You are tuning heartbeat and cache-ttl pruning together
+  - You are tuning automation cadence and cache-ttl pruning together
 ---
 
 Prompt caching lets a model provider reuse an unchanged prompt prefix (system/developer instructions, tool definitions, other stable context) across turns instead of reprocessing it every request. This cuts token cost and latency on long-running sessions with repeated context.
@@ -41,8 +41,11 @@ necessarily delete the provider's older cache entry before its normal expiry.
 
 ## Stable tools between turns
 
-WebChat keeps the `message` reaction description and schema stable between runs
-in the same conversation, including runs without a current-prompt reaction grant.
+The `message` description and schema use the session's channel, bound account,
+and configured bindings, not the current turn's source. CLI, restart recovery, and subagent
+announcement turns in the same conversation keep identical definitions,
+including turns without a current-prompt reaction grant. Scheduled sessions retain
+their creator's account scope; sessions without a bound account use the configured default.
 Code Mode keeps its `exec` and `wait` schemas stable when the enabled catalog
 changes. Its current callable index and capability guidance follow the stable
 prompt prefix; supported in-history prompt updates append changes to the
@@ -70,10 +73,11 @@ identity when available. Retiring earlier history therefore preserves the IDs of
 retained failed-turn markers. Error diagnostics remain transcript metadata and do
 not enter the provider request.
 
-Internal browser conversations reuse their opaque session cache key for private
-subagent completions, so the completion does not switch to a different affinity
-key between chat turns. The key remains scoped to the agent, provider, model,
-and conversation and does not expose the conversation identifier.
+OpenAI requests use the session ID and the authoritative transcript's reset and
+compaction boundary count as their cache key unless the caller supplies an
+explicit key. Operator, WebChat, private subagent completion, requester-settle,
+and recovery turns share this session-boundary identity. The current client and
+reply delivery route do not select a different cache key.
 
 ## Primary knobs
 
@@ -136,16 +140,25 @@ agents:
 
 See [Session pruning](/concepts/session-pruning) for full behavior.
 
-### Heartbeat keep-warm
+<a id="heartbeat-keep-warm" />
 
-Heartbeat can keep cache windows warm and reduce repeated cache writes after idle gaps. Configurable globally (`agents.defaults.heartbeat`) or per agent (`agents.entries.*.heartbeat`).
+### Scheduled cache reuse
 
-```yaml
-agents:
-  defaults:
-    heartbeat:
-      every: "55m"
+An ordinary agent-turn automation that uses the same persistent session can keep
+eligible cache prefixes warm between useful checks. An isolated job starts a new
+session each time, so it does not keep another conversation's history warm.
+For an existing persistent-session check using one-hour cache retention, adjust
+its stored schedule rather than adding heartbeat config:
+
+```bash
+openclaw automations edit <job-id> --every 55m
 ```
+
+Each run still costs tokens, and active hours or idle-only admission can delay
+it beyond the cache window. Choose a cadence for useful work and compare total
+usage; a periodic request does not guarantee a cache hit. See
+[Automations](/automation/cron-jobs) and
+[Heartbeat migration](/gateway/heartbeat).
 
 ## Provider behavior
 
@@ -403,8 +416,6 @@ agents:
   list:
     - id: "research"
       default: true
-      heartbeat:
-        every: "55m"
     - id: "alerts"
       params:
         cacheRetention: "none"
@@ -414,7 +425,7 @@ agents:
 
 - Set baseline `cacheRetention: "short"`.
 - Enable `contextPruning.mode: "cache-ttl"`.
-- Keep heartbeat below your TTL only for agents that benefit from warm caches.
+- Keep a useful persistent-session automation’s cadence below the cache TTL only when the measured savings outweigh the extra turns.
 
 ## Live regression tests
 
@@ -513,7 +524,7 @@ For encoded provider requests, `providerPrefix` compares the serialized instruct
 
 A `continuation:` prefix means either request used `previous_response_id`. Its `wire-input` items are deltas, so differences between them do not establish rewritten conversation history. Compare the separate `historyRewrite` signal and the changed request parameters before attributing a cache miss. A matching full-history wire prefix also does not guarantee a hit: OpenAI must find an available matching cache boundary.
 
-OpenClaw also checks that each converted request history extends the previous request in the same session. An undeclared edit, removal, or reorder records `historyRewrite` and warns once for the session. Internal `__openclaw` envelope metadata, such as persisted Code Mode checkpoints, is excluded from history fingerprints because it is not sent in provider messages. The diagnostic names bounded changed fields (such as `timestamp`, `toolCallId`, or `content[0]`) without logging their values; fields outside the diagnostic limit are grouped. Set `OPENCLAW_PROMPT_CACHE_ASSERT=1` to throw at the first differing message during development or tests. Compaction, pruning, and transient runtime-context removal declare their rewrites as `compaction`, `pruning`, and `runtimeContextCarrier`; model, transport, or retention changes start a new history series. Image blocks and attachment references remain in retained history instead of being replaced by age-based cleanup markers. Content-block fingerprints reuse hashes only while every primitive property still matches; unchanged large text and image data are not hashed again. Sealed transcript publications reuse whole message fingerprints; new sealed messages are prepared by the shared prompt worker before dispatch. Mutable SDK messages and rebuilt wrappers remain checked on every observation, so in-place edits are still detected. String-content hashes live with the bounded history baseline. Published tool schemas reuse their owner’s fingerprint across descriptor generations; other provider-owned declarations are fingerprinted once per object identity.
+OpenClaw also checks that each converted request history extends the previous request in the same session. An undeclared edit, removal, or reorder records `historyRewrite` and warns once for the session. Internal `__openclaw` envelope metadata, such as persisted Code Mode checkpoints, and the persisted `display` visibility flag are excluded from history fingerprints because they are not sent in provider messages. The diagnostic names bounded changed fields (such as `timestamp`, `toolCallId`, or `content[0]`) without logging their values; fields outside the diagnostic limit are grouped. Set `OPENCLAW_PROMPT_CACHE_ASSERT=1` to throw at the first differing message during development or tests. Compaction, pruning, and transient runtime-context removal declare their rewrites as `compaction`, `pruning`, and `runtimeContextCarrier`; model, transport, or retention changes start a new history series. Image blocks and attachment references remain in retained history instead of being replaced by age-based cleanup markers. Content-block fingerprints reuse hashes only while every primitive property still matches; unchanged large text and image data are not hashed again. Sealed transcript publications reuse whole message fingerprints; new sealed messages are prepared by the shared prompt worker before dispatch. Newly appended messages also reuse block fingerprints when their content array is transcript-owned and deeply frozen, while their mutable envelope remains checked. Mutable SDK content and rebuilt wrappers remain checked on every observation, so in-place edits are still detected. String-content hashes live with the bounded history baseline. Published tool schemas reuse their owner’s fingerprint across descriptor generations; other provider-owned declarations are fingerprinted once per object identity.
 
 - Cache trace events are JSONL with staged snapshots like `session:loaded`, `prompt:before`, `stream:context`, and `session:after`.
 - Per-turn cache token impact is visible in normal usage surfaces: `cacheRead` and `cacheWrite` show up in `/usage tokens`, `/status`, session usage summaries, and custom `messages.usageTemplate` layouts.

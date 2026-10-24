@@ -51,7 +51,6 @@ export type RunCliAgentParams = Pick<
   | "conversationToolPolicy"
   | "trustedInternalHandoff"
   | "trigger"
-  | "continuesConversation"
   | "finalizePromptForResolvedTools"
   | "currentInboundContext"
   | "runtimeContextFragments"
@@ -64,6 +63,7 @@ export type RunCliAgentParams = Pick<
   | "bashElevated"
   | "toolsAllow"
   | "skillLibraryAuthoring"
+  | "disableTrajectory"
 > & {
   preparedTtsPreferences?: import("../../tts/tts-preferences.js").PreparedTtsPreferences;
   /** Core lifecycle owner; never forwarded to the plugin execution context. */
@@ -266,4 +266,11 @@ export type PreparedCliRunContext = {
   resultContentSourceByToolName?: ReadonlyMap<string, ToolResultContentSource>;
   cwdHash?: string;
   mcpDeliveryCapture?: true;
+  /**
+   * Runtime trajectory for this prepared CLI turn. Absent when capture is
+   * disabled or this run is intentionally excluded.
+   */
+  trajectoryRecorder?: {
+    recordEvent: (type: string, data?: Record<string, unknown>) => void;
+  } | null;
 };

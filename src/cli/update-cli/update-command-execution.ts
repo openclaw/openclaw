@@ -31,10 +31,7 @@ import {
 } from "./update-command-database-context.js";
 import { settleMutableUpdateResult } from "./update-command-execution-settlement.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
-import {
-  admitSourceUpdateArtifacts,
-  recordInspectedGitTarget,
-} from "./update-command-git-admission.js";
+import { admitSourceUpdateArtifacts } from "./update-command-git-admission.js";
 import { updateGitInstall } from "./update-command-git.js";
 import {
   formatUpdateAncestryBlockMessage,
@@ -618,7 +615,12 @@ export async function executeMutableUpdate(
             target.postgresFamilies,
           );
           retentionInstallTarget = installTarget;
-          await recordInspectedGitTarget(target, recordPhase, waitForCurrent);
+          await waitForCurrent();
+          await recordPhase("staging", {
+            target: { kind: "git", sha: target.sha, version: target.version },
+          });
+          await waitForCurrent();
+          assertReadableGitMetadata(target.metadataUnreadable);
           assertExecutionCurrent();
           admittedTargetSchemaVersions = target.schemaVersions;
           if (!gitContextPrepared && !deferredFamilyPreparation) {

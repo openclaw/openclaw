@@ -87,6 +87,7 @@ it.each(["exact tool cap", "invalid schema", "manifest alias"])(
     try {
       await startAndAddToolNotes(harness.observer);
       await vi.advanceTimersByTimeAsync(24_000);
+      await flushObserver();
       expect(notices).toMatchObject([
         {
           runId: "run-1",
@@ -107,6 +108,7 @@ it.each(["exact tool cap", "invalid schema", "manifest alias"])(
         event({ stream: "tool", data: { phase: "start", name: "read", args: { path: "more" } } }),
       );
       await vi.advanceTimersByTimeAsync(60_000);
+      await flushObserver();
       expect(prepareModel.mock.calls.length + completeModel.mock.calls.length).toBe(callsAtDisable);
       expect(notices).toHaveLength(1);
 
@@ -116,6 +118,7 @@ it.each(["exact tool cap", "invalid schema", "manifest alias"])(
       );
       await startAndAddToolNotes(harness.observer, { runId: "run-2" });
       await vi.advanceTimersByTimeAsync(12_000);
+      await flushObserver();
       expect(harness.broadcastToConnIds).toHaveBeenCalledWith(
         "session.observer",
         expect.objectContaining({ runId: "run-2", headline: "Working" }),
@@ -192,6 +195,7 @@ it("publishes a digest from a utility model that answers after 15s", async () =>
   await startAndAddToolNotes(harness.observer);
 
   await vi.advanceTimersByTimeAsync(12_000);
+  await flushObserver();
   expect(completeModel).toHaveBeenCalledOnce();
   await vi.advanceTimersByTimeAsync(15_000);
   await flushObserver();
@@ -213,14 +217,19 @@ it("aborts stuck completions at the cap and disables the run after two failures"
   const harness = createHarness({ completeModel });
   await startAndAddToolNotes(harness.observer);
   await vi.advanceTimersByTimeAsync(12_000);
+  await flushObserver();
   await vi.advanceTimersByTimeAsync(29_999);
+  await flushObserver();
   expect(signal(0)?.aborted).toBe(false);
   await vi.advanceTimersByTimeAsync(1);
+  await flushObserver();
   expect(signal(0)?.aborted).toBe(true);
   expect(completeModel).toHaveBeenCalledTimes(2);
   await vi.advanceTimersByTimeAsync(30_000);
+  await flushObserver();
   expect(signal(1)?.aborted).toBe(true);
   await vi.advanceTimersByTimeAsync(60_000);
+  await flushObserver();
   expect(completeModel).toHaveBeenCalledTimes(2);
   expect(harness.broadcastToConnIds).not.toHaveBeenCalled();
   await harness.observer.disposeAsync();

@@ -166,6 +166,16 @@ describe("vLLM streaming", () => {
     );
   });
 
+  it.each([
+    { kind: "array", template: ["invalid"] },
+    { kind: "scalar", template: false },
+  ])("replaces $kind template kwargs with model defaults", ({ template }) => {
+    expectTemplate(
+      { thinkingLevel: "off", initialPayload: { chat_template_kwargs: template } },
+      { enable_thinking: false, force_nonempty_content: true },
+    );
+  });
+
   it("composes Qwen thinking with runtime Nemotron payload defaults", () => {
     expectTemplate(
       {

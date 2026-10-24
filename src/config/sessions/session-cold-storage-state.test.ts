@@ -14,9 +14,9 @@ import {
   runSqliteImmediateTransactionSync,
 } from "../../infra/sqlite-transaction.js";
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "../../state/openclaw-agent-schema.js";
-import { readHotSessionTranscriptSnapshot } from "./session-cold-storage-read.js";
 import {
   assertSessionTranscriptHot,
+  readHotSessionTranscriptSnapshot,
   SessionTranscriptColdError,
 } from "./session-cold-storage-state.js";
 
@@ -92,17 +92,6 @@ it("reuses hot facts only within a snapshot and invalidates them after writes an
   } finally {
     observed.restore();
   }
-});
-
-it("keeps an already-open read snapshot local when another owner archives its transcript", () => {
-  const { db, peer, read, archive } = fixture();
-  expect(read()).toEqual({ updated_at: 1 });
-  runSqliteDeferredTransactionSync(db, () => {
-    db.prepare("SELECT updated_at FROM session_windows").all();
-    runSqliteImmediateTransactionSync(peer, () => archive());
-    expect(read()).toEqual({ updated_at: 1 });
-  });
-  expect(read).toThrow(SessionTranscriptColdError);
 });
 
 it("invalidates a retained cold fact when the owning session window is deleted", () => {

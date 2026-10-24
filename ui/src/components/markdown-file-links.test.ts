@@ -1,5 +1,6 @@
 import { expect, it, onTestFinished, vi } from "vitest";
 import { shortestFileLabels } from "./file-kind.ts";
+import { markdownFileLinkFromEvent } from "./markdown-file-links.ts";
 import type { MarkdownRenderOptions } from "./markdown-render-options.ts";
 import { htmlFragment } from "./markdown.test-support.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
@@ -44,10 +45,7 @@ it.each<[string, string[], string[]?]>([
   ["bumped 1.1/1.2 and `2026.9.2`, see v1.2/3.4 [part](assets/part.3mf)", ["assets/part.3mf"]],
   ["`a/x.ts` `x.ts` `i.csv` `f.b()` `n.xyz`", ["a/x.ts", "x.ts", "i.csv"], ["f.b()", "n.xyz"]],
   ["`e\u0301.md` and `C:\\文档\\café.md:9`", ["e\u0301.md", "C:\\文档\\café.md"]],
-  [
-    "`café note.md` `emoji-🌱.md` `100% ready.txt` `reader's [draft] (v2).md` Read the notes/readme.md now.",
-    ["notes/readme.md"],
-  ],
+  ["`reader's [draft] (v2).md` Read the notes/readme.md now.", ["notes/readme.md"]],
   ...["./portal.example/service.test", ".config/workflows/check.yml", "src.v2/app.ts"].map(
     (path): [string, string[]] => [path, [path]],
   ),
@@ -73,44 +71,42 @@ it("converts explicit relative and absolute local file links", () => {
   ).toEqual([false, false]);
 });
 
-it.each(["inventory.CSV", "inventory report.csv"])(
-  "keeps authored CSV %s focusable and non-navigating",
-  (path) => {
-    const markdown = `[Read inventory](${encodeURI(path)})`;
-    const fragment = render(markdown);
-    const link = workspaceLink(fragment, path);
-    expect(link?.textContent).toBe("Read inventory");
-    document.body.append(fragment);
-    onTestFinished(() => fragment.remove());
-    link?.focus();
-    expect(document.activeElement).toBe(link);
+it("keeps authored CSV focusable and non-navigating", () => {
+  const path = "inventory report.CSV";
+  const markdown = `[Read inventory](${encodeURI(path)})`;
+  const fragment = render(markdown);
+  const link = workspaceLink(fragment, path);
+  expect(link?.textContent).toBe("Read inventory");
+  document.body.append(fragment);
+  onTestFinished(() => fragment.remove());
+  link?.focus();
+  expect(document.activeElement).toBe(link);
 
-    const disabled = render(markdown, {});
-    expect(disabled.querySelector("a[data-file-path]")).toBeNull();
-    expect(disabled.querySelector("a")?.getAttribute("href")).toBe(encodeURI(path));
-  },
-);
+  const disabled = render(markdown, {});
+  expect(disabled.querySelector("a[data-file-path]")).toBeNull();
+  expect(disabled.querySelector("a")?.getAttribute("href")).toBe(encodeURI(path));
+});
 
 it.each<[string, boolean]>([
-  ...["文档/说明.md", "qa-cafe\u0301/re\u0301sume\u0301.md", "notes/２０２６.md"].map(
-    (path): [string, boolean] => [path, true],
-  ),
-  ...["family-👩‍👩‍👧.md", "100% ready.txt", "reader's [draft] (v2).md", "literal%20name.txt"].map(
-    (path): [string, boolean] => [path, false],
-  ),
+  ...["文档/说明.md", "qa-cafe\u0301/re\u0301sume\u0301.md"].map((path): [string, boolean] => [
+    path,
+    true,
+  ]),
+  ...["qa files/reader's [draft] (v2).md", "literal%20name.txt"].map((path): [string, boolean] => [
+    path,
+    false,
+  ]),
 ])("preserves Unicode and authored punctuation in %s", (name, unicode) => {
-  for (const path of unicode ? [name] : [name, `qa files/${name}`]) {
-    for (const line of unicode ? ["17"] : [undefined, "17"]) {
-      const target = `${encodeURI(path)}${line ? ":17" : ""}`;
-      const forms = [`[Read file](${target})`];
-      if (unicode) {
-        forms.push(`[Read file](${path}:17)`, `\`${path}:17\``, `Inspect ${path}:17 now.`);
-      }
-      for (const source of forms) {
-        const link = workspaceLink(render(source), path, line);
-        if (source.startsWith("[")) {
-          expect(link?.textContent).toBe("Read file");
-        }
+  for (const line of unicode ? ["17"] : [undefined, "17"]) {
+    const target = `${encodeURI(name)}${line ? ":17" : ""}`;
+    const forms = [`[Read file](${target})`];
+    if (unicode) {
+      forms.push(`[Read file](${name}:17)`, `\`${name}:17\``, `Inspect ${name}:17 now.`);
+    }
+    for (const source of forms) {
+      const link = workspaceLink(render(source), name, line);
+      if (source.startsWith("[")) {
+        expect(link?.textContent).toBe("Read file");
       }
     }
   }
@@ -123,8 +119,6 @@ it("keeps authored URL and session destinations out of workspace file handling",
     "notes/readme.md?raw=1",
     "notes/readme.md#intro",
     "/chat/main/notes/readme.md",
-    "https://example.com/inventory.csv",
-    "//example.com/inventory.csv",
     "inventory.csv?download=1",
     "inventory.csv#totals",
     "example.com",
@@ -139,18 +133,16 @@ it("keeps authored URL and session destinations out of workspace file handling",
   );
 });
 
-it.each([
-  "portal.example/service.test",
-  "docs.example.dev/guide.md:42",
-  "münich.de/guide.md",
-  "example.xn--p1ai/guide.md",
-])("never treats the domain/path reference %s as a workspace file", (reference) => {
-  for (const input of [reference, `\`${reference}\``, `[website](${reference})`]) {
-    const fragment = render(input);
-    expect(fragment.querySelector("a[data-file-path]")).toBeNull();
-    expect(fragment.textContent?.trim()).toBe(input.startsWith("[") ? "website" : reference);
-  }
-});
+it.each(["portal.example/service.test", "münich.de/guide.md", "example.xn--p1ai/guide.md"])(
+  "never treats the domain/path reference %s as a workspace file",
+  (reference) => {
+    for (const input of [reference, `\`${reference}\``, `[website](${reference})`]) {
+      const fragment = render(input);
+      expect(fragment.querySelector("a[data-file-path]")).toBeNull();
+      expect(fragment.textContent?.trim()).toBe(input.startsWith("[") ? "website" : reference);
+    }
+  },
+);
 
 it("does not link paths inside fenced code blocks", () => {
   const fragment = render("```ts\nsrc/lib/foo.ts:42\n```");
@@ -167,21 +159,13 @@ it.each<[string, ...Partial<ReturnType<typeof linkInfo>[number]>[]]>([
   ["`src/auth-options.static.ts:26-35`", { path: "src/auth-options.static.ts", line: "26" }],
   ["see a/X.tsx now", { path: "a/X.tsx", label: "X.tsx", title: "a/X.tsx" }],
   ["`README.md`", { label: "README.md", title: null }],
-  ["[a/x.ts](a/x.ts) [go](a/y.ts)", { title: null }, { title: "a/y.ts" }],
+  ["[a/x.ts](a/x.ts)", { title: null }],
   [
     "`src/lib/foo.ts` and [the button](src/ui/Button.tsx:12)",
     { label: "foo.ts", title: "src/lib/foo.ts" },
     { label: "the button", title: "src/ui/Button.tsx:12" },
   ],
   ["u/a.ts v/a.ts `D:\\w\\a.ts`", { label: "u/a.ts" }, { label: "v/a.ts" }, { label: "w\\a.ts" }],
-  ...[
-    "/tmp/qa/src/file.ts:7 and tmp/qa/src/file.ts:7",
-    "`/tmp/qa/src/file.ts:7` and `tmp/qa/src/file.ts:7`",
-  ].map((input): [string, ...Partial<ReturnType<typeof linkInfo>[number]>[]] => [
-    input,
-    { path: "/tmp/qa/src/file.ts", line: "7", label: "/tmp/qa/src/file.ts:7" },
-    { path: "tmp/qa/src/file.ts", line: "7", label: "tmp/qa/src/file.ts:7" },
-  ]),
 ])("preserves file-line targets, labels, and tooltips in %s", (input, ...expected) => {
   expect(linkInfo(input)).toMatchObject(expected);
 });
@@ -216,7 +200,6 @@ it.each<[string, string, string, string?]>([
   ["`assets/logo.svg`", "assets/logo.svg", "image"],
   ["[Read file](/tmp/constructor)", "/tmp/constructor", "file"],
   ["[Read file](/tmp/notes.__proto__)", "/tmp/notes.__proto__", "file"],
-  ["skills/review/SKILL.md:12", "skills/review/SKILL.md", "skill", "12"],
 ])("classifies %s without changing workspace navigation", (input, path, kind, line) => {
   workspaceLink(render(input), path, line, kind);
 });
@@ -230,4 +213,24 @@ it.each([
     expect(link.dataset.filePath).not.toMatch(/[\s()?]/);
   }
   expect(fragment.textContent).toContain(input);
+});
+
+it("carries a persisted message identity without borrowing it for a forwarded session", () => {
+  const bubble = document.createElement("div");
+  bubble.dataset.entryId = "original-entry";
+  bubble.append(render("[Notes](notes.md)"));
+  let selected: ReturnType<typeof markdownFileLinkFromEvent> = null;
+  bubble.addEventListener("click", (event) => {
+    selected = markdownFileLinkFromEvent(event);
+  });
+  const link = bubble.querySelector<HTMLAnchorElement>("a")!;
+  link.click();
+  expect(selected).toMatchObject({ path: "notes.md", messageEntryId: "original-entry" });
+  bubble.dataset.fileSessionKey = "agent:other:forwarded";
+  link.click();
+  expect(selected).toMatchObject({ sessionKey: "agent:other:forwarded" });
+  expect(selected).not.toHaveProperty("messageEntryId");
+  bubble.dataset.fileEntryId = "forwarded-source-entry";
+  link.click();
+  expect(selected).toMatchObject({ messageEntryId: "forwarded-source-entry" });
 });

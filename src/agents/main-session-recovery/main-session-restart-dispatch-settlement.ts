@@ -3,6 +3,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
 import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import { applySessionEntryReplacements } from "../../config/sessions/session-accessor.js";
+import {
+  GatewayOperatorRecoveryAuthorizationError,
+  GatewayOperatorRecoveryOwnershipError,
+} from "../../infra/restart-recovery-errors.js";
 import { buildMainSessionRecoverySettlementPatch } from "./main-session-recovery-clear.js";
 import type { MainSessionRecoveryReservation } from "./main-session-recovery-state.js";
 import {
@@ -10,6 +14,8 @@ import {
   type MainSessionRecoveryStoreTarget,
 } from "./main-session-recovery-store.js";
 import type { RestartRecoveryTerminalStatus } from "./main-session-restart-dispatch-start.js";
+import type { ResumeMainSessionParams } from "./main-session-restart-dispatch.types.js";
+import { finishDelegatedRestartRecovery } from "./main-session-restart-recovery-failure.js";
 
 export async function rollbackRestartRecoveryReservation(
   params: MainSessionRecoveryStoreTarget & {
@@ -22,6 +28,50 @@ export async function rollbackRestartRecoveryReservation(
     requireWriteSuccess: true,
     target: params,
   });
+}
+
+/** A definitive pre-admission denial settles locally without dropping other recovery custody. */
+export async function settleRejectedRestartRecovery(
+  params: Pick<
+    ResumeMainSessionParams,
+    "agentId" | "sessionKey" | "storePath" | "cfg" | "gatewayRuntime" | "shouldContinue"
+  > & {
+    error: unknown;
+    dispatchAccepted: boolean;
+    rollback: Awaited<ReturnType<typeof rollbackRestartRecoveryReservation>> | undefined;
+  },
+): Promise<"settled" | "skipped" | "failed" | undefined> {
+  const { error, rollback } = params;
+  const entry = rollback?.entry;
+  if (
+    (!(error instanceof GatewayOperatorRecoveryAuthorizationError) &&
+      !(error instanceof GatewayOperatorRecoveryOwnershipError)) ||
+    params.dispatchAccepted ||
+    rollback?.transition.kind !== "applied" ||
+    !entry?.mainRestartRecovery
+  ) {
+    return undefined;
+  }
+  const result = await finishDelegatedRestartRecovery({
+    ...params,
+    entry,
+    observation: {
+      sessionId: entry.sessionId,
+      cycleId: entry.mainRestartRecovery.cycleId,
+      revision: entry.mainRestartRecovery.revision,
+    },
+    assertCurrent: () => {
+      if (params.shouldContinue?.() === false) {
+        throw new Error("Restart recovery admission is no longer current.", { cause: error });
+      }
+    },
+    reason: error.message,
+  });
+  return result === "settled" || result === "tombstoned"
+    ? "settled"
+    : result === "skipped"
+      ? "skipped"
+      : "failed";
 }
 
 // The run's own post-run cleanup can release its claim before this settlement. A run

@@ -42,6 +42,19 @@ export function resolveGatewaySessionDisplayName(key: string, entry?: SessionEnt
     return groupTitle;
   }
   const channel = sessionDeliveryChannel(entry) ?? parsed?.channel;
+  const origin = sessionDeliveryOrigin(entry);
+  const privateTelegramTopicTitle =
+    channel === "telegram" &&
+    !isGroupSession &&
+    origin?.provider === "telegram" &&
+    origin.chatType === "direct" &&
+    origin.threadId != null &&
+    normalizeOptionalString(entry?.topicName) !== undefined
+      ? buildGroupDisplayTitle({ topicName: entry?.topicName })
+      : undefined;
+  if (privateTelegramTopicTitle !== undefined) {
+    return privateTelegramTopicTitle;
+  }
   const id = parsed?.id;
   const compactGroupFallback =
     isGroupSession && channel
@@ -70,7 +83,6 @@ export function resolveGatewaySessionDisplayName(key: string, entry?: SessionEnt
   if (parseAgentSessionKey(key)?.rest.startsWith("dashboard:")) {
     return undefined;
   }
-  const origin = sessionDeliveryOrigin(entry);
   const originLabel = origin?.label;
   const normalizedOriginFrom = normalizeOptionalString(origin?.from);
   const routeIdentityTail = normalizedOriginFrom?.split(":").at(-1);

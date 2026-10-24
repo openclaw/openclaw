@@ -1,9 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, Show } from "solid-js";
+import { Show } from "solid-js";
 import { onTestFinished, vi } from "vitest";
 import { registerMcpAppUnmountTarget } from "../../../components/mcp-app-unmount.ts";
-import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import {
@@ -19,44 +19,28 @@ import {
   type TestContentRow,
 } from "../components/chat-transcript.test-support.ts";
 
-class ThreadFixture {
+class NativeFixture {
   constructor(
-    readonly props: ChatThreadProps,
-    readonly transcript: ChatTranscript,
-    readonly search?: boolean,
+    readonly paneId: string,
+    readonly search: boolean,
+    readonly thread?: { props: ChatThreadProps; transcript: ChatTranscript },
   ) {}
 }
 
-class SearchFixture {
-  constructor(readonly paneId: string) {}
-}
-
-type NativeContent = JSX.Element | ThreadFixture | SearchFixture;
-const mounts = new WeakMap<HTMLElement, { update(value: NativeContent): void; unmount(): void }>();
+type NativeContent = JSX.Element | NativeFixture;
+const mounts = new WeakMap<HTMLElement, ReturnType<typeof mountSolid<{ value: NativeContent }>>>();
 
 function Content(props: { value: NativeContent }) {
-  const thread = () => (props.value instanceof ThreadFixture ? props.value : undefined);
-  const search = createMemo(() => {
-    const value = props.value;
-    if (value instanceof SearchFixture) {
-      return value;
-    }
-    if (value instanceof ThreadFixture && value.search) {
-      return new SearchFixture(value.props.paneId);
-    }
-    return undefined;
-  });
+  const fixture = () => (props.value instanceof NativeFixture ? props.value : undefined);
   return (
     <>
-      <Show when={search()}>
+      <Show when={fixture()?.search && fixture()}>
         {(value) => <TranscriptSearch search={getTranscriptState(value().paneId).search} />}
       </Show>
-      <Show when={thread()}>
+      <Show when={fixture()?.thread}>
         {(value) => <ChatThread props={value().props} transcript={value().transcript} />}
       </Show>
-      {props.value instanceof ThreadFixture || props.value instanceof SearchFixture
-        ? undefined
-        : props.value}
+      {props.value instanceof NativeFixture ? undefined : props.value}
     </>
   );
 }
@@ -66,36 +50,36 @@ export function renderChatThread(
   transcript: ChatTranscript,
   options?: { search: boolean },
 ) {
-  return new ThreadFixture(props, transcript, options?.search);
+  return new NativeFixture(props.paneId, options?.search ?? false, { props, transcript });
 }
 
 export function renderTranscriptSearch(paneId: string) {
-  return new SearchFixture(paneId);
+  return new NativeFixture(paneId, true);
 }
 
 /** Retain native components between commits, including moves of session-owned row roots. */
 export function render(value: NativeContent, container: HTMLElement): void {
   const existing = mounts.get(container);
   if (value == null) {
-    existing?.unmount();
+    existing?.dispose();
     mounts.delete(container);
     return;
   }
   if (existing) {
-    existing.update(value);
+    existing.update({ value });
   } else {
-    let update!: (next: NativeContent) => void;
-    const view = mountSolid(
-      () => {
-        const [content, setContent] = createSignal<NativeContent>(value);
-        update = (next) => setContent(() => next);
-        return <Content value={content()} />;
-      },
-      { container },
-    );
-    mounts.set(container, { update: (next) => update(next), unmount: view.unmount });
+    mounts.set(container, mountSolid(Content, { value }, container));
   }
-  flush();
+}
+
+export function mountChatThread(container: HTMLElement, transcript: ChatTranscript) {
+  return {
+    unmount: () => render(null, container),
+    render(next: ChatThreadProps | null) {
+      render(next ? renderChatThread({ ...next }, transcript) : null, container);
+      flush();
+    },
+  };
 }
 
 export class TranscriptTestHost extends HTMLElement {
@@ -130,14 +114,12 @@ export class TranscriptTestHost extends HTMLElement {
 
   requestRender() {
     this.pending ??= Promise.resolve().then(() => {
-      if (!this.isConnected) {
-        this.pending = undefined;
-        return true;
-      }
       this.pending = undefined;
-      render(this.renderTranscript(), this.transcriptRoot);
-      this.committedRenders += 1;
-      this.transcript?.update();
+      if (this.isConnected) {
+        render(this.renderTranscript(), this.transcriptRoot);
+        this.committedRenders += 1;
+        this.transcript?.update();
+      }
       return true;
     });
   }
@@ -196,29 +178,25 @@ export function stubMcpAppLifecycle(
     container.querySelector<HTMLElement>("mcp-app-view"),
     "mounted MCP app",
   );
-  const lifecycle = {
-    restartAfterTeardown: vi.fn(),
-    teardown: vi.fn(teardown),
-  };
+  const lifecycle = { restartAfterTeardown: vi.fn(), teardown: vi.fn(teardown) };
   const target = Object.assign(app, lifecycle);
   onTestFinished(registerMcpAppUnmountTarget(target));
   return { app: target, ...lifecycle };
 }
 
-export function numberedContentRows(length: number): TestContentRow[] {
+export function numberedContentRows(
+  length: number,
+  content: (index: number) => JSX.Element = (index) => <div>row {index}</div>,
+): TestContentRow[] {
   return Array.from({ length }, (_, index) => ({
     kind: "content",
     key: `row:${index}`,
-    content: <div>row {index}</div>,
+    content: content(index),
   }));
 }
 
 export function mcpRangeRows(appContent: JSX.Element): TestContentRow[] {
-  return Array.from({ length: 24 }, (_, index) => ({
-    kind: "content" as const,
-    key: `row:${index}`,
-    content: index === 23 ? appContent : <div>row {index}</div>,
-  }));
+  return numberedContentRows(24, (index) => (index === 23 ? appContent : <div>row {index}</div>));
 }
 
 export const contact = (identifier: number, target: EventTarget): Touch => ({

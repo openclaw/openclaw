@@ -3,10 +3,12 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
+import { createLegacyWebhookListenerDoctorContract } from "../plugin-sdk/legacy-webhook-listener-migration.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import type * as DoctorContractRegistry from "./doctor-contract-registry.js";
 import { useDoctorContractRegistryHarness } from "./doctor-contract-registry.test-harness.js";
+import { defineRetiredPluginStateMigration } from "./doctor-retired-state.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { createPluginManifestRecordFixture } from "./plugin-metadata.test-support.js";
 const retainedConfigDoctorMock = vi.hoisted(() => vi.fn());
@@ -23,6 +25,11 @@ const harness = useDoctorContractRegistryHarness({
 const { mocks, warn: doctorContractWarnMock, makeTempDir } = harness;
 
 let doctor: typeof DoctorContractRegistry;
+let migrationResources: typeof import("./doctor-migration-resources.js");
+beforeAll(async () => {
+  doctor = harness.registry;
+  migrationResources = await import("./doctor-migration-resources.js");
+});
 
 function registry(...plugins: Parameters<typeof createPluginManifestRecordFixture>[0][]) {
   return {
@@ -74,10 +81,6 @@ function mockExternalShadow(enabledByDefault = false) {
 }
 
 describe("doctor-contract-registry module loader", () => {
-  beforeAll(() => {
-    doctor = harness.registry;
-  });
-
   it("preserves source artifact precedence across root and dist candidates", () => {
     const pluginRoot = makeTempDir();
     const distRoot = path.join(pluginRoot, "dist");
@@ -370,3 +373,548 @@ describe("doctor-contract-registry module loader", () => {
     });
   });
 });
+
+function mockRawDoctorPlugins(...plugins: Record<string, unknown>[]): void {
+  mocks.loadPluginManifestRegistry.mockReturnValue({ plugins, diagnostics: [] });
+}
+
+describe("doctor-contract-registry selection", () => {
+  it.each([
+    { name: "missing official plugin", pins: true },
+    { name: "authored listener endpoints", explicit: true, pins: true },
+    { name: "unresolved host facts", warning: "Resolve account ambiguity", pins: false },
+    { name: "deferred installed owner", ownerId: "feishu", pins: false },
+    { name: "deferred trusted official owner", ownerId: "feishu", trusted: true, pins: true },
+    {
+      name: "deferred trusted owner with authored endpoints",
+      ownerId: "feishu",
+      trusted: true,
+      explicit: true,
+      pins: true,
+    },
+    {
+      name: "deferred trusted owner excluded by the allowlist",
+      ownerId: "feishu",
+      trusted: true,
+      restricted: true,
+      pins: false,
+    },
+    {
+      name: "deferred replacement owner",
+      ownerId: "custom-feishu",
+      pins: false,
+    },
+  ])("preserves historical webhook ownership for $name", (scenario) => {
+    const { ownerId, trusted, restricted, warning, explicit = false, pins } = scenario;
+    const config: OpenClawConfig = {
+      meta: { migrations: { webhookListeners: { telegram: [] } } },
+      gateway: { port: 18789 },
+      ...(restricted ? { plugins: { allow: ["other-plugin"] } } : {}),
+      channels: {
+        feishu: {
+          enabled: true,
+          connectionMode: "webhook",
+          tools: { base: true },
+          ...(explicit ? { webhookPort: 9001, webhookHost: "0.0.0.0" } : {}),
+          accounts: {
+            default: { enabled: true },
+            optedOut: { legacyWebhook: false },
+            ...(explicit ? { specific: { enabled: true, webhookPort: 9002 } } : {}),
+          },
+        },
+      },
+    };
+    const original = structuredClone(config);
+    const listener = createLegacyWebhookListenerDoctorContract({
+      channelKey: "feishu",
+      defaultPort: 3000,
+      defaultHost: "127.0.0.1",
+    });
+    retainedConfigDoctorMock.mockReturnValue({
+      ...listener,
+      normalizeCompatibilityConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
+        config: { ...cfg, gateway: { ...cfg.gateway, port: 60000 } },
+        changes: ["Unrelated plugin repair"],
+      }),
+      normalizeHistoricalWebhookConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
+        ...listener.normalizeCompatibilityConfig({ cfg }),
+        historicalWebhookAccountIds: ["default", "optedOut", ...(explicit ? ["specific"] : [])],
+        ...(warning ? { warnings: [warning] } : {}),
+      }),
+    });
+    if (ownerId) {
+      const pluginRoot = writeContract();
+      mocks.createJiti.mockImplementation(() => () => ({
+        normalizeCompatibilityConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
+          config: { ...cfg, gateway: { ...cfg.gateway, port: 61000 } },
+          changes: ["Deferred owner ran"],
+        }),
+      }));
+      mockRawDoctorPlugins({
+        id: ownerId,
+        rootDir: pluginRoot,
+        channels: ["feishu"],
+        providers: [],
+        origin: "global",
+        trustedOfficialInstall: trusted,
+        doctorContract: { configRepair: true },
+      });
+    }
+    const inspected = vi.fn();
+    const result = doctor.withDeferredPluginDoctorMigrations([ownerId ?? "feishu"], () =>
+      doctor.applyPluginDoctorCompatibilityMigrations(config, {
+        config,
+        env: {},
+        pluginIds: ["feishu"],
+        historicalWebhookListeners: true,
+        onInspectedPlugin: inspected,
+      }),
+    );
+
+    expect(config).toEqual(original);
+    const expected = structuredClone(original);
+    if (pins || restricted) {
+      expected.meta = {
+        migrations: {
+          webhookListeners: {
+            telegram: [],
+            feishu:
+              pins && !explicit
+                ? [["channels", "feishu", "accounts", "default", "legacyWebhook"]]
+                : [],
+          },
+        },
+      };
+    }
+    if (pins) {
+      const channel = expected.channels!.feishu;
+      if (explicit) {
+        delete channel.webhookPort;
+        delete channel.webhookHost;
+        channel.legacyWebhook = { port: 9001, host: "0.0.0.0" };
+        channel.accounts.specific = {
+          enabled: true,
+          legacyWebhook: { port: 9002, host: "0.0.0.0" },
+        };
+      } else {
+        channel.accounts.default.legacyWebhook = { port: 3000, host: "127.0.0.1" };
+      }
+    }
+    expect(result.config).toEqual(expected);
+    expect(result.warnings).toEqual(warning ? [warning] : undefined);
+    expect(inspected).not.toHaveBeenCalled();
+    expect(mocks.createJiti).not.toHaveBeenCalled();
+    if (pins) {
+      expect(listener.normalizeCompatibilityConfig({ cfg: result.config })).toMatchObject({
+        config: result.config,
+        changes: [],
+      });
+    }
+  });
+
+  it.each([
+    { name: "full scan", touchedPaths: undefined, configRepair: true, expected: true },
+    { name: "parent edit", touchedPaths: [["legacyRoots"]], configRepair: true, expected: true },
+    {
+      name: "dotted owner edit",
+      touchedPaths: [["legacyRoots", "store.with.dots", "root"]],
+      configRepair: true,
+      expected: true,
+    },
+    {
+      name: "unrelated edit",
+      touchedPaths: [["gateway", "port"]],
+      configRepair: true,
+      expected: false,
+    },
+    { name: "empty edit", touchedPaths: [], configRepair: true, expected: false },
+    { name: "undeclared repair", touchedPaths: undefined, configRepair: false, expected: false },
+  ])(
+    "discovers declared config migration sources without plugin entries: $name",
+    async ({ touchedPaths, configRepair, expected }) => {
+      const pluginRoot = writeContract();
+      const rule = {
+        path: ["legacyRoots", "store.with.dots", "root"],
+        message: "Migrate legacy root",
+      };
+      mocks.createJiti.mockImplementation(() => () => ({
+        legacyConfigRules: [rule],
+        resolveSessionStoreAgentIds: () => ["unexpected-owner"],
+      }));
+      mockRawDoctorPlugins({
+        id: "root-owner",
+        rootDir: pluginRoot,
+        channels: [],
+        providers: [],
+        doctorContract: { configRepair, resolveSessionStoreAgentIds: true },
+        configContracts: { compatibilityMigrationPaths: ["legacyRoots.*.root"] },
+      });
+      const raw = { legacyRoots: { "store.with.dots": { root: "/legacy/documents" } } };
+      const { findDoctorLegacyConfigIssues } =
+        await import("../commands/doctor/shared/legacy-config-issues.js");
+      expect(findDoctorLegacyConfigIssues(raw, raw, touchedPaths)).toEqual(
+        expected ? [{ path: rule.path.join("."), message: rule.message }] : [],
+      );
+      expect(mocks.createJiti).toHaveBeenCalledTimes(expected ? 1 : 0);
+      // Config migration declarations must not select new session-store owners.
+      const pluginIds = doctor.collectRelevantDoctorPluginIds(raw);
+      expect(pluginIds).toEqual([]);
+      expect(doctor.listPluginDoctorSessionStoreAgentIds({ pluginIds })).toEqual([]);
+    },
+  );
+
+  it.each([
+    {
+      name: "configured-model and policy providers without shadow-list owners",
+      raw: {
+        models: { providers: { "ollama-cloud": {} } },
+        agents: {
+          defaults: {
+            model: { primary: "default/model", fallbacks: ["fallback/model", 42] },
+            modelPolicy: { allow: ["default/*", "policy/*", 42, "bare"] },
+          },
+          entries: {
+            worker: { model: "entry/model", modelPolicy: { allow: ["worker/model", null] } },
+          },
+          list: [
+            {
+              id: "shadow",
+              model: "shadow/model",
+              modelPolicy: { allow: ["shadow-policy/model"] },
+            },
+          ],
+        },
+        hooks: { mappings: [{ model: "hook/model" }, { model: 42 }] },
+      },
+      ids: ["default", "entry", "fallback", "hook", "ollama-cloud", "policy", "worker"],
+    },
+    {
+      name: "model and policy providers from the legacy list when entries is absent",
+      raw: {
+        agents: {
+          list: [
+            {
+              id: "legacy",
+              model: "legacy-model/model",
+              modelPolicy: { allow: ["legacy-policy/*"] },
+            },
+          ],
+        },
+      },
+      ids: ["legacy-model", "legacy-policy"],
+    },
+    {
+      name: "no shadow-list policy providers when entries is null",
+      raw: {
+        agents: {
+          entries: null,
+          list: [{ id: "shadow", modelPolicy: { allow: ["shadow-policy/*"] } }],
+        },
+      },
+      ids: [],
+    },
+  ])("collects $name", ({ raw, ids }) => {
+    expect(doctor.collectRelevantDoctorPluginIds(raw)).toEqual(ids);
+  });
+
+  it("excludes channel metadata and blank ids from full and touched doctor scans", () => {
+    const raw = {
+      plugins: { entries: { "memory-wiki": {} } },
+      channels: {
+        defaults: {},
+        modelByChannel: { discord: { guild: "openai/gpt-5.6-luna" } },
+        " ": {},
+        discord: {},
+      },
+    };
+
+    const allIds = ["discord", "memory-wiki", "openai"];
+    expect(doctor.collectRelevantDoctorPluginIds(raw)).toEqual(allIds);
+    expect(
+      doctor.collectDoctorConfigRepairPluginIds(raw, [
+        ["channels", "modelByChannel", "discord", "guild"],
+      ]),
+    ).toStrictEqual(["openai"]);
+    expect(doctor.collectDoctorConfigRepairPluginIds(raw, [["channels"]])).toEqual(allIds);
+  });
+
+  it("collects provider ids from media model entries", () => {
+    const raw = {
+      tools: {
+        media: {
+          models: [
+            { provider: " xAI " },
+            { provider: " " },
+            { provider: "XAI", model: "grok-stt", capabilities: ["audio"] },
+            { provider: "openai", model: "gpt-5.5", capabilities: ["image"] },
+            { provider: "gemini", model: "veo", capabilities: ["video"] },
+          ],
+        },
+      },
+    };
+
+    const expected = ["gemini", "openai", "xai"];
+    expect(doctor.collectRelevantDoctorPluginIds(raw)).toEqual(expected);
+    expect(
+      doctor.collectDoctorConfigRepairPluginIds(raw, [["tools", "media", "models", "2", "model"]]),
+    ).toEqual(expected);
+  });
+
+  it("loads a plugin doctor contract when scoped by a contributed provider alias", () => {
+    const pluginRoot = writeContract();
+    const unrelatedRoot = writeContract();
+    const config = {
+      models: { providers: { "ollama-cloud": { baseUrl: "https://ai.ollama.com", models: [] } } },
+    };
+    mocks.createJiti.mockImplementation(() => (modulePath: string) => ({
+      normalizeCompatibilityConfig: ({ cfg }: { cfg: typeof config }) => {
+        cfg.models.providers["ollama-cloud"].baseUrl = "https://ollama.com";
+        return {
+          config: cfg,
+          changes: [
+            modulePath.startsWith(unrelatedRoot)
+              ? "wrong unrelated provider contract"
+              : "normalized ollama cloud provider endpoint",
+          ],
+        };
+      },
+    }));
+    mockRawDoctorPlugins(
+      {
+        id: "ollama",
+        rootDir: pluginRoot,
+        channels: [],
+        providers: ["OlLaMa"],
+        providerAuthAliases: { "Ollama-Cloud": "OLLAMA" },
+      },
+      {
+        id: "unrelated",
+        rootDir: unrelatedRoot,
+        channels: [],
+        providers: ["unrelated"],
+        providerAuthAliases: { "ollama-cloud": "missing" },
+      },
+    );
+
+    const result = doctor.applyPluginDoctorCompatibilityMigrations(config, {
+      config,
+      env: {},
+      pluginIds: ["ollama-cloud"],
+    });
+
+    expect(result.changes).toEqual(["normalized ollama cloud provider endpoint"]);
+    expect(result.config.models?.providers?.["ollama-cloud"]).toEqual({
+      baseUrl: "https://ollama.com",
+      models: [],
+    });
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+  });
+
+  it("selects a mixed-case manifest Doctor owner from its canonical config entry", () => {
+    mockContract(
+      {
+        normalizeCompatibilityConfig: ({ cfg }: { cfg: OpenClawConfig }) => ({
+          config: { ...cfg, repairedBy: "MiXeD-upgrade-proof" },
+          changes: ["mixed-case owner repaired config"],
+        }),
+      },
+      {
+        id: "MiXeD-upgrade-proof",
+        channels: [],
+        providers: [],
+        doctorContract: { configRepair: true },
+      },
+    );
+    const config = { plugins: { entries: { "mixed-upgrade-proof": { enabled: true } } } };
+    const result = doctor.applyPluginDoctorCompatibilityMigrations(config, {
+      config,
+      env: {},
+      pluginIds: doctor.collectRelevantDoctorPluginIds(config),
+    });
+    expect(result.changes).toEqual(["mixed-case owner repaired config"]);
+    expect(result.config).toHaveProperty("repairedBy", "MiXeD-upgrade-proof");
+    expect(mocks.createJiti).toHaveBeenCalledTimes(1);
+  });
+
+  it("narrows touched-path doctor ids for scoped dry-run validation", () => {
+    expect(
+      doctor.collectDoctorConfigRepairPluginIds(
+        {
+          channels: {
+            discord: {},
+            telegram: {},
+          },
+          plugins: {
+            entries: { "memory-wiki": {} },
+          },
+          models: {
+            providers: { "ollama-cloud": {} },
+          },
+          talk: {
+            voiceId: "legacy-voice",
+          },
+        },
+        [
+          ["channels", "discord", "token"],
+          ["plugins", "entries", "memory-wiki", "enabled"],
+          ["models", "providers", "ollama-cloud", "baseUrl"],
+          ["talk", "voiceId"],
+        ],
+      ),
+    ).toEqual(["discord", "elevenlabs", "memory-wiki", "ollama-cloud"]);
+  });
+
+  it("keeps all configured model and policy providers active during touched scans", () => {
+    expect(
+      doctor.collectDoctorConfigRepairPluginIds(
+        {
+          agents: {
+            defaults: {
+              model: { primary: "primary/model", fallbacks: ["fallback/model"] },
+            },
+            entries: {
+              worker: { modelPolicy: { allow: ["worker/*"] } },
+            },
+          },
+          hooks: { gmail: { model: "gmail/model" } },
+          tts: { summaryModel: "tts/model" },
+          tools: { media: { image: { preferredModel: "opencode/minimax-m3" } } },
+          channels: {
+            modelByChannel: { slack: { room: "channel/model" } },
+            discord: { voice: { model: "voice/model" } },
+          },
+        },
+        [
+          ["agents", "defaults", "model"],
+          ["agents", "entries", "worker", "modelPolicy", "allow", "0"],
+          ["hooks", "gmail", "model"],
+          ["channels", "modelByChannel", "slack", "room"],
+        ],
+      ),
+    ).toEqual(["channel", "fallback", "gmail", "opencode", "primary", "tts", "voice", "worker"]);
+  });
+});
+
+const channelConfig = () => ({
+  channels: { discord: { dm: { enabled: true, policy: "allowlist" } } },
+});
+
+it("repairs retained channel config before installation without selecting state owners", () => {
+  const rule = { path: ["channels", "discord", "dm", "policy"], message: "retired DM policy" };
+  const config = { ...channelConfig(), plugins: { allow: [] } };
+  retainedConfigDoctorMock.mockReturnValue({
+    legacyConfigRules: [rule],
+    normalizeCompatibilityConfig: ({ cfg }: { cfg: typeof config }) => ({
+      config: { ...cfg, channels: { discord: { dmPolicy: cfg.channels.discord.dm.policy } } },
+      changes: ["moved DM policy"],
+    }),
+    resolveSessionStoreAgentIds: () => {
+      throw new Error("must not select retained state owners");
+    },
+  });
+
+  expect(doctor.listPluginDoctorLegacyConfigRules({ config, env: {} })).toEqual([rule]);
+  expect(doctor.applyPluginDoctorCompatibilityMigrations(config, { env: {} })).toEqual({
+    config: { channels: { discord: { dmPolicy: "allowlist" } }, plugins: { allow: [] } },
+    changes: ["moved DM policy"],
+  });
+  expect(config.channels.discord.dm.policy).toBe("allowlist");
+  expect(retainedConfigDoctorMock).toHaveBeenCalledWith({
+    dirName: "discord",
+    artifactCandidates: ["config-doctor-api.js"],
+    env: {},
+  });
+  retainedConfigDoctorMock.mockClear();
+  expect([
+    doctor.listPluginDoctorSessionStoreAgentIds({ config, env: {} }),
+    doctor.listPluginDoctorSessionRouteStateOwners({ config, env: {} }),
+  ]).toEqual([[], []]);
+  expect(retainedConfigDoctorMock).not.toHaveBeenCalled();
+});
+
+it.each([false, true])("keeps installed owner (configRepair=%s)", (configRepair) => {
+  mocks.loadPluginManifestRegistry.mockReturnValue({
+    plugins: [
+      {
+        id: "installed-owner",
+        channels: ["discord"],
+        providers: [],
+        rootDir: makeTempDir(),
+        doctorContract: { configRepair },
+      },
+    ],
+    diagnostics: [],
+  });
+  const config = channelConfig();
+  expect(doctor.listPluginDoctorLegacyConfigRules({ config, env: {} })).toEqual([]);
+  const result = doctor.applyPluginDoctorCompatibilityMigrations(config, { env: {} });
+  expect(result).toEqual({ config, changes: [] });
+  expect(retainedConfigDoctorMock).not.toHaveBeenCalled();
+});
+
+it("does not probe retained modules outside the selected known channel scope", () => {
+  const scopes = [
+    { config: { channels: { discord: {}, "../outside": {}, defaults: {} } }, pluginIds: ["slack"] },
+    { config: { channels: { "../outside": {} } } },
+  ];
+  expect(
+    scopes.map((scope) => doctor.listPluginDoctorLegacyConfigRules({ ...scope, env: {} })),
+  ).toEqual([[], []]);
+  expect(retainedConfigDoctorMock).not.toHaveBeenCalled();
+});
+it.each([
+  { name: "selected official owner", refuses: true },
+  { name: "external shadow", trusted: false },
+  { name: "different package", packageName: "@other/demo" },
+  { name: "different migration", declared: false },
+  { name: "disabled owner", enabled: false },
+])(
+  "checks only the matching $name",
+  async ({
+    trusted = true,
+    declared = true,
+    enabled = true,
+    packageName = "@openclaw/demo",
+    refuses = false,
+  }) => {
+    const stateDir = makeTempDir();
+    const source = path.join(stateDir, "custom-history.jsonl");
+    fs.writeFileSync(source, "opaque historical bytes\n");
+    const migration = defineRetiredPluginStateMigration({
+      id: "retired-log",
+      label: "Call log",
+      intermediateVersion: "2026.9.7",
+      findSources: () => [source],
+    });
+    retainedConfigDoctorMock.mockReturnValue({
+      packageName: "@openclaw/demo",
+      stateMigrations: [migration],
+    });
+    const owner = createPluginManifestRecordFixture({
+      id: "demo",
+      origin: "global",
+      rootDir: stateDir,
+      packageName,
+      trustedOfficialInstall: trusted,
+      doctorContract: { stateMigrations: [{ id: declared ? "retired-log" : "other" }] },
+    });
+    const params = {
+      candidateRoot: stateDir,
+      config: { plugins: { entries: { demo: { enabled } } } },
+      env: { HOME: stateDir, OPENCLAW_STATE_DIR: stateDir, OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
+      stateDir,
+      manifestRegistry: { plugins: [owner], diagnostics: [] },
+    };
+    const records = doctor
+      .resolvePluginDoctorStateMigrationRecords({ ...params, artifactPreservingReadOnly: true })
+      .filter(doctor.isTrustedForDurableStores);
+    const check = migrationResources.assertPluginStateRetention(records, params);
+    if (refuses) {
+      await expect(check).rejects.toThrow("Install OpenClaw 2026.9.7");
+    } else {
+      await expect(check).resolves.toBeUndefined();
+    }
+    expect(fs.readFileSync(source, "utf8")).toBe("opaque historical bytes\n");
+    expect(fs.readdirSync(stateDir)).toEqual(["custom-history.jsonl"]);
+  },
+);

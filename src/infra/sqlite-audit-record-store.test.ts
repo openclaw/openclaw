@@ -10,7 +10,6 @@ import { getNodeSqliteKysely } from "./kysely-sync.js";
 import {
   createSqliteAuditRecordReader,
   createSqliteAuditRecordWriter,
-  registerSqliteAuditRecordAsync,
 } from "./sqlite-audit-record-store.async.js";
 import { createSqliteAuditRecordStore as createNativeSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
 import {
@@ -172,7 +171,7 @@ it("settles competing worker comparisons against current rows and captures submi
 it("rolls back async insertion and retention together, preserving sibling scopes", async () => {
   const { options, store } = fixture("async-rollback", 2);
   const register = (key: string, value: { value: number }, createdAt: number) =>
-    registerSqliteAuditRecordAsync(options, { key, value, createdAt });
+    createSqliteAuditRecordWriter<{ value: number }>(options).register(key, value, createdAt);
   const sibling = createSqliteAuditRecordStore<{ value: number }>({
     ...options,
     scope: "sibling",

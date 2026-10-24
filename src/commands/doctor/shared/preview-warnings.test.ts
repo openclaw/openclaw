@@ -386,6 +386,40 @@ describe("doctor preview warnings", () => {
     tempRoots.clear();
   });
 
+  it.each(["google/gemini-2.5-pro", "openai/gpt-4.1"])(
+    "uses agent alias target %s for visible reply and inherited profile warnings",
+    async (target) => {
+      const warnings = await collectDoctorPreviewWarnings({
+        cfg: {
+          agents: {
+            entries: {
+              worker: {
+                model: "fast",
+                models: { [target]: { alias: "fast" } },
+                tools: { exec: {} },
+              },
+            },
+          },
+          messages: { visibleReplies: "message_tool" },
+          tools: { byProvider: { google: { profile: "minimal", allow: ["read"] } } },
+        },
+        doctorFixCommand: "openclaw doctor --fix",
+      });
+      const relevant = warnings.filter(
+        (warning) =>
+          warning.includes("visibleReplies is set") || warning.includes("inherited provider"),
+      );
+      expect(relevant).toEqual(
+        target.startsWith("google/")
+          ? [
+              expect.stringContaining('message tool is unavailable for agent "worker"'),
+              expect.stringContaining("inherited provider profile"),
+            ]
+          : [],
+      );
+    },
+  );
+
   it("reports merged gateway owner profiles without applying the repair", async () => {
     const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-doctor-preview" };
     const warning = 'Gateway owner profile is merged. Run "openclaw doctor --fix" to repair it.';

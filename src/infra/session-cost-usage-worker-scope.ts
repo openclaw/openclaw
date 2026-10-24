@@ -15,6 +15,7 @@ import {
   type SessionDatabaseCleanup,
 } from "../config/sessions/session-transcript-worker-resources.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import type { OpenClawAgentDatabaseOptions } from "../state/openclaw-agent-db-contract.js";
 import { isIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
@@ -54,6 +55,7 @@ export async function withSessionCostUsageWorkerDatabases<T>(
     throw error;
   }
   const pending = new Set<Promise<UsageCostWorkerResult>>();
+  const track = createPendingPromiseTracker(pending);
   const cleanups = new Set<SessionDatabaseCleanup>();
   // Failed native stops remain retryable after the task's original failure is observed.
   const lanes = new Map<SessionCostWorkerLane, { native: boolean; retry: boolean }>();
@@ -238,12 +240,7 @@ export async function withSessionCostUsageWorkerDatabases<T>(
         armDatabaseWorkerIdleRetirement(lane);
       }
     })();
-    pending.add(task);
-    void task.then(
-      () => pending.delete(task),
-      () => pending.delete(task),
-    );
-    return task;
+    return track(task);
   };
   let result: { ok: true; value: T } | { ok: false; error: unknown };
   try {

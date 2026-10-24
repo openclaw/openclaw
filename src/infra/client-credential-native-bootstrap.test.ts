@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterAll, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { prepareStartupClientCredentials } from "../commands/startup-client-credentials.js";
 import {
   isNativeClientCredentialBootstrap,
   readIndependentClientCredentialSource,
@@ -240,7 +241,7 @@ it.each([false, true])(
   "keeps refreshed credentials across PortGuardian changes and rebuilds changed native credentials (initial auth table: %s)",
   async (authTablePresent) => {
     const root = directories.make("independent-admission-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+    const env = { ...process.env, HOME: root, USERPROFILE: root, OPENCLAW_STATE_DIR: root };
     const pathname = path.join(root, "state", "openclaw.sqlite");
     fs.mkdirSync(path.dirname(pathname), { recursive: true });
     {
@@ -320,6 +321,9 @@ it.each([false, true])(
         snapshot.sha256,
       );
     }
+    const sourceBytes = fs.readFileSync(pathname);
+    await prepareStartupClientCredentials({ env });
+    expect(fs.readFileSync(pathname)).toEqual(sourceBytes);
     expect(read()).toMatchObject({
       kind: "token",
       token: authTablePresent ? { token: "restored" } : null,

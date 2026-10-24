@@ -45,7 +45,7 @@ function approvalUrl(basePath: string): string {
   return new URL(approvalPath(basePath), suite.server?.baseUrl ?? "http://127.0.0.1/").href;
 }
 
-function pendingApproval(basePath: string): PendingApprovalSnapshot {
+function pendingApproval(basePath: string) {
   const commandLines = Array.from(
     { length: 14 },
     (_value, index) =>
@@ -67,7 +67,7 @@ function pendingApproval(basePath: string): PendingApprovalSnapshot {
       agentId: "main",
       allowedDecisions: ["allow-once", "deny"],
     },
-  };
+  } satisfies PendingApprovalSnapshot;
 }
 
 function pendingPluginApproval(basePath: string): PendingApprovalSnapshot {
@@ -149,6 +149,26 @@ async function visitApproval({ page }: ApprovalSurface, url = approvalUrl("")) {
   const response = await page.goto(url);
   await waitForApprovalPage(page);
   return response;
+}
+
+async function expectLoadedApproval({ page, gateway }: ApprovalSurface): Promise<void> {
+  expect((await gateway.waitForRequest("approval.get")).params).toEqual({ id: APPROVAL_ID });
+  await expectStandaloneApprovalPage(page);
+}
+
+async function expectIdentity(
+  page: Page,
+  severity: string,
+  chips: Record<string, string[]>,
+  meta: string[],
+): Promise<void> {
+  expect(await page.locator(".approval-page__card").getAttribute("class")).toContain(
+    `approval-page__card--severity-${severity}`,
+  );
+  for (const [kind, values] of Object.entries(chips)) {
+    expect(await page.locator(`[data-approval-chip="${kind}"]`).allTextContents()).toEqual(values);
+  }
+  expect(await page.locator(".approval-page__meta-row dt").allTextContents()).toEqual(meta);
 }
 
 async function expectStandaloneApprovalPage(page: Page): Promise<void> {
@@ -253,25 +273,15 @@ suite.define(() => {
 
     try {
       await Promise.all(
-        surfaces.map(async ({ page, gateway }) => {
-          expect((await page.goto(approvalUrl("")))?.status()).toBe(200);
-          await waitForApprovalPage(page);
-          expect((await gateway.waitForRequest("approval.get")).params).toEqual({
-            id: APPROVAL_ID,
-          });
-          await expectStandaloneApprovalPage(page);
+        surfaces.map(async (surface) => {
+          expect((await visitApproval(surface))?.status()).toBe(200);
+          await expectLoadedApproval(surface);
         }),
       );
       expect(new URL(mobile.page.url()).pathname).toBe(approvalPath(""));
       await expectMobilePendingLayout(mobile.page);
       expect(await mobile.page.title()).toBe("Command approval — OpenClaw");
-      expect(await mobile.page.locator(".approval-page__card").getAttribute("class")).toContain(
-        "approval-page__card--severity-warning",
-      );
-      expect(await mobile.page.locator('[data-approval-chip="agent"]').textContent()).toBe("main");
-      expect(await mobile.page.locator('[data-approval-chip="plugin"]').count()).toBe(0);
-      expect(await mobile.page.locator('[data-approval-chip="tool"]').count()).toBe(0);
-      expect(await mobile.page.locator(".approval-page__meta-row dt").allTextContents()).toEqual([
+      await expectIdentity(mobile.page, "warning", { agent: ["main"], plugin: [], tool: [] }, [
         "Host",
         "Node",
       ]);
@@ -347,23 +357,17 @@ suite.define(() => {
     const pending = pendingPluginApproval("");
     const surface = await createSurface({ pending, viewport: DESKTOP_VIEWPORT });
 
-    const response = await visitApproval(surface);
-    expect(response?.status()).toBe(200);
-    await surface.gateway.waitForRequest("approval.get");
-    await expectStandaloneApprovalPage(surface.page);
-
-    expect(await surface.page.locator(".approval-page__card").getAttribute("class")).toContain(
-      "approval-page__card--severity-danger",
-    );
+    expect((await visitApproval(surface))?.status()).toBe(200);
+    await expectLoadedApproval(surface);
     expect(
       await surface.page.locator(".approval-page__heading > .approval-page__chips").count(),
     ).toBe(1);
-    expect(await surface.page.locator('[data-approval-chip="plugin"]').textContent()).toBe("codex");
-    expect(await surface.page.locator('[data-approval-chip="tool"]').textContent()).toBe(
-      "workspace.exec",
+    await expectIdentity(
+      surface.page,
+      "danger",
+      { plugin: ["codex"], tool: ["workspace.exec"], agent: ["main"] },
+      [],
     );
-    expect(await surface.page.locator('[data-approval-chip="agent"]').textContent()).toBe("main");
-    expect(await surface.page.locator(".approval-page__meta-row dt").allTextContents()).toEqual([]);
     await captureProof(surface.page, "after-pending-plugin.png");
     expect(surface.pageErrors).toEqual([]);
   });
@@ -381,10 +385,8 @@ suite.define(() => {
 
     await surface.gateway.resolveDeferred("connect");
     await waitForApprovalPage(surface.page);
-    const request = await surface.gateway.waitForRequest("approval.get");
-    expect(request.params).toEqual({ id: APPROVAL_ID });
+    await expectLoadedApproval(surface);
     expect(new URL(surface.page.url()).pathname).toBe(approvalPath(basePath));
-    await expectStandaloneApprovalPage(surface.page);
     expect(surface.pageErrors).toEqual([]);
   });
 
@@ -409,11 +411,9 @@ suite.define(() => {
         .getByRole("button", { name: "Switch to remote-gateway.example", exact: true })
         .click();
       await waitForApprovalPage(surface.page);
-      const request = await surface.gateway.waitForRequest("approval.get");
-      expect(request.params).toEqual({ id: APPROVAL_ID });
+      await expectLoadedApproval(surface);
       expect((await surface.gateway.getSocketUrls()).at(-1)).toBe(remoteGatewayUrl);
       expect(new URL(surface.page.url()).hash).toBe("");
-      await expectStandaloneApprovalPage(surface.page);
       await captureProof(surface.page, "after-remote-gateway-approval.png");
       await pauseRecordedProof(surface.page);
       expect(surface.pageErrors).toEqual([]);
@@ -470,17 +470,8 @@ suite.define(() => {
 
   it("renders changed Gateway content after reload instead of a hard-coded fixture", async () => {
     const pending = pendingApproval("");
-    if (pending.presentation.kind !== "exec") {
-      throw new Error("Expected an exec approval fixture");
-    }
-    const surface = await createSurface({
-      basePath: "",
-      pending,
-      viewport: MOBILE_VIEWPORT,
-    });
-
-    await surface.page.goto(approvalUrl(""));
-    await waitForApprovalPage(surface.page);
+    const surface = await createSurface({ pending });
+    await visitApproval(surface);
     const changed = {
       ...pending,
       presentation: {

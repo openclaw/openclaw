@@ -4,7 +4,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { seedNativeVersionZeroState } from "../state/native-version-zero.test-support.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
-import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -16,11 +15,6 @@ import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-o
 import { withStateMigrationBackupForTest } from "../state/openclaw-state-schema.test-support.js";
 import { runClientCredentialOperation } from "./client-credential-store.js";
 import { generateStoredDeviceIdentity } from "./device-identity-material.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { OpenClawStateOwnershipError } from "./sqlite-lifecycle-errors.js";
 import {
@@ -56,11 +50,6 @@ function seedDatabase(seed: (db: import("node:sqlite").DatabaseSync) => void) {
   seed(db);
 }
 
-type StartupMigrationLeaseTestDatabase = Pick<
-  OpenClawStateKyselyDatabase,
-  "schema_meta" | "state_leases"
->;
-
 /** Models a prior host or recycled PID without replacing the real lease store. */
 function overwriteStartupMigrationLeaseOwner(
   leaseEnv: NodeJS.ProcessEnv,
@@ -68,17 +57,12 @@ function overwriteStartupMigrationLeaseOwner(
 ): void {
   withOpenClawStateStartupMigrationCheckpointDatabase(
     (db) => {
-      const kysely = getNodeSqliteKysely<StartupMigrationLeaseTestDatabase>(db);
-      const row = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely.selectFrom("state_leases").select("payload_json as payloadJson"),
-      );
-      const payload = JSON.parse(row?.payloadJson ?? "{}") as { owner?: { startedAt?: number } };
-      executeSqliteQuerySync(
-        db,
-        kysely.updateTable("state_leases").set({
-          payload_json: JSON.stringify({ ...payload, owner: { ...payload.owner, ...changes } }),
-        }),
+      const row = db.prepare("SELECT payload_json FROM state_leases").get();
+      const payload = JSON.parse(String(row?.payload_json ?? "{}")) as {
+        owner?: { startedAt?: number };
+      };
+      db.prepare("UPDATE state_leases SET payload_json = ?").run(
+        JSON.stringify({ ...payload, owner: { ...payload.owner, ...changes } }),
       );
     },
     { env: leaseEnv },
@@ -109,63 +93,45 @@ describe("startup migration lease", () => {
   it.each([false, true])(
     "adopts captured native version-zero state before lease acquisition (existing lease tables: %s)",
     async (hasExistingLeaseTables) => {
-      mkdirSync(path.dirname(databasePath), { recursive: true });
-      const native = new DatabaseSync(databasePath);
       const identity = generateStoredDeviceIdentity(1);
-      try {
+      seedDatabase((native) => {
         seedNativeVersionZeroState(native, hasExistingLeaseTables);
         native
           .prepare(
             "UPDATE device_identities SET device_id=?, public_key_pem=?, private_key_pem=? WHERE identity_key='node'",
           )
           .run(identity.deviceId, identity.publicKeyPem, identity.privateKeyPem);
-      } finally {
-        native.close();
-      }
+      });
 
       await withStateMigrationBackupForTest({ env }, () => openOpenClawStateDatabase({ env }));
-      const lease = await acquireStartupMigrationLeaseWithWait({
-        env,
-        owner: "native-bootstrap",
-        timeoutMs: 0,
-      });
+      const lease = await acquireLease({ owner: "native-bootstrap" });
       try {
-        const initialized = new DatabaseSync(databasePath, { readOnly: true });
-        try {
-          expect(initialized.prepare("PRAGMA user_version").get()).toEqual({
-            user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-          });
-          expect(
-            initialized
-              .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
-              .get(),
-          ).toEqual({ schema_version: OPENCLAW_STATE_SCHEMA_VERSION });
-          expect(
-            initialized
-              .prepare("SELECT name FROM sqlite_schema WHERE name='device_identities'")
-              .get(),
-          ).toBeUndefined();
-          expect(
-            runClientCredentialOperation(env, { kind: "identity.read", identity_key: "node" }),
-          ).toEqual({
-            kind: "identity",
-            identity: {
-              identity_key: "node",
-              device_id: identity.deviceId,
-              public_key_pem: identity.publicKeyPem,
-              private_key_pem: identity.privateKeyPem,
-              created_at_ms: 1,
-              updated_at_ms: 1,
-            },
-          });
-          expect(
-            initialized
-              .prepare("SELECT config_key FROM exec_approvals_config WHERE config_key = 'current'")
-              .get(),
-          ).toEqual({ config_key: "current" });
-        } finally {
-          initialized.close();
-        }
+        expect({
+          version: readRow("PRAGMA user_version"),
+          meta: readRow("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'"),
+          legacy: readRow("SELECT name FROM sqlite_schema WHERE name='device_identities'"),
+          approvals: readRow(
+            "SELECT config_key FROM exec_approvals_config WHERE config_key = 'current'",
+          ),
+        }).toEqual({
+          version: { user_version: OPENCLAW_STATE_SCHEMA_VERSION },
+          meta: { schema_version: OPENCLAW_STATE_SCHEMA_VERSION },
+          legacy: undefined,
+          approvals: { config_key: "current" },
+        });
+        expect(
+          runClientCredentialOperation(env, { kind: "identity.read", identity_key: "node" }),
+        ).toEqual({
+          kind: "identity",
+          identity: {
+            identity_key: "node",
+            device_id: identity.deviceId,
+            public_key_pem: identity.publicKeyPem,
+            private_key_pem: identity.privateKeyPem,
+            created_at_ms: 1,
+            updated_at_ms: 1,
+          },
+        });
       } finally {
         lease.release();
       }
@@ -393,16 +359,12 @@ describe("startup migration lease", () => {
         expect(() => second.assertOwnedInTransaction(db)).not.toThrow();
         expect(() => first.assertOwned()).toThrow("startup migration lease was lost");
         expect(() => second.assertOwned()).not.toThrow();
-        const query = getNodeSqliteKysely<StartupMigrationLeaseTestDatabase>(db);
         const replaceOwner = (owner: string) =>
-          executeSqliteQuerySync(
-            db,
-            query
-              .updateTable("state_leases")
-              .set({ owner })
-              .where("scope", "=", "startup-migrations")
-              .where("lease_key", "=", "global"),
-          );
+          db
+            .prepare(
+              "UPDATE state_leases SET owner = ? WHERE scope = 'startup-migrations' AND lease_key = 'global'",
+            )
+            .run(owner);
         replaceOwner("reassigned-before-commit");
         expect(() => second.assertOwned()).toThrow("startup migration lease was lost");
         replaceOwner(second.owner);
@@ -439,9 +401,8 @@ describe("startup migration lease", () => {
       `newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
     );
 
-    const row = readRow(
-      "SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'state_leases'",
-    ) as { ok?: unknown } | undefined;
-    expect(row).toBeUndefined();
+    expect(
+      readRow("SELECT 1 AS ok FROM sqlite_master WHERE type = 'table' AND name = 'state_leases'"),
+    ).toBeUndefined();
   });
 });

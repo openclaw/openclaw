@@ -20,8 +20,8 @@ const scenarios = [
 suite.define(() => {
   it.each(scenarios)(
     "preserves selected identity: $surface $activation collision=$collision",
-    async (scenario) => {
-      await suite.withPage(
+    async (scenario) =>
+      suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
         async ({ page }) => {
           const target = {
@@ -127,7 +127,6 @@ suite.define(() => {
             ),
           ).toBe(true);
         },
-      );
-    },
+      ),
   );
 });

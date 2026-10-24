@@ -17,7 +17,7 @@ import {
   executeMcpAppOperation,
   type McpAppActiveView,
   parseMcpAppOperation,
-  requireMcpAppInteraction,
+  supportsMcpAppInteraction,
   withMcpAppActiveView,
 } from "./mcp-app-operations.js";
 import { runStandaloneMcpAppHost } from "./mcp-app-standalone-host.js";
@@ -198,15 +198,6 @@ function supportsStandaloneToolOperations(
   );
 }
 
-async function supportsStandaloneResourceOperations(view: McpAppViewLease): Promise<boolean> {
-  try {
-    await requireMcpAppInteraction(view);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function sendJsonRepresentation(
   req: IncomingMessage,
   res: ServerResponse,
@@ -373,7 +364,7 @@ export async function handleMcpAppStandaloneHttpRequest(
     return await withMcpAppActiveView(active, "read", async () => {
       const { runtime, view } = active;
       const serverResources =
-        runtime.readResource !== undefined && (await supportsStandaloneResourceOperations(view));
+        runtime.readResource !== undefined && (await supportsMcpAppInteraction(view));
       sendJsonRepresentation(req, res, 200, {
         sandboxUrl: buildMcpAppSandboxPath(view.csp),
         sandboxPort,

@@ -23,6 +23,7 @@ import {
   withDatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { realpathOrResolve } from "../infra/path-existence.js";
 import { assertNotUpdateCapturePath, isUpdateCapturePath } from "../infra/update-capture-paths.js";
 import {
   resolveActivatedPluginBackupInventory,
@@ -252,9 +253,7 @@ async function resolveBackupPlanFromPaths(params: {
   if (onlyConfig) {
     const resolvedConfigPath = path.resolve(configPath);
     const exists = await pathExists(resolvedConfigPath);
-    const sourcePath = exists
-      ? await canonicalizeExistingPath(resolvedConfigPath)
-      : resolvedConfigPath;
+    const sourcePath = exists ? await realpathOrResolve(resolvedConfigPath) : resolvedConfigPath;
     const asset = { kind: "config" as const, sourcePath, displayPath: shortenHomePath(sourcePath) };
     return {
       stateDir,
@@ -309,7 +308,7 @@ async function resolveBackupPlanFromPaths(params: {
       return Object.assign({}, candidate, {
         exists,
         canonicalPath: exists
-          ? await canonicalizeExistingPath(candidate.sourcePath)
+          ? await realpathOrResolve(candidate.sourcePath)
           : path.resolve(candidate.sourcePath),
       });
     }),
@@ -515,14 +514,6 @@ function resolveManagedSkillSymlinkTargetCandidates(params: {
     }
   }
   return [...targets];
-}
-
-async function canonicalizeExistingPath(targetPath: string): Promise<string> {
-  try {
-    return await fs.realpath(targetPath);
-  } catch {
-    return path.resolve(targetPath);
-  }
 }
 
 /** Resolve symlinks in the existing prefix while retaining a not-yet-created suffix. */

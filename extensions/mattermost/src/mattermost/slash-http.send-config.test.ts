@@ -1,6 +1,6 @@
 import type { IncomingMessage } from "node:http";
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/core";
+import type { OpenClawConfig, PluginRuntime } from "openclaw/plugin-sdk/core";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { upsertSessionEntry, type SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import type * as SessionTranscriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -9,14 +9,18 @@ import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type * as MattermostRuntime from "../runtime.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
-import type { MattermostRegisteredCommand } from "./slash-commands.js";
+import type {
+  MattermostRegisteredCommand,
+  MattermostSlashCommandPayload,
+} from "./slash-commands.js";
 
 type BuildPreparedModelsProviderData =
   typeof import("./runtime-api.js").buildPreparedModelsProviderData;
+type SlashDispatchParams = Parameters<PluginRuntime["channel"]["inbound"]["dispatch"]>[0];
 
 const mockState = vi.hoisted(() => ({
   readRequestBodyWithLimit: vi.fn(async () => "token=valid-token"),
-  parseSlashCommandPayload: vi.fn(() => ({
+  parseSlashCommandPayload: vi.fn((): MattermostSlashCommandPayload => ({
     token: "valid-token",
     command: "/oc_models",
     text: "models",
@@ -65,7 +69,7 @@ const mockState = vi.hoisted(() => ({
     delete_at: 0,
   })),
   listMattermostCommands: vi.fn(async () => []),
-  dispatchInbound: vi.fn(async () => undefined),
+  dispatchInbound: vi.fn(async (_params: SlashDispatchParams) => undefined),
   recordDeliveredCommandExchange: vi.fn(async () => ({ ok: true })),
 }));
 
@@ -145,6 +149,9 @@ vi.mock("./slash-commands.js", () => ({
   resolveCommandText: mockState.resolveCommandText,
 }));
 
+let deliverMattermostReplyPayload: typeof import("./reply-delivery.js").deliverMattermostReplyPayload;
+let sendMattermostTyping: typeof import("./client.js").sendMattermostTyping;
+
 let createSlashCommandHttpHandler: typeof import("./slash-http.js").createSlashCommandHttpHandler;
 let clearMattermostSlashCommandValidationCacheForAccount: typeof import("./slash-http.js").clearMattermostSlashCommandValidationCacheForAccount;
 const callbackUrlFixture = "https://gateway.example.com/slash";
@@ -211,6 +218,8 @@ describe("slash-http cfg threading", () => {
     vi.resetModules();
     ({ createSlashCommandHttpHandler, clearMattermostSlashCommandValidationCacheForAccount } =
       await import("./slash-http.js"));
+    ({ deliverMattermostReplyPayload } = await import("./reply-delivery.js"));
+    ({ sendMattermostTyping } = await import("./client.js"));
   });
 
   afterEach(() => {
@@ -396,5 +405,81 @@ describe("slash-http cfg threading", () => {
         }),
       }),
     );
+  });
+  describe("command typed in a thread", () => {
+    beforeEach(() => {
+      mockState.parseSlashCommandPayload.mockReturnValue({
+        token: "valid-token",
+        command: "/oc_models",
+        text: "status",
+        channel_id: "chan-1",
+        user_id: "user-1",
+        user_name: "alice",
+        team_id: "team-1",
+        root_id: "root-1",
+      });
+    });
+
+    it("dispatches and delivers the command in its thread session", async () => {
+      mockState.resolveMattermostModelPickerEntry.mockReturnValueOnce(null);
+      mockState.dispatchInbound.mockImplementationOnce(async (params) => {
+        await params.replyPipeline?.typing?.start?.();
+        await params.delivery.deliver({ text: "Status: ok" }, { kind: "final" });
+      });
+      vi.mocked(deliverMattermostReplyPayload).mockResolvedValueOnce({
+        outcome: "text",
+        visibleReplySent: true,
+      });
+
+      await expectProcessing(createHandler({}));
+
+      expect(deliverMattermostReplyPayload).toHaveBeenCalledWith(
+        expect.objectContaining({ channelId: "chan-1", replyToId: "root-1" }),
+      );
+      expect(sendMattermostTyping).toHaveBeenCalledWith(expect.anything(), {
+        channelId: "chan-1",
+        parentId: "root-1",
+      });
+      expect(mockState.dispatchInbound).toHaveBeenCalledWith(
+        expect.objectContaining({
+          route: expect.objectContaining({
+            sessionKey: "agent:agent-1:mattermost:session:1:thread:root-1",
+          }),
+          ctxPayload: expect.objectContaining({
+            SessionKey: "agent:agent-1:mattermost:session:1:thread:root-1",
+            ParentSessionKey: "agent:agent-1:mattermost:session:1",
+            MessageThreadId: "root-1",
+          }),
+        }),
+      );
+    });
+
+    it("posts the model picker in the thread and records its session", async () => {
+      await expectProcessing(createHandler({}));
+
+      expect(mockState.sendMessageMattermost).toHaveBeenCalledWith(
+        "channel:chan-1",
+        "No models available.",
+        expect.objectContaining({ replyToId: "root-1" }),
+      );
+      expect(mockState.recordDeliveredCommandExchange).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sessionKey: "agent:agent-1:mattermost:session:1:thread:root-1",
+        }),
+      );
+    });
+
+    it("posts the error fallback in the thread", async () => {
+      mockState.resolveMattermostModelPickerEntry.mockReturnValueOnce(null);
+      mockState.dispatchInbound.mockRejectedValueOnce(new Error("boom"));
+
+      await expectProcessing(createHandler({}));
+
+      expect(mockState.sendMessageMattermost).toHaveBeenCalledWith(
+        "channel:chan-1",
+        "Sorry, something went wrong processing that command.",
+        expect.objectContaining({ replyToId: "root-1" }),
+      );
+    });
   });
 });

@@ -5,9 +5,11 @@ export type SolidSidebarProbeOwner = {
   readonly hostElement: HTMLElement;
   readonly isConnected: boolean;
   sessionData: SessionDataProbeOwner;
+  shouldPublishSessionData: (this: SolidSidebarProbeOwner) => boolean;
   invalidate(): void;
   prepareRender(): void;
   commitRender(): void;
+  releaseSidebarSnapshot(): void;
 };
 export type SidebarLifecycle = "invalidate" | "prepareRender" | "commitRender";
 export type ProbeMethod = (...args: unknown[]) => unknown;
@@ -26,8 +28,11 @@ export type ChatOwnerRecord = {
 
 export type ColdLoadProbeInput = {
   ownerProbes?: boolean;
+  sidebarCounters?: boolean;
   latencyMs: number;
   methodLatencyMs?: Record<string, number>;
+  sidebarQueryLatencyMs?: Record<string, number>;
+  omitHelloSelfPresence?: boolean;
   connectNotBeforeMs?: number;
   frameGapMs: number;
   events: Array<{ event: string; payload: unknown }>;

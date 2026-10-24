@@ -225,7 +225,6 @@ export async function runReactionThreadedScenario(context: MatrixQaScenarioConte
     label: "threaded reaction reply",
   });
   const reaction = await observeReactionScenario({
-    actorId: "driver",
     actorUserId: context.driverUserId,
     accessToken: context.driverAccessToken,
     baseUrl: context.baseUrl,

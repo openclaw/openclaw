@@ -5,6 +5,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConsoleMessage, Frame, Page, Request } from "playwright";
 import { agentRouteFromPath, isRouteId, pathForRoute } from "../app-route-paths.ts";
 import type { ControlUiReadiness } from "../app/control-ui-readiness.ts";
+import type { TooltipElement } from "../components/tooltip.ts";
 import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
 import type { ControlUiMockGateway } from "./control-ui-e2e-contract.ts";
 import { captureControlUiE2eRendererStall } from "./control-ui-e2e-renderer-stall.ts";
@@ -12,12 +13,19 @@ import { captureControlUiE2eRendererStall } from "./control-ui-e2e-renderer-stal
 const CONTROL_UI_E2E_DIAGNOSTIC_RING_LIMIT = 200;
 const controlUiE2ePageDiagnostics = new WeakMap<Page, ControlUiE2eDiagnosticEvent[]>();
 const controlUiE2eUnhandledRejectionPages = new WeakSet<Page>();
-const controlUiE2eFailureFacts = new WeakMap<Page, Record<string, boolean | number | null>>();
+export type ControlUiE2eFailureFact =
+  | boolean
+  | number
+  | string
+  | null
+  | readonly ControlUiE2eFailureFact[]
+  | { readonly [key: string]: ControlUiE2eFailureFact };
+const controlUiE2eFailureFacts = new WeakMap<Page, Record<string, ControlUiE2eFailureFact>>();
 
-/** Callers supply fixed diagnostic keys and scalar facts, never user content or identifiers. */
+/** Callers bound and redact facts; keys/string values are fixed labels, never content or IDs. */
 export function recordControlUiE2eFailureFacts(
   page: Page,
-  facts: Record<string, boolean | number | null>,
+  facts: Record<string, ControlUiE2eFailureFact>,
 ): void {
   controlUiE2eFailureFacts.set(page, { ...controlUiE2eFailureFacts.get(page), ...facts });
 }
@@ -360,6 +368,27 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
           ? (agentsState.agentsList as { agents?: unknown })
           : null;
       const send = document.querySelector<HTMLButtonElement>(".chat-send-btn--send");
+      const stop = document.querySelector<HTMLButtonElement>(".chat-send-btn--stop");
+      // Structural facts identify keyboard/overlay ownership without exposing content or IDs.
+      const describeElement = (element: Element | null) =>
+        element
+          ? {
+              kind:
+                element instanceof HTMLTextAreaElement
+                  ? "textarea"
+                  : element instanceof HTMLButtonElement
+                    ? "button"
+                    : element instanceof HTMLInputElement
+                      ? "input"
+                      : element === document.body
+                        ? "body"
+                        : "other",
+              inComposer: Boolean(element.closest(".agent-chat__input")),
+              isStop: element === stop,
+              isSend: element === send,
+            }
+          : null;
+      const openTooltips = [...document.querySelectorAll<TooltipElement>("openclaw-tooltip[open]")];
       const sendLabel = send?.getAttribute("aria-label");
       // Submit-disabled labels can contain server errors. Only known static UI copy
       // may reach CI logs; private reports retain the existing detailed state.
@@ -490,11 +519,33 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
                 length: text?.length ?? 0,
               };
             }),
+          activeElement: describeElement(document.activeElement),
+          tooltips: {
+            openCount: openTooltips.length,
+            entries: openTooltips.slice(0, 8).map((tooltip) => {
+              const trigger =
+                tooltip.anchor ?? tooltip.querySelector("button, input, textarea, [tabindex]");
+              return {
+                trigger: describeElement(trigger),
+                hovered: tooltip.matches(":hover") || (trigger?.matches(":hover") ?? false),
+                containsFocus:
+                  tooltip.contains(document.activeElement) ||
+                  (trigger?.contains(document.activeElement) ?? false),
+              };
+            }),
+          },
           composer: textarea
             ? {
                 draftLength: textarea.value.length,
                 nonempty: textarea.value.length > 0,
                 disabled: textarea.disabled,
+                stop: stop
+                  ? {
+                      visible: stop.checkVisibility({ visibilityProperty: true }),
+                      disabled: stop.disabled,
+                      focused: stop === document.activeElement,
+                    }
+                  : null,
                 send: send
                   ? {
                       label: safeValue(sendLabel, [

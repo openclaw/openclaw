@@ -1,5 +1,12 @@
 import type { SQLInputValue, SQLOutputValue } from "node:sqlite";
-import type { MessagePort } from "node:worker_threads";
+import type { MessagePort, Worker } from "node:worker_threads";
+
+export type PostgresBridge = {
+  port: MessagePort;
+  control: Int32Array;
+  worker: Worker;
+  requestId: number;
+};
 
 export type PostgresResult = {
   inTransaction: boolean;
@@ -212,8 +219,13 @@ export function isPostgresConnectionError(sqlState?: string): boolean {
   return !sqlState || sqlState.startsWith("08") || /^57P0[123]$/.test(sqlState);
 }
 
+export const POSTGRES_QUERY_CANCELED_ERROR_NAME = "PostgresQueryCanceledError";
+
 export function decodePostgresError(data: PostgresErrorData): Error {
   const cause = Object.assign(new Error(data.message), data);
+  if (data.code === "57014") {
+    cause.name = POSTGRES_QUERY_CANCELED_ERROR_NAME;
+  }
   const constraints: Record<string, [number, string]> = {
     "23505": [2067, "UNIQUE"],
     "23503": [787, "FOREIGN KEY"],

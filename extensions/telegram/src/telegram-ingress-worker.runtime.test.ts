@@ -1,4 +1,3 @@
-// Telegram tests cover ingress worker runtime behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as telegramTransport from "./fetch.js";
@@ -11,28 +10,19 @@ import { runTelegramIngressWorkerRuntime } from "./telegram-ingress-worker.runti
 type RuntimePort = Parameters<typeof runTelegramIngressWorkerRuntime>[0]["port"];
 
 function jsonResponse(status: number, body: unknown): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "content-type": "application/json" },
-  });
+  return Response.json(body, { status });
 }
 
-function htmlResponse(status: number, body: string): Response {
-  return new Response(body, {
-    status,
-    headers: { "content-type": "text/html" },
-  });
-}
+const emptyPoll = () => jsonResponse(200, { ok: true, result: [] });
 
 function createRuntime(
   responses: Response[],
-  options: { stopAfterPollSuccesses?: number; timeoutSeconds?: number } = {},
-): {
-  calls: number[];
-  pollBodies: Array<Record<string, unknown>>;
-  messages: TelegramIngressWorkerMessage[];
-  done: Promise<void>;
-} {
+  options: {
+    stopAfterPollSuccesses?: number;
+    timeoutSeconds?: number;
+    acknowledge?: () => Promise<number>;
+  } = {},
+) {
   const calls: number[] = [];
   const pollBodies: Array<Record<string, unknown>> = [];
   const messages: TelegramIngressWorkerMessage[] = [];
@@ -47,11 +37,17 @@ function createRuntime(
     postMessage(message) {
       messages.push(message);
       if (message.type === "updates") {
-        sendCommand({
-          type: "spool-ack",
-          requestId: message.requestId,
-          result: { ok: true, updateId: 42 },
-        });
+        const acknowledge = (updateId: number) =>
+          sendCommand({
+            type: "spool-ack",
+            requestId: message.requestId,
+            result: { ok: true, updateId },
+          });
+        if (options.acknowledge) {
+          void options.acknowledge().then(acknowledge);
+        } else {
+          acknowledge(42);
+        }
       }
       if (message.type === "poll-success") {
         pollSuccesses += 1;
@@ -106,8 +102,8 @@ describe("telegram ingress worker poll cadence", () => {
     const runtime = createRuntime(
       [
         jsonResponse(502, { ok: false, error_code: 502, description: "Bad Gateway" }),
-        jsonResponse(200, { ok: true, result: [] }),
-        jsonResponse(200, { ok: true, result: [] }),
+        emptyPoll(),
+        emptyPoll(),
       ],
       { stopAfterPollSuccesses: 2, timeoutSeconds: 30 },
     );
@@ -133,10 +129,9 @@ describe("telegram ingress worker poll cadence", () => {
   it("backs off consecutive empty polls without hot spinning", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-01T12:00:00.000Z"));
-    const runtime = createRuntime(
-      Array.from({ length: 9 }, () => jsonResponse(200, { ok: true, result: [] })),
-      { stopAfterPollSuccesses: 9 },
-    );
+    const runtime = createRuntime(Array.from({ length: 9 }, emptyPoll), {
+      stopAfterPollSuccesses: 9,
+    });
 
     expect(runtime.calls).toHaveLength(1);
     await flushRuntime();
@@ -155,10 +150,10 @@ describe("telegram ingress worker poll cadence", () => {
     vi.setSystemTime(new Date("2026-07-01T12:00:00.000Z"));
     const runtime = createRuntime(
       [
-        jsonResponse(200, { ok: true, result: [] }),
-        jsonResponse(200, { ok: true, result: [] }),
+        emptyPoll(),
+        emptyPoll(),
         jsonResponse(200, { ok: true, result: [{ update_id: 42 }] }),
-        jsonResponse(200, { ok: true, result: [] }),
+        emptyPoll(),
       ],
       { stopAfterPollSuccesses: 4 },
     );
@@ -178,92 +173,29 @@ describe("telegram ingress worker poll cadence", () => {
 describe("telegram ingress worker durable-before-offset", () => {
   it("advances getUpdates offset only after the whole response is acknowledged", async () => {
     vi.useFakeTimers();
-    const messages: TelegramIngressWorkerMessage[] = [];
-    const listeners = new Set<(message: TelegramIngressWorkerCommand) => void>();
-    const sendCommand = (message: TelegramIngressWorkerCommand) => {
-      for (const listener of listeners) {
-        listener(message);
-      }
-    };
-    const pollBodies: Array<Record<string, unknown>> = [];
-    let pollCount = 0;
-    let releaseSpool: (() => void) | undefined;
-    const spoolGate = new Promise<void>((resolve) => {
-      releaseSpool = resolve;
-    });
-    const port: RuntimePort = {
-      postMessage(message) {
-        messages.push(message);
-        if (message.type === "updates") {
-          // Parent must write spool first; offset must not advance until ack.
-          void spoolGate.then(() => {
-            sendCommand({
-              type: "spool-ack",
-              requestId: message.requestId,
-              result: { ok: true, updateId: 44 },
-            });
-          });
-        }
-        if (message.type === "poll-success" && pollCount >= 2) {
-          sendCommand({ type: "stop" });
-        }
-      },
-      onMessage(listener) {
-        listeners.add(listener);
-      },
-      close() {},
-    };
-    const fetchImpl: typeof fetch = async (_url, init) => {
-      pollCount += 1;
-      const body = JSON.parse((init?.body as string | undefined) ?? "{}") as Record<
-        string,
-        unknown
-      >;
-      pollBodies.push(body);
-      if (pollCount === 1) {
-        return jsonResponse(200, {
-          ok: true,
-          result: [
-            { update_id: 42, message: { text: "hi" } },
-            { update_id: 44, message: { text: "again" } },
-            { update_id: 42, message: { text: "hi" } },
-          ],
-        });
-      }
-      return jsonResponse(200, { ok: true, result: [] });
-    };
-    vi.spyOn(telegramTransport, "resolveTelegramTransport").mockReturnValue({
-      fetch: fetchImpl,
-      sourceFetch: fetchImpl,
-      close: async () => {},
-    });
-    const done = runTelegramIngressWorkerRuntime({
-      options: {
-        token: "test-auth-token",
-        accountId: "acct",
-        initialUpdateId: null,
-        apiRoot: "https://api.telegram.test",
-        timeoutSeconds: 1,
-      },
-      port,
-    });
+    const spoolGate = Promise.withResolvers<number>();
+    const updates = [
+      { update_id: 42, message: { text: "hi" } },
+      { update_id: 44, message: { text: "again" } },
+      { update_id: 42, message: { text: "hi" } },
+    ];
+    const { messages, pollBodies, calls, done } = createRuntime(
+      [jsonResponse(200, { ok: true, result: updates }), emptyPoll()],
+      { stopAfterPollSuccesses: 2, acknowledge: () => spoolGate.promise },
+    );
 
     await flushRuntime();
     // The response stays intact while its one spool-ack is held.
     expect(messages.filter((message) => message.type === "updates")).toEqual([
       expect.objectContaining({
-        updates: [
-          { update_id: 42, message: { text: "hi" } },
-          { update_id: 44, message: { text: "again" } },
-          { update_id: 42, message: { text: "hi" } },
-        ],
+        updates,
         queued: 3,
       }),
     ]);
     expect(messages.some((m) => m.type === "spooled")).toBe(false);
-    expect(pollCount).toBe(1);
+    expect(calls).toHaveLength(1);
 
-    releaseSpool?.();
+    spoolGate.resolve(44);
     await flushRuntime();
     await vi.advanceTimersByTimeAsync(0);
     await done;
@@ -288,7 +220,7 @@ describe("telegram ingress worker retry policy", () => {
         description: "Too Many Requests: retry after 0.05",
         parameters: { retry_after: 0.05 },
       }),
-      jsonResponse(200, { ok: true, result: [] }),
+      emptyPoll(),
     ]);
 
     expect(runtime.calls).toHaveLength(1);
@@ -311,12 +243,19 @@ describe("telegram ingress worker retry policy", () => {
   });
 
   it.each([
-    { name: "non-JSON", response: () => htmlResponse(502, "<html>Bad Gateway</html>") },
+    {
+      name: "non-JSON",
+      response: () =>
+        new Response("<html>Bad Gateway</html>", {
+          status: 502,
+          headers: { "content-type": "text/html" },
+        }),
+    },
     { name: "JSON-null", response: () => jsonResponse(502, null) },
   ])("retries a $name getUpdates 502 response as a server error", async ({ response }) => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-07-01T12:00:00.000Z"));
-    const runtime = createRuntime([response(), jsonResponse(200, { ok: true, result: [] })]);
+    const runtime = createRuntime([response(), emptyPoll()]);
 
     expect(runtime.calls).toHaveLength(1);
     await flushRuntime();

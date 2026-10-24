@@ -323,7 +323,6 @@ describe("durable pre-reply run failure", () => {
                 lastRunError: stored.lastRunError,
                 suppressErrorNotice: stored.suppressErrorNotice,
               },
-              includeSession: true,
             }),
           ).toMatchObject({
             status: "failed",
@@ -499,7 +498,6 @@ describe("durable pre-reply run failure", () => {
                 lifecycleRunId: runId,
                 activeRunState: { active: true, runIds: [runId] },
                 event: queuedEvent,
-                includeSession: true,
                 lifecycle: true,
               }),
             ).toMatchObject({

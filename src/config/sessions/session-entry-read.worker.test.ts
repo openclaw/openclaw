@@ -59,11 +59,8 @@ function withDatabase(run: (database: Database, env: NodeJS.ProcessEnv) => Promi
 
 function withRetainedReader(target: Target, run: () => void) {
   const retained = new OpenClawAgentDatabaseReadOnlyScope();
-  try {
-    retained.run(target, run);
-  } finally {
-    retained.close();
-  }
+  using _ = { [Symbol.dispose]: () => retained.close() };
+  retained.run(target, run);
 }
 
 function openReader(target: Target, env: NodeJS.ProcessEnv): OpenClawAgentReadOnlyDatabase {
@@ -191,18 +188,16 @@ it("publishes lifecycle snapshot admission only after commit and reuses it on th
       const read = () => readExact(target, env, [sessionKey], "lifecycle");
       const commitFailure = new Error("Injected snapshot commit failure");
       const exec = reader.db.exec.bind(reader.db);
-      const failingCommit = vi.spyOn(reader.db, "exec").mockImplementation((sql) => {
-        if (sql === "COMMIT") {
-          throw commitFailure;
-        }
-        return exec(sql);
-      });
-      try {
+      {
+        using _ = vi.spyOn(reader.db, "exec").mockImplementation((sql) => {
+          if (sql === "COMMIT") {
+            throw commitFailure;
+          }
+          return exec(sql);
+        });
         expect(read).toThrow(commitFailure);
         expect(reader.db.isTransaction).toBe(false);
         expect(captureCanonicalSessionReaderContinuation(reader)).toBeUndefined();
-      } finally {
-        failingCommit.mockRestore();
       }
       const queries = trackSqliteStatementExecutions(
         requireNativeSqliteDatabase(reader.db),
@@ -231,9 +226,9 @@ it("keeps pending archive facts in the lifecycle snapshot and observes later com
     writeSessionEntry(database, sessionKey, { sessionId: "live-session", updatedAt: 1 });
     const target = { agentId: database.agentId, path: database.path };
     await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
-    const peer = new (requireNodeSqlite().DatabaseSync)(target.path);
+    using peer = new (requireNodeSqlite().DatabaseSync)(target.path);
     const readEntries = entryCache.readExactSessionEntryCandidatesInDatabase;
-    const concurrentCommit = vi
+    using _ = vi
       .spyOn(entryCache, "readExactSessionEntryCandidatesInDatabase")
       .mockImplementationOnce((...args) => {
         const selected = readEntries(...args);
@@ -244,21 +239,16 @@ it("keeps pending archive facts in the lifecycle snapshot and observes later com
           .run(sessionKey, "0".repeat(64));
         return selected;
       });
-    try {
-      withRetainedReader(target, () => {
-        const read = () => readExact(target, env, [sessionKey], "lifecycle");
-        expect(read()).toMatchObject({
-          entries: [{ sessionKey, entry: { sessionId: "live-session" } }],
-          pendingArchives: false,
-        });
-        expect(read().pendingArchives).toBe(true);
-        peer.exec("UPDATE session_transcript_archives SET published_at = 2");
-        expect(read().pendingArchives).toBe(false);
+    withRetainedReader(target, () => {
+      const read = () => readExact(target, env, [sessionKey], "lifecycle");
+      expect(read()).toMatchObject({
+        entries: [{ sessionKey, entry: { sessionId: "live-session" } }],
+        pendingArchives: false,
       });
-    } finally {
-      concurrentCommit.mockRestore();
-      peer.close();
-    }
+      expect(read().pendingArchives).toBe(true);
+      peer.exec("UPDATE session_transcript_archives SET published_at = 2");
+      expect(read().pendingArchives).toBe(false);
+    });
   }));
 
 it.each([false, true])("reads row metadata (continuation: %s)", (useContinuation) =>
@@ -495,7 +485,7 @@ it("consumes admitted board absence for a cohort and observes first use and publ
     });
   }));
 
-it.each(["worker", "exact", "row-facts"] as const)(
+it.each(["worker", "exact", "full", "children", "worktree", "source-checks", "row-facts"] as const)(
   "refuses unavailable session metadata in the %s reader instead of reporting missing sessions",
   (reader) =>
     withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -513,8 +503,19 @@ it.each(["worker", "exact", "row-facts"] as const)(
               kind: "session-exact-entries",
               database: { agentId: "main", path: storePath },
               env,
-              sessionKeys,
-              projection: reader === "exact" ? "exact" : "list",
+              ...(reader === "children"
+                ? {
+                    selection: { kind: "children" as const, parentSessionKeys: sessionKeys },
+                    projection: "list" as const,
+                  }
+                : {
+                    sessionKeys,
+                    projection:
+                      reader === "exact" || reader === "full" || reader === "worktree"
+                        ? reader
+                        : "list",
+                  }),
+              ...(reader === "source-checks" ? { sourceChecks: [] } : {}),
             }).entries;
       expect(read()).toEqual([]);
       fs.mkdirSync(path.dirname(storePath), { recursive: true });
@@ -638,9 +639,9 @@ it("reads retained headers and entries from one committed sharing snapshot", () 
     seedRetainedSessionHeader(database, sessionKey, "retained-session");
     const target = { agentId: database.agentId, path: database.path };
     await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
-    const peer = new (requireNodeSqlite().DatabaseSync)(target.path);
+    using peer = new (requireNodeSqlite().DatabaseSync)(target.path);
     const readEntries = entryCache.readExactSessionEntryCandidatesInDatabase;
-    const concurrentCommit = vi
+    using _ = vi
       .spyOn(entryCache, "readExactSessionEntryCandidatesInDatabase")
       .mockImplementationOnce((...args) => {
         const selected = readEntries(...args);
@@ -654,24 +655,17 @@ it("reads retained headers and entries from one committed sharing snapshot", () 
         });
         return selected;
       });
-    try {
-      withRetainedReader(target, () => {
-        const read = () => readExact(target, env, [sessionKey], "sharing");
-        const first = read();
-        expect(first.entries).toEqual([]);
-        expect(first.sharing?.placeholders).toEqual([
-          { sessionKey, sessionId: "retained-session" },
-        ]);
-        const next = read();
-        expect(next.entries).toMatchObject([
-          { sessionKey, entry: { sessionId: "retained-session" } },
-        ]);
-        expect(next.sharing?.placeholders).toEqual([]);
-      });
-    } finally {
-      concurrentCommit.mockRestore();
-      peer.close();
-    }
+    withRetainedReader(target, () => {
+      const read = () => readExact(target, env, [sessionKey], "sharing");
+      const first = read();
+      expect(first.entries).toEqual([]);
+      expect(first.sharing?.placeholders).toEqual([{ sessionKey, sessionId: "retained-session" }]);
+      const next = read();
+      expect(next.entries).toMatchObject([
+        { sessionKey, entry: { sessionId: "retained-session" } },
+      ]);
+      expect(next.sharing?.placeholders).toEqual([]);
+    });
   }));
 
 it.each(["unsettled marker", "missing window"] as const)(

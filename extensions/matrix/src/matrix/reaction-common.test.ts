@@ -9,6 +9,20 @@ import {
 } from "./reaction-common.js";
 
 describe("matrix reaction helpers", () => {
+  it.each([
+    [" ", "👍", "Matrix reaction requires a messageId"],
+    ["$msg", " ", "Matrix reaction requires an emoji"],
+    [" ", " ", "Matrix reaction requires a messageId"],
+  ])("rejects blank reaction inputs (%j, %j)", (messageId, emoji, message) => {
+    expect(() => buildMatrixReactionContent(messageId, emoji)).toThrow(message);
+  });
+
+  it("rejects a blank message before building a relation path", () => {
+    expect(() => buildMatrixReactionRelationsPath("!room:example.org", " ")).toThrow(
+      "Matrix reaction requires a messageId",
+    );
+  });
+
   it("builds trimmed reaction content and relation paths", () => {
     expect(buildMatrixReactionContent(" $msg ", " 👍 ")).toEqual({
       "m.relates_to": {

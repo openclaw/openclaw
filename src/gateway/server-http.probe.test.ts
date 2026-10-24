@@ -73,8 +73,17 @@ const remote = (path: string, authorization?: string) => ({
   host: "gateway.test",
   authorization,
 });
-const readyState = (failing: string[]) => ({ ready: failing.length === 0, failing });
-const unready = { ready: false, failing: ["discord", "telegram"], uptimeMs: 8_000 };
+const readyState = (failing: string[], coreReady = true) => ({
+  ready: failing.length === 0,
+  coreReady,
+  failing,
+});
+const unready = {
+  ready: false,
+  coreReady: true,
+  failing: ["discord", "telegram"],
+  uptimeMs: 8_000,
+};
 const startupDetails = (status: "starting" | "started" | "draining", pendingReason?: string) => ({
   ok: status === "started",
   status,
@@ -130,42 +139,20 @@ it("uses Accept to route only the unclaimed Control UI SPA fallback", async () =
       isStartupPluginRuntimeReady: () => sidecarsReady,
     },
     async (probe) => {
-      const htmlCases = [
-        "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "*/*",
-        undefined,
-        "",
-        "text/html;q=0.5",
-        "text/*",
-        "application/xhtml+xml;q=0, text/*",
-        "application/xhtml+xml",
-        "text/html;profile=alternate;q=0, */*;q=1",
-        "text/html;charset=utf-16;q=0, text/html;q=1",
-        'text/html;note="x; q=0; y", */*',
-      ];
-      const nonHtmlCases = [
-        "application/json",
-        "text/event-stream",
-        "text/html;q=0",
-        "text/html;q=0, */*",
-        "text/html;q=0, text/*",
-        "text/html;profile=alternate;q=1, */*;q=0",
-        "text/html;charset=utf-8;q=0, text/html;q=1",
-        "text/html;q=0, text/*;charset=utf-8;q=1",
-        "*/*;q=0",
-        "text/html;Q=0",
-        "text/*;q=0",
-      ];
+      // Negotiation variants belong to control-ui-routing.test.ts; retain both
+      // dispatch branches here, before and after plugin startup.
       for (const ready of [false, true]) {
         sidecarsReady = ready;
-        for (const accept of [...htmlCases, ...nonHtmlCases]) {
-          const html = htmlCases.includes(accept);
+        for (const [accept, html] of [
+          ["text/html", true],
+          ["application/json", false],
+        ] as const) {
           const { res, getBody, setHeader } = await probe.request({
             path: "/unclaimed-spa-route",
             method: "GET",
-            headers: accept === undefined ? undefined : { accept },
+            headers: { accept },
           });
-          const label = String(accept) + " ready=" + ready;
+          const label = `${accept} ready=${ready}`;
           expect(res.statusCode, label).toBe(html ? 200 : ready ? 404 : 503);
           if (html) {
             expect(getBody(), label).toContain("spa fallback");
@@ -201,7 +188,12 @@ describe("gateway probe endpoints", () => {
   it("returns 404 for probe namespace variants instead of false-green Control UI HTML", async () => {
     await withControlUi(
       {
-        getReadiness: () => ({ ready: false, failing: ["gateway-draining"], uptimeMs: 1_000 }),
+        getReadiness: () => ({
+          ready: false,
+          coreReady: false,
+          failing: ["gateway-draining"],
+          uptimeMs: 1_000,
+        }),
       },
       async (probe) => {
         await probe.json("/readyz", 503, { ready: false });
@@ -246,7 +238,7 @@ describe("gateway probe endpoints", () => {
 
         await probe.json("/healthz", 200, { ok: true, status: "live" }, true);
 
-        await probe.json("/readyz", 503, readyState(["gateway-draining"]));
+        await probe.json("/readyz", 503, readyState(["gateway-draining"], false));
 
         for (const [path, method] of [
           ["/v1/chat/completions", "POST"],
@@ -400,7 +392,12 @@ describe("gateway probe endpoints", () => {
         },
       },
       (probe) =>
-        probe.json("/ready", 503, { ready: false, failing: ["internal"], uptimeMs: 0 }, true),
+        probe.json(
+          "/ready",
+          503,
+          { ready: false, coreReady: false, failing: ["internal"], uptimeMs: 0 },
+          true,
+        ),
     );
   });
 
@@ -453,7 +450,7 @@ describe("gateway probe endpoints", () => {
       gatewayDraining = true;
       await probe.json("/startupz", 503, startupDetails("draining"));
 
-      await probe.json("/readyz", 503, readyState(["gateway-draining"]));
+      await probe.json("/readyz", 503, readyState(["gateway-draining"], false));
       gatewayDraining = false;
 
       startupPending = false;
@@ -462,10 +459,8 @@ describe("gateway probe endpoints", () => {
         status: "starting",
         pendingReason: "agent-database-inspection",
       });
-      const readyWhileInspecting = await probe.request({ path: "/readyz" });
-      expect(readyWhileInspecting.res.statusCode).toBe(200);
-      const liveWhileInspecting = await probe.request({ path: "/healthz" });
-      expect(liveWhileInspecting.res.statusCode).toBe(200);
+      await probe.json("/readyz", 200, { ready: true });
+      await probe.json("/healthz", 200, { ok: true });
 
       refusals = [createAgentDatabaseInspectionRefusal({ ...pending, pending: false })];
       await probe.json("/startupz", 200, startupDetails("started"));
@@ -480,10 +475,7 @@ describe("gateway probe endpoints", () => {
       onTestFinished(() => now.mockRestore());
       await probe.json("/readyz", 503, readyState(["whatsapp"]));
 
-      await probe.json("/startupz", 200, {
-        ok: true,
-        status: "started",
-      });
+      await probe.json("/startupz", 200, { ok: true, status: "started" });
 
       gatewayDraining = true;
       await probe.json("/startupz", 503, startupDetails("draining"));
@@ -548,6 +540,7 @@ describe("gateway probe endpoints", () => {
     const shouldEnforcePluginGatewayAuth = vi.fn(() => true);
     const getReadiness = vi.fn(() => ({
       ready: true,
+      coreReady: true,
       failing: [],
       uptimeMs: 123,
     }));
@@ -564,7 +557,7 @@ describe("gateway probe endpoints", () => {
       async (probe) => {
         for (const [path, body, exact] of [
           ["/health", { ok: true, status: "live" }, true],
-          ["/ready", { ready: true, failing: [], uptimeMs: 123 }, true],
+          ["/ready", { ready: true, coreReady: true, failing: [], uptimeMs: 123 }, true],
           [
             "/startup",
             {

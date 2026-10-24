@@ -295,6 +295,7 @@ describe("embedded attempt phase lifecycle state", () => {
         rewrittenEntries: 0,
       }));
       const onContextEngineTurnCandidate = vi.fn();
+      const config = {};
       await completeEmbeddedAttemptAfterTurn(
         {
           ...finalizationInput(prepared(sessionManager)),
@@ -306,9 +307,13 @@ describe("embedded attempt phase lifecycle state", () => {
             sessionFile: target.sessionKey,
             provider: "test",
             modelId: "model",
-            model: { api: "openai-responses", contextWindow: 180_000 },
+            model: { api: "openai-responses", contextWindow: 120_000 },
             modelContextWindow: 200_000,
             contextTokenBudget: 180_000,
+            workspaceDir: dir,
+            cwd: dir,
+            authProfileId: "profile-1",
+            config,
             userTurnTranscriptRecorder: recorder,
             onContextEngineTurnCandidate,
           } as never,
@@ -348,6 +353,32 @@ describe("embedded attempt phase lifecycle state", () => {
       }
       expect(sessionManager.getEntries()).toContainEqual(bootstrapCompletedEntry);
       expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledOnce();
+      const context = hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].ctx;
+      expect(context).toMatchObject({
+        runId: "run-1",
+        agentId: "main",
+        sessionId: target.sessionId,
+        sessionKey: target.sessionKey,
+        modelProviderId: "test",
+        modelId: "model",
+        modelContextWindowTokens: 180_000,
+        authProfileId: "profile-1",
+        skillWorkshopAvailable: false,
+        compacted: false,
+        trace: {
+          traceId: "11111111111111111111111111111111",
+          spanId: "2222222222222222",
+        },
+        foregroundPromptContext: {
+          agentId: "main",
+          agentDir: "/tmp/agent",
+          workspaceDir: dir,
+          cwd: dir,
+          sandboxSessionKey: target.sessionKey,
+          sandboxAgentId: "main",
+        },
+      });
+      expect(context?.config).toBe(config);
       expect(hoisted.runAgentEndSideEffects.mock.calls[0]?.[0].skillExperienceReviewSource).toEqual(
         sessionManager.getSessionTarget()
           ? { ...sessionManager.getSessionTarget(), entryId: terminalEntryId }
@@ -356,6 +387,118 @@ describe("embedded attempt phase lifecycle state", () => {
       expect([afterTurn.mock.calls, maintain.mock.calls]).toEqual([[], []]);
     },
   );
+
+  it.each([
+    ["stacked markers", true],
+    ["custom leaf", false],
+    ["marker after custom leaf", false],
+    ["parentless marker", false],
+    ["missing parent", false],
+    ["no leaf", false],
+    ["real manager marker", true],
+  ] as const)("records terminal candidates with %s", async (scenario, allowed) => {
+    const { dir, target } = await seedSession("candidate-tail");
+    const userMessage = { role: "user" as const, content: "hello", timestamp: 1 };
+    const persisted = await appendTranscriptMessage(target, {
+      cwd: dir,
+      eventId: "user-1",
+      message: userMessage,
+      now: 1,
+    });
+    if (!persisted?.anchor) {
+      throw new Error("expected persisted admission");
+    }
+    const recorder = createUserTurnTranscriptRecorder({
+      message: userMessage,
+      target: async () => undefined,
+    });
+    recorder.markRuntimePersisted(userMessage, persisted.anchor);
+    const sessionManager = SessionManager.open(target, dir);
+    const terminalId = await sessionManager.appendMessageAsync(
+      makeAgentAssistantMessage({ content: [{ type: "text", text: "done" }], timestamp: 2 }),
+    );
+    if (!terminalId) {
+      throw new Error("expected persisted terminal id");
+    }
+    const base = sessionManager.getEntry(terminalId);
+    const terminal = readActiveTranscriptEntryAnchor({ ...persisted.anchor, entryId: terminalId });
+    if (!base || !terminal) {
+      throw new Error("expected persisted terminal");
+    }
+    type Entry = NonNullable<ReturnType<SessionManager["getEntry"]>>;
+    const marker = {
+      id: "marker-1",
+      parentId: base.id,
+      type: "custom" as const,
+      timestamp: new Date(2).toISOString(),
+      customType: "openclaw.cache-ttl",
+    };
+    const snapshot = {
+      ...marker,
+      id: "snapshot-1",
+      parentId: marker.id,
+      customType: "projection-snapshot",
+    };
+    const secondMarker = { ...marker, id: "marker-2", parentId: marker.id };
+    const trailing = { ...marker, id: "trailing", parentId: snapshot.id };
+    const tails = new Map<string, { entries: Entry[]; leafId: string | null }>([
+      ["stacked markers", { entries: [base, marker, secondMarker], leafId: secondMarker.id }],
+      ["custom leaf", { entries: [base, marker, snapshot], leafId: snapshot.id }],
+      [
+        "marker after custom leaf",
+        { entries: [base, marker, snapshot, trailing], leafId: trailing.id },
+      ],
+      ["parentless marker", { entries: [{ ...marker, parentId: null }], leafId: marker.id }],
+      ["missing parent", { entries: [marker], leafId: marker.id }],
+      ["no leaf", { entries: [], leafId: null }],
+    ]);
+    const tail = tails.get(scenario);
+    const reads: { mockRestore(): void }[] = [];
+    if (tail) {
+      const entries = new Map(tail.entries.map((entry) => [entry.id, entry]));
+      reads.push(vi.spyOn(sessionManager, "getLeafId").mockReturnValue(tail.leafId));
+      reads.push(vi.spyOn(sessionManager, "getEntry").mockImplementation((id) => entries.get(id)));
+    } else {
+      await sessionManager.appendCustomEntryAsync("openclaw.cache-ttl", {});
+    }
+    const onContextEngineTurnCandidate = vi.fn();
+    try {
+      await completeEmbeddedAttemptAfterTurn(
+        {
+          ...finalizationInput(prepared(sessionManager, false)),
+          attempt: {
+            runId: "candidate-tail",
+            sessionId: target.sessionId,
+            sessionKey: target.sessionKey,
+            sessionTarget: target,
+            sessionFile: target.sessionKey,
+            provider: "test",
+            modelId: "model",
+            contextTokenBudget: 180_000,
+            userTurnTranscriptRecorder: recorder,
+            onContextEngineTurnCandidate,
+          },
+          activeContextEngine: { info: { id: "test", name: "Test" } },
+        } as never,
+        settled(target.sessionId) as never,
+        prompt(),
+      );
+      if (allowed) {
+        expect(onContextEngineTurnCandidate).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            boundary: { admission: recorder.getAdmissionReceipt(), terminal },
+          }),
+        );
+      } else {
+        expect(onContextEngineTurnCandidate).not.toHaveBeenCalled();
+      }
+      expect(hoisted.runAgentEndSideEffects).toHaveBeenCalledOnce();
+    } finally {
+      for (const read of reads) {
+        read.mockRestore();
+      }
+    }
+  });
 
   it("preserves cron job identity in agent_end after failure", async () => {
     const promptError = new Error("provider failed");

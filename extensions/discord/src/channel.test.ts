@@ -245,6 +245,59 @@ it.each(guildPolicyCases)(
   },
 );
 
+it.each([
+  {
+    name: "parent channel fallback",
+    configuredId: " channel:1510164477642014999 ",
+    expected: { conversationId: "channel:1510164477642014999", matchPriority: 1 },
+  },
+  {
+    name: "exact thread priority",
+    configuredId: "1510164477642014740",
+    expected: { conversationId: "1510164477642014740", matchPriority: 2 },
+  },
+  { name: "unmatched channel", configuredId: "channel:other", expected: null },
+])("discordPlugin matches configured bindings with $name", ({ configuredId, expected }) => {
+  const provider = discordPlugin.bindings;
+  assert(provider);
+  const binding: NonNullable<OpenClawConfig["bindings"]>[number] = {
+    type: "acp",
+    agentId: "main",
+    match: { channel: "discord", peer: { kind: "channel", id: configuredId } },
+  };
+  const compiledBinding = provider.compileConfiguredBinding({
+    binding,
+    conversationId: configuredId,
+  });
+  assert(compiledBinding);
+  expect(compiledBinding.conversationId).toBe(configuredId.trim());
+  expect(
+    provider.matchInboundConversation({
+      binding,
+      compiledBinding,
+      conversationId: "1510164477642014740",
+      parentConversationId: "channel:1510164477642014999",
+    }),
+  ).toEqual(expected);
+  expect(provider.compileConfiguredBinding({ binding, conversationId: "  " })).toBeNull();
+});
+
+it.each([
+  {
+    message: " original message ",
+    blocks: [
+      { type: "text", text: " original message " },
+      { type: "divider" },
+      { type: "context", text: "From Origin" },
+    ],
+  },
+  { message: "  ", blocks: [{ type: "context", text: "From Origin" }] },
+])("discordPlugin presents cross-context text '$message'", ({ message, blocks }) => {
+  const present = discordPlugin.messaging?.buildCrossContextPresentation;
+  assert(present);
+  expect(present({ cfg: {}, originLabel: "Origin", message })).toEqual({ tone: "neutral", blocks });
+});
+
 describe("discordPlugin outbound", () => {
   it("builds tool context with separate native and routable DM targets", () => {
     const buildToolContext = discordPlugin.threading?.buildToolContext;

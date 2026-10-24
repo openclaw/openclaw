@@ -31,6 +31,12 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
     plugins: [],
     pluginIds: [],
     index: { plugins: [] },
+    get registryIndex() {
+      return this.index;
+    },
+    set registryIndex(index) {
+      this.index = index;
+    },
     manifestRegistry: { plugins: [], diagnostics: [] },
     registryDiagnostics: [],
     declaredProviderOwners: new Map(),
@@ -77,10 +83,7 @@ const preparedModelRuntimeMocks = vi.hoisted(() => ({
   createStaticCatalogResolver: vi.fn<CreateStaticCatalogResolver>(),
   discoverAuthStorage: vi.fn((..._args: unknown[]) => undefined as unknown),
   discoverModels: vi.fn(),
-  ensureOpenClawModelsJson: vi.fn(async (...args: unknown[]) => ({
-    agentDir: String(args[1]),
-    wrote: false,
-  })),
+  ensureOpenClawModelsJson: vi.fn(async (..._args: unknown[]) => ({})),
   loadAgentRuntimePluginRegistryHandle: vi.fn(),
   loadStaticCatalog: vi.fn<LoadStaticCatalog>(async () => []),
   planOpenClawModelsJsonSource: vi.fn(async (...args: unknown[]) => ({
@@ -523,10 +526,7 @@ export async function resetPreparedModelRuntimeHarness(state: OpenClawTestState)
   preparedModelRuntimeMocks.discoverModels.mockReset();
   preparedModelRuntimeMocks.ensureOpenClawModelsJson
     .mockReset()
-    .mockImplementation(async (_config, agentDir) => ({
-      agentDir: String(agentDir),
-      wrote: false,
-    }));
+    .mockImplementation(async (_config, _agentDir) => ({}));
   preparedModelRuntimeMocks.loadAgentRuntimePluginRegistryHandle
     .mockReset()
     .mockImplementation(() => createEmptyPluginRegistry());

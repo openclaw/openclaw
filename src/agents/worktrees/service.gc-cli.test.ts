@@ -126,13 +126,12 @@ it
     setLoggerOverride({ level: "warn", consoleLevel: "silent" });
     const logs = createDiagnosticLogRecordCapture();
     await fs.chmod(locked, 0o000);
-    const passes = [];
     try {
       for (let pass = 0; pass < 2; pass++) {
         logs.records.length = 0;
         const exitCode = await run();
         await logs.flush();
-        passes.push({
+        expect({
           exitCode,
           errorLines: logs.records.filter((entry) =>
             [entry.message, ...Object.values(entry.attributes ?? {})].some(
@@ -140,10 +139,7 @@ it
             ),
           ).length,
           result: output.mock.lastCall?.[0],
-        });
-      }
-      for (const pass of passes) {
-        expect(pass).toMatchObject({
+        }).toMatchObject({
           exitCode: 0,
           errorLines: 0,
           result: {

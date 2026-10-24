@@ -51,7 +51,6 @@ describe("Feishu bot identity cache", () => {
       readCachedFeishuBotIdentity({ accountId: "person-2", appId: "cli_person_2" }),
     ).resolves.toEqual({
       botOpenId: "ou_bot_person_2",
-      botName: "OpenClaw QA",
     });
     expect(cacheHarness.openKeyedStore).toHaveBeenCalledWith({
       namespace: "feishu.bot-identity-cache",

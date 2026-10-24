@@ -14,7 +14,7 @@ import {
   sessionPlacementUsesWorkerInference,
 } from "../../agents/session-placement-admission.js";
 import { resolveSessionPlacementForcedTerminalSettlement } from "../../agents/session-placement-forced-terminal-settlement.js";
-import { bindReplyOperationDatabaseAdmission } from "../../auto-reply/reply/reply-turn-database-admission.js";
+import { bindReplyAdmissionRelease } from "../../auto-reply/reply/reply-turn-admission-lifecycle.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   loadSessionEntry,
@@ -27,6 +27,8 @@ import { createEmptyPluginMetadataSnapshot } from "../../plugins/plugin-metadata
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { isCompetingSessionControllerWorkActive } from "../../sessions/session-controller.lifecycle.js";
 import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import { getReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
+import { waitForReplyRunSuccessorAdmission } from "../../sessions/session-controller.wait.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
@@ -318,12 +320,14 @@ describe("worker turn launcher local placement", () => {
       }
       const { databaseClaim } = await loadSessionEntryForAdmission(fx.sessionTarget);
       const operation = createReplyOperation({ ...claim, resetTriggered: false });
-      const binding = bindReplyOperationDatabaseAdmission(
+      bindReplyAdmissionRelease({
         operation,
-        claim,
-        undefined,
+        sessionKey: claim.sessionKey,
+        sessionId: operation.sessionId,
+        admission: undefined,
+        recoveryOwnerLease: undefined,
         databaseClaim,
-      );
+      });
       const projection = vi.spyOn(fx.placements, "readProjection");
       const standaloneEntry = vi.spyOn(sessionEntryReader, "readSessionEntryReadOnlyInWorker");
       const acquire = fx.placements.claimTurn.bind(fx.placements);
@@ -333,7 +337,7 @@ describe("worker turn launcher local placement", () => {
         return acquire(...args);
       });
       try {
-        expect(binding.operationAdmission.reader).toBeDefined();
+        expect(getReplyOperationSessionReader(operation)).toBeDefined();
         await localProvider.executeTurn(
           claim,
           { ...fx.turn(claim.runId), replyOperation: operation },
@@ -350,10 +354,10 @@ describe("worker turn launcher local placement", () => {
         standaloneEntry.mockRestore();
         projection.mockRestore();
         operation.complete();
-        await binding.releaseWorkerDatabaseClaim?.();
-        if (!binding.releaseWorkerDatabaseClaim) {
-          await databaseClaim.release();
-        }
+        expect(await waitForReplyRunSuccessorAdmission(operation.key, null)).toMatchObject({
+          settled: true,
+        });
+        expect(databaseClaim.isCurrent()).toBe(false);
       }
     },
   );
@@ -454,7 +458,9 @@ describe("worker turn launcher local placement", () => {
     const releaseSecond = createDeferred();
     const claim = runIdentity("run-restarted");
 
+    let settleFirst: (() => Promise<void>) | undefined;
     const first = localProvider.executeLocalTurn(claim, async () => {
+      settleFirst = resolveSessionPlacementForcedTerminalSettlement();
       firstStarted.resolve();
       await releaseFirst.promise;
     });
@@ -464,16 +470,9 @@ describe("worker turn launcher local placement", () => {
       throw new Error("Expected the first local turn claim");
     }
     const firstClaimId = firstClaim.claimId;
-    // Live local claims belong to the placement owner; startup only clears legacy SQL claims.
-    expect(
-      await fx.placements.releaseTurn({
-        sessionId: fx.SESSION_ID,
-        claimId: firstClaimId,
-        runId: firstClaim.runId,
-        placementGeneration: firstClaim.generation,
-        owner: { kind: "local" },
-      }),
-    ).toMatchObject({ turnClaim: null });
+    expect(settleFirst).toBeTypeOf("function");
+    await settleFirst?.();
+    expect(fx.placements.get(fx.SESSION_ID)?.turnClaim).toBeNull();
 
     const second = localProvider.executeLocalTurn(claim, async () => {
       secondStarted.resolve();

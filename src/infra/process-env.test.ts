@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  applyProcessEnvKeys,
   mergeProcessEnv,
   resolveDiagnosticProcessEnv,
   resolveEnvironmentValue,
@@ -7,6 +8,26 @@ import {
 
 const routingEnv = (keys: string) =>
   Object.fromEntries(keys.split(" ").map((key) => [key, `/fixture/${key}`]));
+
+it("applies only selected environment keys, preserving empty values and absence", () => {
+  vi.stubEnv("OPENCLAW_TEST_APPLY_ENV_EMPTY", "previous");
+  vi.stubEnv("OPENCLAW_TEST_APPLY_ENV_ABSENT", "previous");
+  vi.stubEnv("OPENCLAW_TEST_APPLY_ENV_OUTSIDE", "retained");
+  try {
+    applyProcessEnvKeys(
+      new Set(["OPENCLAW_TEST_APPLY_ENV_EMPTY", "OPENCLAW_TEST_APPLY_ENV_ABSENT"]),
+      {
+        OPENCLAW_TEST_APPLY_ENV_EMPTY: "",
+        OPENCLAW_TEST_APPLY_ENV_OUTSIDE: "not selected",
+      },
+    );
+    expect(process.env.OPENCLAW_TEST_APPLY_ENV_EMPTY).toBe("");
+    expect(process.env.OPENCLAW_TEST_APPLY_ENV_ABSENT).toBeUndefined();
+    expect(process.env.OPENCLAW_TEST_APPLY_ENV_OUTSIDE).toBe("retained");
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
 
 describe("resolveEnvironmentValue", () => {
   it("preserves exact POSIX keys and the existing Path fallback", () => {

@@ -9,7 +9,6 @@ import { LEGACY_ADVERTISED_GATEWAY_METHODS } from "./server-methods-list.test-fi
 import { coreGatewayHandlers } from "./server-methods.js";
 
 describe("listGatewayMethods", () => {
-  const voiceSelectionMethods = ["talk.voice.get", "talk.voice.set", "talk.voice.complete"];
   let methods: string[];
   beforeEach(() => {
     methods = listGatewayMethods();
@@ -29,8 +28,20 @@ describe("listGatewayMethods", () => {
     ["users.background.upload", "operator.write", {}],
     ["users.background.remove", "operator.write", {}],
     ["models.authSetApiKey", "operator.admin", { controlPlaneWrite: true }],
-  ] as const)("advertises and applies authority policy to %s", (name, scope, policy) => {
-    expectAdvertised(name);
+    ["sessions.title.prepare", "operator.write", { controlPlaneWrite: true }],
+    ["projects.add", "operator.write", { controlPlaneWrite: true }],
+    [
+      "projects.searchRemote",
+      "operator.read",
+      { description: "Search GitHub repositories that can be cloned as managed projects." },
+    ],
+    ["node.runnerInventory.update", "node", { advertise: false }],
+  ] as const)("registers and applies authority policy to %s", (name, scope, policy) => {
+    if (name === "node.runnerInventory.update") {
+      expect(coreGatewayHandlers[name]).toBeTypeOf("function");
+    } else {
+      expectAdvertised(name);
+    }
     expect(descriptor(name)).toMatchObject({ scope, ...policy });
   });
 
@@ -50,13 +61,6 @@ describe("listGatewayMethods", () => {
       LEGACY_ADVERTISED_GATEWAY_METHODS,
     );
   });
-
-  const sessionEnvironmentMethods = [
-    ["environments.session.status", "operator.read", undefined],
-    ["environments.session.create", "operator.admin", true],
-    ["environments.session.destroy", "operator.admin", true],
-    ["environments.session.exec", "operator.admin", undefined],
-  ] as const;
 
   it("advertises plugin reload with admin mutation policy and generation invalidation", () => {
     expect(GATEWAY_EVENTS).toContain("plugins.changed");
@@ -88,8 +92,7 @@ describe("listGatewayMethods", () => {
 
   it("advertises Control UI session pull request detection", () => {
     expect(methods).toContain("controlUi.sessionPullRequests.subscribe");
-    expect(methods).toContain("controlUi.sessionPullRequests.checks");
-    expect(coreGatewayHandlers["controlUi.sessionPullRequests.checks"]).toBeTypeOf("function");
+    expectAdvertised("controlUi.sessionPullRequests.checks");
     expect(GATEWAY_EVENTS).toContain("controlUi.sessionPullRequests.changed");
   });
 
@@ -99,7 +102,7 @@ describe("listGatewayMethods", () => {
     ["update.hold"],
     ["update.runs.get"],
     ["update.runs.list"],
-    voiceSelectionMethods,
+    ["talk.voice.get", "talk.voice.set", "talk.voice.complete"],
   ])("advertises and wires %s", (...names) => expectAdvertised(...names));
 
   it("keeps deprecated restart preflight compatibility read-only and advertised", () => {
@@ -126,28 +129,6 @@ describe("listGatewayMethods", () => {
     }
   });
 
-  it.each([
-    ["sessions.title.prepare", { scope: "operator.write", controlPlaneWrite: true }],
-    ["projects.add", { scope: "operator.write", controlPlaneWrite: true }],
-    [
-      "projects.searchRemote",
-      {
-        scope: "operator.read",
-        description: "Search GitHub repositories that can be cloned as managed projects.",
-      },
-    ],
-  ] as const)("classifies %s policy", (name, policy) => {
-    expect(descriptor(name)).toMatchObject(policy);
-  });
-
-  it("registers the hidden node protocol feature publication method", () => {
-    expect(coreGatewayHandlers["node.runnerInventory.update"]).toBeTypeOf("function");
-    expect(descriptor("node.runnerInventory.update")).toMatchObject({
-      scope: "node",
-      advertise: false,
-    });
-  });
-
   it("advertises session involvement and keeps plugin discovery after public sharing", () => {
     expect(methods).toContain("sessions.setInvolvement");
     const start = methods.indexOf("session.publicShare.set") + 1;
@@ -159,12 +140,7 @@ describe("listGatewayMethods", () => {
   });
 
   it("advertises and wires cloud worker environment methods with their required scopes", () => {
-    const cloudMethods = [
-      "environments.create",
-      "environments.destroy",
-      "environments.prepare",
-    ] as const;
-    for (const method of cloudMethods) {
+    for (const method of ["environments.create", "environments.destroy", "environments.prepare"]) {
       expectAdvertised(method);
       expect(STARTUP_UNAVAILABLE_GATEWAY_METHODS).toContain(method);
       expect(descriptor(method)).toMatchObject({
@@ -173,7 +149,12 @@ describe("listGatewayMethods", () => {
         controlPlaneWrite: true,
       });
     }
-    for (const [method, scope, controlPlaneWrite] of sessionEnvironmentMethods) {
+    for (const [method, scope, controlPlaneWrite] of [
+      ["environments.session.status", "operator.read", undefined],
+      ["environments.session.create", "operator.admin", true],
+      ["environments.session.destroy", "operator.admin", true],
+      ["environments.session.exec", "operator.admin", undefined],
+    ] as const) {
       expectAdvertised(method);
       expect(descriptor(method)).toMatchObject({ scope, since: "2026.9" });
       expect(descriptor(method)?.controlPlaneWrite).toBe(controlPlaneWrite);

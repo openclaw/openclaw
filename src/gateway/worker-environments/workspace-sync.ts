@@ -6,6 +6,7 @@ import { withTimeout } from "../../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
+import { createPendingPromiseTracker } from "../../shared/pending-promises.js";
 import { isWorkspaceInspectionCommand } from "../../worker/workspace-inspection-protocol.js";
 import {
   type PreparedWorkerSsh,
@@ -90,14 +91,7 @@ export function createWorkerWorkspaceActions(
   WorkerTunnelHandle,
   "quiesceWorkspace" | "reconcileWorkspace" | "runWorkspaceCommand" | "syncWorkspace"
 > {
-  const track = <T>(task: Promise<T>): Promise<T> => {
-    options.tasks.add(task);
-    void task.then(
-      () => options.tasks.delete(task),
-      () => options.tasks.delete(task),
-    );
-    return task;
-  };
+  const track = createPendingPromiseTracker(options.tasks);
 
   const waitForPrepared = async (
     timeoutMs: number,

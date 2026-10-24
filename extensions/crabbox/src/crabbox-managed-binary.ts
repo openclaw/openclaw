@@ -8,7 +8,7 @@ import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { runCrabboxProcess } from "./crabbox-process.js";
 import { crabboxExecutionError, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
 
-export const CRABBOX_MIN_VERSION = "0.77.0";
+export const CRABBOX_MIN_VERSION = "0.79.2";
 export const CRABBOX_NONBLOCKING_CAPTURE_VERSION = "0.79.0";
 const RELEASE_URL = `https://github.com/openclaw/crabbox/releases/download/v${CRABBOX_MIN_VERSION}`;
 const MAX_ARCHIVE_BYTES = 128 * 1024 * 1024;
@@ -220,55 +220,6 @@ async function inspectInstallationDirectory(destination: string) {
   return stat;
 }
 
-async function publishInstallation(params: {
-  binary: string;
-  version: string;
-  payload: string;
-  runCommand: CrabboxCommandRunner;
-  signal: AbortSignal;
-}): Promise<CrabboxBinary> {
-  const { binary, payload, runCommand, signal } = params;
-  const destination = path.dirname(binary);
-  const { withFileLock } = await import("openclaw/plugin-sdk/file-lock");
-  signal.throwIfAborted();
-  return withFileLock(
-    `${destination}.publication`,
-    {
-      retries: { retries: 100, factor: 1, minTimeout: 100, maxTimeout: 100 },
-      stale: 120_000,
-      staleRecovery: "remove-if-definitely-stale",
-    },
-    async () => {
-      signal.throwIfAborted();
-      const existing = await inspectInstallationDirectory(destination);
-      const installed = existing ? await probeInstallation(binary, runCommand, signal) : undefined;
-      if (installed) {
-        return installed;
-      }
-      signal.throwIfAborted();
-      const recovery = existing ? `${destination}.recovery-${randomUUID()}` : undefined;
-      if (recovery) {
-        // Preserve damaged installations, including files we did not create, outside staging cleanup.
-        await fs.rename(destination, recovery);
-      }
-      try {
-        signal.throwIfAborted();
-        // Runtime packs and companion executables must stay beside the CLI.
-        await fs.rename(payload, destination);
-        return { binary, version: params.version };
-      } catch (error) {
-        if (recovery) {
-          throw new Error(
-            `Crabbox publication failed; previous installation is preserved at ${recovery}`,
-            { cause: error },
-          );
-        }
-        throw error;
-      }
-    },
-  );
-}
-
 async function installManagedBinary(
   binary: string,
   runCommand: CrabboxCommandRunner,
@@ -327,13 +278,50 @@ async function installManagedBinary(
     if (!staged) {
       throw new Error(`Downloaded Crabbox executable does not satisfy ${CRABBOX_MIN_VERSION}`);
     }
-    return await publishInstallation({
-      binary,
-      version: staged.version,
-      payload,
-      runCommand,
-      signal,
-    });
+    const version = staged.version;
+    async function publishInstallation(): Promise<CrabboxBinary> {
+      const { withFileLock } = await import("openclaw/plugin-sdk/file-lock");
+      signal.throwIfAborted();
+      return withFileLock(
+        `${destination}.publication`,
+        {
+          retries: { retries: 100, factor: 1, minTimeout: 100, maxTimeout: 100 },
+          stale: 120_000,
+          staleRecovery: "remove-if-definitely-stale",
+        },
+        async () => {
+          signal.throwIfAborted();
+          const existing = await inspectInstallationDirectory(destination);
+          const installed = existing
+            ? await probeInstallation(binary, runCommand, signal)
+            : undefined;
+          if (installed) {
+            return installed;
+          }
+          signal.throwIfAborted();
+          const recovery = existing ? `${destination}.recovery-${randomUUID()}` : undefined;
+          if (recovery) {
+            // Preserve damaged installations, including files we did not create, outside staging cleanup.
+            await fs.rename(destination, recovery);
+          }
+          try {
+            signal.throwIfAborted();
+            // Runtime packs and companion executables must stay beside the CLI.
+            await fs.rename(payload, destination);
+            return { binary, version };
+          } catch (error) {
+            if (recovery) {
+              throw new Error(
+                `Crabbox publication failed; previous installation is preserved at ${recovery}`,
+                { cause: error },
+              );
+            }
+            throw error;
+          }
+        },
+      );
+    }
+    return await publishInstallation();
   } finally {
     await fs.rm(staging, { recursive: true, force: true });
   }

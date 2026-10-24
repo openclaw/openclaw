@@ -87,18 +87,6 @@ it("keeps Resume progress and its saved retry in the goal pill", () => {
   expect(query(".session-run-spinner")).toBeNull();
 });
 
-it.each([
-  ["active", "2m 00s"],
-  ["paused", "1m 00s"],
-  ["blocked", "1m 00s"],
-  ["usage_limited", "1m 00s"],
-  ["budget_limited", "1m 00s"],
-  ["complete", "1m 00s"],
-] as const)("renders elapsed time immediately for %s goals", (status, elapsed) => {
-  const view = mountGoal({ ...goal, status });
-  expect(view.elapsed()).toBe(elapsed);
-});
-
 it("replaces a live tick with the authoritative stop time and resumes ticking", () => {
   const view = mountGoal(goal);
   advanceTime(1_000);

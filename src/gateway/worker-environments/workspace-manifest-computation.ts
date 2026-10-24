@@ -3,7 +3,7 @@ import type {
   readWorkspaceFileSnapshotWithLimit,
 } from "./workspace-actual-manifest.js";
 import type { WorkspaceHashMetrics } from "./workspace-hash-memo.js";
-import type { WorkspaceNode } from "./workspace-manifest-comparison.js";
+import type { WorkspaceNode, WorkspacePreflightInput } from "./workspace-manifest-comparison.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
@@ -37,6 +37,8 @@ export type WorkspaceManifestValueInputs = {
     hashes?: WorkspaceComputationHashes;
   };
   "workspace.manifest.snapshot": WorkspaceManifestValueInputs["workspace.manifest.capture"];
+  "workspace.manifest.document": WorkspaceManifestValueInputs["workspace.manifest.capture"];
+  "workspace.manifest.reference": WorkspaceManifestValueInputs["workspace.manifest.capture"];
   "workspace.manifest.file": {
     path: string;
     maxBytes: number;
@@ -60,10 +62,8 @@ export type WorkspaceManifestValueInputs = {
     prepared: WorkerWorkspaceManifest;
     incoming: WorkerWorkspaceManifest;
   };
-  "workspace.reconcile.preflight": {
+  "workspace.reconcile.preflight": WorkspacePreflightInput & {
     root: string;
-    base: WorkerWorkspaceManifest;
-    current: WorkerWorkspaceManifest;
     hashes?: WorkspaceComputationHashes;
   };
 };
@@ -94,6 +94,10 @@ export type WorkspaceStageInput<Raw = Uint8Array<ArrayBuffer>> = WorkspaceStageI
 export type WorkspaceManifestValueOutputs = {
   "workspace.manifest.capture": WorkspaceComputationHashResult<WorkspaceManifestCapture>;
   "workspace.manifest.snapshot": WorkspaceComputationHashResult<WorkspaceManifestSnapshot>;
+  "workspace.manifest.document": WorkspaceComputationHashResult<
+    Omit<WorkspaceManifestSnapshot, "manifest">
+  >;
+  "workspace.manifest.reference": WorkspaceComputationHashResult<string>;
   "workspace.manifest.file": WorkspaceComputationHashResult<
     Awaited<ReturnType<typeof readWorkspaceFileSnapshotWithLimit>>
   >;

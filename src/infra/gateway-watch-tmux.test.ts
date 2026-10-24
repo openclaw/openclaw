@@ -1,4 +1,3 @@
-// Covers gateway watch tmux script helpers.
 import type { SpawnSyncOptions, SpawnSyncReturns } from "node:child_process";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -130,6 +129,13 @@ describe("gateway-watch tmux wrapper", () => {
     stdout: JSON.stringify({ service, gateway: { port: 18789 }, ...(portCli ? { portCli } : {}) }),
     stderr: "",
   });
+  const handoffStatus = (service: object, portCli?: object, stop = false) =>
+    stop
+      ? vi
+          .fn()
+          .mockReturnValueOnce(serviceStatus(service, portCli))
+          .mockReturnValueOnce({ status: 0 })
+      : vi.fn().mockReturnValue(serviceStatus(service, portCli));
   const buildCommand = (overrides: Parameters<typeof buildGatewayWatchTmuxCommand>[0]) =>
     buildGatewayWatchTmuxCommand({
       args: ["gateway", "--force"],
@@ -216,9 +222,9 @@ describe("gateway-watch tmux wrapper", () => {
     expect(command).toContain("gateway");
     expect(command).toContain("--force");
     expect(command).toContain("'a b.jsonl'");
-    expect(command).not.toContain("scripts/run-node.mjs");
     expect(command).toContain("scripts/gateway-watch-tmux.mts");
     expect(command).toContain("--handoff-managed-service");
+    expect(command).not.toContain("scripts/run-node.mjs");
   });
 
   it("runs managed service handoff before watching and clears an omitted development selector", () => {
@@ -278,60 +284,30 @@ describe("gateway-watch tmux wrapper", () => {
     });
   });
 
-  it("leaves a loaded managed Gateway running on a different port", () => {
-    spawnSync = vi.fn().mockReturnValue(serviceStatus({ loaded: true }));
-
-    const code = runHandoff({
-      args: ["gateway", "--force", "--port=19001"],
-      env: { OPENCLAW_GATEWAY_PORT: "18789" },
-    });
-
-    expect(code).toBe(0);
+  it.each([true, false])("leaves a different port running (explicit CLI=%s)", (explicit) => {
+    spawnSync = handoffStatus({ loaded: true }, explicit ? undefined : { port: 19001 });
+    expect(
+      runHandoff(
+        explicit
+          ? {
+              args: ["gateway", "--force", "--port=19001"],
+              env: { OPENCLAW_GATEWAY_PORT: "18789" },
+            }
+          : { env: {} },
+      ),
+    ).toBe(0);
     expect(spawnSync).toHaveBeenCalledTimes(1);
     expect(stderr.text()).toContain("leaving managed Gateway on port 18789; watching port 19001");
   });
 
-  it("uses the current config port when the installed service retains an old port", () => {
-    spawnSync = vi.fn().mockReturnValue(serviceStatus({ loaded: true }, { port: 19001 }));
-
-    const code = runHandoff({ env: {} });
-
-    expect(code).toBe(0);
-    expect(spawnSync).toHaveBeenCalledTimes(1);
-    expect(stderr.text()).toContain("leaving managed Gateway on port 18789; watching port 19001");
-  });
-
-  it("normalizes a Compose-style port before comparing with the managed service", () => {
-    spawnSync = vi
-      .fn()
-      .mockReturnValueOnce(serviceStatus({ loaded: true }))
-      .mockReturnValueOnce({ status: 0 });
-
-    const code = runHandoff({ env: { OPENCLAW_GATEWAY_PORT: "127.0.0.1:18789" } });
-
-    expect(code).toBe(0);
-    expect(spawnSync).toHaveBeenCalledTimes(2);
-  });
-
-  it("does not invoke the unmanaged stop fallback when the service is not loaded", () => {
-    spawnSync = vi.fn().mockReturnValue(serviceStatus({ loaded: false }));
-
-    const code = runHandoff({ env: {} });
-
-    expect(code).toBe(0);
-    expect(spawnSync).toHaveBeenCalledTimes(1);
-  });
-
-  it("stops a running managed service even when systemd reports it disabled", () => {
-    spawnSync = vi
-      .fn()
-      .mockReturnValueOnce(serviceStatus({ loaded: false, runtime: { status: "running" } }))
-      .mockReturnValueOnce({ status: 0 });
-
-    const code = runHandoff({ env: {} });
-
-    expect(code).toBe(0);
-    expect(spawnSync).toHaveBeenCalledTimes(2);
+  it.each([
+    ["Compose port", { loaded: true }, { OPENCLAW_GATEWAY_PORT: "127.0.0.1:18789" }, 2],
+    ["unloaded service", { loaded: false }, {}, 1],
+    ["disabled but running", { loaded: false, runtime: { status: "running" } }, {}, 2],
+  ] as const)("handles %s during service handoff", (_label, service, env, calls) => {
+    spawnSync = handoffStatus(service, undefined, calls === 2);
+    expect(runHandoff({ env })).toBe(0);
+    expect(spawnSync).toHaveBeenCalledTimes(calls);
   });
 
   it("fails handoff when the managed stop process cannot launch", () => {

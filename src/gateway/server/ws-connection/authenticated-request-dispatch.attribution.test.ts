@@ -12,6 +12,8 @@ import { shareSidebarSessionRows } from "../../session-row-presentation.js";
 import {
   createDispatchTestHarness,
   createOperatorWsClient,
+  dispatchProfile,
+  requestFrame,
 } from "./authenticated-request-dispatch.test-support.js";
 
 beforeEach(() => resetDiagnosticEventsForTest());
@@ -58,15 +60,13 @@ async function dispatch(
     clientInfo: { id: "openclaw-control-ui", mode: "webchat" },
   });
   if (delivery === "shared") {
-    client.authenticatedUserProfile = {
-      profileId: "private-profile",
+    client.authenticatedUserProfile = dispatchProfile("private-profile", {
       displayName: "Test operator",
-      hasAvatar: false,
       avatarRevision: "0",
       updatedAt: 0,
-    };
+    });
   }
-  const request = { type: "req", id: "private-request", method, params };
+  const request = requestFrame("private-request", method, params);
   const internalSend = delivery === "internal" ? harness.send : undefined;
   await dispatchRequest(request, client, undefined, internalSend);
   if (delivery === "shared") {

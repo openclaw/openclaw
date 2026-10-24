@@ -28,6 +28,7 @@ import {
 } from "../../../sessions/user-turn-transcript.message.js";
 import { readTranscriptMessages } from "../../../sessions/user-turn-transcript.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
+import { RESTART_RECOVERY_INTERRUPTION_NOTE } from "../../restart-recovery-prompt.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
@@ -791,12 +792,13 @@ describe("durable model prompt projection at provider dispatch", () => {
   });
 
   it.each([
-    { body: "plain", nested: false, hook: false },
-    { body: "forwarded inter-session", nested: true, hook: false },
-    { body: "hook", nested: false, hook: true },
+    { body: "plain", nested: false, hook: false, restart: false },
+    { body: "forwarded inter-session", nested: true, hook: false, restart: false },
+    { body: "hook", nested: false, hook: true, restart: false },
+    { body: "restart with frozen prompt", nested: false, hook: false, restart: true },
   ])(
     "replays an inter-session turn with its stored provenance envelope: $body body",
-    async ({ nested, hook }) => {
+    async ({ nested, hook, restart }) => {
       await withOpenClawTestState({ label: "inter-session-model-prompt" }, async (state) => {
         const target = {
           agentId: "main",
@@ -832,6 +834,9 @@ describe("durable model prompt projection at provider dispatch", () => {
           target,
         });
         await recorder.persistApproved();
+        if (restart) {
+          await recorder.captureModelPromptProjection!(annotated, () => {});
+        }
         const manager = await SessionManager.openAsync(target, state.workspaceDir);
         const { session } = await createTestSession({ sessionManager: manager });
         const convert = session.agent.convertToLlm;
@@ -852,6 +857,11 @@ describe("durable model prompt projection at provider dispatch", () => {
           attempt: { sessionId, userTurnTranscriptRecorder: recorder },
           transcriptPrompt: annotated,
           modelPrompt: hook ? `hook before hidden\n\n${body}` : body,
+          runtimeContextMessage: restart
+            ? buildRuntimeContextCustomMessage(RESTART_RECOVERY_INTERRUPTION_NOTE, [
+                { kind: "runtime-instruction", text: RESTART_RECOVERY_INTERRUPTION_NOTE },
+              ])
+            : undefined,
           prependContext: undefined,
           appendContext: undefined,
           getUserTranscriptContexts: () => [],
@@ -870,7 +880,9 @@ describe("durable model prompt projection at provider dispatch", () => {
         expect(requests).toHaveLength(2);
         const firstUser = (request: (typeof requests)[number]) =>
           JSON.stringify(
-            (request.input as { role?: string }[]).find((item) => item.role === "user"),
+            (request.input as { role?: string }[]).find(
+              (item) => item.role === "user" && JSON.stringify(item).includes(task),
+            ),
           );
         // The first send already carries the stored safety envelope, so replay keeps its bytes
         // and the envelope stays visible once the transient carrier is gone.
@@ -879,9 +891,17 @@ describe("durable model prompt projection at provider dispatch", () => {
         expect(firstUser(requests[1]!)).toBe(firstUser(requests[0]!));
         // A replacement that drops the source envelope is ignored.
         expect(JSON.stringify(requests)).not.toContain("hidden");
-        expect(JSON.stringify(loadTranscriptEventsSync(target))).not.toContain(
-          "modelPromptProjection",
-        );
+        if (restart) {
+          expect(
+            JSON.stringify(requests[0]).split(RESTART_RECOVERY_INTERRUPTION_NOTE),
+          ).toHaveLength(2);
+          expect(JSON.stringify(requests[1])).not.toContain(RESTART_RECOVERY_INTERRUPTION_NOTE);
+          expect(readModelPromptProjection(recorder.getPersistedMessage!())).toBe(annotated);
+        } else {
+          expect(JSON.stringify(loadTranscriptEventsSync(target))).not.toContain(
+            "modelPromptProjection",
+          );
+        }
       });
     },
   );
@@ -959,7 +979,6 @@ describe("tool-result projection persistence at dispatch", () => {
       images: [],
       modelPrompt: "read files",
       onFinalPromptText: () => {},
-      onSteeringAcknowledged: () => {},
       runtimeOnly: false,
       systemPrompt: "test prompt",
       toolResultAggregateMaxChars: 8_000,

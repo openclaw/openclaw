@@ -1,5 +1,4 @@
-// Googlechat tests cover secret contract plugin behavior.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { GoogleChatConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   applyResolvedAssignments,
   createResolverContext,
@@ -8,24 +7,27 @@ import {
 import { describe, expect, it } from "vitest";
 import { collectRuntimeConfigAssignments } from "./secret-contract.js";
 
+const envRef = (id: string) => ({ source: "env" as const, provider: "default", id });
+const channelConfig = <T extends GoogleChatConfig>(googlechat: T) => ({ channels: { googlechat } });
+const expectedAssignment = (ownerId: string, path = "channels.googlechat.serviceAccount") => ({
+  path,
+  ownerId: `googlechat:${ownerId}`,
+  expected: "string-or-object",
+  ownerContractDigest: undefined,
+});
+
 describe("googlechat secret contract", () => {
   it("keeps inherited object credentials and explicit overrides owned by their active accounts", () => {
-    const rootRef = { source: "env", provider: "default", id: "GOOGLECHAT_ROOT" } as const;
-    const overrideRef = { source: "env", provider: "default", id: "GOOGLECHAT_OVERRIDE" } as const;
-    const disabledRef = { source: "env", provider: "default", id: "GOOGLECHAT_DISABLED" } as const;
-    const sourceConfig = {
-      channels: {
-        googlechat: {
-          serviceAccount: rootRef,
-          accounts: {
-            alpha: {},
-            beta: {},
-            override: { serviceAccount: overrideRef },
-            disabled: { enabled: false, serviceAccount: disabledRef },
-          },
-        },
+    const disabledRef = envRef("GOOGLECHAT_DISABLED");
+    const sourceConfig = channelConfig({
+      serviceAccount: envRef("GOOGLECHAT_ROOT"),
+      accounts: {
+        alpha: {},
+        beta: {},
+        override: { serviceAccount: envRef("GOOGLECHAT_OVERRIDE") },
+        disabled: { enabled: false, serviceAccount: disabledRef },
       },
-    } satisfies OpenClawConfig;
+    });
     const config = structuredClone(sourceConfig);
     const context = createResolverContext({ sourceConfig, env: {} });
 
@@ -39,24 +41,9 @@ describe("googlechat secret contract", () => {
         ownerContractDigest,
       })),
     ).toEqual([
-      {
-        path: "channels.googlechat.serviceAccount",
-        ownerId: "googlechat:alpha",
-        expected: "string-or-object",
-        ownerContractDigest: undefined,
-      },
-      {
-        path: "channels.googlechat.serviceAccount",
-        ownerId: "googlechat:beta",
-        expected: "string-or-object",
-        ownerContractDigest: undefined,
-      },
-      {
-        path: "channels.googlechat.accounts.override.serviceAccount",
-        ownerId: "googlechat:override",
-        expected: "string-or-object",
-        ownerContractDigest: undefined,
-      },
+      expectedAssignment("alpha"),
+      expectedAssignment("beta"),
+      expectedAssignment("override", "channels.googlechat.accounts.override.serviceAccount"),
     ]);
     const serviceAccount = { client_email: "synthetic@example.invalid" };
     context.assignments[0]?.apply(serviceAccount);
@@ -71,36 +58,19 @@ describe("googlechat secret contract", () => {
   });
 
   it("resolves account serviceAccount SecretRefs for enabled accounts", async () => {
-    const sourceConfig = {
-      channels: {
-        googlechat: {
-          enabled: true,
-          accounts: {
-            work: {
-              enabled: true,
-              serviceAccount: {
-                source: "env",
-                provider: "default",
-                id: "GOOGLECHAT_SERVICE_ACCOUNT",
-              },
-            },
-          },
-        },
+    const sourceConfig = channelConfig({
+      enabled: true,
+      accounts: {
+        work: { enabled: true, serviceAccount: envRef("GOOGLECHAT_SERVICE_ACCOUNT") },
       },
-    } satisfies OpenClawConfig;
+    });
     const resolvedConfig: OpenClawConfig = structuredClone(sourceConfig);
     const context = createResolverContext({
       sourceConfig,
-      env: {
-        GOOGLECHAT_SERVICE_ACCOUNT: '{"client_email":"bot@example.com"}',
-      },
+      env: { GOOGLECHAT_SERVICE_ACCOUNT: '{"client_email":"bot@example.com"}' },
     });
 
-    collectRuntimeConfigAssignments({
-      config: resolvedConfig,
-      defaults: undefined,
-      context,
-    });
+    collectRuntimeConfigAssignments({ config: resolvedConfig, context });
 
     expect(context.assignments).toMatchObject([
       {
@@ -113,16 +83,9 @@ describe("googlechat secret contract", () => {
 
     const resolved = await resolveSecretRefValues(
       context.assignments.map((assignment) => assignment.ref),
-      {
-        config: sourceConfig,
-        env: context.env,
-        cache: context.cache,
-      },
+      { config: sourceConfig, env: context.env, cache: context.cache },
     );
-    applyResolvedAssignments({
-      assignments: context.assignments,
-      resolved,
-    });
+    applyResolvedAssignments({ assignments: context.assignments, resolved });
 
     const workAccount = resolvedConfig.channels?.googlechat?.accounts?.work;
     expect(workAccount?.serviceAccount).toBe('{"client_email":"bot@example.com"}');

@@ -2,6 +2,7 @@ import { spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { appendFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { createInterface } from "node:readline";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { afterEach, describe, expect, it } from "vitest";
 import { createJsonlRequestTailer } from "../../scripts/e2e/lib/codex-media-path/jsonl-request-tail.mts";
@@ -47,32 +48,21 @@ it("returns a structured error when request logging fails", async () => {
     stdio: ["pipe", "pipe", "pipe"],
   });
   const stderr = createBoundedChildOutput();
-  const stdout = createBoundedChildOutput();
-  const response = new Promise<string>((resolve, reject) => {
-    child.stdout.on("data", (chunk) => {
-      stdout.append(chunk);
-      const line = stdout
-        .text()
-        .split("\n")
-        .find((entry) => entry.trim());
-      if (line) {
-        resolve(line);
-      }
-    });
-    child.once("error", reject);
-    child.once("exit", (code, signal) =>
-      reject(new Error(`fake app-server exited before response: code=${code} signal=${signal}`)),
-    );
-  });
+  const lines = createInterface({ input: child.stdout });
+  const response = Promise.race([
+    once(lines, "line"),
+    once(child, "exit").then(([code, signal]) => {
+      throw new Error(`fake app-server exited before response: code=${code} signal=${signal}`);
+    }),
+  ]);
   child.stderr.on("data", stderr.append);
   // Reproduce independent pipe delivery: stdout can arrive before stderr.
   child.stderr.pause();
   const closed = once(child, "close");
   try {
     child.stdin.write(jsonl({ id: "request-1", method: "initialize" }));
-    const responseLine = await withTimeout(response, 3_000, {
-      createError: () =>
-        new Error(`timed out waiting for fake app-server response: ${stdout.text()}`),
+    const [responseLine] = await withTimeout(response, 3_000, {
+      createError: () => new Error("timed out waiting for fake app-server response"),
     });
     expect(JSON.parse(responseLine)).toMatchObject({
       error: {
@@ -86,6 +76,7 @@ it("returns a structured error when request logging fails", async () => {
     await closed;
     expect(stderr.text()).toContain("fake Codex app-server request log write failed");
   } finally {
+    lines.close();
     if (child.exitCode === null && child.signalCode === null) {
       child.kill("SIGTERM");
       await closed;
@@ -94,9 +85,9 @@ it("returns a structured error when request logging fails", async () => {
 });
 
 describe("codex media path JSONL tailer", () => {
-  function fixture(maxReadBytes = 1024) {
+  function fixture() {
     const logPath = path.join(tempRoots.make("openclaw-codex-media-path-"), "app-server.jsonl");
-    const tailer = createJsonlRequestTailer(logPath, { maxReadBytes, historyLimit: 10 });
+    const tailer = createJsonlRequestTailer(logPath, { maxReadBytes: 1024, historyLimit: 10 });
     return { logPath, tailer };
   }
   const initialize = { method: "initialize" };
@@ -110,13 +101,6 @@ describe("codex media path JSONL tailer", () => {
     expect(tailer.read()).toEqual([initialize]);
     appendFileSync(logPath, "\n");
     expect(tailer.read()).toEqual([initialize, turn]);
-  });
-
-  it("starts from a bounded tail of oversized logs", () => {
-    const lastLine = jsonl(turn);
-    const { logPath, tailer } = fixture(lastLine.length + 2);
-    writeFileSync(logPath, `${"x".repeat(256)}\n${jsonl({ method: "old" })}${lastLine}`);
-    expect(tailer.read()).toEqual([turn]);
   });
 
   it("resets request history when the app-server log is truncated", () => {

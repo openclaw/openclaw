@@ -31,9 +31,6 @@ export function validateMatrixHomeserverUrl(
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
     throw new Error("Matrix homeserver must use http:// or https://");
   }
-  if (!parsed.hostname) {
-    throw new Error("Matrix homeserver must include a hostname");
-  }
   if (parsed.username || parsed.password) {
     throw new Error("Matrix homeserver URL must not include embedded credentials");
   }
@@ -55,14 +52,10 @@ export async function resolveValidatedMatrixHomeserverUrl(
   homeserver: string,
   opts?: {
     dangerouslyAllowPrivateNetwork?: boolean;
-    allowPrivateNetwork?: boolean;
     lookupFn?: LookupFn;
   },
 ): Promise<string> {
-  const allowPrivateNetwork =
-    typeof opts?.dangerouslyAllowPrivateNetwork === "boolean"
-      ? opts.dangerouslyAllowPrivateNetwork
-      : opts?.allowPrivateNetwork;
+  const allowPrivateNetwork = opts?.dangerouslyAllowPrivateNetwork;
   const normalized = validateMatrixHomeserverUrl(homeserver, {
     allowPrivateNetwork,
   });

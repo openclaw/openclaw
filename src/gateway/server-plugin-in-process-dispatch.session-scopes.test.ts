@@ -21,6 +21,7 @@ import {
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { prepareCronRunAdmission } from "../cron/run-admission.js";
+import { TEST_SCHEDULED_EXECUTION } from "../cron/scheduled-occurrence.test-support.js";
 import {
   bindGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
@@ -148,6 +149,7 @@ async function createHostedCreation(state: OpenClawTestState, source: HostedSour
   const scheduled =
     source === "scheduled"
       ? prepareCronRunAdmission({
+          scheduledExecution: TEST_SCHEDULED_EXECUTION,
           deliveryAttemptFence: { beforeAttempt: async () => {}, assertCurrent: () => {} },
           cfg,
           runId: "scope-parent-run",

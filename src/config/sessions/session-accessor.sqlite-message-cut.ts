@@ -77,16 +77,6 @@ export async function forkSessionAtMessage(
   return await mutateSqliteSessionAtMessage(params, "fork", expectedState);
 }
 
-/** Gateway-owned source predicates are checked beside the transaction's fresh session row. */
-export async function mutateSessionAtMessageWithPreconditions(
-  params: SessionMessageCutMutationParams,
-  mode: SessionTranscriptMutationMode,
-  expectedState: SessionEntryExpectedState | undefined,
-  preconditions: SessionMessageCutPreconditions,
-): Promise<SessionMessageCutResult> {
-  return mutateSqliteSessionAtMessage(params, mode, expectedState, preconditions);
-}
-
 export async function switchSessionBranch(
   params: SessionBranchSwitchMutationParams,
   expectedState?: SessionEntryExpectedState,
@@ -98,26 +88,27 @@ export async function switchSessionBranch(
   );
 }
 
-function mutateSqliteSessionAtMessage(
+export function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: "fork" | "rewind",
   expectedState?: SessionEntryExpectedState,
   preconditions?: SessionMessageCutPreconditions,
 ): Promise<SessionMessageCutMutationResult | { status: "conflict" }>;
-function mutateSqliteSessionAtMessage(
+export function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: "switch",
   expectedState?: SessionEntryExpectedState,
   preconditions?: SessionMessageCutPreconditions,
 ): Promise<SessionBranchSwitchMutationResult | { status: "conflict" }>;
-function mutateSqliteSessionAtMessage(
+export function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: SessionTranscriptMutationMode,
   expectedState?: SessionEntryExpectedState,
   preconditions?: SessionMessageCutPreconditions,
 ): Promise<SessionMessageCutResult>;
 
-async function mutateSqliteSessionAtMessage(
+/** Gateway-owned source predicates are checked beside the transaction's fresh session row. */
+export async function mutateSqliteSessionAtMessage(
   params: SessionMessageCutMutationParams,
   mode: SessionTranscriptMutationMode,
   expectedState?: SessionEntryExpectedState,

@@ -63,7 +63,7 @@ it("recovers a deleted Chat through the shell's router subscription without recu
     expect(shell.activeSessionKey).toBe(deletedKey);
 
     deletion.mockImplementation((key) => (key === deletedKey ? "confirmed" : undefined));
-    shell.recoverDeletedActiveSession();
+    shell.shellNavigation.recoverDeletedActiveSession();
     await recovery;
 
     expect(errors).toEqual([]);

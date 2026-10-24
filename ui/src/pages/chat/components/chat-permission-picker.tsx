@@ -1,4 +1,4 @@
-import { createMemo, createUniqueId, onCleanup } from "solid-js";
+import { createMemo, createUniqueId, onSettled } from "solid-js";
 import type { SessionPermissionMode } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { Menu, type MenuHandle, type MenuItem } from "../../../components/solid/menu.tsx";
@@ -60,8 +60,8 @@ export function ChatPermissionPicker(props: ChatPermissionPickerProps) {
   let menu: MenuHandle | undefined;
   let stopSurface: (() => void) | undefined;
   let stopTrigger: (() => void) | undefined;
-  // Menu publishes its handle from onSettled; teardown registration belongs in setup.
-  onCleanup(() => {
+  // Menu publishes its handle during settlement; release its listeners with this view.
+  onSettled(() => () => {
     stopSurface?.();
     stopTrigger?.();
   });

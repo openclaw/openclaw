@@ -319,14 +319,6 @@
   min-width: 0;
 }
 
-.cron-table__name-text,
-.cron-table__cell-value {
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .cron-table__description {
   flex: 0 1 auto;
   min-width: 0;
@@ -509,13 +501,6 @@
   font-weight: 600;
 }
 
-.cron-detail-meta {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  min-width: 0;
-}
-
 .cron-detail-sub {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
@@ -618,18 +603,6 @@
   color: var(--danger);
   font-weight: 700;
   margin-left: 3px;
-}
-
-.cron-required-sr {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  padding: 0;
-  margin: -1px;
-  overflow: hidden;
-  clip: rect(0, 0, 0, 0);
-  white-space: nowrap;
-  border: 0;
 }
 
 .cron-editor input[aria-invalid="true"],
@@ -736,6 +709,13 @@
 
 .cron-form-status__link:hover {
   color: var(--text-strong);
+}
+
+/* The action bar owns bottom spacing while present. Shell and settings-page
+   padding would leave form content visible beneath it, including at scroll end. */
+.shell main.content.content--cron-editor,
+.content--cron-editor .cron-page--detail > .settings-page {
+  padding-bottom: 0;
 }
 
 /* Sticky save bar: stays visible while the long form scrolls in `.content`. */

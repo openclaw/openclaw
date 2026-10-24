@@ -17,6 +17,7 @@ export type SessionEntryCurrentFacts = {
   sandbox?: SessionEntry["sandbox"];
   sandboxMode?: SessionEntry["sandboxMode"];
   permissionMode?: SessionEntry["permissionMode"];
+  toolOverrides?: SessionEntry["toolOverrides"];
   sessionRoot?: SessionEntry["sessionRoot"];
   authProfileOverride?: SessionEntry["authProfileOverride"];
   authProfileOverrideSource?: SessionEntry["authProfileOverrideSource"];
@@ -27,8 +28,10 @@ export type SessionEntryCurrentFacts = {
   previousSessionId?: unknown;
   archivedAt?: unknown;
   repositoryWorkspaceId?: unknown;
+  goal?: unknown;
   lifecycleRevision?: unknown;
   lifecycleRunId?: unknown;
+  lastRunId?: unknown;
   activeWriterRunId?: unknown;
   spawnedBy?: unknown;
   spawnDepth?: unknown;

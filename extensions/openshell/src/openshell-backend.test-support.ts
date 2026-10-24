@@ -22,25 +22,16 @@ export let createOpenShellSandboxBackendManager: typeof import("./backend.js").c
 export let createOpenShellSandboxBackendFactory: typeof import("./backend.js").createOpenShellSandboxBackendFactory;
 
 export async function installOpenShellBackendMocks() {
-  vi.doMock("openclaw/plugin-sdk/sandbox", async () => {
-    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/sandbox")>(
-      "openclaw/plugin-sdk/sandbox",
-    );
-    return {
-      ...actual,
-      disposeSshSandboxSession: sandboxMocks.disposeSshSandboxSession,
-      prepareSshSandboxExec: sandboxMocks.prepareSshSandboxExec,
-      runSshSandboxCommand: sandboxMocks.runSshSandboxCommand,
-    };
-  });
-  vi.doMock("./cli.js", async () => {
-    const actual = await vi.importActual<typeof import("./cli.js")>("./cli.js");
-    return {
-      ...actual,
-      createOpenShellSshSession: cliMocks.createOpenShellSshSession,
-      runOpenShellCli: cliMocks.runOpenShellCli,
-    };
-  });
+  vi.doMock("openclaw/plugin-sdk/sandbox", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("openclaw/plugin-sdk/sandbox")>()),
+    disposeSshSandboxSession: sandboxMocks.disposeSshSandboxSession,
+    prepareSshSandboxExec: sandboxMocks.prepareSshSandboxExec,
+    runSshSandboxCommand: sandboxMocks.runSshSandboxCommand,
+  }));
+  vi.doMock("./cli.js", async (importOriginal) => ({
+    ...(await importOriginal<typeof import("./cli.js")>()),
+    ...cliMocks,
+  }));
   ({ createOpenShellSandboxBackendFactory, createOpenShellSandboxBackendManager } =
     await import("./backend.js"));
 }
@@ -86,19 +77,11 @@ export function resetOpenShellBackendMocks() {
       if (result.error) {
         throw result.error;
       }
-      const stdout = Buffer.isBuffer(result.stdout)
-        ? result.stdout
-        : Buffer.from(result.stdout ?? "");
-      const stderr = Buffer.isBuffer(result.stderr)
-        ? result.stderr
-        : Buffer.from(result.stderr ?? "");
+      const stdout = result.stdout ?? Buffer.alloc(0);
+      const stderr = result.stderr ?? Buffer.alloc(0);
       const code = result.status ?? 1;
       if (code !== 0 && !params.allowFailure) {
-        throw Object.assign(new Error(stderr.toString("utf8").trim()), {
-          code,
-          stdout,
-          stderr,
-        });
+        throw Object.assign(new Error(stderr.toString("utf8").trim()), { code, stdout, stderr });
       }
       return { stdout, stderr, code };
     },
@@ -123,11 +106,8 @@ export async function createOpenShellBackendFixture(params: {
 }): Promise<OpenShellSandboxBackend> {
   const factory = createOpenShellSandboxBackendFactory({
     pluginConfig: resolveOpenShellPluginConfig({
-      command: "openshell",
       mode: params.mode,
-      ...(params.remoteAgentWorkspaceDir
-        ? { remoteAgentWorkspaceDir: params.remoteAgentWorkspaceDir }
-        : {}),
+      remoteAgentWorkspaceDir: params.remoteAgentWorkspaceDir || undefined,
     }),
   });
   return (await factory({

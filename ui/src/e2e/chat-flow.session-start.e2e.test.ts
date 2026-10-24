@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
-import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
+import { closeChatDetails, openChatTaskProgress } from "./chat-details.test-support.ts";
 import {
   chatMessage,
   newChatPage,
@@ -72,10 +72,12 @@ suite.define(() => {
     const progressRequest = await gateway.waitForRequest("progressCard.get");
     expect(progressRequest.params).toEqual({ sessionKey: "global", agentId: "ops" });
     const progress = page.getByText("Global progress after startup", { exact: true });
-    await progress.waitFor({ state: "attached" });
     expect(await progress.isVisible()).toBe(false);
-    const details = await openChatDetails(page);
-    await details.getByText("Global progress after startup", { exact: true }).waitFor();
+    const details = await openChatTaskProgress(page);
+    await details
+      .locator(".session-progress-card__markdown")
+      .getByText("Global progress after startup", { exact: true })
+      .waitFor();
     await closeChatDetails(page);
 
     const prompt = "send after configured inference loads";

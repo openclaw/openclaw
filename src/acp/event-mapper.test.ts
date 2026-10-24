@@ -8,6 +8,32 @@ import {
 } from "./event-mapper.js";
 
 describe("extractToolCallLocations", () => {
+  it.each([
+    [12.9, 12],
+    [0.5, undefined],
+    [0, undefined],
+    [-1, undefined],
+    [Number.NaN, undefined],
+    [Number.POSITIVE_INFINITY, undefined],
+    ["12", undefined],
+  ] as const)("keeps only positive whole-line locations from %j", (line, expected) => {
+    const path = "/tmp/synthetic.txt";
+    expect(extractToolCallLocations({ path, line })).toEqual([
+      expected === undefined ? { path } : { path, line: expected },
+    ]);
+  });
+
+  it("uses the first valid line key after rejecting subunit lines", () => {
+    expect(
+      extractToolCallLocations({
+        path: "/tmp/synthetic.txt",
+        line: 0.5,
+        lineNumber: 3.9,
+        startLine: 9,
+      }),
+    ).toEqual([{ path: "/tmp/synthetic.txt", line: 3 }]);
+  });
+
   it("enforces the global node visit cap across nested structures", () => {
     const nested = Array.from({ length: 20 }, (_, outer) =>
       Array.from({ length: 20 }, (_Local, inner) =>

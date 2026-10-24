@@ -63,36 +63,28 @@ it("preserves valid legacy sources without letting unusable receipts veto discov
   const config = await fs.readFile(path.join(root, ".git", "config"), "utf8");
   mocks.root.mockResolvedValue(root);
   const matching = { root, sha, upstreamRef: "upstream/main", installedAtMs: 1234 };
-  const receipts = [
+  const sourceCase = (name: string, upstream: string, upstreamSha = customTarget, behind = 1) => ({
+    name,
+    receipt: { ...matching, upstreamRef: upstream },
+    expected: { upstream, upstreamSha, behind },
+  });
+  const receipts: Array<{
+    name: string;
+    receipt: VerifiedGitUpdateReceipt | null;
+    expected?: ReturnType<typeof sourceCase>["expected"];
+  }> = [
     { name: "absent", receipt: null },
+    sourceCase("matching custom source", "upstream/main"),
+    sourceCase("abbreviated fetch source", "refs/status/main"),
+    sourceCase("HEAD fetch source", "refs/status/head"),
     {
-      name: "matching custom source",
-      receipt: matching,
-      expected: { upstream: "upstream/main", upstreamSha: customTarget, behind: 1 },
-    },
-    {
-      name: "abbreviated fetch source",
-      receipt: { ...matching, upstreamRef: "refs/status/main" },
-      expected: { upstream: "refs/status/main", upstreamSha: customTarget, behind: 1 },
-    },
-    {
-      name: "HEAD fetch source",
-      receipt: { ...matching, upstreamRef: "refs/status/head" },
-      expected: { upstream: "refs/status/head", upstreamSha: customTarget, behind: 1 },
-    },
-    {
-      name: "unambiguous short SHA",
+      ...sourceCase("unambiguous short SHA", "upstream/main"),
       receipt: { ...matching, sha: sha.slice(0, 8) },
-      expected: { upstream: "upstream/main", upstreamSha: customTarget, behind: 1 },
     },
     { name: "short stale SHA", receipt: { ...matching, sha: target.slice(0, 8) } },
     { name: "too short SHA", receipt: { ...matching, sha: sha.slice(0, 6) } },
     { name: "revision expression", receipt: { ...matching, sha: sha.slice(0, 8) + "^{commit}" } },
-    {
-      name: "valid older stream",
-      receipt: { ...matching, upstreamRef: "origin/old-stream" },
-      expected: { upstream: "origin/old-stream", upstreamSha: sha, behind: 0 },
-    },
+    sourceCase("valid older stream", "origin/old-stream", sha, 0),
     { name: "missing stream", receipt: { ...matching, upstreamRef: "origin/missing" } },
     { name: "malformed stream", receipt: { ...matching, upstreamRef: "bad ..ref" } },
     { name: "stale SHA", receipt: { ...matching, sha: target } },
@@ -119,15 +111,13 @@ it("preserves valid legacy sources without letting unusable receipts veto discov
       root,
     );
     expect
-      .soft(schedule.install?.git?.status, name)
-      .toBe(expected?.behind === 0 ? "current" : "behind");
-    expect
-      .soft(schedule.install?.git?.installedAtMs, name)
-      .toBe(
+      .soft([schedule.install?.git?.status, schedule.install?.git?.installedAtMs], name)
+      .toEqual([
+        expected?.behind === 0 ? "current" : "behind",
         receipt?.root === root && /^[0-9a-f]{7,}$/i.test(receipt.sha) && sha.startsWith(receipt.sha)
           ? 1234
           : undefined,
-      );
+      ]);
   }
   mocks.receipt.mockResolvedValue({ ...matching, upstreamRef: "refs/remotes/upstream/main" });
   await git(root, "update-ref", "-d", "refs/remotes/upstream/main");

@@ -503,6 +503,10 @@ An explicit tool model remains selected; the Grok 4.3 examples below are overrid
     - Default endpointing: `800ms`
     - Interim transcripts: enabled by default
 
+    Dictation previews retain locked chunks across short pauses. A replacement
+    connection commits those chunks as an interrupted utterance before showing
+    new speech; unconfirmed text from the old connection is discarded.
+
     Voice Call's Twilio media stream sends G.711 mu-law audio frames, so the
     xAI provider forwards those frames directly without transcoding:
 

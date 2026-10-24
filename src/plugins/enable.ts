@@ -1,4 +1,3 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { ensurePluginAllowlisted } from "../config/plugins-allowlist.js";
@@ -17,19 +16,14 @@ export function prepareConfigForDisabledInstall(
   config: OpenClawConfig,
   pluginId: string,
 ): OpenClawConfig {
-  const entry = config.plugins?.entries?.[pluginId];
-  const policy = isRecord(entry) ? { ...entry } : {};
+  // Reuse the disable toggle so the staged entry lands on the canonical policy key.
+  const next = setPluginEnabledInConfig(config, pluginId, false, { updateChannelConfig: false });
+  const resolvedId = normalizePluginId(normalizeChatChannelId(pluginId) ?? pluginId);
+  const entries = { ...next.plugins?.entries };
+  const policy = { ...entries[resolvedId] };
   delete policy.config;
-  return {
-    ...config,
-    plugins: {
-      ...config.plugins,
-      entries: {
-        ...config.plugins?.entries,
-        [pluginId]: { ...policy, enabled: false },
-      },
-    },
-  };
+  entries[resolvedId] = policy;
+  return { ...next, plugins: { ...next.plugins, entries } };
 }
 
 /** Result of enabling a plugin in config. */

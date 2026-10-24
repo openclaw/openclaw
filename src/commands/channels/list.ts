@@ -23,11 +23,6 @@ import {
   requireValidChannelConfig,
 } from "./shared.js";
 
-type ChannelsListOptions = {
-  json?: boolean;
-  all?: boolean;
-};
-
 async function readGatewayChannelStatus(): Promise<RuntimeChannelStatusPayload | null> {
   try {
     return (await callGateway({
@@ -101,7 +96,10 @@ function formatAccountLine(params: {
 }
 
 export async function channelsListCommand(
-  opts: ChannelsListOptions,
+  opts: {
+    json?: boolean;
+    all?: boolean;
+  },
   runtime: RuntimeEnv = defaultRuntime,
 ) {
   const cfg = await requireValidChannelConfig(runtime);

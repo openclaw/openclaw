@@ -134,17 +134,13 @@ export async function waitForQueueDebounce(
   }
 }
 
-/** Render a collect prompt from queued items and optional overflow summary. */
+/** Render a collect prompt from queued items. */
 export function buildCollectPrompt<T>(params: {
   title: string;
   items: T[];
-  summary?: string;
   renderItem: (item: T, index: number) => string;
 }): string {
   const blocks: string[] = [params.title];
-  if (params.summary) {
-    blocks.push(params.summary);
-  }
   params.items.forEach((item, idx) => {
     blocks.push(params.renderItem(item, idx));
   });

@@ -15,7 +15,6 @@ suite.define(() => {
     ["chat", ".chat-thread"],
     ["sessions", ".sessions-table"],
     ["dashboards", "[data-dashboard-session]"],
-    ["agents", ".agents-home__preview"],
   ])(
     "updates held rows on %s without any mounted caller refetching a list",
     async (route, selector) => {
@@ -116,7 +115,7 @@ suite.define(() => {
         if (route !== "chat") {
           await expect
             .poll(() => foreground.first().textContent())
-            .toContain(route === "agents" ? "Main roster preview" : "Updated by certified event");
+            .toContain("Updated by certified event");
         }
         await gateway.emitGatewayEvent("sessions.changed", {
           ...patch("Updated with held ancestor", now + 500),

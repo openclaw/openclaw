@@ -571,7 +571,7 @@ describe("Git operation host lifecycle", () => {
           }),
           runGitWorkerOperation({
             type: "worktree.directory-size",
-            input: { root: peer, excludeGit: true },
+            input: { root: peer },
           }),
           runGitWorkerOperation({
             type: "worktree.eviction-source",

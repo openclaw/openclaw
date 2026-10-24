@@ -18,6 +18,7 @@ import {
   MODEL_CATALOG_MAX_CONTEXT_WINDOWS,
   MODEL_CATALOG_THINKING_LEVELS,
   isModelCatalogThinkingFormat,
+  normalizeModelFamily,
   type ModelCatalog,
   type ModelCatalogApi,
   type ModelCatalogCompatConfig,
@@ -468,6 +469,7 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
   const contextWindowSelection = normalizeModelCatalogContextWindowSelection(value);
   const contextTokens = normalizePositiveInteger(value.contextTokens);
   const parameterCount = normalizePositiveInteger(value.parameterCount);
+  const family = normalizeModelFamily(value.family);
   const maxTokens = normalizePositiveNumber(value.maxTokens);
   const thinkingLevelMap = normalizeModelCatalogThinkingLevelMap(value.thinkingLevelMap);
   const cost = normalizeModelCatalogCost(value.cost);
@@ -491,6 +493,7 @@ function normalizeModelCatalogModel(value: unknown): ModelCatalogModel | undefin
     ...contextWindowSelection,
     ...(contextTokens !== undefined ? { contextTokens } : {}),
     ...(parameterCount !== undefined ? { parameterCount } : {}),
+    ...(family ? { family } : {}),
     ...(maxTokens !== undefined ? { maxTokens } : {}),
     ...(thinkingLevelMap ? { thinkingLevelMap } : {}),
     ...(cost ? { cost } : {}),
@@ -529,11 +532,13 @@ function normalizeModelCatalogProvider(value: unknown): ModelCatalogProvider | u
   const headers = normalizeStringMap(value.headers);
   const defaultModel = normalizeOptionalString(value.defaultModel) ?? "";
   const defaultUtilityModel = normalizeOptionalString(value.defaultUtilityModel) ?? "";
+  const family = normalizeModelFamily(value.family);
   return {
     ...(authScope ? { authScope } : {}),
     ...(baseUrl ? { baseUrl } : {}),
     ...(api ? { api } : {}),
     ...(headers ? { headers } : {}),
+    ...(family ? { family } : {}),
     ...(defaultModel ? { defaultModel } : {}),
     ...(defaultUtilityModel ? { defaultUtilityModel } : {}),
     models,
@@ -693,6 +698,7 @@ export function normalizeModelCatalogProviderRows(params: {
   const providerApi = normalizeModelCatalogApi(params.providerCatalog.api);
   const providerBaseUrl = normalizeOptionalString(params.providerCatalog.baseUrl) ?? "";
   const providerHeaders = normalizeStringMap(params.providerCatalog.headers);
+  const providerFamily = normalizeModelFamily(params.providerCatalog.family);
   const rows: NormalizedModelCatalogRow[] = [];
 
   for (const rawModel of params.providerCatalog.models) {
@@ -702,6 +708,7 @@ export function normalizeModelCatalogProviderRows(params: {
     }
     const api = model.api ?? providerApi;
     const baseUrl = model.baseUrl ?? providerBaseUrl;
+    const family = model.family ?? providerFamily;
     const headers =
       providerHeaders || model.headers ? { ...providerHeaders, ...model.headers } : undefined;
     rows.push({
@@ -717,6 +724,7 @@ export function normalizeModelCatalogProviderRows(params: {
       ...(api ? { api } : {}),
       ...(baseUrl ? { baseUrl } : {}),
       ...(headers ? { headers } : {}),
+      ...(family ? { family } : {}),
     });
   }
 

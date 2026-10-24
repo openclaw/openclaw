@@ -184,83 +184,6 @@ function dispatchModelCallHook(
   );
 }
 
-function withDiagnosticRequestContext(
-  options: ModelCallStreamOptions,
-  trace: DiagnosticTraceContext,
-  observer: ModelCallObserver,
-  callId: string,
-  ctx: ModelCallDiagnosticContext,
-): NonNullable<ModelCallStreamOptions> {
-  const traceparent = formatPropagatedDiagnosticTraceparent(trace);
-  const originalOnPayload = options?.onPayload;
-  const originalOnResponse = options?.onResponse;
-  const onPayload: NonNullable<ModelCallStreamOptions>["onPayload"] = (payload, model) => {
-    if (modelRequestBodyState(requestOptions).enabled) {
-      return originalOnPayload?.(payload, model);
-    }
-    if (!originalOnPayload) {
-      observer.assignRequestPayloadBytes(payload);
-      return undefined;
-    }
-    const result = originalOnPayload(payload, model);
-    const observeReplacement = (replacement: unknown) => {
-      observer.assignRequestPayloadBytes(replacement ?? payload);
-      return replacement;
-    };
-    return isPromiseLike(result) ? result.then(observeReplacement) : observeReplacement(result);
-  };
-  const onResponse: NonNullable<ModelCallStreamOptions>["onResponse"] = (response, model) => {
-    // Retrying providers can expose several responses; the terminal request status
-    // is the latest response observed before the model call completes or fails.
-    if (!observer.state.terminalEventEmitted) {
-      observer.state.responseStatus = response.status;
-      observer.state.lastProviderActivityAtMs = Date.now();
-    }
-    return originalOnResponse?.(response, model);
-  };
-
-  const headers: Record<string, string> = {};
-  for (const [key, value] of Object.entries(options?.headers ?? {})) {
-    if (key.toLowerCase() === TRACEPARENT_HEADER_NAME) {
-      continue;
-    }
-    headers[key] = value;
-  }
-  if (traceparent) {
-    headers[TRACEPARENT_HEADER_NAME] = traceparent;
-  }
-  const requestOptions = {
-    ...options,
-    requestId: callId,
-    ...((options?.headers || traceparent) && { headers }),
-    onPayload,
-    onResponse,
-  };
-  modelRequestBodyState(requestOptions).onBytes = (bytes) => {
-    observer.state.requestPayloadBytes = bytes;
-    emitDiagnosticsTimelineEvent(
-      {
-        type: "mark",
-        name: "provider.request.serialized",
-        timestamp: new Date().toISOString(),
-        runId: ctx.runId,
-        spanId: callId,
-      },
-      { config: ctx.config },
-    );
-  };
-  return withProviderAcceptanceObserver(requestOptions, (acceptance) => {
-    if (observer.state.terminalEventEmitted) {
-      return;
-    }
-    observer.state.lastProviderActivityAtMs = Date.now();
-    observer.state.providerAcceptanceKind = acceptance.kind;
-    if (acceptance.kind === "http_response") {
-      observer.state.responseStatus = acceptance.status;
-    }
-  });
-}
-
 export function createModelLifecycle(params: {
   ctx: ModelCallDiagnosticContext;
   options: ModelCallStreamOptions;
@@ -328,13 +251,76 @@ export function createModelLifecycle(params: {
     },
     { config: params.ctx.config },
   );
-  const propagatedOptions = withDiagnosticRequestContext(
-    params.options,
-    trace,
-    observer,
-    callId,
-    params.ctx,
-  );
+  const options = params.options;
+  const ctx = params.ctx;
+  const traceparent = formatPropagatedDiagnosticTraceparent(trace);
+  const originalOnPayload = options?.onPayload;
+  const originalOnResponse = options?.onResponse;
+  const onPayload: NonNullable<ModelCallStreamOptions>["onPayload"] = (payload, model) => {
+    if (modelRequestBodyState(requestOptions).enabled) {
+      return originalOnPayload?.(payload, model);
+    }
+    if (!originalOnPayload) {
+      observer.assignRequestPayloadBytes(payload);
+      return undefined;
+    }
+    const result = originalOnPayload(payload, model);
+    const observeReplacement = (replacement: unknown) => {
+      observer.assignRequestPayloadBytes(replacement ?? payload);
+      return replacement;
+    };
+    return isPromiseLike(result) ? result.then(observeReplacement) : observeReplacement(result);
+  };
+  const onResponse: NonNullable<ModelCallStreamOptions>["onResponse"] = (response, model) => {
+    // Retrying providers can expose several responses; the terminal request status
+    // is the latest response observed before the model call completes or fails.
+    if (!observer.state.terminalEventEmitted) {
+      observer.state.responseStatus = response.status;
+      observer.state.lastProviderActivityAtMs = Date.now();
+    }
+    return originalOnResponse?.(response, model);
+  };
+
+  const headers: Record<string, string> = {};
+  for (const [key, value] of Object.entries(options?.headers ?? {})) {
+    if (key.toLowerCase() === TRACEPARENT_HEADER_NAME) {
+      continue;
+    }
+    headers[key] = value;
+  }
+  if (traceparent) {
+    headers[TRACEPARENT_HEADER_NAME] = traceparent;
+  }
+  const requestOptions = {
+    ...options,
+    requestId: callId,
+    ...((options?.headers || traceparent) && { headers }),
+    onPayload,
+    onResponse,
+  };
+  modelRequestBodyState(requestOptions).onBytes = (bytes) => {
+    observer.state.requestPayloadBytes = bytes;
+    emitDiagnosticsTimelineEvent(
+      {
+        type: "mark",
+        name: "provider.request.serialized",
+        timestamp: new Date().toISOString(),
+        runId: ctx.runId,
+        spanId: callId,
+      },
+      { config: ctx.config },
+    );
+  };
+  const propagatedOptions = withProviderAcceptanceObserver(requestOptions, (acceptance) => {
+    if (observer.state.terminalEventEmitted) {
+      return;
+    }
+    observer.state.lastProviderActivityAtMs = Date.now();
+    observer.state.providerAcceptanceKind = acceptance.kind;
+    if (acceptance.kind === "http_response") {
+      observer.state.responseStatus = acceptance.status;
+    }
+  });
   let waitReason: "response" | "slot" | null = null;
   let firstEventObserved = false;
   const trackStatusDelivery = captureAsyncWorkTracker();

@@ -44,7 +44,7 @@ const reportedRuntimeErrors = new Set<string>();
 // Fresh renders ping the agent; old restored history only shows the notice.
 const WIDGET_RUNTIME_ERROR_REPORT_WINDOW_MS = 10 * 60_000;
 
-export type CanvasWidgetViewProps = {
+type CanvasWidgetViewProps = {
   docId: string;
   sessionKey: string;
   messageTimestamp?: number;
@@ -56,10 +56,14 @@ export type CanvasWidgetViewProps = {
   allowScripts: boolean;
 };
 
-export type OpenClawCanvasWidgetView = SolidBridgeElement<CanvasWidgetViewProps> & {
+type CanvasWidgetViewContent = {
   readonly documentHtml: string | undefined;
   readonly previewFrame: HTMLIFrameElement | undefined;
 };
+export type OpenClawCanvasWidgetView = SolidBridgeElement<
+  CanvasWidgetViewProps,
+  CanvasWidgetViewContent
+>;
 
 function createCanvasWidget(
   props: CanvasWidgetViewProps,
@@ -551,7 +555,7 @@ function createCanvasWidget(
   };
 }
 
-export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
+export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps, CanvasWidgetViewContent>(
   "openclaw-canvas-widget-view",
   (props, host) => {
     host.style.display = "contents";

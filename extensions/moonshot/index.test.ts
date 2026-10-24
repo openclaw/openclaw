@@ -1,48 +1,92 @@
 import type { Context, Model } from "openclaw/plugin-sdk/llm";
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createRuntimeEnv,
+  registerSingleProviderPlugin,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  resolveAgentModelPrimaryValue,
+  type OpenClawConfig,
+} from "openclaw/plugin-sdk/provider-onboard";
 import { createCapturedThinkingConfigStream } from "openclaw/plugin-sdk/provider-test-contracts";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
-import { MOONSHOT_BASE_URL } from "./provider-catalog.js";
+import {
+  MOONSHOT_BASE_URL,
+  MOONSHOT_CN_BASE_URL,
+  MOONSHOT_DEFAULT_MODEL_ID,
+  MOONSHOT_DEFAULT_MODEL_REF,
+} from "./provider-catalog.js";
 
-async function captureThinkingConfig(
-  modelId: string,
-  hook: "wrapStreamFn" | "wrapSimpleCompletionStreamFn" = "wrapSimpleCompletionStreamFn",
-) {
+async function registeredSetup(methodId: string) {
   const provider = await registerSingleProviderPlugin(plugin);
-  const captured = createCapturedThinkingConfigStream();
-  const wrapped = provider[hook]?.({
-    provider: "moonshot",
-    modelId,
-    thinkingLevel: "off",
-    streamFn: captured.streamFn,
-  } as never);
-  await wrapped?.(
-    { api: "openai-completions", provider: "moonshot", id: modelId } as Model<"openai-completions">,
-    { messages: [] } as Context,
-    {},
-  );
-  return { provider, captured, payload: captured.getCapturedPayload() };
+  const runNonInteractive = provider.auth.find(
+    (method) => method.id === methodId,
+  )?.runNonInteractive;
+  if (!runNonInteractive) {
+    throw new Error("expected registered Moonshot noninteractive auth");
+  }
+  const toApiKeyCredential = vi.fn(() => null);
+  return async (config: OpenClawConfig) => {
+    const result = await runNonInteractive({
+      authChoice: methodId === "api-key-cn" ? "moonshot-api-key-cn" : "moonshot-api-key",
+      config,
+      baseConfig: config,
+      opts: {},
+      runtime: createRuntimeEnv(),
+      resolveApiKey: async () => ({ key: "stored-test-key", source: "profile" }),
+      toApiKeyCredential,
+    });
+    expect(toApiKeyCredential).not.toHaveBeenCalled();
+    if (!result) {
+      throw new Error("expected Moonshot setup result");
+    }
+    return result;
+  };
 }
 
 describe("moonshot provider plugin", () => {
-  it.each<{ name: string; route: Partial<Model>; expected: boolean }>([
-    { name: "userinfo", route: { baseUrl: "https://u@api.moonshot.ai/v1" }, expected: false },
-  ])("enables native video only for the exact $name route", async ({ route, expected }) => {
+  it.each([
+    ["international", "api-key", MOONSHOT_BASE_URL],
+    ["China", "api-key-cn", MOONSHOT_CN_BASE_URL],
+  ])(
+    "applies the replace-mode manifest default on the %s endpoint",
+    async (_name, methodId, baseUrl) => {
+      const applyConfig = await registeredSetup(methodId);
+      const config = await applyConfig({ models: { mode: "replace" } });
+      const provider = config.models?.providers?.moonshot;
+      expect(MOONSHOT_DEFAULT_MODEL_ID).toBe(manifest.modelCatalog.providers.moonshot.defaultModel);
+      expect(provider?.baseUrl).toBe(baseUrl);
+      expect(provider?.models.map((model) => model.id)).toEqual([MOONSHOT_DEFAULT_MODEL_ID]);
+      expect(resolveAgentModelPrimaryValue(config.agents?.defaults?.model)).toBe(
+        MOONSHOT_DEFAULT_MODEL_REF,
+      );
+      expect(config.agents?.defaults?.models).toEqual({
+        [MOONSHOT_DEFAULT_MODEL_REF]: { alias: "Kimi" },
+      });
+    },
+  );
+
+  it("leaves ordinary catalogs runtime-owned", async () => {
+    const applyConfig = await registeredSetup("api-key");
+    for (const mode of [undefined, "merge"] as const) {
+      const config = await applyConfig({ models: { mode } });
+      expect(config.models?.providers?.moonshot?.models).toEqual([]);
+      expect(config.agents?.defaults?.models?.[MOONSHOT_DEFAULT_MODEL_REF]).toEqual({
+        alias: "Kimi",
+      });
+      expect(await applyConfig(config)).toEqual(config);
+    }
+  });
+
+  it("disables native video for a userinfo route", async () => {
     const provider = await registerSingleProviderPlugin(plugin);
     const model = {
       id: "kimi-k3",
-      name: "Kimi K3",
       provider: "moonshot",
       api: "openai-completions",
-      baseUrl: MOONSHOT_BASE_URL,
-      reasoning: true,
-      input: expected ? ["text", "image"] : ["text", "image", "video"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 1_000_000,
-      maxTokens: 1_000_000,
-      ...route,
+      baseUrl: "https://u@api.moonshot.ai/v1",
+      input: ["text", "image", "video"],
     } as unknown as Model;
     const normalized = provider.normalizeResolvedModel?.({
       provider: model.provider,
@@ -50,7 +94,7 @@ describe("moonshot provider plugin", () => {
       model,
     } as never);
 
-    expect(((normalized ?? model).input as string[]).includes("video")).toBe(expected);
+    expect(((normalized ?? model).input as string[]).includes("video")).toBe(false);
   });
 
   it("declares shipped Moonshot provider aliases in runtime and manifest metadata", async () => {
@@ -80,48 +124,67 @@ describe("moonshot provider plugin", () => {
     expect(policy).not.toHaveProperty("dropReasoningFromHistory");
   });
 
-  it.each(["constructor"])(
-    "keeps inherited object key %s outside the always-thinking model family",
-    async (modelId) => {
+  it("keeps inherited object keys outside the always-thinking model family", async () => {
+    const provider = await registerSingleProviderPlugin(plugin);
+    const ref = { provider: "moonshot", modelId: "constructor" };
+    const captured = createCapturedThinkingConfigStream();
+    expect(provider.isModernModelRef?.(ref)).toBe(false);
+    expect(provider.resolveThinkingProfile?.({ ...ref, reasoning: true })).toEqual({
+      levels: [
+        { id: "off", label: "off" },
+        { id: "low", label: "on" },
+      ],
+      defaultLevel: "off",
+    });
+    expect(provider.wrapSimpleCompletionStreamFn?.({ ...ref, streamFn: captured.streamFn })).toBe(
+      captured.streamFn,
+    );
+  });
+
+  it.each(["kimi-k3", "kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"])(
+    "enables native video for %s on the native route",
+    async (id) => {
       const provider = await registerSingleProviderPlugin(plugin);
-      const capturedStream = createCapturedThinkingConfigStream();
-      expect(provider.isModernModelRef?.({ provider: "moonshot", modelId })).toBe(false);
-      expect(
-        provider.resolveThinkingProfile?.({ provider: "moonshot", modelId, reasoning: true }),
-      ).toEqual({
-        levels: [
-          { id: "off", label: "off" },
-          { id: "low", label: "on" },
-        ],
-        defaultLevel: "off",
-      });
-      expect(
-        provider.wrapSimpleCompletionStreamFn?.({
-          provider: "moonshot",
-          modelId,
-          streamFn: capturedStream.streamFn,
-        }),
-      ).toBe(capturedStream.streamFn);
+      const model = {
+        id,
+        provider: "moonshot",
+        api: "openai-completions",
+        baseUrl: "https://api.moonshot.ai/v1",
+        input: ["text", "image"],
+      } as unknown as Model;
+      const normalized = provider.normalizeResolvedModel?.({
+        provider: model.provider,
+        modelId: model.id,
+        model,
+      } as never);
+
+      expect((normalized ?? model).input).toEqual(["text", "image", "video"]);
     },
   );
 
-  it("exposes Kimi K3 as an always-max-thinking modern model", async () => {
-    const { provider, payload } = await captureThinkingConfig("kimi-k3");
-    expect(payload).toEqual({
-      config: { thinkingConfig: { thinkingBudget: -1 } },
-      reasoning_effort: "max",
-    });
-    expect(
-      provider.resolveThinkingProfile?.({
-        provider: "moonshot",
-        modelId: "kimi-k3",
-        reasoning: true,
-      } as never),
-    ).toEqual({
-      levels: [{ id: "max", label: "max" }],
-      defaultLevel: "max",
-      preserveWhenCatalogReasoningFalse: true,
-    });
-    expect(provider.isModernModelRef?.({ provider: "moonshot", modelId: "kimi-k3" })).toBe(true);
-  });
+  it.each(["kimi-k3", "kimi-k3.1-pro", "kimi-k3.1-pro-highspeed"])(
+    "exposes %s as an always-max-thinking modern model",
+    async (id) => {
+      const provider = await registerSingleProviderPlugin(plugin);
+      const model = { api: "openai-completions", provider: "moonshot", id } as const;
+      const ref = { provider: model.provider, modelId: model.id };
+      const captured = createCapturedThinkingConfigStream();
+      const wrapped = provider.wrapSimpleCompletionStreamFn?.({
+        ...ref,
+        thinkingLevel: "off",
+        streamFn: captured.streamFn,
+      } as never);
+      await wrapped?.(model as Model<"openai-completions">, { messages: [] } as Context, {});
+      expect(captured.getCapturedPayload()).toEqual({
+        config: { thinkingConfig: { thinkingBudget: -1 } },
+        reasoning_effort: "max",
+      });
+      expect(provider.resolveThinkingProfile?.({ ...ref, reasoning: true })).toEqual({
+        levels: [{ id: "max", label: "max" }],
+        defaultLevel: "max",
+        preserveWhenCatalogReasoningFalse: true,
+      });
+      expect(provider.isModernModelRef?.(ref)).toBe(true);
+    },
+  );
 });

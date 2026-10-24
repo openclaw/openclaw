@@ -218,8 +218,12 @@ function withTinyFileTree(files: Record<string, string>, test: (cwd: string) => 
   }
 }
 
-function expectChangedTargets(changedPaths: string[], targets: string[]): void {
-  expect(changedPlan(changedPaths), changedPaths.join(", ")).toEqual({
+function expectChangedTargets(
+  changedPaths: string[],
+  targets: string[],
+  options?: Parameters<typeof changedPlan>[1],
+): void {
+  expect(changedPlan(changedPaths, options), changedPaths.join(", ")).toEqual({
     mode: "targets",
     targets,
   });
@@ -240,16 +244,16 @@ function runPlan(
 
 function expectRun(
   actual: ReturnType<typeof planRuns>,
+  project: string,
   expected: {
-    config: string;
     forwardedArgs?: string[];
     includePatterns?: string[] | null;
     watchMode?: boolean;
-  },
+  } = {},
 ): void {
   expect(actual).toEqual([
     {
-      config: expected.config,
+      config: configFile(project),
       forwardedArgs: expected.forwardedArgs ?? [],
       includePatterns: expected.includePatterns ?? null,
       watchMode: expected.watchMode ?? false,
@@ -301,15 +305,13 @@ describe("scripts/test-projects changed-target routing", () => {
         }
         expect(candidateProbes).toHaveLength(0);
 
-        expectRun(planRuns([target], cwd), {
-          config: configFile("unit"),
+        expectRun(planRuns([target], cwd), "unit", {
           forwardedArgs: [`${target}.extra.spec.mts`, `${target}.test.ts`],
         });
         expect(unmatchedTargets([target], cwd)).toEqual([]);
 
         fs.unlinkSync(path.join(cwd, `${target}.extra.spec.mts`));
-        expectRun(planRuns([target], cwd), {
-          config: configFile("unit"),
+        expectRun(planRuns([target], cwd), "unit", {
           forwardedArgs: [`${target}.test.ts`],
           includePatterns: [`${target}.test.ts`],
         });
@@ -340,10 +342,7 @@ describe("scripts/test-projects changed-target routing", () => {
 
   it.each<[string[], string[]]>([
     [["src/plugin-sdk/provider-entry.ts"], ["src/plugin-sdk/provider-entry.test.ts"]],
-    [
-      ["src/plugin-sdk/lazy-value.ts"],
-      ["src/plugin-sdk/core.test.ts", "src/plugin-sdk/channel-entry-contract.test.ts"],
-    ],
+    [["src/plugin-sdk/lazy-value.ts"], testFiles("src/plugin-sdk", "core channel-entry-contract")],
     [
       ["extensions/qa-lab/src/scenario-catalog.test.ts"],
       ["extensions/qa-lab/src/scenario-catalog.test.ts"],
@@ -357,7 +356,7 @@ describe("scripts/test-projects changed-target routing", () => {
     [["scripts/check-no-conflict-markers.mjs"], ["test/scripts/check-no-conflict-markers.test.ts"]],
     [
       ["scripts/lib/restart-mac-gateway.sh"],
-      ["test/scripts/build-and-run-mac.test.ts", "test/scripts/restart-mac.test.ts"],
+      testFiles("test/scripts", "build-and-run-mac restart-mac"),
     ],
     [["src/gateway/gateway-codex-harness.live.test.ts"], []],
   ])("retains precise changed owners for %j", (paths, targets) => {
@@ -378,9 +377,9 @@ describe("scripts/test-projects changed-target routing", () => {
         "test/scripts/fixture.live.test.ts": "",
       },
       (cwd) => {
-        expect(changedPlan([`scripts/nested/fixture.${extension}`], { cwd })).toEqual({
-          mode: "targets",
-          targets: [
+        expectChangedTargets(
+          [`scripts/nested/fixture.${extension}`],
+          [
             "test/scripts/nested/fixture.test.ts",
             "test/scripts/nested-fixture.test.ts",
             "test/scripts/fixture.test.ts",
@@ -388,7 +387,8 @@ describe("scripts/test-projects changed-target routing", () => {
             "src/scripts/nested-fixture.test.ts",
             "src/scripts/fixture.test.ts",
           ],
-        });
+          { cwd },
+        );
         expect(changedPlan([`scripts/fixture.${extension}`], { cwd }).targets).toEqual([
           "test/scripts/fixture.test.ts",
           "src/scripts/fixture.test.ts",
@@ -493,19 +493,16 @@ describe("scripts/test-projects changed-target routing", () => {
             : {}),
         },
         (cwd) => {
-          expect(
-            changedPlan([".github/actionlint.yaml"], {
+          expectChangedTargets(
+            [".github/actionlint.yaml"],
+            withConsumers ? testFiles("test/scripts", "lint-import lint-reader") : [],
+            {
               cwd,
               forceFullImportGraph: true,
               resolveAliases: true,
               runtimeOnly: true,
-            }),
-          ).toEqual({
-            mode: "targets",
-            targets: withConsumers
-              ? ["test/scripts/lint-import.test.ts", "test/scripts/lint-reader.test.ts"]
-              : [],
-          });
+            },
+          );
           expect(changedPlan([".github/unknown-lint.yaml"], { cwd }).targets).toEqual([
             configFile("tooling"),
           ]);
@@ -521,7 +518,6 @@ describe("scripts/test-projects changed-target routing", () => {
     ${"src/agents/cli-runner/bundle-mcp.user-config.test.ts"}                  | ${"agents-core-isolated"}             | ${undefined}                                   | ${undefined}
     ${"src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts"} | ${"agents-spawn-production-boundary"} | ${undefined}                                   | ${undefined}
     ${"src/agents/agent-command-local.test.ts"}                                | ${"cli-process"}                      | ${undefined}                                   | ${undefined}
-    ${"src/gateway/health/collector.queue-health.test.ts"}                     | ${"gateway-database-workers"}         | ${undefined}                                   | ${gatewayDatabaseWorkerTestFiles}
     ${"src/agents/command/session-store.test.ts"}                              | ${"infra"}                            | ${undefined}                                   | ${databaseWorkerCoreTestFiles}
     ${"src/auto-reply/reply/agent-runner-execution-auth-failures.test.ts"}     | ${"infra"}                            | ${undefined}                                   | ${undefined}
     ${"src/auto-reply/reply/agent-runner-execution-cli-admission.test.ts"}     | ${"infra"}                            | ${undefined}                                   | ${undefined}
@@ -538,10 +534,7 @@ describe("scripts/test-projects changed-target routing", () => {
       source?: string;
       inventory?: readonly string[];
     }) => {
-      expectRun(planRuns([source ?? file]), {
-        config: `test/vitest/vitest.${owner}.config.ts`,
-        includePatterns: [file],
-      });
+      expectRun(planRuns([source ?? file]), owner, { includePatterns: [file] });
       if (inventory) {
         expect(inventory.filter((entry) => entry === file)).toEqual([file]);
       }
@@ -555,7 +548,7 @@ describe("scripts/test-projects changed-target routing", () => {
     [["src/selector/one.spec.ts"], null],
     [["src/selector/*.test.ts"], null],
     [["src/selector/one.test.ts", "src/selector/one.spec.ts"], null],
-    [["src/selector/one.test.ts", "src/selector/missing.test.ts"], null],
+    [testFiles("src/selector", "one missing"), null],
     [["src/selector/one.live.test.ts"], null],
     [["outside/one.test.ts"], null],
   ])("selects default-unit includes without losing CLI targets: %j", (targets, includePatterns) => {
@@ -568,8 +561,7 @@ describe("scripts/test-projects changed-target routing", () => {
       },
       (cwd) => {
         const filters = includePatterns ? ["-t", "case"] : [];
-        expectRun(planRuns([...targets, "--", ...filters], cwd), {
-          config: configFile("unit"),
+        expectRun(planRuns([...targets, "--", ...filters], cwd), "unit", {
           forwardedArgs: [...filters, ...targets],
           includePatterns,
         });
@@ -581,12 +573,8 @@ describe("scripts/test-projects changed-target routing", () => {
     const target = "src/selector/one.test.ts";
     withTinyFileTree({ [target]: "" }, (cwd) => {
       const absolute = path.join(cwd, target);
-      expectRun(planRuns([absolute], cwd), {
-        config: configFile("unit"),
-        forwardedArgs: [absolute],
-      });
-      expectRun(planRuns(["--watch", target], cwd), {
-        config: configFile("unit"),
+      expectRun(planRuns([absolute], cwd), "unit", { forwardedArgs: [absolute] });
+      expectRun(planRuns(["--watch", target], cwd), "unit", {
         forwardedArgs: [target],
         watchMode: true,
       });
@@ -698,10 +686,7 @@ export const single = {
           ]) {
             expect(impactsTargets([dep], [unrelated], cwd, options), unrelated).toBe(false);
           }
-          expect(changedPlan([dep], { cwd, broad: true })).toEqual({
-            mode: "targets",
-            targets: expected,
-          });
+          expectChangedTargets([dep], expected, { cwd, broad: true });
           expect(affectedTests([dep], cwd, { ...options, forceFull: true })).toEqual(expected);
           for (const [dependency, reader] of [
             ["dep-b", readerB],
@@ -982,10 +967,7 @@ export const single = {
             resolveAliases: true,
           }),
         ).toEqual(["extensions/consumer/other.test.ts"]);
-        for (const target of [
-          "packages/library/src/import.test.ts",
-          "packages/library/src/require.test.ts",
-        ]) {
+        for (const target of testFiles("packages/library/src", "import require")) {
           expect(
             affectedTests([target], cwd, {
               resolveAliases: true,
@@ -1283,28 +1265,24 @@ export const single = {
       (cwd) => {
         const options = { cwd, broad: true, forceFullImportGraph: true };
         for (const changed of [fixture, helper]) {
-          expect(changedPlan([changed], { cwd, broad: true })).toEqual({
-            mode: "targets",
-            targets: [direct, indirect],
-          });
-          expect(changedPlan([changed], options)).toEqual({
-            mode: "targets",
-            targets: ["test/scripts/after-test.consumer.test.ts", direct, indirect],
-          });
+          expectChangedTargets([changed], [direct, indirect], { cwd, broad: true });
+          expectChangedTargets(
+            [changed],
+            ["test/scripts/after-test.consumer.test.ts", direct, indirect],
+            options,
+          );
         }
         // A literal reference alone cannot prove an opaque helper's complete frontier.
-        expect(changedPlan([opaque, direct], { cwd, broad: true })).toEqual({
-          mode: "targets",
-          targets: [opaque, direct],
-        });
-        expect(changedPlan([opaque, direct], options)).toEqual({
-          mode: "targets",
-          targets: [
+        expectChangedTargets([opaque, direct], [opaque, direct], { cwd, broad: true });
+        expectChangedTargets(
+          [opaque, direct],
+          [
             "test/scripts/relative.opaque.consumer.test.ts",
             "test/scripts/literal.opaque.consumer.test.ts",
             direct,
           ],
-        });
+          options,
+        );
         expect(planRuns([explicitHelper], cwd)).toEqual([runPlan("tooling", [explicitConsumer])]);
       },
     );
@@ -1326,13 +1304,8 @@ export const single = {
         },
         (cwd) => {
           const inputs = mixedInput ? [changedTest, otherTest, changedTest] : [changedTest];
-          expect(
-            changedPlan(inputs, {
-              cwd,
-            }),
-          ).toEqual({
-            mode: "targets",
-            targets: [changedTest, reader, ...(mixedInput ? [otherTest] : [])],
+          expectChangedTargets(inputs, [changedTest, reader, ...(mixedInput ? [otherTest] : [])], {
+            cwd,
           });
         },
       );
@@ -1361,10 +1334,7 @@ export const single = {
           "test/scripts/tooling-reader.test.ts": `const fixture = "${changedPath}";\n`,
         },
         (cwd) => {
-          expect(changedPlan([changedPath], { cwd })).toEqual({
-            mode: "targets",
-            targets: expectedTargets,
-          });
+          expectChangedTargets([changedPath], expectedTargets, { cwd });
         },
       );
     },
@@ -1390,8 +1360,8 @@ export const single = {
           Array.from({ length: count }, (_, index) => `src/runtime-${index}.ts`),
           cwd,
         ),
+        "unit",
         {
-          config: configFile("unit"),
           forwardedArgs: ["src/runtime.consumer.test.ts"],
           includePatterns: ["src/runtime.consumer.test.ts"],
         },
@@ -1427,8 +1397,8 @@ export const single = {
       withEnv({ OPENCLAW_GATEWAY_PROJECT_SHARDS: inheritedProjectShards }, () => {
         expectRun(
           planRuns(args, process.cwd(), () => [], { env }),
+          owner,
           {
-            config: `test/vitest/vitest.${owner}.config.ts`,
             includePatterns: args.some((arg) => arg.endsWith(".config.ts"))
               ? null
               : args.filter((arg) => arg !== "--watch"),
@@ -1485,8 +1455,7 @@ export const single = {
     ({ target, workerFirst }) => {
       const workerConfig = configFile("gateway-database-workers");
       const targets = workerFirst ? [workerConfig, target] : [target, workerConfig];
-      expectRun(planRuns(targets), {
-        config: configFile("gateway"),
+      expectRun(planRuns(targets), "gateway", {
         includePatterns: target.endsWith(".config.ts")
           ? null
           : workerFirst
@@ -1517,22 +1486,14 @@ export const single = {
   });
 
   it.each([
-    ["src/agents/**/*.test.ts", "src/agents/**/memory-*.test.ts", "src/agents/**/memory-*.test.ts"],
+    testFiles("src/agents/**", "* memory-* memory-*"),
     [
       "extensions/matrix",
       "extensions/matrix/**/storage.test.ts",
       "extensions/matrix/**/storage.test.ts",
     ],
-    [
-      "extensions/matrix/**/storage.test.ts",
-      "extensions/matrix/**/*.test.ts",
-      "extensions/matrix/**/storage.test.ts",
-    ],
-    [
-      "extensions/matrix/**/storage.test.ts",
-      "extensions/matrix/**/storage.test.ts",
-      "extensions/matrix/**/storage.test.ts",
-    ],
+    testFiles("extensions/matrix/**", "storage * storage"),
+    testFiles("extensions/matrix/**", "storage storage storage"),
   ])("retains watch intersection for %s and %s", (directory, pattern, expected) => {
     withIncludeFile([pattern], (includeFile) => {
       const specs = runSpecs(["--watch", directory], {
@@ -1710,8 +1671,7 @@ export const single = {
               explicitPlans.find((plan) => plan.config === configFile("e2e"))?.forwardedArgs,
             ).toEqual([e2e]);
             expect(selectedTestFiles(explicitPlans)).toContain(live);
-            expectRun(planRuns([`${toolRoot}/*.e2e.test.ts`], cwd), {
-              config: configFile("e2e"),
+            expectRun(planRuns([`${toolRoot}/*.e2e.test.ts`], cwd), "e2e", {
               forwardedArgs: [`${toolRoot}/*.e2e.test.ts`],
             });
           },
@@ -1725,8 +1685,8 @@ export const single = {
       planRuns(["--changed", "origin/main"], process.cwd(), () => [
         "scripts/e2e/parallels/host-command.ts",
       ]),
+      "tooling",
       {
-        config: configFile("tooling"),
         includePatterns: testFiles(
           "test/scripts",
           "parallels-smoke-model parallels-npm-update-smoke",
@@ -1789,14 +1749,10 @@ export const single = {
         "scripts/e2e/plugin-binding-command-escape-docker.sh",
         "scripts/e2e/qr-import-docker.sh",
       ],
-      [
-        "test/scripts/docker-build-helper.test.ts",
-        "test/scripts/docker-e2e-plan.test.ts",
-        "test/scripts/codex-media-path-client.test.ts",
-        "test/scripts/package-acceptance-workflow.test.ts",
-        "test/scripts/live-plugin-tool-assertions.test.ts",
-        "test/scripts/plugin-binding-command-escape-docker.test.ts",
-      ],
+      testFiles(
+        "test/scripts",
+        "docker-build-helper docker-e2e-plan codex-media-path-client package-acceptance-workflow live-plugin-tool-assertions plugin-binding-command-escape-docker",
+      ),
     ],
   ])("routes Docker E2E targets %j to their semantic owners", (targets, owners) => {
     expect(unmatchedTargets(targets)).toEqual([]);
@@ -1864,8 +1820,7 @@ export const single = {
       ["--reporter=verbose", false],
       ["--watch", true],
     ] as const) {
-      expectRun(planRuns(["test/scripts/run-vitest.test.ts", "--", arg]), {
-        config: configFile("tooling"),
+      expectRun(planRuns(["test/scripts/run-vitest.test.ts", "--", arg]), "tooling", {
         forwardedArgs: [arg],
         includePatterns: ["test/scripts/run-vitest.test.ts"],
         watchMode,
@@ -2016,10 +1971,7 @@ export const single = {
   });
 
   it("keeps the top-level extensions watch target on its aggregate owner", () => {
-    expectRun(planRuns(["--watch", "extensions"]), {
-      config: configFile("full-extensions"),
-      watchMode: true,
-    });
+    expectRun(planRuns(["--watch", "extensions"]), "full-extensions", { watchMode: true });
   });
 
   it("bounds an explicit Telegram config target across process lifetimes", () => {
@@ -2036,22 +1988,17 @@ export const single = {
     expect(selectedTestFiles(plans)).toEqual(listOrdinaryExtensionFiles("extensions/telegram"));
   });
 
-  it.each([
-    {
-      channel: "Telegram",
-      config: configFile("extension-telegram"),
+  it.each(["extension-telegram", "extension-matrix"])(
+    "preserves an externally scoped %s config target",
+    (project) => {
+      expectRun(
+        planRuns([configFile(project)], process.cwd(), () => [], {
+          env: { OPENCLAW_VITEST_INCLUDE_FILE: "ci-shard.json" },
+        }),
+        project,
+      );
     },
-    { channel: "Matrix", config: configFile("extension-matrix") },
-  ])("preserves an externally scoped $channel config target", ({ config }) => {
-    expectRun(
-      planRuns([config], process.cwd(), () => [], {
-        env: { OPENCLAW_VITEST_INCLUDE_FILE: "ci-shard.json" },
-      }),
-      {
-        config,
-      },
-    );
-  });
+  );
 
   it.each([
     {
@@ -2265,8 +2212,7 @@ export const single = {
           plans.find((plan) => plan.config === configFile("tooling"))?.includePatterns,
         ).toEqual(expected.includes(kova) ? [kova] : undefined);
         if (watchMode) {
-          expectRun(plans, {
-            config: configFile("runtime-config"),
+          expectRun(plans, "runtime-config", {
             includePatterns: expect.arrayContaining(expected),
             watchMode: true,
           });
@@ -2320,11 +2266,14 @@ export const single = {
     "keeps an existing nested ui directory and explicit e2es scoped (%s)",
     (spelling) => {
       const directory = "ui/src/pages/new-session";
-      const isolated = `${directory}/draft-persistence.test.ts`;
+      const isolated = [
+        `${directory}/draft-persistence.test.ts`,
+        `${directory}/new-session-attachment-lazy.test.ts`,
+      ];
       const unitFiles = [
         `${directory}/view.test.ts`,
         `${directory}/nested/child.test.ts`,
-        isolated,
+        ...isolated,
       ];
       const e2es = testFiles(
         "ui/src/e2e",
@@ -2353,7 +2302,7 @@ export const single = {
           const plans = planRuns([target, ...e2es], cwd);
           expect(plans).toEqual([
             runPlan("ui", [`${directory}/**/*.test.ts`]),
-            runPlan("ui-isolated", [isolated]),
+            runPlan("ui-isolated", isolated),
             runPlan("ui-e2e", e2es),
           ]);
           const includeFile = path.join(cwd, "include.json");
@@ -2362,7 +2311,7 @@ export const single = {
             return JSON.parse(fs.readFileSync(includeFile, "utf8"));
           });
           // Shared UI intersects these files with its ownership exclusions.
-          expect(filesByPlan).toEqual([unitFiles.toSorted(), [isolated], e2es]);
+          expect(filesByPlan).toEqual([unitFiles.toSorted(), isolated, e2es]);
         },
       );
     },
@@ -2510,11 +2459,8 @@ export const single = {
     expectChangedTargets(fixturePaths, [owner]);
     expectRun(
       planRuns(["--changed", "origin/main"], process.cwd(), () => fixturePaths),
-      {
-        config: configFile("unit"),
-        forwardedArgs: [owner],
-        includePatterns: [owner],
-      },
+      "unit",
+      { forwardedArgs: [owner], includePatterns: [owner] },
     );
   });
 });
@@ -3194,6 +3140,7 @@ describe("test selector native source facts", () => {
           references: ["scripts/tool.mts"],
         };
         for (const file of [
+          "node-runtime-env.mjs",
           "scripts/lib/test-selector-source-facts.mts",
           "scripts/lib/test-source-term-matcher.mts",
           "src/infra/node-runtime-executable.ts",
@@ -3486,8 +3433,7 @@ describe("scripts/test-projects full-suite sharding", () => {
     const args = [configFile("shared")];
 
     expect(unmatchedTargets(args, process.cwd())).toEqual([]);
-    expectRun(planRuns(args, process.cwd()), {
-      config: configFile("tooling"),
+    expectRun(planRuns(args, process.cwd()), "tooling", {
       includePatterns: ["test/vitest/**/*.test.ts"],
     });
 
@@ -3500,8 +3446,7 @@ describe("scripts/test-projects full-suite sharding", () => {
           includePattern: "test/vitest/**/*.test.ts",
         },
       ]);
-      expectRun(planRuns(helperArgs, cwd), {
-        config: configFile("tooling"),
+      expectRun(planRuns(helperArgs, cwd), "tooling", {
         includePatterns: ["test/vitest/**/*.test.ts"],
       });
     });

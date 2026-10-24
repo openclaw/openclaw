@@ -181,6 +181,12 @@ runtime availability, image state, and mounted-path existence without filesystem
 paths. Local runs leave runtime installation to the operator. Boot and capture
 failures still stop the lane without retrying screenshots.
 
+If Apple removes the Watch runtime registration but cannot reclaim its MobileAsset,
+CI follows Apple's recovery instruction once: scan and mount orphaned runtimes,
+resolve the selected Watch image again, and retry its deletion before downloading.
+Other errors or a second deletion failure stop the repair. The replacement must
+report `Ready` with an existing mounted runtime directory before simulator creation.
+
 The screenshot-only job enables `OPENCLAW_SNAPSHOT_DIAGNOSTICS=1`. To collect the
 same diagnostics locally:
 

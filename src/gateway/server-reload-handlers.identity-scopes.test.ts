@@ -12,6 +12,7 @@ import {
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { GatewayScheduler } from "../infra/gateway-scheduler.js";
 import {
   resetGatewayRestartStateForInProcessRestart,
   setGatewayRestartPolicy,
@@ -61,18 +62,6 @@ function resolveGeneration(config: OpenClawConfig) {
   );
 }
 
-// A write that lands while the previous reload finishes its tail is re-armed from that reload's
-// finally, after a single zero-delay tick has run. Zero-delay ticks never move the fake clock.
-async function tickUntilSettled(operation: Promise<unknown>): Promise<void> {
-  const settled = operation.then(
-    () => true,
-    () => true,
-  );
-  while (!(await Promise.race([settled, Promise.resolve(false)]))) {
-    await vi.advanceTimersByTimeAsync(0);
-  }
-}
-
 let registrySnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
 const registry = createEmptyPluginRegistry();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -85,7 +74,6 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
-  vi.useRealTimers();
   clearSecretsRuntimeSnapshot();
   clearRuntimeConfigSnapshot();
   restoreActivePluginRegistrySnapshot(registrySnapshot);
@@ -97,7 +85,6 @@ afterEach(() => {
 const revocations = ["scopes", "allowUsers", "origin"];
 it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
   withOpenClawTestState({ scenario: "minimal" }, async () => {
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const effectDir = tempDirs.make("openclaw-identity-scope-effects-");
     const effectScript = 'require("node:fs").writeFileSync(process.argv[1], "accepted effect");';
     const processes: ExecProcessHandle[] = [];
@@ -172,7 +159,8 @@ it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
     const log = createInfoWarnErrorLogger();
     const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
     const reloader = startManagedGatewayConfigReloader({
-      scheduler: createTestGatewayScheduler("fake-timers"),
+      // Real lease and subprocess I/O must be able to finish delayed retries.
+      scheduler: new GatewayScheduler(),
       getPluginRegistry: () => registry,
       configRevisionProjector: createTestConfigRevisionProjector(),
       minimalTestGateway: false,
@@ -345,7 +333,6 @@ it.each(revocations)("preserves proxy runs until %s ends", (revocation) =>
             "source-" + revision,
           ),
         );
-        await tickUntilSettled(application);
         await expect(application).resolves.toBe("applied");
       };
       const allowedEffect = await prepareEffect("allowed.txt", original.authority);

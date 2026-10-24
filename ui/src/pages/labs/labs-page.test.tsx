@@ -1,5 +1,7 @@
 /* @vitest-environment jsdom */
 
+import { createRouter, definePage } from "@openclaw/uirouter";
+import { onSettled } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -71,31 +73,40 @@ function createRuntimeConfig(sourceConfig: Record<string, unknown>) {
   };
 }
 
-async function mountPage(
-  sourceConfig: Record<string, unknown>,
-  basePath = "",
-): Promise<{
-  page: LabsPageElement;
-  unmount: () => void;
-  runtimeConfig: ReturnType<typeof createRuntimeConfig>;
-  gateway: ReturnType<typeof createGateway>;
-  context: { navigate: ReturnType<typeof vi.fn> };
-}> {
+async function mountPage(sourceConfig: Record<string, unknown>, basePath = "") {
   const runtimeConfig = createRuntimeConfig(sourceConfig);
   const gateway = createGateway();
   const navigate = vi.fn();
+  const router = createRouter({
+    routes: [
+      definePage({ id: "labs", path: "/labs", component: () => ({}) }),
+      definePage({ id: "usage", path: "/usage", component: () => ({}) }),
+    ],
+  });
   const context = {
     basePath,
     gateway: gateway.gateway,
     runtimeConfig,
     navigate,
+    router,
   } as unknown as ApplicationContext;
   const provider = createSolidApplicationContextProvider(context);
-  const { container: page, unmount } = mountSolid(() => <LabsPage />, {
-    wrapper: provider.wrapper,
-  });
+  const { container: page, unmount } = mountSolid(
+    () => {
+      onSettled(() => () => router.stop());
+      return <LabsPage />;
+    },
+    { wrapper: provider.wrapper },
+  );
   await waitForSolid(() => expect(page.querySelector(".settings-page")).not.toBeNull());
-  return { page, unmount, runtimeConfig, gateway, context: { navigate } };
+  return {
+    page,
+    unmount,
+    runtimeConfig,
+    gateway,
+    router,
+    context: { navigate },
+  };
 }
 
 function labRow(page: LabsPageElement, title: string) {
@@ -263,14 +274,50 @@ describe("LabsPage", () => {
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
     await waitForSolid(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
 
+    await waitForSolid(() => {
+      expect(toggle.checked).toBe(true);
+      expect(toggle.hasAttribute("aria-disabled")).toBe(true);
+      expect(toggle.disabled).toBe(false);
+      expect(labToggle(page, "Composer predictions").disabled).toBe(true);
+    });
+    runtimeConfig.state.configLoading = true;
+    runtimeConfig.notify();
+    await waitForSolid(() => expect(toggle.disabled).toBe(true));
+    runtimeConfig.state.configLoading = false;
+    runtimeConfig.notify();
+    await waitForSolid(() => expect(toggle.disabled).toBe(false));
+    toggle.click();
+    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
     gateway.setPhase("reconnecting");
     gateway.setPhase("connected");
+    await waitForSolid(() => {
+      expect(toggle.checked).toBe(false);
+      expect(toggle.hasAttribute("aria-disabled")).toBe(false);
+      expect(labToggle(page, "Composer predictions").disabled).toBe(false);
+    });
     pendingPatch.resolve(false);
     await pendingPatch.promise;
     flush();
 
     expect(page.querySelector('[role="alert"]')).toBeNull();
     expect(toggle.checked).toBe(false);
+  });
+
+  it("releases optimistic save presentation when navigation leaves Labs", async () => {
+    const pendingPatch = deferred<boolean>();
+    const { page, runtimeConfig, router } = await mountPage({
+      tools: { codeMode: { enabled: false } },
+    });
+    runtimeConfig.patch.mockImplementationOnce(() => pendingPatch.promise);
+    const toggle = codeModeToggle(page);
+    toggle.checked = true;
+    toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+    await waitForSolid(() => expect(toggle.checked).toBe(true));
+    expect(runtimeConfig.patch).toHaveBeenCalledOnce();
+    await router.navigate("usage", {});
+    await waitForSolid(() => expect(toggle.checked).toBe(false));
+    pendingPatch.reject(new Error("Retired save failed"));
+    await waitForSolid(() => expect(page.querySelector('[role="alert"]')).toBeNull());
   });
 
   it.each([
@@ -456,15 +503,17 @@ describe("LabsPage Decision assistance", () => {
     const toggle = labToggle(page, "Decision assistance");
     toggle.checked = true;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
-    flush();
-    expect(toggle.checked).toBe(true);
-    expect(toggle.hasAttribute("disabled")).toBe(true);
+    await waitForSolid(() => {
+      expect(toggle.checked).toBe(true);
+      expect(toggle.hasAttribute("aria-disabled")).toBe(true);
+    });
     expect(labRow(page, "Decision assistance").textContent).not.toContain("Preference saved.");
     pending.resolve(false);
     await pending.promise;
-    flush();
-    expect(toggle.checked).toBe(false);
-    expect(page.querySelector('[role="alert"]')).not.toBeNull();
+    await waitForSolid(() => {
+      expect(toggle.checked).toBe(false);
+      expect(page.querySelector('[role="alert"]')).not.toBeNull();
+    });
     expect(runtimeConfig.patch).toHaveBeenCalledOnce();
   });
 

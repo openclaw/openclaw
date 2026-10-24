@@ -69,6 +69,8 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 type ChatAbortLifecycle = {
+  /** Internal composition may advance only after this exact run was cancelled. */
+  onExactRunAborted?: (runId: string) => void;
   onDescendantsCancelled?: (
     result: NonNullable<Awaited<ReturnType<typeof abortControlledSubagents>>>,
   ) => void;
@@ -432,7 +434,10 @@ export async function handleChatAbortRequestWithLifecycle(
     assertCurrent();
     const settlement = workerCancellation.cancel({
       assertCurrent,
-      onCancelled: (id) => workerRunIds.add(id),
+      onCancelled: (id) => {
+        workerRunIds.add(id);
+        lifecycle.onExactRunAborted?.(id);
+      },
     });
     workerSettlement = settlement;
     void settlement.catch(() => undefined);
@@ -602,6 +607,7 @@ export async function handleChatAbortRequestWithLifecycle(
     assertCurrent,
     hookContext: stopHookContext,
     afterParent: cancelWorker,
+    onAborted: () => lifecycle.onExactRunAborted?.(runId),
     onAbortPrepared: () => {
       const text = context.chatRunState.resolveBuffer(runId, { final: true }).text;
       if (!partialSession || !text?.trim()) {

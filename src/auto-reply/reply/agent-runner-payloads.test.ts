@@ -1,13 +1,11 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it } from "vitest";
-import { buildEmbeddedRunPayloads } from "../../agents/embedded-agent-runner/run/payloads.js";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.public.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { selectHeartbeatToolResponse } from "../heartbeat-tool-response.js";
 import {
   getReplyPayloadMetadata,
   markReplyPayloadForSourceSuppressionDelivery,
@@ -20,7 +18,6 @@ import type { DirectBlockDelivery } from "./reply-delivery.js";
 import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
 const baseParams = {
-  isHeartbeat: false,
   blockStreamingEnabled: false,
   blockReplyPipeline: null,
   replyToMode: "off" as const,
@@ -63,54 +60,6 @@ async function expectBuiltPayloads({
   expect(replyPayloads).toHaveLength(expected.length);
   expected.forEach((payload, index) => expectFields(replyPayloads[index], payload));
 }
-
-describe("heartbeat reply scratch", () => {
-  it.each([
-    { notify: false, proposals: ["  PRIVATE_SCRATCH\n\n- keep exact spacing  \n"] },
-    { notify: true, proposals: [""] },
-    { notify: false, proposals: ["old proposal", "new proposal"] },
-    { notify: false, proposals: ["old proposal", undefined] },
-  ])(
-    "preserves the latest private decision through embedded and final payloads: %j",
-    async ({ notify, proposals }) => {
-      const responses = proposals.map((scratch, index) => ({
-        outcome: "done" as const,
-        notify,
-        summary: `Monitor checked ${index + 1}.`,
-        ...(scratch !== undefined ? { scratch } : {}),
-      }));
-      const payloads = responses.flatMap((heartbeatToolResponse) =>
-        buildEmbeddedRunPayloads({
-          assistantTexts: [],
-          lastAssistant: undefined,
-          sessionKey: "agent:main:main",
-          isHeartbeatTrigger: true,
-          heartbeatToolResponse,
-        }),
-      );
-      const expected = proposals.at(-1);
-      const embedded = expectDefined(selectHeartbeatToolResponse(payloads), "embedded response");
-      expect(getReplyPayloadMetadata(embedded.payload)?.heartbeatScratchProposal).toBe(expected);
-      const { replyPayloads } = await buildTestReplyPayloads({ isHeartbeat: true, payloads });
-
-      expect(replyPayloads).toHaveLength(proposals.length);
-      const selected = expectDefined(selectHeartbeatToolResponse(replyPayloads), "final response");
-      expect(getReplyPayloadMetadata(selected.payload)?.heartbeatScratchProposal).toBe(expected);
-      expect(selected.response).toEqual({
-        outcome: "done",
-        notify,
-        summary: `Monitor checked ${proposals.length}.`,
-      });
-      const serialized = JSON.stringify(replyPayloads);
-      expect(serialized).not.toContain('"scratch"');
-      for (const scratch of proposals) {
-        if (scratch) {
-          expect(serialized).not.toContain(JSON.stringify(scratch));
-        }
-      }
-    },
-  );
-});
 
 function expectFields(value: unknown, expected: Record<string, unknown>): void {
   if (!value || typeof value !== "object") {
@@ -274,9 +223,8 @@ describe("buildReplyPayloads media filter integration", () => {
     expect(fallback.replyPayloads[0]?.replyToId).toBeUndefined();
   });
 
-  it("strips legacy bracket tool blocks from heartbeat replies", async () => {
+  it("strips legacy bracket tool blocks from replies", async () => {
     await expectBuiltPayloads({
-      isHeartbeat: true,
       payloads: [
         {
           text: [
@@ -331,19 +279,14 @@ describe("buildReplyPayloads media filter integration", () => {
     },
   );
 
-  it.each([
-    { isHeartbeat: false, visibleAlreadyClean: false },
-    { isHeartbeat: true, visibleAlreadyClean: false },
-    { isHeartbeat: true, visibleAlreadyClean: true },
-  ])(
-    "sanitizes source reply transcript mirror text ($isHeartbeat, $visibleAlreadyClean)",
-    async ({ isHeartbeat, visibleAlreadyClean }) => {
+  it.each([false, true])(
+    "sanitizes source reply transcript mirror text (visibleAlreadyClean=%s)",
+    async (visibleAlreadyClean) => {
       const text =
         'Visible\n<function_response>\nSearching for: "what skills matter most in the age of AI"\n...\n</function_response>\nDone';
       const payload = withMirror(text, visibleAlreadyClean ? "Visible\n\nDone" : text);
 
       const { replyPayloads } = await buildTestReplyPayloads({
-        isHeartbeat,
         payloads: [payload],
       });
 

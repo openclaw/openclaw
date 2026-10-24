@@ -1,24 +1,23 @@
-// STT live audio test helpers provide audio fixtures and expectations for speech plugins.
 import { expect } from "vitest";
 import type {
   RealtimeTranscriptionProviderConfig,
   RealtimeTranscriptionProviderPlugin,
 } from "../realtime-transcription.js";
 
-const DEFAULT_ELEVENLABS_BASE_URL = "https://api.elevenlabs.io";
-const DEFAULT_ELEVENLABS_VOICE_ID = "pMsXgVXv3BLzUgSXRplE";
-const DEFAULT_ELEVENLABS_TTS_MODEL_ID = "eleven_multilingual_v2";
-
 export function normalizeTranscriptForMatch(value: string): string {
   return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
 }
-
-type ExpectedTranscriptMatch = RegExp | string;
 
 export const OPENCLAW_LIVE_TRANSCRIPT_MARKER_RE = /open(?:claw|cl|flaw|clar|core)/;
 
 export function expectOpenClawLiveTranscriptMarker(value: string): void {
   expect(normalizeTranscriptForMatch(value)).toMatch(OPENCLAW_LIVE_TRANSCRIPT_MARKER_RE);
+}
+
+function delay(ms: number) {
+  return new Promise<void>((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 export async function waitForLiveExpectation(expectation: () => void, timeoutMs = 30_000) {
@@ -30,9 +29,7 @@ export async function waitForLiveExpectation(expectation: () => void, timeoutMs 
       return;
     } catch (error) {
       lastError = error;
-      await new Promise((resolve) => {
-        setTimeout(resolve, 100);
-      });
+      await delay(100);
     }
   }
   throw lastError;
@@ -44,8 +41,8 @@ export async function synthesizeElevenLabsLiveSpeech(params: {
   outputFormat: "mp3_44100_128" | "ulaw_8000";
   timeoutMs?: number;
 }): Promise<Buffer> {
-  const baseUrl = process.env.ELEVENLABS_BASE_URL?.trim() || DEFAULT_ELEVENLABS_BASE_URL;
-  const voiceId = process.env.ELEVENLABS_LIVE_VOICE_ID?.trim() || DEFAULT_ELEVENLABS_VOICE_ID;
+  const baseUrl = process.env.ELEVENLABS_BASE_URL?.trim() || "https://api.elevenlabs.io";
+  const voiceId = process.env.ELEVENLABS_LIVE_VOICE_ID?.trim() || "pMsXgVXv3BLzUgSXRplE";
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), params.timeoutMs ?? 30_000);
   try {
@@ -53,13 +50,10 @@ export async function synthesizeElevenLabsLiveSpeech(params: {
     url.searchParams.set("output_format", params.outputFormat);
     const response = await fetch(url, {
       method: "POST",
-      headers: {
-        "xi-api-key": params.apiKey,
-        "Content-Type": "application/json",
-      },
+      headers: { "xi-api-key": params.apiKey, "Content-Type": "application/json" },
       body: JSON.stringify({
         text: params.text,
-        model_id: DEFAULT_ELEVENLABS_TTS_MODEL_ID,
+        model_id: "eleven_multilingual_v2",
         voice_settings: {
           stability: 0.5,
           similarity_boost: 0.75,
@@ -71,8 +65,7 @@ export async function synthesizeElevenLabsLiveSpeech(params: {
       signal: controller.signal,
     });
     if (!response.ok) {
-      // Error payloads are not used by the live fixture. Cancel instead of buffering an
-      // untrusted or unbounded body so Undici can release the connection promptly.
+      // Release the connection without buffering an unbounded error payload.
       await response.body?.cancel().catch(() => undefined);
       throw new Error(`ElevenLabs live TTS failed (${response.status})`);
     }
@@ -82,32 +75,28 @@ export async function synthesizeElevenLabsLiveSpeech(params: {
   }
 }
 
-export async function streamAudioForLiveTest(params: {
-  audio: Buffer;
-  sendAudio: (chunk: Buffer) => void;
-  chunkSize?: number;
-  delayMs?: number;
-}) {
+type AudioInput = { audio: Buffer; chunkSize?: number; delayMs?: number };
+
+export async function streamAudioForLiveTest(
+  params: AudioInput & { sendAudio: (chunk: Buffer) => void },
+) {
   const chunkSize = params.chunkSize ?? 160;
   const delayMs = params.delayMs ?? 5;
   for (let offset = 0; offset < params.audio.byteLength; offset += chunkSize) {
     params.sendAudio(params.audio.subarray(offset, offset + chunkSize));
-    await new Promise((resolve) => {
-      setTimeout(resolve, delayMs);
-    });
+    await delay(delayMs);
   }
 }
 
-export async function runRealtimeSttLiveTest(params: {
-  provider: RealtimeTranscriptionProviderPlugin;
-  providerConfig: RealtimeTranscriptionProviderConfig;
-  audio: Buffer;
-  expectedNormalizedText?: ExpectedTranscriptMatch;
-  timeoutMs?: number;
-  closeBeforeWait?: boolean;
-  chunkSize?: number;
-  delayMs?: number;
-}): Promise<{ transcripts: string[]; partials: string[]; errors: Error[] }> {
+export async function runRealtimeSttLiveTest(
+  params: AudioInput & {
+    provider: RealtimeTranscriptionProviderPlugin;
+    providerConfig: RealtimeTranscriptionProviderConfig;
+    expectedNormalizedText?: RegExp | string;
+    timeoutMs?: number;
+    closeBeforeWait?: boolean;
+  },
+): Promise<{ transcripts: string[]; partials: string[]; errors: Error[] }> {
   const transcripts: string[] = [];
   const partials: string[] = [];
   const errors: Error[] = [];
@@ -121,12 +110,7 @@ export async function runRealtimeSttLiveTest(params: {
 
   try {
     await session.connect();
-    await streamAudioForLiveTest({
-      audio: params.audio,
-      sendAudio: (chunk) => session.sendAudio(chunk),
-      chunkSize: params.chunkSize,
-      delayMs: params.delayMs,
-    });
+    await streamAudioForLiveTest({ ...params, sendAudio: (chunk) => session.sendAudio(chunk) });
     if (params.closeBeforeWait) {
       session.close();
     }
@@ -135,12 +119,7 @@ export async function runRealtimeSttLiveTest(params: {
       if (errors[0]) {
         throw errors[0];
       }
-      const normalized = normalizeTranscriptForMatch(transcripts.join(" "));
-      if (typeof expected === "string") {
-        expect(normalized).toContain(expected);
-      } else {
-        expect(normalized).toMatch(expected);
-      }
+      expect(normalizeTranscriptForMatch(transcripts.join(" "))).toMatch(expected);
     }, params.timeoutMs ?? 60_000);
   } finally {
     session.close();

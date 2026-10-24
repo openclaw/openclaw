@@ -1,8 +1,10 @@
 import { once } from "node:events";
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { buffer } from "node:stream/consumers";
+import { setImmediate } from "node:timers/promises";
 import { gunzipSync } from "node:zlib";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -25,7 +27,86 @@ vi.mock("node:fs", async (importOriginal) => {
   };
 });
 
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+});
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const archivePathFor = (prefix: string) => path.join(tempDirs.make(prefix), "partial.tar.gz");
+type ReportProgress = Parameters<
+  Parameters<typeof writeArchiveStreamToFile>[0]["createArchiveStream"]
+>[0];
+
+function startArchive() {
+  const archivePath = archivePathFor("backup-stream-");
+  const archiveStream = new PassThrough();
+  let reportProgress: ReportProgress = () => {};
+  const writePromise = writeStream(archivePath, (report) => {
+    reportProgress = report;
+    return archiveStream;
+  });
+  return {
+    archivePath,
+    archiveStream,
+    writePromise,
+    reportProgress: (progress: Parameters<ReportProgress>[0]) => reportProgress(progress),
+  };
+}
+const retry = (
+  controller: AbortController,
+  options: Parameters<typeof writeTarArchiveWithRetry>[0],
+) => withCommandProcessScope(() => writeTarArchiveWithRetry(options), controller.signal);
+function writeStream(
+  archivePath: string,
+  createArchiveStream: Parameters<typeof writeArchiveStreamToFile>[0]["createArchiveStream"],
+  controller?: AbortController,
+) {
+  const run = () =>
+    writeArchiveStreamToFile({ archivePath, createArchiveStream, onPartialArchive() {} });
+  return controller ? withCommandProcessScope(run, controller.signal) : run();
+}
+
+it("removes the exclusive partial archive when its initial descriptor stat fails", async () => {
+  vi.spyOn(fsSync, "fstatSync").mockImplementationOnce(() => {
+    throw Object.assign(new Error("fstat failed"), { code: "EIO" });
+  });
+  const { archivePath, archiveStream, writePromise } = startArchive();
+  archiveStream.end("partial archive");
+  await expect(writePromise).rejects.toThrow("fstat failed");
+  await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it.each([false, true])("cleans a stalled archive (entry suffix=%s)", async (withEntry) => {
+  vi.useFakeTimers();
+  const { archivePath, archiveStream, writePromise, reportProgress } = startArchive();
+  const suffix = `${"a".repeat(170)}/${"b".repeat(170)}/${"c".repeat(169)}`;
+  if (withEntry) {
+    reportProgress({ phase: "raw", entryPath: `/source/🤖${suffix}`, bytes: 16 });
+  }
+  archiveStream.write("partial archive");
+  const message = "Backup archive write stalled: no progress observed for 300000ms";
+  const rejection = expect(writePromise).rejects.toThrow(
+    withEntry
+      ? `${message} (phase=output, entry=${JSON.stringify(suffix)}, rawBytes=16, outputBytes=15)`
+      : message,
+  );
+  await vi.advanceTimersByTimeAsync(300_001);
+  await rejection;
+  expect(archiveStream.destroyed).toBe(true);
+  await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("keeps the archive alive through more than five minutes of one entry's raw bytes", async () => {
+  vi.useFakeTimers();
+  const { archivePath, archiveStream, writePromise, reportProgress } = startArchive();
+  for (let elapsed = 0; elapsed < 360_000; elapsed += 60_000) {
+    await vi.advanceTimersByTimeAsync(60_000);
+    reportProgress({ phase: "raw", entryPath: "/source/large.pack", bytes: 16 });
+  }
+  archiveStream.end("archive after one large entry");
+  await expect(writePromise).resolves.toMatchObject({ archivePath });
+  await expect(fs.readFile(archivePath, "utf8")).resolves.toBe("archive after one large entry");
+});
 
 it("cancels an EOF retry backoff without starting another archive", async () => {
   vi.useFakeTimers();
@@ -34,28 +115,20 @@ it("cancels an EOF retry backoff without starting another archive", async () => 
     .fn()
     .mockRejectedValueOnce(Object.assign(new Error("Synthetic live-write race"), { code: "EOF" }))
     .mockResolvedValue("complete");
-  const writing = withCommandProcessScope(
-    () =>
-      writeTarArchiveWithRetry({
-        tempArchivePath: "synthetic-partial.tar.gz",
-        runTar,
-        log: () => controller.abort(),
-      }),
-    controller.signal,
-  );
+  const writing = retry(controller, {
+    tempArchivePath: "synthetic-partial.tar.gz",
+    runTar,
+    log: () => controller.abort(),
+  });
   const observed = writing.catch((error: unknown) => error);
-  try {
-    await vi.advanceTimersByTimeAsync(10_001);
-    await expect(writing).rejects.toMatchObject({ name: "AbortError" });
-    expect(runTar).toHaveBeenCalledTimes(1);
-  } finally {
-    await observed;
-    vi.useRealTimers();
-  }
+  await vi.advanceTimersByTimeAsync(10_001);
+  await expect(writing).rejects.toMatchObject({ name: "AbortError" });
+  expect(runTar).toHaveBeenCalledTimes(1);
+  await observed;
 });
 
 it("retains bounded progress through cancellation, retry, and CLI error formatting", async () => {
-  const archivePath = path.join(tempDirs.make("backup-cancel-"), "partial.tar.gz");
+  const archivePath = archivePathFor("backup-cancel-");
   const source = new PassThrough();
   const read = once(source, "data");
   const controller = new AbortController();
@@ -73,18 +146,13 @@ it("retains bounded progress through cancellation, retry, and CLI error formatti
       },
     }),
   );
-  const writing = withCommandProcessScope(
-    () => writeTarArchiveWithRetry({ tempArchivePath: archivePath, runTar }),
-    controller.signal,
-  );
+  const writing = retry(controller, { tempArchivePath: archivePath, runTar });
   const observed = writing.catch((error: unknown) => error);
   try {
     source.write("partial archive");
     await read;
     controller.abort(reason);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await setImmediate();
     expect(source.destroyed).toBe(true);
     const error = await observed;
     const message = `Backup archive write failed: The operation was aborted (phase=output, entry=${JSON.stringify(entrySuffix)}, rawBytes=16, outputBytes=15) (after 1 attempt)`;
@@ -105,82 +173,66 @@ it("retains bounded progress through cancellation, retry, and CLI error formatti
   }
 });
 
-it("preserves a shared abort reason and its numeric code before the output opens", async () => {
-  const archivePath = path.join(tempDirs.make("backup-sync-cancel-"), "partial.tar.gz");
-  const controller = new AbortController();
-  const reason = Object.freeze(new DOMException("Owner stopped backup", "AbortError"));
-  const writing = withCommandProcessScope(
-    () =>
-      writeArchiveStreamToFile({
-        archivePath,
-        createArchiveStream(report, signal) {
+it.each(["abort", "producer failure"] as const)(
+  "joins output closure and preserves %s before a producer returns",
+  async (mode) => {
+    const archivePath = archivePathFor("backup-sync-failure-");
+    const controller = new AbortController();
+    const producerError = Object.assign(new Error("Producer failed before returning a stream"), {
+      code: "EACCES",
+    });
+    const reason =
+      mode === "abort"
+        ? Object.freeze(new DOMException("Owner stopped backup", "AbortError"))
+        : producerError;
+    const previousOutputs = outputs.length;
+    const writing = writeStream(
+      archivePath,
+      (report, signal) => {
+        if (mode === "abort") {
           report({ phase: "traversal", entryPath: "/source/workspace" });
           controller.abort(reason);
           signal.throwIfAborted();
           throw new Error("Expected cancellation");
-        },
-        onPartialArchive() {},
-      }),
-    controller.signal,
-  );
-  const error: unknown = await writing.catch((caught: unknown) => caught);
-  expect(error).not.toBe(reason);
-  expect(error).toMatchObject({
-    name: "AbortError",
-    code: 20,
-    cause: reason,
-    message:
-      'Owner stopped backup (phase=traversal, entry="/source/workspace", rawBytes=0, outputBytes=0)',
-  });
-  expect(reason.message).toBe("Owner stopped backup");
-  expect(reason.code).toBe(20);
-  await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
-});
+        }
+        controller.abort();
+        throw producerError;
+      },
+      controller,
+    );
+    const output = outputs[previousOutputs]!;
+    try {
+      if (mode === "abort") {
+        const error: unknown = await writing.catch((caught: unknown) => caught);
+        expect(error).not.toBe(reason);
+        expect(error).toMatchObject({
+          name: "AbortError",
+          code: 20,
+          cause: reason,
+          message:
+            'Owner stopped backup (phase=traversal, entry="/source/workspace", rawBytes=0, outputBytes=0)',
+        });
+        expect(reason).toMatchObject({ message: "Owner stopped backup", code: 20 });
+      } else {
+        await expect(writing).rejects.toBe(reason);
+      }
+      expect(output.closed).toBe(true);
+      await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      if (!output.closed) {
+        await once(output, "close");
+      }
+    }
+  },
+);
 
 it("preserves an existing archive when exclusive creation is refused", async () => {
-  const archivePath = path.join(tempDirs.make("backup-existing-"), "existing.tar.gz");
+  const archivePath = archivePathFor("backup-existing-");
   await fs.writeFile(archivePath, "existing archive");
   const source = new PassThrough();
   source.end("new archive");
-  await expect(
-    writeArchiveStreamToFile({
-      archivePath,
-      createArchiveStream: () => source,
-      onPartialArchive() {},
-    }),
-  ).rejects.toMatchObject({ code: "EEXIST" });
+  await expect(writeStream(archivePath, () => source)).rejects.toMatchObject({ code: "EEXIST" });
   await expect(fs.readFile(archivePath, "utf8")).resolves.toBe("existing archive");
-});
-
-it("joins a pending output open before cleaning up a synchronous producer failure", async () => {
-  const archivePath = path.join(tempDirs.make("backup-producer-failed-"), "partial.tar.gz");
-  const previousOutputs = outputs.length;
-  const controller = new AbortController();
-  const failure = Object.assign(new Error("Producer failed before returning a stream"), {
-    code: "EACCES",
-  });
-  const writing = withCommandProcessScope(
-    () =>
-      writeArchiveStreamToFile({
-        archivePath,
-        createArchiveStream() {
-          controller.abort();
-          throw failure;
-        },
-        onPartialArchive() {},
-      }),
-    controller.signal,
-  );
-  const output = outputs[previousOutputs]!;
-  try {
-    await expect(writing).rejects.toBe(failure);
-    expect(output.closed).toBe(true);
-    await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
-  } finally {
-    if (!output.closed) {
-      await once(output, "close");
-    }
-  }
 });
 
 it.each([511, 1024, 1025, 8193])(

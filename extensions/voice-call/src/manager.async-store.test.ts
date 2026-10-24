@@ -27,6 +27,7 @@ import type { VoiceCallRuntime } from "./runtime.js";
 import { CallRecordSchema, type InitiateCallInput } from "./types.js";
 import { speakOnRealtimeBridge } from "./webhook/realtime-call-session-control.js";
 import { RealtimeCallHandler } from "./webhook/realtime-handler.js";
+import { StreamDisconnectGrace } from "./webhook/stream-disconnect-grace.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "./websocket-test-support.js";
 
 let registeredRuntime: VoiceCallRuntime;
@@ -311,6 +312,7 @@ it.each(["committed", "failed", "retired"] as const)(
         triggerGreeting: () => {},
       };
     });
+    const streamDisconnectLifecycle = new StreamDisconnectGrace(() => {});
     const handler = new RealtimeCallHandler(
       config.realtime,
       manager,
@@ -326,7 +328,7 @@ it.each(["committed", "failed", "retired"] as const)(
         providerConfig: {},
       }),
       config.serve.path,
-      { connect: () => {}, disconnect: () => {}, retire: () => {} },
+      streamDisconnectLifecycle,
     );
     manager.streamSessionIssuer = (request) => handler.issueStreamSession(request);
     let server: Awaited<ReturnType<typeof startUpgradeWsServer>> | undefined;
@@ -392,8 +394,12 @@ it.each(["committed", "failed", "retired"] as const)(
     } finally {
       bindingWrite?.release();
       ws?.terminate();
-      await handler.close();
-      await server?.close();
+      try {
+        await handler.close();
+        await server?.close();
+      } finally {
+        streamDisconnectLifecycle.close();
+      }
       await placement;
       await retirement;
       initiate.mockRestore();

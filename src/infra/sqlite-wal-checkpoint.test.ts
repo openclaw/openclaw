@@ -150,11 +150,7 @@ it.each([
     writer.exec("INSERT INTO events VALUES ('after-reader')");
 
     expect(maintenance.checkpoint()).toBe(false);
-    if (checkpointMode === "TRUNCATE") {
-      expect(onCheckpointError).toHaveBeenCalledWith(
-        expect.objectContaining({ message: "test-db WAL checkpoint TRUNCATE remained busy" }),
-      );
-    }
+    expect(onCheckpointError).not.toHaveBeenCalled();
     expect(maintenance.inspectIdle?.()).toBe("healthy");
     expect(maintenance.health).toMatchObject({
       state: "blocked",
@@ -168,6 +164,11 @@ it.each([
     });
     expect(maintenance.checkpoint()).toBe(false);
     expect(maintenance.health).toMatchObject({ consecutiveBlocked: 2, warning: true });
+    expect(onCheckpointError).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        message: `test-db WAL checkpoint ${checkpointMode} ${checkpointMode === "TRUNCATE" ? "remained busy" : "blocked by a reader"}`,
+      }),
+    );
     reader.exec("ROLLBACK;");
     expect(maintenance.checkpoint()).toBe(true);
     expect(maintenance.health).toMatchObject({
@@ -176,6 +177,13 @@ it.each([
       lastCompletedAtMs: expect.any(Number),
       warning: false,
     });
+    onCheckpointError.mockClear();
+    reader.exec("BEGIN; SELECT * FROM events;");
+    writer.exec("INSERT INTO events VALUES ('after-recovery')");
+    expect(maintenance.checkpoint()).toBe(false);
+    expect(maintenance.health).toMatchObject({ consecutiveBlocked: 1, warning: false });
+    expect(onCheckpointError).not.toHaveBeenCalled();
+    reader.exec("ROLLBACK;");
   },
 );
 
@@ -309,4 +317,45 @@ it("does not settle explicit reader custody when forgetting closed connection me
   expect(() => assertNoActiveSqliteReaders(database, "fixture")).toThrow("fixture.owned-reader");
   owned.release();
   expect(() => assertNoActiveSqliteReaders(database, "fixture")).not.toThrow();
+});
+
+it("reports a first blocked checkpoint when the retained WAL exceeds its ceiling", () => {
+  const databasePath = resources.file();
+  const database = open(databasePath);
+  database.exec("PRAGMA journal_mode=WAL; CREATE TABLE payload(data BLOB)");
+  const reader = open(databasePath);
+  const onCheckpointError = vi.fn();
+  const owner = createSqliteWalCheckpoint(
+    database,
+    { databaseLabel: "fixture-db", databasePath, onCheckpointError },
+    1024,
+  );
+  try {
+    expect(owner.checkpoint("TRUNCATE")).toBe(true);
+    reader.exec("BEGIN");
+    reader.prepare("SELECT data FROM payload").all();
+    database.exec("INSERT INTO payload VALUES (zeroblob(4194304))");
+    const walBytes = fs.statSync(`${databasePath}-wal`).size;
+    const databaseBytes = fs.statSync(databasePath).size;
+    expect(walBytes).toBeGreaterThan(Math.max(2 * databaseBytes, 1024));
+
+    // Oversized retained WAL is a real operator signal on the very first blocked pass.
+    expect(owner.checkpoint("TRUNCATE")).toBe(false);
+    expect(owner.health).toMatchObject({
+      state: "blocked",
+      consecutiveBlocked: 1,
+      warning: true,
+    });
+    expect(onCheckpointError).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        message: "fixture-db WAL checkpoint TRUNCATE remained busy",
+      }),
+    );
+  } finally {
+    if (reader.isTransaction) {
+      reader.exec("ROLLBACK");
+    }
+    reader.close();
+    database.close();
+  }
 });

@@ -211,7 +211,7 @@ it.each([
            instances.push(restored);
            try {
              withPluginSourceCaptureDirectory(captures, () => recovery.bind(restored));
-           } finally { recovery.dispose(); }
+           } finally { await recovery.dispose(); }
            await assertWorker(restored.loadModule(${JSON.stringify(path.join(plugin, "eager.ts"))}));
          } finally {
            for (const instance of instances.reverse()) await instance.dispose();

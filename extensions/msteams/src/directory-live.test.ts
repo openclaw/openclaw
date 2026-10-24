@@ -4,13 +4,11 @@ const {
   searchGraphUsersMock,
   listTeamsByNameMock,
   listChannelsForTeamMock,
-  normalizeQueryMock,
   resolveGraphTokenMock,
 } = vi.hoisted(() => ({
   searchGraphUsersMock: vi.fn(),
   listTeamsByNameMock: vi.fn(),
   listChannelsForTeamMock: vi.fn(),
-  normalizeQueryMock: vi.fn((value?: string | null) => value?.trim() ?? ""),
   resolveGraphTokenMock: vi.fn(),
 }));
 
@@ -19,9 +17,8 @@ vi.mock("./graph-users.js", () => ({ searchGraphUsers: searchGraphUsersMock }));
 
 // mock-isolation: Directory queries use fixed teams and tokens without network authentication.
 vi.mock("./graph.js", () => ({
-  listTeamsByName: listTeamsByNameMock,
-  listChannelsForTeam: listChannelsForTeamMock,
-  normalizeQuery: normalizeQueryMock,
+  listTeamsByNameWithPageInfo: listTeamsByNameMock,
+  listChannelsForTeamWithPageInfo: listChannelsForTeamMock,
   resolveGraphToken: resolveGraphTokenMock,
 }));
 
@@ -63,10 +60,9 @@ const entry = (kind: "user" | "group", id: string, name: string, handle: string,
 describe("msteams directory live", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    normalizeQueryMock.mockImplementation((value?: string | null) => value?.trim() ?? "");
     resolveGraphTokenMock.mockResolvedValue("graph-token");
     searchGraphUsersMock.mockResolvedValue([]);
-    listTeamsByNameMock.mockResolvedValue([]);
+    listTeamsByNameMock.mockResolvedValue({ items: [], truncated: false });
   });
 
   it("returns normalized peer entries and skips users without ids", async () => {
@@ -97,8 +93,16 @@ describe("msteams directory live", () => {
     expect(resolveGraphTokenMock).toHaveBeenCalledWith(cfg, { accountId: "secondary" });
   });
 
+  it.each([
+    ["peers", listMSTeamsDirectoryPeersLive],
+    ["groups", listMSTeamsDirectoryGroupsLive],
+  ] as const)("returns no %s for a blank query without acquiring a token", async (_kind, list) => {
+    await expect(list({ cfg, query: "   " })).resolves.toEqual([]);
+    expect(resolveGraphTokenMock).not.toHaveBeenCalled();
+  });
+
   it("returns team entries without channel queries and honors limits", async () => {
-    listTeamsByNameMock.mockResolvedValue(teams);
+    listTeamsByNameMock.mockResolvedValue({ items: teams, truncated: false });
 
     await expect(
       listMSTeamsDirectoryGroupsLive({
@@ -110,10 +114,10 @@ describe("msteams directory live", () => {
   });
 
   it("searches channels within matching teams when a team/channel query is used", async () => {
-    listTeamsByNameMock.mockResolvedValue(teams);
+    listTeamsByNameMock.mockResolvedValue({ items: teams, truncated: false });
     listChannelsForTeamMock
-      .mockResolvedValueOnce(channels.slice(0, 2))
-      .mockResolvedValueOnce(channels.slice(2));
+      .mockResolvedValueOnce({ items: channels.slice(0, 2), truncated: false })
+      .mockResolvedValueOnce({ items: channels.slice(2), truncated: false });
 
     await expect(
       listMSTeamsDirectoryGroupsLive({
