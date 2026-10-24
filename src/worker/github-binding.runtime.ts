@@ -96,16 +96,20 @@ async function bindWorkerGitHubCheckout(
     if (signal?.aborted) {
       return;
     }
-    const added = (await requireGit([
-      "diff",
-      "--name-only",
-      "--diff-filter=A",
-      "--no-renames",
-      "-z",
-      "HEAD",
-      "FETCH_HEAD",
-      "--",
-    ])).split("\0").filter(Boolean);
+    const added = (
+      await requireGit([
+        "diff",
+        "--name-only",
+        "--diff-filter=A",
+        "--no-renames",
+        "-z",
+        "HEAD",
+        "FETCH_HEAD",
+        "--",
+      ])
+    )
+      .split("\0")
+      .filter(Boolean);
     let hasPathPrefixCollision = false;
     // Native path lookup also recognizes the filesystem's case and Unicode aliases.
     // Inspect only incoming components, not unrelated or ignored workspace files.

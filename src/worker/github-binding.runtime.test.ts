@@ -338,7 +338,11 @@ describe("prepareWorkerGitHubEnvironment", () => {
 
   for (const { scenario, localCollision, remoteCollision } of [
     { scenario: "case", localCollision: "Collision", remoteCollision: "collision" },
-    { scenario: "Unicode normalization", localCollision: "cafe\u0301", remoteCollision: "caf\u00e9" },
+    {
+      scenario: "Unicode normalization",
+      localCollision: "cafe\u0301",
+      remoteCollision: "caf\u00e9",
+    },
   ]) {
     it(`preserves ${scenario} aliases recognized by the filesystem`, async ({ skip }) => {
       const localContent = "local file\n";
