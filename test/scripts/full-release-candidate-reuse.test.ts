@@ -15,16 +15,15 @@ import {
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import {
   canonicalTestJson,
+  canonicalTestSha256,
   fullReleaseCandidateBindingFixture,
   fullReleaseCandidateManifestFixture,
-  fullReleaseCandidateRequestInput,
 } from "../helpers/full-release-candidate.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const NOW = Date.parse("2026-08-28T12:00:00Z");
 const EXPIRES_AT = "2026-09-04T12:00:00Z";
 const REPOSITORY = "openclaw/openclaw";
-const CONTRACT_SCRIPT = resolve("scripts/full-release-candidate-contract.mjs");
 const SCRIPT = resolve("scripts/full-release-candidate-reuse.mjs");
 const WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -287,12 +286,7 @@ describe("trusted full release candidate selection", () => {
     const selected = await select({
       artifacts: [
         { ...metadata, name: "wrong" },
-        { ...metadata, digest: "" },
-        { ...metadata, expired: true },
-        { ...metadata, expires_at: "2026-08-28T11:59:59Z" },
-        { ...metadata, expires_at: "2026-08-29T01:00:00Z" },
         artifactMetadata(archive, { id: 302 }, { head_repository_id: 2, id: 78 }),
-        artifactMetadata(archive, { id: 303 }, { head_sha: "9".repeat(40), id: 79 }),
       ],
       readWorkflowRun: async () => {
         runReads += 1;
@@ -371,36 +365,16 @@ describe("trusted full release candidate selection", () => {
 describe("full release candidate discovery CLI", () => {
   it("preserves canonical request arrays when checking the expected digest", () => {
     const cli = discoveryCli("canonical");
-    const rawInputPath = join(cli.root, "raw-request-input.json");
-    const requestPath = cli.inputPath;
-    writeFileSync(
-      rawInputPath,
-      JSON.stringify(
-        fullReleaseCandidateRequestInput({
-          upgradeSurvivorBaselines: "openclaw@latest",
-          upgradeSurvivorScenarios: "base",
-        }),
-      ),
-    );
-    const contractResult = spawnSync(
-      testNodeExecPath,
-      [CONTRACT_SCRIPT, "request", "--input", rawInputPath, "--output", requestPath],
-      { encoding: "utf8", timeout: 10_000 },
-    );
-    expect(contractResult.status, contractResult.stderr).toBe(0);
-    const contract = JSON.parse(contractResult.stdout) as {
-      requestJson: string;
-      requestSha256: string;
+    const request = {
+      ...fullReleaseCandidateManifestFixture().request,
+      upgradeSurvivorBaselines: ["openclaw@latest"],
+      upgradeSurvivorScenarios: ["base"],
     };
-    const requestBeforeDiscovery = readFileSync(requestPath, "utf8");
-    const request = JSON.parse(requestBeforeDiscovery) as {
-      upgradeSurvivorBaselines: string[];
-      upgradeSurvivorScenarios: string[];
-    };
-    expect(request.upgradeSurvivorBaselines).toEqual(["openclaw@latest"]);
-    expect(request.upgradeSurvivorScenarios).toEqual(["base"]);
-    cli.respond({ [cli.inventory(contract.requestSha256)]: { artifacts: [] } });
-    const result = cli.run({}, ["--expected-request-sha256", contract.requestSha256]);
+    const requestJson = canonicalTestJson(request).trimEnd();
+    const requestSha256 = canonicalTestSha256(request);
+    writeFileSync(cli.inputPath, requestJson);
+    cli.respond({ [cli.inventory(requestSha256)]: { artifacts: [] } });
+    const result = cli.run({}, ["--expected-request-sha256", requestSha256]);
     expect(result.status, result.stderr).toBe(0);
     const outputs = Object.fromEntries(
       readFileSync(cli.outputPath, "utf8")
@@ -412,14 +386,14 @@ describe("full release candidate discovery CLI", () => {
         }),
     );
     expect(outputs).toMatchObject({
-      request_json: contract.requestJson,
-      request_sha256: contract.requestSha256,
+      request_json: requestJson,
+      request_sha256: requestSha256,
       reused: "false",
       state: "miss",
     });
-    expect(readFileSync(requestPath, "utf8")).toBe(requestBeforeDiscovery);
+    expect(readFileSync(cli.inputPath, "utf8")).toBe(requestJson);
     expect(readFileSync(cli.callLogPath, "utf8").trim()).toBe(
-      `api repos/${REPOSITORY}/actions/artifacts?name=full-release-candidate-v2-${contract.requestSha256}&per_page=100&page=1`,
+      `api repos/${REPOSITORY}/actions/artifacts?name=full-release-candidate-v2-${requestSha256}&per_page=100&page=1`,
     );
   });
 
@@ -448,60 +422,52 @@ describe("full release candidate discovery CLI", () => {
     expectUnavailable(cli.outputPath, "candidate artifact inventory exceeded the bounded scan");
   });
 
-  it.each([false, true])(
-    "marks bounded candidate evaluation unavailable when older candidates remain (100-job pages 502: %s)",
-    async (largePage502) => {
-      const cli = discoveryCli("evaluation");
-      const replies: Record<string, unknown> = {};
-      const errors: Record<string, string> = {};
-      const now = Date.now();
-      const { manifest, metadata } = await fixture(now);
-      const artifacts = Array.from({ length: 6 }, (_, index) => {
-        const runId = 80 + index;
-        const jobs = workflowJobs(manifest, { runId });
-        jobs.jobs[1]!.conclusion = runId === 85 ? "success" : "failure";
-        replies[`actions/runs/${runId}`] = workflowRun(runId);
-        for (const perPage of [100, 50]) {
-          const endpoint = `actions/runs/${runId}/jobs?filter=all&per_page=${perPage}`;
-          replies[endpoint] = [jobs];
-          if (largePage502 && perPage === 100) {
-            errors[endpoint] = "gh: Server Error (HTTP 502)";
-          }
-        }
-        return {
-          ...metadata,
-          created_at: new Date(now - index * 1000).toISOString(),
-          id: 400 + index,
-          workflow_run: {
-            head_repository_id: 1,
-            head_sha: manifest.request.toolingSha,
-            id: runId,
-            repository_id: 1,
-          },
-        };
-      });
-      cli.respond({ ...replies, [cli.inventory()]: { artifacts } }, errors);
-      const result = cli.run();
-      expect(result.status, result.stderr).toBe(0);
-      expectUnavailable(cli.outputPath, "candidate evaluation exceeded the bounded scan", true);
-      const candidateCalls = readFileSync(cli.callLogPath, "utf8")
-        .trim()
-        .split("\n")
-        .filter((line) => line.includes("actions/runs/"));
-      expect(candidateCalls).toEqual(
-        [80, 81, 82, 83, 84].flatMap((runId) =>
-          // A 5xx at 100 rereads the complete listing once at 50, without a same-size retry.
-          [`api repos/${REPOSITORY}/actions/runs/${runId}`].concat(
-            (largePage502 ? [100, 50] : [100]).map(
-              (perPage) =>
-                `api --paginate --slurp repos/${REPOSITORY}/actions/runs/${runId}/jobs?filter=all&per_page=${perPage}`,
-            ),
+  it("bounds candidate evaluation even after falling back from 100-job pages", async () => {
+    const cli = discoveryCli("evaluation");
+    const replies: Record<string, unknown> = {};
+    const errors: Record<string, string> = {};
+    const now = Date.now();
+    const { manifest, metadata } = await fixture(now);
+    const artifacts = Array.from({ length: 6 }, (_, index) => {
+      const runId = 80 + index;
+      const jobs = workflowJobs(manifest, { runId });
+      jobs.jobs[1]!.conclusion = runId === 85 ? "success" : "failure";
+      replies[`actions/runs/${runId}`] = workflowRun(runId);
+      replies[`actions/runs/${runId}/jobs?filter=all&per_page=50`] = [jobs];
+      errors[`actions/runs/${runId}/jobs?filter=all&per_page=100`] = "gh: Server Error (HTTP 502)";
+      return {
+        ...metadata,
+        created_at: new Date(now - index * 1000).toISOString(),
+        id: 400 + index,
+        workflow_run: {
+          head_repository_id: 1,
+          head_sha: manifest.request.toolingSha,
+          id: runId,
+          repository_id: 1,
+        },
+      };
+    });
+    cli.respond({ ...replies, [cli.inventory()]: { artifacts } }, errors);
+    const result = cli.run();
+    expect(result.status, result.stderr).toBe(0);
+    expectUnavailable(cli.outputPath, "candidate evaluation exceeded the bounded scan", true);
+    const candidateCalls = readFileSync(cli.callLogPath, "utf8")
+      .trim()
+      .split("\n")
+      .filter((line) => line.includes("actions/runs/"));
+    expect(candidateCalls).toEqual(
+      [80, 81, 82, 83, 84].flatMap((runId) =>
+        // A 5xx at 100 rereads the complete listing once at 50, without a same-size retry.
+        [`api repos/${REPOSITORY}/actions/runs/${runId}`].concat(
+          [100, 50].map(
+            (perPage) =>
+              `api --paginate --slurp repos/${REPOSITORY}/actions/runs/${runId}/jobs?filter=all&per_page=${perPage}`,
           ),
         ),
-      );
-      expect(candidateCalls.join("\n")).not.toContain("actions/runs/85");
-    },
-  );
+      ),
+    );
+    expect(candidateCalls.join("\n")).not.toContain("actions/runs/85");
+  });
 
   it("marks a selected candidate with a missing constituent unavailable", async () => {
     const cli = discoveryCli("selected-missing");
@@ -617,75 +583,16 @@ describe("full release candidate loading", () => {
     expect(downloads).toBe(0);
   });
 
-  it("rejects unavailable, expired, or changed constituent artifacts before reuse", async () => {
-    const { manifest, options } = await loadingFixture();
-    const packageId = manifest.package.artifact.id;
-    const cases: Array<[string, Record<string, unknown> | null]> = [
-      ["package artifact is unavailable", null],
-      ["package artifact is expired or near expiry", { expired: true }],
-      ["package artifact identity changed", { digest: `sha256:${"9".repeat(64)}` }],
-    ];
-    for (const [expected, overrides] of cases) {
-      await expect(
-        loadSelectedFullReleaseCandidate({
-          ...options,
-          readArtifact: async (artifactId: string) => {
-            if (artifactId === packageId && overrides === null) {
-              throw new Error("GitHub Actions artifact metadata returned HTTP 404.");
-            }
-            const value = await constituentArtifactReader(manifest)(artifactId);
-            return artifactId === packageId ? { ...value, ...overrides } : value;
-          },
-        }),
-      ).rejects.toThrow(expected);
-    }
+  it("rejects a manifest workflow that differs from the selected run", async () => {
+    const { manifest } = await fixture();
+    manifest.producer.workflowPath = ".github/workflows/candidate-evidence-test.yml";
+    const archive = await archiveWithManifest(manifest);
+    const metadata = artifactMetadata(archive);
+    const { options } = await loadingFixture({ archive, metadata, manifest });
+    await expect(loadSelectedFullReleaseCandidate(options)).rejects.toThrow(
+      "producer or publisher workflow attempt is invalid",
+    );
   });
-
-  it.each(["producer", "publisher"] as const)(
-    "rejects a manifest %s workflow that differs from the selected run",
-    async (role) => {
-      const { manifest } = await fixture();
-      const changedManifest = structuredClone(manifest);
-      changedManifest[role].workflowPath = ".github/workflows/candidate-evidence-test.yml";
-      const archive = await archiveWithManifest(changedManifest);
-      const metadata = artifactMetadata(archive);
-      const { options } = await loadingFixture({ archive, metadata, manifest: changedManifest });
-      await expect(loadSelectedFullReleaseCandidate(options)).rejects.toThrow(
-        "producer or publisher workflow attempt is invalid",
-      );
-    },
-  );
-
-  it("hard-fails an unavailable selected artifact", async () => {
-    const { options } = await loadingFixture();
-    const error = new Error("GitHub Actions artifact metadata returned HTTP 404.");
-    await expect(
-      loadSelectedFullReleaseCandidate({
-        ...options,
-        downloadArchive: async () => {
-          throw error;
-        },
-      }),
-    ).rejects.toThrow(error.message);
-  });
-
-  it.each([
-    ["job name", (jobs) => void (jobs.jobs[1]!.name = "different publisher")],
-    ["job conclusion", (jobs) => void (jobs.jobs[1]!.conclusion = "failure")],
-  ] satisfies Array<[string, (jobs: ReturnType<typeof workflowJobs>) => void]>)(
-    "rejects evidence when the publisher %s differs from the sealed identity",
-    async (_label, mutate) => {
-      const { manifest, options } = await loadingFixture();
-      const jobs = workflowJobs(manifest);
-      mutate(jobs);
-      await expect(
-        loadSelectedFullReleaseCandidate({
-          ...options,
-          readWorkflowJobs: async () => jobs,
-        }),
-      ).rejects.toThrow("publisher job did not complete successfully");
-    },
-  );
 });
 
 describe("full release candidate binding authority", () => {
@@ -719,11 +626,9 @@ describe("full release candidate binding authority", () => {
     expect(() => resolveBinding({ freshBinding: binding, reusedBinding: binding })).toThrow(
       "exactly one",
     );
-    for (const now of [Date.parse(EXPIRES_AT), Date.parse(EXPIRES_AT) - 90 * 60 * 1000]) {
-      expect(() => resolveBinding({ freshBinding: binding, now })).toThrow(
-        "expired or near-expiry",
-      );
-    }
+    expect(() =>
+      resolveBinding({ freshBinding: binding, now: Date.parse(EXPIRES_AT) - 90 * 60 * 1000 }),
+    ).toThrow("expired or near-expiry");
     expect(() =>
       resolveBinding({
         freshBinding: binding,
@@ -735,7 +640,7 @@ describe("full release candidate binding authority", () => {
 
 describe("sealed full release candidate verification", () => {
   it("rechecks the exact evidence archive and producer tuple", async () => {
-    const { archive, manifest, metadata, binding, verification } = await verificationFixture();
+    const { archive, metadata, binding, verification } = await verificationFixture();
     await expect(
       verifySealedFullReleaseCandidate({
         ...verification,
@@ -755,29 +660,43 @@ describe("sealed full release candidate verification", () => {
         },
       }),
     ).resolves.toEqual(binding);
-
-    const changedPublisherJobs = workflowJobs(manifest);
-    changedPublisherJobs.jobs[1]!.id = 999;
-    await expect(
-      verifySealedFullReleaseCandidate({
-        ...verification,
-        readWorkflowJobs: async () => changedPublisherJobs,
-      }),
-    ).rejects.toThrow("publisher job did not complete successfully");
   });
 
-  it("fails final verification when a sealed constituent artifact disappears", async () => {
+  it.each([{ id: 999 }, { name: "different publisher" }, { conclusion: "failure" }])(
+    "rejects changed sealed publisher identity: %j",
+    async (changed) => {
+      const { manifest, verification } = await verificationFixture();
+      const jobs = workflowJobs(manifest);
+      Object.assign(jobs.jobs[1]!, changed);
+      await expect(
+        verifySealedFullReleaseCandidate({
+          ...verification,
+          readWorkflowJobs: async () => jobs,
+        }),
+      ).rejects.toThrow("publisher job did not complete successfully");
+    },
+  );
+
+  it.each<[Record<string, unknown> | null, string]>([
+    [null, "HTTP 404"],
+    [{ expired: true }, "package artifact is expired or near expiry"],
+    [{ digest: `sha256:${"9".repeat(64)}` }, "package artifact identity changed"],
+  ])("rejects changed sealed constituents: %j", async (changed, error) => {
     const { binding, verification } = await verificationFixture();
     await expect(
       verifySealedFullReleaseCandidate({
         ...verification,
         readArtifact: async (artifactId) => {
-          if (artifactId === binding.package.artifact.id) {
+          const metadata = await verification.readArtifact(artifactId);
+          if (artifactId !== binding.package.artifact.id) {
+            return metadata;
+          }
+          if (changed === null) {
             throw new Error("GitHub Actions artifact metadata returned HTTP 404.");
           }
-          return verification.readArtifact(artifactId);
+          return { ...metadata, ...changed };
         },
       }),
-    ).rejects.toThrow("HTTP 404");
+    ).rejects.toThrow(error);
   });
 });

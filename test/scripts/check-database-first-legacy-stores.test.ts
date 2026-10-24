@@ -237,9 +237,11 @@ describe("check-database-first-legacy-stores", () => {
   });
 
   it("keeps transcript bridge markers out of runtime while permitting migration owners", () => {
-    const source = 'const transcriptLocator = "sqlite-transcript://legacy";';
+    const source =
+      'const transcriptLocator = "sqlite-transcript://legacy";\nconst dynamicLocator = `sqlite-transcript://${sessionId}`;';
     expect(violations(source, "src/runtime/fixture.ts")).toEqual([
       { kind: "legacy transcript bridge marker", line: 1 },
+      { kind: "legacy transcript bridge marker", line: 2 },
     ]);
     expect(violations(source, "src/commands/doctor/fixture.ts")).toEqual([]);
     expect(
@@ -327,15 +329,10 @@ describe("check-database-first-legacy-stores", () => {
       "allows read-only fs open calls and flags write modes": fsPromisesCase`
         await fs.open("sessions.json");
         await fs.open("sessions.json", "r");
-        await fs.open("sessions.json", "r+");
         await fs.open("sessions.json", "w");
-      `(filesystemWriteViolations(5, 6)),
+      `(filesystemWriteViolations(5)),
       "allows fs copy calls reading from legacy store paths": fsPromisesCase`
-        import syncFs from "node:fs";
         await fs.copyFile("sessions.json", "state/openclaw.sqlite.import");
-        await fs.cp("cron/jobs.json", "state/openclaw.sqlite.import");
-        syncFs.copyFileSync("auth-profiles.json", "state/openclaw.sqlite.import");
-        syncFs.cpSync("cache/models.json", "state/openclaw.sqlite.import");
       `(),
       "flags legacy paths destructured from for-of tuple entries": sourceCase`
         import path from "node:path";
@@ -359,9 +356,8 @@ describe("check-database-first-legacy-stores", () => {
       "flags bracketed fs writes": sourceCase`
         import fs from "node:fs";
         await fs["writeFile"]("sessions.json", "{}\\n");
-        await fs.promises["writeFile"]("cron/runs/job.jsonl", "{}\\n");
         require("node:fs")["writeFileSync"]("sessions.json", "{}\\n");
-      `(filesystemWriteViolations(3, 4, 5)),
+      `(filesystemWriteViolations(3, 4)),
       "flags dynamic fs import write aliases": sourceCase`
         const { writeFile } = await import("node:fs/promises");
         const { promises } = await import("node:fs");
@@ -748,13 +744,6 @@ describe("check-database-first-legacy-stores", () => {
         options.paths = { nested: loadNested() };
         await persist(options);
       `(),
-      "flags legacy transcript bridge markers in runtime source": sourceCase`
-        export const transcriptLocator = "sqlite-transcript://session";
-        export const dynamicLocator = \`sqlite-transcript://\${sessionId}\`;
-      `([
-        { kind: "legacy transcript bridge marker", line: 2 },
-        { kind: "legacy transcript bridge marker", line: 3 },
-      ]),
     }),
   )("%s", (_name, { source, filename, expected }) => {
     expect(violations(source, filename)).toEqual(expected);

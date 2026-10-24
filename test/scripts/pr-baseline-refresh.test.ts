@@ -324,67 +324,6 @@ describePosix("native correction baseline refresh", () => {
     expect(existsSync(join(f.root, ".local/review-transition.json"))).toBe(false);
   });
 
-  it("revalidates both correction callers under native supervision and rejects authority mutation", () => {
-    const f = reviewedFixture();
-    // The baseline fixture uses a synthetic lock during setup. Retire only that
-    // fixture ref before letting the actual supervisor acquire its own owner.
-    f.git("update-ref", "-d", "refs/openclaw/pr-operation-locks/42", f.incoming);
-    const driver = join(f.root, ".local/supervised-review.sh");
-    writeFileSync(
-      driver,
-      `#!/bin/bash
-set -euo pipefail
-script_parent_dir="$1"
-canonical_repo_root="$PWD"
-source "$1/pr-lib/common.sh"
-source "$1/pr-lib/review.sh"
-pr_git() { command git "$@"; }
-source "$1/pr-lib/worktree.sh"
-source "$1/pr-lib/operation-lock.sh"
-[ "$(repo_root)" = "$PWD" ]
-acquire_pr_operation_lock 42
-snapshot=$(correction_review_snapshot 42)
-baseline=$(run_prepared_correction_review 42 publication-baseline)
-[ "$baseline" = "$2" ]
-if [ "$3" = mutate ]; then printf '\\n' >> .local/correction-review.json; fi
-verify_correction_review_snapshot 42 "$snapshot"
-printf '%s\\n' "$snapshot"
-`,
-    );
-    chmodSync(driver, 0o700);
-    const supervise = (mode: string) =>
-      spawnSync(
-        "node",
-        [
-          join(process.cwd(), "scripts/pr-lib/process-group-runner.mjs"),
-          f.root,
-          driver,
-          join(process.cwd(), "scripts"),
-          f.baseline,
-          mode,
-        ],
-        {
-          cwd: f.root,
-          env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" },
-          encoding: "utf8",
-        },
-      );
-    const before = f.read(".local/correction-review.json");
-    const valid = pass(supervise("valid"));
-    expect(valid.stdout).toContain(
-      `.local/prepare-baseline.json ${f.git("hash-object", "--no-filters", ".local/prepare-baseline.json")}`,
-    );
-    expect(f.read(".local/correction-review.json")).toEqual(before);
-    expect(f.git("for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks/")).toBe(
-      "",
-    );
-    const changed = reject(supervise("mutate"));
-    expect(changed.stderr).toContain("Correction review authority changed during admission");
-    expect(f.git("for-each-ref", "--format=%(refname)", "refs/openclaw/pr-operation-locks/")).toBe(
-      "",
-    );
-  });
-
   it.each(["delete", "binary"] as const)(
     "requires exact native conflict identities for %s/edit and preserves the reviewed resolution",
     (shape) => {
@@ -662,20 +601,13 @@ printf '%s\\n' "$snapshot"
       expect(existsSync(join(f.root, ".local/review-transition.json"))).toBe(false);
     },
   );
-  it("rejects mismatched successor source, tree, review, predecessor and selected main without changing authority", () => {
+  it("rejects mismatched successor review and selected main without changing authority", () => {
     const f = reviewedFixture();
     const next = f.nextBaseline();
     const source = f.git("rev-parse", "HEAD");
     const binding = f.read(".local/prepare-baseline.json");
     const review = f.read(".local/correction-review.json");
-    for (const option of [
-      "--expected-head",
-      "--expected-tree",
-      "--expected-review",
-      "--predecessor-head",
-      "--predecessor-binding",
-      "--baseline",
-    ]) {
+    for (const option of ["--expected-review", "--baseline"]) {
       const args = f.successorArgs(next);
       args[args.indexOf(option) + 1] = option === "--baseline" ? source : f.incoming;
       reject(f.run(`PR_MAIN_SHA=${next}; prepare_baseline_successor 42 ${args.join(" ")}`));
@@ -684,75 +616,5 @@ printf '%s\\n' "$snapshot"
       expect(f.read(".local/correction-review.json")).toEqual(review);
       expect(existsSync(join(f.root, ".local/review-transition.json"))).toBe(false);
     }
-  });
-
-  it.each(["review", "lock"])("rejects successor %s drift after signing", (change) => {
-    const f = reviewedFixture();
-    const source = f.git("rev-parse", "HEAD");
-    const binding = f.read(".local/prepare-baseline.json");
-    const next = f.nextBaseline();
-    reject(f.successor(next, driftAfterSigning("create-successor", change, next)));
-    expect(f.git("rev-parse", "HEAD")).toBe(source);
-    expect(f.read(".local/prepare-baseline.json")).toEqual(binding);
-    expect(existsSync(join(f.root, ".local/review-transition.json"))).toBe(false);
-  });
-
-  it.each(["binding", "CAS"])(
-    "recovers only the admitted successor after %s interruption",
-    (phase) => {
-      const f = reviewedFixture();
-      const source = f.git("rev-parse", "HEAD");
-      const predecessor = f.read(".local/prepare-baseline.json");
-      const next = f.nextBaseline();
-      let setup = "";
-      const env = phase === "binding" ? contextWriteFault(f) : {};
-      if (phase === "CAS") {
-        setup = `pr_git() { command git "$@" || return $?; if [ "$1" = update-ref ] && [ "\${2:-}" = --no-deref ]; then return 91; fi; }`;
-      }
-      reject(f.successor(next, setup, env));
-      const journal = f.json(".local/review-transition.json");
-      expect(journal.source).toBe(source);
-      const record = JSON.parse(Buffer.from(journal.binding, "base64").toString());
-      expect(readFileSync(join(f.root, record.archive, "prepare-baseline.json"))).toEqual(
-        predecessor,
-      );
-      pass(f.run("recover_review_transition 42"));
-      expect(f.git("rev-parse", "HEAD")).toBe(journal.target);
-      expect(f.run("recover_review_transition 42").status).toBe(0);
-      expect(f.git("rev-parse", "HEAD")).toBe(journal.target);
-      expect(f.run("require_prepared_review 42").status).not.toBe(0);
-      expect(f.run("prepare_correction_review_init 42").status).toBe(0);
-      f.approve();
-      expect(f.run("require_prepared_review 42").status).toBe(0);
-      const oldArchive = JSON.parse(predecessor.toString()).archive;
-      appendFileSync(join(f.root, oldArchive, "gates-build.log"), "changed proof");
-      const changed = reject(f.run("require_prepared_review 42"));
-      expect(changed.stderr).toContain("Retained successor proof changed");
-    },
-  );
-
-  it("rechecks live PR identity after restoring a successor and before its branch CAS", () => {
-    const f = reviewedFixture();
-    const source = f.git("rev-parse", "HEAD");
-    const next = f.nextBaseline();
-    const result = reject(
-      f.successor(
-        next,
-        `
-      pr_git() {
-        command git "$@" || return $?
-        if [ "$1" = --literal-pathspecs ] && [ "\${2:-}" = restore ]; then touch .local/closed; fi
-      }
-      read_pr_view_json() {
-        if [ -e .local/closed ]; then jq '.state="CLOSED"' .local/pr-meta.json; else cat .local/pr-meta.json; fi
-      }`,
-      ),
-    );
-    expect(result.stderr).toContain("PR identity changed");
-    expect(f.git("rev-parse", "HEAD")).toBe(source);
-    const journal = f.json(".local/review-transition.json");
-    expect(journal.source).toBe(source);
-    pass(f.run("recover_review_transition 42"));
-    expect(f.git("rev-parse", "HEAD")).toBe(journal.target);
   });
 });

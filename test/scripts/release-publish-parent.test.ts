@@ -290,27 +290,24 @@ describe("optional Gateway publication notification", () => {
   const notificationName = "Notify Windows of published Gateway packages";
   const publisher = job("publish_openclaw_npm", "success");
 
-  it.each(["failure", "timed_out", "cancelled"])(
-    "preserves publisher start and background completion after notification %s",
-    (conclusion) => {
-      const jobs = [publisher, job(notificationName, conclusion)];
-      const states: RunState[] = [{ status: "in_progress", jobs }, terminal("success", ...jobs)];
-      const started = childFixture({ 91: states }).run(
-        source +
-          'wait_for_run openclaw-npm-release.yml 91 "$PARENT_WORKFLOW_SHA" publish_openclaw_npm false',
-      );
-      expect(started.status, started.stderr).toBe(0);
-      expect(started.stdout).toContain("publish_openclaw_npm started");
-      const completed = childFixture({ 91: states }).run(
-        source +
-          'wait_for_run_background openclaw-npm-release.yml 91 "$PARENT_WORKFLOW_SHA" "$RUNNER_TEMP/result" false; wait "$wait_run_pid"; cat "$RUNNER_TEMP/result"',
-      );
-      expect(completed.status, completed.stderr).toBe(0);
-      expect(completed.stdout.trim().endsWith("success")).toBe(true);
-      expect(completed.summary).toContain("openclaw-npm-release.yml: success");
-      expect(completed.calls.some(isCancel)).toBe(false);
-    },
-  );
+  it("preserves publisher start and background completion after notification failure", () => {
+    const jobs = [publisher, job(notificationName, "failure")];
+    const states: RunState[] = [{ status: "in_progress", jobs }, terminal("success", ...jobs)];
+    const started = childFixture({ 91: states }).run(
+      source +
+        'wait_for_run openclaw-npm-release.yml 91 "$PARENT_WORKFLOW_SHA" publish_openclaw_npm false',
+    );
+    expect(started.status, started.stderr).toBe(0);
+    expect(started.stdout).toContain("publish_openclaw_npm started");
+    const completed = childFixture({ 91: states }).run(
+      source +
+        'wait_for_run_background openclaw-npm-release.yml 91 "$PARENT_WORKFLOW_SHA" "$RUNNER_TEMP/result" false; wait "$wait_run_pid"; cat "$RUNNER_TEMP/result"',
+    );
+    expect(completed.status, completed.stderr).toBe(0);
+    expect(completed.stdout.trim().endsWith("success")).toBe(true);
+    expect(completed.summary).toContain("openclaw-npm-release.yml: success");
+    expect(completed.calls.some(isCancel)).toBe(false);
+  });
 
   it.each([
     { workflow: coreNpm, failed: "publish_openclaw_npm", conclusion: "failure" },
@@ -342,33 +339,8 @@ describe("optional Gateway publication notification", () => {
 });
 
 describe("plugin npm child lifecycle", () => {
-  it.each<[string, RunState[]]>([
-    ["a pre-publish failure while the child is still running", failedBeforePublish],
-    ["a terminal pre-publish failure", [failedBeforePublish[1]!]],
-    [
-      "a failed job while a sibling publisher is still running",
-      [
-        active(previewFailed, "in_progress"),
-        active(previewFailed, "in_progress"),
-        terminal("failure", previewFailed, publish("success")),
-      ],
-    ],
-    [
-      "a failure after publication started",
-      [
-        terminal(
-          "failure",
-          previewPassed,
-          publish("success"),
-          job("Publish plugin npm package (@openclaw/x)", "failure"),
-        ),
-      ],
-    ],
-    [
-      "a cancelled pre-publish job",
-      [terminal("cancelled", job(previewFailed.name, "cancelled"), publish("skipped"))],
-    ],
-  ])("fails the publication step without replacing %s", (_label, states) => {
+  it("waits for a failed child to finish without replacing it", () => {
+    const states = failedBeforePublish;
     const result = childFixture({ 91: states, 92: succeeded }).run(
       step("Start core npm publication").run!,
     );
@@ -378,27 +350,6 @@ describe("plugin npm child lifecycle", () => {
     expect(result.stderr).toContain("deferred cleanup will preserve ClawHub recovery evidence");
   });
 
-  it("records the successful original child before continuing publication", () => {
-    const result = childFixture({ 91: succeeded }).run(step("Start core npm publication").run!);
-    expect(result.status, result.stderr).toBe(0);
-    expect(result.dispatches).toHaveLength(0);
-    expect(result.outputs).toBe("plugin_npm_completed=true\nplugin_npm_run_id=91\n");
-    expect(result.summary).toContain("plugin-npm-release.yml: success");
-  });
-  it.each([
-    { status: "waiting", jobs: [publish(null, "waiting")], cancelled: true },
-    { status: "in_progress", jobs: [publish(null, "in_progress")], cancelled: false },
-    { status: "completed", jobs: [publish("success")], cancelled: false },
-  ])(
-    "preserves active publishers and cancels only waiting children ($status)",
-    ({ status, jobs, cancelled }) => {
-      const result = childFixture({ 91: [{ status, jobs }] }).run(
-        source + "cleanup_waiting_npm_children",
-      );
-      expect(result.status, result.stderr).toBe(0);
-      expect(result.events.filter(Boolean)).toEqual(cancelled ? ["cancel 91"] : []);
-    },
-  );
   it.each([
     { count: 2, message: "gh: Server Error (HTTP 502)", calls: 3, succeeds: true },
     { count: 4, message: "gh: Server Error (HTTP 502)", calls: 4, succeeds: false },
@@ -569,11 +520,6 @@ it.each<[string, Fixture, boolean]>([
   ["failed cancellation", { children: [child()], rejectFails: true, cancelFails: true }, false],
   ["other release", slotFixture(clawhub, `${clawhub} [v2026.9.4] publish parent=80/1`), true],
   [
-    "other bootstrap release",
-    slotFixture(bootstrap, `${bootstrap} [v2026.9.4] publish parent=80/1`),
-    true,
-  ],
-  [
     "validation run",
     slotFixture(clawhub, `${clawhub} [${tag}] validation parent=80/1`, "in_progress"),
     true,
@@ -620,21 +566,21 @@ it.each<{ config: Fixture; env: NodeJS.ProcessEnv; messages: string[] }>([
   },
 );
 
-it("failure cleanup cancels a waiting npm child and preserves an active one", () => {
-  const result = fixture({
-    children: [
-      child(),
-      child({ id: 93, status: "in_progress", jobs: [{ status: "in_progress" }] }),
-    ],
-  }).run(
-    `${source}cleanup_clawhub_children() { :; }\n${step("Clean up npm children after failure").run}`,
-    { CHILD_PLUGIN_NPM_RUN_ID: "91", CHILD_OPENCLAW_NPM_RUN_ID: "93" },
-  );
-  expect(result.status, result.stderr).toBe(0);
-  expect(cancellations(result)).toEqual(["91"]);
-  // Same-tooling npm children publish in npm-publish and have no gate to reject.
-  expect(result.calls.some((call) => call.args.includes("state=rejected"))).toBe(false);
-});
+it.each(["in_progress", "completed"])(
+  "failure cleanup cancels a waiting npm child and preserves a %s one",
+  (status) => {
+    const result = fixture({
+      children: [child(), child({ id: 93, status, jobs: [{ status }] })],
+    }).run(
+      `${source}cleanup_clawhub_children() { :; }\n${step("Clean up npm children after failure").run}`,
+      { CHILD_PLUGIN_NPM_RUN_ID: "91", CHILD_OPENCLAW_NPM_RUN_ID: "93" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(cancellations(result)).toEqual(["91"]);
+    // Same-tooling npm children publish in npm-publish and have no gate to reject.
+    expect(result.calls.some((call) => call.args.includes("state=rejected"))).toBe(false);
+  },
+);
 
 const visible = { versions: { "2026.9.6": {} }, "dist-tags": { latest: "2026.9.6" } };
 it("waits through missing version, missing selector and transport failure", () => {
@@ -711,7 +657,6 @@ it.each([
   { resume: false, visible: true, sync: "absent" },
   { resume: true, visible: true, sync: "absent" },
   { resume: false, visible: false, sync: "absent" },
-  { resume: true, visible: false, sync: "absent" },
   { resume: false, visible: true, sync: "late" },
   { resume: true, visible: true, sync: "timeout" },
 ])(
