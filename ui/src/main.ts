@@ -10,6 +10,7 @@ import {
 } from "./app/stale-chunk-reload.ts";
 import { CONTROL_UI_BUILD_INFO, controlUiWorkerActivationRetires } from "./build-info.ts";
 import kbdStyles from "./components/kbd.css?inline";
+import { listen } from "./lib/reactive/listener.ts";
 
 async function startControlUi(): Promise<void> {
   // HTML paints the critical frame without waiting for CSS. The interactive
@@ -17,8 +18,13 @@ async function startControlUi(): Promise<void> {
   const bootStyles = document.getElementById("openclaw-boot-styles");
   if (bootStyles instanceof HTMLLinkElement && bootStyles.media === "print") {
     await new Promise<void>((resolve) => {
-      bootStyles.addEventListener("load", () => resolve(), { once: true });
-      bootStyles.addEventListener("error", () => resolve(), { once: true });
+      const ready = () => {
+        stopLoad();
+        stopError();
+        resolve();
+      };
+      const stopLoad = listen(bootStyles, "load", ready);
+      const stopError = listen(bootStyles, "error", ready);
     });
   }
   const themeColors: HTMLMetaElement[] = [];
