@@ -6,7 +6,7 @@ import type { ApplicationRouter } from "../app-routes.ts";
 import { createMcpAppUnmountGate } from "../components/mcp-app-unmount.ts";
 import { AgentStartupState, LazyViewError } from "../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../components/solid/loading-state.tsx";
-import { isAgentDatabaseInspectionPendingError } from "../lib/gateway-availability.ts";
+import { isAwaitingGatewayFailure } from "../lib/gateway-availability.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { ContentPresentation } from "../lib/solid/presentation.ts";
 import type { ApplicationContext } from "./context.ts";
@@ -71,10 +71,7 @@ function RouteError(props: RouteErrorProps) {
           return <></>;
         }}
       </Show>
-      <Show
-        when={!isAgentDatabaseInspectionPendingError(props.error)}
-        fallback={<AgentStartupState />}
-      >
+      <Show when={!isAwaitingGatewayFailure(props.error, null)} fallback={<AgentStartupState />}>
         <LazyViewError
           error={props.error}
           onRetry={handleRetry}
@@ -108,10 +105,7 @@ function renderRouterOutlet(
     return { state: error ? "empty" : "loading", error };
   }
   const routeModule = renderedMatch.module;
-  if (
-    error &&
-    (routeModule.retainOnNavigate || isAgentDatabaseInspectionPendingError(error.error))
-  ) {
+  if (error && (routeModule.retainOnNavigate || isAwaitingGatewayFailure(error.error, null))) {
     return { state: "empty", error };
   }
   return {
