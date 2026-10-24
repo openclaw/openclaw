@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { projectChatTranscriptMetadata } from "../session-message-cache.ts";
 import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
@@ -215,7 +215,7 @@ describe("completed-work duration", () => {
 });
 
 describe("live progress placement", () => {
-  it("keeps progress after accepted steers and before queued input", () => {
+  it("keeps progress after accepted steers and before queued input", async () => {
     const clock = vi.spyOn(Date, "now").mockReturnValue(31_000);
     cleanup.push(() => clock.mockRestore());
     const runId = "active-run";
@@ -271,7 +271,7 @@ describe("live progress placement", () => {
     ];
     const { container, transcript } = mount(props, false);
     transcript.update();
-    flush();
+    await flushDeferredRowPrune();
     const progress = container.querySelector(".chat-working-indicator")!;
     const answer = container.querySelector('[data-entry-id="latest-answer"]')!;
     const activity = container.querySelector('[data-entry-id="latest-tool"]')!;

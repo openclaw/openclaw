@@ -675,6 +675,7 @@ describe("chat transcript invalidation", () => {
     const { container, rerender } = threadFixture(props);
     const prepareFrame = vi.spyOn(chatMessage, "prepareMessageGroupFrame");
     rerender();
+    await flushDeferredRowPrune();
     const userRow = required(container, ".chat-group.user");
     expect(userRow.querySelector(".chat-avatar")).toBeNull();
     expect(prepareFrame.mock.calls.some(([group]) => group.role === "user")).toBe(true);
@@ -915,7 +916,10 @@ describe("chat transcript invalidation", () => {
     };
     const controller = createTestTranscript();
     const retainedPane = transcriptContainer();
+    controller.start();
     render(renderChatThread(props, controller), retainedPane);
+    controller.update();
+    await flushDeferredRowPrune();
     await settleToolBridges(retainedPane);
     const staleTools = getExpandedToolCards(sessionKey);
     const staleUsers = getExpandedUserMessages(sessionKey);
