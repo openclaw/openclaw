@@ -1,6 +1,4 @@
-/**
- * Gateway runtime service lifecycle tests.
- */
+import assert from "node:assert/strict";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -182,9 +180,7 @@ describe("server-runtime-services", () => {
         await vi.dynamicImportSettled();
         if (kind === "session retry") {
           const runtime = hoisted.startSessionDeliveryRuntime.mock.calls[0]?.[0];
-          if (!runtime) {
-            throw new Error("Expected the session delivery runtime to start");
-          }
+          assert(runtime, "Expected the session delivery runtime to start");
           await runtime.deliver(
             {
               id: "scheduled-retry",
@@ -205,7 +201,6 @@ describe("server-runtime-services", () => {
         expect(hasGatewayContextOwner(admittedOwner, () => gatewayContext)).toBe(false);
       } finally {
         await services.stopScheduledServices();
-        await services.stopDeliveryRecovery();
         vi.useRealTimers();
       }
     },
@@ -221,21 +216,19 @@ describe("server-runtime-services", () => {
       return { recovered: 0, failed: 0, skippedMaxRetries: 0, deferredBackoff: 0 };
     });
     const { services } = activateScheduledServicesForTest();
-    let stopped = false;
+    const stopped = vi.fn();
     try {
       await vi.dynamicImportSettled();
       const first = services.stopScheduledServices();
       const second = services.stopScheduledServices();
       expect(second).toBe(first);
-      void first.then(() => {
-        stopped = true;
-      });
+      void first.then(stopped);
       recovery.resolve();
       await vi.advanceTimersByTimeAsync(0);
-      expect(stopped).toBe(false);
+      expect(stopped).not.toHaveBeenCalled();
       upstream.resolve();
       await first;
-      expect(stopped).toBe(true);
+      expect(stopped).toHaveBeenCalledOnce();
       expect(hoisted.stopSessionUpstreamMonitor).toHaveBeenCalledOnce();
     } finally {
       upstream.resolve();
@@ -267,17 +260,15 @@ describe("server-runtime-services", () => {
         } else if (failing === "recovery") {
           recovery.reject(failure);
         }
-        let stopped = false;
-        stopPromise = services.stopDeliveryRecovery().then(() => {
-          stopped = true;
-        });
+        const stopped = vi.fn();
+        stopPromise = services.stopDeliveryRecovery().then(stopped);
         await vi.advanceTimersByTimeAsync(0);
-        expect(stopped).toBe(false);
+        expect(stopped).not.toHaveBeenCalled();
         expect(getActiveGatewayRootWorkCount()).toBe(1);
         legacy.resolve(0);
         recovery.resolve();
         await stopPromise;
-        expect(stopped).toBe(true);
+        expect(stopped).toHaveBeenCalledOnce();
         expect(getActiveGatewayRootWorkCount()).toBe(0);
         if (failing !== "neither") {
           expect(log.error).toHaveBeenCalledWith(`Delivery recovery failed: ${String(failure)}`);
@@ -293,13 +284,8 @@ describe("server-runtime-services", () => {
 
   it("warns but holds shutdown until outbound recovery settles", async () => {
     vi.useFakeTimers();
-    let resolveDrain: (() => void) | undefined;
-    hoisted.drainPendingDeliveries.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          resolveDrain = resolve;
-        }),
-    );
+    const drain = createDeferredCore();
+    hoisted.drainPendingDeliveries.mockReturnValueOnce(drain.promise);
     const log = createLog();
     const { services } = activateScheduledServicesForTest({ log });
     await vi.dynamicImportSettled();
@@ -308,18 +294,14 @@ describe("server-runtime-services", () => {
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
 
-    let firstStopped = false;
-    let secondStopped = false;
-    const firstStop = services.stopDeliveryRecovery().then(() => {
-      firstStopped = true;
-    });
-    const secondStop = services.stopDeliveryRecovery().then(() => {
-      secondStopped = true;
-    });
+    const firstStopped = vi.fn();
+    const secondStopped = vi.fn();
+    const firstStop = services.stopDeliveryRecovery().then(firstStopped);
+    const secondStop = services.stopDeliveryRecovery().then(secondStopped);
 
     await vi.advanceTimersByTimeAsync(5_000);
-    expect(firstStopped).toBe(false);
-    expect(secondStopped).toBe(false);
+    expect(firstStopped).not.toHaveBeenCalled();
+    expect(secondStopped).not.toHaveBeenCalled();
     expect(getActiveGatewayRootWorkCount()).toBe(1);
     expect(log.child.mock.results[0]?.value.warn).toHaveBeenCalledOnce();
     expect(log.child.mock.results[0]?.value.warn).toHaveBeenCalledWith(
@@ -329,17 +311,14 @@ describe("server-runtime-services", () => {
     await vi.advanceTimersByTimeAsync(15_000);
     expect(hoisted.recoverPendingDeliveries).toHaveBeenCalledOnce();
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
-    expect(firstStopped).toBe(false);
-    expect(secondStopped).toBe(false);
+    expect(firstStopped).not.toHaveBeenCalled();
+    expect(secondStopped).not.toHaveBeenCalled();
     expect(log.child.mock.results[0]?.value.warn).toHaveBeenCalledOnce();
 
-    if (!resolveDrain) {
-      throw new Error("Expected outbound retry drain resolver to be initialized");
-    }
-    resolveDrain();
+    drain.resolve();
     await Promise.all([firstStop, secondStop]);
-    expect(firstStopped).toBe(true);
-    expect(secondStopped).toBe(true);
+    expect(firstStopped).toHaveBeenCalledOnce();
+    expect(secondStopped).toHaveBeenCalledOnce();
     expect(getActiveGatewayRootWorkCount()).toBe(0);
     await services.stopScheduledServices();
   });
@@ -349,9 +328,7 @@ describe("server-runtime-services", () => {
     async (reason) => {
       vi.useFakeTimers();
       const fence = beginGatewayRestartSignalAdmission();
-      if (!fence) {
-        throw new Error("Expected restart signal admission fence");
-      }
+      assert(fence, "Expected restart signal admission fence");
       if (reason === "hard drain") {
         markGatewayRestartDraining("stop (SIGTERM)");
       }
@@ -360,19 +337,16 @@ describe("server-runtime-services", () => {
       try {
         await vi.advanceTimersByTimeAsync(1_250);
         expect(getActiveGatewayRootWorkCount()).toBe(0);
-        let stopped = false;
-        stopping = services.stopDeliveryRecovery().then(() => {
-          stopped = true;
-        });
+        const stopped = vi.fn();
+        stopping = services.stopDeliveryRecovery().then(stopped);
         await vi.advanceTimersByTimeAsync(0);
-        expect(stopped).toBe(true);
+        expect(stopped).toHaveBeenCalledOnce();
         expect(hoisted.startSessionDeliveryRuntime).not.toHaveBeenCalled();
         expect(hoisted.recoverPendingRestartContinuationDeliveries).not.toHaveBeenCalled();
         expect(log.error).not.toHaveBeenCalled();
       } finally {
         fence.rollback();
         await services.stopScheduledServices();
-        await services.stopDeliveryRecovery();
         await stopping;
         await vi.advanceTimersByTimeAsync(0);
       }
@@ -382,9 +356,7 @@ describe("server-runtime-services", () => {
   it("resumes pending session recovery when the restart fence rolls back", async () => {
     vi.useFakeTimers();
     const fence = beginGatewayRestartSignalAdmission();
-    if (!fence) {
-      throw new Error("Expected restart signal admission fence");
-    }
+    assert(fence, "Expected restart signal admission fence");
     const { services } = activateScheduledServicesForTest();
     try {
       await vi.advanceTimersByTimeAsync(1_250);
@@ -398,7 +370,6 @@ describe("server-runtime-services", () => {
     } finally {
       fence.rollback();
       await services.stopScheduledServices();
-      await services.stopDeliveryRecovery();
       await vi.advanceTimersByTimeAsync(0);
     }
   });
@@ -425,12 +396,10 @@ describe("server-runtime-services", () => {
         expect(operation).toHaveBeenCalledOnce();
         expect(getActiveGatewayRootWorkCount()).toBe(1);
 
-        let stopped = false;
-        stopPromise = services.stopScheduledServices().then(() => {
-          stopped = true;
-        });
+        const stopped = vi.fn();
+        stopPromise = services.stopScheduledServices().then(stopped);
         await vi.advanceTimersByTimeAsync(0);
-        expect(stopped).toBe(false);
+        expect(stopped).not.toHaveBeenCalled();
 
         if (outcome === "AbortError") {
           const error = new Error(`admitted ${stage} aborted`);
@@ -440,7 +409,7 @@ describe("server-runtime-services", () => {
           pending.resolve(undefined);
         }
         await stopPromise;
-        expect(stopped).toBe(true);
+        expect(stopped).toHaveBeenCalledOnce();
         expect(getActiveGatewayRootWorkCount()).toBe(0);
         if (outcome === "AbortError") {
           expect(log.error).toHaveBeenCalledWith(
@@ -452,7 +421,6 @@ describe("server-runtime-services", () => {
       } finally {
         pending.resolve(undefined);
         await services.stopScheduledServices();
-        await services.stopDeliveryRecovery();
         await stopPromise;
         await vi.advanceTimersByTimeAsync(0);
       }
@@ -483,14 +451,12 @@ describe("server-runtime-services", () => {
       try {
         waking = clock.advanceBy(1_250);
         await importStarted.promise;
-        let stopped = false;
+        const stopped = vi.fn();
         stopPromise = (
           owner === "service" ? services.stopDeliveryRecovery() : scheduler.stop()
-        ).then(() => {
-          stopped = true;
-        });
+        ).then(stopped);
         await Promise.resolve();
-        expect(stopped).toBe(false);
+        expect(stopped).not.toHaveBeenCalled();
 
         releaseImport.resolve();
         await stopPromise;
@@ -503,7 +469,6 @@ describe("server-runtime-services", () => {
         releaseImport.resolve();
         await vi.dynamicImportSettled();
         await services.stopScheduledServices();
-        await services.stopDeliveryRecovery();
         await stopPromise;
         await waking;
         await scheduler.stop();
@@ -566,9 +531,7 @@ describe("server-runtime-services", () => {
     const { services } = activateScheduledServicesForTest();
     await vi.dynamicImportSettled();
     const recovery = hoisted.recoverPendingDeliveries.mock.calls[0]?.[0];
-    if (!recovery) {
-      throw new Error("Expected outbound recovery to start");
-    }
+    assert(recovery, "Expected outbound recovery to start");
     hoisted.deliverOutboundPayloads.mockImplementationOnce(async (params) => {
       await params.withDirectAdapterHandoff?.(async () => []);
       return [];
@@ -640,13 +603,8 @@ describe("server-runtime-services", () => {
 
   it("never overlaps outbound retry drains or admits work between timer firings", async () => {
     vi.useFakeTimers();
-    let finishDrain: (() => void) | undefined;
-    hoisted.drainPendingDeliveries.mockImplementationOnce(
-      () =>
-        new Promise<void>((resolve) => {
-          finishDrain = resolve;
-        }),
-    );
+    const drain = createDeferredCore();
+    hoisted.drainPendingDeliveries.mockReturnValueOnce(drain.promise);
     const { services } = activateScheduledServicesForTest();
     await vi.dynamicImportSettled();
     notifyOutboundDeliveryEnqueued(captureDeliveryQueueStateContext().stateDir);
@@ -665,10 +623,7 @@ describe("server-runtime-services", () => {
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledOnce();
     expect(getActiveGatewayRootWorkCount()).toBe(1);
 
-    if (!finishDrain) {
-      throw new Error("Expected the outbound retry drain to be pending");
-    }
-    finishDrain();
+    drain.resolve();
     await vi.advanceTimersByTimeAsync(0);
     expect(getActiveGatewayRootWorkCount()).toBe(0);
 
@@ -676,7 +631,6 @@ describe("server-runtime-services", () => {
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(2);
     await vi.advanceTimersByTimeAsync(10_000);
     expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(2);
-    await services.stopDeliveryRecovery();
     await services.stopScheduledServices();
   });
 
@@ -699,7 +653,6 @@ describe("server-runtime-services", () => {
       expect(scheduler.nextWakeAtMs).toBe(clock.clock.now() + 5_000);
 
       await services.stopScheduledServices();
-      await services.stopDeliveryRecovery();
       await clock.advanceBy(15_000);
 
       expect(hoisted.drainPendingDeliveries).toHaveBeenCalledTimes(2);
@@ -719,9 +672,7 @@ describe("server-runtime-services", () => {
     await vi.advanceTimersByTimeAsync(1_250);
 
     const suspension = tryBeginGatewaySuspendAdmission(() => {});
-    if (!suspension?.commit()) {
-      throw new Error("Expected gateway suspension admission to be acquired");
-    }
+    assert(suspension?.commit(), "Expected gateway suspension admission to be acquired");
     await vi.advanceTimersByTimeAsync(13_750);
 
     expect(hoisted.drainPendingDeliveries).not.toHaveBeenCalled();
@@ -746,19 +697,17 @@ describe("server-runtime-services", () => {
         heldOwner === "stopPeriodicTasks" ? "skillUsageCleanup" : "stopPeriodicTasks";
       maintenance[heldOwner].mockReturnValue(held.promise);
       maintenance[failingOwner].mockRejectedValue(earlyFailure);
-      let settled = false;
+      const settled = vi.fn();
       const clearing = clearGatewayMaintenanceHandles(maintenance).then(
-        () => {
-          settled = true;
-        },
+        settled,
         (error: unknown) => {
-          settled = true;
+          settled();
           return error;
         },
       );
       try {
         await vi.advanceTimersByTimeAsync(0);
-        expect(settled).toBe(false);
+        expect(settled).not.toHaveBeenCalled();
         held.reject(lateFailure);
 
         const error = await clearing;
