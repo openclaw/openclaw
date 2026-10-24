@@ -10,11 +10,13 @@ export function readPostgresBridgeCounters(value: unknown): PostgresBridgeCounte
   if (!Array.isArray(value)) {
     return [];
   }
+  // A child can never own its parent's direct counter, even through a loopback transport.
   return value.filter(
     (entry): entry is PostgresBridgeCounter =>
       isRecord(entry) &&
       typeof entry.threadId === "number" &&
       Number.isSafeInteger(entry.threadId) &&
+      entry.threadId !== threadId &&
       entry.count instanceof Int32Array &&
       entry.count.length === 1 &&
       entry.count.buffer instanceof SharedArrayBuffer,

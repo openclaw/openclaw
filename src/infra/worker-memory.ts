@@ -1,10 +1,6 @@
 import { getHeapSpaceStatistics, getHeapStatistics } from "node:v8";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
-import type { WorkerGcProfiles } from "../logging/diagnostic-worker-gc-profile.js";
-import type {
-  DiagnosticMemoryUsage,
-  DiagnosticWorkerRetainedData,
-} from "./diagnostic-process-types.js";
+import type { DiagnosticWorkerRetainedData, WorkerGcStorm } from "./diagnostic-process-types.js";
 import {
   flushGcSamples,
   getOldGenerationAfterGcBytes,
@@ -15,36 +11,6 @@ import {
   getTrackedPostgresBridgeCounters,
   observeTrackedPostgresBridgeCounters,
 } from "./worker-cpu.js";
-
-export type WorkerMemorySample = Pick<
-  NodeJS.MemoryUsage,
-  "heapUsed" | "heapTotal" | "external" | "arrayBuffers"
-> & {
-  heapSizeLimitBytes?: number;
-  oldGenerationAfterGcBytes?: number;
-  heapSpaces?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["heapSpaces"];
-  retainedData?: NonNullable<DiagnosticMemoryUsage["workerHeaps"]>[number]["retainedData"];
-  gc?: GcSample[];
-};
-
-export type WorkerGcStorm = {
-  workerId?: string;
-  runId?: string;
-  sessionKeyHash?: string;
-  cellCount: number;
-  activeCellCount: number;
-  bridgeMethods: string[];
-  majorCollections: number;
-  intervalMs: number;
-  heapUsed: number;
-  heapTotal: number;
-  external: number;
-  arrayBuffers: number;
-  heapSizeLimitBytes: number;
-  captureStatus?: "requested" | "complete" | "unavailable";
-  captureReason?: string;
-  profiles?: WorkerGcProfiles;
-};
 
 let diagnosticPort: MessagePort | undefined;
 let nextGcProfileAt = 0;

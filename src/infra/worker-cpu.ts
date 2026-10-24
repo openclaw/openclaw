@@ -5,11 +5,14 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { WorkerRetirementReason } from "@openclaw/worker-runtime";
 import { createRetainedOperation } from "@openclaw/worker-runtime/lifecycle";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import type { DiagnosticMemoryUsage } from "./diagnostic-process-types.js";
+import type {
+  DiagnosticMemoryUsage,
+  WorkerGcStorm,
+  WorkerMemorySample,
+} from "./diagnostic-process-types.js";
 import type { GcSample } from "./gc-observer.js";
 import { runWithMainThreadTask } from "./main-thread-stall.js";
 import { MAX_DIAGNOSTIC_WORKER_SLOTS, workerScriptName } from "./worker-diagnostic-script.js";
-import type { WorkerGcStorm, WorkerMemorySample } from "./worker-memory.js";
 import {
   canObserveWorkerMessages,
   recordWorkerMessage,
@@ -145,6 +148,20 @@ function publishPostgresBridgeCounters(): void {
   for (const observer of trackedWorkers.postgresBridgeObservers) {
     observer();
   }
+}
+
+function receivePostgresBridgeCounters(source: WorkerSource, value: unknown): void {
+  const next = readPostgresBridgeCounters(value);
+  const previous = source.postgresBridgeCounters;
+  // Native identity owns one shared counter; cloned wrappers do not change the topology.
+  if (
+    next.length === (previous?.length ?? 0) &&
+    next.every((counter, index) => counter.threadId === previous?.[index]?.threadId)
+  ) {
+    return;
+  }
+  source.postgresBridgeCounters = next;
+  publishPostgresBridgeCounters();
 }
 
 function getTrackedPostgresBridgeCount(): number {
@@ -512,8 +529,7 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
     port.close();
     return true;
   }
-  source.postgresBridgeCounters = readPostgresBridgeCounters(message.postgresBridgeCounters);
-  publishPostgresBridgeCounters();
+  receivePostgresBridgeCounters(source, message.postgresBridgeCounters);
   source.memoryPort = port;
   source.memoryPending = true;
   const close = () => {
@@ -535,8 +551,7 @@ export function receiveWorkerMemoryPort(worker: WorkerCpuHandle, message: unknow
         | { retireWorkerId: string },
     ) => {
       if ("postgresBridgeCounters" in record) {
-        source.postgresBridgeCounters = readPostgresBridgeCounters(record.postgresBridgeCounters);
-        publishPostgresBridgeCounters();
+        receivePostgresBridgeCounters(source, record.postgresBridgeCounters);
         recordWorkerMessage("memory", "from_worker");
         return;
       }

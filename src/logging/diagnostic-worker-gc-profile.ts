@@ -3,7 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { replaceFileAtomic } from "@openclaw/fs-safe/atomic";
 import { resolveStateDir } from "../config/state-dir.js";
-import type { WorkerGcStorm } from "../infra/worker-memory.js";
+import type { WorkerGcProfiles, WorkerGcStorm } from "../infra/diagnostic-process-types.js";
 import { sanitizeDiagnosticCpuProfile } from "./diagnostic-cpu-profile.js";
 import { sanitizeDiagnosticHeapProfile, type SamplingProfile } from "./diagnostic-heap-profile.js";
 import { captureDiagnosticProfile, createInspectorProfileCapture } from "./diagnostic-profile.js";
@@ -14,8 +14,6 @@ const SAMPLING_INTERVAL_BYTES = 262_144;
 const MAX_FILES = 20;
 const FILE_PATTERN = /^code-mode-gc-\d+-[a-f0-9-]+\.(?:heapprofile|cpuprofile)\.json$/;
 let writes: Promise<unknown> = Promise.resolve();
-
-export type WorkerGcProfiles = { heap: string; cpu: string };
 
 /** The Gateway reports storms lazily; its registry retains the final capture admission. */
 export async function reportWorkerGcStorm(
