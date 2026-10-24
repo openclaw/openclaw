@@ -288,8 +288,9 @@ export function ContextNotice(props: ContextNoticeProps) {
     return context ? { "--ctx-color": context.color, "--ctx-bg": context.bg } : undefined;
   };
   const dashOffset = () => RING_CIRCUMFERENCE * (1 - (model()?.pct ?? 0) / 100);
-  const providerCosts = createMemo(() =>
-    model() ? latestProviderCostStats(props.messages) : null,
+  const providerCosts = createMemo(
+    () => (model() ? latestProviderCostStats(props.messages) : null),
+    { lazy: true },
   );
   // Plan-billed sessions hide dollar estimates: subscription usage is bounded
   // by the plan windows below, and per-token math would misread as real spend.

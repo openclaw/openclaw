@@ -104,6 +104,9 @@ Detached orphan reads, restored requester wakes, and cleanup share a bounded
 background budget per Gateway. A large retained backlog waits there instead of
 filling the reader task limit needed by reconnecting clients. Queued cleanup stays
 tracked through restart drain and checks its original ownership before proceeding.
+Delivery releases that preparation budget when the Gateway accepts its input,
+while the registry keeps tracking the result. A queued completion never blocks
+the preparation of an earlier input in the same mailbox.
 
 Operator-admitted children retain bounded source evidence with their run record.
 Before continuing the requester after restart, the Gateway revalidates the current
