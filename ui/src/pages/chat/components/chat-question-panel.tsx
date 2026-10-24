@@ -379,9 +379,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
                   {model().nonBlocking ? (
                     <span class="chat-question-panel__prompt">{item().question}</span>
                   ) : (
-                    <div class="chat-question-panel__title">
-                      {protectedStore() && <Icon name="lock" />} {model().title}
-                    </div>
+                    <div class="chat-question-panel__title">{model().title}</div>
                   )}
                   {requestNavigation()}
                   <span class="chat-question-panel__progress">{progress()}</span>
@@ -426,9 +424,6 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
                   <span class="muted">{t("chat.questions.externalStepHint")}</span>
                 </div>
               )}
-              {protectedStore() && (
-                <p class="chat-question-panel__store-privacy">{t("chat.questions.storePrivacy")}</p>
-              )}
               <QuestionOptions
                 question={item()}
                 selected={draft()?.selected ?? new Set()}
@@ -443,6 +438,7 @@ function QuestionPanelRequest(props: { panel: QuestionPanelProps }) {
               />
               {item().secretStore && (
                 <div class="chat-question-panel__store">
+                  {protectedStore() && <div>{t("chat.questions.storePrivacy")}</div>}
                   <div class="chat-question-panel__store-requester">
                     {t("chat.questions.storeRequestedBy", {
                       agent: model().agentId ?? t("common.unknown"),
