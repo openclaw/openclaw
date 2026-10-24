@@ -811,7 +811,7 @@ describe("subagent announce formatting", () => {
       expect(agentSpy).not.toHaveBeenCalled();
       const didAnnounce = await announceWake(parentKey, parentRunId, {
         runTimeoutSeconds,
-        roundOneReply: "waiting",
+        roundOneReply: "placeholder waiting text that should be ignored",
       });
 
       expect(didAnnounce).toBe("delivered");
@@ -825,7 +825,12 @@ describe("subagent announce formatting", () => {
       expectText(
         message,
         ["current-A", "current-B"],
-        ["obsolete-A", "obsolete-turn", "waiting", "late-progress"],
+        [
+          "obsolete-A",
+          "obsolete-turn",
+          "placeholder waiting text that should be ignored",
+          "late-progress",
+        ],
       );
       expect(message.match(/current-A/g)).toHaveLength(1);
       expect(registry.replaceSubagentRunAfterSteerCore).toHaveBeenCalledWith({

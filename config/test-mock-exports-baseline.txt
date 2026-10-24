@@ -6558,7 +6558,6 @@
 ["src/plugins/web-provider-runtime-shared.test.ts","./loader.js","8e584d264b7170e3f86647416d9f3349f97bba430b8185a3024b71be9cf2858c",1]
 ["src/plugins/web-provider-runtime-shared.test.ts","./runtime.js","509c6a1ba2ffeeff8d9480213e2fdd289fcd4fb87b15bf7ccf55c3da7f971be6",1]
 ["src/plugins/wired-hooks-after-tool-call.e2e.test.ts","../infra/agent-events.js","5d64ca88850e72e5466c2c98ea13ba15d581dc72da0bcaa24c952fd3258806f5",1]
-["src/plugins/wired-hooks-after-tool-call.e2e.test.ts","../plugins/hook-runner-global.js","6d9823e1f3c0ba539024acbfa6778307c43992be6b2b53cdf5aa0f585d74d084",1]
 ["src/plugins/wired-hooks-compaction.test.ts","../plugins/hook-runner-global.js","6d9823e1f3c0ba539024acbfa6778307c43992be6b2b53cdf5aa0f585d74d084",1]
 ["src/process/background-work.test.ts","../logging/diagnostic-runtime.js","3005d9447dc22400dda2144b032ad7501a9cb7972627fc9a168b58643fd04d82",1]
 ["src/process/child-process-tree.reaping.test.ts","./kill-tree.js","883637170b915a6ed10435001c6b849d92ff07f0a4d1efdf3ab0950d962d05e1",1]
