@@ -69,18 +69,15 @@ it("keeps check navigation, refresh, and long content usable in a narrow native 
         .toBe(true);
       for (const state of ["failure", "success", "unavailable", "neutral"] as const) {
         const empty = state === "unavailable" || state === "neutral";
-        const checks: NonNullable<ControlUiLinkReaderDocument["checks"]> = {
-          state,
-          summary:
-            state === "unavailable"
-              ? "Checks could not load"
-              : state === "neutral"
-                ? "No checks reported"
-                : "Updated checks",
-          total: state === "neutral" ? 0 : 1,
-          items: empty ? [] : [{ name: "Updated build", state }],
-        };
-        await gateway.setMethodResponse("forge.detail", { ...detail, checks });
+        await gateway.setMethodResponse("forge.detail", {
+          ...detail,
+          checks: {
+            state,
+            summary: "Updated checks",
+            total: state === "neutral" ? 0 : 1,
+            items: empty ? [] : [{ name: "Updated build", state }],
+          },
+        });
         await button("Refresh item").click();
         await panel.locator(".lr-checks--" + state).waitFor({ state: "attached" });
         expect(await panel.locator(".lr-checks-meter").count()).toBe(empty ? 0 : 1);

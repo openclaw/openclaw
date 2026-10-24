@@ -1,7 +1,7 @@
 import { expect, it } from "vitest";
 import type { CronJob } from "../api/types.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { compactCronJobFixture, cronListResponseFixture } from "../test-helpers/cron.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { expectCount } from "./sidebar-assertions.test-support.ts";
 import { sidebarCronJob } from "./sidebar-customization.test-support.ts";
@@ -11,10 +11,6 @@ const suite = createControlUiE2eSuite({ name: "Compact Inbox automation inventor
 suite.define(() => {
   it("keeps complete Inbox attention without downloading automation instructions", async () => {
     const now = Date.now();
-    const payload = {
-      kind: "agentTurn" as const,
-      message: "Review the synthetic daily report. ".repeat(200),
-    };
     const jobs = Array.from({ length: 55 }, (_, index) =>
       sidebarCronJob({
         id: `automation-${index}`,
@@ -22,7 +18,6 @@ suite.define(() => {
         agentId: "main",
         createdAtMs: now,
         updatedAtMs: now,
-        payload,
         state: { lastRunStatus: "ok", nextRunAtMs: now + 60_000 },
       }),
     );
@@ -39,9 +34,8 @@ suite.define(() => {
       false,
     );
     setJob(54, "Overdue report", { nextRunAtMs: now - 600_000 });
-    const compactJobs = jobs.map(compactCronJobFixture);
-    const pageResponse = <T>(entries: T[], offset: number) => ({
-      jobs: entries.slice(offset, offset + 50),
+    const pageResponse = (offset: number) => ({
+      jobs: jobs.slice(offset, offset + 50),
       snapshotRevision: "synthetic-inventory-1",
       total: jobs.length,
       limit: 50,
@@ -59,8 +53,8 @@ suite.define(() => {
           deferredMethods: ["chat.startup"],
           methodResponses: {
             "cron.list": cronListResponseFixture([
-              { match: { offset: 50 }, response: pageResponse(jobs, 50) },
-              { response: pageResponse(jobs, 0) },
+              { match: { offset: 50 }, response: pageResponse(50) },
+              { response: pageResponse(0) },
             ]),
             "cron.status": { enabled: true, triggersEnabled: true, jobs: jobs.length },
             "models.authStatus": { providers: [], ts: now },
@@ -85,20 +79,10 @@ suite.define(() => {
         for (const name of ["Failed daily report", "Disabled after failures", "Overdue report"]) {
           await rows.getByText(name, { exact: true }).waitFor();
         }
-        const requests = await gateway.getRequests("cron.list");
-        const bytes = (compact: boolean, offset: number) =>
-          Buffer.byteLength(
-            JSON.stringify(
-              compact ? pageResponse(compactJobs, offset) : pageResponse(jobs, offset),
-            ),
-          );
-        const responseBytes = requests.reduce((sum, request) => {
-          const params = request.params as { compact?: boolean; offset?: number };
-          return sum + bytes(params.compact === true, params.offset ?? 0);
-        }, 0);
-        const fullBytes = bytes(false, 0) + bytes(false, 50);
-        expect(responseBytes).toBeLessThan(fullBytes / 10);
-        expect(requests).toHaveLength(2);
+        expect((await gateway.getRequests("cron.list")).map(({ params }) => params)).toEqual([
+          expect.objectContaining({ compact: true }),
+          expect.objectContaining({ compact: true, offset: 50 }),
+        ]);
       },
     );
   });

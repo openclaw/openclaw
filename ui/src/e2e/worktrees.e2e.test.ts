@@ -8,20 +8,6 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 
-const restorableWorktree = {
-  baseRef: "main",
-  branch: "openclaw/test",
-  createdAt: 1,
-  id: "worktree-1",
-  lastActiveAt: 2,
-  name: "restorable-test",
-  ownerKind: "manual",
-  path: "/tmp/repo/.worktrees/restorable-test",
-  removedAt: 3,
-  repoFingerprint: "0123456789abcdef",
-  repoRoot: "/tmp/repo",
-};
-
 suite.define(() => {
   it.each([1440, 390])("keeps the Worktrees title above left-aligned hub tabs at %ipx", (width) =>
     suite.withPage({ viewport: { width, height: 900 } }, async ({ page }) => {
@@ -61,7 +47,7 @@ suite.define(() => {
             defaultBranch: "main",
             headBranch: "old-feature",
           },
-          "worktrees.create": { ...restorableWorktree, removedAt: undefined },
+          "worktrees.create": {},
         },
       });
       await page.goto(`${suite.server.baseUrl}settings/worktrees`);
@@ -79,8 +65,11 @@ suite.define(() => {
         await base.waitFor({ state: "hidden" });
       }
       const requests = await gateway.getRequests("worktrees.create");
-      const expected = [{ repoRoot }, { repoRoot, baseRef: "main" }, { repoRoot }];
-      expect(requests.map(({ params }) => params)).toEqual(expected);
+      expect(requests.map(({ params }) => params)).toEqual([
+        { repoRoot },
+        { repoRoot, baseRef: "main" },
+        { repoRoot },
+      ]);
     }));
 
   it("keeps a restore failure visible after the automatic list refresh succeeds", () =>
