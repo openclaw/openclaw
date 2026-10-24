@@ -8,12 +8,7 @@ import {
   PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
   REPETITIVE_OUTPUT_ERROR_CODE,
 } from "@openclaw/llm-core";
-import type {
-  AssistantMessage,
-  AssistantMessageEvent,
-  Context,
-  ToolResultMessage,
-} from "@openclaw/llm-core";
+import type { AssistantMessage, Context, ToolResultMessage } from "@openclaw/llm-core";
 import { AssistantRepetitionGuard } from "./assistant-repetition-guard.js";
 import { REPETITIVE_OUTPUT_ERROR_MESSAGE } from "./errors.js";
 import { uuidv7 } from "./harness/session/uuid.js";
@@ -58,19 +53,6 @@ export type ExecutedToolCallBatch = {
   intervention?: ToolLoopIntervention;
   fatal?: { error: unknown };
 };
-
-function resolveAssistantMessageUpdate(
-  event: Extract<AssistantMessageEvent, { contentIndex: number }>,
-  currentMessage: AssistantMessage,
-): AssistantMessage {
-  if ("partial" in event && event.partial) {
-    return event.partial;
-  }
-  if (event.type !== "text_delta") {
-    return currentMessage;
-  }
-  return appendTextDeltaToAssistantMessage(currentMessage, event.contentIndex, event.delta);
-}
 
 function removeNonExecutableToolCalls(message: AssistantMessage): AssistantMessage {
   if (message.stopReason === "toolUse") {
@@ -374,7 +356,16 @@ export async function streamAgentResponse(
                         delta: event.delta,
                       }
                     : undefined;
-                const message = resolveAssistantMessageUpdate(event, partialMessage);
+                let message: AssistantMessage = partialMessage;
+                if ("partial" in event && event.partial) {
+                  message = event.partial;
+                } else if (event.type === "text_delta") {
+                  message = appendTextDeltaToAssistantMessage(
+                    partialMessage,
+                    event.contentIndex,
+                    event.delta,
+                  );
+                }
                 partialMessage = message;
                 if (event.contentIndex < committedContentCount) {
                   break;
