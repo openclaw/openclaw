@@ -25,65 +25,54 @@ function fixture() {
 }
 
 describe("standalone build interface", () => {
-  it("defaults to JIT and selects exactly one explicit compilation mode", () => {
-    expect(parse()).toEqual({
-      outputDirectory: "out",
-      mode: "jit",
-      compileFlags: [],
-    });
-    for (const [flag, mode] of Object.entries({
-      "--bytecode": "bytecode",
-      "--compile-aot": "aot",
-    })) {
-      const parsed = parse(flag);
-      expect(parsed).toMatchObject({ mode });
-    }
-    expect(() => parse("--bytecode", "--compile-aot")).toThrow("at most one");
-    expect(() => parse("--unknown")).toThrow("at most one");
-    expect(() => parseStandaloneArguments([])).toThrow("Usage:");
-  });
-
-  it("accepts one plugin list independently of the compilation mode", () => {
-    for (const flags of [
+  it.each([
+    { flags: [], mode: "jit", compileFlags: [], extra: {} },
+    { flags: ["--bytecode"], mode: "bytecode", compileFlags: ["--bytecode"], extra: {} },
+    { flags: ["--compile-aot"], mode: "aot", compileFlags: ["--aot"], extra: {} },
+    ...[
       ["--plugins", "codex, slack,codex", "--bytecode"],
       ["--bytecode", "--plugins", "codex,slack"],
-    ]) {
-      expect(parse(...flags)).toEqual({
-        outputDirectory: "out",
-        mode: "bytecode",
-        compileFlags: ["--bytecode"],
-        pluginIds: ["codex", "slack"],
-      });
-    }
-    for (const flags of [
+    ].map((flags) => ({
+      flags,
+      mode: "bytecode",
+      compileFlags: ["--bytecode"],
+      extra: { pluginIds: ["codex", "slack"] },
+    })),
+    {
+      flags: ["--compile-aot", "--support-output", "support"],
+      mode: "aot",
+      compileFlags: ["--aot"],
+      extra: { supportOutputDirectory: "support" },
+    },
+  ])("parses standalone options $flags", ({ flags, mode, compileFlags, extra }) => {
+    expect(parse(...flags)).toEqual({ outputDirectory: "out", mode, compileFlags, ...extra });
+  });
+
+  it.each([
+    { flags: ["--bytecode", "--compile-aot"], error: "at most one" },
+    { flags: ["--unknown"], error: "at most one" },
+    ...[
       ["--plugins"],
       ["--plugins", ""],
       ["--plugins", "codex,"],
       ["--plugins", "--bytecode"],
       ["--plugins", "codex", "--plugins", "slack"],
-    ]) {
-      expect(() => parse(...flags)).toThrow("--plugins");
-    }
+    ].map((flags) => ({ flags, error: "--plugins" })),
+    { flags: ["--support-output", "support"], error: "requires --compile-aot" },
+    { flags: ["--compile-aot", "--support-output"], error: "fresh directory" },
+    {
+      flags: ["--compile-aot", "--support-output", "one", "--support-output", "two"],
+      error: "once",
+    },
+    ...[["--target=bun-linux-x64"], ["--compile-aot", "--target", "bun-linux-x64"]].map(
+      (flags) => ({ flags, error: "AOT cannot cross-compile" }),
+    ),
+  ])("rejects invalid standalone options $flags", ({ flags, error }) => {
+    expect(() => parse(...flags)).toThrow(error);
   });
 
-  it("accepts a JIT support destination only with AOT and rejects cross-target requests", () => {
-    expect(parse("--compile-aot", "--support-output", "support")).toEqual({
-      outputDirectory: "out",
-      mode: "aot",
-      compileFlags: ["--aot"],
-      supportOutputDirectory: "support",
-    });
-    expect(() => parse("--support-output", "support")).toThrow("requires --compile-aot");
-    expect(() => parse("--compile-aot", "--support-output")).toThrow("fresh directory");
-    expect(() =>
-      parse("--compile-aot", "--support-output", "one", "--support-output", "two"),
-    ).toThrow("once");
-    for (const flags of [
-      ["--target=bun-linux-x64"],
-      ["--compile-aot", "--target", "bun-linux-x64"],
-    ]) {
-      expect(() => parse(...flags)).toThrow("AOT cannot cross-compile");
-    }
+  it("requires an output directory", () => {
+    expect(() => parseStandaloneArguments([])).toThrow("Usage:");
   });
 
   it("refuses experimental AOT on a compiler without that capability", () => {

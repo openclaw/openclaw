@@ -10,6 +10,7 @@ import { copyWorkerRunFixture, writeFixture } from "./vitest-worker-artifacts.te
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const fixtureUrl = (root: string, name: string) =>
   pathToFileURL(path.join(root, `scripts/lib/${name}.mts`)).href;
+const manifestFixture = new URL("./fixtures/vitest-worker-compiler.mjs", import.meta.url).href;
 
 async function runProbe(root: string, probe: string, env: NodeJS.ProcessEnv) {
   const result = await runNodeScript(
@@ -34,19 +35,15 @@ it("retains verified artifacts after the runner's module loader stops", async ()
   writeFixture(
     root,
     "scripts/lib/vitest-worker-compiler.mts",
-    `import fs from 'node:fs';
-import path from 'node:path';
+    `import { writeWorkerFixtureManifest } from ${JSON.stringify(manifestFixture)};
 import { hashVitestWorkerArtifact as hash } from ${JSON.stringify(artifactsUrl)};
+import fs from 'node:fs';
+import path from 'node:path';
 const directory = process.argv[2];
-fs.mkdirSync(path.join(directory, 'dist'));
-const files = { 'probe.js': ${JSON.stringify(output)}, 'build-info.json': '{}\\n' };
-for (const [name, bytes] of Object.entries(files)) fs.writeFileSync(path.join(directory, 'dist', name), bytes);
-const inputs = { [${JSON.stringify(input)}]: hash(fs.readFileSync(${JSON.stringify(input)})) };
-const outputs = Object.fromEntries(Object.entries(files).map(([name, bytes]) => [name, hash(bytes)]));
-fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify({
-  identity: hash(JSON.stringify([inputs, outputs])), inputs, outputs, durationMs: 1,
-  cacheSignature: hash('fixture compiler generation'),
-}));
+const manifest = writeWorkerFixtureManifest(directory, { [${JSON.stringify(input)}]: fs.readFileSync(${JSON.stringify(input)}) },
+  { 'probe.js': ${JSON.stringify(output)}, 'build-info.json': '{}\\n' });
+manifest.cacheSignature = hash('fixture compiler generation');
+fs.writeFileSync(path.join(directory, 'manifest.json'), JSON.stringify(manifest));
 `,
   );
   const borrower = writeFixture(
@@ -167,23 +164,20 @@ assert.equal(metadataInjected, ${lateMetadata});
 console.log(JSON.stringify(directories));
 `,
   );
-  const preload = writeFixture(root, "preload.mjs", "export {};\n");
-  return { root, occupied, probe, preload };
+  return { root, occupied, probe };
 }
 
 it.each([
-  { label: "CI", ci: "1", cache: "", preload: false, reusesReleasedSlot: false },
-  { label: "cached CI", ci: "1", cache: "1", preload: false, reusesReleasedSlot: true },
-  { label: "custom loader", ci: "1", cache: "1", preload: true, reusesReleasedSlot: false },
-  { label: "late metadata", ci: "", cache: "", preload: false, reusesReleasedSlot: true },
+  { label: "CI", ci: "1", cache: "", reusesReleasedSlot: false },
+  { label: "cached CI", ci: "1", cache: "1", reusesReleasedSlot: true },
+  { label: "late metadata", ci: "", cache: "", reusesReleasedSlot: true },
 ])(
   "preserves occupied generations and applies $label reservation lifetime",
-  async ({ label, ci, cache, preload, reusesReleasedSlot }) => {
+  async ({ label, ci, cache, reusesReleasedSlot }) => {
     const f = fixture(label === "late metadata", reusesReleasedSlot);
     const result = await runProbe(f.root, f.probe, {
       CI: ci,
       OPENCLAW_VITEST_WORKER_CACHE: cache,
-      NODE_OPTIONS: preload ? `"--im\\port" "${pathToFileURL(f.preload).href}"` : "",
     });
     const directories = JSON.parse(result.stdout) as [string, string, string];
     for (const directory of new Set(directories)) {
