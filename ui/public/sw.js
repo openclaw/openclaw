@@ -119,9 +119,13 @@ async function retireOldCaches() {
   if (OFFLINE_BOOT && retired.length) {
     // Promote unchanged content-addressed files before their only copy disappears.
     // No network work here: installation never waits for deferred downloads.
-    const cache = await caches.open(CACHE_NAME);
-    for (const asset of [...OFFLINE_BOOT.assets, ...OFFLINE_BOOT.deferredAssets]) {
-      await reuseOfflineAsset(cache, asset, retired);
+    try {
+      const cache = await caches.open(CACHE_NAME);
+      for (const asset of [...OFFLINE_BOOT.assets, ...OFFLINE_BOOT.deferredAssets]) {
+        await reuseOfflineAsset(cache, asset, retired);
+      }
+    } catch {
+      // Optional reuse must not block quota recovery or update announcements.
     }
   }
   await Promise.all(retired.map((name) => caches.delete(name)));

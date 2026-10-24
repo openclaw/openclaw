@@ -5,7 +5,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import vm from "node:vm";
-import { fetch as fetchWithIntegrity } from "undici";
+// Explicit package entry: Bun maps the bare "undici" import to Bun.fetch.
+import { fetch as fetchWithIntegrity } from "undici/index.js";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 
@@ -341,6 +342,26 @@ describe("Control UI offline app shell", () => {
       }
     } finally {
       vi.useRealTimers();
+    }
+  });
+
+  it("retires obsolete caches and announces updates when chunk promotion exceeds quota", async () => {
+    const worker = createFetchServiceWorker();
+    const asset = offlineBootFixture.deferredAssets[0]!;
+    worker.priorCache.set(worker.scope + "__offline_shell__", new Response("previous shell"));
+    worker.olderCache.set(worker.scope + asset.path, new Response("build asset"));
+    worker.cachePut.mockRejectedValue(new DOMException("Cache full", "QuotaExceededError"));
+
+    await worker.activate();
+
+    expect(worker.cacheDelete.mock.calls).toEqual([["openclaw-control-older"]]);
+    expect(worker.priorCache.has(worker.scope + "__offline_shell__")).toBe(true);
+    expect(worker.cache.has(worker.scope + asset.path)).toBe(false);
+    for (const client of worker.windowClients) {
+      expect(client.postMessage).toHaveBeenCalledExactlyOnceWith(
+        { type: "sw-updated", version: "dev" },
+        [],
+      );
     }
   });
 
@@ -862,7 +883,11 @@ function createFetchServiceWorker(
       registration: { scope },
       navigator,
       skipWaiting,
-      clients: { get: getClient, claim: async () => undefined, matchAll: async () => [] },
+      clients: {
+        get: getClient,
+        claim: async () => undefined,
+        matchAll: async () => windowClients,
+      },
     },
   });
   return {

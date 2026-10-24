@@ -3,18 +3,23 @@ import { controlUiWorkerActivationRetires } from "../build-info.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { scheduleStaleChunkReload } from "./stale-chunk-reload.ts";
 
+declare global {
+  interface Navigator {
+    readonly connection?: EventTarget & {
+      readonly saveData?: boolean;
+      readonly effectiveType?: string;
+    };
+  }
+}
+
 const observedConnections = new WeakSet<EventTarget>();
 
 function probeWorker(worker: ServiceWorker, ports: MessagePort[] = []) {
-  const connection = (
-    navigator as Navigator & {
-      connection?: EventTarget & { saveData?: boolean; effectiveType?: string };
-    }
-  ).connection;
+  const connection = navigator.connection;
   if (connection && !observedConnections.has(connection)) {
     observedConnections.add(connection);
     // Document-lifetime listener: changing network class need not fire "online".
-    connection.addEventListener("change", () => {
+    listen(connection, "change", () => {
       const controller = navigator.serviceWorker?.controller;
       if (controller) {
         probeWorker(controller);
