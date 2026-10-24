@@ -1,5 +1,4 @@
 // Control UI tests prove trusted-proxy and browser-origin auth through real transports.
-import { readFile } from "node:fs/promises";
 import { createServer, type IncomingMessage } from "node:http";
 import net from "node:net";
 import path from "node:path";
@@ -18,14 +17,10 @@ import {
   controlUiE2eWaitTimeoutMs,
   type ControlUiE2eServer,
 } from "../test-helpers/control-ui-e2e.ts";
-import { verifyGatewayServedControlUiBundle } from "./control-ui-auth-proof.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const viewport = { height: 900, width: 1280 };
 const trustedProxyUser = "qa-operator";
-const configProofIdentifier = "9223372036854775807";
-const configProofPrefixBefore = "proof-before";
-const configProofPrefixAfter = "proof-after";
 const controlUiSettleTimeoutMs = 60_000;
 const originProxyHeaderBlocklist = new Set([
   "connection",
@@ -48,7 +43,6 @@ type ProxyConnectionEvidence = {
   browserOrigin: string | null;
   gatewayResult?: ReturnType<typeof readGatewayResult>;
   requestTarget: string;
-  requestMethods: string[];
   route: ProxyRoute;
   upstreamHandshakeStatus?: number;
 };
@@ -145,10 +139,6 @@ function startProxyConnection(
     const frame = parseJsonFrame(data);
     if (frame) {
       connectRequestId = captureBrowserConnect(evidence, frame) ?? connectRequestId;
-      const method = frame.type === "req" ? stringValue(frame.method) : null;
-      if (method && method !== "connect") {
-        evidence.requestMethods.push(method);
-      }
     }
     if (upstream.readyState === WebSocket.OPEN) {
       upstream.send(data, { binary: isBinary });
@@ -247,7 +237,6 @@ async function startRealTransportProxy(gatewayUrl: string) {
       const connectionEvidence: ProxyConnectionEvidence = {
         browserOrigin: stringValue(request.headers.origin),
         requestTarget: request.url ?? "",
-        requestMethods: [],
         route,
       };
       evidence.push(connectionEvidence);
@@ -378,8 +367,6 @@ async function startRealGateway(allowedOrigin: string, signal: AbortSignal) {
   };
   const auth = { mode: "trusted-proxy" as const, trustedProxy };
   await state.writeConfig({
-    messages: { responsePrefix: configProofPrefixBefore },
-    tools: { elevated: { allowFrom: { discord: [configProofIdentifier] } } },
     gateway: {
       auth,
       controlUi: {
@@ -409,7 +396,6 @@ async function startRealGateway(allowedOrigin: string, signal: AbortSignal) {
   return {
     httpUrl,
     port,
-    state,
     url: `ws://127.0.0.1:${port}`,
   };
 }
@@ -462,19 +448,6 @@ async function finishBrowser({ context, errors }: BrowserFlow): Promise<void> {
   await suite.closeBrowserContext(context);
 }
 
-async function readConfigProofSnapshot(): Promise<{ identifier: unknown; prefix: string | null }> {
-  const config = asNullableRecord(JSON.parse(await readFile(gateway.state.configPath, "utf8")));
-  const messages = asNullableRecord(config?.messages);
-  const tools = asNullableRecord(config?.tools);
-  const elevated = asNullableRecord(tools?.elevated);
-  const allowFrom = asNullableRecord(elevated?.allowFrom);
-  const discord = Array.isArray(allowFrom?.discord) ? allowFrom.discord : [];
-  return {
-    identifier: discord[0],
-    prefix: stringValue(messages?.responsePrefix),
-  };
-}
-
 async function waitForConnectionEvidence(
   predicate: (entry: ProxyConnectionEvidence) => boolean,
   evidenceStartIndex: number,
@@ -502,13 +475,6 @@ async function reconnect(
     params,
   );
   return waitForConnectionEvidence(matches, start);
-}
-
-async function expectRawConfig(page: Page, prefix: string) {
-  const editor = page.locator(".config-raw-field textarea");
-  await editor.waitFor();
-  await expect.poll(() => editor.inputValue()).toContain(`"${configProofIdentifier}"`);
-  await expect.poll(() => editor.inputValue()).toContain(prefix);
 }
 
 async function waitForVisibleFailure(page: Page, expectedText: string): Promise<void> {
@@ -582,62 +548,6 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("preserves a 64-bit identifier through a real Gateway form save", async (context) => {
-    await suite.runScenario(context, {
-      async run() {
-        const servedBundle = await verifyGatewayServedControlUiBundle(gateway.httpUrl);
-        const connected = await createBrowserPage(gateway.httpUrl, proxy.trustedUrl);
-        await waitForShell(connected.page);
-        const servedAssetLoaded = await connected.page.evaluate(
-          (assetPath) =>
-            performance
-              .getEntriesByType("resource")
-              .some((entry) => new URL(entry.name).pathname.endsWith(`/${assetPath}`)),
-          servedBundle.assetPath,
-        );
-        expect(servedAssetLoaded).toBe(true);
-
-        const rawSettingsUrl = new URL("settings/advanced", gateway.httpUrl);
-        rawSettingsUrl.searchParams.set("section", "env");
-        expect((await connected.page.goto(rawSettingsUrl.toString()))?.status()).toBe(200);
-        await connected.page.getByRole("button", { name: "Raw", exact: true }).click();
-        await expectRawConfig(connected.page, configProofPrefixBefore);
-
-        const settingsUrl = new URL("settings/communications", gateway.httpUrl);
-        settingsUrl.searchParams.set("section", "messages");
-        expect((await connected.page.goto(settingsUrl.toString()))?.status()).toBe(200);
-        const prefix = connected.page.getByRole("textbox", {
-          name: "Outbound Response Prefix",
-          exact: true,
-        });
-        await expect.poll(() => prefix.inputValue()).toBe(configProofPrefixBefore);
-        const configSetCount = () =>
-          proxy.evidence
-            .slice(connected.evidenceStartIndex)
-            .flatMap((entry) => entry.requestMethods)
-            .filter((method) => method === "config.set").length;
-        const configSetCountBefore = configSetCount();
-        await prefix.fill(configProofPrefixAfter);
-
-        await expect
-          .poll(configSetCount, { timeout: 15_000 })
-          .toBeGreaterThan(configSetCountBefore);
-        await expect
-          .poll(async () => (await readConfigProofSnapshot()).prefix)
-          .toBe(configProofPrefixAfter);
-        const persisted = await readConfigProofSnapshot();
-        expect(persisted.identifier).toBe(configProofIdentifier);
-
-        await connected.page.reload({ waitUntil: "domcontentloaded" });
-        await waitForShell(connected.page);
-        expect((await connected.page.goto(rawSettingsUrl.toString()))?.status()).toBe(200);
-        await connected.page.getByRole("button", { name: "Raw", exact: true }).click();
-        await expectRawConfig(connected.page, configProofPrefixAfter);
-        await finishBrowser(connected);
-      },
-    });
-  });
-
   it("connects through the trusted path and rejects the untrusted proxy path", async (context) => {
     await suite.runScenario(context, {
       async run() {

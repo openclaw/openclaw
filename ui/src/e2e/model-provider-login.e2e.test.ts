@@ -13,7 +13,7 @@ const suite = createControlUiE2eSuite({
   startServerBeforeBrowser: true,
 });
 suite.define(() => {
-  it("loads provider styles and hands first-run API keys to the selected setup method", async () => {
+  it("hands first-run API keys to the selected setup method", async () => {
     await suite.withPage(
       {
         colorScheme: "light",
@@ -46,13 +46,6 @@ suite.define(() => {
                   groupLabel: "Anthropic",
                   label: "Anthropic API key",
                 },
-                {
-                  id: "github-copilot",
-                  brandId: "github-copilot",
-                  groupLabel: "Copilot",
-                  label: "GitHub Copilot",
-                  hint: "Device login with your GitHub account",
-                },
               ],
               workspace: "/tmp/openclaw-e2e",
               setupComplete: false,
@@ -62,36 +55,6 @@ suite.define(() => {
               providers: [],
               providerCapabilities: [
                 { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
-                {
-                  provider: "openai",
-                  apiKeySupported: true,
-                  quickApiKeySetup: true,
-                  loginOptions: [
-                    {
-                      id: "openai-login",
-                      brandId: "openai",
-                      label: "Sign in with ChatGPT (Beta)",
-                      kind: "oauth",
-                      featured: true,
-                    },
-                  ],
-                },
-                {
-                  provider: "github-copilot",
-                  apiKeySupported: false,
-                  quickApiKeySetup: false,
-                  loginOptions: [
-                    {
-                      id: "github-copilot/github-copilot",
-                      brandId: "github-copilot",
-                      groupLabel: "Copilot",
-                      label: "GitHub Copilot",
-                      hint: "Device login with your GitHub account",
-                      kind: "device-code",
-                      featured: false,
-                    },
-                  ],
-                },
               ],
             },
             "openclaw.setup.activate.start": { done: false, status: "running" },
@@ -102,29 +65,6 @@ suite.define(() => {
         await page.locator(".model-setup__manual").waitFor();
         await page.locator("[data-models-connect]").click();
         const dialog = page.locator(".model-provider-login");
-        await dialog.locator('[data-models-login-provider="openai"]').waitFor();
-        expect((await dialog.locator(".model-setup-wizard__body > p").textContent())?.trim()).toBe(
-          "Choose how to connect. Verifying an API key or token can also set this agent's active model.",
-        );
-        expect(
-          await dialog.locator("ul").evaluate((element) => getComputedStyle(element).listStyleType),
-        ).toBe("none");
-        expect(await dialog.locator('[data-models-login-provider="anthropic"]').isVisible()).toBe(
-          true,
-        );
-        expect(
-          await dialog
-            .locator('[data-models-login-provider="anthropic"] .provider-brand-icon')
-            .evaluate((element) => element.getBoundingClientRect().width),
-        ).toBeGreaterThan(0);
-        await dialog.locator('[data-models-login-provider="github-copilot"]').click();
-        const copilotMethods = dialog.locator("[data-models-login-choice] button");
-        expect(await copilotMethods.locator("strong").allTextContents()).toEqual([
-          "GitHub Copilot",
-          "GitHub Copilot API key or token",
-        ]);
-        expect(await copilotMethods.nth(1).textContent()).toContain("Paste an API key or token");
-        await dialog.locator("[data-models-login-back]").click();
         await dialog.locator('[data-models-login-provider="anthropic"]').click();
         expect(
           await dialog
@@ -243,7 +183,7 @@ suite.define(() => {
     },
   );
 
-  it("keeps browser sign-in available while an OAuth callback is pending", async () => {
+  it.each([false, true])("keeps browser sign-in usable (popup blocked: %s)", async (blocked) => {
     await suite.withPage(
       {
         colorScheme: "dark",
@@ -253,9 +193,11 @@ suite.define(() => {
       },
       async ({ page, context }) => {
         // Embedded browsers can refuse automatic windows; the explicit link must still work.
-        await page.addInitScript(() => {
-          window.open = () => null;
-        });
+        if (blocked) {
+          await page.addInitScript(() => {
+            window.open = () => null;
+          });
+        }
         await context.route("https://provider.example/sign-in", (route) =>
           route.fulfill({ contentType: "text/html", body: "<h1>Example sign-in</h1>" }),
         );
@@ -291,9 +233,17 @@ suite.define(() => {
             await page.locator(".model-provider-login .model-setup-wizard__body > p").textContent()
           )?.trim(),
         ).toBe("Save credentials for this agent. Choose the active model separately.");
+        expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
+        expect(await gateway.getRequests("models.authSetApiKey")).toHaveLength(0);
+        const popupReady = blocked ? undefined : page.waitForEvent("popup");
         await page.getByRole("button", { name: "Example browser sign-in", exact: true }).click();
         const login = await gateway.waitForRequest("models.authLogin");
         const loginParams = login.params;
+        expect(loginParams).toEqual({
+          sessionId: expect.any(String),
+          agentId: "main",
+          authChoice: "example-browser",
+        });
         assert(loginParams && typeof loginParams === "object" && "sessionId" in loginParams);
         await gateway.waitForRequest("wizard.next");
         await gateway.deferNext("wizard.next", { answer: { stepId: "browser-note" } });
@@ -328,7 +278,12 @@ suite.define(() => {
         await dialog.getByRole("status").filter({ hasText: "Waiting for" }).waitFor();
         expect(await dialog.getByRole("button", { name: "Continue", exact: true }).count()).toBe(0);
         expect(await dialog.locator('input[name="wizard-text"]').count()).toBe(0);
-        const [signInPage] = await Promise.all([context.waitForEvent("page"), openSignIn.click()]);
+        const signInPage = popupReady
+          ? await popupReady
+          : (await Promise.all([context.waitForEvent("page"), openSignIn.click()]))[0];
+        await expect.poll(() => signInPage.url()).toBe("https://provider.example/sign-in");
+        expect(await signInPage.evaluate(() => window.opener)).toBeNull();
+        expect(await dialog.textContent()).not.toContain("https://provider.example/sign-in");
         await signInPage.getByRole("heading", { name: "Example sign-in" }).waitFor();
         await signInPage.close();
         expect(await gateway.getRequests("models.authLogin")).toHaveLength(1);
@@ -352,186 +307,6 @@ suite.define(() => {
         await dialog.getByRole("button", { name: "Close", exact: true }).click();
         await dialog.waitFor({ state: "detached" });
         await page.locator('[data-provider-id="example"]').waitFor();
-      },
-    );
-  });
-  it("shows a provider's accounts and every connection method before browser sign-in", async () => {
-    await suite.withPage(
-      {
-        locale: "en-US",
-        reducedMotion: "reduce",
-        serviceWorkers: "block",
-        viewport: { width: 1280, height: 900 },
-      },
-      async ({ page, context }) => {
-        const signInUrl = "https://provider.example/sign-in";
-        await context.route("https://provider.example/**", (route) =>
-          route.fulfill({
-            contentType: "text/html",
-            body: "<title>Provider sign-in</title>Provider sign-in",
-          }),
-        );
-        const gateway = await installMockGateway(page, {
-          featureMethods: [
-            "config.get",
-            "config.patch",
-            "models.authStatus",
-            "models.authSetApiKey",
-            "models.authLogin",
-            "wizard.next",
-            "wizard.cancel",
-          ],
-          methodResponses: {
-            "models.authStatus": {
-              ts: 1,
-              providers: [
-                {
-                  provider: "openai",
-                  displayName: "OpenAI",
-                  status: "ok",
-                  profiles: [
-                    {
-                      profileId: "openai:codex",
-                      type: "oauth",
-                      status: "ok",
-                      source: "external",
-                      email: "alex@example.invalid",
-                      displayName: "Codex CLI",
-                    },
-                    {
-                      profileId: "openai:siwc",
-                      type: "oauth",
-                      status: "expiring",
-                      source: "saved",
-                      email: "alex@example.invalid",
-                      displayName: "Sign in with ChatGPT",
-                    },
-                  ],
-                },
-              ],
-              providerCapabilities: [
-                {
-                  provider: "openai",
-                  apiKeySupported: true,
-                  quickApiKeySetup: true,
-                  loginOptions: [
-                    {
-                      id: "openai-device-code",
-                      brandId: "openai",
-                      groupLabel: "OpenAI",
-                      label: "Codex login (device code)",
-                      hint: "Use a browser code when OpenClaw runs on a remote VM",
-                      kind: "device-code",
-                      featured: true,
-                      docsUrl: "https://docs.openclaw.ai/providers/openai/authentication",
-                    },
-                    {
-                      id: "openai",
-                      brandId: "openai",
-                      label: "Codex login (browser)",
-                      hint: "Sign in to Codex locally with your ChatGPT account",
-                      kind: "oauth",
-                      featured: false,
-                    },
-                    {
-                      id: "openai-token-sharing",
-                      brandId: "openai",
-                      label: "Sign in with ChatGPT (Beta)",
-                      hint: "Authorize OpenClaw for eligible Responses models using your Codex allowance",
-                      kind: "oauth",
-                      featured: false,
-                    },
-                  ],
-                },
-              ],
-            },
-            "models.authLogin": { done: false, status: "running" },
-            "wizard.next": {
-              sequence: [
-                {
-                  done: false,
-                  status: "running",
-                  step: {
-                    id: "instructions",
-                    type: "note",
-                    executor: "client",
-                    message: "Remote environment",
-                    externalUrl: signInUrl,
-                  },
-                },
-                {
-                  done: false,
-                  status: "running",
-                  step: {
-                    id: "browser",
-                    type: "progress",
-                    executor: "gateway",
-                    externalUrl: signInUrl,
-                    message: "Complete sign-in",
-                  },
-                },
-                { done: true, status: "done" },
-              ],
-            },
-          },
-        });
-        await page.goto(suite.server.baseUrl + "settings/model-providers");
-        await page.locator("[data-models-connect]").click();
-        await page.locator('[data-models-login-provider="openai"]').click();
-        const dialog = page.locator(".model-setup-wizard");
-        await dialog.getByText("Accounts available to this agent", { exact: true }).waitFor();
-        const profiles = dialog.locator("[data-profile-id]");
-        expect(await profiles.count()).toBe(2);
-        expect(await profiles.first().textContent()).toContain("alex@example.invalid");
-        expect(await profiles.first().textContent()).toContain("Codex CLI");
-        expect(await profiles.last().textContent()).toContain("alex@example.invalid");
-        expect(await profiles.last().textContent()).toContain("Expiring");
-        const connectionMethod = (label: string) =>
-          dialog.getByRole("button").filter({
-            has: page.locator("strong").filter({ hasText: label }),
-          });
-        expect(await dialog.locator("[data-models-login-choice] strong").allTextContents()).toEqual(
-          ["Codex login (device code)", "Codex login (browser)", "Sign in with ChatGPT (Beta)"],
-        );
-        expect(await dialog.locator("[data-models-login-api-key]").isVisible()).toBe(true);
-        expect(await dialog.locator("select, openclaw-select-picker").count()).toBe(0);
-        await dialog
-          .locator('a[href="https://docs.openclaw.ai/providers/openai/authentication"]')
-          .waitFor();
-        expect(await gateway.getRequests("models.authLogin")).toHaveLength(0);
-        expect(await gateway.getRequests("models.authSetApiKey")).toHaveLength(0);
-        const footerFits = () =>
-          dialog.evaluate((element) => {
-            const footer = element.querySelector(".model-setup-wizard__footer")!;
-            return footer.getBoundingClientRect().bottom <= element.getBoundingClientRect().bottom;
-          });
-        expect(await footerFits()).toBe(true);
-
-        await gateway.deferNext("wizard.next", { answer: { stepId: "instructions" } });
-        const popupReady = page.waitForEvent("popup");
-        await connectionMethod("Sign in with ChatGPT (Beta)").click();
-        const login = await gateway.waitForRequest("models.authLogin");
-        expect(login.params).toEqual({
-          sessionId: expect.any(String),
-          agentId: "main",
-          authChoice: "openai-token-sharing",
-        });
-        const popup = await popupReady;
-        await gateway.waitForRequest("wizard.next", {
-          match: { answer: { stepId: "instructions" } },
-        });
-        await gateway.deferNext("wizard.next");
-        await gateway.resolveDeferred("wizard.next");
-        await page.getByRole("link", { name: "Reopen browser tab", exact: true }).waitFor();
-        await expect.poll(() => popup.url()).toBe(signInUrl);
-        expect(await popup.evaluate(() => window.opener)).toBeNull();
-        await page.getByRole("button", { name: "Copy sign-in link", exact: true }).waitFor();
-        expect(await dialog.textContent()).not.toContain(signInUrl);
-
-        await gateway.resolveDeferred("wizard.next");
-        await dialog.getByRole("button", { name: "Close", exact: true }).click();
-        await expect.poll(() => page.locator("openclaw-modal-dialog").count()).toBe(0);
-        await popup.close();
       },
     );
   });

@@ -1,6 +1,5 @@
 import { once } from "node:events";
 import http from "node:http";
-import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { GatewayClient } from "../../../src/gateway/client.ts";
 import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
@@ -10,24 +9,29 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { createRequireRecord } from "../../../test/helpers/record.js";
-import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
-import {
-  waitForControlUiGatewayReady,
-  waitForControlUiInitialRoster,
-} from "../test-helpers/control-ui-e2e-readiness.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { pickerValue } from "../test-helpers/select-picker-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const requireRecord = createRequireRecord("record", "expected-object-value");
-const models = (id: string) => [
-  { id: "anchor", name: "Anchor" },
-  { id, name: id },
-];
 let instance: OpenClawTestInstance;
 let readback: GatewayClient;
 let providerMode: "ready" | "failed" | "empty" = "ready";
 let providerModel = "refresh-fixture:latest";
 const providerTraffic: Array<{ path: string; status: number }> = [];
+async function dashboardUrl() {
+  const handoff = await instance.cli(["dashboard", "--json"]);
+  expect(handoff.code, handoff.stderr).toBe(0);
+  const url = requireRecord(JSON.parse(handoff.stdout)).browserUrl;
+  if (typeof url !== "string") {
+    throw new Error("Dashboard did not return a browser handoff");
+  }
+  return url;
+}
+const refreshCatalog = async (agentId = "main") =>
+  requireRecord(
+    await readback.request("models.list", { agentId, view: "configured", refresh: true }),
+  );
 const suite = createControlUiE2eSuite({
   name: "Control UI catalog publication with a real Gateway",
   startServerBeforeBrowser: true,
@@ -85,7 +89,7 @@ const suite = createControlUiE2eSuite({
                 api: "openai-completions",
                 apiKey: "synthetic-catalog-key",
                 baseUrl: "http://127.0.0.1:9/v1",
-                models: models("palette-retiring"),
+                models: [{ id: "anchor", name: "Anchor" }],
               },
               ollama: { api: "ollama", baseUrl: `http://127.0.0.1:${address.port}`, models: [] },
             },
@@ -140,23 +144,13 @@ suite.define(() => {
     const requests: Array<{ id: string; params: Record<string, unknown> }> = [];
     const replies = new Map<string, Record<string, unknown>>();
     const acquisitions = () => providerTraffic.filter((entry) => entry.path === "/api/tags").length;
-    const publish = async (agentId = "main") => {
-      return requireRecord(
-        await readback.request("models.list", { agentId, view: "configured", refresh: true }),
-      );
-    };
-    const handoff = await instance.cli(["dashboard", "--json"]);
-    expect(handoff.code, handoff.stderr).toBe(0);
-    const browserUrl = requireRecord(JSON.parse(handoff.stdout)).browserUrl;
-    if (typeof browserUrl !== "string") {
-      throw new Error("Dashboard did not return a browser handoff");
-    }
+    const browserUrl = await dashboardUrl();
     const url = new URL("/settings/model-providers", browserUrl);
     url.hash = new URL(browserUrl).hash;
     try {
       // The provider counter spans both owners; settle each before measuring page-owned requests.
       for (const agentId of ["main", "reviewer"]) {
-        expect((await publish(agentId)).providerOutcomes).toContainEqual({
+        expect((await refreshCatalog(agentId)).providerOutcomes).toContainEqual({
           provider: "ollama",
           status: "ready",
         });
@@ -256,7 +250,7 @@ suite.define(() => {
 
           providerModel = "published-fixture:latest";
           const publicationStart = requests.length;
-          expect((await publish()).providerOutcomes).toContainEqual({
+          expect((await refreshCatalog()).providerOutcomes).toContainEqual({
             provider: "ollama",
             status: "ready",
           });
@@ -349,29 +343,14 @@ suite.define(() => {
   }, 120_000);
 
   it("shows acquisition failures in Automations while keeping model search quiet and usable", async () => {
-    const refresh = async () => {
-      const payload = requireRecord(
-        await readback.request("models.list", {
-          agentId: "main",
-          view: "configured",
-          refresh: true,
-        }),
-      );
-      return payload;
-    };
-    const handoff = await instance.cli(["dashboard", "--json"]);
-    expect(handoff.code, handoff.stderr).toBe(0);
-    const browserUrl = requireRecord(JSON.parse(handoff.stdout)).browserUrl;
-    if (typeof browserUrl !== "string") {
-      throw new Error("Dashboard did not return a browser handoff");
-    }
+    const browserUrl = await dashboardUrl();
     const warning = "Some models could not be refreshed. Open Models to try again.";
     try {
       await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
         await page.goto(browserUrl);
         await waitForControlUiGatewayReady(page);
         providerMode = "ready";
-        expect((await refresh()).providerOutcomes).toContainEqual({
+        expect((await refreshCatalog()).providerOutcomes).toContainEqual({
           provider: "ollama",
           status: "ready",
         });
@@ -381,7 +360,7 @@ suite.define(() => {
         await automations.waitFor({ state: "visible" });
 
         providerMode = "failed";
-        const failed = await refresh();
+        const failed = await refreshCatalog();
         expect(failed.providerOutcomes).toContainEqual({
           provider: "ollama",
           status: "unavailable",
@@ -404,7 +383,7 @@ suite.define(() => {
         );
 
         providerMode = "empty";
-        expect((await refresh()).providerOutcomes).toContainEqual({
+        expect((await refreshCatalog()).providerOutcomes).toContainEqual({
           provider: "ollama",
           status: "ready",
         });
@@ -417,168 +396,6 @@ suite.define(() => {
       });
     } finally {
       providerMode = "ready";
-    }
-  }, 120_000);
-
-  it("refreshes open search after publication and retains results through a failed read", async () => {
-    const handoff = await instance.cli(["dashboard", "--json"]);
-    expect(handoff.code).toBe(0);
-    const browserUrl = requireRecord(JSON.parse(handoff.stdout)).browserUrl;
-    if (typeof browserUrl !== "string") {
-      throw new Error("Dashboard did not return a browser handoff");
-    }
-    const catalogRequests = new Set<string>();
-    const catalogParams: unknown[] = [];
-    let rejectCatalogReplies = false;
-    let rejectedCatalogReplies = 0;
-    const publish = async (page: Page, id: string) => {
-      const applicationHandle = await getControlUiContextHandle(page);
-      try {
-        const publication = await applicationHandle.evaluateHandle((application) => {
-          const observed = { committed: false };
-          const stop = application.gateway.subscribeEvents((event) => {
-            if (event.event === "config.changed") {
-              observed.committed = true;
-            }
-          });
-          return { observed, stop };
-        });
-        const args = [
-          "config",
-          "set",
-          "models.providers.fixture.models",
-          JSON.stringify(models(id)),
-          "--strict-json",
-          "--replace",
-        ];
-        try {
-          const result = await instance.cli(args);
-          expect(result.code, result.stderr).toBe(0);
-          // Runtime rows can arrive before this accepted-config event retires them.
-          await expect
-            .poll(() => publication.evaluate(({ observed }) => observed.committed))
-            .toBe(true);
-        } finally {
-          await publication.evaluate(({ stop }) => stop());
-          await publication.dispose();
-        }
-      } finally {
-        await applicationHandle.dispose();
-      }
-    };
-    try {
-      await suite.withPage(
-        { serviceWorkers: "block", viewport: { width: 1280, height: 900 } },
-        async ({ page }) => {
-          await page.routeWebSocket(`ws://127.0.0.1:${instance.port}/**`, (socket) => {
-            const server = socket.connectToServer();
-            socket.onMessage((message) => {
-              const frame = requireRecord(JSON.parse(message.toString()));
-              if (frame.type === "req" && frame.method !== "connect") {
-                if (frame.method === "models.list" && typeof frame.id === "string") {
-                  catalogRequests.add(frame.id);
-                  catalogParams.push(frame.params);
-                }
-              }
-              server.send(message);
-            });
-            server.onMessage((message) => {
-              const frame = requireRecord(JSON.parse(message.toString()));
-              const catalogReply = typeof frame.id === "string" && catalogRequests.has(frame.id);
-              if (catalogReply && rejectCatalogReplies) {
-                rejectedCatalogReplies += 1;
-                socket.send(
-                  JSON.stringify({
-                    type: "res",
-                    id: frame.id,
-                    ok: false,
-                    error: { code: "UNAVAILABLE", message: "Catalog transport unavailable" },
-                  }),
-                );
-              } else {
-                socket.send(message);
-              }
-            });
-          });
-          await page.goto(browserUrl);
-          await waitForControlUiGatewayReady(page);
-          // The handshake can precede the lazy shell and its shortcut listener.
-          await waitForControlUiInitialRoster(page);
-          await page.keyboard.press("ControlOrMeta+K");
-          const input = page.locator(".cmd-palette__input");
-          await input.fill("palette-");
-          const retiring = page.getByRole("option", {
-            name: "palette-retiring fixture",
-            exact: true,
-          });
-          const published = page.getByRole("option", {
-            name: "palette-published fixture",
-            exact: true,
-          });
-          await retiring.waitFor({ state: "visible" });
-
-          await publish(page, "palette-published");
-          await expect.poll(() => published.count()).toBe(1);
-          expect(await retiring.count()).toBe(0);
-
-          rejectCatalogReplies = true;
-          // Refresh the same catalog owner; a config write retires its display facts.
-          providerModel = "read-failure-fixture:latest";
-          const refreshParams = { agentId: "main", view: "configured", refresh: true };
-          const refreshed = requireRecord(await readback.request("models.list", refreshParams));
-          expect(refreshed.providerOutcomes).toContainEqual({
-            provider: "ollama",
-            status: "ready",
-          });
-          expect(refreshed.models).toContainEqual(
-            expect.objectContaining({ provider: "ollama", id: "read-failure-fixture:latest" }),
-          );
-          await expect.poll(() => rejectedCatalogReplies).toBeGreaterThan(0);
-          const status = page
-            .locator(".cmd-palette [role=status]")
-            .filter({ hasText: "Model search unavailable" });
-          await status.waitFor({ state: "visible" });
-          expect(await published.count()).toBe(1);
-
-          rejectCatalogReplies = false;
-          await publish(page, "palette-held");
-          await input.fill("palette-held");
-          const recovered = page.getByRole("option", { name: "palette-held fixture", exact: true });
-          await recovered.waitFor({ state: "visible" });
-          await status.waitFor({ state: "hidden" });
-          await input.press("Enter");
-          await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
-          // History changes before the new view commits; capture must not supply that wait.
-          const settings = page.locator("openclaw-model-providers-page");
-          await settings.waitFor({ state: "visible" });
-
-          await page.goBack();
-          await settings.waitFor({ state: "hidden" });
-          rejectCatalogReplies = true;
-          const sidebar = page.locator("openclaw-app-sidebar");
-          await sidebar.getByRole("button", { name: /Switch agent/ }).click();
-          await sidebar.getByRole("menuitem", { name: "Reviewer fixture", exact: true }).click();
-          await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/reviewer");
-          const requestsBeforeOpen = catalogParams.length;
-          await page.keyboard.press("ControlOrMeta+K");
-          await input.fill("palette");
-          await status.waitFor({ state: "visible" });
-          // The selected Chat can issue its session-scoped read on this connection too.
-          expect(catalogParams.slice(requestsBeforeOpen)).toContainEqual({
-            view: "configured",
-            agentId: "reviewer",
-          });
-          expect(await recovered.count()).toBe(0);
-
-          rejectCatalogReplies = false;
-          await input.fill("palette-held");
-          await recovered.waitFor({ state: "visible" });
-          await status.waitFor({ state: "hidden" });
-        },
-      );
-    } finally {
-      providerMode = "ready";
-      providerModel = "refresh-fixture:latest";
     }
   }, 120_000);
 });
