@@ -4535,3 +4535,37 @@ outside GC capture. `--count-path-work` is another separate attribution mode:
 it counts `path.relative` calls from the sessions root after scanner warmup.
 These are the coverage checks for the unchanged-file workload; do not include
 this instrumentation in timing comparisons.
+
+## Skill resource delivery allocation
+
+`skill-resource-delivery-measure.ts` exercises production bundle preparation with
+metadata-shaped synthetic skills: 32 files, 1,302,894 bytes, and eight concurrent
+turns by default. File contents are generated Markdown and scripts; no operator
+skill content is copied. Delivery mode retains the payloads like a worker launch
+that may need to retry. Transfer mode runs the actual staging script over child
+stdin and retains the returned turn handles. It does not create a Gateway
+placement or run model inference.
+
+```sh
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/skill-resource-delivery-measure.ts \
+  --state-dir /path/to/isolated/skill-delivery --prepare-only
+node --expose-gc --import ./scripts/tsx.mjs scripts/perf/skill-resource-delivery-measure.ts \
+  --state-dir /path/to/isolated/skill-delivery --existing --operations 128 --concurrency 8
+```
+
+Use `--functional` for exact-byte verification without timing, `--mode transfer`
+for staging and supporting-file readback, and `--content unicode` or
+`--content binary` for alternate fixtures (prepare each in a separate directory).
+`--allocations` includes collected objects in inspector sampling; run that pass
+separately from uninstrumented CPU, GC, and event-loop comparisons. Reports also
+include source reads and bytes per turn, retained payload characters, JSON bytes,
+and post-GC retained heap. The transfer readback is performed by the verifier,
+not a model.
+
+Run on the authorized benchmark host. Prepare fixtures before acquiring the
+shared measurement slot, then use `--existing --start-file /path/to/barrier` on
+both sides. Each side prints `READY <pid>` after warmup; write a future Unix time
+in milliseconds to the barrier to synchronize the start. Compare concurrent
+baseline/candidate pairs on interleaved CPUs and swap sides for the next pair,
+using the host's guard and resource limits. Run identical-source controls before
+attributing GC or pause differences. Never compare profiled and unprofiled runs.
