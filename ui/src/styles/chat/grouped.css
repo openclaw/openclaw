@@ -2096,7 +2096,8 @@ button.chat-reply-attribution__target:disabled {
   cursor: var(--cursor-action);
 }
 
-.chat-bubble-activity--working > .chat-bubble-activity__summary {
+.chat-bubble-activity--working > .chat-bubble-activity__summary,
+.chat-activity-group--working > .chat-activity-group__summary {
   min-width: 60px;
   min-height: 40px;
   justify-content: center;

@@ -88,7 +88,10 @@ describe("full-release-validation-at-sha", () => {
     expect(comparison).not.toContainEqual(expect.stringMatching(/^--max-count=/u));
     expect(comparison?.at(-1)).toMatch(/\.\.\./u);
     const treeDiffs = fixture.gitCalls().filter((args) => args[0] === "diff");
-    expect(treeDiffs).toContainEqual(expect.arrayContaining(["--no-renames", "--name-only"]));
+    // Drifted release branches differ from main by more paths than a default
+    // child-process buffer holds; the lag count must not list them.
+    expect(treeDiffs).toContainEqual(expect.arrayContaining(["--no-renames", "--shortstat"]));
+    expect(treeDiffs).not.toContainEqual(expect.arrayContaining(["--name-only"]));
   });
 
   it("rejects a missing purpose before remote creation on supporting tooling", () => {

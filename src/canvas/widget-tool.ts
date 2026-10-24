@@ -3,6 +3,7 @@ import { truncateCodePoints } from "@openclaw/normalization-core/code-points";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Result } from "@openclaw/normalization-core/result";
 import { Type } from "typebox";
+import { ToolArgumentValidationError } from "../../packages/agent-core/src/errors.js";
 import type { BoardWidgetPutResult } from "../../packages/gateway-protocol/src/index.js";
 import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../packages/gateway-protocol/src/schema/canvas.js";
 import { optionalStringEnum } from "../agents/schema/string-enum.js";
@@ -20,10 +21,6 @@ import {
   WIDGET_CDN_ORIGINS,
   WidgetHtmlInputError,
 } from "../plugin-sdk/widget-html.js";
-import {
-  listBoardWidgetContentKinds,
-  resolveBoardWidgetContentKind,
-} from "../plugins/board-widget-content-kinds.js";
 import { describeDashboardCapabilities } from "../plugins/dashboard-capabilities.js";
 import type {
   WidgetPresentationError,
@@ -39,14 +36,10 @@ import { findWidgetScriptSyntaxError } from "./widget-script-syntax.js";
 import { buildWidgetDocument } from "./wrap.js";
 
 const SHOW_WIDGET_REQUIRED_CLIENT_CAPS = ["inline-widgets"];
-const REGISTERED_WIDGET_CODE_MAX_CHARS = 262_144;
+const REMOVED_A2UI_ERROR = 'A2UI widgets were removed; use kind "html"';
 
 function currentPluginRegistry() {
   return getPluginRuntimeGatewayRequestScope()?.pluginRegistry ?? getActivePluginRegistry();
-}
-
-export function hasRegisteredShowWidgetKinds(): boolean {
-  return listBoardWidgetContentKinds(currentPluginRegistry()).length > 0;
 }
 
 type ShowWidgetToolOptions = {
@@ -179,8 +172,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
   const inlineHostEnabled = options.inlineHostEnabled !== false;
   const inlineAvailable =
     !pinnedOnly && inlineHostEnabled && options.inlineClientAvailable !== false;
-  const registeredKinds = listBoardWidgetContentKinds(currentPluginRegistry());
-  const allKinds = ["html", ...registeredKinds];
+  const allKinds = ["html"];
   const presenters = options.presenters ?? [];
   const presenterContext =
     options.presenterContext ??
@@ -192,7 +184,6 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
     currentChannelPresenter && !inlineAvailable
       ? allKinds.filter((kind) => currentChannelPresenter.capabilities.sourceKinds.includes(kind))
       : allKinds;
-  const advertisedRegisteredKinds = kinds.filter((kind) => kind !== "html");
   const reportAvailable = Boolean(options.agentSessionKey?.trim());
   const reportGuidance = reportAvailable
     ? " Prefer the report argument with pin=true for data reports; these render natively on the dashboard without a document frame. Reports are dashboard-only; omit widget_code, kind, capabilities, and presentation.target."
@@ -219,12 +210,12 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
   );
   const widgetCodeSchema = Type.String({
     description:
-      "Required for HTML/SVG or registered source. For HTML, send a fragment with optional style/script tags, not a full document or file path. Use fluid widths and wrap or stack narrow layouts; reserve horizontal scrolling for exact geometry.",
+      "Required HTML/SVG source. Send a fragment with optional style/script tags, not a full document or file path. Use fluid widths and wrap or stack narrow layouts; reserve horizontal scrolling for exact geometry.",
   });
   return {
     label: "Show Widget",
     name: "show_widget",
-    description: `Visual helps? Make widget. Do not wait for ask. ${usageGuidance} Update pinned HTML by name. Use for code architecture, execution traces, performance comparisons, interactive explanations, UI mockups, and dashboards. Text clearer? Skip. Load the visualize skill when available for composition and dashboard authoring. The source kind defaults to html${advertisedRegisteredKinds.length ? ` and registered kinds are ${advertisedRegisteredKinds.join(", ")}` : ""}. Send markup directly in widget_code. Scripts, stylesheets, and fonts may load from ${WIDGET_CDN_ORIGINS.join(", ")}; pin library versions. Use direct HTTPS URLs for audio/video, or data/blob URLs for embedded/generated clips. Default videos to controls playsinline preload="auto" so a first frame can appear before playback; do not autoplay. Images and video posters must be data URLs; media playback does not grant fetch access. Inline widgets cannot fetch APIs. Pinned data access needs declared and granted capabilities.netOrigins or capabilities.tools; inline previews never inherit those grants. Keep filters and controls local; user-clicked openclaw.prompt.send(text) requests an agent follow-up in the Control UI. Data, action, state, and cron host APIs are dashboard-only. openclaw.host.controlUiBaseUrl is the Control UI origin plus base path after dashboard initialization, otherwise null; read it at click time. Dashboard HTML links support HTTP(S) destinations only; open them with target="_blank" and rel="noopener noreferrer". Put local workspace file links in chat Markdown, not widget HTML; file:// links cannot open the Files panel. \`title\` is host metadata. Start directly with content; do not repeat the title or recreate dashboard chrome. Use host theme variables such as --text, --muted, --card, --border, --accent, --font-body, and --font-mono. Inline script syntax errors return line and column; fix and retry. Check library loading and rendered interactions; hosting success alone is not visual proof.${reportGuidance}${presenterPrompt}`,
+    description: `Visual helps? Make widget. Do not wait for ask. ${usageGuidance} Update pinned HTML by name. Use for code architecture, execution traces, performance comparisons, interactive explanations, UI mockups, and dashboards. Text clearer? Skip. Load the visualize skill when available for composition and dashboard authoring. The source kind defaults to html. Send markup directly in widget_code. Scripts, stylesheets, and fonts may load from ${WIDGET_CDN_ORIGINS.join(", ")}; pin library versions. Use direct HTTPS URLs for audio/video, or data/blob URLs for embedded/generated clips. Default videos to controls playsinline preload="auto" so a first frame can appear before playback; do not autoplay. Images and video posters must be data URLs; media playback does not grant fetch access. Inline widgets cannot fetch APIs. Pinned data access needs declared and granted capabilities.netOrigins or capabilities.tools; inline previews never inherit those grants. Keep filters and controls local; user-clicked openclaw.prompt.send(text) requests an agent follow-up in the Control UI. Data, action, state, and cron host APIs are dashboard-only. openclaw.host.controlUiBaseUrl is the Control UI origin plus base path after dashboard initialization, otherwise null; read it at click time. Dashboard HTML links support HTTP(S) destinations only; open them with target="_blank" and rel="noopener noreferrer". Put local workspace file links in chat Markdown, not widget HTML; file:// links cannot open the Files panel. \`title\` is host metadata. Start directly with content; do not repeat the title or recreate dashboard chrome. Use host theme variables such as --text, --muted, --card, --border, --accent, --font-body, and --font-mono. Inline script syntax errors return line and column; fix and retry. Check library loading and rendered interactions; hosting success alone is not visual proof.${reportGuidance}${presenterPrompt}`,
     parameters: Type.Object({
       title: Type.String({ description: "Short host title; do not repeat it inside the widget" }),
       widget_code: reportAvailable ? Type.Optional(widgetCodeSchema) : widgetCodeSchema,
@@ -304,10 +295,24 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
     ...(currentChannelPresenter || pinnedOnly
       ? {}
       : { requiredClientCaps: SHOW_WIDGET_REQUIRED_CLIENT_CAPS }),
+    prepareArguments: (args) => {
+      if (asOptionalRecord(args)?.kind === "a2ui") {
+        throw new ToolArgumentValidationError(REMOVED_A2UI_ERROR);
+      }
+      return args;
+    },
     execute: async (_toolCallId, args) => {
       const params = args as Record<string, unknown>;
       const requestedKind = readToolStringParam(params, "kind");
       const kind = requestedKind ?? "html";
+      if (kind === "a2ui") {
+        throw new WidgetHtmlInputError(REMOVED_A2UI_ERROR);
+      }
+      if (kind !== "html") {
+        throw new WidgetHtmlInputError(
+          `Unsupported widget kind ${JSON.stringify(kind)}; use kind "html"`,
+        );
+      }
       const rawWidgetCode =
         readToolStringParam(params, "widget_code", {
           trim: false,
@@ -322,19 +327,16 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         if (!rawWidgetCode.trim()) {
           throw new WidgetHtmlInputError("widget_code required");
         }
-        assertWidgetHtmlSize(
-          rawWidgetCode,
-          kind === "html" ? WIDGET_HTML_MAX_UTF8_BYTES : REGISTERED_WIDGET_CODE_MAX_CHARS,
-          { inputName: "widget_code", unit: kind === "html" ? "bytes" : "characters" },
-        );
-        if (kind === "html") {
-          // Untrimmed so reported line/column match the widget_code the model sent.
-          const scriptError = findWidgetScriptSyntaxError(rawWidgetCode);
-          if (scriptError) {
-            throw new WidgetHtmlInputError(
-              `widget_code has a JavaScript syntax error in inline script ${scriptError.scriptIndex} at line ${scriptError.line}, column ${scriptError.column}: ${scriptError.message}. Offending line: ${scriptError.snippet}. Fix the script and call show_widget again.`,
-            );
-          }
+        assertWidgetHtmlSize(rawWidgetCode, WIDGET_HTML_MAX_UTF8_BYTES, {
+          inputName: "widget_code",
+          unit: "bytes",
+        });
+        // Untrimmed so reported line/column match the widget_code the model sent.
+        const scriptError = findWidgetScriptSyntaxError(rawWidgetCode);
+        if (scriptError) {
+          throw new WidgetHtmlInputError(
+            `widget_code has a JavaScript syntax error in inline script ${scriptError.scriptIndex} at line ${scriptError.line}, column ${scriptError.column}: ${scriptError.message}. Offending line: ${scriptError.snippet}. Fix the script and call show_widget again.`,
+          );
         }
       }
       const shouldPin = params.pin === true;
@@ -373,22 +375,6 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         );
       }
       const report = isReport ? parseBoardReport(params.report) : undefined;
-      const registration =
-        kind === "html" || isReport
-          ? undefined
-          : resolveBoardWidgetContentKind(currentPluginRegistry(), kind);
-      if (kind !== "html" && !isReport && !registration) {
-        throw new WidgetHtmlInputError(
-          `widget kind ${JSON.stringify(kind)} is unavailable; enable the plugin that provides it and retry`,
-        );
-      }
-      if (registration) {
-        try {
-          registration.definition.validateSource(widgetCode);
-        } catch (error) {
-          throw new WidgetHtmlInputError(`invalid ${kind} widget source: ${String(error)}`);
-        }
-      }
       const currentPresenterSupportsKind =
         currentChannelPresenter?.capabilities.sourceKinds.includes(kind);
       const wantsCurrentChannel =
@@ -405,26 +391,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           assertWidgetHtmlSize(rawWidgetCode, maxSourceBytes, { inputName: "widget_code" });
         }
       }
-      const composedWidget = registration
-        ? registration.definition.composeDocument({
-            source: widgetCode,
-            title,
-            resourceUrls: Object.fromEntries(
-              registration.definition.resources.paths.map((resourcePath) => [
-                resourcePath,
-                resourcePath,
-              ]),
-            ),
-            promptGranted: false,
-          })
-        : widgetCode;
-      const wrappedDocument = isReport
-        ? ""
-        : buildWidgetDocument(
-            title,
-            composedWidget,
-            registration ? { scriptOrigins: ["'self'"] } : {},
-          );
+      const wrappedDocument = isReport ? "" : buildWidgetDocument(title, widgetCode);
       const hasPresentationRoute =
         !isReport && (inlineAvailable || wantsCurrentChannel || wantsNodePanel);
       let pinnedText = "";
@@ -438,7 +405,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         const frame = readToolStringParam(presentation ?? {}, "frame");
         const after = readToolStringParam(params, "after");
         const pinnedTitle = truncateCodePoints(title, 80);
-        if (!registration && !isReport) {
+        if (!isReport) {
           assertPinnedWidgetDocumentSize(
             buildWidgetDocument(pinnedTitle, widgetCode, {
               connectOrigins: capabilities?.netOrigins,
@@ -461,9 +428,7 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
           // can never run before its user-activation and bridge bootstrap.
           content: report
             ? { kind: "plugin", pluginKind: BOARD_REPORT_WIDGET_KIND, props: report }
-            : registration
-              ? { kind: "registered", contentKind: kind, source: widgetCode }
-              : { kind: "html", html: widgetCode },
+            : { kind: "html", html: widgetCode },
           ...(frame ? { presentation: frame } : {}),
           ...(capabilities ? { declared: capabilities } : {}),
           ...(!explicitName ? { generatedIdentity: generatedWidgetIdentity(title, name) } : {}),

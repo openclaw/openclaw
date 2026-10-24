@@ -37,6 +37,7 @@ import {
   bindReplyQueueInputAdapter,
   type ReplyQueueInputAdapter,
   bindReplyToolAuthorityCallerRead,
+  captureReplyToolAuthorityCallerBinding,
   createAgentQuestionAnswerAuthority,
   prepareReplyToolAuthorityCallerRead,
   registerAgentHarnessQuestionAnswerAuthority,
@@ -73,7 +74,7 @@ export async function withPreparedEmbeddedRunToolAuthority<T, Attempt extends To
     | "sessionPersistence"
     | "trigger"
     | "bindWatchdogAttempt"
-    | "executionSelection"
+    | "joinObservation"
   > & { queueInputAdapter?: ReplyQueueInputAdapter },
   attempt: Attempt,
   narrow: ReplyToolAuthorityNarrow | undefined,
@@ -140,7 +141,6 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
     ? undefined
     : prepareReplyToolAuthority(
         {
-          executionSelection: internal.executionSelection,
           originatingChannel: attempt.messageChannel,
           toolsAllow: attempt.toolsAllow,
           disableTools: attempt.disableTools,
@@ -164,6 +164,8 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
           },
         },
         narrow,
+        undefined,
+        internal.joinObservation,
       );
   let fingerprint: string | undefined;
   let releaseAttemptSnapshot: (() => void) | undefined;
@@ -380,7 +382,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
           // attempt snapshot. A lifecycle-only turn cannot lend its policy.
           bindReplyToolAuthorityCallerRead(
             projectAsync,
-            async (caller, expected, _requestedRoute, assertCaller) => {
+            (caller, expected, _requestedRoute, assertCaller) => {
               const assertPreparedOwner = () => {
                 assertCaller();
                 assertRegistered();
@@ -404,7 +406,7 @@ async function withPreparedEmbeddedRunToolAuthorityOwned<T, Attempt extends Tool
                   );
                 }
               }
-              return prepareReplyToolAuthorityCallerRead(
+              return captureReplyToolAuthorityCallerBinding(
                 operation?.projectToolAuthorityFingerprintAsync ?? direct?.projectAsync,
                 caller,
                 expected,

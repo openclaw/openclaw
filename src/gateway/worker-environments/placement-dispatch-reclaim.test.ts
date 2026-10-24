@@ -21,6 +21,7 @@ import { createHarness } from "./placement-dispatch-test-harness.js";
 import { createWorkerPlacementMoveService } from "./placement-move-service.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
 import { prepareSessionWorkerPlacementStop } from "./session-placement-lifecycle.js";
+import * as workspaceResultStaging from "./workspace-result-staging.js";
 
 const tempDirs = useStateDatabaseTempDirs();
 const it = createCommandTest();
@@ -220,10 +221,10 @@ describe("worker placement dispatch reclaim", () => {
       "workspace:lease",
       "workspace:verify",
       "workspace:verify-local",
+      "teardown:stop",
       "teardown:destroy",
       "placement:reconciling",
       "placement:reclaimed",
-      "teardown:stop",
     ]);
   });
 
@@ -535,6 +536,9 @@ describe("worker placement dispatch reclaim", () => {
   );
 
   it("retains and reports cloud versions that conflict during an idle reclaim", async () => {
+    // This lifecycle fixture records only a synthetic conflict ref; Git history has its own proof.
+    using history = vi.spyOn(workspaceResultStaging, "adoptStagedWorkerWorkspaceHistory");
+    history.mockResolvedValue(undefined);
     const harness = await createHarness(database, placementStore, {
       reconcileConflictPaths: ["src/local.ts"],
     });

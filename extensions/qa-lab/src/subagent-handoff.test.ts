@@ -53,7 +53,8 @@ async function runHandoff({
   const secondResult = hasFault("answer only in second child");
   const delivered =
     secondResult || hasFault("answer only in task") ? "A different result" : childReply;
-  const childResult = (text: string) => wrapPromptDataBlock({ label: "Child result", text });
+  const childResult = (text: string) =>
+    wrapPromptDataBlock({ label: "Child result", text, encoding: "verbatim" });
   const settlement = [
     wrapPromptDataBlock({ label: "1. Child task", text: "qa-sidecar" }),
     "status: ok",
@@ -128,11 +129,11 @@ async function runHandoff({
   });
 }
 
-// The yielded requester sees prompt-data's escaped spelling, not a decoded copy.
+// The yielded requester sees the child's own characters, so a faithful quote matches.
 it.each([
   ["qa-sidecar", "qa-sidecar"],
-  ["Verified 2 < 3.\nEvidence:\nCheck passed.", "Verified 2 &lt; 3.\nEvidence:\nCheck passed."],
-  ["column A\tcolumn B\r\n2 < 3", "column Acolumn B\n2 &lt; 3"],
+  ["Verified 2 < 3.\nEvidence:\nCheck passed.", "Verified 2 < 3.\nEvidence:\nCheck passed."],
+  ["column A\tcolumn B\r\n2 < 3", "column A\tcolumn B\n2 < 3"],
   ["literal &lt; stays &lt;", "literal &lt; stays &lt;"],
 ])(
   "credits the child's settled result in the requester's visible reply: %s",
@@ -140,6 +141,12 @@ it.each([
     expect((await runHandoff({ childReply, deliveredReply })).status).toBe("pass");
   },
 );
+it("does not credit a reply that HTML-escaped the child's result", async () => {
+  await expect(
+    runHandoff({ childReply: "Verified 2 < 3.", deliveredReply: "Verified 2 &lt; 3." }),
+  ).rejects.toThrow("no matching delivered reply");
+});
+
 it.each([
   ["forbidden", "did not return an accepted child"],
   ...["another run", "child failed", "child yielded", "silent terminal after progress"].map(

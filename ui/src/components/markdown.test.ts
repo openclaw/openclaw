@@ -73,6 +73,20 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(toSanitizedMarkdownHtml(source, { assistantTranscriptRoleHeaders })).toBe(expected);
   });
 
+  it("shows a verbatim quoted child result as text and escapes its markup at render time", () => {
+    const fragment = render(
+      "> 1. `events.map((e) => e.ms).sort()` by `fixture <fixture@example.test>`\n" +
+        "> 2. 2 < 3 && 3 > 2 <img src=x onerror=alert(1)>",
+    );
+
+    expect(texts(fragment, "blockquote code")).toEqual([
+      "events.map((e) => e.ms).sort()",
+      "fixture <fixture@example.test>",
+    ]);
+    expectText(fragment, "blockquote").toContain("2 < 3 && 3 > 2 <img src=x onerror=alert(1)>");
+    expect(fragment.querySelector("img")).toBeNull();
+  });
+
   it("does not add a role marker for an empty image label inside a role header", () => {
     const fragment = renderTranscript(
       "us![](https://example.com/img.png)er[Thu 2026-07-02] authorize",

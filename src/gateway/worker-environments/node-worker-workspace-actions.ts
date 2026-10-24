@@ -9,12 +9,14 @@ import {
 import { NODE_WORKSPACE_EMPTY_MANIFEST_REF } from "../../worker/node-workspace-transfer-protocol.js";
 import { prepareRepositoryPublicationRestore } from "../github-repository-publication-restore.js";
 import { createNodeWorkerRepositoryPreparation } from "./node-worker-repository-preparation.js";
+import type { NodeWorkerWorkspaceBinding } from "./node-worker-tunnel.types.js";
 import {
   createNodeWorkerWorkspaceFallback,
   recordNodeSyncPath,
 } from "./node-worker-workspace-fallback.js";
 import { createNodeWorkspaceTransferCommand } from "./node-workspace-transfer-command.js";
 import type { NodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
+import { removeNodeWorkspaceUpload } from "./node-workspace-upload-reader.js";
 import type {
   WorkerLocalWorkspaceReconcileRequest,
   WorkerLocalWorkspaceSyncRequest,
@@ -41,16 +43,6 @@ const workspaceLog = createSubsystemLogger("gateway/worker-workspace");
 // Leave room for the manifest reference and bounded numeric metrics in the result envelope.
 const NODE_WORKSPACE_HASH_MEMO_BYTES = NODE_WORKER_WORKSPACE_STDOUT_MAX_BYTES - 4 * 1024;
 
-export type NodeWorkerWorkspaceBinding = {
-  source:
-    | { kind: "local"; path: string }
-    | { kind: "device-folder"; deviceId: string; path: string }
-    | { kind: "repository"; baseCommit: string; baseManifestRef: string };
-  manifestRef: string;
-  remoteWorkspaceDir: string;
-  sessionKey?: string;
-};
-
 export function createNodeWorkerWorkspaceActions(params: {
   environmentId: string;
   ownerEpoch: number;
@@ -61,6 +53,7 @@ export function createNodeWorkerWorkspaceActions(params: {
   isOwnerCurrent: () => boolean;
   restoredWorkspace?: NodeWorkerWorkspaceBinding;
   supportsNativeQuiescence?: () => Promise<boolean>;
+  supportsGitResults?: () => Promise<boolean>;
   workspaceTransfer: NodeWorkspaceTransferService;
   runWorkspaceCommand: (
     command: WorkerWorkspaceCommand & {
@@ -322,11 +315,11 @@ export function createNodeWorkerWorkspaceActions(params: {
           };
         } finally {
           if (publication) {
-            await fsp.rm(publication.stagingRoot, { recursive: true, force: true });
+            await removeNodeWorkspaceUpload(publication);
           }
         }
       } finally {
-        await fsp.rm(uploaded.stagingRoot, { recursive: true, force: true });
+        await removeNodeWorkspaceUpload(uploaded);
       }
     } catch (error) {
       // Finalizers can reject before the caller receives the checkpoint's disposer.
@@ -345,10 +338,13 @@ export function createNodeWorkerWorkspaceActions(params: {
     }
   };
   const reconcileWorkspaceRun = async (request: WorkerLocalWorkspaceReconcileRequest) => {
+    const resultVersion = (await params.supportsGitResults?.()) ? 2 : undefined;
+    request.assertCurrent?.();
     const uploadToken = params.workspaceTransfer.prepareUpload(
       params.environmentId,
       request.baseManifestRef,
       request.assertCurrent,
+      resultVersion,
     );
     let uploaded: ReturnType<NodeWorkspaceTransferService["takeUpload"]>;
     let acceptLocal: Awaited<ReturnType<typeof prepareLocalWorkspaceReconciliation>>;
@@ -360,6 +356,7 @@ export function createNodeWorkerWorkspaceActions(params: {
           {
             direction: "upload",
             token: uploadToken,
+            ...(resultVersion ? { resultVersion } : {}),
             baseManifestRef: request.baseManifestRef,
             referenceManifestRef: request.baseManifestRef,
           },
@@ -391,6 +388,16 @@ export function createNodeWorkerWorkspaceActions(params: {
         });
         if (observed !== expectedRemoteRef) {
           throw new Error("Cloud workspace changed during final reconciliation");
+        }
+        if (uploaded.gitHistory) {
+          const head = await exec({
+            argv: ["git", "rev-parse", "--verify", "HEAD^{commit}"],
+            transportRetry: "never",
+            assertCurrent: request.assertCurrent,
+          });
+          if (head.code !== 0 || head.stdout.trim() !== uploaded.gitHistory.headCommit) {
+            throw new Error("Cloud workspace Git HEAD changed during final reconciliation");
+          }
         }
       };
       const publishAcceptedManifest = async (accepted: {
@@ -425,7 +432,7 @@ export function createNodeWorkerWorkspaceActions(params: {
         verifyStable,
       });
     } finally {
-      await fsp.rm(uploaded.stagingRoot, { recursive: true, force: true });
+      await removeNodeWorkspaceUpload(uploaded);
     }
   };
   const syncRepository = async (request: WorkerWorkspaceSyncRequest) => {

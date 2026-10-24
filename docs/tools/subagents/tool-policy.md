@@ -28,6 +28,11 @@ policies leave the continuation under its ordinary restricted policy. Current
 tool restrictions and live revocation checks still apply at execution; the
 handoff does not grant additional tools or infer a sender identity.
 
+Completion turns keep the requester's session tool definitions and catalog.
+The replayed policy gates calls instead: a denied tool reports that it is not
+available during a child-completion turn. If the requester is itself a sub-agent,
+its own inherited restrictions still apply to its listed tools.
+
 An automatic completion turn for a requester on the Claude CLI backend keeps that same
 captured policy. The tools reach the CLI only through OpenClaw's policy-filtered
 MCP surface, so native CLI tools stay disabled for the turn and every inherited

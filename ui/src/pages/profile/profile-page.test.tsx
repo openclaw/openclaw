@@ -1,10 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import {
-  GIT_COAUTHOR_PREFERENCE_KEY,
-  type UserProfile,
-} from "../../../../packages/gateway-protocol/src/index.ts";
+import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationConfigCapability } from "../../app/config.ts";
@@ -933,76 +930,3 @@ it("reconnects through the connection owner while retaining the last access summ
   flush();
   expect(page.querySelector(".settings-row__value")?.textContent).toBe("operator.sessions.read");
 });
-
-it.each([
-  { primary: true, stored: false, enabled: false, updated: true },
-  { primary: true, stored: "not-a-boolean", enabled: false, updated: undefined },
-  { primary: true, stored: undefined, enabled: true, updated: false },
-  { primary: false, stored: false, enabled: false, updated: true },
-  { primary: false, stored: undefined, enabled: true, updated: false },
-])(
-  "loads co-author consent $stored and saves changes without reloading (display primary=$primary)",
-  async ({ primary, stored, enabled, updated }) => {
-    const profile: UserProfile = {
-      ...modelAccountProfile,
-      emails: primary ? [] : ["github:ghe.example.test:101", "github:code.example.test:101"],
-      githubIdentity: primary
-        ? {
-            login: "octocat",
-            profileUrl: "https://github.com/octocat",
-            avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
-          }
-        : null,
-    };
-    const request = vi.fn(async (method: string, params?: unknown) => {
-      if (method === "users.self") {
-        return { profile };
-      }
-      if (method === "users.listModelAccounts") {
-        return { profileId: "profile-1", accounts: [], links: [] };
-      }
-      if (method === "users.prefs.get") {
-        expect(params).toEqual({ keys: [GIT_COAUTHOR_PREFERENCE_KEY] });
-        return {
-          status: "ok",
-          entries: stored === undefined ? {} : { [GIT_COAUTHOR_PREFERENCE_KEY]: stored },
-        };
-      }
-      if (method === "users.prefs.set") {
-        expect(params).toEqual({ entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: updated } });
-        return { status: "ok" };
-      }
-      throw new Error(`unexpected method: ${method}`);
-    });
-    const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-      id: profile.id,
-      name: profile.displayName ?? undefined,
-    });
-    const page = mountProfilePage(harness.context);
-    await waitForFast(() =>
-      expect(page.querySelector("input.settings-toggle__input")).not.toBeNull(),
-    );
-    expect(Boolean(page.querySelector(".settings-account"))).toBe(primary);
-    const toggle = page.querySelector<HTMLInputElement>("input.settings-toggle__input");
-    await waitForFast(() => {
-      expect(toggle?.disabled).toBe(false);
-      expect(toggle?.checked).toBe(enabled);
-    });
-    expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
-      ["users.self", "users.listModelAccounts", "users.prefs.get"].toSorted(),
-    );
-    expect(page.querySelector(".identity-github-form")).toBeNull();
-    if (updated === undefined) {
-      return;
-    }
-    toggle!.checked = updated;
-    toggle?.dispatchEvent(new Event("change", { bubbles: true }));
-    await waitForFast(() =>
-      expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1),
-    );
-    await waitForFast(() => expect(toggle?.checked).toBe(updated));
-    expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
-      ["users.self", "users.listModelAccounts", "users.prefs.get", "users.prefs.set"].toSorted(),
-    );
-  },
-);

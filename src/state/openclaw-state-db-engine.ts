@@ -35,7 +35,11 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { openTrackedStateDatabase } from "./openclaw-state-db-handle.js";
 import { withLegacyPublicationDraft } from "./openclaw-state-db-schema-v28-publication.js";
 import { withLegacyLocalWorkspaceManifests } from "./openclaw-state-db-schema-v31-workspace-manifests.js";
-import { admitStateSchemaFacts } from "./openclaw-state-db-schema-version.js";
+import {
+  admitStateSchemaFacts,
+  PostgresSchemaAdmissionUnavailableError,
+} from "./openclaw-state-db-schema-version.js";
+import { withPostgresSchemaAdmissionRetry } from "./openclaw-state-postgres-admission.js";
 import { writeStateSchemaContentVersion } from "./openclaw-state-schema-publication.js";
 import { statePostgresRuntime as runtime } from "./postgres-schema.generated/runtime.js";
 
@@ -79,10 +83,15 @@ export function admitStatePostgres(db: PostgresSqlConnection, fresh: boolean): v
   if (!fresh && getStateRuntimeSchemaAdmission(db)?.startupReady) {
     return;
   }
-  const facts = getPostgresPhysicalFacts(db);
-  if (!facts) {
-    throw new Error(`Missing PostgreSQL state admission. ${recovery}`);
-  }
+  const facts = withPostgresSchemaAdmissionRetry(db, () => {
+    const admitted = getPostgresPhysicalFacts(db);
+    if (!admitted) {
+      throw new PostgresSchemaAdmissionUnavailableError(
+        `Missing PostgreSQL state admission. ${recovery}`,
+      );
+    }
+    return admitted;
+  });
   const tables = new Set(
     facts.catalog.filter((fact) => fact.kind === "table").map((fact) => fact.table),
   );
@@ -276,7 +285,9 @@ export const stateEngineSchema: StoreSchema = {
 export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: string): void {
   const facts = getPostgresPhysicalFacts(db);
   if (!facts) {
-    throw new Error(`Missing PostgreSQL state admission. ${recovery}`);
+    throw new PostgresSchemaAdmissionUnavailableError(
+      `Missing PostgreSQL state admission. ${recovery}`,
+    );
   }
   const fragment = runtime.fragments.find((item) => item.tables.includes(table));
   if (!fragment) {

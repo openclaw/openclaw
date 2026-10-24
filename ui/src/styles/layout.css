@@ -12,7 +12,6 @@
   text-transform: uppercase;
 }
 
-.chat-swarm__task-name,
 .usage-list-label {
   overflow: hidden;
   color: var(--text);
@@ -1363,31 +1362,31 @@ openclaw-settings-save-indicator:empty {
   margin-inline: -6px;
 }
 
-.sidebar-shell__body--scroll-top {
-  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-out));
-}
-
-.sidebar-shell__body--scroll-middle {
-  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-in), var(--sidebar-fade-out));
-}
-
-.sidebar-shell__body--scroll-bottom {
-  --sidebar-body-mask: linear-gradient(to bottom, var(--sidebar-fade-in));
-}
-
 .sidebar-shell__body--scroll-top,
 .sidebar-shell__body--scroll-middle,
 .sidebar-shell__body--scroll-bottom {
-  --sidebar-scroll-edge: right;
-
-  /* The second layer keeps the native scrollbar out of the content fade. */
+  /* Keep the scrollbar opaque; changing inherited mask tokens restyles every row. */
   mask:
-    var(--sidebar-body-mask),
-    linear-gradient(black, black) var(--sidebar-scroll-edge) / var(--scrollbar-size) 100% no-repeat;
+    none,
+    linear-gradient(black, black) right / var(--scrollbar-size) 100% no-repeat;
+}
+
+.sidebar-shell__body--scroll-top {
+  mask-image: linear-gradient(to bottom, var(--sidebar-fade-out)), linear-gradient(black, black);
+}
+
+.sidebar-shell__body--scroll-middle {
+  mask-image:
+    linear-gradient(to bottom, var(--sidebar-fade-in), var(--sidebar-fade-out)),
+    linear-gradient(black, black);
+}
+
+.sidebar-shell__body--scroll-bottom {
+  mask-image: linear-gradient(to bottom, var(--sidebar-fade-in)), linear-gradient(black, black);
 }
 
 :root[dir="rtl"] .sidebar-shell__body {
-  --sidebar-scroll-edge: left;
+  mask-position: 0% 50%;
 }
 
 .sidebar-recent-sessions__group {

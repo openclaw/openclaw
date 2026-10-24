@@ -8,7 +8,6 @@ import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
 } from "../state/openclaw-agent-db.js";
-import { registerTestWidgetContentKind } from "./widget-tool.content-kinds.test-support.js";
 import {
   asGatewayCaller,
   createBoardPutCaller,
@@ -29,25 +28,6 @@ const report: BoardReport = {
     { type: "links", items: [{ label: "Details", url: "https://example.com/details" }] },
   ],
 };
-
-it("preserves plugin source kinds named report alongside native report data", async () => {
-  registerTestWidgetContentKind("report");
-  const { mock } = createBoardPutCaller();
-  const tool = createTool();
-  const result = await tool.execute("registered-report", {
-    title: "Plugin report",
-    kind: "report",
-    widget_code: "diagram:ready",
-    pin: true,
-  });
-  expect(result.details).toMatchObject({ kind: "canvas", view: { id: expect.any(String) } });
-  expect(mock).toHaveBeenCalledWith(
-    "board.widget.put",
-    expect.objectContaining({
-      content: { kind: "registered", contentKind: "report", source: "diagram:ready" },
-    }),
-  );
-});
 
 it("pins, updates and reopens a report for a global agent without a document", async () => {
   const target = { sessionKey: "global", agentId: "research" };

@@ -33,6 +33,7 @@ import {
   withGatewayPersonalToolUser,
   withGatewayToolApprovalOwner,
   withGatewayToolCallerIdentity,
+  withGatewayToolOperatorContinuation,
   wrapToolWithGatewayCallerIdentity,
 } from "./gateway-caller-context.js";
 
@@ -79,6 +80,61 @@ function makeTool(): AnyAgentTool {
 }
 
 describe("gateway caller context wrapper", () => {
+  it.each(["same", "selected", "caller"] as const)(
+    "checks each selected source once per effect and observes %s source revocation",
+    async (revokedSource) => {
+      let permitted = true;
+      const refusal = new Error("access grant ended between effects");
+      const createSource = (profileId: string, revoke: boolean) => {
+        const check = vi.fn(() => {
+          if (revoke && !permitted) {
+            throw refusal;
+          }
+        });
+        return {
+          check,
+          authority: createAdmittedRunOperatorAuthority({
+            profileId,
+            scopes: ["operator.write"],
+            assertCurrent: check,
+          }),
+        };
+      };
+      const caller = createSource("caller", revokedSource !== "selected");
+      const selected =
+        revokedSource === "same" ? caller : createSource("selected", revokedSource === "selected");
+      await withCaller(
+        {
+          operationalRunInstance: runInstance("selected-source"),
+          operatorAuthority: caller.authority,
+          receiptAuthority: () => true,
+        },
+        () =>
+          withGatewayToolOperatorContinuation(
+            { operatorAuthority: selected.authority },
+            async () => {
+              const assertion = expectDefined(captureGatewayToolCallerAssertion(), "caller guard");
+              caller.check.mockClear();
+              selected.check.mockClear();
+              const effects: string[] = [];
+              const effect = (name: string) => {
+                assertion();
+                effects.push(name);
+              };
+              effect("first");
+              expect(caller.check).toHaveBeenCalledOnce();
+              expect(selected.check).toHaveBeenCalledOnce();
+
+              await Promise.resolve();
+              permitted = false;
+              expect(() => effect("second")).toThrow(refusal);
+              expect(effects).toEqual(["first"]);
+            },
+          ),
+      );
+    },
+  );
+
   it("keeps prepared caller authority live through personal selection without synchronous source reads", async () => {
     const refusal = new Error("requesting session authority was revoked");
     let active = true;

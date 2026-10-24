@@ -7,8 +7,9 @@ import {
 import { redactSensitiveText } from "../logging/redact.js";
 export {
   collectErrorGraphCandidates,
-  readErrorCauses,
   extractErrorCode,
+  formatErrorStackWithMessage,
+  readErrorCauses,
   readErrorName,
 } from "@openclaw/normalization-core/error-coercion";
 export { hasErrnoCode, isErrno, isMissingPathError } from "./errno.js";

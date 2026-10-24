@@ -33,6 +33,9 @@ function decodeSessionEntryCurrentFacts(
       ...(deviceFolder ? { deviceFolder } : {}),
       sessionId: value.sessionId,
       createdVia: value.createdVia,
+      clientCapabilities: Array.isArray(value.clientCapabilities)
+        ? value.clientCapabilities.filter((cap): cap is string => typeof cap === "string")
+        : undefined,
       spawnedBy: value.spawnedBy,
       spawnDepth: value.spawnDepth,
       completionOwnerSessionKey: value.completionOwnerSessionKey,
