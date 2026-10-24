@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { resolvePathPrefixSync } from "@openclaw/fs-safe/advanced";
+import { hasErrnoCode } from "../infra/errno.js";
 import { isPathInside } from "../infra/path-guards.js";
 
 function canonicalPath(filePath: string): string {
@@ -15,7 +16,7 @@ function findRepository(start: string) {
     try {
       stat = fs.lstatSync(gitFile);
     } catch (error) {
-      if (!["ENOENT", "ENOTDIR"].includes((error as NodeJS.ErrnoException).code ?? "")) {
+      if (!hasErrnoCode(error, "ENOENT") && !hasErrnoCode(error, "ENOTDIR")) {
         return undefined;
       }
     }
