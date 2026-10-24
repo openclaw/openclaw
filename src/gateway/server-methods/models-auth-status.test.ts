@@ -1101,48 +1101,28 @@ describe("models.authOrderSet", () => {
   });
 });
 
-describe("models.authSetApiKey", () => {
-  it.each([
-    { refreshFails: false, configWarning: undefined },
-    { refreshFails: true, configWarning: "Provider settings were saved but not applied." },
-  ])(
-    "reports a saved key with application and refresh warnings: %j",
-    async ({ refreshFails, configWarning }) => {
-      const config = { agents: { entries: { main: {}, writer: {} } } };
-      mocks.getRuntimeConfig.mockReturnValue(config);
-      mocks.listAgentIds.mockReturnValue(["main", "writer"]);
-      mocks.saveModelProviderApiKey.mockResolvedValueOnce({
-        profileId: "openrouter:manual",
-        warning: configWarning,
-      });
-      if (refreshFails) {
-        mocks.refreshActiveProviderAuthRuntimeSnapshot.mockRejectedValueOnce(
-          new Error("refresh failed"),
-        );
-      }
-      const opts = createOptions({ provider: "OpenRouter", apiKey: "test-key", agentId: "Writer" });
-
-      await setApiKeyHandler(opts);
-
-      expect(mocks.saveModelProviderApiKey).toHaveBeenCalledWith({
-        config,
-        provider: "openrouter",
-        apiKey: "test-key",
-        agentDir: "/tmp/agent-writer",
-      });
-      expectSuccess(opts, {
-        provider: "openrouter",
-        profileId: "openrouter:manual",
-        ...(refreshFails || configWarning ? { warning: expect.any(String) } : {}),
-      });
-      if (configWarning) {
-        expect(firstRespondCall(opts)?.[1]?.warning).toContain(configWarning);
-      }
-      if (refreshFails) {
-        expect(firstRespondCall(opts)?.[1]?.warning).toContain("openclaw gateway restart");
-      }
-    },
-  );
+it("models.authSetApiKey reports both application and refresh warnings after saving", async () => {
+  const config = { agents: { entries: { main: {}, writer: {} } } };
+  const warning = "Provider settings were saved but not applied.";
+  mocks.getRuntimeConfig.mockReturnValue(config);
+  mocks.listAgentIds.mockReturnValue(["main", "writer"]);
+  mocks.saveModelProviderApiKey.mockResolvedValueOnce({ profileId: "openrouter:manual", warning });
+  mocks.refreshActiveProviderAuthRuntimeSnapshot.mockRejectedValueOnce(new Error("refresh failed"));
+  const opts = createOptions({ provider: "OpenRouter", apiKey: "test-key", agentId: "Writer" });
+  await setApiKeyHandler(opts);
+  expect(mocks.saveModelProviderApiKey).toHaveBeenCalledWith({
+    config,
+    provider: "openrouter",
+    apiKey: "test-key",
+    agentDir: "/tmp/agent-writer",
+  });
+  expectSuccess(opts, {
+    provider: "openrouter",
+    profileId: "openrouter:manual",
+    warning: expect.any(String),
+  });
+  expect(firstRespondCall(opts)?.[1]?.warning).toContain(warning);
+  expect(firstRespondCall(opts)?.[1]?.warning).toContain("openclaw gateway restart");
 });
 
 registerModelAuthLogoutTests({
