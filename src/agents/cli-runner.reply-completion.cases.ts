@@ -1,5 +1,7 @@
+import fs from "node:fs";
+import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it, onTestFinished } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import type { SessionEntry } from "../config/sessions.js";
@@ -45,6 +47,141 @@ export function registerCliReplyCompletionTests({
   ) => Partial<RunCliAgentParams>;
   readTranscriptMessages: (sessionTarget: SessionTranscriptRuntimeTarget) => Promise<unknown[]>;
 }) {
+  it("recognizes a WhatsApp LID media delivery before NO_REPLY", async () => {
+    const { createChannelHandler } = await import("../infra/outbound/deliver-channel.js");
+    const { annotateSourceDelivery } =
+      await import("../infra/outbound/message-action-result-acceptance.js");
+    const { buildGatewayDeliveryPayload } =
+      await import("../gateway/server-methods/message-operation-result.js");
+    const channelRuntimeContext = await import("../infra/channel-runtime-context.js");
+    const { getActivePluginRegistry, setActivePluginRegistry } =
+      await import("../plugins/runtime.js");
+    const { createTestRegistry } = await import("../test-utils/channel-plugins.js");
+    const { whatsappPlugin } = await import("../../extensions/whatsapp/channel-plugin-api.js");
+    const to = "+15551234567";
+    const sessionKey = `agent:main:whatsapp:direct:${to}`;
+    const { dir } = createSessionFixture({ sessionKey });
+    const mediaUrl = path.join(dir, "report.pdf");
+    fs.writeFileSync(mediaUrl, "%PDF-1.4\nsynthetic report\n%%EOF");
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { authDir: path.join(dir, "auth"), allowFrom: [to] } },
+    };
+    const controller = {
+      getActiveListener: () => ({
+        sendComposingTo: async () => {},
+        sendMessage: async () => ({
+          kind: "media",
+          messageId: "wa-lid-reply",
+          keys: [{ id: "wa-lid-reply", remoteJid: "987654321@lid", fromMe: true }],
+          providerAccepted: true,
+        }),
+      }),
+      getCurrentSock: () => ({
+        signalRepository: {
+          lidMapping: {
+            getPNForLID: async (jid: string) =>
+              jid === "987654321@lid" ? "15551234567@s.whatsapp.net" : null,
+          },
+        },
+      }),
+    };
+    const runtimeContext = vi
+      .spyOn(channelRuntimeContext, "getChannelRuntimeContext")
+      .mockImplementation(({ channelId, accountId }) =>
+        channelId === "whatsapp" && accountId === "default" ? controller : undefined,
+      );
+    const previousRegistry = getActivePluginRegistry();
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "whatsapp", source: "test", plugin: whatsappPlugin }]),
+    );
+    onTestFinished(() => {
+      runtimeContext.mockRestore();
+      setActivePluginRegistry(previousRegistry ?? createTestRegistry([]));
+    });
+    const handler = await createChannelHandler({
+      cfg,
+      channel: "whatsapp",
+      to,
+      mediaAccess: { localRoots: [dir] },
+    });
+    const toolContext = {
+      currentChannelProvider: "whatsapp",
+      currentChannelId: to,
+      currentMessagingTarget: to,
+      currentChatType: "direct" as const,
+    };
+    const args = { action: "send", message: "Report", media: mediaUrl };
+    const context = createContext({
+      sessionKey,
+      runId: "whatsapp-lid-source-reply",
+      config: cfg,
+      messageChannel: "whatsapp",
+      currentChannelId: to,
+      sourceReplyDeliveryMode: "automatic",
+      terminalReplyExpectation: "required",
+      trigger: "user",
+    });
+    context.backendResolved.config.output = "jsonl";
+    let deliveredPayload: unknown;
+    supervisorSpawnMock.mockImplementationOnce(async (input) => {
+      const delivery = await handler.sendMedia(args.message, mediaUrl);
+      const result = await annotateSourceDelivery(
+        {
+          kind: "send",
+          channel: "whatsapp",
+          action: "send",
+          handledBy: "core",
+          to,
+          payload: {
+            channel: "whatsapp",
+            to,
+            result: buildGatewayDeliveryPayload({
+              runId: "whatsapp-lid-source-reply",
+              channel: "whatsapp",
+              result: { ...delivery },
+            }),
+          },
+          dryRun: false,
+        },
+        {
+          cfg,
+          params: { ...args, target: to },
+          channel: "whatsapp",
+          channelPlugin: whatsappPlugin,
+          mediaAccess: { localRoots: [dir] },
+          dryRun: false,
+          input: {
+            cfg,
+            action: "send",
+            params: args,
+            sessionKey,
+            messageActionAuthorization: { toolContext },
+          },
+        },
+        false,
+      );
+      deliveredPayload = result.payload;
+      completeToolCall(
+        {
+          captureKey: input.env?.OPENCLAW_MCP_CLI_CAPTURE_KEY ?? "",
+          toolName: "message",
+          args,
+        },
+        { details: result.payload },
+      );
+      input.onStdout?.(`${JSON.stringify({ type: "result", result: SILENT_REPLY_TOKEN })}\n`);
+      return makeManagedRun();
+    });
+
+    const result = await run(context);
+
+    expect(deliveredPayload).toMatchObject({ sourceReplyRoute: "current-source" });
+    expect(result.didDeliverSourceReplyViaMessageTool).toBe(true);
+    expect(result.meta.error).toBeUndefined();
+    expect(result.meta.terminalReply).toEqual({ disposition: "silent" });
+    expect(result.payloads).toBeUndefined();
+  });
+
   it.each([
     { raw: "NO_REPLY\nNO_REPLY", visible: "NO_REPLY" },
     { raw: "NO_REPLY\nVisible answer", visible: "Visible answer" },
