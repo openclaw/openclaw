@@ -218,7 +218,7 @@ it("spawns text and structured collectors with explicit collection guidance and 
   }
   await waitsStarted.promise;
   // These three collectors start below maxConcurrent and race; only overflow queues FIFO (docs/tools/swarm.md).
-  expect(modelStructuredCalls.toSorted()).toEqual([1, 3]);
+  expect(modelStructuredCalls.toSorted((a, b) => a - b)).toEqual([1, 3]);
 
   const pending = new Set(runIds);
   const completionOrder: string[] = [];
