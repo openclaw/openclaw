@@ -1,7 +1,7 @@
 // Run only on an authorized benchmark host; prepare and measure in separate scopes.
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { createCipheriv } from "node:crypto";
+import { createCipheriv, createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { parseArgs } from "node:util";
@@ -27,12 +27,21 @@ RSS and Git trace2 children, then verifies retained objects.
 Use --policy baseline or --policy candidate (default) at prepare time to compare
 the existing owner with and without the managed project repository policy.
 Use a fresh fixture for each run; measurement consumes its fragmented layout.
+Dependency-free native Git MIDX probe (Node's built-in TypeScript support):
+  node scripts/perf/managed-git-maintenance-measure.ts --mode prepare-midx --packs 32 --blobs-per-pack 65536 --state-dir <new-directory>
+  node scripts/perf/managed-git-maintenance-measure.ts --mode measure-midx --state-dir <prepared-directory>
+This fixture contains 2,097,152 unique 16-byte blobs (32 MiB payload), written in
+sequential packs. The probe times the old full MIDX write and repeated cat-file
+lookups with/without that optional cache; it does not invoke the maintenance owner.
 The caller supplies the quiet-slot lock, swapped CPU placement, production guard,
 MemoryMax, and low CPU/IO priority. RSS is not an aggregate process-tree bound.`);
   process.exit(0);
 }
 assert(values["state-dir"], "--state-dir must name a task-owned synthetic fixture");
-assert(["prepare", "measure", "owner"].includes(values.mode), "invalid --mode");
+assert(
+  ["prepare", "measure", "owner", "prepare-midx", "measure-midx"].includes(values.mode),
+  "invalid --mode",
+);
 assert(["baseline", "candidate"].includes(values.policy), "invalid --policy");
 assert.equal(process.platform, "linux", "This benchmark requires Linux and GNU time");
 const root = path.resolve(values["state-dir"]);
@@ -42,7 +51,8 @@ const trace = path.join(root, "maintenance.trace.jsonl");
 const summary = path.join(root, "maintenance.json");
 const packCount = Number(values.packs);
 const blobsPerPack = Number(values["blobs-per-pack"]);
-const blobBytes = 32 * 1024;
+const nativeMidx = values.mode.endsWith("-midx");
+const blobBytes = nativeMidx ? 16 : 32 * 1024;
 const payloadBytes = packCount * blobsPerPack * blobBytes;
 assert(Number.isSafeInteger(packCount) && packCount >= 16, "--packs must be an integer >=16");
 assert(
@@ -94,13 +104,13 @@ async function checkDirty() {
   assert(Number.isFinite(dirtyKiB) && dirtyKiB < 2 * 1024 * 1024, "Host Dirty exceeds 2 GiB");
 }
 
-if (values.mode === "prepare") {
+if (values.mode === "prepare" || values.mode === "prepare-midx") {
   await checkDirty();
   await fs.mkdir(root); // Refuse existing directories rather than overwrite another fixture.
   for (const directory of [repo, process.env.HOME!, process.env.TMPDIR!]) {
     await fs.mkdir(directory, { recursive: true });
   }
-  await git(["init", "--initial-branch=main"]);
+  await git(["init", "--initial-branch=main", ...(nativeMidx ? ["--object-format=sha1"] : [])]);
   for (const [key, value] of [
     ["gc.auto", "0"],
     ["maintenance.auto", "false"],
@@ -108,12 +118,13 @@ if (values.mode === "prepare") {
   ]) {
     await git(["config", "--local", key!, value!]);
   }
-  if (values.policy === "candidate") {
+  if (!nativeMidx && values.policy === "candidate") {
     const { configureProjectCheckoutMaintenance } =
       await import("../../src/projects/project-clone-runtime.js");
     await configureProjectCheckoutMaintenance(repo, { env: process.env });
   }
   const objects: string[] = [];
+  const sampleStride = Math.max(1, Math.floor((packCount * blobsPerPack) / 4096));
   let parent: string | undefined;
   for (let index = 0; index < packCount; index++) {
     await checkDirty();
@@ -123,14 +134,22 @@ if (values.mode === "prepare") {
       const nonce = Buffer.alloc(16);
       nonce.writeUInt32LE(index, 0);
       nonce.writeUInt32LE(blob, 4);
-      const bytes = createCipheriv("aes-256-ctr", Buffer.alloc(32), nonce).update(
-        Buffer.alloc(blobBytes),
-      );
+      const bytes = nativeMidx
+        ? nonce
+        : createCipheriv("aes-256-ctr", Buffer.alloc(32), nonce).update(Buffer.alloc(blobBytes));
       commands.push(
-        Buffer.from(`blob\nmark :${blob + 1}\ndata ${blobBytes}\n`),
+        Buffer.from(`blob\n${nativeMidx ? "" : `mark :${blob + 1}\n`}data ${blobBytes}\n`),
         bytes,
         Buffer.from("\n"),
       );
+      if (nativeMidx && (index * blobsPerPack + blob) % sampleStride === 0) {
+        objects.push(createHash("sha1").update(`blob ${blobBytes}\0`).update(bytes).digest("hex"));
+      }
+    }
+    if (nativeMidx) {
+      commands.push(Buffer.from("done\n"));
+      await git(["fast-import", "--quiet", "--done"], Buffer.concat(commands));
+      continue;
     }
     const message = `synthetic pack ${index}`;
     commands.push(
@@ -148,23 +167,30 @@ if (values.mode === "prepare") {
     objects.push(...(await git(["ls-tree", "-r", "--format=%(objectname)", "HEAD"])).split("\n"));
   }
   assert.equal(await packs(), packCount);
-  const { insertRegistryWorktree } = await import("../../src/agents/worktrees/registry.js");
-  const { closeOpenClawStateDatabaseAsync } = await import("../../src/state/openclaw-state-db.js");
-  try {
-    await insertRegistryWorktree(process.env, {
-      id: "synthetic-maintenance",
-      name: "synthetic-maintenance",
-      repoFingerprint: "synthetic-maintenance",
-      repoRoot: repo,
-      path: repo,
-      branch: "main",
-      baseRef: "main",
-      ownerKind: "manual",
-      createdAt: 1_700_000_000_000,
-      lastActiveAt: 1_700_000_000_000,
-    });
-  } finally {
-    await closeOpenClawStateDatabaseAsync();
+  if (nativeMidx) {
+    const inventory = await git(["count-objects", "-v"]);
+    assert.equal(Number(/^in-pack: (\d+)$/m.exec(inventory)?.[1]), packCount * blobsPerPack);
+  }
+  if (!nativeMidx) {
+    const { insertRegistryWorktree } = await import("../../src/agents/worktrees/registry.js");
+    const { closeOpenClawStateDatabaseAsync } =
+      await import("../../src/state/openclaw-state-db.js");
+    try {
+      await insertRegistryWorktree(process.env, {
+        id: "synthetic-maintenance",
+        name: "synthetic-maintenance",
+        repoFingerprint: "synthetic-maintenance",
+        repoRoot: repo,
+        path: repo,
+        branch: "main",
+        baseRef: "main",
+        ownerKind: "manual",
+        createdAt: 1_700_000_000_000,
+        lastActiveAt: 1_700_000_000_000,
+      });
+    } finally {
+      await closeOpenClawStateDatabaseAsync();
+    }
   }
   const fixture = {
     version: 1,
@@ -172,10 +198,11 @@ if (values.mode === "prepare") {
     packs: packCount,
     blobBytes,
     payloadBytes,
+    ...(nativeMidx ? { nativeMidx: true, objectCount: packCount * blobsPerPack } : {}),
     objects,
   };
   await fs.writeFile(marker, `${JSON.stringify(fixture)}\n`);
-  console.log(JSON.stringify({ mode: "prepare", ...fixture, objects: objects.length }));
+  console.log(JSON.stringify({ mode: values.mode, ...fixture, objects: objects.length }));
 } else {
   const fixture: {
     version: number;
@@ -184,10 +211,83 @@ if (values.mode === "prepare") {
     blobBytes: number;
     payloadBytes: number;
     objects: string[];
+    nativeMidx?: boolean;
+    objectCount?: number;
   } = JSON.parse(await fs.readFile(marker, "utf8"));
   assert.equal(fixture.version, 1);
   assert.equal(await packs(), fixture.packs, "Use a fresh prepared fixture for each run");
-  if (values.mode === "owner") {
+  if (values.mode === "measure-midx") {
+    assert(fixture.nativeMidx, "Use a prepare-midx fixture");
+    await checkDirty();
+    const packDirectory = path.join(repo, ".git", "objects", "pack");
+    const indexPath = path.join(packDirectory, "multi-pack-index");
+    const indexNames = (await fs.readdir(packDirectory)).filter((name) => name.endsWith(".idx"));
+    const timingPath = path.join(root, "midx.time.txt");
+    await fs.rm(indexPath, { force: true });
+    const started = performance.now();
+    await run(
+      "/usr/bin/time",
+      ["-v", "-o", timingPath, "git", "-C", repo, "multi-pack-index", "write", "--stdin-packs"],
+      `${indexNames.join("\n")}\n`,
+    );
+    const elapsedMs = performance.now() - started;
+    const timing = await fs.readFile(timingPath, "utf8");
+    const peakProcessRssKiB = Number(
+      /Maximum resident set size \(kbytes\):\s+(\d+)/.exec(timing)?.[1],
+    );
+    assert(peakProcessRssKiB > 0, "GNU time did not report peak RSS");
+    const savedIndexPath = path.join(root, "saved-multi-pack-index");
+    const lookups: Array<{ midx: boolean; elapsedMs: number; objects: number }> = [];
+    // Mix packs deterministically rather than giving ordinary indexes pack-local reads.
+    const lookupObjects = fixture.objects
+      .map((oid) => ({ oid, order: createHash("sha256").update(oid).digest("hex") }))
+      .toSorted((a, b) => a.order.localeCompare(b.order))
+      .map(({ oid }) => oid);
+    const input = `${lookupObjects.join("\n")}\n`;
+    // Both modes are warmed before the fixed ABBA order; every response is checked.
+    const lookup = async (midx: boolean) => {
+      const start = performance.now();
+      const output = await git(
+        ["cat-file", "--batch-check=%(objectname) %(objecttype) %(objectsize)"],
+        input,
+      );
+      const duration = performance.now() - start;
+      assert.equal(
+        output,
+        lookupObjects.map((oid) => `${oid} blob ${fixture.blobBytes}`).join("\n"),
+      );
+      return { midx, elapsedMs: duration, objects: fixture.objects.length };
+    };
+    await lookup(true);
+    await fs.rename(indexPath, savedIndexPath);
+    await lookup(false);
+    let hasIndex = false;
+    for (const midx of [true, false, false, true, true, false, false, true]) {
+      if (midx !== hasIndex) {
+        await fs.rename(midx ? savedIndexPath : indexPath, midx ? indexPath : savedIndexPath);
+        hasIndex = midx;
+      }
+      lookups.push(await lookup(midx));
+    }
+    console.log(
+      JSON.stringify(
+        {
+          mode: values.mode,
+          objectCount: fixture.objectCount,
+          packs: fixture.packs,
+          payloadBytes: fixture.payloadBytes,
+          elapsedMs,
+          peakProcessRssKiB,
+          userSeconds: Number(/User time \(seconds\):\s+([\d.]+)/.exec(timing)?.[1]),
+          systemSeconds: Number(/System time \(seconds\):\s+([\d.]+)/.exec(timing)?.[1]),
+          midxBytes: (await fs.stat(indexPath)).size,
+          lookups,
+        },
+        null,
+        2,
+      ),
+    );
+  } else if (values.mode === "owner") {
     const { createWorktreeGitMaintenance } =
       await import("../../src/agents/worktrees/git-maintenance.js");
     const { WorktreeGcProgress } = await import("../../src/agents/worktrees/gc-progress.js");
