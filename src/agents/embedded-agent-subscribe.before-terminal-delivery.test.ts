@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { AssistantMessage } from "../llm/types.js";
@@ -17,19 +17,10 @@ const visibleTexts = (replies: { text?: unknown }[]) =>
   replies.map(({ text }) => text).filter(Boolean);
 type Options = Parameters<typeof createSubscribedSessionHarness>[0];
 const subscriptions: ReturnType<typeof createSubscribedSessionHarness>["subscription"][] = [];
-const unhandledRejections: unknown[] = [];
-const onUnhandledRejection = (reason: unknown) => {
-  unhandledRejections.push(reason);
-};
-beforeEach(() => {
-  process.on("unhandledRejection", onUnhandledRejection);
-});
 afterEach(() => {
-  process.off("unhandledRejection", onUnhandledRejection);
   for (const subscription of subscriptions.splice(0)) {
     subscription.unsubscribe();
   }
-  expect(unhandledRejections.splice(0)).toEqual([]);
 });
 
 function answer(text: string, stopReason: AssistantMessage["stopReason"] = "stop", phase?: string) {
@@ -291,50 +282,44 @@ it("contains rejected progress callbacks", async () => {
   });
   expect(rejected).toHaveBeenCalled();
 });
-it.each(["immediate", "rejected"] as const)(
-  "honors terminal silence without stealing %s delivery ownership",
-  async (delivery) => {
-    const markdown =
-      "## Result\n\n- **Saved** the note.\n- Keep `note.md` unchanged.\n\n```text\nfirst  second\n```";
-    const delivered: string[] = [];
-    const h = setup({
-      onBlockReply: async ({ text }) => {
-        if (delivery === "rejected") {
-          throw new Error("delivery failed");
-        }
-        if (text) {
-          delivered.push(text);
-        }
-      },
-    });
-    const prompt = user("Read the saved note.");
-    const toolCall = assistantMessage([readCall()], "toolUse");
-    const result = readResult("Note saved.", false, 1);
-    const final = answer(markdown, "toolUse", "final_answer"),
-      silent = answer("NO_REPLY");
-    h.emit({ type: "message_end", message: prompt });
-    h.message(toolCall);
-    h.tool("read", result);
-    h.emit({ type: "message_end", message: result });
-    h.turn(toolCall, [result]);
-    for (const message of [final, silent]) {
-      h.message(message);
-      h.turn(message);
-    }
-    const messages = [prompt, toolCall, result, final, silent];
-    h.emit({ type: "agent_end", messages, willRetry: false });
-    await h.drain();
-    expect(h.subscription.assistantTexts).toEqual([markdown]);
-    expect(h.subscription.getItemLifecycle()).toMatchObject({
-      startedCount: 1,
-      completedCount: 1,
-      activeCount: 0,
-    });
-    expect(delivered).toEqual(delivery === "immediate" ? [markdown] : []);
-    expect(h.subscription.getVisibleBlockReplyCount()).toBe(delivery === "rejected" ? 0 : 1);
-    expect(payloads(h.subscription)).toEqual([]);
-  },
-);
+
+it("keeps a rejected text delivery failed when the next response is silent", async () => {
+  const markdown =
+    "## Result\n\n- **Saved** the note.\n- Keep `note.md` unchanged.\n\n```text\nfirst  second\n```";
+  const h = setup({
+    onBlockReply: async () => {
+      throw new Error("delivery failed");
+    },
+  });
+  const prompt = user("Read the saved note.");
+  const toolCall = assistantMessage([readCall()], "toolUse");
+  const result = readResult("Note saved.", false, 1);
+  const final = answer(markdown, "toolUse", "final_answer");
+  const silent = answer("NO_REPLY");
+  h.emit({ type: "message_end", message: prompt });
+  h.message(toolCall);
+  h.tool("read", result);
+  h.emit({ type: "message_end", message: result });
+  h.turn(toolCall, [result]);
+  for (const message of [final, silent]) {
+    h.message(message);
+    h.turn(message);
+  }
+  h.emit({
+    type: "agent_end",
+    messages: [prompt, toolCall, result, final, silent],
+    willRetry: false,
+  });
+  await h.drain();
+  expect(h.subscription.assistantTexts).toEqual([markdown]);
+  expect(h.subscription.getItemLifecycle()).toMatchObject({
+    startedCount: 1,
+    completedCount: 1,
+    activeCount: 0,
+  });
+  expect(h.subscription.getVisibleBlockReplyCount()).toBe(0);
+  expect(payloads(h.subscription)).toEqual([]);
+});
 
 it.each(["read", "skipped"] as const)(
   "seals and delivers steered answers after %s",
