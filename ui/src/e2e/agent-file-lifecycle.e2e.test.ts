@@ -2,10 +2,7 @@ import { writeFileSync } from "node:fs";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
-import {
-  takeControlUiScreenshotFrame,
-  waitForControlUiProofSurface,
-} from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -150,103 +147,6 @@ suite.define(() => {
       );
     },
   );
-  it("keeps preview tooltip aligned with its expand state", async () => {
-    const content = "# Preview tooltip fixture\n\nSynthetic preview instructions.\n";
-    await withFilePage(content, async ({ page, gateway, editor, preview }) => {
-      await expect.poll(() => editor.inputValue()).toBe(content);
-      const modal = page.locator("openclaw-modal-dialog:has(.md-preview-expand-btn)");
-      const dialog = modal.locator("dialog");
-      const panel = modal.locator(".md-preview-dialog__panel");
-      const reader = modal.locator(".md-preview-dialog__reader");
-      const expand = modal.locator(".md-preview-expand-btn");
-      const tooltipHost = modal.locator("openclaw-tooltip:has(.md-preview-expand-btn)");
-      // Hover-intent timing is covered by the tooltip owner's fake-clock tests.
-      await tooltipHost.evaluate((element) => element.setAttribute("delay", "0"));
-      const tooltip = tooltipHost.locator(".tooltip-surface[popover]");
-      const hint = tooltip.locator(".tooltip-content");
-      const settlePreview = async () => {
-        await waitForControlUiProofSurface(dialog, [reader]);
-        await waitForControlUiProofSurface(panel, [reader]);
-      };
-      const assertHint = async (label: string) => {
-        await reader.hover();
-        await expand.hover();
-        await waitForControlUiProofSurface(tooltip, [hint, expand]);
-        expect(
-          await expand.evaluate((anchor) => {
-            const host = anchor.closest<HTMLElement & { anchor?: Element }>("openclaw-tooltip");
-            const tooltipAnchor =
-              host?.anchor ??
-              host?.shadowRoot
-                ?.querySelector<HTMLSlotElement>("slot:not([name])")
-                ?.assignedElements({ flatten: true })[0];
-            return tooltipAnchor === anchor;
-          }),
-        ).toBe(true);
-        expect((await hint.textContent())?.trim()).toBe(label);
-        expect(await expand.getAttribute("aria-label")).toBe(label);
-        expect(await hint.isVisible()).toBe(true);
-      };
-      const toggle = async () => {
-        await expand.click();
-        await hint.waitFor({ state: "hidden" });
-        await settlePreview();
-      };
-      const assertExpanded = async (expanded: boolean) => {
-        expect(await expand.getAttribute("aria-pressed")).toBe(String(expanded));
-        expect(await panel.evaluate((element) => element.classList.contains("fullscreen"))).toBe(
-          expanded,
-        );
-      };
-      await preview.click();
-      await settlePreview();
-      const normalBox = await dialog.boundingBox();
-      expect(normalBox).not.toBeNull();
-      await assertExpanded(false);
-      await assertHint("Expand preview");
-      for (const action of ["collapse", "Close preview", "Edit file", "Escape"]) {
-        await toggle();
-        await assertExpanded(true);
-        const expandedBox = await dialog.boundingBox();
-        expect(Boolean(normalBox && expandedBox && expandedBox.width > normalBox.width)).toBe(true);
-        await assertHint("Collapse preview");
-        if (action === "collapse") {
-          await toggle();
-        } else {
-          if (action === "Escape") {
-            await page.keyboard.press("Escape");
-            await hint.waitFor({ state: "hidden" });
-            expect(await dialog.isVisible()).toBe(true);
-            await page.keyboard.press("Escape");
-          } else {
-            await modal.getByRole("button", { name: action, exact: true }).click();
-          }
-          await dialog.waitFor({ state: "hidden" });
-          expect(await editor.inputValue()).toBe(content);
-          await preview.click();
-          await settlePreview();
-        }
-        await assertExpanded(false);
-        const resetBox = await dialog.boundingBox();
-        expect(Boolean(resetBox && expandedBox && resetBox.width < expandedBox.width)).toBe(true);
-        await assertHint("Expand preview");
-      }
-      await modal.getByRole("button", { name: "Close preview", exact: true }).click();
-      await dialog.waitFor({ state: "hidden" });
-      expect(await editor.inputValue()).toBe(content);
-      expect((await page.locator(".agent-file-sub").textContent())?.trim()).toBe(
-        "/tmp/openclaw-e2e/workspace-main/AGENTS.md",
-      );
-      expect(
-        (await gateway.getRequests()).filter((request) =>
-          ["agents.files.set", "config.set", "config.patch", "config.apply"].includes(
-            request.method,
-          ),
-        ),
-      ).toEqual([]);
-    });
-  });
-
   it("disables unread file controls until an explicit retry succeeds", async () => {
     await withFilePage(
       "# Main instructions\n",

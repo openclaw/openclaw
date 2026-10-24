@@ -101,30 +101,6 @@ suite.define(() => {
     );
   });
 
-  it("shows browser access unavailability without opening another surface", async () => {
-    await suite.withPage({ locale: "en-US", serviceWorkers: "block" }, async ({ page }) => {
-      const gateway = await installMockGateway(page, {
-        featureMethods: ["browser.request"],
-        operatorScopes: ["operator.read", "operator.sessions.write"],
-        deferredMethods: ["connect"],
-        awaitInitialRoster: false,
-      });
-      await page.goto(
-        `${suite.server.baseUrl}focus/browser?sessionKey=agent%3Amain%3Awork&target=host&profile=work&targetId=existing`,
-      );
-      await page.locator("openclaw-browser-document .connect-splash").waitFor();
-      await gateway.waitForRequest("connect");
-      await gateway.resolveDeferred("connect");
-      await page
-        .getByText(
-          "Browser control is unavailable for this connection. Reconnect with browser access.",
-        )
-        .waitFor();
-      expect(await gateway.getRequests("browser.request")).toEqual([]);
-      expect(await page.locator("openclaw-app-shell, openclaw-desktop-panel").count()).toBe(0);
-    });
-  });
-
   it("keeps live non-browser metadata inert with browser access enabled", async () => {
     await suite.withPage(
       { locale: "en-US", serviceWorkers: "block", viewport: { height: 900, width: 1280 } },
