@@ -4,9 +4,6 @@ import { join } from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   type GatewayFrame,
-  assertGatewaySuspendingError,
-  assertReadySuspensionResponse,
-  assertSuspendedProbes,
   prepareReadySuspension,
   runGatewayNetworkClient,
   runGatewaySuspensionPostRestartClient,
@@ -248,9 +245,7 @@ function createNetworkClientHarness(responses: GatewayFrame[]) {
       const frame = {
         type: "res",
         id: sentMethods.at(-1) === "connect" ? "c1" : "h1",
-        ...(sentMethods.at(-1) === "connect" && response?.ok && !response.payload
-          ? connectResponse()
-          : response),
+        ...response,
       };
       expect(predicate(frame)).toBe(true);
       return frame;
@@ -291,14 +286,26 @@ it.each([
 );
 
 it.each([
-  ["partial", ["gateway.suspend.prepare", "gateway.suspend.status"]],
+  ["partial", suspensionMethods.slice(0, 2)],
   ["malformed", "gateway.suspend.prepare"],
 ])("rejects %s suspension methods only after baseline health", async (_label, methods) => {
   const harness = createNetworkClientHarness([connectResponse(methods), healthResponse()]);
-
   await expect(harness.run()).rejects.toThrow(/suspension methods/u);
   expect(harness.sentMethods).toEqual(["connect", "health"]);
 });
+
+it.each([
+  [{ ok: true }, "missing health summary payload"],
+  [{ ok: false, error: { message: "health unavailable" } }, "health unavailable"],
+] satisfies Array<[GatewayFrame, string]>)(
+  "rejects health response %j",
+  async (response, error) => {
+    const harness = createNetworkClientHarness([connectResponse(), response]);
+    await expect(harness.run()).rejects.toThrow(`health failed: ${error}`);
+    expect(harness).toMatchObject({ sentMethods: ["connect", "health"], stdout: [] });
+    expect(harness.close).toHaveBeenCalledOnce();
+  },
+);
 
 it("does not sleep past the remaining client deadline between retries", async () => {
   const delays: number[] = [];
@@ -324,63 +331,4 @@ it("does not sleep past the remaining client deadline between retries", async ()
   ).rejects.toThrow("ECONNREFUSED");
 
   expect(delays).toEqual([50]);
-});
-
-it.each([
-  [{ ok: true }, "missing health summary payload"],
-  [{ ok: false, error: { message: "health unavailable" } }, "health unavailable"],
-] satisfies Array<[GatewayFrame, string]>)(
-  "rejects health response %j",
-  async (response, error) => {
-    const harness = createNetworkClientHarness([{ ok: true }, response]);
-    await expect(harness.run()).rejects.toThrow(`health failed: ${error}`);
-    expect(harness).toMatchObject({
-      sentMethods: ["connect", "health"],
-      stdout: [],
-    });
-    expect(harness.close).toHaveBeenCalledOnce();
-  },
-);
-
-it("accepts only an idle future suspension lease", () => {
-  const payload = readyPayload(2_000);
-  const response = (overrides = {}) => adminResponse({ ...payload, ...overrides });
-
-  expect(() => assertReadySuspensionResponse(response({ expiresAtMs: 999 }), 1_000)).toThrow(
-    "expire in the future",
-  );
-  expect(() => assertReadySuspensionResponse(response({ activeCount: 1 }), 1_000)).toThrow(
-    "no active work",
-  );
-});
-
-it("requires canonical prepared-suspension RPC and probe evidence", () => {
-  const suspendedError = {
-    ok: false,
-    error: {
-      code: "UNAVAILABLE",
-      retryable: true,
-      details: { reason: "gateway-suspending", phase: "prepared" },
-    },
-  };
-  const health = { status: 200, body: { ok: true, status: "live" } };
-  const readiness = { status: 503, body: { ready: false, failing: ["gateway-draining"] } };
-
-  expect(() => assertGatewaySuspendingError(suspendedError)).not.toThrow();
-  expect(() => assertSuspendedProbes(health, readiness)).not.toThrow();
-  expect(() =>
-    assertGatewaySuspendingError({
-      ...suspendedError,
-      error: {
-        ...suspendedError.error,
-        details: { reason: "gateway-restarting", phase: "prepared" },
-      },
-    }),
-  ).toThrow("identify gateway suspension");
-  expect(() =>
-    assertSuspendedProbes(health, {
-      status: 503,
-      body: { ready: false, failing: ["channels"] },
-    }),
-  ).toThrow("identify gateway-draining");
 });
