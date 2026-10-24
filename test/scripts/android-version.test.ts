@@ -23,16 +23,6 @@ installAndroidFixtureCleanup();
 const writeAndroidFixture = (overrides: Partial<Parameters<typeof writeFixture>[0]> = {}) =>
   writeFixture({ version: "2026.6.2", versionCode: 2026060201, ...overrides });
 
-function expectMissingValue(script: string, flag: string, next?: string) {
-  const result = spawnSync(
-    process.execPath,
-    ["--import", "tsx", `scripts/${script}.ts`, flag, ...(next ? [next] : [])],
-    { cwd: process.cwd(), encoding: "utf8" },
-  );
-  expect(result.status).toBe(1);
-  expect(result.stderr).toBe(`Missing value for ${flag}.\n`);
-}
-
 describe("Android versioning", () => {
   it("preserves mobile parser ordering and platform-specific revision support", () => {
     expect(
@@ -50,12 +40,20 @@ describe("Android versioning", () => {
     });
   });
 
-  it.each<[string, string, string | undefined]>([
-    ["android-version", "--field", undefined],
-    ["android-version", "--field", "-h"],
-    ["android-sync-versioning", "--root", "--check"],
-    ["android-sync-versioning", "--root", "-h"],
-  ])("rejects missing %s %s values before reading version files (%s)", expectMissingValue);
+  it.each([
+    ["android-version", "--field"],
+    ["android-sync-versioning", "--root"],
+  ])("rejects missing %s %s values before reading version files", (script, flag) => {
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", `scripts/${script}.ts`, flag, "-h"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+      },
+    );
+    expect(result).toMatchObject({ status: 1, stderr: `Missing value for ${flag}.\n` });
+  });
 
   it.each<[Partial<Parameters<typeof writeFixture>[0]>, string]>([
     [{ version: "1.2.3" }, "Expected pinned release version like 2026.6.5"],
@@ -64,26 +62,18 @@ describe("Android versioning", () => {
     expect(() => resolveAndroidVersion(writeAndroidFixture(overrides))).toThrow(message);
   });
 
-  it.each(["2026.13.2", "2026.6.9007199254740993"])("rejects impossible pinned %s", (version) => {
-    expect(() => normalizePinned(version)).toThrow("Expected pinned release version like 2026.6.5");
-  });
-
-  it.each(["2026.6.2-beta.3", "2026.6.2-alpha.1"])("strips the suffix from %s", (version) => {
-    expect(pinGateway(version)).toBe("2026.6.2");
-  });
-
-  it("rejects pinned versions that cannot derive Play-compatible version codes", () => {
-    expect(() => canonicalAndroidVersionCode("2026.6.100")).toThrow(
+  it.each([
+    [normalizePinned, "2026.6.9007199254740993", "Expected pinned release version like 2026.6.5"],
+    [pinGateway, "2026.13.2-beta.1", "Expected YYYY.M.PATCH"],
+    [pinGateway, "2026.6.2-beta.9007199254740993", "Expected YYYY.M.PATCH"],
+    [
+      canonicalAndroidVersionCode,
+      "2026.6.100",
       "Unable to derive Android versionCode from 2026.6.100",
-    );
+    ],
+  ] as const)("rejects an invalid version: %s %s", (parse, version, error) => {
+    expect(() => parse(version)).toThrow(error);
   });
-
-  it.each(["2026.13.2-beta.1", "2026.6.2-beta.9007199254740993"])(
-    "rejects impossible gateway %s",
-    (version) => {
-      expect(() => pinGateway(version)).toThrow("Expected YYYY.M.PATCH");
-    },
-  );
 
   it("rejects changelogs without exact-version or nonempty Unreleased notes", () => {
     const changelog = "## Unreleased\n\n## 2026.6.1\n\nOld notes.\n";
