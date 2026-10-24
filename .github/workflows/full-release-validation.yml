@@ -179,7 +179,7 @@ env:
   FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"
   FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT: "1"
   FULL_RELEASE_LANE_INPUTS_CONTRACT: "1"
-  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "1"
+  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "2"
   CHILD_EVIDENCE_REUSE: ${{ inputs.reuse_evidence && inputs.rerun_group == 'all' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/')) }}
 
 jobs:
@@ -2225,6 +2225,10 @@ jobs:
       [
         resolve_target,
         evidence_reuse,
+        prepare_npm_package,
+        qualify_npm_package,
+        prepare_plugin_npm,
+        prepare_docker_release,
         candidate_acquisition,
         normal_ci,
         plugin_prerelease_independent,
@@ -2364,6 +2368,11 @@ jobs:
           CANDIDATE_ACQUISITION_RESULT: ${{ needs.candidate_acquisition.result }}
           CANDIDATE_EVIDENCE_JSON: ${{ needs.candidate_acquisition.outputs.binding_json }}
           CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
+          NPM_PREPARATION_RESULT: ${{ needs.prepare_npm_package.result }}
+          NPM_QUALIFICATION_RESULT: ${{ needs.qualify_npm_package.result }}
+          PLUGIN_NPM_REQUIRED: ${{ needs.resolve_target.outputs.plugin_npm_preflight_required }}
+          PLUGIN_NPM_PREPARATION_RESULT: ${{ needs.prepare_plugin_npm.result }}
+          DOCKER_PREPARATION_RESULT: ${{ needs.prepare_docker_release.result }}
           FULL_RELEASE_RESTORE_PLAN: ${{ github.run_attempt != 1 }}
           FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ github.workspace }}/full-release-execution-plan/full-release-execution-plan.json
           PUBLICATION_ADMISSION_PATH: ${{ runner.temp }}/full-release-publication-admission/publication-admission.json
@@ -2400,6 +2409,11 @@ jobs:
               --arg candidateAcquisitionResult "$CANDIDATE_ACQUISITION_RESULT" \
               --argjson candidateEvidence "${CANDIDATE_EVIDENCE_JSON:-null}" \
               --argjson candidateRequestInput "$CANDIDATE_REQUEST_JSON" \
+              --arg npmPreparationResult "$NPM_PREPARATION_RESULT" \
+              --arg npmQualificationResult "$NPM_QUALIFICATION_RESULT" \
+              --arg pluginNpmPreflightRequired "$PLUGIN_NPM_REQUIRED" \
+              --arg pluginNpmPreparationResult "$PLUGIN_NPM_PREPARATION_RESULT" \
+              --arg dockerPreparationResult "$DOCKER_PREPARATION_RESULT" \
               --arg normalCiResult "$NORMAL_CI_RESULT" \
               --arg normalCiRunId "$NORMAL_CI_RUN_ID" \
               --arg normalCiRunAttempt "$NORMAL_CI_RUN_ATTEMPT" \
@@ -2463,6 +2477,11 @@ jobs:
                 candidateAcquisitionResult: $candidateAcquisitionResult,
                 candidateEvidence: $candidateEvidence,
                 candidateRequestInput: $candidateRequestInput,
+                npmPreparationResult: $npmPreparationResult,
+                npmQualificationResult: $npmQualificationResult,
+                pluginNpmPreflightRequired: $pluginNpmPreflightRequired,
+                pluginNpmPreparationResult: $pluginNpmPreparationResult,
+                dockerPreparationResult: $dockerPreparationResult,
                 children: {
                   normalCi: {result: $normalCiResult, runId: $normalCiRunId, runAttempt: $normalCiRunAttempt, url: $normalCiUrl},
                   pluginPrereleaseIndependent: {result: $pluginPrereleaseIndependentResult, runId: $pluginPrereleaseIndependentRunId, runAttempt: $pluginPrereleaseIndependentRunAttempt, url: $pluginPrereleaseIndependentUrl},
@@ -2555,7 +2574,15 @@ jobs:
 
   release_decision:
     name: Release Decision
-    needs: [resolve_target, release_execution_plan]
+    needs:
+      [
+        resolve_target,
+        prepare_npm_package,
+        qualify_npm_package,
+        prepare_plugin_npm,
+        prepare_docker_release,
+        release_execution_plan,
+      ]
     if: always()
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
     timeout-minutes: 720
@@ -2594,6 +2621,10 @@ jobs:
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+          NPM_PREPARATION_RESULT: ${{ needs.prepare_npm_package.result }}
+          NPM_QUALIFICATION_RESULT: ${{ needs.qualify_npm_package.result }}
+          PLUGIN_NPM_PREPARATION_RESULT: ${{ needs.prepare_plugin_npm.result }}
+          DOCKER_PREPARATION_RESULT: ${{ needs.prepare_docker_release.result }}
           FULL_RELEASE_STATE_MODE: decision
           FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
           FULL_RELEASE_STATE_PATH: ${{ runner.temp }}/full-release-decision/full-release-decision.json
@@ -2623,7 +2654,15 @@ jobs:
 
   diagnostic_drain:
     name: Diagnostic Drain
-    needs: [resolve_target, release_execution_plan]
+    needs:
+      [
+        resolve_target,
+        prepare_npm_package,
+        qualify_npm_package,
+        prepare_plugin_npm,
+        prepare_docker_release,
+        release_execution_plan,
+      ]
     if: always()
     runs-on: ${{ vars.OPENCLAW_RELEASE_RUNNER_GROUP != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON(vars.OPENCLAW_RELEASE_RUNNER_GROUP), toJSON(vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404'))) || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'ubuntu-24.04' || 'blacksmith-4vcpu-ubuntu-2404') }}
     timeout-minutes: 720
@@ -2666,6 +2705,10 @@ jobs:
           RELEASE_PROFILE: ${{ inputs.release_profile }}
           RERUN_GROUP: ${{ inputs.rerun_group }}
           TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+          NPM_PREPARATION_RESULT: ${{ needs.prepare_npm_package.result }}
+          NPM_QUALIFICATION_RESULT: ${{ needs.qualify_npm_package.result }}
+          PLUGIN_NPM_PREPARATION_RESULT: ${{ needs.prepare_plugin_npm.result }}
+          DOCKER_PREPARATION_RESULT: ${{ needs.prepare_docker_release.result }}
           FULL_RELEASE_STATE_MODE: drain
           FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ runner.temp }}/full-release-execution-plan/full-release-execution-plan.json
           FULL_RELEASE_STATE_PATH: ${{ runner.temp }}/full-release-diagnostics/full-release-diagnostic-manifest.json
@@ -2780,6 +2823,8 @@ jobs:
           sparse-checkout: scripts
           sparse-checkout-cone-mode: false
           persist-credentials: false
+
+      - *qualification_evidence_verifier_checkout
 
       - name: Download immutable release execution plan
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
@@ -2963,6 +3008,7 @@ jobs:
           PREPARED_DOCKER_RUN_ATTEMPT: ${{ needs.prepare_docker_release.outputs.prepared_run_attempt }}
           PREPARED_DOCKER_ARTIFACT_NAME: ${{ needs.prepare_docker_release.outputs.prepared_artifact_name }}
           PREPARED_DOCKER_MANIFEST_SHA256: ${{ needs.prepare_docker_release.outputs.prepared_manifest_sha256 }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
         run: node scripts/full-release-validation-state.mjs write-manifest
 
       - name: Validate release validation manifest
