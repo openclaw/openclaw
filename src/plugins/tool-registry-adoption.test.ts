@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 const loaders = vi.hoisted(() => ({ acquirePluginRegistryForInspection: vi.fn() }));
 vi.mock("./loader.js", () => loaders);
@@ -12,9 +12,11 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginRuntimeStore } from "../plugin-sdk/runtime-store.js";
 import { createPluginRecord } from "./loader-records.js";
-import { getPluginInstance } from "./plugin-instance-scope.js";
+import { getPluginInstance, getPluginValueInstance } from "./plugin-instance-scope.js";
 import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
+import { createHookRunner } from "./hooks.js";
+import { collectRegistryInvocationInstances } from "./plugin-invocation-scope.js";
 import { PluginRegistryInspectionResources } from "./registry-inspection-resources.js";
 import {
   bindPluginRegistryGatewayOwner,
@@ -49,11 +51,14 @@ function setLoadContext(registry: PluginRegistry, config: OpenClawConfig) {
 }
 
 const runtimes = new Set<PluginRegistry>();
-afterEach(() => {
+const instances = new Set<PluginInstance>();
+afterEach(async () => {
   for (const runtime of runtimes) {
     markPluginRegistryRetired(runtime);
   }
   runtimes.clear();
+  await Promise.all([...instances].map((instance) => instance.dispose()));
+  instances.clear();
   resetPluginRuntimeStateForTest();
 });
 
@@ -64,6 +69,14 @@ function createAdoptionPair(config: OpenClawConfig = {}) {
   const localRecord = { ...record };
   runtime.plugins.push(record);
   target.plugins.push(localRecord);
+  for (const [registry, currentRecord] of [
+    [runtime, record],
+    [target, localRecord],
+  ] as const) {
+    const instance = new PluginInstance(currentRecord.id, { registry, record: currentRecord });
+    instance.sourceDigest = "1".repeat(64);
+    instances.add(instance);
+  }
   setLoadContext(runtime, config);
   markPluginRegistryActive(runtime);
   runtimes.add(runtime);
@@ -99,7 +112,7 @@ it("keeps discovery tools when the Gateway source, config, or lifetime does not 
   expect(adopt()).toBe(target);
 });
 
-it("substitutes exact declared identities without widening or reordering discovery tools", () => {
+it("requires complete tool identity sets and preserves repeated fallback order", () => {
   const { runtime, target, tool, adopt } = createAdoptionPair();
   const x = tool(["x"]);
   runtime.tools.push(tool(["y"]), x);
@@ -111,13 +124,13 @@ it("substitutes exact declared identities without widening or reordering discove
   const unmatched = tool(["missing"]);
   runtime.tools.push(tool([]), ownedGroup);
   target.tools = [unnamed, grouped, optional, localX, unmatched];
-  expect.soft(adopt().tools).toEqual([unnamed, ownedGroup, optional, x, unmatched]);
+  expect.soft(adopt()).toBe(target);
   expect(target.tools).toEqual([unnamed, grouped, optional, localX, unmatched]);
 
   // A null-returning fallback may share its declared name with the registration that supplies it.
   const fallback = tool(["z"]);
   const supplier = tool(["z"]);
-  runtime.tools.push(fallback, supplier);
+  runtime.tools = [fallback, supplier];
   target.tools = [tool(["z"]), tool(["z"])];
   const [first, second] = adopt().tools;
   expect.soft(first).toBe(fallback);
@@ -155,6 +168,7 @@ it("executes only the admitting Gateway's current service and skips unowned turn
       contracts: { tools: ["owner_tool"] },
     });
     const api = builder.createApi(record, { config });
+    getPluginInstance(record)!.sourceDigest = "1".repeat(64);
     const call = vi.fn(() => marker);
     api.registerTool(
       () => ({
@@ -256,4 +270,202 @@ it("executes only the admitting Gateway's current service and skips unowned turn
     }
   }
   expect(a.instance.retainedWorkCount).toBe(0);
+});
+
+describe("coherent Gateway service owner", () => {
+  const config: OpenClawConfig = {
+    plugins: { entries: { owner: { enabled: true, hooks: { allowConversationAccess: true } } } },
+  };
+  function create(ownerName: string, names: string[][] = [["owner_tool"]], hookCount = 1) {
+    const builder = createTestPluginRegistry();
+    const record = createPluginRecord({
+      id: "owner",
+      source: "/synthetic/plugin.ts",
+      origin: "global",
+      enabled: true,
+      configSchema: false,
+      contracts: {
+        tools: [...new Set(names.flatMap((group) => (group.length ? group : ["unnamed"])))],
+      },
+    });
+    builder.registry.plugins.push(record);
+    const api = builder.createApi(record, {
+      config,
+      hookPolicy: { allowConversationAccess: true },
+    });
+    const instance = getPluginInstance(record)!;
+    instance.sourceDigest = "1".repeat(64);
+    instances.add(instance);
+    runtimes.add(builder.registry);
+    const proofs = new Set<string>();
+    const calls: string[] = [];
+    for (let i = 0; i < hookCount; i++)
+      api.on("before_tool_call", (event) => {
+        calls.push(ownerName);
+        const proof = ownerName + ":" + String(event.params.marker);
+        proofs.add(proof);
+        return { params: { ...event.params, proof } };
+      });
+    api.registerHook(
+      "synthetic:event",
+      async () => {
+        calls.push(ownerName + ":legacy");
+      },
+      { name: "synthetic-owner-hook" },
+    );
+    for (const group of names)
+      api.registerTool(
+        () => ({
+          name: group[0] ?? "unnamed",
+          label: "Synthetic",
+          description: "No external effects",
+          parameters: { type: "object", properties: {} },
+          execute: async (_id: string, params: Record<string, unknown>) => ({
+            content: [{ type: "text", text: ownerName }],
+            details: { ownerName, accepted: proofs.delete(String(params.proof)) },
+          }),
+        }),
+        { names: group },
+      );
+    expect(builder.registry.tools).toHaveLength(names.length);
+    setPluginRuntimeLoadContext(builder.registry, createToolLoadContext(config, "/synthetic"));
+    markPluginRegistryActive(builder.registry);
+    return { registry: builder.registry, record, instance, calls };
+  }
+  function pair(localNames?: string[][], donorNames?: string[][], localHooks = 1, donorHooks = 1) {
+    const donor = create("donor", donorNames, donorHooks);
+    const local = create("local", localNames, localHooks);
+    return {
+      donor,
+      local,
+      adopt: (next = config) => adoptRuntimeToolRegistrations(local.registry, donor.registry, next),
+    };
+  }
+  async function run(registry: PluginRegistry, marker = "GWTEST_OWNER") {
+    const result = await createHookRunner(registry, { catchErrors: false }).runBeforeToolCall(
+      { toolName: "owner_tool", params: { marker } },
+      {},
+    );
+    const raw = registry.tools[0]!.factory({ config, workspaceDir: "/synthetic" });
+    if (!raw || Array.isArray(raw)) throw new Error("Expected one fixture tool");
+    return raw.execute(marker, result?.params ?? { marker });
+  }
+  it("keeps hook/tool private state with the Gateway service owner", async () => {
+    const { donor, local, adopt } = pair();
+    const selected = adopt();
+    expect(selected.tools[0]).toBe(donor.registry.tools[0]);
+    expect(selected.plugins).toBe(local.registry.plugins);
+    expect((await run(selected)).details).toMatchObject({ ownerName: "donor", accepted: true });
+    expect(donor.calls).toEqual(["donor"]);
+    expect(local.calls).toEqual([]);
+    expect(local.registry.tools[0]).not.toBe(donor.registry.tools[0]);
+    expect(selected.typedHooks).not.toBe(local.registry.typedHooks);
+  });
+  it.each([
+    [[[]], [["owner_tool"]]],
+    [[["owner_tool"]], [[]]],
+    [[["owner_tool"], ["extra"]], [["owner_tool"]]],
+    [[["owner_tool"]], [["owner_tool"], ["extra"]]],
+    [[["owner_tool"], ["owner_tool"]], [["owner_tool"]]],
+  ])("declines the entire plugin for incomplete or unnamed tool sets %j / %j", (locals, donors) => {
+    const { local, adopt } = pair(locals, donors);
+    expect(adopt()).toBe(local.registry);
+  });
+  it("pairs repeated identities one-to-one in original tool order", () => {
+    const { donor, adopt } = pair(
+      [["owner_tool"], ["owner_tool"]],
+      [["owner_tool"], ["owner_tool"]],
+    );
+    expect(adopt().tools).toEqual(donor.registry.tools);
+  });
+  it("declines same-path source drift, unknown digest, config and hook-policy mismatch", () => {
+    const { donor, local, adopt } = pair();
+    donor.instance.sourceDigest = "2".repeat(64);
+    expect(adopt()).toBe(local.registry);
+    donor.instance.sourceDigest = "1".repeat(64);
+    local.instance.sourceDigest = undefined;
+    expect(adopt()).toBe(local.registry);
+    local.instance.sourceDigest = "1".repeat(64);
+    expect(
+      adopt({
+        plugins: {
+          entries: {
+            owner: { config: { changed: true }, hooks: { allowConversationAccess: true } },
+          },
+        },
+      }),
+    ).toBe(local.registry);
+    expect(
+      adopt({ plugins: { entries: { owner: { hooks: { allowConversationAccess: false } } } } }),
+    ).toBe(local.registry);
+  });
+  it.each([
+    [0, 1],
+    [1, 0],
+    [1, 2],
+  ])(
+    "replaces the complete hook suite (%i local / %i donor), without duplicates",
+    async (localHooks, donorHooks) => {
+      const { donor, local, adopt } = pair(undefined, undefined, localHooks, donorHooks);
+      const selected = adopt();
+      expect(selected.typedHooks).toHaveLength(donorHooks);
+      if (donorHooks > 0)
+        expect((await run(selected)).details).toMatchObject({ ownerName: "donor", accepted: true });
+      expect(local.calls).toEqual([]);
+      expect(donor.calls).toHaveLength(donorHooks);
+    },
+  );
+  it("keeps both invocation owners represented for native custody collection", () => {
+    const { donor, local, adopt } = pair();
+    const selected = adopt();
+    const represented = collectRegistryInvocationInstances(selected);
+    expect(represented.has(donor.instance)).toBe(true);
+    expect(represented.has(local.instance)).toBe(true);
+    expect(getPluginValueInstance(selected.tools[0]!.factory)).toBe(donor.instance);
+  });
+  it.each(["local", "donor"] as const)(
+    "closes retained hook callbacks when the %s instance retires",
+    async (retired) => {
+      const fixture = pair();
+      const selected = fixture.adopt();
+      await fixture[retired].instance.dispose();
+      await expect(
+        createHookRunner(selected, { catchErrors: false }).runBeforeToolCall(
+          { toolName: "owner_tool", params: { marker: "GWTEST_RETIRED" } },
+          {},
+        ),
+      ).rejects.toThrow(/closed|retir|dispos|active|reload|disabled/i);
+    },
+  );
+
+  it("moves legacy hook metadata and handlers as the same complete owner suite", async () => {
+    const { donor, local, adopt } = pair();
+    const selected = adopt();
+    expect(selected.hooks).toHaveLength(donor.registry.hooks.length);
+    expect(selected.legacyInternalHooks).toHaveLength(1);
+    expect(selected.hooks[0]!.entry).toEqual(donor.registry.hooks[0]!.entry);
+    await selected.legacyInternalHooks[0]!.handler({
+      type: "synthetic",
+      action: "event",
+      sessionKey: "synthetic",
+      timestamp: new Date(),
+      messages: [],
+      context: {},
+    });
+    expect(donor.calls).toEqual(["donor:legacy"]);
+    expect(local.calls).toEqual([]);
+  });
+  it("declines different global internal-hook policy without adding donor handlers", () => {
+    const { local, adopt } = pair();
+    expect(adopt({ ...config, hooks: { internal: { enabled: false } } })).toBe(local.registry);
+  });
+  it.each(["contextVersion", "declaredNames"] as const)(
+    "declines an incompatible %s tool contract atomically",
+    (field) => {
+      const { donor, local, adopt } = pair();
+      if (field === "contextVersion") donor.registry.tools[0]!.contextVersion = 2;
+      else donor.registry.tools[0]!.declaredNames = new Set(["different"]);
+      expect(adopt()).toBe(local.registry);
+    },
+  );
 });
