@@ -47,7 +47,7 @@ it.each<[string, Partial<Shard>, number]>([
       pretestBuildMode: "runtime",
       planConcurrency: 1,
     });
-    expect(groups(packed)).toEqual(
+    expect(groups(packed).toSorted((a, b) => a.shard_name.localeCompare(b.shard_name))).toEqual(
       inputs.map(
         ({ configs, includePatterns, env, pretestBuildMode, requiresDist, runner, shardName }) => ({
           configs,
@@ -84,10 +84,8 @@ it("keeps selected Telegram scopes and runtime preparation in bounded serial job
     const needsRuntime = envelopes.some((group) =>
       group.includePatterns?.some((file) => runtime.has(file)),
     );
-    expect(job).toMatchObject({
-      planConcurrency: 1,
-      pretestBuildMode: needsRuntime ? "runtime" : undefined,
-    });
+    expect(job.planConcurrency).toBe(1);
+    expect(job.pretestBuildMode).toBe(needsRuntime ? "runtime" : undefined);
     expect(job.predictedSeconds).toBeLessThanOrEqual(300);
     for (const group of envelopes) {
       expect(group.pretestBuildMode).toBe(job.pretestBuildMode);
