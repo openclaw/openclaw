@@ -82,7 +82,7 @@ async function fixture() {
     "git/ref/tags/" + f.admission.producer.workflowHeadBranch,
     "compare/" + f.p + "...main",
   ]) {
-    api[path.split("?")[0]] = admissionResponse(path);
+    api[path.replace(/\?.*$/u, "")] = admissionResponse(path);
   }
   api["compare/" + f.p + "..." + f.p] = { status: "identical" };
   api["actions/runs/99"] = {
