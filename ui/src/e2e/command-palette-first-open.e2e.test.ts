@@ -68,7 +68,79 @@ async function expectBackdrop(page: Page) {
 }
 
 suite.define(() => {
-  it("hands native drops and continuous typing across a cold load without disturbing the foreground", async () => {
+  it("retains files accepted before the cold palette is dismissed and cancels queued submission", async () => {
+    await withColdPalette(async (page, paletteModule, _chat, gateway) => {
+      const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
+      await composer.fill("Keep foreground text");
+      await page.keyboard.press("ControlOrMeta+K");
+      const input = page.locator(".cmd-palette__input");
+      await input.waitFor({ state: "visible" });
+      await paletteModule.request;
+      await input.fill("Keep the cold attachment draft");
+      await input.evaluate((element) => {
+        const dataTransfer = new DataTransfer();
+        dataTransfer.items.add(new File(["brief"], "cold-brief.pdf", { type: "application/pdf" }));
+        element.dispatchEvent(
+          new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer }),
+        );
+      });
+      await input.press("ControlOrMeta+Enter");
+      await page.keyboard.press("ControlOrMeta+K");
+      await input.waitFor({ state: "hidden" });
+      await expectFocused(composer);
+      paletteModule.release();
+      await page.waitForFunction(() => customElements.get("openclaw-command-palette"));
+      await page.keyboard.press("ControlOrMeta+K");
+      const loaded = page.locator("openclaw-command-palette .cmd-palette__input");
+      await loaded.waitFor({ state: "visible" });
+      expect(await loaded.inputValue()).toBe("Keep the cold attachment draft");
+      await expect
+        .poll(() => page.locator(".chat-attachment-file__name").allTextContents())
+        .toEqual(["cold-brief.pdf"]);
+      expect(await loaded.isEditable()).toBe(true);
+      expect(await gateway.getRequests("sessions.create")).toEqual([]);
+      expect(await composer.inputValue()).toBe("Keep foreground text");
+      expect(page.url()).toBe(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+    });
+  });
+
+  it("preserves native text drops across the cold module handoff", async () => {
+    await withColdPalette(async (page, paletteModule) => {
+      const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
+      await composer.fill("Keep foreground text");
+      await page.keyboard.press("ControlOrMeta+K");
+      const input = page.locator(".cmd-palette__input:not([disabled])");
+      await input.waitFor({ state: "visible" });
+      await paletteModule.request;
+      const bounds = await input.boundingBox();
+      assert(bounds, "Cold input must have a drop target");
+      const cdp = await page.context().newCDPSession(page);
+      const data = {
+        items: [{ mimeType: "text/plain", data: "Native dropped instructions" }],
+        dragOperationsMask: 1,
+      };
+      for (const type of ["dragEnter", "dragOver", "drop"] as const) {
+        await cdp.send("Input.dispatchDragEvent", {
+          type,
+          x: bounds.x + bounds.width / 2,
+          y: bounds.y + bounds.height / 2,
+          data,
+        });
+      }
+      await expect.poll(() => input.inputValue()).toBe("Native dropped instructions");
+      paletteModule.release();
+      const loaded = page.locator("openclaw-command-palette .cmd-palette__input");
+      await loaded.waitFor({ state: "visible" });
+      expect(await loaded.inputValue()).toBe("Native dropped instructions");
+      await expectFocused(loaded);
+      await loaded.press("Escape");
+      expect(await composer.inputValue()).toBe("Keep foreground text");
+      expect(page.url()).toBe(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await cdp.detach();
+    });
+  });
+
+  it("loads only on shortcut and preserves continuous typing and the foreground draft at 8x CPU", async () => {
     await withColdPalette(async (page, paletteModule) => {
       const composer = page.locator(".agent-chat__composer-combobox textarea:visible");
       const foregroundDraft = "Foreground draft";
@@ -85,19 +157,6 @@ suite.define(() => {
       expect(paletteModule.requests()).toBe(1);
       await expectFocused(input);
       const cdp = await page.context().newCDPSession(page);
-      const dropped = "Native dropped instructions";
-      const bounds = await input.boundingBox();
-      assert(bounds, "Cold input must have a drop target");
-      for (const type of ["dragEnter", "dragOver", "drop"] as const) {
-        await cdp.send("Input.dispatchDragEvent", {
-          type,
-          x: bounds.x + bounds.width / 2,
-          y: bounds.y + bounds.height / 2,
-          data: { items: [{ mimeType: "text/plain", data: dropped }], dragOperationsMask: 1 },
-        });
-      }
-      await expect.poll(() => input.inputValue()).toBe(dropped);
-      await input.press("End");
       await cdp.send("Emulation.setCPUThrottlingRate", { rate: 8 });
       const keyTargets = await page.evaluateHandle(() => {
         const escaped: string[] = [];
@@ -113,11 +172,10 @@ suite.define(() => {
         document.addEventListener("keydown", capture, true);
         return { escaped, stop: () => document.removeEventListener("keydown", capture, true) };
       });
-      const suffix =
-        " Continuous cold typing must cross the module boundary without a missing character.";
-      const typed = dropped + suffix;
-      const typing = page.keyboard.type(suffix, { delay: 4 });
-      await expect.poll(() => input.inputValue()).not.toBe(dropped);
+      const typed =
+        "Continuous cold typing must cross the module boundary without a missing character.";
+      const typing = page.keyboard.type(typed, { delay: 4 });
+      await expect.poll(() => input.inputValue()).not.toBe("");
       paletteModule.release();
       await typing;
       const loaded = page.locator("openclaw-command-palette .cmd-palette__input");
@@ -134,7 +192,6 @@ suite.define(() => {
       expect(await composer.inputValue()).toBe(foregroundDraft);
       expect(paletteModule.requests()).toBe(1);
       await cdp.send("Emulation.setCPUThrottlingRate", { rate: 1 });
-      await cdp.detach();
       await page.keyboard.press("Escape");
       await expectFocused(composer);
       await expectSelection(composer, { start: 3, end: 12, direction: "backward" });

@@ -1,12 +1,25 @@
 // Onboard channels e2e tests cover setup wizard adapters, plugin install hooks, and channel picker behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createExitThrowingRuntime, createWizardPrompter } from "../../test/helpers/auth-wizard.js";
+import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import type { ChannelSetupWizardAdapter } from "../channels/plugins/setup-wizard-types.js";
+import {
+  ensureChannelSetupPluginInstalled,
+  loadChannelSetupPluginRegistrySnapshotForChannel,
+} from "../commands/channel-setup/plugin-install.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createEmptyPluginRegistry } from "../plugins/registry.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+
+const catalogMocks = vi.hoisted(() => ({
+  listChannelPluginCatalogEntries: vi.fn(),
+}));
+
+const manifestRegistryMocks = vi.hoisted(() => ({
+  loadPluginManifestRegistryCore: vi.fn(() => ({ plugins: [], diagnostics: [] })),
+}));
 
 function createPrompter(overrides: Partial<WizardPrompter>): WizardPrompter {
   return createWizardPrompter(overrides, { defaultSelect: "__done__" });
@@ -36,6 +49,17 @@ function registerDiscord(
   );
 }
 
+function createUnexpectedPromptGuards() {
+  return {
+    multiselect: vi.fn(async () => {
+      throw new Error("unexpected multiselect");
+    }),
+    text: vi.fn(async ({ message }: { message: string }) => {
+      throw new Error(`unexpected text prompt: ${message}`);
+    }) as unknown as WizardPrompter["text"],
+  };
+}
+
 type SetupChannels = typeof import("../flows/channel-setup.js").setupChannels;
 let setupChannels: SetupChannels;
 
@@ -52,13 +76,87 @@ function runSetupChannels(
   });
 }
 
+function createMSTeamsCatalogEntry(): ChannelPluginCatalogEntry {
+  return {
+    id: "external-chat",
+    pluginId: "@openclaw/external-chat-plugin",
+    meta: {
+      id: "external-chat",
+      label: "External Chat",
+      selectionLabel: "External Chat",
+      docsPath: "/channels/external-chat",
+      blurb: "external chat channel",
+    },
+    install: {
+      npmSpec: "@openclaw/external-chat",
+    },
+  };
+}
+
+function createMSTeamsPluginRegistryEntry(params?: { includeSetupWizard?: boolean }) {
+  return {
+    pluginId: "@openclaw/external-chat-plugin",
+    source: "test",
+    plugin: {
+      id: "external-chat",
+      meta: createMSTeamsCatalogEntry().meta,
+      capabilities: { chatTypes: ["direct"] as const },
+      config: {
+        listAccountIds: () => [],
+        resolveAccount: () => ({ accountId: "default" }),
+      },
+      ...(params?.includeSetupWizard
+        ? {
+            setupWizard: {
+              channel: "external-chat",
+              status: {
+                configuredLabel: "configured",
+                unconfiguredLabel: "installed",
+                resolveConfigured: () => false,
+                resolveStatusLines: async () => [],
+                resolveSelectionHint: async () => "installed",
+              },
+              credentials: [],
+            },
+          }
+        : {}),
+      outbound: { deliveryMode: "direct" as const },
+    },
+  };
+}
+
+function mockMSTeamsRegistrySnapshot(params?: { includeSetupWizard?: boolean }) {
+  vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockImplementation(
+    async ({ channel }: { channel: string }) => {
+      const registry = createEmptyPluginRegistry();
+      if (channel === "external-chat") {
+        if (params?.includeSetupWizard) {
+          registry.channelSetups.push(createMSTeamsPluginRegistryEntry(params) as never);
+        } else {
+          registry.channels.push(createMSTeamsPluginRegistryEntry(params) as never);
+        }
+      }
+      return registry;
+    },
+  );
+}
+
 vi.mock("../channels/plugins/catalog.js", async () => {
   const actual = await vi.importActual<typeof import("../channels/plugins/catalog.js")>(
     "../channels/plugins/catalog.js",
   );
+  const listRawChannelPluginCatalogEntries = (
+    ...args: Parameters<typeof actual.listRawChannelPluginCatalogEntries>
+  ) => {
+    const implementation = catalogMocks.listChannelPluginCatalogEntries.getMockImplementation();
+    if (implementation) {
+      return catalogMocks.listChannelPluginCatalogEntries(...args);
+    }
+    return actual.listRawChannelPluginCatalogEntries(...args);
+  };
   return {
     ...actual,
-    listRawChannelPluginCatalogEntries: () => [],
+    listRawChannelPluginCatalogEntries,
   };
 });
 
@@ -68,7 +166,7 @@ vi.mock("../plugins/manifest-registry.js", async () => {
   );
   return {
     ...actual,
-    loadPluginManifestRegistryCore: () => ({ plugins: [], diagnostics: [] }),
+    loadPluginManifestRegistryCore: manifestRegistryMocks.loadPluginManifestRegistryCore,
   };
 });
 
@@ -88,7 +186,6 @@ vi.mock("../commands/channel-setup/plugin-install.js", async () => {
     ensureChannelSetupPluginInstalled: vi.fn(async ({ cfg }: { cfg: OpenClawConfig }) => ({
       cfg,
       installed: true,
-      status: "installed",
     })),
     // Allow tests to simulate an empty plugin registry during setup.
     loadChannelSetupPluginRegistrySnapshotForChannel: vi.fn(async () =>
@@ -100,6 +197,20 @@ vi.mock("../commands/channel-setup/plugin-install.js", async () => {
 describe("setupChannels", () => {
   beforeEach(async () => {
     ({ setupChannels } = await import("../flows/channel-setup.js"));
+    catalogMocks.listChannelPluginCatalogEntries.mockReset();
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([]);
+    manifestRegistryMocks.loadPluginManifestRegistryCore.mockReset();
+    manifestRegistryMocks.loadPluginManifestRegistryCore.mockReturnValue({
+      plugins: [],
+      diagnostics: [],
+    });
+    vi.mocked(ensureChannelSetupPluginInstalled).mockClear();
+    vi.mocked(ensureChannelSetupPluginInstalled).mockImplementation(async ({ cfg }) => ({
+      cfg,
+      installed: true,
+      status: "installed",
+    }));
+    vi.mocked(loadChannelSetupPluginRegistrySnapshotForChannel).mockClear();
   });
 
   it.each<[string, boolean, boolean, string[] | undefined, string[] | undefined]>([
@@ -278,4 +389,81 @@ describe("setupChannels", () => {
       }
     },
   );
+
+  it("keeps configured external plugin channels visible when the active registry starts empty", async () => {
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([createMSTeamsCatalogEntry()]);
+    mockMSTeamsRegistrySnapshot();
+    const select = vi.fn(async ({ message, options }: { message: string; options: unknown[] }) => {
+      if (message === "Select a channel") {
+        const entries = options as Array<{ value: string; hint?: string }>;
+        const msteams = entries.find((entry) => entry.value === "external-chat");
+        if (msteams === undefined) {
+          throw new Error("expected Teams catalog entry");
+        }
+        expect(msteams.hint ?? "").not.toContain("plugin");
+        expect(msteams.hint ?? "").not.toContain("install");
+        return "__done__";
+      }
+      return "__done__";
+    });
+    const { multiselect, text } = createUnexpectedPromptGuards();
+    const prompter = createPrompter({
+      select: select as unknown as WizardPrompter["select"],
+      multiselect,
+      text,
+    });
+
+    await runSetupChannels(
+      {
+        channels: {
+          "external-chat": {
+            tenantId: "tenant-1",
+          },
+        },
+        plugins: {
+          entries: {
+            "@openclaw/external-chat-plugin": { enabled: true },
+          },
+        },
+      } as OpenClawConfig,
+      prompter,
+    );
+
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "external-chat",
+        pluginId: "@openclaw/external-chat-plugin",
+      }),
+    );
+    expect(multiselect).not.toHaveBeenCalled();
+  });
+
+  it("treats installed external plugin channels as installed without reinstall prompts", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([createMSTeamsPluginRegistryEntry({ includeSetupWizard: true }) as never]),
+    );
+    catalogMocks.listChannelPluginCatalogEntries.mockReturnValue([createMSTeamsCatalogEntry()]);
+
+    let channelSelectionCount = 0;
+    const select = vi.fn(async ({ message }: { message: string }) => {
+      if (message === "Select a channel") {
+        channelSelectionCount += 1;
+        return channelSelectionCount === 1 ? "external-chat" : "__done__";
+      }
+      return "__done__";
+    });
+    const { multiselect, text } = createUnexpectedPromptGuards();
+    const prompter = createPrompter({
+      select: select as unknown as WizardPrompter["select"],
+      multiselect,
+      text,
+    });
+
+    await runSetupChannels({} as OpenClawConfig, prompter);
+
+    expect(ensureChannelSetupPluginInstalled).not.toHaveBeenCalled();
+    expect(loadChannelSetupPluginRegistrySnapshotForChannel).not.toHaveBeenCalled();
+    expect(multiselect).not.toHaveBeenCalled();
+  });
 });

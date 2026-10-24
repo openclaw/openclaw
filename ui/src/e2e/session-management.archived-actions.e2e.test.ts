@@ -74,7 +74,11 @@ suite.define(() => {
     { height: 900, label: "desktop", width: 1280 },
     { height: 844, label: "mobile", width: 390 },
   ] as const)("keeps archived transcript actions inert on $label", (viewport) =>
-    suite.withPage({ ...options, viewport }, async ({ page }) => {
+    suite.withPage({ ...options, viewport }, async ({ page, context }) => {
+      await context.grantPermissions(["clipboard-read", "clipboard-write"], {
+        origin: new URL(suite.server.baseUrl).origin,
+      });
+
       const sessionKey = "agent:main:archive-actions";
       const messageText = "Archive action proof.";
       const session = sessionRow(sessionKey, "Archive actions", baseTime);
@@ -151,6 +155,18 @@ suite.define(() => {
       await rewind.click();
       const confirmation = page.locator(".chat-confirm-popover");
       await ui.visible(confirmation);
+      const remember = confirmation.getByRole("checkbox");
+      await remember.check();
+      expect(await remember.isChecked()).toBe(true);
+      await remember.uncheck();
+      await ui.button(confirmation, "Cancel").click();
+      await confirmation.waitFor({ state: "detached" });
+      expect(await gateway.getRequests("sessions.rewind")).toHaveLength(0);
+      expect(await menu.isVisible()).toBe(true);
+      expect(await rewind.evaluate((element) => element === document.activeElement)).toBe(true);
+      await rewind.click();
+      await ui.visible(confirmation);
+
       const archived = { ...session, archived: true, archivedAt: baseTime + 2_000 };
       await gateway.setSessionsListResponse(support.sessionsListResponse([main, archived]));
       await gateway.emitGatewayEvent("sessions.changed", {
@@ -194,6 +210,21 @@ suite.define(() => {
         }),
       ).toEqual([false, true]);
 
+      for (const action of ["Copy", "Copy as markdown"]) {
+        if (action === "Copy as markdown") {
+          await page.evaluate(async () => {
+            window.getSelection()?.removeAllRanges();
+            await navigator.clipboard.writeText("Before archived message copy.");
+          });
+          await userBubble.click({ button: "right" });
+        }
+        await ui.menuItem(menu, action).click();
+        await expect
+          .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+          .toBe(messageText);
+      }
+
+      await userBubble.click({ button: "right" });
       await ui.menuItem(menu, "Fork from here").click();
       const fork = await gateway.waitForRequest("sessions.fork");
       expect(fork.params).toMatchObject({
@@ -208,4 +239,71 @@ suite.define(() => {
       );
     }),
   );
+
+  it("shows the archived notice when an archived session is cold-loaded outside the active list", () =>
+    suite.withPage(options, async ({ page }) => {
+      const archived = sessionRow(
+        "agent:main:dashboard:cold-archive",
+        "Archived planning",
+        baseTime,
+        { archived: true },
+      );
+      const main = sessionRow("agent:main:main", "Main", archived.updatedAt + 1);
+      const gateway = await ui.installSessionRows(page, [main], {
+        mainSessionKey: "agent:main:main",
+        sessions: [main, archived],
+        methodResponses: {
+          "sessions.branches.list": branches("current", "other"),
+          "sessions.patch": {},
+        },
+        sessionArchiveFiltering: true,
+        sessionKey: archived.key,
+      });
+
+      await page.goto(`${suite.server.baseUrl}chat?session=${encodeURIComponent(archived.key)}`);
+      const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+
+      const selectedRow = ui.sessionRows(page)(archived.key);
+      await ui.visible(selectedRow, 10_000);
+      await expect
+        .poll(() => selectedRow.getAttribute("class"))
+        .toContain("sidebar-recent-session--active");
+      await ui.visible(selectedRow.locator(".sidebar-session__archive-glyph"));
+      await ui.visible(selectedRow.getByText("Archived planning", { exact: true }));
+      await ui.visible(
+        activePane.getByRole("button", {
+          name: "Actions for Archived planning",
+          exact: true,
+        }),
+      );
+
+      const archivedNotice = activePane.locator(".agent-chat__disabled-banner");
+      await ui.visible(archivedNotice, 10_000);
+      await ui.expectText(archivedNotice, "This session is archived.");
+      await ui.expectCount(activePane.locator(".agent-chat__input"), 0);
+      await expect
+        .poll(() => activePane.locator(".chat-pane__branches-trigger").isDisabled())
+        .toBe(true);
+      expect(await gateway.getRequests("sessions.branches.switch")).toHaveLength(0);
+
+      await support.activateSelfRemovingControl(ui.button(archivedNotice, "Unarchive", false));
+      await ui.sessionPatch(gateway, archived.key, { archived: false });
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...archived,
+        archived: false,
+        archivedAt: undefined,
+        reason: "update",
+        sessionKey: archived.key,
+      });
+
+      await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
+      await ui.visible(activePane.locator(".agent-chat__input textarea"));
+      await expect
+        .poll(() =>
+          activePane.evaluate(
+            (element) => (element as HTMLElement & { sessionKey?: string }).sessionKey,
+          ),
+        )
+        .toBe(archived.key);
+    }));
 });

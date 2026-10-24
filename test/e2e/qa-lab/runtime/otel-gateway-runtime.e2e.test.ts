@@ -12,6 +12,9 @@ import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { otelTraceConfig, settleOtelCleanup } from "./otel-runtime.test-support.js";
 import { type CapturedSpan, startLocalOtlpReceiver } from "./otel-test-support.js";
 
+const CODE_MODE_RECONCILIATION_NEEDLE =
+  "The previous Code Mode mutation may have partially applied.";
+
 async function waitFor<T>(
   read: () => T | undefined,
   timeoutMs: number,
@@ -39,7 +42,7 @@ function traceLayers(spans: CapturedSpan[]) {
   return { terminal, layers: levels.map((name) => spans.filter((span) => span.name === name)) };
 }
 
-function expectTraceParents(spans: CapturedSpan[], tool: CapturedSpan) {
+function expectTraceParents(spans: CapturedSpan[], tool: CapturedSpan, counts?: number[]) {
   const { terminal, layers } = traceLayers(spans);
   const spansById = new Map(
     spans.flatMap((span) => (span.spanId ? [[span.spanId, span] as const] : [])),
@@ -53,7 +56,11 @@ function expectTraceParents(spans: CapturedSpan[], tool: CapturedSpan) {
   expect(terminal).toBeDefined();
   expect(terminal?.parentSpanId).toBeFalsy();
   for (const [index, children] of layers.entries()) {
-    expect(children).toHaveLength([1, 1, 2][index]!);
+    if (counts) {
+      expect(children).toHaveLength(counts[index]!);
+    } else {
+      expect(children.length).toBeGreaterThanOrEqual(1);
+    }
     for (const child of children) {
       const parent = parentOf(child);
       if (index === 0) {
@@ -66,7 +73,7 @@ function expectTraceParents(spans: CapturedSpan[], tool: CapturedSpan) {
   expect(parentOf(tool).name).toBe("openclaw.run");
 }
 
-test("exports linked failed-read recovery and attributed plugin-usage spans", async () => {
+test("exports linked success and failed-read recovery spans from a real qa-channel run", async () => {
   const state = createQaBusState();
   const transport = createQaChannelTransport(state);
   let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
@@ -81,10 +88,12 @@ test("exports linked failed-read recovery and attributed plugin-usage spans", as
 
   try {
     bus = await startQaBusServer({ state });
-    const activeReceiver = startLocalOtlpReceiver();
+    const activeReceiver = startLocalOtlpReceiver(["qa-plugin-usage-secret-sentinel"]);
     const receiverPort = await activeReceiver.listen();
     receiver = activeReceiver;
     mock = await startQaMockOpenAiServer();
+    const readDebug = async <T>(route: string): Promise<T> =>
+      (await fetch(`${mock!.baseUrl}/debug/${route}`)).json();
     const gateway = await gatewayOwner.start({
       repoRoot: path.resolve(import.meta.dirname, "../../../.."),
       useRepoCli: true,
@@ -139,12 +148,49 @@ test("exports linked failed-read recovery and attributed plugin-usage spans", as
       );
     };
 
+    await send(
+      "Tool progress QA check: use the read tool exactly once on `QA_KICKOFF_TASK.md` before answering. After that read completes, reply with only this exact marker and no other text: `OTEL-GATEWAY-SUCCESS-OK`.",
+      "OTEL-GATEWAY-SUCCESS-OK",
+    );
+    const requestCursor = await readDebug<{ cursor: number }>("request-cursor");
     const recovered = await send(
       "Failed tool terminal recovery QA check: read the missing workspace file, then respond with exact marker: `QA-FAILED-TOOL-FINALIZED-OK`.",
       "QA-FAILED-TOOL-FINALIZED-OK",
     );
     expect(recovered.text).toContain("The requested file could not be read: ENOENT.");
 
+    type ProviderRequest = {
+      allInputText?: string;
+      body?: { input?: Array<Record<string, unknown>>; tools?: Array<{ name?: string }> };
+      plannedToolCallId?: string;
+      plannedToolName?: string;
+      plannedWireToolName?: string;
+      toolOutputCallId?: string;
+      toolOutput?: string;
+    };
+    const scenarioRequests = await readDebug<ProviderRequest[]>(
+      `requests?after=${requestCursor.cursor}`,
+    );
+    const readPlans = scenarioRequests.filter((request) => request.plannedToolName === "read");
+    expect(readPlans).toHaveLength(1);
+    expect(readPlans[0]?.plannedToolCallId).toBeTruthy();
+    expect(readPlans[0]?.plannedWireToolName).toBe("exec");
+    expect(scenarioRequests).toHaveLength(2);
+    const continuation = scenarioRequests[1]!;
+    expect(continuation.toolOutputCallId).toBe(readPlans[0]?.plannedToolCallId);
+    expect(continuation.toolOutput).toMatch(/ENOENT|no such file/i);
+    expect(continuation.allInputText).not.toContain(CODE_MODE_RECONCILIATION_NEEDLE);
+    expect(continuation.body?.tools?.map((tool) => tool.name)).toEqual(
+      expect.arrayContaining(["exec", "wait"]),
+    );
+    const continuationInput = continuation.body?.input ?? [];
+    for (const type of ["function_call", "function_call_output"]) {
+      expect(
+        continuationInput.filter(
+          (item) => item.type === type && item.call_id === readPlans[0]?.plannedToolCallId,
+        ),
+      ).toHaveLength(1);
+    }
     const failureEvidence = await waitFor(
       () => {
         const toolError = activeReceiver.capturedSpans.find(
@@ -172,20 +218,41 @@ test("exports linked failed-read recovery and attributed plugin-usage spans", as
       }),
     );
 
-    expectTraceParents(failureEvidence.sameTrace, failureEvidence.toolError);
+    expectTraceParents(failureEvidence.sameTrace, failureEvidence.toolError, [1, 1, 2]);
+
+    const successEvidence = activeReceiver.capturedSpans.find(
+      (span) =>
+        span.name === "openclaw.tool.execution" &&
+        span.statusCode !== 2 &&
+        span.attributes["openclaw.toolName"] === "read" &&
+        span.traceId !== failureEvidence.toolError.traceId,
+    );
+    expect(successEvidence).toBeTruthy();
+    const successTrace = activeReceiver.capturedSpans.filter(
+      (span) => span.traceId === successEvidence?.traceId,
+    );
+    expectTraceParents(successTrace, successEvidence!);
 
     const llmTaskSpanCursor = activeReceiver.capturedSpans.length;
+    const llmTaskCursor = await readDebug<{ cursor: number }>("request-cursor");
     await send(
       "tool search qa check target=llm-task. Call exactly that tool once, then reply with only this exact marker: `OTEL-PLUGIN-USAGE-OK`.",
       "OTEL-PLUGIN-USAGE-OK",
       { id: "qa-plugin-usage", kind: "direct" },
     );
 
-    const usageAttributes = {
-      "openclaw.tokens.input": 64,
-      "openclaw.tokens.output": 24,
-      "openclaw.tokens.total": 88,
-    };
+    const llmTaskRequests = await readDebug<ProviderRequest[]>(
+      `requests?after=${llmTaskCursor.cursor}`,
+    );
+    expect(
+      llmTaskRequests.filter((request) => request.plannedToolName === "llm-task"),
+    ).toHaveLength(1);
+    expect(
+      llmTaskRequests.some((request) =>
+        String(request.allInputText).includes("You are a JSON-only function."),
+      ),
+    ).toBe(true);
+
     const llmTaskUsage = await waitFor(
       () =>
         activeReceiver.capturedSpans.find(
@@ -196,7 +263,11 @@ test("exports linked failed-read recovery and attributed plugin-usage spans", as
       45_000,
       () => activeReceiver.capturedSpans,
     );
-    expect(llmTaskUsage.attributes).toMatchObject(usageAttributes);
+    expect(llmTaskUsage.attributes).toMatchObject({
+      "openclaw.tokens.input": 64,
+      "openclaw.tokens.output": 24,
+      "openclaw.tokens.total": 88,
+    });
     expect(
       activeReceiver.capturedSpans
         .slice(llmTaskSpanCursor)
@@ -204,7 +275,9 @@ test("exports linked failed-read recovery and attributed plugin-usage spans", as
           (span) =>
             span.name === "openclaw.model.usage" &&
             span.attributes["openclaw.channel"] === "unknown" &&
-            Object.entries(usageAttributes).every(([key, value]) => span.attributes[key] === value),
+            span.attributes["openclaw.tokens.input"] === 64 &&
+            span.attributes["openclaw.tokens.output"] === 24 &&
+            span.attributes["openclaw.tokens.total"] === 88,
         )
         .map((span) => span.attributes["openclaw.plugin"]),
     ).toEqual(["llm-task"]);
@@ -214,12 +287,21 @@ test("exports linked failed-read recovery and attributed plugin-usage spans", as
     expect(attributedUsageSpans).toMatchObject([
       { name: "openclaw.model.usage", attributes: { "openclaw.plugin": "llm-task" } },
     ]);
+
+    const exportedBodies = Object.values(activeReceiver.capturedBodyText).flat().join("\n");
+    expect(exportedBodies).not.toContain("qa-plugin-usage-secret-sentinel");
   } finally {
     await settleOtelCleanup(
       () => stopQaGatewayFixture(gatewayOwner),
-      async () => await mock?.stop(),
-      async () => await receiver?.close(),
-      async () => await bus?.stop(),
+      async () => {
+        await mock?.stop();
+      },
+      async () => {
+        await receiver?.close();
+      },
+      async () => {
+        await bus?.stop();
+      },
     );
   }
 }, 120_000);

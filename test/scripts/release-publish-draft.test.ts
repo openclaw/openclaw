@@ -46,21 +46,28 @@ function publicationFixture(releaseVersion = "2026.9.4") {
   git("commit", "-qm", "historical release");
   const targetSha = git("rev-parse", "HEAD");
   io.write("CHANGELOG.md", "Working tree content must not be published.\n");
-  fs.mkdirSync(join(root, ".release-harness/scripts"), { recursive: true });
+  fs.mkdirSync(join(root, ".release-harness/scripts/lib"), { recursive: true });
   io.json(".release-harness/package.json", { version: "2026.9.5" });
-  fs.copyFileSync(
-    join(repository, "scripts/render-github-release-notes.mts"),
-    join(root, ".release-harness/scripts/render-github-release-notes.mts"),
-  );
-  // Keep the CLI entry at its invoked path; support modules can use the current checkout.
   for (const source of [
-    "scripts/lib",
+    "scripts/render-github-release-notes.mts",
     "scripts/tsx.mjs",
+    "scripts/lib/tsx-cli-shim.mjs",
+    "scripts/lib/local-check-runtime.mts",
+    "scripts/lib/managed-cleanup-handoff.mts",
     "scripts/openclaw-npm-extended-stable-release.mjs",
-    "scripts/full-release-validation-policy.mjs",
+    "scripts/plugin-sdk-api-release-evidence.mjs",
+    "scripts/lib/release-changelog.mjs",
+    "scripts/lib/arg-utils.runtime.mjs",
+    "scripts/lib/release-notes-compaction.mjs",
+    "scripts/lib/release-version.mjs",
+    "scripts/lib/release-publish-children.sh",
   ]) {
-    fs.symlinkSync(join(repository, source), join(root, ".release-harness", source));
+    fs.copyFileSync(join(repository, source), join(root, ".release-harness", source));
   }
+  fs.symlinkSync(
+    join(repository, "scripts/full-release-validation-policy.mjs"),
+    join(root, ".release-harness/scripts/full-release-validation-policy.mjs"),
+  );
   // Publication installs tooling in the harness, then links the frozen target cwd to it.
   fs.symlinkSync(
     join(repository, "node_modules"),
@@ -84,53 +91,84 @@ function publicationFixture(releaseVersion = "2026.9.4") {
   };
 }
 
-it.each([true, false])("renders pinned release notes with manifest=%s", (hasManifest) => {
-  const { root, targetSha, read, write, json, run } = publicationFixture();
-  const prepare = workflow.jobs.publish.steps.find(
-    (step: { name?: string }) => step.name === "Prepare GitHub release notes",
-  );
-  const notes = join(root, "helper-notes.md");
-  const proof = write("proof.md", `### Release verification\n\n- Source: ${targetSha}\n`);
-  if (hasManifest) {
-    json("full-release-validation-manifest.json", {
-      childRuns: {},
-      childEvidence: {},
-      advisoryJobs: [],
-    });
-  }
-  expect(
-    new Set(
-      workflow.jobs.publish.steps.flatMap((step: { env?: Record<string, string> }) =>
-        step.env?.FULL_RELEASE_VALIDATION_MANIFEST_DIR
-          ? [step.env.FULL_RELEASE_VALIDATION_MANIFEST_DIR]
-          : [],
-      ),
-    ),
-  ).toEqual(new Set(["${{ runner.temp }}/full-release-validation-manifest"]));
-  const result = run(
-    `
+it.each([
+  { releaseVersion: "2026.9.4", hasManifest: true },
+  { releaseVersion: "2026.9.4", hasManifest: false },
+  { releaseVersion: "2026.8.35", hasManifest: false },
+])(
+  "renders pinned $releaseVersion with manifest=$hasManifest",
+  ({ releaseVersion, hasManifest }) => {
+    const extended = releaseVersion === "2026.8.35";
+    const { root, targetSha, read, write, json, run } = publicationFixture(releaseVersion);
+    const prepare = workflow.jobs.publish.steps.find(
+      (step: { name?: string }) => step.name === "Prepare GitHub release notes",
+    );
+    const notes = join(root, "helper-notes.md");
+    const proof = write("proof.md", `### Release verification\n\n- Source: ${targetSha}\n`);
+    if (hasManifest) {
+      json("full-release-validation-manifest.json", {
+        childRuns: {},
+        childEvidence: {},
+        advisoryJobs: [],
+      });
+    }
+    if (!extended) {
+      for (const name of [
+        "Dispatch publish workflows",
+        "Start core npm publication",
+        "Complete publish workflows",
+      ]) {
+        expect(
+          workflow.jobs.publish.steps.find((step: { name?: string }) => step.name === name)?.env
+            .FULL_RELEASE_VALIDATION_MANIFEST_DIR,
+        ).toBe("${{ runner.temp }}/full-release-validation-manifest");
+      }
+    }
+    const result = run(
+      extended
+        ? prepare.run
+        : `
 set -euo pipefail
 ${prepare.run}
 source "$GITHUB_WORKSPACE/.release-harness/scripts/lib/release-publish-children.sh"
 render_github_release_notes "$NOTES_FILE" "$PROOF_FILE"
 canonical_release_body_matches "$NOTES_FILE"
 `,
-    {
-      NOTES_FILE: notes,
-      PROOF_FILE: proof,
-      RELEASE_EVIDENCE_MODE: "full-release-validation",
-      ...(hasManifest ? { FULL_RELEASE_VALIDATION_MANIFEST_DIR: root } : {}),
-    },
-    process.platform === "darwin" ? "/bin/bash" : "bash",
-  );
-  expect(result.status, result.stderr).toBe(0);
-  const prepared = read("release-notes.md");
-  expect(prepared).toContain("Frozen release fix.");
-  expect(read("helper-notes.md")).toBe(`${prepared}\n\n${read("proof.md").trimEnd()}`);
-});
+      extended
+        ? {
+            GITHUB_REPOSITORY: "openclaw/openclaw",
+            RELEASE_NPM_DIST_TAG: "extended-stable",
+          }
+        : {
+            NOTES_FILE: notes,
+            PROOF_FILE: proof,
+            RELEASE_EVIDENCE_MODE: "full-release-validation",
+            ...(hasManifest ? { FULL_RELEASE_VALIDATION_MANIFEST_DIR: root } : {}),
+          },
+      process.platform === "darwin" ? "/bin/bash" : "bash",
+    );
+    expect(result.status, result.stderr).toBe(0);
+    const prepared = read("release-notes.md");
+    if (extended) {
+      expect(
+        prepared.startsWith(
+          "This is a gateway-only `extended-stable` release, which is our current equivalent to LTS. " +
+            "This release is OpenClaw from the end of August 2026, plus critical security updates, " +
+            "reliability and performance fixes, and features like new model support. " +
+            "The latest version of OpenClaw at the time of this release is " +
+            "[2026.9.5](https://github.com/openclaw/openclaw/releases#release-v2026.9.5)\n\n",
+        ),
+      ).toBe(true);
+    } else {
+      expect(prepared).toContain("Frozen release fix.");
+      expect(read("helper-notes.md")).toBe(`${prepared}\n\n${read("proof.md").trimEnd()}`);
+    }
+  },
+);
 
 it.each<[string, string, string?, string?]>([
   ["draft", "latest", "edit"],
+  ["draft", "beta", "edit"],
   ["missing", "latest", "create"],
   ["public", "latest"],
   ["diverged-public", "latest"],

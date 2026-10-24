@@ -111,10 +111,13 @@ describe("npm package-lock release report", () => {
     const rootDir = fixture();
     const report = await generateNpmPackageLocksReport({ rootDir, jobs: 2 });
     expect(report).toEqual({
+      schemaVersion: 1,
       generatedAt: expect.any(String),
+      generator: "scripts/npm-package-locks-report.mts",
       sourceSha: "a".repeat(40),
       packageVersion: "2026.9.1",
       pnpmLockSha256: hash("lockfileVersion: '9.0'\n"),
+      lockfileVersion: 3,
       packagesWithOmittedWorkspaceDependencies: 0,
       packages: [".", "extensions/acpx", "extensions/beta", "packages/zulu"].map((packageDir) => {
         const lock = lockFor(path.join(rootDir, packageDir));
@@ -136,14 +139,9 @@ describe("npm package-lock release report", () => {
     expect(new Date(report.generatedAt).toISOString()).toBe(report.generatedAt);
   });
 
-  it("sorts runtime omissions across release packages without including dev or peer references", async () => {
+  it("marks only the root and gateway client partial in the release-split fixture", async () => {
     const root = sourceFixture({
-      ".": {
-        dependencies: { zeta: "workspace:*", alpha: "workspace:^", fixture: "1.0.0" },
-        optionalDependencies: { middle: "workspace:~", alpha: "workspace:^" },
-        devDependencies: { development: "workspace:*" },
-        peerDependencies: { peer: "workspace:*" },
-      },
+      ".": { dependencies: { "@openclaw/ai": "workspace:*", fixture: "1.0.0" } },
       "packages/gateway-client": {
         dependencies: { "@openclaw/gateway-protocol": "workspace:*", fixture: "1.0.0" },
         openclaw: { release: { publishToNpm: true } },
@@ -158,7 +156,7 @@ describe("npm package-lock release report", () => {
       packageVersion: "2026.9.1",
       packagesWithOmittedWorkspaceDependencies: 2,
       packages: [
-        { name: "openclaw", omittedWorkspaceDependencies: ["alpha", "middle", "zeta"] },
+        { name: "openclaw", omittedWorkspaceDependencies: ["@openclaw/ai"] },
         {
           name: "@openclaw/acpx",
           bundleRuntimeDependencies: false,
@@ -170,6 +168,22 @@ describe("npm package-lock release report", () => {
           omittedWorkspaceDependencies: ["@openclaw/gateway-protocol"],
         },
       ],
+    });
+  });
+
+  it("sorts and deduplicates runtime omissions without including dev or peer references", async () => {
+    const root = sourceFixture({
+      ".": {
+        dependencies: { zeta: "workspace:*", alpha: "workspace:^", fixture: "1.0.0" },
+        optionalDependencies: { middle: "workspace:~", alpha: "workspace:^" },
+        devDependencies: { development: "workspace:*" },
+        peerDependencies: { peer: "workspace:*" },
+      },
+    });
+    const report = await generateNpmPackageLocksReport({ rootDir: root });
+    expect(report).toMatchObject({
+      packagesWithOmittedWorkspaceDependencies: 1,
+      packages: [{ omittedWorkspaceDependencies: ["alpha", "middle", "zeta"] }],
     });
   });
 
@@ -209,7 +223,13 @@ describe("npm package-lock release report", () => {
   });
 
   it.each([
-    { carrier: npmPath, metadata: { ...dependency, integrity: undefined } },
+    ...[
+      { integrity: undefined },
+      { resolved: undefined },
+      { dev: true },
+      { link: true },
+      { resolved: "file:npm.tgz" },
+    ].map((invalid) => ({ carrier: npmPath, metadata: { ...dependency, ...invalid } })),
     { carrier: npmPath, metadata: undefined },
     { carrier: `${npmPath}/node_modules/foo`, metadata: undefined },
     { carrier: `${npmPath}/node_modules/foo`, metadata: { version: "1.0.0" } },
@@ -228,12 +248,19 @@ describe("npm package-lock release report", () => {
   });
 
   it.each([
-    ...[{ dev: true }, { link: true }, { resolved: "file:local.tgz" }].map((invalid) => ({
-      invalid,
-      bundled: false,
-    })),
-    ...[undefined, ""].map((version) => ({ invalid: { version }, bundled: true })),
-    ...["", undefined].map((resolved) => ({ invalid: { resolved }, bundled: false })),
+    ...[{ dev: true }, { link: true }, { resolved: "file:local.tgz" }].flatMap((invalid) =>
+      [false, true].map((bundled) => ({ invalid, bundled })),
+    ),
+    ...[undefined, "", 1].map((version) => ({ invalid: { version }, bundled: true })),
+    ...[
+      "workspace:*",
+      "git+https://example.com/repo",
+      "git:repo",
+      "ssh:repo",
+      "https://github.com/org/repo",
+      "",
+      undefined,
+    ].map((resolved) => ({ invalid: { resolved }, bundled: false })),
     ...[
       { integrity: "" },
       { integrity: undefined },

@@ -45,6 +45,16 @@ type PendingApproval = {
   };
 };
 
+type ApprovalIdentityRow = {
+  source_agent_id: string | null;
+  source_session_key: string | null;
+  source_run_id: string | null;
+  source_tool_call_id: string | null;
+  source_tool_name: string | null;
+  source_context_id: string | null;
+  source_execution_id: string | null;
+};
+
 afterEach(async () => {
   closeOpenClawAgentDatabasesForTest();
   await instance?.cleanup();
@@ -65,31 +75,65 @@ function readJsonLines(filePath: string): AppServerLogEntry[] {
   }
 }
 
-function readApprovalIdentity(owner: OpenClawTestInstance, approvalId: string) {
+function queryApproval(owner: OpenClawTestInstance, sql: string, ...args: string[]) {
   const database = new DatabaseSync(path.join(owner.stateDir, "state", "openclaw.sqlite"), {
     readOnly: true,
   });
   try {
-    return database
-      .prepare(`SELECT approval.source_agent_id, approval.source_session_key, approval.source_run_id,
-      approval.source_tool_call_id, approval.source_tool_name,
-      binding.source_context_id, binding.source_execution_id
-      FROM operator_approvals AS approval
-      LEFT JOIN operator_approval_execution_identities AS binding ON binding.approval_id = approval.approval_id
-      WHERE approval.approval_id = ?`)
-      .get(approvalId);
+    return database.prepare(sql).get(...args);
   } finally {
     database.close();
   }
 }
 
+function readApprovalIdentity(testInstance: OpenClawTestInstance, approvalId: string) {
+  return queryApproval(
+    testInstance,
+    `SELECT approval.source_agent_id, approval.source_session_key, approval.source_run_id,
+            approval.source_tool_call_id, approval.source_tool_name,
+            binding.source_context_id, binding.source_execution_id
+       FROM operator_approvals AS approval
+       LEFT JOIN operator_approval_execution_identities AS binding
+         ON binding.approval_id = approval.approval_id
+      WHERE approval.approval_id = ?`,
+    approvalId,
+  ) as ApprovalIdentityRow | undefined;
+}
+
+function assertNoGenericDuplicate(testInstance: OpenClawTestInstance, approvalId: string) {
+  const table = queryApproval(
+    testInstance,
+    "SELECT name FROM sqlite_schema WHERE type = 'table' AND name = ?",
+    "execution_decision_facts",
+  );
+  if (table) {
+    const row = queryApproval(
+      testInstance,
+      `SELECT COUNT(*) AS count FROM execution_decision_facts
+        WHERE owner = 'operator_approvals' OR source_ref = (
+          SELECT resolution_ref FROM operator_approvals WHERE approval_id = ?
+        )`,
+      approvalId,
+    );
+    expect(row?.count).toBe(0);
+  }
+}
+
 function requireAllowedOnceReceipt(result: AuditRunInspectResult) {
-  expect(
-    result.decisionDisplays.find(
-      (candidate) => candidate.provenance.producer === "operator-approval",
-    ),
-  ).toMatchObject({
-    enforcement: { coverageState: "enforced" },
+  const receipt = result.decisionDisplays.find(
+    (candidate) =>
+      candidate.provenance.state === "verified" &&
+      candidate.provenance.producer === "operator-approval",
+  );
+  expect(receipt).toMatchObject({
+    decision: {
+      outcome: "allowed",
+      reasonCode: "operator_approval_allowed_once",
+    },
+    enforcement: {
+      coverageState: "enforced",
+      contextFieldsUsed: ["contextId", "executionId", "runId"],
+    },
     provenance: { state: "verified", producer: "operator-approval" },
   });
 }
@@ -127,11 +171,12 @@ async function connectApprovalReviewer(testInstance: OpenClawTestInstance) {
   return client;
 }
 
-async function inspectReceipt(owner: OpenClawTestInstance, runId: string) {
+async function inspectReceipt(owner: OpenClawTestInstance, runId: string, approvalId: string) {
   const result = await owner.cli(["audit", "--run", runId, "--explain", "--json"]);
   expect(result.code, result.stderr).toBe(0);
   const inspection = JSON.parse(result.stdout) as AuditRunInspectResult;
   requireAllowedOnceReceipt(inspection);
+  assertNoGenericDuplicate(owner, approvalId);
   return JSON.stringify(inspection);
 }
 
@@ -223,6 +268,7 @@ describe("Codex native approval receipt", () => {
             async () => {
               const pending = await reviewer.request<PendingApproval[]>("plugin.approval.list", {});
               const match = pending[0];
+              expect(match).toBeDefined();
               if (!match) {
                 throw new Error("native approval is not pending yet");
               }
@@ -272,12 +318,12 @@ describe("Codex native approval receipt", () => {
           source_context_id: expect.any(String),
           source_execution_id: expect.any(String),
         });
-        if (typeof identity?.source_run_id !== "string") {
+        if (!identity?.source_run_id) {
           throw new Error("operator approval omitted the admitted run id");
         }
         const sourceRunId = identity.source_run_id;
 
-        const serialized = await inspectReceipt(instance, sourceRunId);
+        const serialized = await inspectReceipt(instance, sourceRunId, approval.id);
         expect(serialized).not.toContain(PRIVATE_COMMAND);
         expect(serialized).not.toContain(PRIVATE_THREAD_ID);
         expect(serialized).not.toContain(PRIVATE_ITEM_ID);
@@ -286,7 +332,7 @@ describe("Codex native approval receipt", () => {
         reviewer.stop();
         await instance.stopGateway();
         await instance.startGateway();
-        expect(await inspectReceipt(instance, sourceRunId)).toBe(serialized);
+        expect(await inspectReceipt(instance, sourceRunId, approval.id)).toBe(serialized);
       } finally {
         reviewer.stop();
       }

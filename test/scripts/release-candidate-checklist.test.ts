@@ -1328,9 +1328,9 @@ describe("release candidate checklist", () => {
     const latest = "b".repeat(40);
     const check = () =>
       validateReleaseScenarioCatalogCompatibility({
-        candidateCatalog: catalog(Boolean(extra)),
+        candidateCatalog: catalog(extra),
         toolingCatalog: catalog(!extra),
-        latestTrustedToolingCatalog: catalog(Boolean(supported)),
+        latestTrustedToolingCatalog: catalog(supported),
         toolingSha: pinned,
         latestTrustedToolingSha: latest,
         workflowRef: "main",
