@@ -4,6 +4,7 @@ import path from "node:path";
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { runWithLocalStateOwner } from "./local-state-owner.js";
 import { registerSecretsCli } from "./secrets-cli.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -45,7 +46,11 @@ vi.mock("../secrets/store/secret-store.js", async (importOriginal) => {
   };
 });
 // mock-isolation: These policy tests use the offline branch; owner routing has its own boundary suite.
-vi.mock("./local-state-owner.js", () => import("./secrets-store-cli.test-support.js"));
+vi.mock("./local-state-owner.js", async () => {
+  const { runWithLocalStateOwner: runOfflineOwner } =
+    await import("./secrets-store-cli.test-support.js");
+  return { runWithLocalStateOwner: vi.fn(runOfflineOwner) };
+});
 
 function run(...args: string[]) {
   const program = new Command().exitOverride();
@@ -69,12 +74,103 @@ beforeEach(() => {
   mocks.updateHosts.mockReset();
   mocks.remove.mockReset();
   mocks.purge.mockReset();
+  vi.mocked(runWithLocalStateOwner).mockClear();
   for (const mock of Object.values(mocks.defaultRuntime)) {
     mock.mockClear();
   }
 });
 
 describe("secrets store CLI", () => {
+  const byteInputs = [
+    { command: "set", source: "file" },
+    { command: "set", source: "stdin" },
+    { command: "import", source: "file" },
+    { command: "import", source: "stdin" },
+  ];
+
+  it.each(byteInputs)(
+    "rejects malformed UTF-8 in $command $source before any store mutation",
+    async ({ command, source }) => {
+      const file = path.join(tempDirs.make("store-cli-encoding-"), "input");
+      const bytes = Buffer.concat([
+        Buffer.from(
+          command === "import" ? "GOOD_ENV=legal\nOPENCLAW_GATEWAY_TOKEN=before-" : "before-",
+        ),
+        Buffer.from([0xff]),
+        Buffer.from("-after"),
+      ]);
+      await fs.writeFile(file, bytes);
+      const stdinSpy =
+        source === "stdin"
+          ? vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
+              yield bytes;
+              return undefined;
+            })
+          : undefined;
+      try {
+        const input = source === "file" ? file : "-";
+        await expect(
+          run(
+            ...(command === "set"
+              ? ["set", "OPENCLAW_GATEWAY_TOKEN", "--value-file", input]
+              : ["import", "--from", input, "--yes"]),
+          ),
+        ).rejects.toThrow("__exit__:2");
+        expect(mocks.runtimeErrors.join("\n")).toContain("must be valid UTF-8");
+        expect(mocks.write).not.toHaveBeenCalled();
+        expect(mocks.writeBatch).not.toHaveBeenCalled();
+        expect(runWithLocalStateOwner).not.toHaveBeenCalled();
+      } finally {
+        stdinSpy?.mockRestore();
+      }
+    },
+  );
+
+  it.each(byteInputs)(
+    "preserves valid UTF-8 and existing BOM/newline handling in $command $source",
+    async ({ command, source }) => {
+      const file = path.join(tempDirs.make("store-cli-encoding-"), "input");
+      const value = "合法 � 😀";
+      const bytes = Buffer.from(
+        command === "import" ? `\uFEFFOPENCLAW_GATEWAY_TOKEN="${value}"\r\n` : `\uFEFF${value}\r\n`,
+      );
+      await fs.writeFile(file, bytes);
+      const stdinSpy =
+        source === "stdin"
+          ? vi.spyOn(process.stdin, Symbol.asyncIterator).mockImplementation(async function* () {
+              // A multibyte character can straddle byte-stream chunks.
+              const split = bytes.indexOf(Buffer.from("合")) + 1;
+              yield bytes.subarray(0, split);
+              yield bytes.subarray(split);
+              return undefined;
+            })
+          : undefined;
+      try {
+        const input = source === "file" ? file : "-";
+        await run(
+          ...(command === "set"
+            ? ["set", "OPENCLAW_GATEWAY_TOKEN", "--value-file", input]
+            : ["import", "--from", input, "--yes"]),
+        );
+        if (command === "set") {
+          expect(mocks.write).toHaveBeenCalledWith(
+            expect.objectContaining({
+              value: `\uFEFF${value}${source === "file" ? "\r\n" : ""}`,
+            }),
+          );
+        } else {
+          expect(mocks.writeBatch).toHaveBeenCalledWith(
+            expect.objectContaining({
+              entries: [{ name: "OPENCLAW_GATEWAY_TOKEN", kind: "secret", value }],
+            }),
+          );
+        }
+      } finally {
+        stdinSpy?.mockRestore();
+      }
+    },
+  );
+
   it.each(["set", "import"])("preserves credentials on redacted %s", async (command) => {
     const file = await inputFile(
       command === "set"
