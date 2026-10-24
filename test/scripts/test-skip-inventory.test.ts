@@ -1,5 +1,4 @@
 import { spawnSync } from "node:child_process";
-import fs from "node:fs";
 import path from "node:path";
 import { expect, it } from "vitest";
 import {
@@ -7,16 +6,16 @@ import {
   main as runTestSkipInventory,
   renderTestSkipInventoryReport,
 } from "../../scripts/test-skip-inventory.js";
+import { fixtureFiles } from "./script-fixture-files.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 
 function collectFixture(files: Record<string, string> = {}) {
   const repoRoot = createTempDir("openclaw-test-skip-inventory-");
+  const { write } = fixtureFiles(repoRoot);
   for (const [file, source] of Object.entries(files)) {
-    const target = path.join(repoRoot, file);
-    fs.mkdirSync(path.dirname(target), { recursive: true });
-    fs.writeFileSync(target, source, "utf8");
+    write(file, source);
   }
   return collectTestSkipInventoryReport({ repoRoot });
 }
