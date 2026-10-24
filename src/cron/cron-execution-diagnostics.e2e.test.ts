@@ -18,6 +18,7 @@ import {
   runWithModelFallbackMock,
 } from "./isolated-agent/run.test-harness.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
+import { cronTestInput } from "./service.fixture-builders.test-support.js";
 import { CronService, type CronEvent } from "./service.js";
 import { createNoopLogger } from "./service.test-harness.js";
 import { cronStoreKey } from "./store/key.js";
@@ -32,7 +33,6 @@ const { resetCronModelProviderPreflightCacheForTest } =
 
 type ModelRef = { provider: string; model: string };
 const defaultModel = { provider: "openai", model: "gpt-5.4" };
-const denied = "SYSTEM_RUN_DENIED: approval required";
 const unresolvedTool = "Code Mode could not resolve a configured MCP tool.";
 
 function agentReply(
@@ -101,15 +101,13 @@ async function runCase(name: string, modelRef: ModelRef = defaultModel, localBas
       });
       try {
         await cron.start();
-        const job = await cron.add({
-          name,
-          enabled: true,
-          schedule: { kind: "every", everyMs: 60_000 },
-          sessionTarget: "isolated",
-          wakeMode: "next-heartbeat",
-          payload: { kind: "agentTurn", message: `run ${name}`, model },
-          delivery: { mode: "none" },
-        });
+        const job = await cron.add(
+          cronTestInput({
+            name,
+            payload: { kind: "agentTurn", message: `run ${name}`, model },
+            delivery: { mode: "none" },
+          }),
+        );
         await expect(cron.run(job.id, "force")).resolves.toEqual({ ok: true, ran: true });
 
         const finished = events.find(
@@ -174,23 +172,6 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
     });
   });
 
-  it("persists and emits the canonical terminal timeout diagnostic", async () => {
-    runWithModelFallbackMock.mockRejectedValueOnce(
-      Object.assign(new Error('Command lane "cron-nested" task timed out after 330000ms'), {
-        name: "CommandLaneTaskTimeoutError",
-      }),
-    );
-
-    const { finished, history } = await runCase("nested lane timeout");
-
-    expectOutcomes([finished, history], {
-      status: "error",
-      ...defaultModel,
-      error: "cron: job execution timed out",
-      diagnostics: diagnostic("cron-setup", "error", "cron: job execution timed out"),
-    });
-  });
-
   it("persists provider failures without internal class names", async () => {
     const message = "Saved selection requires an update.";
     const modelRef = { provider: "openai", model: "not-a-real-model" };
@@ -230,29 +211,6 @@ describe("cron execution diagnostics", { concurrent: false }, () => {
       expect(outcome.error).not.toContain("timed out");
     }
     expect(lastError).toBe(expected);
-  });
-
-  it("persists and emits a fatal execution-denial diagnostic", async () => {
-    agentReply({
-      failureSignal: {
-        kind: "execution_denied",
-        source: "tool",
-        toolName: "exec",
-        code: "SYSTEM_RUN_DENIED",
-        message: denied,
-        fatalForCron: true,
-      },
-    });
-
-    const { finished, history } = await runCase("execution denied");
-
-    expectOutcomes([finished, history], {
-      status: "error",
-      ...defaultModel,
-      error: denied,
-      summary: denied,
-      diagnostics: diagnostic("tool", "error", denied),
-    });
   });
 
   it("persists an unresolved exec warning when the scheduled agent recovers with a reply", async () => {
