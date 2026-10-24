@@ -155,7 +155,8 @@ The built-in `memory-core` plugin can index and search a PostgreSQL agent databa
 SQLite remains the default. PostgreSQL memory search is supported on the
 [qualified runtime](/gateway/postgresql#support-matrix). Text ranking is
 engine-local, so result ordering and scores can differ from SQLite. PostgreSQL
-calibrates unnormalized cover-density rank `r` as `r / (r + 0.1)` before the
+uses the faster native `ts_rank` function and calibrates its unnormalized rank
+`r` as `r / (r + 0.1)` before the
 shared hybrid merge. This gives keywords a useful weight without penalizing
 long chunks by their full length. It is not BM25: PostgreSQL's native rank lacks
 corpus-wide inverse document frequency (IDF), so common and mixed-frequency

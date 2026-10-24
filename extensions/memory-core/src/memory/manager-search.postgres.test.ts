@@ -381,8 +381,7 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
     expect(keyword.body.error).toBeUndefined();
     expect(keyword.path.error).toBeUndefined();
     expect(keyword.body.rows.map((row) => row.path)).toEqual(["memory/lexical.md"]);
-    expect(keyword.body.rows[0]!.textScore).toBeGreaterThan(0.6);
-    expect(keyword.body.rows[0]!.textScore).toBeLessThan(0.75);
+    expect(keyword.body.rows[0]!.textScore).toBeCloseTo(0.431788756, 6);
     const vector = await regular.vector();
     const merged = await mergeHybridResults({
       vector: vector.rows.map((row) => Object.assign({}, row, { vectorScore: row.score })),
@@ -393,12 +392,12 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
       temporalDecay: { enabled: false, halfLifeDays: 30 },
     });
     expect(merged.map((row) => row.path)).toEqual([
-      "memory/lexical.md",
       "memory/semantic.md",
+      "memory/lexical.md",
       "memory/orthogonal.md",
     ]);
-    expect(merged[0]!.score).toBeCloseTo(0.62, 6);
-    expect(merged[1]!.score).toBeCloseTo(0.56, 6);
+    expect(merged[0]!.score).toBeCloseTo(0.56, 6);
+    expect(merged[1]!.score).toBeCloseTo(0.549536627, 6);
     const exact = await regular.keyword(keywordQuery("semantic"));
     expect(exact.path.rows).toMatchObject([
       { path: "memory/semantic.md", exactPathSpecificity: 1 },
@@ -451,7 +450,7 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
         db.exec(`
           CREATE FUNCTION pg_temp.pglive_rank(tsvector, tsquery, integer) RETURNS real
           LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE COST 1 AS $$
-          BEGIN RETURN pg_catalog.ts_rank_cd($1, $2, $3); END $$;
+          BEGIN RETURN pg_catalog.ts_rank($1, $2, $3); END $$;
           CREATE FUNCTION pg_temp.pglive_prefix(text, integer) RETURNS text
           LANGUAGE plpgsql IMMUTABLE PARALLEL SAFE COST 1 AS $$
           BEGIN RETURN pg_catalog.left($1, $2); END $$;
@@ -479,7 +478,7 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
             const capture = vi.spyOn(db, "query").mockImplementation((statement, bindings) => {
               return execute(
                 statement
-                  .replaceAll("ts_rank_cd(", "pg_temp.pglive_rank(")
+                  .replaceAll("ts_rank(", "pg_temp.pglive_rank(")
                   .replaceAll("left(", "pg_temp.pglive_prefix("),
                 bindings,
               );
@@ -504,8 +503,8 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
         const expected = admitted(() =>
           db
             .prepare(`
-          SELECT id, ts_rank_cd(openclaw_search, to_tsquery('simple', ?), 0) /
-            (ts_rank_cd(openclaw_search, to_tsquery('simple', ?), 0) + 0.1) AS score
+          SELECT id, ts_rank(openclaw_search, to_tsquery('simple', ?), 0) /
+            (ts_rank(openclaw_search, to_tsquery('simple', ?), 0) + 0.1) AS score
           FROM memory_index_chunks
           WHERE openclaw_search @@ to_tsquery('simple', ?)
           ORDER BY score DESC, id LIMIT 3
@@ -545,8 +544,8 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
       expect(result.body.rows).toMatchObject([
         {
           path: "body-hit.md",
-          score: expect.closeTo(2 / 3, 6),
-          textScore: expect.closeTo(2 / 3, 6),
+          score: expect.closeTo(0.431788753, 6),
+          textScore: expect.closeTo(0.431788753, 6),
         },
       ]);
       expect(result.path.rows.map((row) => [row.path, row.exactPathSpecificity])).toEqual([
@@ -556,15 +555,15 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
       ]);
       expect(result.path.rows).toMatchObject([
         {
-          score: expect.closeTo(0.5, 6),
-          pathScore: expect.closeTo(0.5, 6),
+          score: expect.closeTo(0.378081258, 6),
+          pathScore: expect.closeTo(0.378081258, 6),
           textScore: 0,
           hasBodyMatch: false,
         },
         { score: 0, pathScore: 0, textScore: 0, hasBodyMatch: false },
         {
-          score: expect.closeTo(0.5, 6),
-          pathScore: expect.closeTo(0.5, 6),
+          score: expect.closeTo(0.378081258, 6),
+          pathScore: expect.closeTo(0.378081258, 6),
           textScore: 0,
           hasBodyMatch: false,
         },

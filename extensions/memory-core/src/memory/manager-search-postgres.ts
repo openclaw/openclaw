@@ -240,7 +240,7 @@ function textRank(
   tokenizer?: "unicode61" | "trigram",
 ): RawBuilder<number> {
   if (tokenizer !== "trigram") {
-    return fullText.rank(index, query, { postgres: { normalization: 0 } }).value;
+    return fullText.rank(index, query, { postgres: { normalization: 0, rank: "frequency" } }).value;
   }
   if (query.kind !== "all" && query.kind !== "any") {
     return fullText.rank(index, query).value;
@@ -254,7 +254,7 @@ function calibrateTextRank(
   rank: RawBuilder<number>,
   tokenizer?: "unicode61" | "trigram",
 ): RawBuilder<number> {
-  // Native cover density has no corpus IDF. Saturation preserves hybrid weighting.
+  // Native rank has no corpus IDF. Saturation preserves hybrid weighting.
   return tokenizer === "trigram" ? rank : sql<number>`${rank} / (${rank} + 0.1)`;
 }
 
