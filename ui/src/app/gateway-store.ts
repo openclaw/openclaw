@@ -2,8 +2,10 @@ import {
   ConnectErrorDetailCodes,
   gatewayCredentialScope,
   isRetryableGatewayStartupUnavailableError,
+  readControlUiBuildMismatchId,
 } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeNullableString } from "@openclaw/normalization-core/string-coerce";
 import { registerListener } from "../../../src/shared/listeners.js";
 import type { EventLogEntry } from "../api/event-log.ts";
 import {
@@ -27,7 +29,6 @@ import { createGatewayCanvasSurfaceLease } from "./gateway-canvas-surface.ts";
 import {
   createGatewayControlUiReloadOptions,
   isSameOriginGateway,
-  readGatewayRejectionReload,
 } from "./gateway-control-ui-reload.ts";
 import { createGatewayMessageBodyInterest } from "./gateway-message-bodies.ts";
 import {
@@ -395,7 +396,7 @@ export function createApplicationGateway(
     canvasSurface.stop();
     client?.stop();
 
-    const scheduleReload = (buildId: string, reloadOnce = false) => {
+    const scheduleReload = (buildId: string, reloadOnce?: boolean) => {
       void scheduleStaleChunkReload({
         buildId,
         reloadOnce,
@@ -451,11 +452,7 @@ export function createApplicationGateway(
         const controlUiBuildFresh = !(
           isSameOriginGateway(nextConnection.gatewayUrl) &&
           (exactBuildIdentityAvailable || everConnected) &&
-          controlUiBuildDiffersFrom({
-            version: hello.server?.version,
-            buildId: hello.server?.buildId,
-            controlUiBuildSource: hello.server?.controlUiBuildSource,
-          })
+          controlUiBuildDiffersFrom(hello.server ?? {})
         );
         if (!controlUiBuildFresh) {
           // Keep every connected-only drain fenced. The stale document may
@@ -539,9 +536,13 @@ export function createApplicationGateway(
           credentials.retire(false);
         }
         const lastErrorCode = resolveGatewayErrorDetailCode(error) ?? error?.code ?? null;
-        const { buildId, buildMismatch } = readGatewayRejectionReload(error);
-        if (buildId) {
-          scheduleReload(buildId, true);
+        const mismatchId = readControlUiBuildMismatchId(error?.details);
+        const buildMismatch = mismatchId !== null && error?.code !== "INVALID_REQUEST";
+        if (mismatchId || lastErrorCode === ConnectErrorDetailCodes.PROTOCOL_MISMATCH) {
+          const serverBuildId = normalizeNullableString(
+            asOptionalRecord(error?.details)?.gatewayBuildId,
+          );
+          scheduleReload(mismatchId ?? serverBuildId ?? CONTROL_UI_BUILD_INFO.buildId, true);
         }
         const startupPending =
           !buildMismatch &&
