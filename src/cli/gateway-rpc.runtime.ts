@@ -19,6 +19,7 @@ export type GatewayRpcExtraOptions = {
   expectFinal?: boolean;
   progress?: boolean;
   scopes?: Parameters<typeof callGateway>[0]["scopes"];
+  requiredMethods?: Parameters<typeof callGateway>[0]["requiredMethods"];
   sharedStateMode?: Parameters<typeof callGateway>[0]["sharedStateMode"];
 };
 
@@ -102,6 +103,7 @@ export async function callGatewayFromCliRuntime<T = Record<string, unknown>>(
         beforeDeviceIdentityLoad: prepareCliGatewayStateAccess,
         expectFinal: extra?.expectFinal ?? Boolean(opts.expectFinal),
         scopes: extra?.scopes,
+        requiredMethods: extra?.requiredMethods,
         useStoredDeviceAuth: extra?.useStoredDeviceAuth,
         requiredStoredDeviceAuthScopes: extra?.requiredStoredDeviceAuthScopes,
         requireLocalBackendSharedAuth: extra?.requireLocalBackendSharedAuth,

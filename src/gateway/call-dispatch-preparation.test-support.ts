@@ -27,6 +27,7 @@ export function registerGatewayCallDispatchPreparationTests(
   }
 
   it.each([
+    ["device.pair.clear", undefined, undefined],
     ["secrets.resolve", undefined, undefined],
     ["gateway.restart.request", "gateway-restart-target-safe-v1", undefined],
     ["agent", CAPS.AGENT_SESSION_ID_CREATE, undefined],

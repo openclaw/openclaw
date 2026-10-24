@@ -11,6 +11,7 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   pairing: {
+    clearDevicePairing: vi.fn(),
     getPairedDevice: vi.fn(),
     getPendingDevicePairing: vi.fn(),
     listDevicePairing: vi.fn(),
