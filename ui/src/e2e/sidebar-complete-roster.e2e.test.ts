@@ -6,6 +6,7 @@ import { expect, it } from "vitest";
 import { warmReloadProbe } from "../../../scripts/lib/control-ui-warm-reload-probe.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
+import { controlUiE2eWaitTimeoutMs } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
@@ -182,7 +183,16 @@ suite.define(() => {
               match: ownerMatch,
             },
           );
-          await page.clock.runFor(100);
+          await expect
+            .poll(
+              async () => {
+                // Reply delivery can outlive a clock jump. Drain the frame that discovers children.
+                await page.clock.runFor(20);
+                return (await gateway.getRequests("sessions.list", childMatch)).length;
+              },
+              { timeout: controlUiE2eWaitTimeoutMs },
+            )
+            .toBeGreaterThan(0);
           const childRequest = await gateway.waitForRequest("sessions.list", { match: childMatch });
           const childResult = lists.list(asRecord(childRequest.params)!).result;
           let childReleased = false;

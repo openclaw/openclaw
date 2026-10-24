@@ -14,13 +14,13 @@ import {
   expandBundleCommandPromptTemplate,
   expandExplicitSkillReferences,
   hasSkillReferenceCandidate,
-  listReservedChatSlashCommandNames,
   mergeExplicitSkillSelections as mergeSelections,
   resolveSkillCommandInvocation,
   skillCommandsToExplicitSelections as toSelections,
 } from "../../skills/discovery/chat-command-invocation.js";
 import type { ExplicitSkillSelection } from "../../skills/types.js";
 import { notifyPreparedAgentRunStart } from "../agent-run-start.js";
+import { listReservedChatSlashCommandNames } from "../commands-registry.data.js";
 import {
   copyReplyPayloadMetadata,
   markCommandReplyForDelivery,

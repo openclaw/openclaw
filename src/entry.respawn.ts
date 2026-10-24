@@ -1,4 +1,5 @@
 import path from "node:path";
+import { formatErrorStackWithMessage } from "@openclaw/normalization-core/error-coercion";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { isStandaloneRuntimeExecutable, resolveOpenClawCliRespawn } from "../cli-invocation.mjs";
 import { resolveNodeStartupTlsEnvironment } from "./bootstrap/node-startup-env.js";
@@ -172,7 +173,7 @@ export async function runCliRespawnPlan(
     onError: (error) =>
       writeError(
         "[openclaw] Failed to respawn CLI:",
-        error instanceof Error ? (error.stack ?? error.message) : error,
+        error instanceof Error ? formatErrorStackWithMessage(error) : error,
       ),
   });
 }

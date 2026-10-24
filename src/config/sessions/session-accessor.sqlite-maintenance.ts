@@ -15,7 +15,6 @@ import {
 } from "./session-accessor.sqlite-archive.js";
 import type { SessionLifecycleArchivedTranscript } from "./session-accessor.sqlite-contract.js";
 import { withSqliteSessionDeletions } from "./session-accessor.sqlite-deletion.js";
-import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-lifecycle-state.js";
 import type {
   SessionEntryMaintenancePlan,
   SessionEntryMaintenanceResult,
@@ -36,6 +35,7 @@ import {
   createSessionMaintenanceStatisticsOperation,
   resolveSessionReclamationDatabaseOptions,
 } from "./session-accessor.sqlite-reclamation.js";
+import { collectSessionStateIdsForEntry } from "./session-accessor.sqlite-references.js";
 import {
   toDatabaseOptions,
   type ResolvedSqliteReadScope,

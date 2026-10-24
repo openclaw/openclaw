@@ -1,33 +1,33 @@
 import type {
   ChatHistoryPage,
   ChatHistoryPageParams,
-} from "../../config/sessions/session-history-types.js";
-import { resolveSessionTranscriptActiveLeafEntryId } from "../../config/sessions/transcript-tree.js";
-import { createTranscriptDisplaySource } from "../../sessions/transcript-display-position.js";
-import { augmentChatHistoryWithCanvasBlocks } from "../chat-display-projection.canvas.js";
+} from "../config/sessions/session-history-types.js";
+import { resolveSessionTranscriptActiveLeafEntryId } from "../config/sessions/transcript-tree.js";
+import { createTranscriptDisplaySource } from "../sessions/transcript-display-position.js";
+import { augmentChatHistoryWithCanvasBlocks } from "./chat-display-projection.canvas.js";
 import {
   projectChatDisplayMessagesWithState,
   createChatHistoryRecoveryProjection,
   type ChatDisplayProjectionOptions,
-} from "../chat-display-projection.core.js";
+} from "./chat-display-projection.core.js";
 import {
   dropPreSessionStartAnnouncePairs,
   isHeartbeatHistoryTurnBoundaryMessage,
-} from "../chat-display-projection.history.js";
-import type { CurrentUserProfileDisplayResolver } from "../current-user-profile-display.js";
+} from "./chat-display-projection.history.js";
+import { attachChatHistoryReplyMessages } from "./chat-history-reply-messages.js";
+import { prepareChatHistoryResponsePage } from "./chat-history-response-page.js";
+import type { CurrentUserProfileDisplayResolver } from "./current-user-profile-display.js";
 import {
   dropChatHistoryOverreadContextMessage,
   readChatHistoryMessageId,
   readChatHistoryRecoveryContext,
   readChatHistoryMessageSeq,
   readIncrementalChatHistoryTail,
-} from "../session-history-tail.js";
+} from "./session-history-tail.js";
 import type {
   SessionTranscriptPageReader,
   ReadRecentSessionMessagesResult,
-} from "../session-transcript-read.types.js";
-import { attachChatHistoryReplyMessages } from "./chat-history-reply-messages.js";
-import { prepareChatHistoryResponsePage } from "./chat-history-response-page.js";
+} from "./session-transcript-read.types.js";
 
 export type ChatHistoryPageKernelOptions = {
   readers: SessionTranscriptPageReader;

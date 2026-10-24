@@ -1,14 +1,14 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
-import type { ChatMessageGetResult } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import type { ChatHistoryPageParams } from "../../config/sessions/session-history-types.js";
-import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
+import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../packages/gateway-protocol/src/schema/chat-history-constants.js";
+import type { ChatMessageGetResult } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { ChatHistoryPageParams } from "../config/sessions/session-history-types.js";
+import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import {
   projectChatDisplayMessage,
   type ChatDisplayProjectionOptions,
-} from "../chat-display-projection.core.js";
-import type { SessionTranscriptPageReader } from "../session-transcript-read.types.js";
+} from "./chat-display-projection.core.js";
+import type { SessionTranscriptPageReader } from "./session-transcript-read.types.js";
 
 /** Batch label projection includes quoted originals without recursively following their replies. */
 export async function projectChatHistoryWithReplies(
