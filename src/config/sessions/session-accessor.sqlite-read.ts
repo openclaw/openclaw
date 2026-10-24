@@ -541,7 +541,8 @@ export function readTranscriptEventsFromDatabase<T>(
     );
     const events = (function* () {
       for (const row of rows) {
-        yield JSON.parse(row.event_json) as TranscriptEvent;
+        const event: TranscriptEvent = JSON.parse(row.event_json);
+        yield event;
       }
     })();
     try {
