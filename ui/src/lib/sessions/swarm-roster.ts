@@ -1,4 +1,5 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { childSessionListQuery } from "./child-session-data.ts";
@@ -86,7 +87,7 @@ type SwarmHydrationParams = {
 type SwarmRead = "parent" | "children";
 
 export class SwarmRosterHydrator {
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
   rows: GatewaySessionRow[] = [];
   /** True once the child query has filled `rows`; the seed can hold only some children. */
   hydrated = false;
@@ -125,14 +126,11 @@ export class SwarmRosterHydrator {
   private readonly requestedChildren = new Set<string>();
 
   subscribe(notify: () => void): () => void {
-    this.listeners.add(notify);
-    return () => this.listeners.delete(notify);
+    return this.listeners.subscribe(notify);
   }
 
   private publish(): void {
-    for (const notify of this.listeners) {
-      notify();
-    }
+    this.listeners.publish();
   }
 
   update(params: SwarmHydrationParams): void {

@@ -1,4 +1,5 @@
 import { AVATAR_MAX_BYTES, isAvatarImageMimeType } from "../../../src/shared/avatar-limits.js";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import {
   fetchGatewayContextResource,
   readAvatarGatewayContext,
@@ -145,8 +146,7 @@ export function retainAvatarImageUrl(value: string | Promise<string | null> | nu
 
 /** Synchronous view leases; the shared Gateway cache owns image bytes. */
 export function createIdentityAvatars() {
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+  const { publish: notify, subscribe } = createChangeListeners();
   let connected = false;
   let unsubscribeGatewayReset: (() => void) | undefined;
   const routes = new Map<
@@ -175,10 +175,7 @@ export function createIdentityAvatars() {
       return disconnect;
     },
     disconnect,
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe,
     withActiveRoutes<T>(render: () => T): T {
       activeRoutes = new Set();
       try {

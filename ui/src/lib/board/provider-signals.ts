@@ -1,4 +1,4 @@
-import { registerListener } from "../../../../src/shared/listeners.js";
+import { createChangeListeners, registerListener } from "../../../../src/shared/listeners.js";
 
 export type BoardSnapshotSignal<T> = {
   readonly value: T;
@@ -10,19 +10,17 @@ export type BoardEventStream<T> = {
 };
 
 export class ValueSignal<T> implements BoardSnapshotSignal<T> {
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
 
   constructor(public value: T) {}
 
   subscribe(listener: () => void): () => void {
-    return registerListener(this.listeners, listener);
+    return this.listeners.subscribe(listener);
   }
 
   set(value: T): void {
     this.value = value;
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.listeners.publish();
   }
 }
 
