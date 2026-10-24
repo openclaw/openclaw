@@ -33,10 +33,26 @@ vi.mock("./hosted-setup.runtime.js", async (importOriginal) => ({
   runHostedSearchSetup: vi.fn(),
 }));
 
-vi.mock("../plugins/providers.js", () => ({
-  resolveOwningPluginIdsForModelRefs: vi.fn(() => []),
-  resolveOwningPluginIdsForProviderRef: vi.fn(() => []),
-}));
+vi.mock("../plugins/providers.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../plugins/providers.js")>();
+  return {
+    ...original,
+    // The verified-inference helper installs exact synthetic owner records; keep every
+    // selected fixture owner available without consulting the host plugin inventory.
+    resolveActivatableProviderOwnerPluginIds: vi.fn(
+      (params: Parameters<typeof original.resolveActivatableProviderOwnerPluginIds>[0]) => [
+        ...params.pluginIds,
+      ],
+    ),
+    resolveBundledProviderCompatPluginIds: vi.fn(
+      (params: Parameters<typeof original.resolveBundledProviderCompatPluginIds>[0]) => [
+        ...(params.onlyPluginIds ?? []),
+      ],
+    ),
+    resolveOwningPluginIdsForModelRefs: vi.fn(() => []),
+    resolveOwningPluginIdsForProviderRef: vi.fn(() => []),
+  };
+});
 
 vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),

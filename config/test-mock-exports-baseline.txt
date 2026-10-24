@@ -6797,7 +6797,6 @@
 ["src/system-agent/setup-inference-turn.test.ts","../agents/runtime-plugins.js","f33c9cc23788f77c9d790be1b53b8006a671bd2772f3ea84b1935963f347cdc5",1]
 ["src/system-agent/setup-inference.provider-install-owner.test.ts","../plugins/provider-auth-choice.js","4317d4dbf8564afebef8b46019d84f717457db6a1d4653b2b89b5af9337b6a23",1]
 ["src/system-agent/tui-backend.test.ts","../agents/prepared-model-catalog.js","f97eb654e755515f9f971db6de0d9ef1fadc01282f1e855aa371a2d50b347d20",1]
-["src/system-agent/tui-backend.test.ts","../plugins/providers.js","25373331c7ce8a9e5e1d66b21d70ce8c425849f7dd03bca51a94f52915aa8047",1]
 ["src/talk/agent-run-control.test.ts","../agents/embedded-agent-runner/runs.js","84749cd68c32bf2807d147720b84a3f012f96ba66893f0a69ba5c26a2a354f61",1]
 ["src/talk/fast-context-runtime.test.ts","../plugins/memory-runtime.js","bf5e72067c79eb8b2db29d1f842538a2f75279069f91605a664b2872b734668b",1]
 ["src/test-utils/openclaw-test-state.auth.test.ts","../plugins/loader-runtime-load.js","6feea9c304832fa0c01827a298c2948ee8ab3e4595bd40d1fc69d410dd78d079",1]
