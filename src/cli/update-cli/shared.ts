@@ -227,21 +227,18 @@ export async function resolveUpdateRoot(context?: { root: string }): Promise<str
   );
 }
 
-export async function runUpdateStep(params: {
-  name: string;
-  argv: string[];
-  cwd?: string;
-  timeoutMs?: number;
-  progress?: UpdateStepProgress;
-  env?: NodeJS.ProcessEnv;
-  input?: string;
-  runCommand?: Parameters<typeof runStep>[0]["runCommand"];
-  results?: UpdateStepResult[];
-}): Promise<UpdateStepResult> {
+export async function runUpdateStep(
+  params: Omit<Parameters<typeof runStep>[0], "cwd" | "runCommand" | "stepIndex" | "totalSteps"> & {
+    cwd?: string;
+    runCommand?: Parameters<typeof runStep>[0]["runCommand"];
+  },
+): Promise<UpdateStepResult> {
   return await runStep({
     ...params,
     cwd: params.cwd ?? process.cwd(),
-    runCommand: params.runCommand ?? runCommandWithTimeout,
+    runCommand:
+      params.runCommand ??
+      ((argv, options) => runCommandWithTimeout(argv, { ...options, killProcessTree: true })),
     stepIndex: 0,
     totalSteps: 0,
   });
