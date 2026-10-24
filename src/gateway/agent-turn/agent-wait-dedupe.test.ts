@@ -419,7 +419,6 @@ it.each(
   async ({ status, registration }) => {
     vi.useFakeTimers();
     const runId = `publication-${status}-${registration}`;
-    const key = `agent:${runId}`;
     const context = createGatewayRequestContext(makeContextParams());
     let claim: SessionControllerMailboxClaim | undefined;
     if (registration !== "sessionless") {
@@ -435,7 +434,7 @@ it.each(
       const emitAcceptance = vi.fn();
       expect(
         replayAgentTurnIfCached({
-          preflight: { runId, agentDedupeKeys: [key] },
+          preflight: { runId, agentDedupeKeys: [`agent:${runId}`] },
           context,
           io: { emitAcceptance, emitFinal: vi.fn() },
         }),
@@ -460,8 +459,7 @@ it.each(
       }
       await vi.advanceTimersByTimeAsync(0);
       expect(waiting.respond).not.toHaveBeenCalled();
-      const duringPublication = invokeWait(context, runId, 0);
-      await expectReply(duringPublication, { runId, status: "timeout" });
+      await expectReply(invokeWait(context, runId, 0), { runId, status: "timeout" });
       expect(replay()?.[1]).toMatchObject({ runId, status: "in_flight" });
       publish();
       rpcSourceTesting.delete(runId);

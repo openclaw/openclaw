@@ -160,13 +160,11 @@ describe("startAgentRunExecution Gateway ownership", () => {
     if (prewriter) {
       registration.controller.abort();
     }
-    const commandEntered = createDeferred();
-    const finishCommand = createDeferred();
+    const command = createGate();
     const save = createGate();
     const disposal = createGate();
     agentCommand.mockImplementationOnce(async () => {
-      commandEntered.resolve();
-      await finishCommand.promise;
+      await command.wait();
       if (outcome === "startup failure") {
         throw new Error("Synthetic command startup failure");
       }
@@ -209,7 +207,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
     try {
       if (!prewriter) {
         await awaitGateBeforeSettlement(
-          commandEntered.promise,
+          command.entered,
           disposal.entered,
           "Execution entered disposal before command dispatch",
         );
@@ -220,7 +218,7 @@ describe("startAgentRunExecution Gateway ownership", () => {
             await save.wait();
           }),
         ).toBe(true);
-        finishCommand.resolve();
+        command.resolve();
         await awaitGateBeforeSettlement(
           save.entered,
           disposal.entered,
@@ -245,14 +243,12 @@ describe("startAgentRunExecution Gateway ownership", () => {
       expect(rpcSourceTesting.get(execution.params.runId)).toBe(entry);
       expectCalls(0, execution.callerRelease, finished);
       disposal.resolve();
-      if (completedCleanupFails) {
-        expect(collectNestedErrorCandidates(await observed)).toContain(callbackFault);
-        if (publicationFails) {
-          expect(collectNestedErrorCandidates(await observed)).toContain(publicationFault);
-        }
-      } else if (outcome === "publication and cleanup failure") {
+      if (completedCleanupFails || (publicationFails && cleanupFails)) {
         expect(collectNestedErrorCandidates(await observed)).toEqual(
-          expect.arrayContaining([publicationFault, cleanupFault]),
+          expect.arrayContaining([
+            ...(publicationFails ? [publicationFault] : []),
+            completedCleanupFails ? callbackFault : cleanupFault,
+          ]),
         );
       } else if (outcome === "publication failure") {
         expect(await observed).toBe(publicationFault);
@@ -262,14 +258,10 @@ describe("startAgentRunExecution Gateway ownership", () => {
         await completion;
       }
       expect(rpcSourceTesting.has(execution.params.runId)).toBe(cleanupFails);
-      if (cleanupFails) {
-        expect(sourceSettled).not.toHaveBeenCalled();
-      } else {
-        expect(sourceSettled).toHaveBeenCalledOnce();
-      }
+      expectCalls(cleanupFails ? 0 : 1, sourceSettled);
       expect(execution.callerRelease).toHaveBeenCalledOnce();
     } finally {
-      finishCommand.resolve();
+      command.resolve();
       save.resolve();
       disposal.resolve();
       await observed;
@@ -350,24 +342,22 @@ describe("startAgentRunExecution Gateway ownership", () => {
     const execution = createExecution();
     const completion = bindFollowupCompletion(execution);
     const source = execution.params.prepared.activeRunAbort.entry!;
-    const entered = createDeferred();
-    const release = createDeferred();
+    const dispatchGate = createGate();
     dispatchAgentRunFromGateway.mockImplementationOnce(async (dispatch) => {
       expect(source.input.claim?.inputs).toEqual([source.input]);
       expect(getCurrentSessionControllerOwner()).toBe(source.input.claim?.operation);
       expect(source.input.mailbox.entries).toContain(source.input);
       expect(source.input.mailbox.entries).toHaveLength(1);
-      entered.resolve();
-      await release.promise;
+      await dispatchGate.wait();
       dispatch.cleanupAbortController();
     });
     const running = startAgentRunExecution(execution.params);
     try {
-      await Promise.race([entered.promise, running]);
+      await Promise.race([dispatchGate.entered, running]);
       expect(dispatchAgentRunFromGateway).toHaveBeenCalledOnce();
       expect(source.input.claim?.released).toBe(false);
     } finally {
-      release.resolve();
+      dispatchGate.resolve();
       await running;
       completion.close();
     }
