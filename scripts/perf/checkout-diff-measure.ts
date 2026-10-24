@@ -476,11 +476,11 @@ function observeGitQueues() {
         typeof result.source === "string" ? result.source : new TextDecoder().decode(result.source);
       for (const [pattern, replacement, expected] of [
         [
-          /const measure = timing \|\| options\.diffTiming;/g,
-          "const measure = timing || options.diffTiming || observedAt !== undefined;",
+          /const measure\s*=\s*timing\s*\|\|\s*options\.diffTiming\b/g,
+          "const measure = timing || options.diffTiming || observedAt !== undefined",
           1,
         ],
-        [/if \(timing\)/g, "if (measure)", 3],
+        [/if\s*\(\s*timing\s*\)/g, "if (measure)", 3],
       ] as const) {
         let guards = 0;
         source = source.replace(pattern, () => {
