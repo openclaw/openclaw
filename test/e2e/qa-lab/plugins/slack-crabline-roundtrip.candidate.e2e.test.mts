@@ -190,7 +190,6 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
     let transportClosed = false;
     let providerClosed = false;
     let completed = false;
-    let effectiveConfig: unknown;
     let runtimeIdentity: Awaited<ReturnType<typeof slackRuntimeIdentity>> | undefined;
     const cells: Array<Record<string, unknown>> = [];
     const recorderFile = path.join(directory, "artifacts/crabline/slack-provider-server.jsonl");
@@ -318,21 +317,6 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
       await transport.waitReady({ gateway });
       assertActive();
       await entryObservation.verify(gateway.pid, runtimeIdentity.entrySha256);
-      const slack = gateway.cfg.channels?.slack;
-      const accounts = slack?.accounts ?? {};
-      const key = Object.hasOwn(accounts, "default")
-        ? "default"
-        : Object.keys(accounts).find((entry) => entry.trim().toLowerCase() === "default");
-      const account = key === undefined ? undefined : accounts[key];
-      effectiveConfig = {
-        accountKey: key,
-        webhookPath: account?.webhookPath ?? slack?.webhookPath,
-        rootStreaming: slack?.streaming ?? null,
-        accountStreaming: account?.streaming ?? null,
-        // Report authored values; do not invent a runtime call from an inferred default.
-        streaming: { ...slack?.streaming, ...account?.streaming },
-      };
-
       const first = await cursors(mock.baseUrl);
       const unboundMarker = "p03-unbound-no-replay";
       assertActive();
@@ -449,7 +433,6 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
             proof: "slack-public-callback-candidate",
             ...proofIdentity,
             completed,
-            effectiveConfig,
             cells: cells.map((entry) => Object.assign({}, entry)),
             artifactDirectory: directory,
             runtime: { platform: process.platform, arch: process.arch, node: process.version },
@@ -475,28 +458,6 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
           if (runtimeIdentity) {
             expect(await slackRuntimeIdentity()).toEqual(runtimeIdentity);
           }
-          // Snapshot provider diagnostics before its owner closes. A later failure still
-          // leaves the fields already captured available to the durable failure receipt.
-          snapshot.calls = transport
-            ? (await records()).map((event) => ({
-                method: event.method,
-                path: event.path,
-                accepted: event.accepted ?? null,
-              }))
-            : [];
-          snapshot.model = mock
-            ? (
-                await json<MockOpenAiRequestSnapshot[]>(
-                  mock.baseUrl + "/debug/requests",
-                  AbortSignal.timeout(5_000),
-                )
-              ).map((entry) => ({
-                cursor: entry.cursor,
-                outcome: entry.outcome,
-                errorCode: entry.errorCode ?? null,
-              }))
-            : [];
-          console.log(JSON.stringify(snapshot));
         }),
         observeCleanup("abort", () => fixture.abort()),
         observeCleanup("gateway", async () => {
@@ -543,18 +504,6 @@ it.for(["nonstreaming", "default-streaming diagnostic"] as const)(
               retentionErrors.push(error);
             }
           };
-          await retain(() => {
-            console.log(
-              JSON.stringify({
-                artifactDirectory: directory,
-                ...closure,
-                bodyFailure:
-                  bodyFailure instanceof Error
-                    ? { name: bodyFailure.name, message: bodyFailure.message }
-                    : (bodyFailure ?? null),
-              }),
-            );
-          });
           let raw: { file: string; bytes: number; sha256: string } | null = null;
           await retain(async () => {
             if (retainedResources) {
