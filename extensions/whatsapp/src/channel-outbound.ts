@@ -2,6 +2,7 @@ import {
   createMessageReceiptFromOutboundResults,
   defineChannelMessageAdapter,
   type ChannelMessageSendResult,
+  type MessageReceiptPartKind,
 } from "openclaw/plugin-sdk/channel-outbound";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
@@ -39,6 +40,7 @@ export const whatsappChannelOutbound = {
 function toWhatsAppMessageSendResult(
   result: Awaited<ReturnType<NonNullable<typeof whatsappChannelOutbound.sendText>>>,
   replyToId?: string | null,
+  kind: MessageReceiptPartKind = "text",
 ): ChannelMessageSendResult {
   const source = result as typeof result & { toJid?: string };
   const receipt =
@@ -53,7 +55,7 @@ function toWhatsAppMessageSendResult(
             },
           ]
         : [],
-      kind: "text",
+      kind,
       ...(replyToId ? { replyToId } : {}),
     });
   return {
@@ -67,6 +69,7 @@ export const whatsappMessageAdapter = defineChannelMessageAdapter({
   durableFinal: {
     capabilities: {
       text: true,
+      media: true,
       replyTo: true,
       messageSendingHooks: true,
     },
@@ -82,6 +85,27 @@ export const whatsappMessageAdapter = defineChannelMessageAdapter({
           : undefined,
       });
       return toWhatsAppMessageSendResult(result, ctx.replyToId);
+    },
+    media: async ({ onDeliveryResult, ...ctx }) => {
+      const result = await whatsappChannelOutbound.sendMedia!({
+        ...ctx,
+        onDeliveryResult: onDeliveryResult
+          ? async (progress) => {
+              await onDeliveryResult(
+                toWhatsAppMessageSendResult(
+                  progress,
+                  ctx.replyToId,
+                  ctx.audioAsVoice ? "voice" : "media",
+                ),
+              );
+            }
+          : undefined,
+      });
+      return toWhatsAppMessageSendResult(
+        result,
+        ctx.replyToId,
+        ctx.audioAsVoice ? "voice" : "media",
+      );
     },
   },
 });

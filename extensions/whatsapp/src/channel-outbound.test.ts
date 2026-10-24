@@ -631,7 +631,44 @@ describe("whatsappChannelOutbound", () => {
         messageSendingHooks: () => {
           expect(whatsappMessageAdapter.send.text).toBeTypeOf("function");
         },
+        media: async () => {
+          const result = await whatsappMessageAdapter.send.media?.({
+            cfg: {} as never,
+            to: "5511999999999@c.us",
+            text: "report",
+            mediaUrl: "/tmp/report.pdf",
+          } as Parameters<NonNullable<typeof whatsappMessageAdapter.send.media>>[0]);
+          expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith(
+            "5511999999999@c.us",
+            "report",
+            expect.objectContaining({ mediaUrl: "/tmp/report.pdf" }),
+          );
+          // The transport reports the accepted LID alias as toJid. The adapter
+          // result must stay receipt-shaped like text sends, so a media send to
+          // the current chat still counts as a delivered source reply.
+          expect(result).toEqual({
+            messageId: "wa-1",
+            receipt: expect.objectContaining({
+              platformMessageIds: ["wa-1"],
+              parts: [expect.objectContaining({ kind: "media" })],
+            }),
+          });
+          expect(result).not.toHaveProperty("toJid");
+        },
       },
     });
+  });
+
+  it("keeps voice-note media receipts in the voice kind", async () => {
+    const result = await whatsappMessageAdapter.send.media?.({
+      cfg: {} as never,
+      to: "5511999999999@c.us",
+      text: "",
+      mediaUrl: "/tmp/voice.ogg",
+      audioAsVoice: true,
+    } as Parameters<NonNullable<typeof whatsappMessageAdapter.send.media>>[0]);
+
+    expect(result?.receipt.parts.map((part) => part.kind)).toEqual(["voice"]);
+    expect(result).not.toHaveProperty("toJid");
   });
 });
