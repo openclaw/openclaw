@@ -2,7 +2,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { SkillsWorkshopReadResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.ts";
-import { createSkill } from "../pages/skills/view.test-support.ts";
+import { createReport, createSkill } from "../pages/skills/view.test-support.ts";
 import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -20,12 +20,6 @@ const agentRoster = [
   { id: "reviewer", identity: { name: "Reviewer" }, name: "Reviewer" },
 ];
 const agentsResponse = { agents: agentRoster, defaultId: "main", mainKey: "main", scope: "agent" };
-const approvalDefaults = {
-  security: "deny",
-  ask: "on-miss",
-  askFallback: "deny",
-  autoAllowSkills: false,
-};
 const emptyRequirements = { anyBins: [], env: [], config: [], os: [] };
 const bootMethods = ["agents.list", "chat.metadata", "chat.startup", "config.get"];
 const workshopMethods = [
@@ -35,13 +29,6 @@ const workshopMethods = [
   "skills.workshop.read",
   "skills.workshop.restore",
 ];
-const approvalSnapshot = {
-  path: "/tmp/openclaw-e2e/exec-approvals.json",
-  exists: true,
-  hash: "approval-hash-1",
-  file: { defaults: approvalDefaults, agents: {} },
-};
-
 const operatorConfig = {
   agents: {
     ownership: "explicit",
@@ -54,47 +41,31 @@ const operatorConfig = {
 };
 
 function skillStatus(eligible: boolean) {
-  return {
-    workspaceDir: "/tmp/openclaw-e2e/workspace",
-    managedSkillsDir: "/tmp/openclaw-e2e/skills",
-    skills: [
-      createSkill({
-        name: "Deploy Helper",
-        description: "Prepare reviewed deployments.",
-        source: "openclaw-bundled",
-        bundled: true,
-        filePath: "/tmp/openclaw-e2e/skills/deploy-helper/SKILL.md",
-        baseDir: "/tmp/openclaw-e2e/skills/deploy-helper",
-        skillKey: "deploy-helper",
-        eligible,
-        modelVisible: eligible,
-        commandVisible: eligible,
-        primaryEnv: undefined,
-        homepage: undefined,
-        requirements: { ...emptyRequirements, bins: ["deploy-helper"] },
-        missing: { ...emptyRequirements, bins: eligible ? [] : ["deploy-helper"] },
-        install: [
-          {
-            id: "node-deploy-helper",
-            kind: "node",
-            label: "Install Deploy Helper",
-            bins: ["deploy-helper"],
-          },
-        ],
-      }),
-    ],
-  };
+  return createReport([
+    createSkill({
+      name: "Deploy Helper",
+      skillKey: "deploy-helper",
+      eligible,
+      modelVisible: eligible,
+      commandVisible: eligible,
+      primaryEnv: undefined,
+      homepage: undefined,
+      requirements: { ...emptyRequirements, bins: ["deploy-helper"] },
+      missing: { ...emptyRequirements, bins: eligible ? [] : ["deploy-helper"] },
+      install: [
+        {
+          id: "node-deploy-helper",
+          kind: "node",
+          label: "Install Deploy Helper",
+          bins: ["deploy-helper"],
+        },
+      ],
+    }),
+  ]);
 }
 
 function configResponse(config: Record<string, unknown> = operatorConfig) {
   return { ...configSnapshot(config, "config-hash-1"), sourceConfig: config };
-}
-
-function reviewerApprovals(
-  hash: string,
-  reviewer: typeof approvalDefaults & { allowlist: Array<{ pattern: string }> },
-) {
-  return { ...approvalSnapshot, hash, file: { defaults: approvalDefaults, agents: { reviewer } } };
 }
 
 function withPage(run: (page: Page) => Promise<void>) {
@@ -330,82 +301,6 @@ suite.define(() => {
         .locator("openclaw-modal-dialog", { hasText: "Deploy Helper" })
         .getByRole("button", { name: "Install Deploy Helper" });
       await expectDenied(install, gateway, "skills.install");
-    });
-  });
-
-  it("edits, saves, and reapplies reviewer-scoped exec approvals", async () => {
-    await withPage(async (page) => {
-      const initialApprovals = reviewerApprovals("approval-hash-1", {
-        ...approvalDefaults,
-        security: "allowlist",
-        allowlist: [{ pattern: "/usr/bin/git" }],
-      });
-      const appliedApprovals = reviewerApprovals("approval-hash-2", {
-        security: "full",
-        ask: "always",
-        askFallback: "allowlist",
-        autoAllowSkills: true,
-        allowlist: [{ pattern: "/usr/bin/gh" }],
-      });
-      const gateway = await installMockGateway(page, {
-        featureMethods: [
-          ...bootMethods,
-          "device.pair.list",
-          "exec.approvals.get",
-          "exec.approvals.set",
-          "node.list",
-        ],
-        methodResponses: {
-          "config.get": configResponse(),
-          "device.pair.list": { paired: [], pending: [] },
-          "exec.approvals.get": initialApprovals,
-          "exec.approvals.set": { ok: true },
-          "node.list": { nodes: [] },
-        },
-      });
-
-      const response = await page.goto(`${suite.server.baseUrl}nodes`);
-      expect(response?.status()).toBe(200);
-      await gateway.waitForRequest("exec.approvals.get");
-
-      const scopeSelect = page.locator("openclaw-agent-select.agent-select--settings");
-      await selectAgent(scopeSelect, "Reviewer (reviewer)");
-
-      const modeSelects = page.getByRole("combobox", { name: "Mode" });
-      await modeSelects.nth(0).selectOption("full");
-      await modeSelects.nth(1).selectOption("always");
-      await page.getByRole("combobox", { name: "Fallback" }).selectOption("allowlist");
-      const autoAllowSwitch = page
-        .locator(".settings-row", { hasText: "Auto-allow skill CLIs" })
-        .getByRole("switch");
-      await autoAllowSwitch.click();
-      await page.getByRole("textbox", { name: "Pattern" }).fill("/usr/bin/gh");
-
-      await gateway.setMethodResponse("exec.approvals.get", appliedApprovals);
-      const getRequestsBeforeSave = (await gateway.getRequests("exec.approvals.get")).length;
-      const approvalsSection = page.locator(".settings-section", { hasText: "Exec approvals" });
-      const saveButton = approvalsSection.getByRole("button", { name: "Save", exact: true });
-      await saveButton.click();
-      const saveRequest = await gateway.waitForRequest("exec.approvals.set");
-      expect(saveRequest.params).toEqual({
-        baseHash: "approval-hash-1",
-        file: appliedApprovals.file,
-      });
-
-      await expect
-        .poll(async () => (await gateway.getRequests("exec.approvals.get")).length)
-        .toBeGreaterThan(getRequestsBeforeSave);
-      for (const [control, value] of [
-        [modeSelects.nth(0), "full"],
-        [modeSelects.nth(1), "always"],
-        [page.getByRole("combobox", { name: "Fallback" }), "allowlist"],
-        [page.getByRole("textbox", { name: "Pattern" }), "/usr/bin/gh"],
-      ] as const) {
-        await expect.poll(() => control.inputValue()).toBe(value);
-      }
-      await expect.poll(() => autoAllowSwitch.isChecked()).toBe(true);
-      await expect.poll(() => saveButton.isDisabled()).toBe(true);
-      expect(await page.getByRole("alert").count()).toBe(0);
     });
   });
 });

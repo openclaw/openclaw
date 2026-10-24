@@ -597,11 +597,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
   ),
   pageWatch("ui/src/e2e/chat-heartbeat-activity-rollup.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-history-loading.e2e.test.ts", ["chat"]),
-  pageWatch(
-    "ui/src/e2e/chat-history-prepend-anchor.e2e.test.ts",
-    ["chat"],
-    ["ui/src/pages/chat/chat-pane.ts", "ui/src/pages/chat/session-snapshot-database.ts"],
-  ),
   pageWatch("ui/src/e2e/chat-image-loading.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-image-virtual-remount.e2e.test.ts", ["chat"]),
   pageWatch("ui/src/e2e/chat-interrupted-reply.e2e.test.ts", ["chat"]),
