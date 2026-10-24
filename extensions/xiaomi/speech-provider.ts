@@ -36,6 +36,14 @@ const XIAOMI_TTS_VOICES = [
 
 const XIAOMI_TTS_FORMATS = ["mp3", "wav"] as const;
 
+function usesXiaomiTokenPlanAuth(baseUrl: string): boolean {
+  try {
+    return /^token-plan-[a-z0-9-]+\.xiaomimimo\.com$/i.test(new URL(baseUrl).hostname);
+  } catch {
+    return false;
+  }
+}
+
 function normalizeXiaomiTtsFormat(value: unknown): (typeof XIAOMI_TTS_FORMATS)[number] | undefined {
   const normalized = trimToUndefined(value)?.toLowerCase();
   return XIAOMI_TTS_FORMATS.find((format) => format === normalized);
@@ -147,13 +155,16 @@ export function buildXiaomiSpeechProvider(): SpeechProviderPlugin {
       const voiceDesign = model === XIAOMI_TTS_VOICE_DESIGN_MODEL;
       const resolvedStyle =
         trimToUndefined(style) ?? (voiceDesign ? DEFAULT_XIAOMI_TTS_VOICE_DESIGN_STYLE : undefined);
+      const authHeaders = usesXiaomiTokenPlanAuth(config.baseUrl)
+        ? { Authorization: `Bearer ${config.apiKey}` }
+        : { "api-key": config.apiKey };
       let audioBuffer: Buffer;
       const { response, release } = await fetchWithSsrFGuard({
         url: `${config.baseUrl}/chat/completions`,
         init: {
           method: "POST",
           headers: {
-            "api-key": config.apiKey,
+            ...authHeaders,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({

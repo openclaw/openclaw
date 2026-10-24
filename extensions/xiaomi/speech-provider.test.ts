@@ -174,6 +174,37 @@ describe("buildXiaomiSpeechProvider", () => {
       expect(new Headers(requestInit()?.headers).get("api-key")).toBe("fake");
     });
 
+    it.each(["cn", "ams", "sgp"])(
+      "uses bearer auth for the Token Plan %s endpoint",
+      async (region) => {
+        mockAudioResponse();
+        await synthesize({
+          providerConfig: {
+            apiKey: "tp-test",
+            baseUrl: `https://token-plan-${region}.xiaomimimo.com/v1`,
+          },
+        });
+
+        const headers = new Headers(requestInit()?.headers);
+        expect(headers.get("authorization")).toBe("Bearer tp-test");
+        expect(headers.has("api-key")).toBe(false);
+      },
+    );
+
+    it("keeps api-key auth for a lookalike Token Plan host", async () => {
+      mockAudioResponse();
+      await synthesize({
+        providerConfig: {
+          apiKey: "sk-test",
+          baseUrl: "https://token-plan-cn.xiaomimimo.com.example/v1",
+        },
+      });
+
+      const headers = new Headers(requestInit()?.headers);
+      expect(headers.get("api-key")).toBe("sk-test");
+      expect(headers.has("authorization")).toBe(false);
+    });
+
     it.each([
       ["missing", "Xiaomi TTS API returned no audio data"],
       ["malformed", "Xiaomi TTS API returned malformed base64 audio data"],

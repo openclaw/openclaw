@@ -130,6 +130,24 @@ message.
 | Default  | `mimo-v2.5-tts`, voice `mimo_default`    |
 | Output   | MP3 by default; WAV when configured      |
 
+Token Plan speech uses the same `xiaomi` provider with a regional Token Plan
+`baseUrl` and its `tp-...` key. OpenClaw sends `Authorization: Bearer` for
+`token-plan-{cn,ams,sgp}.xiaomimimo.com`; pay-as-you-go endpoints continue to
+use the `api-key` header.
+
+```json5
+{
+  tts: {
+    providers: {
+      xiaomi: {
+        apiKey: "${XIAOMI_TOKEN_PLAN_API_KEY}",
+        baseUrl: "https://token-plan-cn.xiaomimimo.com/v1",
+      },
+    },
+  },
+}
+```
+
 ```json5
 {
   tts: {
