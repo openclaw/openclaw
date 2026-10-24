@@ -1,4 +1,5 @@
 // Terminal preview and confirmation for the shared plugin uninstall owner.
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../config/config.js";
 import type { PreparedPluginUninstall } from "../plugins/management-uninstall.js";
@@ -47,12 +48,15 @@ export async function runPluginUninstallCommand(
     if (preview.plan.directoryRemoval) {
       labels.push(`directory: ${shortenHomePath(preview.plan.directoryRemoval.target)}`);
     }
+    // Manifest metadata is untrusted: strip terminal controls before styling it.
+    const name = sanitizeTerminalText(preview.name);
+    const pluginId = sanitizeTerminalText(preview.pluginId);
     runtime.log(
-      `Plugin: ${theme.command(preview.name)}${preview.name !== preview.pluginId ? theme.muted(` (${preview.pluginId})`) : ""}`,
+      `Plugin: ${theme.command(name)}${preview.name !== preview.pluginId ? theme.muted(` (${pluginId})`) : ""}`,
     );
     if (preview.pluginIds.length > 1 || preview.requestedPluginId !== preview.pluginId) {
       runtime.log(
-        `Package owner: ${theme.command(preview.pluginId)}; all entries will be removed: ${preview.pluginIds.join(", ")}`,
+        `Package owner: ${theme.command(pluginId)}; all entries will be removed: ${preview.pluginIds.map(sanitizeTerminalText).join(", ")}`,
       );
     }
     runtime.log(`Will remove: ${labels.length ? labels.join(", ") : "(nothing)"}`);
