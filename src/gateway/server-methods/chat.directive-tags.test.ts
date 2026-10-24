@@ -4749,20 +4749,20 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createSqliteTranscriptFixture("openclaw-chat-send-user-transcript-error-replay-");
     mockState.dispatchError = new Error("upstream unavailable");
 
-    await runNonStreamingChatSend({
-      context: createChatContext(),
-      respond: vi.fn(),
+    const request = {
       idempotencyKey: "idem-user-transcript-error-replay",
       message: "hello from replayed failed dispatch",
-      expectBroadcast: false,
-    });
-    await runNonStreamingChatSend({
-      context: createChatContext(),
-      respond: vi.fn(),
-      idempotencyKey: "idem-user-transcript-error-replay",
-      message: "hello from replayed failed dispatch",
-      expectBroadcast: false,
-    });
+    };
+    await sendNewChatRequest({ ...request, expectBroadcast: false });
+    const dispatchCallsBeforeReplay = dispatchInboundMessageMock.mock.calls.length;
+    const { respond } = await sendNewChatRequest({ ...request, waitFor: "none" });
+    expect(respond).toHaveBeenCalledExactlyOnceWith(
+      true,
+      { runId: "idem-user-transcript-error-replay", status: "ok", messageSeq: 1 },
+      undefined,
+      { cached: true, runId: "idem-user-transcript-error-replay" },
+    );
+    expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatchCallsBeforeReplay);
 
     expect(readPersistedUserMessages()).toEqual([
       expect.objectContaining({
