@@ -10,10 +10,15 @@
 
 :is(.mention-menu, .composer-context-strip__person)
   .chat-author-avatar.is-pending
+  .chat-author-avatar__image {
+  display: none;
+}
+
+:is(.mention-menu, .composer-context-strip__person)
+  .chat-author-avatar.is-pending
   .chat-author-avatar__fallback {
   display: inline-flex;
   visibility: visible;
-  opacity: 1;
 }
 
 @media (prefers-reduced-motion: reduce) {
