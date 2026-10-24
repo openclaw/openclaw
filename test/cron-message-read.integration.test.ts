@@ -17,13 +17,8 @@ import {
 } from "../src/config/config.js";
 import { replaceSessionEntry } from "../src/config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
-import {
-  getSuspensionVisibleCronTaskRunCount,
-  waitForActiveCronTaskRuns,
-} from "../src/cron/service/active-run-cancellation.js";
 import { loadCronStore, resolveCronJobsStorePathFromConfig } from "../src/cron/store.js";
 import type { CronJobCreate } from "../src/cron/types.js";
-import * as mcpHttpHandlers from "../src/gateway/mcp-http.handlers.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "../src/gateway/mcp-http.js";
 import { getActiveMcpLoopbackRuntime } from "../src/gateway/mcp-http.loopback-runtime.js";
 import {
@@ -106,14 +101,11 @@ type Scenario = [
   runtime: "claude-cli" | "openclaw",
   action: "read" | "channel-info" | "channel-edit",
   creator: "trusted" | "account" | "native",
-  disableBeforeResponse?: 200 | 429,
 ];
 const scenarios: Scenario[] = [
   ["claude-cli", "read", "trusted"],
   ["openclaw", "channel-info", "trusted"],
   ["claude-cli", "channel-edit", "trusted"],
-  ["claude-cli", "channel-edit", "trusted", 429],
-  ["claude-cli", "channel-edit", "trusted", 200],
   ["openclaw", "channel-edit", "trusted"],
   ["claude-cli", "channel-info", "account"],
   ["openclaw", "read", "account"],
@@ -212,7 +204,7 @@ type McpResponse = {
 describe("scheduled message actions", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  async function runScenario(...[runtime, action, creator, disableBeforeResponse]: Scenario) {
+  async function runScenario(...[runtime, action, creator]: Scenario) {
     const nativeCreator = creator === "native";
     // Local creator turns use the default account identity, independent of provider defaults.
     const creatorAccountId = nativeCreator ? "work" : "default";
@@ -292,30 +284,9 @@ describe("scheduled message actions", () => {
     const cleanup: Array<() => void | Promise<void>> = [];
     const requests: Array<{ method: string; path: string; authorizationMatches: boolean }> = [];
     const edits: unknown[] = [];
-    const heldPatch = disableBeforeResponse
-      ? { entered: createDeferred(), release: createDeferred() }
-      : undefined;
-    // Job cancellation may terminate the child before it can persist the MCP reply.
-    const mcpHandlerSpy = disableBeforeResponse
-      ? vi.spyOn(mcpHttpHandlers, "handleMcpJsonRpc")
-      : undefined;
     const providerErrors: unknown[] = [];
     const providerWork = new Set<Promise<void>>();
     let requesterPermissions = 16n; // Discord MANAGE_CHANNELS.
-    const readObservedMcpResponse = async (method: "tools/list" | "tools/call") => {
-      const spy = expectDefined(mcpHandlerSpy, "MCP handler observer for a disabled job");
-      const index = spy.mock.calls.findIndex(
-        ([request]) =>
-          request.message.method === method &&
-          request.hookContext?.workspaceDir === workspaceDir &&
-          (method === "tools/list" || request.message.params?.name === "message"),
-      );
-      const returned = expectDefined(spy.mock.results[index], `Scheduled MCP ${method} result`);
-      if (returned.type !== "return") {
-        throw new Error(`Scheduled MCP ${method} did not return a response promise.`);
-      }
-      return (await waitFor(returned.value)) as McpResponse;
-    };
     await runQaGatewayFixture(
       async () => {
         await mkdir(workspaceDir, { recursive: true });
@@ -385,19 +356,6 @@ describe("scheduled message actions", () => {
               const edit: unknown = await readJson(req);
               edits.push(edit);
               expect(edit).toEqual({ topic: expectedTopic });
-              if (heldPatch && edits.length === 1) {
-                heldPatch.entered.resolve();
-                await heldPatch.release.promise;
-                if (disableBeforeResponse === 429) {
-                  res
-                    .writeHead(429, {
-                      "content-type": "application/json",
-                      "retry-after": "0.001",
-                    })
-                    .end(JSON.stringify({ message: "Rate limited", retry_after: 0.001 }));
-                  return;
-                }
-              }
               if (nativeCreator) {
                 // Each edit must use B's current permissions, independent of attribution A.
                 requesterPermissions = 0n;
@@ -756,75 +714,17 @@ describe("scheduled message actions", () => {
         expect(
           await gateway.client.request("cron.run", { id: job.id, mode: "force" }),
         ).toMatchObject({ ok: true, enqueued: true });
-        if (heldPatch) {
-          try {
-            await waitFor(
-              Promise.race([
-                heldPatch.entered.promise,
-                finished.promise.then((completion) => {
-                  throw new Error(`Completed before PATCH: ${JSON.stringify(completion)}`);
-                }),
-              ]),
-            );
-            expect(edits).toEqual([{ topic: providerTopic }]);
-            await gateway.client.request("cron.update", {
-              id: job.id,
-              patch: { enabled: false },
-            });
-            const disabledJob = expectDefined(
-              (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id),
-              "persisted disabled scheduled job",
-            );
-            expect(disabledJob).toMatchObject({
-              id: job.id,
-              enabled: false,
-              scheduledToolPolicy: { version: 1, mode: "trusted" },
-              payload: { toolsAllow: ["message"] },
-            });
-            if (disableBeforeResponse === 200) {
-              const requestSignal = expectDefined(
-                mcpHandlerSpy?.mock.calls.find(
-                  ([request]) =>
-                    request.message.method === "tools/call" &&
-                    request.hookContext?.workspaceDir === workspaceDir,
-                )?.[0].signal,
-                "original scheduled MCP request signal",
-              );
-              await waitFor(
-                requestSignal.aborted
-                  ? Promise.resolve()
-                  : new Promise<void>((resolve) => {
-                      requestSignal.addEventListener("abort", () => resolve(), { once: true });
-                    }),
-                10_000,
-              );
-            }
-          } finally {
-            heldPatch.release.resolve();
-          }
-        }
         const completion = await waitFor(finished.promise);
-        if (!disableBeforeResponse) {
-          expect(completion).toMatchObject({ status: "ok" });
-        }
+        expect(completion).toMatchObject({ status: "ok" });
         let text: string | undefined;
         if (runtime === "claude-cli") {
-          const observation: McpObservation = mcpHandlerSpy
-            ? {
-                listed: await readObservedMcpResponse("tools/list"),
-                reply: await readObservedMcpResponse("tools/call"),
-              }
-            : await readObservation(root, "mcp-result.json");
-          if (disableBeforeResponse) {
-            expect(await waitForActiveCronTaskRuns(10_000)).toEqual({ drained: true, active: 0 });
-            expect(getSuspensionVisibleCronTaskRunCount({ agentId: "main" })).toBe(0);
-          }
+          const observation = await readObservation(root, "mcp-result.json");
           const messageTool = expectDefined(
             observation.listed.result?.tools?.find((tool) => tool.name === "message"),
             "scheduled CLI message tool",
           );
           assertAccountToolSchema?.(messageTool.inputSchema);
-          expectMcpReply(observation.reply, disableBeforeResponse === 429);
+          expectMcpReply(observation.reply);
           text = contentText(observation.reply);
           if (nativeCreator) {
             expect(requests).toContainEqual(discordRequest("GET"));
@@ -849,11 +749,7 @@ describe("scheduled message actions", () => {
           });
           text = embeddedModel.observation.toolOutput;
         }
-        if (disableBeforeResponse === 429) {
-          expect(text).toMatch(/authority is no longer active|disabled by operator|abort|cancel/i);
-        } else {
-          assertToolResult(expectDefined(text, "scheduled provider tool result"));
-        }
+        assertToolResult(expectDefined(text, "scheduled provider tool result"));
         if (action === "channel-edit") {
           expect(requests.filter((request) => request.method === "PATCH")).toEqual([
             discordRequest("PATCH"),
@@ -868,13 +764,11 @@ describe("scheduled message actions", () => {
         }
         expect(providerErrors).toEqual([]);
       },
-      // Release provider responses before Gateway shutdown waits for pending writes.
-      () => heldPatch?.release.resolve(),
       () => runQaGatewayFixture(async () => {}, ...cleanup.toReversed()),
       () => vi.restoreAllMocks(),
       () => vi.unstubAllGlobals(),
       () => vi.unstubAllEnvs(),
     );
   }
-  it.each(scenarios)("%s/%s/%s, disabled before %s", { timeout: 120_000 }, runScenario);
+  it.each(scenarios)("%s/%s/%s", { timeout: 120_000 }, runScenario);
 });

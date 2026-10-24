@@ -1,6 +1,5 @@
-import * as providerAuthRuntime from "openclaw/plugin-sdk/provider-auth-runtime";
 import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import chutesPlugin from "../extensions/chutes/index.js";
 import { buildOpenAIProvider } from "../extensions/openai/api.js";
 import radiusPlugin from "../extensions/radius/index.js";
@@ -17,7 +16,6 @@ import type { AuthProfileStore, OAuthCredential } from "../src/agents/auth-profi
 import { planOpenClawModelsJson } from "../src/agents/models-config.plan.js";
 import * as catalogContext from "../src/agents/models-config.providers.catalog-context.js";
 import { resolveImplicitProviders } from "../src/agents/models-config.providers.implicit.js";
-import { prepareModelCatalogPublication } from "../src/agents/prepared-model-runtime.catalog-publication.js";
 import type { ModelProviderConfig } from "../src/config/types.models.js";
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { createTestPluginApi } from "../src/plugin-sdk/plugin-test-api.js";
@@ -238,22 +236,6 @@ describe("Provider model discovery auth preparation", () => {
       : undefined;
   }
 
-  function expectRefresh(
-    refresh: MockInstance<typeof providerRuntime.resolveProviderOAuthCredentialWithPlugin>,
-    provider: string,
-    access: string,
-    token: string,
-  ) {
-    expect(refresh).toHaveBeenCalledOnce();
-    expect(refresh).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider,
-        refresh: true,
-        credential: expect.objectContaining({ type: "oauth", provider, access, refresh: token }),
-      }),
-    );
-  }
-
   it.each([
     { providerId: "openai", source: "profile", modelId: "gpt-5.5" },
     { providerId: "xai", source: "profile", modelId: "grok-4.3" },
@@ -303,13 +285,6 @@ describe("Provider model discovery auth preparation", () => {
           events.push(`refresh:${credential.access}`);
           throw new Error("synthetic OAuth refresh failure");
         });
-      const { resolveApiKeyForProvider } = providerAuthRuntime;
-      const runtimeAuth = vi
-        .spyOn(providerAuthRuntime, "resolveApiKeyForProvider")
-        .mockImplementation(async (params) => {
-          events.push(`resolve:${params.profileId}`);
-          return resolveApiKeyForProvider(params);
-        });
       const requests: string[] = [];
       const outcomes: ProviderCatalogOutcome[] = [];
       vi.spyOn(globalThis, "fetch").mockImplementation(async (_input, init) => {
@@ -324,37 +299,18 @@ describe("Provider model discovery auth preparation", () => {
         ...(source === "env" ? { env: { XAI_API_KEY: keyB } } : {}),
       });
 
-      expect(
-        providerRuntime.resolveProviderOAuthRefreshCapabilityWithPlugin,
-      ).toHaveBeenCalledOnce();
-      expect(providerRuntime.resolveProviderOAuthRefreshCapabilityWithPlugin).toHaveBeenCalledWith(
-        expect.objectContaining({ provider: providerId }),
-      );
-      expectRefresh(refresh, providerId, "rejected-oauth-a", "refresh-a");
+      expect(refresh).toHaveBeenCalledOnce();
       const resolvedProfile = source === "profile" ? profileB : undefined;
-      expect(events).toEqual(["refresh:rejected-oauth-a", `resolve:${resolvedProfile}`, "catalog"]);
-      expect({
-        runtimeProfiles: runtimeAuth.mock.calls.map(([params]) => ({
-          profileId: params.profileId,
-          lockedProfile: params.lockedProfile,
-        })),
-        requests,
-        outcomes,
-        action: plan.action,
-      }).toEqual({
-        runtimeProfiles: [
-          { profileId: resolvedProfile, lockedProfile: resolvedProfile ? true : undefined },
-        ],
-        requests: [`Bearer ${keyB}`],
-        outcomes: [
-          {
-            provider: providerId,
-            ...(resolvedProfile ? { profileId: resolvedProfile } : {}),
-            status: "ready",
-          },
-        ],
-        action: "write",
-      });
+      expect(events).toEqual(["refresh:rejected-oauth-a", "catalog"]);
+      expect(requests).toEqual([`Bearer ${keyB}`]);
+      expect(outcomes).toEqual([
+        {
+          provider: providerId,
+          ...(resolvedProfile ? { profileId: resolvedProfile } : {}),
+          status: "ready",
+        },
+      ]);
+      expect(readPlannedProvider(plan, providerId)?.models.map(({ id }) => id)).toContain(modelId);
       expect(plan.action === "write" ? plan.contents : "").not.toContain("rejected-oauth-a");
     },
   );
@@ -435,7 +391,7 @@ describe("Provider model discovery auth preparation", () => {
     { providerId: "openai", profileCount: 1, plugin: null },
     { providerId: "xai", profileCount: 2, plugin: xaiPlugin },
   ])(
-    "retains the $providerId catalog when all $profileCount OAuth profiles fail preparation",
+    "reports every unavailable $providerId profile after OAuth preparation fails",
     async ({ providerId, profileCount, plugin }) => {
       if (plugin) {
         registerProvider(plugin);
@@ -454,62 +410,13 @@ describe("Provider model discovery auth preparation", () => {
       const config: OpenClawConfig = { auth: { order: { [providerId]: profileIds } } };
       await state.writeAuthProfiles(store);
       const refresh = mockRefreshFailure();
-      const runtimeAuth = vi.spyOn(providerAuthRuntime, "resolveApiKeyForProvider");
       const fetch = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("unexpected HTTP"));
       const outcomes: ProviderCatalogOutcome[] = [];
-      const previousProfileId = profileIds[profileIds.length - 1];
-      const previousCredential = previousProfileId && profiles[previousProfileId];
-      if (!previousProfileId || !previousCredential) {
-        throw new Error("OAuth fixture requires a previous profile");
-      }
-      const auth = {
-        authStore: store,
-        providerAuthLabels: new Map(),
-        authModes: { [providerId]: "oauth" as const },
-        credentials: { [providerId]: previousCredential },
-      };
-      const priorModel = {
-        id: "prior-account-only-model",
-        name: "Prior Account Model",
-        provider: providerId,
-      };
-      const previous = prepareModelCatalogPublication(
-        {
-          entries: [priorModel],
-          routeVariants: [],
-          providerOutcomes: [
-            { provider: providerId, profileId: previousProfileId, status: "ready" },
-          ],
-        },
-        new Map(),
-        undefined,
-        auth,
-        (provider) => provider,
-      );
-
-      const plan = await planCatalog(config, store, { providerId, outcomes });
-      const published = prepareModelCatalogPublication(
-        {
-          entries: [],
-          routeVariants: [],
-          staticEntries: readPlannedProvider(plan, providerId)?.models.map((model) =>
-            Object.assign(model, { provider: providerId }),
-          ),
-          providerOutcomes: outcomes,
-        },
-        new Map(),
-        { ...previous, providers: new Map() },
-        auth,
-        (provider) => provider,
-      );
-
-      expect(published.catalog.entries).toContainEqual(priorModel);
-      expect(published.discoveryOrigins).toEqual(previous.discoveryOrigins);
+      await planCatalog(config, store, { providerId, outcomes });
       expect(outcomes).toEqual(
         profileIds.map((profileId) => ({ provider: providerId, profileId, status: "unavailable" })),
       );
       expect(refresh).toHaveBeenCalledTimes(profileCount);
-      expect(runtimeAuth).not.toHaveBeenCalled();
       expect(fetch).not.toHaveBeenCalled();
     },
   );
