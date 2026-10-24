@@ -127,11 +127,13 @@ chat display. Native calls without negotiated host input control and direct
 WebSocket conversation seeds keep their existing representation.
 
 Generated agent-consult prompts are internal input, not spoken user turns. New
-consult records are hidden from chat and excluded from later model context, while
-the active consult still receives the full question, context, and response style.
-Raw archives and [session exports](/tools/slash-commands) remain lossless. Existing
-consult records without the exclusion flag are not rewritten and remain eligible
-for model context.
+consult records are hidden from chat and from voice background history, but stay in
+later model context exactly as the consult sent them, so each consult extends the
+provider's cached prompt instead of rewriting it. Speech finalized while a consult
+runs stays in model context too, placed after that consult's answer. Raw archives
+and [session exports](/tools/slash-commands) remain lossless. Existing consult
+records are not rewritten: records saved with the earlier exclusion flag stay out of
+model context.
 
 Chat-backed Talk stores the spoken answer without a second copy of the
 successful consult answer in visible history; the internal answer remains in the

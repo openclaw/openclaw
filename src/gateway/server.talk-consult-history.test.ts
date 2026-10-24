@@ -60,6 +60,7 @@ import {
 } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { createTalkClientAgentConsultRunner } from "./talk/client-agent-consult.js";
+import { readTalkRealtimeInitialItems } from "./talk/session-history.js";
 import { prepareTalkSessionTarget } from "./talk/session-target.js";
 import {
   createGatewaySuiteHarness,
@@ -493,7 +494,7 @@ it("preserves an actual human stop command", async () => {
   expect(runEmbeddedAgent).toHaveBeenCalledOnce();
 });
 
-it("keeps read-only Talk operator consult scaffolding out of chat and later context but in the raw archive", async () => {
+it("keeps read-only Talk operator consult scaffolding out of chat but replays it as model context", async () => {
   client.connect.scopes = ["operator.read", "operator.talk"];
   const completeModel = expectDefined(
     runEmbeddedAgent.getMockImplementation(),
@@ -570,6 +571,14 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
   await drainPublications();
   expectVisibleSpeechOnly(liveMessages(), "before model completion", false);
   expectVisibleSpeechOnly(await historyMessages(), "model-held chat.history", false);
+  // Reconnect background must hide the real persisted input before any model response exists.
+  const pendingTarget = await prepareTalkSessionTarget(getRuntimeConfig(), sessionKey);
+  expect(
+    await readTalkRealtimeInitialItems(pendingTarget, () =>
+      pendingTarget.assertCurrent(getRuntimeConfig()),
+    ),
+    "voice connection background while the browser consult is pending",
+  ).toEqual([{ role: "user", text: spoken }]);
 
   releaseModel.resolve();
   await waitForDispatchEnd();
@@ -600,9 +609,10 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
   expect.soft(generated[0]).toMatchObject({
     role: "user",
     display: false,
-    excludeFromContext: true,
     provenance: { kind: "internal_system" },
   });
+  // The model received this prompt, so replay keeps it to preserve the cached prefix.
+  expect.soft(generated[0]).not.toHaveProperty("excludeFromContext");
   const metadata = asOptionalRecord(generated[0]?.["__openclaw"]);
   expect.soft(metadata?.senderIdentity).toBeUndefined();
   expect.soft(metadata?.senderIsOwner).not.toBe(true);
@@ -615,7 +625,10 @@ it("keeps read-only Talk operator consult scaffolding out of chat and later cont
   expectVisibleSpeechOnly(await historyMessages(), "reopened chat.history", true);
   for (const manager of [SessionManager.open(scope()), SessionManager.openModelContext(scope())]) {
     const messages = manager.buildSessionContext().messages;
-    expectNoGeneratedInput(messages, "reopened model context");
+    expect(
+      messages.filter((message) => extractText(message)?.includes(args.question)),
+      "reopened model context replays the submitted prompt once",
+    ).toHaveLength(1);
     expect(messages.map(extractText)).toEqual(
       expect.arrayContaining([spoken, answer, consultCommentary, consultToolResult, consultAnswer]),
     );
@@ -712,11 +725,9 @@ it.each(["before-final", "after-final"] as const)(
       const storedMessages = transcriptMessages();
       const generated = generatedInputs(storedMessages);
       expect(generated).toHaveLength(1);
-      expect(generated[0]).toMatchObject({
-        role: "user",
-        display: false,
-        excludeFromContext: true,
-      });
+      expect(generated[0]).toMatchObject({ role: "user", display: false });
+      // The model received this prompt, so replay keeps it to preserve the cached prefix.
+      expect(generated[0]).not.toHaveProperty("excludeFromContext");
       expect(
         storedMessages.filter((message) => message.role === "assistant").map(extractText),
       ).toEqual([directAnswer]);
@@ -730,7 +741,10 @@ it.each(["before-final", "after-final"] as const)(
         expectNoGeneratedInput(messages, `closed direct call ${view}`);
       }
       const modelContext = SessionManager.openModelContext(scope()).buildSessionContext().messages;
-      expectNoGeneratedInput(modelContext, "closed direct call model context");
+      expect(
+        modelContext.filter((message) => extractText(message)?.includes(args.question)),
+        "closed direct call model context replays the submitted prompt once",
+      ).toHaveLength(1);
       expect(modelContext.map(extractText)).toContain(directAnswer);
     } finally {
       releaseModel.resolve();

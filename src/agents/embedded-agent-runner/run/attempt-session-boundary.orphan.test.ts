@@ -25,6 +25,7 @@ import {
 import { MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL } from "../../../sessions/input-provenance.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
+import { REALTIME_VOICE_AGENT_CONSULT_INPUT_PROVENANCE } from "../../../talk/agent-consult-tool.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -273,6 +274,79 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
     );
   });
 
+  it.each(["native-recorder", "prepared-message", "browser-provenance"] as const)(
+    "keeps mirrored Talk speech separate from tagged consult input: %s",
+    async (source) => {
+      await withPersistedOrphanBoundary(
+        {
+          parent: true,
+          metadata: true,
+          orphanProvenance: { kind: "realtime_voice", sourceChannel: "talk" },
+        },
+        async ({ input, manager, orphanId, target }) => {
+          const prompt = "CONSULT_ONLY: Check the requested note.";
+          const consult: PersistedUserTurnMessage = {
+            role: "user",
+            content: prompt,
+            timestamp: 3,
+            display: false,
+            idempotencyKey: "orphan-projection:user",
+            provenance: REALTIME_VOICE_AGENT_CONSULT_INPUT_PROVENANCE,
+          };
+          input.attempt.prompt = prompt;
+          if (source === "native-recorder") {
+            const recorder = createUserTurnTranscriptRecorder({
+              target: { ...target, sessionEntry: undefined },
+              message: consult,
+            });
+            await recorder.resolveMessage();
+            input.attempt.userTurnTranscriptRecorder = recorder;
+            expect(input.attempt.inputProvenance).toBeUndefined();
+            expect(input.preparedUserTurnMessage).toBeUndefined();
+          } else if (source === "prepared-message") {
+            input.preparedUserTurnMessage = consult;
+          } else {
+            input.attempt.inputProvenance = REALTIME_VOICE_AGENT_CONSULT_INPUT_PROVENANCE;
+          }
+          const boundary = await prepareEmbeddedAttemptSessionBoundary(input);
+          expect(boundary.orphanRepair).toBeUndefined();
+          expect(input.activeSession.agent.state.messages).toMatchObject([
+            { role: "user", content: "orphan wake" },
+          ]);
+          const firstCallContents = [
+            ...input.activeSession.agent.state.messages.map((message) =>
+              message.role === "user" ? message.content : undefined,
+            ),
+            prompt,
+          ];
+          expect(firstCallContents).toEqual(["orphan wake", prompt]);
+          await manager.appendMessageAsync(consult);
+          const answer = makeAssistantMessageFixture({
+            content: [{ type: "text", text: "consult reply" }],
+            timestamp: 4,
+          });
+          await manager.appendMessageAsync(answer);
+          const reopened = await SessionManager.openAsync(target);
+          const replay = reopened.buildSessionContext().messages;
+          expect(replay).toMatchObject([
+            { role: "user", content: "orphan wake" },
+            consult,
+            { role: "assistant", content: [{ type: "text", text: "consult reply" }] },
+          ]);
+          expect(
+            replay
+              .slice(0, firstCallContents.length)
+              .map((message) => (message.role === "user" ? message.content : undefined)),
+          ).toEqual(firstCallContents);
+          expect(reopened.getBranch().map((entry) => entry.id)).toContain(orphanId);
+          expect(loadTranscriptEventsSync(target)).not.toEqual(
+            expect.arrayContaining([expect.objectContaining({ type: "leaf" })]),
+          );
+        },
+      );
+    },
+  );
+
   it.each([
     { kind: "realtime_voice", sourceChannel: "discord" },
     { kind: "realtime_voice" },
@@ -288,10 +362,10 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
     );
   });
 
-  it.each(["orphan", "current", "excluded"] as const)(
+  it.each(["orphan", "current", "excluded", "talk-consult"] as const)(
     "preserves speech finalized while orphan repair waits for write admission: %s",
     async (kind) => {
-      const currentUser = kind !== "orphan";
+      const currentUser = kind === "current" || kind === "excluded";
       await withPersistedOrphanBoundary(
         {
           parent: true,
@@ -317,15 +391,20 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
             input.preparedUserTurnMessage = message;
             input.attempt.userTurnTranscriptRecorder = recorder;
           }
+          if (kind === "talk-consult") {
+            input.attempt.inputProvenance = REALTIME_VOICE_AGENT_CONSULT_INPUT_PROVENANCE;
+          }
           const reload = vi.spyOn(manager, "reloadPersistedTranscriptAsync");
           const admitted = createDeferred();
           const release = createDeferred();
           const speech = {
-            ...makeAssistantMessageFixture({
-              content: [{ type: "text", text: "voice reply" }],
-              stopReason: "stop",
-              timestamp: 2,
-            }),
+            ...(kind === "talk-consult"
+              ? { role: "user" as const, content: "late spoken clarification", timestamp: 2 }
+              : makeAssistantMessageFixture({
+                  content: [{ type: "text", text: "voice reply" }],
+                  stopReason: "stop",
+                  timestamp: 2,
+                })),
             provenance: { kind: "realtime_voice" as const, sourceChannel: "talk" },
           };
           const writing = withSessionManagerWrite(manager, async () => {
@@ -340,6 +419,12 @@ describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
 
           expect(boundary.orphanRepair).toBeUndefined();
           expect(reload).toHaveBeenCalledTimes(currentUser ? 0 : 1);
+          if (kind === "talk-consult") {
+            expect(input.activeSession.agent.state.messages).toMatchObject([
+              { role: "user", content: "orphan wake" },
+              speech,
+            ]);
+          }
           reload.mockRestore();
           const consult: PersistedUserTurnMessage = {
             role: "user",

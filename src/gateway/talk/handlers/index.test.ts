@@ -2684,7 +2684,7 @@ describe("talk.client.toolCall handler", () => {
         toolsAllow: configured
           ? undefined
           : ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
-        transcript: { display: false, excludeFromContext: true },
+        transcript: { display: false },
         prepareAssistantTranscriptMessage: expect.any(Function),
         beforeDispatch: expect.any(Function),
       });

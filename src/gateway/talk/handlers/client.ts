@@ -29,6 +29,7 @@ import { readOpenClawAgentDatabaseIdentity } from "../../../state/openclaw-agent
 import { withOpenClawAgentDatabaseRuntime } from "../../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../../state/openclaw-agent-write-admission.js";
 import {
+  REALTIME_VOICE_AGENT_CONSULT_INPUT_PROVENANCE,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   parseRealtimeVoiceAgentConsultArgs,
   buildRealtimeVoiceAgentConsultChatMessage,
@@ -399,10 +400,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
               message,
               idempotencyKey,
               suppressCommandInterpretation: true,
-              systemInputProvenance: {
-                kind: "internal_system",
-                sourceTool: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-              },
+              systemInputProvenance: REALTIME_VOICE_AGENT_CONSULT_INPUT_PROVENANCE,
               ...(normalizedTalk?.consultThinkingLevel
                 ? { thinking: normalizedTalk.consultThinkingLevel }
                 : {}),
@@ -434,9 +432,11 @@ export const talkClientHandlers: GatewayRequestHandlers = {
             transferGatewayOperatorSourceIdentity(request.client, chatSendOptions.client);
           }
           // Speech owns normal history; detached transports leave the accepted answer to Chat.
+          // The model receives the generated prompt, so it stays model context (hidden from
+          // display): dropping it would rewrite provider history on every later consult.
           const chatSendResult = handleTrustedInternalChatSend(chatSendOptions, undefined, {
             toolsAllow: authority.toolsAllow,
-            transcript: { display: false, excludeFromContext: true },
+            transcript: { display: false },
             prepareAssistantTranscriptMessage: (assistantMessage, sourceText) =>
               (relayRegistration?.prepareTranscript ?? prepareTalkAgentConsultTranscript)(
                 assistantMessage,

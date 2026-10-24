@@ -1,3 +1,4 @@
+import { omitTalkConsultInputs } from "../agents/embedded-agent-runner/run/talk-voice-history.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import type { SessionTranscriptReadScope } from "../config/sessions/session-accessor.js";
 import {
@@ -109,7 +110,8 @@ function readSessionModelPreviewItems(
     });
     return {
       items: buildSessionPreviewItems(
-        manager.buildSessionContext().messages,
+        // Voice background quotes what people said, not generated consult prompts.
+        omitTalkConsultInputs(manager.buildSessionContext().messages),
         maxItems,
         maxChars,
         "model-context",

@@ -9,6 +9,7 @@ import {
   createUserTurnTranscriptRecorder,
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
+import { REALTIME_VOICE_AGENT_CONSULT_INPUT_PROVENANCE } from "../../talk/agent-consult-tool.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
 import type { TalkClientRunAuthority } from "./client-run-authority.js";
 
@@ -106,14 +107,15 @@ export function createTalkClientAgentRuntime(params: {
             return await execution.runEmbeddedAgent({
               ...runParams,
               preparedRunAdmission,
-              // Speech is mirrored separately. Keep generated input in current-turn custody,
-              // but never display it or replay it as a later user request.
+              // Speech is mirrored separately, so never display generated input. The model
+              // already received it, so later consults must replay it unchanged: dropping it
+              // rewrites provider history and discards the cached prefix on every consult.
               userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
                 sessionLifecyclePatch: { lastInteractionAt: Date.now() },
                 input: {
                   text: runParams.prompt,
                   display: false,
-                  excludeFromContext: true,
+                  provenance: REALTIME_VOICE_AGENT_CONSULT_INPUT_PROVENANCE,
                   idempotencyKey: buildRunUserTurnIdempotencyKey(runParams.runId),
                 },
                 target: {

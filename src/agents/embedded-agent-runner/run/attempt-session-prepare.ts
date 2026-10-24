@@ -12,6 +12,7 @@ import {
   shouldPreserveUserFacingSessionStateForInputProvenance,
 } from "../../../sessions/input-provenance.js";
 import type { PersistedUserTurnMessage } from "../../../sessions/user-turn-transcript.types.js";
+import { REALTIME_VOICE_AGENT_CONSULT_INPUT_PROVENANCE } from "../../../talk/agent-consult-tool.js";
 import { createPreparedEmbeddedAgentSettingsManager } from "../../agent-project-settings.js";
 import {
   applyAgentAutoCompactionGuard,
@@ -371,9 +372,25 @@ export async function prepareEmbeddedAttemptSessionBoundary(input: {
         const orphanProvenance = normalizeInputProvenance(
           candidate?.messageEntry.message.provenance,
         );
-        // Talk speech is mirrored before its distinct hidden consult input is persisted.
-        // Keep the speech durable; the merged prompt already carries it for this attempt.
+        // Native Talk carries this tag on its recorder, while chat-backed Talk also
+        // supplies attempt provenance. Keep mirrored speech separate from the consult:
+        // merging it here duplicates the preserved speech when the next run replays it.
+        const currentInputProvenance =
+          normalizeInputProvenance(currentUserTurnMessage?.provenance) ??
+          normalizeInputProvenance(attempt.userTurnTranscriptRecorder?.message?.provenance) ??
+          normalizeInputProvenance(attempt.inputProvenance);
         if (candidate && isOutOfTurnHistoryEntry(candidate.messageEntry)) {
+          if (
+            currentInputProvenance?.kind === REALTIME_VOICE_AGENT_CONSULT_INPUT_PROVENANCE.kind &&
+            currentInputProvenance.sourceTool ===
+              REALTIME_VOICE_AGENT_CONSULT_INPUT_PROVENANCE.sourceTool
+          ) {
+            // The admitted reload may have observed speech newer than the active snapshot.
+            activeSession.agent.state.messages = sanitizeCompactionReplayMessages(
+              sessionManager.buildSessionContext().messages,
+            );
+            return undefined;
+          }
           candidate.removeLeaf = false;
         }
         // Keep unanswered user input in history through failed internal continuations.
