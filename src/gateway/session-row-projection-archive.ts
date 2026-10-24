@@ -172,6 +172,7 @@ export function createSessionRowProjectionArchive(params: {
         },
         release() {
           readPins.delete(pins);
+          limit = DEFAULT_ARCHIVED_MATERIALIZED_ROWS;
           trim();
         },
       };

@@ -370,20 +370,32 @@ it("bounds archived residency across pages and evicts the least recently read ro
       limit: 128,
       includeLastMessage: true,
     });
+    let overlappingPage: ReturnType<typeof listProjectedSessions> | undefined;
+    const secondPrepared = createDeferredCore();
+    const releaseSecond = createDeferredCore();
     try {
       await waitForPage(pendingPage, pagePrepared, signal);
       await listRows(projection, { archived: true, limit: 1 });
       expect(projection.selectEntries().filter(ready)).toHaveLength(128);
+      afterExactPreparation = async () => {
+        secondPrepared.resolve();
+        await releaseSecond.promise;
+      };
+      overlappingPage = listRows(projection, { archived: true, limit: 110, offset: 18 });
+      await waitForPage(overlappingPage, secondPrepared, signal);
+      releasePage.resolve();
+      const wholePage = await pendingPage;
+      expect(wholePage.sessions).toHaveLength(128);
+      expect(projection.selectEntries().filter(ready)).toHaveLength(110);
     } finally {
       releasePage.resolve();
-      await pendingPage;
+      releaseSecond.resolve();
+      await Promise.allSettled([pendingPage, overlappingPage]);
       afterExactPreparation = undefined;
     }
-    const wholePage = await pendingPage;
-    expect(wholePage.sessions).toHaveLength(128);
-    expect(projection.selectEntries().filter(ready)).toHaveLength(128);
-    await listRows(projection, { archived: true, limit: 1 });
+    expect((await overlappingPage)?.sessions).toHaveLength(110);
     expect(projection.selectEntries().filter(ready)).toHaveLength(100);
+    const wholePage = await pendingPage;
 
     sessionChanges.emit({ all: true, scope: "catalog" });
     await projection.ensureMaterialized();
