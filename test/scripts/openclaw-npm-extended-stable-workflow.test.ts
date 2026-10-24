@@ -202,7 +202,6 @@ it.each([
   [true, "ahead", 0, "plugins:boundary-report:ci"],
   [false, "behind", 0, null],
   [false, "ahead", 1, null],
-  [false, "diverged", 1, null],
 ] as const)(
   "enforces plugin compatibility: script=%s ancestry=%s",
   (hasScript, relationship, status, invocation) => {

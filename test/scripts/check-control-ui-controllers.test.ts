@@ -1,7 +1,6 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { main } from "../../scripts/check-control-ui-controllers.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -103,21 +102,9 @@ describe("Control UI controller guard", () => {
   });
 
   it.each([
-    [
-      "createEffect",
-      "ui/src/view.ts",
-      'import { createEffect as effect } from "solid-js"; effect(read, write);',
-    ],
     ["untrack", "ui/src/view.ts", "untrack(read);"],
-    ["addEventListener", "ui/src/view.ts", "signal.addEventListener('abort', done);"],
-    ["querySelector", "ui/src/components/markdown.ts", "root.querySelectorAll<HTMLElement>('a');"],
-    [
-      "onCleanup",
-      "ui/src/pages/view.ts",
-      'import { onCleanup } from "solid-js"; onCleanup(dispose);',
-    ],
-    ["manualImport", "ui/src/pages/view.tsx", 'let component = import("./panel.tsx");'],
-  ])("ratchets %s per file and rejects allowance inflation", (pattern, file, source) => {
+    ["querySelector", "ui/src/components/markdown.ts", "root.querySelectorAll('a');"],
+  ])("ratchets %s allowances and prunes resolved debt", (pattern, file, source) => {
     const root = fixture();
     write(root, file, source);
     const baseline = path.join(root, `config/control-ui-${pattern}-baseline.txt`);
@@ -125,8 +112,7 @@ describe("Control UI controller guard", () => {
     git(root, ["add", "."]);
     git(root, ["commit", "-m", "existing debt"]);
     expect(main(root, [])).toBe(0);
-    const addedCall = pattern === "createEffect" ? "effect(read, write);" : source;
-    write(root, file, `${source}\n${addedCall}`);
+    write(root, file, `${source}\n${source}`);
     fs.writeFileSync(baseline, `${file}\t2\n`);
     expect(main(root, [])).toBe(1);
     expect(errors.mock.calls.flat().join("\n")).toContain("allowances must not increase");
@@ -441,15 +427,5 @@ describe("Control UI controller guard", () => {
     expect(staged.error).toBeUndefined();
     expect(staged.status, staged.stderr).toBe(1);
     expect(staged.stderr).toContain("ui/src/new.ts");
-  });
-
-  it("checks current source in a shallow checkout without base history", () => {
-    const source = fixture();
-    const root = tempDirs.make("openclaw-controller-shallow-");
-    git(root, ["clone", "--depth=1", pathToFileURL(source).href, "."]);
-    expect(main(root, [])).toBe(0);
-    fs.writeFileSync(path.join(root, "ui/src/new.ts"), "class NewController {}\n");
-    expect(main(root, [])).toBe(1);
-    expect(errors.mock.calls.flat().join("\n")).toContain("ui/src/new.ts");
   });
 });

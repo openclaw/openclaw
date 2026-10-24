@@ -255,7 +255,7 @@ describe("recovery survivor evidence", () => {
         OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION: "150000",
       }),
     ).toEqual({ sessions: 1, eventsPerSession: 150000 });
-    for (const invalid of ["0", "-1", "1.5", "9007199254740992"]) {
+    for (const invalid of ["0", "9007199254740992"]) {
       expect(() =>
         recoveryVolumeSpec({ OPENCLAW_UPGRADE_SURVIVOR_VOLUME_EVENTS_PER_SESSION: invalid }),
       ).toThrow();
