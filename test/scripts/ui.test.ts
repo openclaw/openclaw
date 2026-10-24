@@ -90,13 +90,13 @@ function copyUiFixture(root: string, extra: string[] = []): void {
   fs.mkdirSync(nativeModules, { recursive: true });
   // Resolve native optional dependencies from their installed package owner.
   fs.symlinkSync(procSafeRoot, path.join(nativeModules, "proc-safe"), "junction");
-  fs.writeFileSync(path.join(root, "package.json"), '{"type":"module"}\n');
+  writeFiles(root, {
+    "package.json": '{"type":"module"}\n',
+    "scripts/generate-control-ui-validators.mts":
+      'if (process.argv.at(-1) !== "--check") throw new Error("expected validator freshness check");\n',
+  });
   fs.mkdirSync(path.join(root, ".git"));
   installDistArtifactScripts(root, [], { compiler: false });
-  fs.writeFileSync(
-    path.join(root, "scripts/generate-control-ui-validators.mts"),
-    'if (process.argv.at(-1) !== "--check") throw new Error("expected validator freshness check");\n',
-  );
 }
 
 function writeUiPackageBin(modules: string, name: string, source: string): string {
@@ -409,7 +409,10 @@ process.exitCode = 0;\n`,
     writeFiles(root, Object.fromEntries(posterFonts.map((font) => [font, "initial font bytes"])));
     // This fixture owns UI cache behavior; the native presenter builder is
     // exercised with real source and distribution bytes in its delivery suite.
-    fs.writeFileSync(path.join(root, "scripts/build-plugin-control-ui.mts"), "export {};\n");
+    writeFiles(root, {
+      "scripts/build-plugin-control-ui.mts": "export {};\n",
+      ...Object.fromEntries(validatorNames.map((file) => [`scripts/${file}`, "export {};\n"])),
+    });
     build.vite(`
 import fs from "node:fs";
 import path from "node:path";
@@ -427,9 +430,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   console.log("fixture-bundler-ran");
 }
 `);
-    for (const file of validatorNames) {
-      fs.writeFileSync(path.join(root, "scripts", file), "export {};\n");
-    }
     const run = (expectedExit = 0) => {
       const result = build.run({
         BUILD_ALL_CACHE_ROOT: cacheRoot === "explicit" ? path.join(root, "cache") : undefined,
@@ -468,10 +468,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     expect(run()).toContain("fixture-bundler-ran");
     const output = path.join(root, "dist/control-ui/index.html");
     const published = fs.readFileSync(output, "utf8");
-    fs.writeFileSync(
-      path.join(root, "scripts/generate-control-ui-validators.mts"),
-      "process.exitCode = 23;\n",
-    );
+    writeFiles(root, { "scripts/generate-control-ui-validators.mts": "process.exitCode = 23;\n" });
     const refused = run(23);
     expect(refused).not.toContain("fixture-bundler-ran");
     expect(refused).not.toContain("reused content cache");
@@ -630,15 +627,14 @@ require("node:module").syncBuiltinESMExports();
   it("checks the selected staged directory with both real validators", () => {
     const root = tempDirs.make("openclaw-ui-validators-");
     const staging = path.join(root, "dist/control-ui.build-123-fixture");
-    fs.mkdirSync(path.join(staging, "assets"), { recursive: true });
-    fs.writeFileSync(
-      path.join(staging, "index.html"),
-      '<script src="./assets/index.js"></script><link href="./assets/index.css">',
-    );
+    writeFiles(staging, {
+      "index.html": '<script src="./assets/index.js"></script><link href="./assets/index.css">',
+      "assets/index.js": "/* synthetic asset */",
+      "assets/index.css": "/* synthetic asset */",
+    });
     for (const name of ["index.js", "index.css"]) {
       const bytes = Buffer.from("/* synthetic asset */");
       const file = path.join(staging, "assets", name);
-      fs.writeFileSync(file, bytes);
       fs.writeFileSync(`${file}.gz`, gzipSync(bytes));
       fs.writeFileSync(`${file}.br`, brotliCompressSync(bytes));
     }

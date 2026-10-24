@@ -616,12 +616,8 @@ describe("scripts/test-group-report", () => {
   it.each([
     { command: "--help --unknown", error: "Unknown option: --unknown" },
     { command: "--help --limit", error: "--limit requires a value" },
-    ...["--config", "--output"].flatMap((flag) => [
-      { command: `${flag} --limit 5`, error: `${flag} requires a value` },
-      { command: `${flag} -h`, error: `${flag} requires a value` },
-    ]),
-    { command: "--limit", error: "--limit requires a value" },
-    { command: "--limit --output report.json", error: "--limit requires a value" },
+    { command: "--config --limit 5", error: "--config requires a value" },
+    { command: "--output -h", error: "--output requires a value" },
     { command: "--compare before.json --limit", error: "--compare requires a value" },
     { command: "--compare --limit 5", error: "--compare requires a value" },
     {

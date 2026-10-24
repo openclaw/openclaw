@@ -241,15 +241,11 @@ describe("Crabbox admin merge bypass verifier", () => {
   ])("rejects $stage with $fault", ({ stage, fault }) => {
     const pullToMain = stage === "pull base to first main";
     const value = input(pullToMain ? mainSha : baseSha);
-    const comparison = {
-      ahead_by: 1,
-      base_commit: { sha: pullToMain ? mainSha : baseSha },
-      behind_by: fault === "non-forward" ? 1 : 0,
-      merge_base_commit: {
-        sha: fault === "non-forward" ? headSha : pullToMain ? mainSha : baseSha,
-      },
-      status: fault === "non-forward" ? "diverged" : "ahead",
-    };
+    const comparison = forwardComparison(
+      pullToMain ? mainSha : baseSha,
+      1,
+      fault === "non-forward",
+    );
     if (pullToMain) {
       value.mainRef.object.sha = advancedMainSha;
       value.finalMainRef.object.sha = advancedMainSha;
@@ -725,14 +721,13 @@ describe("Crabbox protected gh request producers", () => {
     expect(result.stdout.trim()).toBe("maintainer");
   });
 
-  it.each([{ role: "admin", state: "pending" }])(
-    "rejects writer membership $state/$role despite the relay's admin identity",
-    (membership) => {
-      const result = runProtectedShell("require_active_org_admin_for_crabbox_gate", membership);
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain("requires an active openclaw organization admin");
-    },
-  );
+  it("rejects pending writer membership despite the relay's admin identity", () => {
+    const result = runProtectedShell("require_active_org_admin_for_crabbox_gate", {
+      state: "pending",
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("requires an active openclaw organization admin");
+  });
 
   it("keeps protected refusal terminal without alternate identity or dispatch", () => {
     const result = runProtectedShell("require_active_org_admin_for_crabbox_gate", {
