@@ -4,6 +4,7 @@ import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import type { ControlUiSessionFixture } from "../test-helpers/control-ui-session-fixtures.ts";
 import { openChatTaskProgress } from "./chat-details.test-support.ts";
 import {
   controlUiSessionUrl,
@@ -11,6 +12,8 @@ import {
   installMockGateway,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
+
+type RuntimeSessionFixture = GatewaySessionRow & ControlUiSessionFixture;
 
 const suite = createSessionManagementE2eSuite(true);
 suite.define(() => {
@@ -20,7 +23,7 @@ suite.define(() => {
       { locale: "en-US", serviceWorkers: "block", viewport: { width: 1100, height: 850 } },
       async ({ page }) => {
         const now = Date.now();
-        const parent: GatewaySessionRow = {
+        const parent: RuntimeSessionFixture = {
           key: "agent:main:progress-runtime",
           sessionId: "session:agent:main:progress-runtime",
           kind: "direct",
@@ -32,7 +35,7 @@ suite.define(() => {
           endedAt: now - 60_000,
           updatedAt: now,
         };
-        const children: GatewaySessionRow[] = Array.from({ length: 5 }, (_, index) => ({
+        const children: RuntimeSessionFixture[] = Array.from({ length: 5 }, (_, index) => ({
           key: `agent:main:subagent:progress-${index}`,
           sessionId: `session:agent:main:subagent:progress-${index}`,
           kind: "direct",
