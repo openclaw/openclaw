@@ -61,13 +61,3 @@ export async function readBoardHtml(store: BoardStore, target: BoardSessionTarge
     document && "html" in document ? document : undefined,
   );
 }
-
-export async function readBoardRegistered(
-  store: BoardStore,
-  target: BoardSessionTarget,
-  name: string,
-) {
-  return await store.useWidgetDocument(target, name, (document) =>
-    document && "source" in document ? document : undefined,
-  );
-}

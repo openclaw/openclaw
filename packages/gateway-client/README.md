@@ -5,17 +5,17 @@ connection state machine used by OpenClaw's own Node and browser clients:
 challenge-based authentication, typed protocol frames, request correlation,
 timeouts, reconnect backoff, device-token handling, and event delivery.
 
-The current wire protocol is version 4. General clients must advertise exactly v4 with
-`minProtocol: 4` and `maxProtocol: 4`. See the
+The current wire protocol is version 5. General clients must advertise exactly v5 with
+`minProtocol: 5` and `maxProtocol: 5`. See the
 [Gateway protocol specification](https://docs.openclaw.ai/gateway/protocol) for
 the complete handshake, authentication, role, scope, and method contracts.
 Exact node identities (`role: "node"` plus `mode: "node"`) and diagnostic clients
-can use v3. The built-in node host starts with an exact v4 envelope, then retries
-an exact v3 envelope after a v3 Gateway rejects v4. If that legacy connection attempt reaches
-an upgraded v4 Gateway, the client reconnects with the full v4 envelope before
-reporting readiness. Other exact node identities default to `[3, 4]`. Explicit
-bounds override these defaults; `[3, 4]` on the built-in node host selects the
-same bounded negotiation.
+can use v4. The built-in node host starts with an exact v5 envelope, then retries
+an exact v4 envelope after a v4 Gateway rejects v5. If that previous-version connection attempt reaches
+an upgraded v5 Gateway, the client reconnects with the full v5 envelope before
+reporting readiness. Both versions preserve client metadata and node capabilities.
+Other exact node identities default to `[4, 5]`. Explicit bounds override these
+defaults; `[4, 5]` on the built-in node host selects the same bounded negotiation.
 
 ## Versioning
 
@@ -101,8 +101,8 @@ const connected = Promise.withResolvers<void>();
 const client = new GatewayClient({
   url: "ws://127.0.0.1:18789",
   token: process.env.OPENCLAW_GATEWAY_TOKEN,
-  minProtocol: PROTOCOL_VERSION, // v4
-  maxProtocol: PROTOCOL_VERSION, // v4
+  minProtocol: PROTOCOL_VERSION, // v5
+  maxProtocol: PROTOCOL_VERSION, // v5
   onHelloOk: () => connected.resolve(),
   onConnectError: (error) => connected.reject(error),
   onEvent: (event) => {

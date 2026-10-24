@@ -198,7 +198,7 @@ boundaries. The sidecar contains the resources read from disk:
 - Plugin manifests, package metadata, and assets such as browser scripts, styles,
   WebAssembly, SQL templates, browser extensions, and plugin-declared static files.
 - Control UI static files.
-- Canvas A2UI bundles, session-card fonts, HTML export templates, and bundled hook metadata.
+- Session-card fonts, HTML export templates, and bundled hook metadata.
 - Native addons, shared libraries, dependency resources, and their package and
   license metadata.
 - Runtime identity and startup metadata, install-owner metadata, and license notices.

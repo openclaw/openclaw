@@ -163,7 +163,14 @@ it("backs off shared-repository snapshots after a missing-object failure", async
   }
 });
 
-it.each(["promised", "promised-retry", "unpromised", "checksum", "byte-limited"] as const)(
+it.each([
+  "promised",
+  "promised-retry",
+  "unpromised",
+  "checksum",
+  "byte-limited",
+  "index-limited",
+] as const)(
   "consolidates healthy pack batches independently of missing snapshot objects (%s)",
   async (damage) => {
     const { root, source, repo, env, materialize } = await fixture("partial");
@@ -211,19 +218,28 @@ it.each(["promised", "promised-retry", "unpromised", "checksum", "byte-limited"]
       await requireGit(source, ["config", "uploadpack.allowAnySHA1InWant", "true"]);
     }
     const before = (await fs.readdir(directory)).filter((name) => name.endsWith(".pack"));
-    if (damage === "byte-limited") {
-      // Exercise the 512-MiB budget with native tiny packs, without writing 640 MiB in a test.
+    if (damage === "byte-limited" || damage === "index-limited") {
+      // Exercise byte/object-metadata budgets using tiny native packs.
       const realStat = fs.stat.bind(fs);
       vi.spyOn(fs, "stat").mockImplementation(async (...args) => {
         const stat = await realStat(...args);
         const file = String(args[0]);
-        if (stat && path.dirname(file) === directory && file.endsWith(".pack")) {
-          stat.size = 40 * 1024 * 1024;
+        if (stat && path.dirname(file) === directory) {
+          if (damage === "byte-limited" && file.endsWith(".pack")) {
+            stat.size = 40 * 1024 * 1024;
+          } else if (damage === "index-limited" && file.endsWith(".idx")) {
+            stat.size = 8 * 1024 * 1024;
+          }
         }
         return stat;
       });
     }
-    const expectedPacks = damage === "byte-limited" ? before.length - 11 : 1;
+    const expectedPacks =
+      damage === "byte-limited"
+        ? before.length - 11
+        : damage === "index-limited"
+          ? before.length - 3
+          : 1;
     const missing = await requireGit(repo, ["rev-list", "--objects", "--all", "--missing=print"]);
     expect(missing).toContain("?");
     await requireGit(repo, ["remote", "set-url", "origin", path.join(root, "unavailable.git")]);

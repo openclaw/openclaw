@@ -41,6 +41,11 @@ import {
   validateWorkerInferenceEventFrame,
   validateWorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
+import {
+  type WorkerTurnAdmissionParams,
+  WorkerTurnAdmissionResponseFrameSchema,
+  WORKER_TURN_ADMISSION_METHOD,
+} from "../../packages/gateway-protocol/src/schema/worker-turn-admission.js";
 import { isWorkerTranscriptFrameWithinBudget } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
 import {
@@ -50,6 +55,10 @@ import {
 import { WorkerConnectionInterruptedError } from "./worker-connection-contract.js";
 
 const WORKER_REQUEST_SPECS = {
+  "turn-admission": {
+    method: WORKER_TURN_ADMISSION_METHOD,
+    validateResponse: lazyCompile(WorkerTurnAdmissionResponseFrameSchema),
+  },
   "gateway-tool": {
     method: WORKER_GATEWAY_TOOL_METHODS.invoke,
     validateResponse: lazyCompile(WorkerGatewayToolResponseFrameSchema),
@@ -86,6 +95,7 @@ const WORKER_REQUEST_SPECS = {
 
 type WorkerRequestKind = keyof typeof WORKER_REQUEST_SPECS;
 type WorkerRequestParams = {
+  "turn-admission": WorkerTurnAdmissionParams;
   "gateway-tool": WorkerGatewayToolInvokeParams;
   "gateway-tool-cancel": WorkerGatewayToolCancelParams;
   heartbeat: WorkerHeartbeatParams;
@@ -234,7 +244,7 @@ export class WorkerConnectionFrameDispatcher {
       return Promise.reject(toStructuredErrorObject(error));
     }
     const payloadLimit =
-      kind === "inference-start" || kind === "transcript"
+      kind === "inference-start" || kind === "transcript" || kind === "turn-admission"
         ? WORKER_PROTOCOL_MAX_INFERENCE_PAYLOAD_BYTES
         : WORKER_PROTOCOL_MAX_PAYLOAD_BYTES;
     if (Buffer.byteLength(encoded, "utf8") > payloadLimit) {

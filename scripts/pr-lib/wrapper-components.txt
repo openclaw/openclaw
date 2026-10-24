@@ -41,9 +41,11 @@ packages/gateway-protocol/src/schema/user-profile-constants.ts
 packages/gateway-protocol/src/schema/worker-admission.ts
 packages/gateway-protocol/src/schema/worker-computer.ts
 packages/gateway-protocol/src/schema/worker-gateway-tool.ts
+packages/gateway-protocol/src/schema/worker-inference.ts
 packages/gateway-protocol/src/schema/worker-protocol-constants.ts
 packages/gateway-protocol/src/schema/worker-protocol-primitives.ts
 packages/gateway-protocol/src/schema/worker-session-tools.ts
+packages/gateway-protocol/src/schema/worker-turn-admission.ts
 packages/gateway-protocol/src/schema/worktrees.ts
 packages/gateway-protocol/src/secret-ref-contract.ts
 packages/gateway-protocol/src/session-agent-status.ts
@@ -997,6 +999,7 @@ src/infra/gateway-supervision.ts
 src/infra/git-commit.ts
 src/infra/git-content-budget.ts
 src/infra/git-exec.ts
+src/infra/git-maintenance-env.ts
 src/infra/git-network-retry.ts
 src/infra/git-operation-timing.ts
 src/infra/git-operation.worker.ts

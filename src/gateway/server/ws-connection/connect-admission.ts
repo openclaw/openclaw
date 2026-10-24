@@ -231,13 +231,12 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
     connectParams.client.mode === GATEWAY_CLIENT_MODES.PROBE &&
     maxProtocol >= MIN_PROBE_PROTOCOL_VERSION &&
     minProtocol <= PROTOCOL_VERSION;
-  // Protocol v4 changed chat deltas, not node RPC frames. Keep N-1 limited to
-  // the node role+mode so stale operator/UI clients cannot enter the v4 surface.
+  // Protocol v5 retires registered board content. Node RPC frames remain
+  // compatible with v4; operator/UI clients must use the current board schema.
   const supportsPreviousNodeProtocol =
     isNodeClient &&
     maxProtocol >= MIN_NODE_PROTOCOL_VERSION &&
     minProtocol <= MIN_NODE_PROTOCOL_VERSION;
-  const usesLegacyNodeProtocol = !supportsCurrentProtocol && supportsPreviousNodeProtocol;
   if (!supportsCurrentProtocol && !supportsProbeRestartProtocol && !supportsPreviousNodeProtocol) {
     markHandshakeFailure("protocol-mismatch", {
       minProtocol,
@@ -358,7 +357,6 @@ export async function admitGatewayConnect(context: GatewayConnectPhaseContext) {
   return {
     minProtocol,
     maxProtocol,
-    usesLegacyNodeProtocol,
     role,
     scopes,
     isControlUi,

@@ -18,6 +18,7 @@ import {
   NODE_WORKER_PROMPT_CONTEXT_VERSION,
   NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION,
   NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
+  NODE_WORKSPACE_RESULT_VERSION,
   type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
 import { redactSensitiveText } from "../logging/redact.js";
@@ -346,6 +347,9 @@ export function startNodeHostConnection({
               !process.versions.bun &&
               gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_QUIESCENCE)
                 ? { workspaceQuiescence: NODE_WORKER_WORKSPACE_QUIESCENCE_VERSION }
+                : {}),
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_WORKSPACE_RESULT)
+                ? { workspaceResultVersion: NODE_WORKSPACE_RESULT_VERSION }
                 : {}),
               ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_STATUS_WAIT)
                 ? { statusWait: NODE_WORKER_STATUS_WAIT_VERSION }
