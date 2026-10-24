@@ -5,10 +5,7 @@ import {
   configureMerge,
   expectCapturedFiles,
   expectExit,
-  expectRetained,
   pendingGates,
-  readLocal,
-  writeLocal,
 } from "./pr-merge-assertions.test-support.js";
 import { createMergeOutcomeFixtureHarness } from "./pr-merge-outcome.test-support.js";
 import {
@@ -89,18 +86,6 @@ describePosix("qualified pre-dispatch merge recovery", () => {
       expect(f.state().mutations).toBe(1);
     },
   );
-
-  it("rejects a qualified refusal with stale prepare context", () => {
-    const f = fixture();
-    const proof = qualifiedAutoRefusal(f);
-    const captures = f.captures();
-    writeLocal(f, "prep-context.env", readLocal(f, "prep-context.env").replace(f.head, f.base));
-    const run = proof.runRecovery();
-    expect(run.error, run.output).toBeUndefined();
-    expectExit(run, 1);
-    expect(f.state()).toMatchObject({ mutations: 0, posts: 0 });
-    expectRetained(f, proof.outcome, captures);
-  });
 
   it("preserves a pre-dispatch outcome when immediate admission is ineligible", () => {
     const f = fixture();

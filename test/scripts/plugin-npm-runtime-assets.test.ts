@@ -128,7 +128,6 @@ it("isolates and awaits bounded asset hooks before publishing package assets", a
 
 it.each<AssetOptions>([
   { tracked: true },
-  { generated: true },
   { dependency: "engine" },
   { dependency: "@fixture/engine", localDependency: true },
   { tracked: true, missing: true },

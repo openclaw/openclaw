@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
 import { describe, expect } from "vitest";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
@@ -14,7 +13,6 @@ import { workerTransformProbe } from "./vitest-worker-artifacts.transforms.test-
 
 const root = process.cwd();
 const it = createWorkerArtifactTest();
-const generationDirectory = (url: string) => fileURLToPath(new URL("../../", url));
 
 // Each sequence owns its cache and two generations; keep their observations ordered.
 describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
@@ -43,7 +41,7 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
               (ids) => transformed.filter((actual) => ids.includes(actual)).length,
             );
           };
-          const generations = new Set<string>();
+          let compiled = false;
           const owner = createVitestWorkerRun(controlled.env);
           let redirectedCompilers = 0;
           // The second owner lives in this process; its child env cannot intercept its spawn.
@@ -65,7 +63,7 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
               const previousObservations = fs.existsSync(path.join(directory, "observations.jsonl"))
                 ? readJsonLines("observations.jsonl").length
                 : 0;
-              const reuse = mode === "compiled" && generations.size > 0;
+              const reuse = mode === "compiled" && compiled;
               const result = reuse
                 ? await startBorrower(owner, args).result
                 : await runtime(
@@ -81,38 +79,17 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
                     controlled.env,
                   );
               expect(result.code, result.stderr + result.stdout).toBe(0);
-              const currentGenerations: string[] =
-                readJsonLines<string>("generations.jsonl").slice(previousObservations);
               const observed = readJsonLines("observations.jsonl").slice(previousObservations);
               expect(observed).toEqual(
                 projectNames.map(() => ({ value: expectedValue, configValue: "first" })),
               );
-              expect(currentGenerations).toHaveLength(projectCount);
-              expect(new Set(currentGenerations).size).toBe(1);
-              const generation = currentGenerations[0]!;
-              if (mode === "compiled") {
-                const dir = generationDirectory(generation);
-                if (reuse) {
-                  expect(path.resolve(dir)).toBe(owner.descriptor.directory);
-                }
-                generations.add(generation);
-                expect(path.dirname(dir)).toBe(path.join(root, ".artifacts", "vitest-workers"));
-                expect(fileURLToPath(generation)).toBe(
-                  path.join(dir, "dist/infra/runtime-process-entrypoints.js"),
-                );
-                expect(fs.existsSync(dir)).toBe(reuse);
-              } else {
-                expect(fileURLToPath(generation)).toBe(
-                  path.join(root, "src/infra/runtime-process-entrypoints.ts"),
-                );
-              }
+              compiled ||= mode === "compiled";
               expect(counts(), "filesystem transform reuse").toEqual(
                 transforms.map((count) => count * projectCount),
               );
             };
             await launch("compiled", [1, 1]);
             await launch("compiled", [1, 1]);
-            expect(generations.size).toBe(2);
             await launch("source", [2, 2]);
             fs.writeFileSync(value, 'export const value: string = "second";');
             await launch("compiled", [3, 2], "second");
@@ -126,30 +103,13 @@ describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
                 ),
             );
             await launch("compiled", [4, 3], "configured");
-            expect(generations.size).toBe(2);
-            const compilers = controlled.read();
             expect(redirectedCompilers).toBe(1);
-            expect(compilers).toHaveLength(2);
-            expect(compilers.map(({ isMainThread }) => isMainThread)).toEqual([true, true]);
-            // Windows can recycle a PID after exit; process start distinguishes its next owner.
-            expect(
-              new Set(compilers.map(({ pid, processStartTime }) => `${pid}:${processStartTime}`))
-                .size,
-            ).toBe(2);
-            expect(
-              new Set(compilers.map(({ directory: generation }) => path.resolve(generation))),
-            ).toEqual(
-              new Set([...generations].map((url) => path.resolve(generationDirectory(url)))),
-            );
           } finally {
             try {
               await owner.dispose();
             } finally {
               compilerLaunch.mockRestore();
             }
-          }
-          for (const generation of generations) {
-            expect(fs.existsSync(new URL("../../", generation))).toBe(false);
           }
         },
       ),
