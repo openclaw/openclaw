@@ -163,6 +163,16 @@ try {
         const events: Array<{ name: string; dur?: number }> = [];
         let tracing = false;
         page.on("pageerror", (error) => errors.push(error.message));
+        page.on("console", (message) => {
+          if (message.type() === "error") {
+            errors.push(message.text());
+          }
+        });
+        page.on("response", (response) => {
+          if (response.status() >= 400) {
+            errors.push(`HTTP ${response.status()} ${response.url()}`);
+          }
+        });
         let releaseMedia!: () => void;
         const heldMedia = new Promise<void>((resolve) => {
           releaseMedia = resolve;
@@ -274,6 +284,19 @@ try {
             now: 1_800_000_000_000,
             sidebarAvatars: true,
             transcriptMessages: 96,
+          });
+          await page.route("**/*", async (route) => {
+            const asset = fixture.assets.get(new URL(route.request().url()).pathname);
+            if (!asset) {
+              return route.fallback();
+            }
+            const { delayMs, ...response } = asset;
+            if (delayMs) {
+              await new Promise((resolve) => {
+                setTimeout(resolve, delayMs);
+              });
+            }
+            return route.fulfill(response);
           });
           const messages = Array.from({ length: 96 }, (_, index) => ({
             role: index % 2 ? "assistant" : "user",
@@ -559,7 +582,8 @@ try {
             ),
           });
         } catch (error) {
-          result.error = String(error);
+          result.error = `${String(error)} (page: ${page.url()})`;
+          result.errors = errors;
           await page
             .screenshot({ path: path.join(artifactDir, `${prefix}-failed.png`) })
             .catch(() => undefined);

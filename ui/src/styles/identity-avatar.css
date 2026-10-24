@@ -36,8 +36,7 @@
 }
 
 .identity-avatar--agent:not(.is-fallback) > .identity-avatar__image + .identity-avatar__fallback,
-.identity-avatar--agent.is-fallback > .identity-avatar__image,
-.identity-avatar--agent.is-pending > * {
+.identity-avatar--agent.is-fallback > .identity-avatar__image {
   visibility: hidden;
 }
 
@@ -46,8 +45,10 @@
   border-radius: var(--radius-full);
 }
 
-:is(.viewer-avatar, .chat-author-avatar, .chat-avatar-slot).is-pending > * {
-  visibility: hidden;
+/* Native lazy images must remain visible to load and settle their pending state. */
+:is(.identity-avatar--agent, .viewer-avatar, .chat-author-avatar, .chat-avatar-slot).is-pending
+  > * {
+  opacity: 0;
 }
 
 .identity-avatar__text::before {
