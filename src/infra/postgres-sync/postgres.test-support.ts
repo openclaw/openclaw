@@ -3,6 +3,7 @@ import { getEnvironmentData } from "node:worker_threads";
 import { Client } from "pg";
 import { afterAll, beforeAll } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { dropPostgresTestSchemas } from "./schema-cleanup.test-support.js";
 
 export function usePostgresTestHarness(name: string) {
   const configured: unknown = getEnvironmentData("openclaw.test.workboard.connection");
@@ -18,13 +19,7 @@ export function usePostgresTestHarness(name: string) {
           for (const close of closing) {
             await close();
           }
-          const schemas = await client.query<{ nspname: string }>(
-            "SELECT nspname FROM pg_namespace WHERE nspname = $1 OR left(nspname, $2) = $3",
-            [prefix, prefix.length + 1, `${prefix}_`],
-          );
-          for (const { nspname } of schemas.rows) {
-            await client.query(`DROP SCHEMA "${nspname.replaceAll('"', '""')}" CASCADE`);
-          }
+          await dropPostgresTestSchemas(client, prefix, { includePrefix: true });
         }
       } finally {
         try {

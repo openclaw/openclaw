@@ -36,17 +36,13 @@ import { GatewayClientRegistry } from "./server/client-registry.js";
 import { createSessionObserverAudience } from "./session-observer-audience.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
-import {
-  canReceiveSessionEvent as canReceiveSessionEventForClient,
-  prepareProjectedSessionSharing,
-  resolveSessionSharingTargetAsync,
-} from "./session-sharing.js";
+import { resolveSessionSharingTargetAsync } from "./session-sharing.js";
 import {
   canReceivePreparedSessionEvent,
+  createProjectedSessionEventPredicate,
   roleClient,
   rolePolicyConfig,
 } from "./session-sharing.test-utils.js";
-import { resolveSessionStoreIdentity } from "./session-store-key.js";
 import { resolveSessionSubscriptionKeys } from "./session-subscription-keys.js";
 import { claimRpcSourceForTest, createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
@@ -92,31 +88,7 @@ function sharingFilter(
   cfg: OpenClawConfig,
   projection: Awaited<ReturnType<typeof createSessionRowProjection>>,
 ): EventFilter {
-  return (client, sessionKeys, agentId, event, payload) =>
-    canReceiveSessionEventForClient({
-      cfg,
-      client,
-      sessionKeys,
-      agentId,
-      event,
-      payload,
-      prepared: {
-        sharing: prepareProjectedSessionSharing({
-          cfg,
-          client,
-          isMember: (target, identityId) =>
-            projection.hasMembership(target.storePath, target.storeKey, identityId),
-        }),
-        target: (key, targetAgentId) => {
-          const { agentId: ownerAgentId } = resolveSessionStoreIdentity({
-            cfg,
-            sessionKey: key,
-            agentId: targetAgentId,
-          });
-          return projection.sharingTarget({ key, agentId: ownerAgentId });
-        },
-      },
-    });
+  return createProjectedSessionEventPredicate(cfg, projection);
 }
 
 describe("board and progress event session ownership", () => {

@@ -43,6 +43,7 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
+import { dropPostgresTestSchemas } from "../postgres-sync/schema-cleanup.test-support.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import { installDatabaseEngineSelection } from "./context.js";
 import { resetDatabaseEngineSelectionForTest } from "./context.test-support.js";
@@ -81,13 +82,7 @@ async function withDatabase(
       } finally {
         await closeStateDatabaseForTest();
         resetDatabaseEngineSelectionForTest();
-        const schemas = await client.query<{ nspname: string }>(
-          "SELECT nspname FROM pg_namespace WHERE starts_with(nspname, $1)",
-          [`${prefix}_`],
-        );
-        for (const { nspname } of schemas.rows) {
-          await client.query(`DROP SCHEMA "${nspname}" CASCADE`);
-        }
+        await dropPostgresTestSchemas(client, prefix);
       }
     },
   );
