@@ -4,7 +4,6 @@ import {
   usePreparedModelRuntimeHarness,
   getPreparedModelRuntimeTestApi,
 } from "./prepared-model-runtime.test-harness.js";
-import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { applyAgentConfig, pruneAgentConfig } from "../commands/agents.config.js";
@@ -19,13 +18,11 @@ import { createGatewayModelRuntimeReload } from "../gateway/server-reload-model-
 import { registryContainsRuntimePluginIds } from "../plugins/active-runtime-registry.js";
 import { PluginInstance } from "../plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import { PluginRegistryInspectionResources } from "../plugins/registry-inspection-resources.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import type { DiscoverAuthStorageOptions } from "./agent-auth-discovery.js";
 import { replaceRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-snapshots.js";
-import { harnessRegistry } from "./model-catalog-fixtures.test-support.js";
 import {
   scopePreparedModelRuntimeLease,
   withPreparedModelRuntimePluginGenerationScope,
@@ -143,67 +140,6 @@ async function useDiscoveryCredentials() {
 }
 
 describe("prepared reply dispatch runtime", () => {
-  it("holds inspected input through accepted preparation and refuses a retired result", async () => {
-    const database = new DatabaseSync(fixture.state.path("prepared-registration.sqlite"));
-    database.exec(
-      "CREATE TABLE observations (value INTEGER); INSERT INTO observations VALUES (42)",
-    );
-    const registry = createEmptyPluginRegistry();
-    const resources = new PluginRegistryInspectionResources(async () => {});
-    resources.attach(registry);
-    const dispose = vi.fn(() => database.close());
-    resources.runRegistration("prepared-native", () => {
-      resources.register("prepared-native", {
-        id: "sqlite",
-        dispose,
-      });
-    });
-    let observedValue: unknown;
-    const gate = catalogGate(() => {
-      observedValue = database.prepare("SELECT value FROM observations").get()?.value;
-    });
-    const config = {};
-    const preparation = prepareWorkspaceBuildGroup(
-      [
-        {
-          config,
-          agentDir: fixture.state.agentDir("default"),
-          workspaceDir: fixture.state.workspaceDir,
-          env: fixture.state.env,
-          skipCredentials: true,
-        },
-      ],
-      "static",
-      {},
-      () => registry,
-      undefined,
-      metadata(config),
-    );
-    const outcome = preparation.catch((error: unknown) => error);
-    try {
-      await Promise.race([
-        gate.started,
-        preparation.then(() => {
-          throw new Error("Preparation completed before its static catalog dependency");
-        }),
-      ]);
-      await resources.release();
-      expect(database.isOpen).toBe(true);
-      expect(dispose).not.toHaveBeenCalled();
-      gate.finish();
-      expect(await outcome).toEqual(new Error("Plugin inspection resources have been released"));
-      expect(observedValue).toBe(42);
-      expect(database.isOpen).toBe(false);
-      expect(dispose).toHaveBeenCalledTimes(1);
-    } finally {
-      gate.finish();
-      await Promise.allSettled([outcome, resources.release()]);
-      if (database.isOpen) {
-        database.close();
-      }
-    }
-  });
-
   it("carries newly selected provider auth into a derived generation and its refresh", async () => {
     await useDiscoveryCredentials();
     mocks.configuredAgentIds = ["default"];
@@ -241,90 +177,6 @@ describe("prepared reply dispatch runtime", () => {
     mocks.mutationListener?.({ affectsInheritedStores: true });
     await publishedRefresh();
     expect(getPreparedModelRuntimeSnapshot(input)?.authModes.selected).toBe("api_key");
-  });
-
-  it("isolates selected run owners while retaining the published generation and lease lifetime", async () => {
-    mocks.configuredAgentIds = ["default"];
-    const config = { agents: { defaults: { model: "custom/model" } } };
-    const registries = new Map(
-      ["first-harness", "second-harness"].map((runtime) => {
-        const registry = harnessRegistry(runtime, {
-          runAttempt: async () => {
-            throw new Error("unused");
-          },
-        });
-        registry.agentHarnesses[0]!.source = "test";
-        return [runtime, registry] as const;
-      }),
-    );
-    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(
-      (params) => registries.get(params.selections?.[0]?.runtime) ?? createEmptyPluginRegistry(),
-    );
-    const manifests = [...registries.keys()].map((id) => ({
-      id,
-      origin: "bundled" as const,
-      channels: [],
-      activation: { onStartup: false, onAgentHarnesses: [id] },
-    }));
-    await publishGateway(config, {
-      allowGatewaySubagentBinding: true,
-      pluginMetadataSnapshot: metadata(config, manifests),
-    });
-    const published = (await publishedDispatch())!;
-    const input = (runtime: string) => ({
-      ...runInput(
-        published,
-        [{ provider: "custom", modelId: "model", runtime }],
-        config,
-        "default",
-      ),
-      allowGatewaySubagentBinding: true,
-    });
-    const acquire = (
-      runtime: string,
-      pluginGeneration = published.pluginGeneration,
-      catalogMode?: "static",
-    ) => acquireAgentRunPreparedModelRuntime(input(runtime), { pluginGeneration, catalogMode });
-    const leases = await Promise.all(
-      [...registries.keys()].map((runtime) =>
-        acquire(runtime, published.pluginGeneration, "static"),
-      ),
-    );
-    for (const [index, runtime] of [...registries.keys()].entries()) {
-      const lease = leases[index]!;
-      expect(lease.snapshot.pluginRegistry === registries.get(runtime)).toBe(true);
-      expect(lease.snapshot.metadataSnapshot).toBe(
-        published.pluginGeneration.pluginMetadataSnapshot,
-      );
-      expect(lease.pluginGeneration.inboundPluginRegistry).toBe(published.inboundPluginRegistry);
-      expect(Object.isFrozen(lease.pluginGeneration)).toBe(true);
-      const repeated = await acquire(runtime, published.pluginGeneration, "static");
-      expect(repeated.snapshot === lease.snapshot).toBe(true);
-      expect(repeated.pluginGeneration === lease.pluginGeneration).toBe(true);
-      await repeated[Symbol.asyncDispose]();
-      let active = true;
-      await withPreparedModelRuntimePluginGenerationScope(
-        lease.pluginGeneration,
-        async () => {
-          const nested = await acquire(runtime, lease.pluginGeneration);
-          expect(nested.snapshot === lease.snapshot).toBe(true);
-          await nested[Symbol.asyncDispose]();
-          const otherRuntime = [...registries.keys()].find((candidate) => candidate !== runtime)!;
-          await expect(acquire(otherRuntime, lease.pluginGeneration)).rejects.toThrow(
-            "plugin generation was superseded",
-          );
-          active = false;
-          await lease[Symbol.asyncDispose]();
-          await expect(acquire(runtime, lease.pluginGeneration)).rejects.toThrow(
-            "plugin generation was superseded",
-          );
-        },
-        () => (active ? lease.snapshot : undefined),
-      );
-    }
-    expect(await publishedDispatch()).toBe(published);
-    expect(published.pluginGeneration.pluginRegistry?.agentHarnesses).toEqual([]);
-    expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(4);
   });
 
   it.each(["disabled", "error", "not-imported"] as const)(

@@ -712,35 +712,17 @@ describe("makeBootstrapWarn", () => {
 });
 
 describe("resolveContextInjectionMode", () => {
-  it("defaults to always when config is missing", () => {
-    expect(resolveContextInjectionMode(undefined)).toBe("always");
-  });
-
-  it("uses per-agent contextInjection before defaults", () => {
-    expect(
-      resolveContextInjectionMode(
-        {
-          agents: {
-            defaults: { contextInjection: "continuation-skip" },
-            entries: { strict: { contextInjection: "always" } },
-          },
-        } as never,
-        "strict",
-      ),
-    ).toBe("always");
-  });
-
-  it("falls back to defaults when the agent has no contextInjection override", () => {
-    expect(
-      resolveContextInjectionMode(
-        {
-          agents: {
-            defaults: { contextInjection: "never" },
-            entries: { worker: {} },
-          },
-        } as never,
-        "worker",
-      ),
-    ).toBe("never");
+  const config: OpenClawConfig = {
+    agents: {
+      defaults: { contextInjection: "never" },
+      entries: { strict: { contextInjection: "always" }, worker: {} },
+    },
+  };
+  it.each([
+    [undefined, undefined, "always"],
+    [config, "strict", "always"],
+    [config, "worker", "never"],
+  ] as const)("resolves injection mode for %s/%s", (cfg, agentId, expected) => {
+    expect(resolveContextInjectionMode(cfg, agentId)).toBe(expected);
   });
 });

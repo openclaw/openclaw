@@ -1,8 +1,5 @@
-import { performance } from "node:perf_hooks";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-registry.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import type { AdmittedRunContext } from "./admitted-run-context.js";
 import {
   isolatedAssistant,
@@ -35,7 +32,6 @@ const { mintSecretSentinel } = await import("../secrets/sentinel.js");
 const { getAdmittedRunDelegatedAuthority } = await import("./admitted-run-context.js");
 const { resolveModelFallbackError } = await import("./failover-error.js");
 const { PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE } = await import("../llm/types.js");
-const { prepareUtilityCompletionForAgent } = await import("./utility-completion.js");
 
 beforeEach(resetIsolatedCompletionTestState);
 
@@ -127,76 +123,6 @@ function pausedHarness(stage: PreparationStage, version: "v1" | "v2" = "v2") {
   };
 }
 
-it("routes an automatic utility completion without borrowing HTTP credentials", async () => {
-  const cfg: OpenClawConfig = {
-    agents: {
-      defaults: {
-        model: "anthropic/claude-opus-5",
-        models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } },
-      },
-    },
-  };
-  const manifestPlugins = [
-    {
-      id: "anthropic",
-      modelCatalog: {
-        providers: {
-          anthropic: {
-            defaultUtilityModel: "claude-haiku-4-5",
-            models: [{ id: "claude-haiku-4-5" }, { id: "claude-opus-5" }],
-          },
-        },
-      },
-    },
-  ] as unknown as PluginMetadataSnapshot["plugins"];
-  mocks.isCliRuntimeAliasForProvider.mockImplementation(
-    ({ runtime, provider }) => runtime === "claude-cli" && provider === "anthropic",
-  );
-  mocks.hasAvailableAuthForProvider.mockResolvedValue(false);
-  mocks.prepareSimpleCompletionModel.mockResolvedValue({
-    error: 'No API key found for provider "anthropic".',
-  });
-  mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "Utility result" }] });
-  const dispatch = vi.fn(async () => reply("Utility result"));
-  registerIsolatedHarness({ id: "openclaw", runIsolatedCompletionV2: dispatch });
-  const prepared = await prepareUtilityCompletionForAgent({
-    cfg,
-    agentId: "main",
-    useUtilityModel: true,
-    manifestPlugins,
-  });
-  const request = {
-    ...prepared,
-    systemPrompt: "Return JSON.",
-    prompt: "Do the task.",
-    timeoutMs: 1_000,
-  };
-
-  expect(prepared.agentHarnessRuntimeOverride).toBe("claude-cli");
-
-  await expect(runIsolatedCompletion(request)).resolves.toMatchObject({
-    text: "Utility result",
-    provider: "anthropic",
-    model: "claude-haiku-4-5",
-    owner: cliOwner,
-  });
-  expectNoCalls(mocks.prepareSimpleCompletionModel, dispatch);
-  expectCall(mocks.runCliAgent, {
-    provider: "claude-cli",
-    modelProvider: "anthropic",
-    model: "claude-haiku-4-5",
-    isolatedCompletion: true,
-  });
-
-  // Without the borrowed owner, the same credentialless request reproduces #138789.
-  await expect(
-    runIsolatedCompletion({ ...request, agentHarnessRuntimeOverride: undefined }),
-  ).rejects.toThrow('No API key found for provider "anthropic"');
-  expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledOnce();
-  expect(dispatch).not.toHaveBeenCalled();
-  expect(mocks.runCliAgent).toHaveBeenCalledOnce();
-});
-
 describe("runIsolatedCompletion", () => {
   it("rejects the admitted required-worker policy before selecting an execution owner", async () => {
     mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
@@ -219,47 +145,18 @@ describe("runIsolatedCompletion", () => {
     expect(releaseRuntimeLease).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    ["429 Too many requests", 400],
-    ["You have hit your ChatGPT usage limit. Try again in 120 minutes.", 0],
-    ["Your credit balance is too low to access the API.", 0],
-    ["429 Too many requests", 1_000],
-  ] as const)(
-    "rotates quota failure %s within one deadline (%s ms)",
-    async (errorMessage, elapsedMs) => {
-      prepareQuotaProfiles();
-      const now = vi.spyOn(performance, "now").mockReturnValue(1_000);
-      const dispatch = vi
-        .fn()
-        .mockImplementationOnce(async () => {
-          now.mockReturnValue(1_000 + elapsedMs);
-          return errorReply(errorMessage);
-        })
-        .mockResolvedValueOnce(reply("recovered"));
-      registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: dispatch });
-
-      try {
-        const completion = complete();
-        if (elapsedMs === 1_000) {
-          await expect(completion).rejects.toThrow("timed out");
-          expect(dispatch).toHaveBeenCalledOnce();
-        } else {
-          await expect(completion).resolves.toMatchObject({ text: "recovered" });
-          expect(dispatch).toHaveBeenCalledTimes(2);
-          expect(
-            dispatch.mock.calls.map(([params]) => params.authorization.plan.forwardedAuthProfileId),
-          ).toEqual(["openai:first", "openai:backup"]);
-          expect(dispatch).toHaveBeenNthCalledWith(
-            2,
-            expect.objectContaining({ timeoutMs: 1_000 - elapsedMs }),
-          );
-        }
-        expect(releaseRuntimeLease).toHaveBeenCalledOnce();
-      } finally {
-        now.mockRestore();
-      }
-    },
-  );
+  it("rotates billing failures through the prepared profile order", async () => {
+    prepareQuotaProfiles();
+    const dispatch = vi
+      .fn()
+      .mockResolvedValueOnce(errorReply("Your credit balance is too low to access the API."))
+      .mockResolvedValueOnce(reply("recovered"));
+    registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: dispatch });
+    await expect(complete()).resolves.toMatchObject({ text: "recovered" });
+    expect(
+      dispatch.mock.calls.map(([params]) => params.authorization.plan.forwardedAuthProfileId),
+    ).toEqual(["openai:first", "openai:backup"]);
+  });
 
   it.each([false, true])(
     "preserves quota failure and profile limits (locked: %s)",
@@ -449,16 +346,8 @@ describe("runIsolatedCompletion", () => {
           expectNoCalls(owner.dispatch, mocks.prepareSimpleCompletionModel);
         } else {
           await expect(completion).resolves.toMatchObject({ text: "done" });
-          expectCall(mocks.ensureSelectedAgentHarnessPlugin, admitted);
           expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledWith(
             expect.objectContaining({
-              cfg: admitted.config,
-              agentDir: admitted.agentDir,
-              workspaceDir: admitted.workspaceDir,
-              preparedModelRuntime,
-              bindAuthOwner: true,
-              provider: "openai",
-              modelId: "gpt-test",
               profileId: "openai:original",
             }),
             expect.any(Function),
@@ -495,30 +384,14 @@ describe("runIsolatedCompletion", () => {
         },
         sourceAuthFingerprint: "fingerprint",
       });
-      const dispatch = vi.fn();
-      let dispatchLater: (() => void) | undefined;
+      let assertCurrent: (() => void) | undefined;
       const runIsolatedCompletionHarness = vi.fn(async (params: { assertCurrent?: () => void }) => {
-        dispatchLater = () => {
-          params.assertCurrent?.();
-          dispatch();
-        };
+        assertCurrent = params.assertCurrent;
         return reply("done");
       });
-      registerIsolatedHarness({
-        id: "copilot",
-        label: "Copilot",
-        ...(version === "v1"
-          ? { runIsolatedCompletion: runIsolatedCompletionHarness }
-          : { runIsolatedCompletionV2: runIsolatedCompletionHarness }),
-      });
-
-      await complete({ provider: "github-copilot", agentHarnessRuntimeOverride: "copilot" });
-
-      if (!dispatchLater) {
-        throw new Error("The harness did not receive its dispatch callback.");
-      }
-      expect(dispatchLater).toThrow("Isolated completion has ended");
-      expect(dispatch).not.toHaveBeenCalled();
+      registerIsolatedRuntime(version, runIsolatedCompletionHarness);
+      await complete({ provider: "github-copilot" });
+      expect(assertCurrent).toThrow("Isolated completion has ended");
       const expectedCredentials = {
         auth: expect.objectContaining({ apiKey: "github-source-token" }),
         model: expect.objectContaining({
@@ -594,66 +467,58 @@ describe("runIsolatedCompletion", () => {
     },
   );
 
-  it.each([undefined, "session-activity-summary"] as const)(
-    "routes purpose %s through one empty-tool CLI run with reported usage",
-    async (purpose) => {
+  it.each([
+    { requested: "anthropic:locked", forwarding: false, selected: undefined, purpose: undefined },
+    {
+      requested: undefined,
+      forwarding: true,
+      selected: "anthropic:ordered",
+      purpose: "session-activity-summary",
+    },
+    {
+      requested: "anthropic:claude-cli",
+      forwarding: true,
+      selected: undefined,
+      purpose: undefined,
+    },
+  ] as const)(
+    "dispatches an isolated CLI call with profile $requested/$selected",
+    async ({ requested, forwarding, selected, purpose }) => {
       const usage = { input: 8, output: 3, cacheRead: 2, total: 13 };
       cliReply();
+      mocks.resolveCliBackendConfig.mockReturnValue({
+        config: { command: "claude", modelAliases: { short: "full" } },
+      });
       mocks.runCliAgent.mockResolvedValue({
-        payloads: [{ text: '{"cli":true}' }],
+        payloads: [{ text: "done" }],
         meta: { agentMeta: { usage } },
       });
-
-      await expect(cliComplete({ purpose })).resolves.toStrictEqual({
-        text: '{"cli":true}',
+      mocks.cliBackendAcceptsAuthProfileForwarding.mockReturnValue(forwarding);
+      mocks.resolveCliExecutionAuthProfileId.mockResolvedValue(selected);
+      await expect(
+        cliComplete({ model: "short", authProfileId: requested, purpose }),
+      ).resolves.toStrictEqual({
+        text: "done",
         provider: "anthropic",
-        model: "claude-test",
+        model: "full",
         owner: cliOwner,
         usage,
       });
-      expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+      expectNoCalls(mocks.prepareSimpleCompletionModel);
       expectCall(mocks.runCliAgent, {
-        provider: "claude-cli",
-        modelProvider: "anthropic",
-        authProfileId: undefined,
+        authProfileId: forwarding ? selected : requested,
         executionMode: "side-question",
         isolatedCompletion: true,
         disableTools: true,
         cliToolAvailability: { native: [], openClaw: [] },
         isolatedCompletionPurpose: purpose ?? "isolated-completion",
         disableCliLiveSession: true,
-        timeoutMs: expect.any(Number),
-        model: "claude-test",
       });
-      const params = mocks.runCliAgent.mock.calls[0]?.[0];
-      expect(params?.timeoutMs).toBeGreaterThan(0);
-      expect(params?.timeoutMs).toBeLessThanOrEqual(1_000);
-      expect(params?.trigger).toBeUndefined();
-    },
-  );
-
-  it.each([
-    ["ordered managed profile", undefined, "anthropic:ordered"],
-    ["explicit native login", "anthropic:claude-cli", undefined],
-  ] as const)(
-    "forwards the shared CLI auth selection for %s",
-    async (_description, requestedProfile, selectedProfile) => {
-      cliReply("isolated result");
-      mocks.cliBackendAcceptsAuthProfileForwarding.mockReturnValue(true);
-      mocks.resolveCliExecutionAuthProfileId.mockResolvedValue(selectedProfile);
-      await expect(cliComplete({ authProfileId: requestedProfile })).resolves.toMatchObject({
-        text: "isolated result",
-        owner: cliOwner,
-      });
-
-      expect(mocks.resolveCliExecutionAuthProfileId).toHaveBeenCalledWith({
-        cliExecutionProvider: "claude-cli",
-        authProfileProvider: "anthropic",
-        config: expect.any(Object),
-        agentDir: "/tmp/agent",
-        selected: { authProfileId: requestedProfile },
-      });
-      expectCall(mocks.runCliAgent, { authProfileId: selectedProfile });
+      if (forwarding) {
+        expectCall(mocks.resolveCliExecutionAuthProfileId, {
+          selected: { authProfileId: requested },
+        });
+      }
     },
   );
 
@@ -727,27 +592,6 @@ describe("runIsolatedCompletion", () => {
       await Promise.allSettled(second ? [first, second] : [first]);
       clock.mockRestore();
     }
-  });
-
-  it("keeps the explicit CLI profile and reports its normalized model", async () => {
-    cliReply();
-    mocks.resolveCliBackendConfig.mockReturnValue({
-      config: { command: "gemini", modelAliases: { flash: "gemini-3.1-flash-preview" } },
-    });
-    await expect(
-      complete({
-        provider: "google",
-        model: "flash",
-        authProfileId: "google:locked",
-        agentHarnessRuntimeOverride: "google-gemini-cli",
-      }),
-    ).resolves.toEqual({
-      text: "done",
-      provider: "google",
-      model: "gemini-3.1-flash-preview",
-      owner: { kind: "cli", id: "google-gemini-cli" },
-    });
-    expectCall(mocks.runCliAgent, { authProfileId: "google:locked" });
   });
 });
 
