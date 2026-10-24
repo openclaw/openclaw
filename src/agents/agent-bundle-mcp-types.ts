@@ -99,7 +99,11 @@ export type RequesterMcpConnect = {
   catalog: McpToolCatalog;
   authorizedServerNames: readonly string[];
   configFingerprint: string;
-  createExecute: (serverName: string) => AnyAgentTool["execute"] | undefined;
+  /** `assertRequesterCurrent` is rechecked through the whole sign-in, before each OAuth network and store effect. */
+  createExecute: (
+    serverName: string,
+    options?: { assertRequesterCurrent?: () => void },
+  ) => AnyAgentTool["execute"] | undefined;
 };
 
 type PreparedNativeMcpServerPolicy = {
@@ -135,6 +139,13 @@ export type SessionMcpRequesterScope = {
 
 /** Supplied only by the authenticated Gateway profile owner, never inferred from a channel sender. */
 export type McpAppRequesterIdentity = { kind: "gateway-profile"; profileId: string };
+
+/** A chat turn's verified Gateway profile as MCP requester, bound to the run's live authority. */
+export type McpRequesterProfile = Readonly<{
+  profileId: string;
+  /** Throws once the profile no longer holds the run's operator authority. */
+  assertCurrent: () => void;
+}>;
 
 /** Live MCP runtime bound to one session/workspace. */
 export type SessionMcpRuntime = {
@@ -223,6 +234,11 @@ export type SessionMcpRuntimeManager = {
     manifestRegistry?: Pick<PluginManifestRegistry, "plugins">;
     /** Trusted sender id; required to materialize requester-scoped MCP servers. */
     requesterSenderId?: string | null;
+    /**
+     * Verified Gateway profile that sent the turn. When present it is the requester
+     * instead of the sender, keyed as MCP Apps key a profile.
+     */
+    requesterProfile?: McpRequesterProfile;
     agentAccountId?: string | null;
     messageChannel?: string | null;
     toolOverrides?: Pick<SessionToolOverrides, "mcpServers" | "mcpToolsDeny">;

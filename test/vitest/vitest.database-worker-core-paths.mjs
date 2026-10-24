@@ -482,6 +482,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/config/sessions/disk-budget.physical-usage.test.ts",
   "src/config/sessions/session-logical-entry-read.worker.test.ts",
   "src/agents/agent-bundle-mcp-requester-connect.read.test.ts",
+  "src/agents/agent-bundle-mcp-requester-connect.authority.test.ts",
   "src/agents/agent-tools.before-tool-call.embedded-mode.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.skills-policy.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts",

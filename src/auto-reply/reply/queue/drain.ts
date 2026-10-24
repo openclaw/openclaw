@@ -87,6 +87,7 @@ function resolveCollectedRun(items: readonly FollowupRun[], source: FollowupRun[
   return {
     ...source,
     senderId: undefined,
+    requesterProfileId: undefined,
     senderName: undefined,
     senderUsername: undefined,
     senderE164: undefined,

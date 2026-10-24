@@ -25,6 +25,7 @@ import {
   releaseAgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
 import { readUserTurnRequesterOrigin } from "../../sessions/user-turn-transcript-admission.js";
+import { withCommandSenderAuthority } from "../command-sender-authority.js";
 import { bindRequesterProfile } from "../requester-profile.js";
 import { runReplyAgent } from "./agent-runner-run.js";
 import type { runPreparedReply } from "./get-reply-run.js";
@@ -53,6 +54,41 @@ export function registerPendingRequesterAuthorityCases({
     inbound?: Partial<Parameters<typeof runPreparedReply>[0]["ctx"]>,
   ) => Pick<Parameters<typeof runPreparedReply>[0], "ctx" | "sessionCtx">;
 }): void {
+  it.each([
+    {
+      name: "a verified Gateway caller",
+      authority: "profile-a",
+      inbound: {},
+      expected: "profile-a",
+    },
+    {
+      name: "a caller with no verified profile",
+      authority: undefined,
+      inbound: {},
+      expected: undefined,
+    },
+    {
+      name: "a system turn",
+      authority: "profile-a",
+      inbound: { InputProvenance: { kind: "internal_system" as const } },
+      expected: undefined,
+    },
+  ])("names the MCP requester profile for $name", async ({ authority, inbound, expected }) => {
+    // A backend Gateway client is every person's transport sender; only its verified profile differs.
+    const prepared = turn(
+      "list my orders",
+      { ...createProviderSurface("webchat"), ChatType: "direct", SenderId: "gateway-client" },
+      {},
+      inbound,
+    );
+    await runPrepared({
+      ...baseParams(),
+      ...prepared,
+      ctx: withCommandSenderAuthority(prepared.ctx, authority ? () => authority : undefined),
+    });
+    expect(requireRunReplyAgentCall().followupRun.run.requesterProfileId).toBe(expected);
+  });
+
   it("retains a linked nonadmin requester as the causal origin of delegated work", async () => {
     const params = turn("Please inspect this", {
       ...createProviderSurface("x"),

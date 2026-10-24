@@ -63,6 +63,7 @@ export type AgentRunMessageContext = Pick<
   | "agentAccountId"
   | "senderIsOwner"
   | "gitContributorProfileId"
+  | "requesterProfileId"
   | "sourceReplyDeliveryMode"
   | "taskSuggestionDeliveryMode"
 > & {

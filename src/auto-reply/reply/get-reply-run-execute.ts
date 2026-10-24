@@ -42,6 +42,7 @@ import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { isConfiguredCommandOwner } from "../command-auth.js";
 import { bindCommandOwnerAuthority, getCommandOwnerAuthority } from "../command-owner-authority.js";
+import { getCommandSenderAuthority } from "../command-sender-authority.js";
 import { getGroupThreadTurn } from "../group-thread-context.js";
 import { getRequesterProfile } from "../requester-profile.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -552,6 +553,12 @@ export async function executePreparedReplyRun(
       // they do not rewrite the sender identity used by command/action auth.
       senderIsOwner: command.senderIsOwner,
       gitContributorProfileId: getRequesterProfile(ctx)?.id ?? readSessionInputProfileId(ctx),
+      // Gateway chat ingress binds the caller's verified profile; channel turns carry none.
+      // Only the person's own input signs in as them, never a system or internal turn.
+      requesterProfileId:
+        !ctx.InternalTurnSource && (!inputProvenance || inputProvenance.kind === "external_user")
+          ? getCommandSenderAuthority(ctx)?.()
+          : undefined,
       traceAuthorized:
         command.senderIsOwner || (ctx.GatewayClientScopes ?? []).includes("operator.admin"),
       traceLevelOverride: params.directives.traceLevel,

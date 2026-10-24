@@ -36,6 +36,17 @@ describe("requester-scoped MCP harness preflight", () => {
     ).toBe(true);
   });
 
+  it("loads for a verified Gateway profile without a transport sender", () => {
+    delete globalStore[SESSION_MCP_RUNTIME_MANAGER_KEY];
+
+    expect(
+      shouldLoadRequesterScopedMcpHarnessRuntime({
+        sessionId: "session-1",
+        requesterProfile: { profileId: "profile-1" },
+      }),
+    ).toBe(true);
+  });
+
   it("loads advertised stubs for an unauthenticated requester", () => {
     globalStore[SESSION_MCP_RUNTIME_MANAGER_KEY] = {
       getAdvertisedScopedCatalog: (sessionId: string) =>

@@ -4,7 +4,10 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type EmbeddedForegroundPromptContextRun = Pick<
   EmbeddedRunAttemptParams,
-  Exclude<keyof EmbeddedForegroundPromptContext, "agentDir" | "agentId" | "cronCreatorCallerOrigin">
+  Exclude<
+    keyof EmbeddedForegroundPromptContext,
+    "agentDir" | "agentId" | "cronCreatorCallerOrigin" | "requesterProfileId"
+  >
 > &
   Pick<EmbeddedRunAttemptParams, "cronCreatorAuthorityCapability" | "sessionId" | "sessionKey"> & {
     agentId: string;

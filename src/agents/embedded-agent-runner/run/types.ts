@@ -10,6 +10,7 @@ import type { DiagnosticTraceContext } from "../../../infra/diagnostic-trace-con
 import type { AssistantMessage, Model } from "../../../llm/types.js";
 import type { CommandQueueTaskDeadline } from "../../../process/command-queue.types.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
+import type { McpRequesterProfile } from "../../agent-bundle-mcp-types.js";
 import type { AgentHarnessCompletionScope } from "../../agent-harness-completion-scope.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import type { PreparedAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
@@ -93,6 +94,7 @@ export type EmbeddedRunAttemptBase = Omit<
   | "sessionFile"
   | "preparedRunAdmission"
   | "admittedRunContext"
+  | "requesterProfileId"
 >;
 
 export type EmbeddedRunFastModeParam =
@@ -143,6 +145,8 @@ export type EmbeddedRunAttemptTrajectoryRecorder = {
 };
 
 export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
+  /** The turn's verified Gateway profile for requester-scoped MCP, checked against live authority on use. */
+  requesterProfile?: McpRequesterProfile;
   /** Transport hooks follow the current endpoint without changing admitted request policy. */
   transportConfig?: RunEmbeddedAgentParams["config"];
   modelCallSequence?: { value: number };
