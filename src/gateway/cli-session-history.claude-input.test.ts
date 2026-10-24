@@ -39,6 +39,17 @@ const REQUESTER_HINT =
   'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
 const frame = (json: string) =>
   `Conversation info: ⟦openclaw:ctx⟧\n\`\`\`json\n${json}\n\`\`\`\n\n`;
+// Saved transcripts keep the bytes the retired cron prompt builder wrote.
+const CRON_REMINDER =
+  "A scheduled reminder has been triggered. The reminder content is:\n\nStand-up reminder";
+const SILENT_TAIL =
+  "Reply with exactly NO_REPLY as the entire final answer. NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently.";
+const cronPrompt = `${CRON_REMINDER}\n\nPlease relay this reminder to the user in a helpful and friendly way.`;
+const cronSilentPrompt = `${CRON_REMINDER}\n\nHandle this reminder internally. Do not relay it to the user unless explicitly requested.`;
+const cronEmptyPrompt = `A scheduled cron event was triggered, but no event content was found. ${SILENT_TAIL}`;
+const cronEmptyHeartbeatToolPrompt =
+  "A scheduled cron event was triggered, but no event content was found. " +
+  "Use heartbeat_respond to report the wake outcome. Set notify=false when nothing needs the user's attention. Set notify=true with notificationText only when the user should be interrupted.";
 const execPrompt = LEGACY_EXEC_COMPLETION_PROMPT;
 
 function merge(localMessages: unknown[], importedMessages: unknown[]) {
@@ -67,6 +78,10 @@ const internalInputs = [
   ],
   ["compact-output", "<local-command-stdout>Compacted </local-command-stdout>"],
   ["exec", execPrompt],
+  ["cron", cronPrompt],
+  ["cron-silent", cronSilentPrompt],
+  ["cron-no-content", cronEmptyPrompt],
+  ["cron-no-content-heartbeat-tool", cronEmptyHeartbeatToolPrompt],
   [
     "exec-with-queued-system-event",
     `System: [2026-10-06 14:35:17 GMT+8] Control UI reaction added: 👍 by Alice on msg m1 from assistant\n\n${execPrompt}`,
