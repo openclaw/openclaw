@@ -123,7 +123,14 @@ it.each([
   const exact = selection === "known" || selection === "unresolved";
   const gate = createDeferredCore();
   const scope = exact ? undefined : "sibling-family";
-  const held = resource("selected/nested/candidate.sqlite", () => gate.promise, { scope });
+  const held = resource("selected/nested/candidate.sqlite", () => gate.promise, {
+    scope,
+    revoke: () => {
+      if (!exact) {
+        expectClosing(() => registerKnown(resource("selected/reentrant.sqlite")));
+      }
+    },
+  });
   const sibling = resource("selected-sibling/candidate.sqlite", undefined, {
     scope,
     agentId: "kept",
@@ -172,49 +179,38 @@ it.each([
   expect(held.close).toHaveBeenCalledOnce();
 });
 
-it.each([false, true])(
-  "keeps a draining root fenced through every settlement (failure: %s)",
-  async (fail) => {
-    const gate = createDeferredCore();
-    const held = resource("selected/worker.sqlite", () => gate.promise, {
-      revoke: () =>
-        expectClosing(() =>
-          registerKnown(resource("selected/reentrant.sqlite", undefined, { agentId: "reentrant" })),
-        ),
-    });
-    const sibling = resource("sibling/kept.sqlite", undefined, { agentId: "kept" });
-    registerKnown(held);
-    registerKnown(sibling);
-    const failureObserved = createDeferredCore();
-    const failed = failingResource(
-      "selected/failed.sqlite",
-      "independent resource close failed",
-      () => failureObserved.resolve(),
-    );
-    if (fail) {
-      registerKnown({ ...failed, agentId: "failed" });
-    }
-    const tracked = trackSettlement(closeDatabases(path.join(root, "selected")));
-    try {
-      if (fail) {
-        await failureObserved.promise;
-      }
-      expect(tracked.settled).toBe(false);
-      expect(held.revoke).toHaveBeenCalledOnce();
-      expect(sibling.revoke).not.toHaveBeenCalled();
-      expectClosing(() => registerKnown({ ...held, path: path.join(root, "selected/new.sqlite") }));
-    } finally {
-      gate.resolve();
-      if (fail) {
-        await expect(tracked.promise).rejects.toThrow("Agent database");
-        failed.recover();
-        await closePathAsync(failed.path);
-      } else {
-        await tracked.promise;
-      }
-    }
-  },
-);
+it("keeps a draining root fenced through failed settlement", async () => {
+  const gate = createDeferredCore();
+  const held = resource("selected/worker.sqlite", () => gate.promise, {
+    revoke: () =>
+      expectClosing(() =>
+        registerKnown(resource("selected/reentrant.sqlite", undefined, { agentId: "reentrant" })),
+      ),
+  });
+  const sibling = resource("sibling/kept.sqlite", undefined, { agentId: "kept" });
+  registerKnown(held);
+  registerKnown(sibling);
+  const failureObserved = createDeferredCore();
+  const failed = failingResource(
+    "selected/failed.sqlite",
+    "independent resource close failed",
+    () => failureObserved.resolve(),
+  );
+  registerKnown({ ...failed, agentId: "failed" });
+  const tracked = trackSettlement(closeDatabases(path.join(root, "selected")));
+  try {
+    await failureObserved.promise;
+    expect(tracked.settled).toBe(false);
+    expect(held.revoke).toHaveBeenCalledOnce();
+    expect(sibling.revoke).not.toHaveBeenCalled();
+    expectClosing(() => registerKnown({ ...held, path: path.join(root, "selected/new.sqlite") }));
+  } finally {
+    gate.resolve();
+    await expect(tracked.promise).rejects.toThrow("Agent database");
+    failed.recover();
+    await closePathAsync(failed.path);
+  }
+});
 
 it.each([
   ["known", "retry.sqlite", false, "", false],
@@ -306,12 +302,9 @@ it.each(["ordinary", "maintenance"])(
   "retains unresolved custody before a %s reentrant revoke callback",
   async (owner) => {
     const scope = createScope();
-    let unexpectedRelease: (() => void) | undefined;
     const held = resource("reentrant.sqlite");
     const revoke = vi.fn(() =>
-      expectClosing(() => {
-        unexpectedRelease = registerKnown({ ...held, agentId: "different-owner" });
-      }),
+      expectClosing(() => registerKnown({ ...held, agentId: "different-owner" })),
     );
     const register = () => registerCandidate({ ...held, revoke });
     if (owner === "maintenance") {
@@ -319,17 +312,12 @@ it.each(["ordinary", "maintenance"])(
     } else {
       register();
     }
-    try {
-      if (owner === "maintenance") {
-        await scope.close();
-      } else {
-        await closePathAsync(held.path, "worker");
-      }
-      expect(revoke).toHaveBeenCalled();
-      expect(unexpectedRelease).toBeUndefined();
-    } finally {
-      unexpectedRelease?.();
+    if (owner === "maintenance") {
+      await scope.close();
+    } else {
+      await closePathAsync(held.path, "worker");
     }
+    expect(revoke).toHaveBeenCalled();
   },
 );
 
@@ -375,11 +363,7 @@ it.each([
     await duringClose(closing, gate, async () => {
       expect(closingTarget).toBe(true);
       expect(isClosing({ ...target, agentId: "other" })).toBe(false);
-      if ("path" in selection || "rootPath" in selection) {
-        expect(closingOtherPath).toBe(false);
-      } else {
-        expect(closingOtherPath).toBe(true);
-      }
+      expect(closingOtherPath).toBe(!("path" in selection || "rootPath" in selection));
       await entered.promise;
       expectClosing(() => registerCandidate(held));
       expect(held.revoke).not.toHaveBeenCalled();

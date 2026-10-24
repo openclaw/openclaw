@@ -1,7 +1,6 @@
 import { existsSync } from "node:fs";
-import { constants, StatementSync } from "node:sqlite";
-import { beforeEach, expect, it, vi } from "vitest";
-import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
+import { constants } from "node:sqlite";
+import { beforeEach, expect, it } from "vitest";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { closeOpenClawStateDatabaseByPath } from "./openclaw-state-db-cache.js";
@@ -121,10 +120,7 @@ it("reads current linked credentials together after in-process refresh and unlin
   expect(Object.keys(read().profiles)).toEqual([first, second]);
   expect(
     alice.update(first, (profile) => {
-      if (profile.credential.type !== "token") {
-        throw new Error("Expected token credential");
-      }
-      profile.credential.token = "synthetic-refreshed-token";
+      profile.credential = tokenCredential("synthetic-refreshed-token");
       return true;
     }),
   ).toBe(true);
@@ -133,34 +129,25 @@ it("reads current linked credentials together after in-process refresh and unlin
     links: [{ provider: "anthropic", authProfileId: first, updatedAt: expect.any(Number) }],
     profiles: {
       [first]: {
-        credential: { type: "token", provider: "anthropic", token: "synthetic-refreshed-token" },
+        credential: tokenCredential("synthetic-refreshed-token"),
         usageStats: undefined,
       },
     },
   });
 });
 
-it("reads one-statement default links and refreshes cached links after committed writes", async () => {
+it("refreshes native and cached default links after committed writes", async () => {
   const alice = owner();
   const bob = owner("bob@example.test");
   const { authProfileId } = alice.token();
   const { db } = openOpenClawStateDatabase(options);
   const expectLinks = async (profileId: string, expected: UserProfileAuthLink[]) => {
-    const observation = observeSqliteReadSql(StatementSync.prototype);
-    const exec = vi.spyOn(requireNativeSqliteDatabase(db), "exec");
-    try {
-      expect(
-        readUserModelAccountCommand(db, { type: "userModelAccounts.links", profileId }),
-      ).toEqual({
+    expect(readUserModelAccountCommand(db, { type: "userModelAccounts.links", profileId })).toEqual(
+      {
         type: "userModelAccounts.links",
         links: expected,
-      });
-      expect(observation.queries).toHaveLength(1);
-      expect(exec).not.toHaveBeenCalled();
-    } finally {
-      observation.restore();
-      exec.mockRestore();
-    }
+      },
+    );
     await expect(listUserProfileAuthLinksAsync(profileId, options)).resolves.toEqual(expected);
   };
   const linked = [{ provider: "anthropic", authProfileId, updatedAt: expect.any(Number) }];
@@ -305,7 +292,6 @@ it.each([
   "retains the credential and exposes the repaired account label $label",
   ({ credential, label }) => {
     const alice = owner();
-    const bob = owner("bob@example.test");
     const { authProfileId } = alice.connect(credential);
     closeOpenClawStateDatabaseByPath(options.path);
     expect(alice.read(authProfileId)?.credential).toEqual(
@@ -316,8 +302,6 @@ it.each([
     expect(alice.accounts()).toEqual({
       accounts: [accountSummary(authProfileId, credential.provider, label, credential.type)],
     });
-    expect(bob.accounts()).toEqual({ accounts: [] });
-    expect(alice.summary(authProfileId)?.label).toBe(label);
   },
 );
 

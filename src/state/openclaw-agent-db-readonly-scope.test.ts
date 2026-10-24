@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import fs from "node:fs";
 import nodePath from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -79,26 +80,18 @@ async function closedDatabase() {
 
 function retain(options: Parameters<typeof retainOpenClawAgentDatabaseReadOnly>[0]) {
   const result = retainOpenClawAgentDatabaseReadOnly(options);
-  expect(result.found).toBe(true);
-  if (!result.found) {
-    throw new Error("Missing synthetic agent database");
-  }
+  assert(result.found, "Missing synthetic agent database");
   return result;
 }
 
 function foundValue<T>(result: { found: true; value: T } | { found: false }): T {
-  expect(result.found).toBe(true);
-  if (!result.found) {
-    throw new Error("Missing synthetic agent database");
-  }
+  assert(result.found, "Missing synthetic agent database");
   return result.value;
 }
 
 function readValidation(owner: Parameters<typeof captureOpenClawAgentDatabaseReadValidation>[0]) {
   const receipt = captureOpenClawAgentDatabaseReadValidation(owner);
-  if (!receipt) {
-    throw new Error("Expected the owner's read validation");
-  }
+  assert(receipt, "Expected the owner's read validation");
   return receipt.validation;
 }
 
