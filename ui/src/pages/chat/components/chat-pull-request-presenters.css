@@ -298,6 +298,12 @@
   color: var(--text);
 }
 
+.chat-pr-mobile--empty {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
+
 .chat-pr-mobile__group {
   min-width: 0;
   overflow: hidden;
@@ -575,12 +581,6 @@
   margin-bottom: 8px;
   color: var(--muted);
 }
-.chat-pr-mobile__empty {
-  padding: 24px 16px;
-  color: var(--muted);
-  text-align: center;
-}
-
 .chat-pr-mobile__actions > a {
   cursor: pointer;
 }

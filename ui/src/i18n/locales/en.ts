@@ -1590,6 +1590,8 @@ const startupEnglish = {
     waitingOnSubagent: "Waiting on {name}",
     subagentsRunning: "{count} subagents running",
     subagentsRunningOne: "1 subagent running",
+    bubbleTaskOne: "1 task",
+    bubbleTasks: "{count} tasks",
     startupStatus: {
       preparingWorkspace: "Preparing workspace…",
       namingWorktree: "Naming worktree…",

@@ -9,7 +9,7 @@ import type {
   InstalledPluginIndexFacts,
 } from "./installed-plugin-index-types.js";
 import type { ManifestModelSuppressionResolver } from "./manifest-model-suppression.types.js";
-import type { PluginManifestRecord } from "./manifest-registry.types.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.types.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { BundledProviderPolicySurface } from "./provider-policy-surface.types.js";
 
@@ -60,6 +60,26 @@ export type PluginCacheMetadata = {
     >;
     current: CurrentPluginMetadataCacheState;
     snapshots: Map<string, PluginMetadataSnapshot>;
+    derivedIndexes: WeakMap<
+      OpenClawConfig,
+      Map<string, { index: InstalledPluginIndex; manifestRegistry: PluginManifestRegistry }>
+    >;
+    preparedManifests: WeakMap<PluginManifestRegistry, Map<string, PluginManifestRegistry>>;
+    snapshotManifestFacts: WeakMap<
+      PluginManifestRegistry,
+      Map<
+        string,
+        Pick<
+          PluginMetadataSnapshot,
+          | "manifestRegistry"
+          | "plugins"
+          | "diagnostics"
+          | "byPluginId"
+          | "owners"
+          | "declaredProviderOwners"
+        >
+      >
+    >;
     discovery: Map<string, PluginDiscoveryResult>;
     sharedDiscovery: Map<
       string,

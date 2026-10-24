@@ -8,6 +8,7 @@ import {
 } from "../database-engine/policy.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../runtime-process-url.js";
 import { resolveRuntimeWorkerThreadExecArgv } from "../runtime-worker-url.js";
+import { trackNativeWorkerForCpu } from "../worker-cpu.js";
 import { hasIdlePostgresBridge } from "./idle-bridges.js";
 import type { PostgresBridge } from "./protocol.js";
 
@@ -56,6 +57,7 @@ export function createPostgresBridge(params: PostgresBridgeParameters): Postgres
     port2.close();
     throw error;
   }
+  trackNativeWorkerForCpu(worker, workerUrl);
   worker.unref();
   port1.unref();
   return { port: port1, control, worker, requestId: 0 };

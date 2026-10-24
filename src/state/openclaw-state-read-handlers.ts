@@ -25,10 +25,6 @@ import {
   readCronStateCommandInDatabase,
 } from "../cron/store/read-command.js";
 import {
-  readSharedGitHubPublicationRequestInDatabase,
-  readSharedRepositoryGitHubPublicationInDatabase,
-} from "../gateway/github-publication-shared-read.kernel.js";
-import {
   readGitHubPublicationRequest,
   readKnownGitHubPublicationPullRequestUrlsInDatabase,
 } from "../gateway/github-publication-store.worker.js";
@@ -403,15 +399,6 @@ export function readOpenClawStateDatabaseCommand(
     return {
       type: command.type,
       lifecycle: readGitHubPublicationSessionLifecycle(command, db),
-    };
-  }
-  if (command.type === "githubPublication.sharedObservation") {
-    const { session, selector, entry } = command.input;
-    return {
-      type: command.type,
-      row:
-        readSharedRepositoryGitHubPublicationInDatabase(db, session, selector, entry) ??
-        readSharedGitHubPublicationRequestInDatabase(db, session, selector, entry),
     };
   }
   if (command.type === "githubPublication.request") {

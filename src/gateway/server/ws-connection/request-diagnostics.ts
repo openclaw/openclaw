@@ -25,8 +25,6 @@ import {
 } from "../../session-list-diagnostics.js";
 
 type RpcEvent = Extract<DiagnosticEventInput, { type: "gateway.rpc" }>;
-type ResponseOutcome = Extract<RpcEvent, { phase: "response" }>["outcome"];
-type DispatchOutcome = Extract<RpcEvent, { phase: "dispatch" }>["outcome"];
 type ModelsListAttribution = Extract<RpcEvent, { phase: "received" }>["modelsList"];
 type SessionsListAttribution = Extract<RpcEvent, { phase: "received" }>["sessionsList"];
 type CronListAttribution = Extract<RpcEvent, { phase: "received" }>["cronList"];
@@ -115,7 +113,7 @@ export class GatewayRpcDiagnostics {
   }
 
   response(
-    outcome: ResponseOutcome,
+    outcome: Extract<RpcEvent, { phase: "response" }>["outcome"],
     responseBytes?: number,
     response?: { payload: unknown; params: unknown },
   ): void {
@@ -237,7 +235,7 @@ export class GatewayRpcDiagnostics {
     }
   }
 
-  finish(outcome: DispatchOutcome): void {
+  finish(outcome: Extract<RpcEvent, { phase: "dispatch" }>["outcome"]): void {
     if (this.dispatchFinished) {
       return;
     }

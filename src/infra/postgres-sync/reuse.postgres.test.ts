@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { withEngineStoreAdmission } from "../database-engine/admission-scope.js";
 import {
   readSqliteDatabasePendingScopedWriteToken as pendingToken,
@@ -60,6 +60,31 @@ describe.skipIf(!connection)("PostgreSQL exclusive idle connection reuse", () =>
     // Closing a live transaction must roll it back and discard that backend.
     close(writer);
     expect(get(reader, "SELECT count(*)::int AS count FROM entries")).toEqual({ count: 0 });
+  });
+
+  it("expires quiet backends while preserving burst reuse and checked-out connections", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      const first = open();
+      const firstPid = pid(first);
+      close(first);
+      vi.advanceTimersByTime(2 * 60_000);
+      const borrowed = open();
+      expect(pid(borrowed)).toBe(firstPid);
+      // Its previous idle deadline must not retire a checked-out connection.
+      vi.advanceTimersByTime(2 * 60_000);
+      expect(get(borrowed, "SELECT 7::int AS value")).toEqual({ value: 7 });
+      close(borrowed);
+      vi.advanceTimersByTime(3 * 60_000);
+      const backend = await admin.query("SELECT pid FROM pg_stat_activity WHERE pid = $1", [
+        firstPid,
+      ]);
+      expect(backend.rows).toEqual([]);
+      const reopened = open();
+      expect(pid(reopened)).not.toBe(firstPid);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("retains unrelated replicas and predicts only the written scope across commits", () => {

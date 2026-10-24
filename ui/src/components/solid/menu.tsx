@@ -3,7 +3,8 @@ import { For, Show, createMemo, onSettled, untrack, merge } from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
 import { createAnchoredOverlay } from "../../lib/reactive/overlay-anchor.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import { registerMenuShortcuts } from "../menu-shortcuts.ts";
+import { nativeListener } from "../../lib/solid-native-listener.ts";
+import { findMenuSearch, registerMenuShortcuts } from "../menu-shortcuts.ts";
 import type { OverlayPlacement } from "../overlay-anchor.ts";
 import { createOverlay, type Overlay } from "../overlay-lifecycle.ts";
 import { containsComposed, registryFor } from "../overlay-registry.ts";
@@ -281,10 +282,49 @@ export function Menu(props: BranchProps): JSX.Element {
     ids: { trigger: initialIdentity.triggerId },
     pointerFocus: () => props.pointerFocus ?? "menu",
   });
+  const searchInput = () =>
+    registeredElements().find(
+      (node): node is HTMLInputElement =>
+        node instanceof HTMLInputElement &&
+        node.hasAttribute("data-search") &&
+        node.closest('[role="menu"]') === overlay.surface,
+    );
   onSettled(() =>
-    registerMenuShortcuts(overlay.surface, () =>
-      binding.items().map((element) => ({ element, key: element.dataset.shortcut })),
+    registerMenuShortcuts(
+      overlay.surface,
+      () => binding.items().map((element) => ({ element, key: element.dataset.shortcut })),
+      searchInput,
     ),
+  );
+  const searchKeydown = nativeListener(
+    "keydown",
+    (event) => {
+      if (
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey ||
+        event.key.length !== 1 ||
+        event.key === " " ||
+        event
+          .composedPath()
+          .some(
+            (node) =>
+              node instanceof HTMLElement &&
+              node.matches("input, textarea, select, [contenteditable=true]"),
+          )
+      ) {
+        return;
+      }
+      const search = findMenuSearch(overlay.surface);
+      if (search) {
+        search.focus({ preventScroll: true });
+        // Keep native text insertion, but do not activate a parent shortcut or typeahead.
+        event.stopImmediatePropagation();
+      }
+    },
+    true,
   );
   const ownItems = () =>
     binding.items().filter((item) => !item.matches(':disabled, [aria-disabled="true"]'));
@@ -309,12 +349,7 @@ export function Menu(props: BranchProps): JSX.Element {
     ) {
       return;
     }
-    const search = registeredElements().find(
-      (node): node is HTMLInputElement =>
-        node instanceof HTMLInputElement &&
-        node.hasAttribute("data-search") &&
-        node.closest('[role="menu"]') === overlay.surface,
-    );
+    const search = searchInput();
     const first = ownItems().find(
       (item) =>
         !search || Boolean(search.compareDocumentPosition(item) & Node.DOCUMENT_POSITION_FOLLOWING),
@@ -609,9 +644,12 @@ export function Menu(props: BranchProps): JSX.Element {
             binding.content().onKeyDown(event);
           }
         }}
-        ref={(node) => {
-          surface = node;
-        }}
+        ref={[
+          (node) => {
+            surface = node;
+          },
+          searchKeydown,
+        ]}
         id={`${initialIdentity.id}:content`}
         class={["oc-overlay oc-menu", props.panelClass]}
         popover="manual"
