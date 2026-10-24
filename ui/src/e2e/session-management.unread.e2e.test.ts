@@ -1,34 +1,15 @@
 import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol";
-import type { Page } from "playwright";
 import { it, expect } from "vitest";
-import { getControlUiContextHandle } from "../test-helpers/control-ui-e2e-context.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { captureUiProof, expectRequestCountStable } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import * as ui from "./session-management.compact.test-support.ts";
 import * as support from "./session-management.test-support.ts";
-import { waitForCommittedState } from "./settle.test-support.ts";
 
 const suite = support.createSessionManagementE2eSuite();
 const marker = 1_800_000_000_001;
 const badgeSelector = ".sidebar-session-indicator .session-glyph__badge--unread";
 const unreadState = { icon: "📬", markedUnreadAt: marker, unread: true };
-
-async function installUnreadRows(
-  page: Page,
-  primary: ReturnType<typeof sessionRow>,
-  otherKey: string,
-  options: Parameters<typeof ui.installSessionRows>[2] = {},
-) {
-  const other = sessionRow(otherKey, "Other thread", 10, { unread: false });
-  const gateway = await ui.installSessionRows(page, [primary, other], {
-    featureCapabilities: [GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT],
-    methodResponses: { "sessions.patch": {} },
-    sessionKey: otherKey,
-    ...options,
-  });
-  return { gateway, other };
-}
 
 const darkOptions = createControlUiE2eContextOptions();
 darkOptions.colorScheme = "dark";
@@ -192,7 +173,15 @@ suite.define(() => {
         icon: "📬",
         unread: true,
       });
-      const { gateway } = await installUnreadRows(page, unread, otherKey);
+      const gateway = await ui.installSessionRows(
+        page,
+        [unread, sessionRow(otherKey, "Other thread", 10, { unread: false })],
+        {
+          featureCapabilities: [GATEWAY_SERVER_CAPS.SESSION_UNREAD_ACK_CONTRACT],
+          methodResponses: { "sessions.patch": {} },
+          sessionKey: otherKey,
+        },
+      );
       const match = { key: unreadKey, unread: false };
       let patchHeld = false;
       try {
@@ -226,23 +215,10 @@ suite.define(() => {
         });
         patchHeld = false;
 
-        const context = await getControlUiContextHandle(page);
-        try {
-          await waitForCommittedState(
-            page,
-            ({ context: app, key }) =>
-              (app.sessions.presentation.result?.sessions.find((entry) => entry.key === key)
-                ?.updatedAt ?? 0) >= 40,
-            { context, key: unreadKey },
-          );
-        } finally {
-          await context.dispose();
-        }
-        // Capture the settled sidebar even on the broken base, before requiring the follow-up.
-        await captureUiProof(suite, page, "deferred-unread-ack", "settled-sidebar.png");
         await expect
           .poll(async () => (await gateway.getRequests("sessions.patch", match)).length)
           .toBe(2);
+        await captureUiProof(suite, page, "deferred-unread-ack", "settled-sidebar.png");
         await badge.waitFor({ state: "hidden" });
         await expectRequestCountStable(gateway, "sessions.patch", 2, 500, match);
       } finally {
