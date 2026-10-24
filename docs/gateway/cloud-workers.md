@@ -9,6 +9,8 @@ doc-schema-version: 1
 
 Cloud workers run a session's coding work on a disposable machine while its transcript and accepted workspace changes stay with the Gateway. With Crabbox configured on the Gateway host, OpenClaw can select a machine, prepare the repository, and save a snapshot without a custom setup script.
 
+**Stop cloud worker** finishes after the session is shut down and the provider accepts cleanup. With Crabbox, physical release can continue afterward: the environment stays `destroying` until release is confirmed, and charges can continue during that interval. Cleanup failures remain visible on the environment and are retried by the Gateway. Providers without early cleanup acceptance keep Stop waiting for confirmed release.
+
 ## Quick start
 
 Open **New Session**, select a repository or **New workspace**, and choose **Cloud**. If no cloud profile exists, OpenClaw can suggest one from your configured Crabbox backend and save it when you select it. Viewing the suggestion does not install a CLI, save configuration, or allocate a machine. Saving requires administrator access; existing profiles take precedence.
