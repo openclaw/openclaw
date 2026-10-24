@@ -4,7 +4,7 @@ import {
   normalizeOptionalString as asNonEmptyString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
-import type { ArtifactSummary } from "../../../packages/gateway-protocol/src/index.js";
+import type { ArtifactSummary } from "../../packages/gateway-protocol/src/index.js";
 import {
   type ArtifactBase64Payload,
   base64FromDataUrl,

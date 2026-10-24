@@ -1,17 +1,12 @@
 import { constants as zlibConstants, deflateRawSync } from "node:zlib";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { composeTranscriptDisplay } from "../../chat/transcript-display-position.js";
-import { readLegacyCompactionMetrics } from "../../config/sessions/legacy-compaction-history.js";
+import { composeTranscriptDisplay } from "../chat/transcript-display-position.js";
+import { readLegacyCompactionMetrics } from "../config/sessions/legacy-compaction-history.js";
 import type {
   ChatHistoryPage,
   ChatHistoryPageParams,
   ChatHistoryResponsePage,
-} from "../../config/sessions/session-history-types.js";
-import {
-  readChatHistoryMessageId,
-  readChatHistoryMessageSeq,
-  readChatHistoryPaginationKey,
-} from "../session-history-tail.js";
+} from "../config/sessions/session-history-types.js";
 import {
   CHAT_HISTORY_MAX_SINGLE_MESSAGE_BYTES,
   buildOversizedHistoryPlaceholder,
@@ -20,6 +15,11 @@ import {
   replaceOversizedChatHistoryMessages,
 } from "./chat-history-budget.js";
 import { resolveChatHistoryPageCursors } from "./chat-history-page-cursor.js";
+import {
+  readChatHistoryMessageId,
+  readChatHistoryMessageSeq,
+  readChatHistoryPaginationKey,
+} from "./session-history-tail.js";
 type MessageSequences = Record<string, number> | ((message: unknown) => number | undefined);
 
 function readPageMessageSequence(message: unknown, messageSequences?: MessageSequences) {

@@ -1,11 +1,11 @@
 import { z } from "zod";
-import type { ChatHistoryParams } from "../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type { ChatHistoryParams } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type {
   ChatHistoryPageAnchor,
   ChatHistoryPageCursor,
   ChatHistoryResponsePage,
-} from "../../config/sessions/session-history-types.js";
-import { readChatHistoryMessageId } from "../session-history-tail.js";
+} from "../config/sessions/session-history-types.js";
+import { readChatHistoryMessageId } from "./session-history-tail.js";
 
 const PREFIX = "history-page:";
 const MAX_CURSOR_CHARS = 4096;
