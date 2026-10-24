@@ -25,7 +25,6 @@ export async function readCheckoutGitRevision(
     scope,
     branch,
     defaultBranch,
-    summaryOnly = false,
     paths: diffPaths,
   }: GitReadOperations["checkout.revision"]["input"],
   timing?: DiffReadTiming,
@@ -35,7 +34,7 @@ export async function readCheckoutGitRevision(
   }
   try {
     if (scope === "diff") {
-      return await readCheckoutDiffRevision(root, diffPaths, summaryOnly, timing);
+      return await readCheckoutDiffRevision(root, diffPaths, timing);
     }
     const head = readGitHead(root, { maxDepth: 1 });
     const checkout = readCheckoutHead(root);
