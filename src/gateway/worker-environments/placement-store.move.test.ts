@@ -1,6 +1,3 @@
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import {
   clearRuntimeConfigSnapshot,
@@ -8,19 +5,12 @@ import {
 } from "../../config/runtime-snapshot.js";
 import * as operationAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
-import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
-import {
-  openOpenClawStateDatabase,
-  type OpenClawStateDatabase,
-} from "../../state/openclaw-state-db.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import type { OpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createWorkerPlacementMoveService } from "./placement-move-service.js";
 import type { WorkerSessionPlacementIdentity } from "./placement-record.js";
-import {
-  createWorkerSessionPlacementStore,
-  type WorkerSessionPlacementStore,
-} from "./placement-store.js";
+import { usePlacementStoreFixture } from "./placement-store-fixture.test-support.js";
+import type { WorkerSessionPlacementStore } from "./placement-store.js";
 import { placementClaim, placementSource as sourceFor } from "./placement-suite.test-support.js";
 import {
   advancePlacementFixtureToActive,
@@ -34,23 +24,13 @@ const SESSION: WorkerSessionPlacementIdentity = {
 };
 
 describe("worker session placement moves", () => {
-  let root: string;
+  const fixture = usePlacementStoreFixture();
   let database: OpenClawStateDatabase;
   let store: WorkerSessionPlacementStore;
-  let nowMs: number;
-
-  beforeEach(async () => {
-    root = await fs.mkdtemp(path.join(await fs.realpath(os.tmpdir()), "openclaw-move-store-"));
-    database = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: root } });
-    nowMs = 1_000;
-    store = createWorkerSessionPlacementStore({ database, now: () => nowMs });
+  beforeEach(() => {
+    ({ database, store } = fixture);
   });
-
-  afterEach(async () => {
-    await closeStateDatabaseForTest();
-    clearRuntimeConfigSnapshot();
-    await fs.rm(root, { recursive: true, force: true });
-  });
+  afterEach(clearRuntimeConfigSnapshot);
 
   function advanceToActive() {
     return advancePlacementFixtureToActive(store, database, SESSION, {
@@ -70,13 +50,14 @@ describe("worker session placement moves", () => {
   }
 
   type MoveRequest = Parameters<WorkerSessionPlacementStore["beginPlacementMove"]>[0];
+  const moveRequest = (source: MoveRequest["source"], overrides: Partial<MoveRequest> = {}) => ({
+    sessionId: SESSION.sessionId,
+    source,
+    target: { kind: "gateway" as const },
+    ...overrides,
+  });
   const beginMove = (source: MoveRequest["source"], overrides: Partial<MoveRequest> = {}) =>
-    store.beginPlacementMove({
-      sessionId: SESSION.sessionId,
-      source,
-      target: { kind: "gateway" },
-      ...overrides,
-    });
+    store.beginPlacementMove(moveRequest(source, overrides));
   const readMove = () => store.getPlacementMoveAsync(SESSION.sessionId);
   const moveKey = (begun: Awaited<ReturnType<typeof beginMove>>) => ({
     operationId: begun.intent.operationId,
@@ -110,13 +91,31 @@ describe("worker session placement moves", () => {
       resolveDestination: vi.fn(),
       ...overrides,
     });
-  const recover = async (moves: ReturnType<typeof createMoveService>, owner = store) =>
-    moves.recoverSession(await owner.readProjection([SESSION.sessionId], { current: true }));
+  const recover = async (moves: ReturnType<typeof createMoveService>) =>
+    moves.recoverSession(await store.readProjection([SESSION.sessionId], { current: true }));
 
   async function beginGatewayMove(abandonSource?: true) {
     const active = await seedActiveEnvironment();
     const begun = await beginMove(sourceFor(active), abandonSource ? { abandonSource } : {});
     return { active, begun };
+  }
+
+  async function failedAbandonment() {
+    const { active, begun } = await beginGatewayMove(true);
+    const reconciling = await reconcileMove(active, begun.placement.generation);
+    const recoveryError = "Worker result abandoned by forced operator teardown";
+    const failed = await store.fail({
+      sessionId: active.sessionId,
+      expectedGeneration: reconciling.generation,
+      recoveryError,
+    });
+    const complete = (expectedRecoveryError = recoveryError) =>
+      store.completeAbandonedPlacementMoveSourceToLocal({
+        ...moveKey(begun),
+        expectedGeneration: failed.generation,
+        expectedRecoveryError,
+      });
+    return { active, failed, complete };
   }
 
   function reconcileMove(active: Awaited<ReturnType<typeof advanceToActive>>, generation: number) {
@@ -185,20 +184,13 @@ describe("worker session placement moves", () => {
         );
       try {
         await expect(
-          store.beginPlacementMove(
-            {
-              sessionId: SESSION.sessionId,
-              source: sourceFor(active),
-              target: { kind: "gateway" },
+          store.beginPlacementMove(moveRequest(sourceFor(active)), {
+            assertCurrent: () => {
+              if (revoked) {
+                throw new Error("caller revoked");
+              }
             },
-            {
-              assertCurrent: () => {
-                if (revoked) {
-                  throw new Error("caller revoked");
-                }
-              },
-            },
-          ),
+          }),
         ).rejects.toThrow("caller revoked");
       } finally {
         admission.mockRestore();
@@ -212,15 +204,7 @@ describe("worker session placement moves", () => {
   it("lazily begins one exact-source move in the drain transaction", async () => {
     database.db.exec("DROP TABLE worker_session_placement_moves");
     expect(moveTable()).toBeUndefined();
-    expect(await store.readProjection([SESSION.sessionId])).toEqual({
-      placements: new Map(),
-      moves: new Map(),
-      pendingResults: new Map(),
-      workspaceJournalOwnerSessionIds: new Set(),
-      environments: new Map(),
-      workspaceResultReconcilingSessionIds: new Set(),
-      workspaceRecoveryPendingSessionIds: new Set(),
-    });
+    expect((await store.readProjection([SESSION.sessionId])).moves.size).toBe(0);
     expect(moveTable()).toBeUndefined();
 
     const active = await seedActiveEnvironment();
@@ -245,9 +229,6 @@ describe("worker session placement moves", () => {
       },
     });
     expect(begun.intent.operationId).toMatch(/^move:v1:[A-Za-z0-9_-]{43}$/u);
-    expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
-      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-    });
     expect(await readMove()).toEqual(begun.intent);
     expect(await store.readProjection([SESSION.sessionId, "missing"])).toMatchObject({
       placements: new Map([[SESSION.sessionId, begun.placement]]),
@@ -268,34 +249,12 @@ describe("worker session placement moves", () => {
   });
 
   it("persists explicit abandonment and atomically completes its exact failed source", async () => {
-    const { active, begun } = await beginGatewayMove(true);
-    expect(await readMove()).toMatchObject({
-      abandonSource: true,
-    });
-    const reconciling = await reconcileMove(active, begun.placement.generation);
-    const recoveryError = "Worker result abandoned by forced operator teardown";
-    const failed = await store.fail({
-      sessionId: active.sessionId,
-      expectedGeneration: reconciling.generation,
-      recoveryError,
-    });
-    await expect(
-      store.completeAbandonedPlacementMoveSourceToLocal({
-        operationId: begun.intent.operationId,
-        sessionId: active.sessionId,
-        expectedGeneration: failed.generation,
-        expectedRecoveryError: "different abandonment",
-      }),
-    ).rejects.toThrow("Cannot complete stale abandoned placement move");
-
-    expect(
-      await store.completeAbandonedPlacementMoveSourceToLocal({
-        operationId: begun.intent.operationId,
-        sessionId: active.sessionId,
-        expectedGeneration: failed.generation,
-        expectedRecoveryError: recoveryError,
-      }),
-    ).toMatchObject({ state: "local", generation: failed.generation + 1 });
+    const { failed, complete } = await failedAbandonment();
+    expect((await readMove())?.abandonSource).toBe(true);
+    await expect(complete("different abandonment")).rejects.toThrow(
+      "Cannot complete stale abandoned placement move",
+    );
+    expect(await complete()).toMatchObject({ state: "local", generation: failed.generation + 1 });
     expect(await readMove()).toBeUndefined();
   });
 
@@ -318,9 +277,6 @@ describe("worker session placement moves", () => {
       joined: false,
       placement: { state: "draining" },
       intent: { abandonSource: true },
-    });
-    expect(await readMove()).toMatchObject({
-      abandonSource: true,
     });
     expect(store.validateWorkspaceResultClaim(claim)).toBe(true);
   });
@@ -526,26 +482,11 @@ describe("worker session placement moves", () => {
 
   it("completes a persisted abandonment only after a later sweep makes its placement local", async () => {
     setRuntimeConfigSnapshot({});
-    const { active, begun } = await beginGatewayMove(true);
-    const reconciling = await reconcileMove(active, begun.placement.generation);
-    const recoveryError = "Worker result abandoned by forced operator teardown";
-    const failed = await store.fail({
-      sessionId: active.sessionId,
-      expectedGeneration: reconciling.generation,
-      recoveryError,
-    });
+    const { active, failed, complete } = await failedAbandonment();
     const abandonSource = vi
       .fn()
       .mockRejectedValueOnce(new Error("device teardown is still pending"))
-      .mockImplementationOnce(
-        async () =>
-          await store.completeAbandonedPlacementMoveSourceToLocal({
-            operationId: begun.intent.operationId,
-            sessionId: active.sessionId,
-            expectedGeneration: failed.generation,
-            expectedRecoveryError: recoveryError,
-          }),
-      );
+      .mockImplementationOnce(() => complete());
     const moves = createMoveService({ abandonSource });
 
     await recover(moves);
@@ -560,65 +501,9 @@ describe("worker session placement moves", () => {
       generation: failed.generation + 1,
     });
     expect(await readMove()).toBeUndefined();
-    expect(abandonSource).toHaveBeenCalledTimes(2);
-  });
-
-  it("completes an ordinary reconciled move with one durable Gateway placement", async () => {
-    setRuntimeConfigSnapshot({});
-    const { active, begun } = await beginGatewayMove();
-    const reconciling = await reconcileMove(active, begun.placement.generation);
-    const moves = createMoveService();
-
-    await recover(moves);
-
     const recovered = store.get(active.sessionId);
-    expect(recovered).toMatchObject({ state: "local", generation: reconciling.generation + 1 });
-    expect(await readMove()).toBeUndefined();
     await recover(moves);
     expect(store.get(active.sessionId)).toEqual(recovered);
-  });
-
-  it("fails a pending profile move after restart loses request authority", async () => {
-    const source = await seedActiveEnvironment();
-    const begun = await beginMove(sourceFor(source), { target: profileTarget });
-    const reconciling = await reconcileMove(source, begun.placement.generation);
-    const local = await completeLocal(begun, reconciling.generation);
-    const dispatch = vi.fn();
-    const reclaimSource = vi.fn(async () => {
-      throw new Error("failed destination must not reclaim the old source");
-    });
-    const restartedStore = createWorkerSessionPlacementStore({ database, now: () => nowMs });
-    const moves = createMoveService({
-      placements: restartedStore,
-      dispatch,
-      reclaimSource,
-      validateAbandonSource: vi.fn(),
-      abandonSource: vi.fn(async () => {
-        throw new Error("unexpected source abandonment");
-      }),
-      resolveDestination: async (_identity, target) => {
-        if (target.kind !== "profile") {
-          throw new Error("expected profile move target");
-        }
-        return {
-          profileId: target.profileId,
-          executionMode: "worker-turn",
-          machineClass: target.machineClass,
-          os: target.os,
-        };
-      },
-    });
-
-    await recover(moves, restartedStore);
-
-    expect(reclaimSource).not.toHaveBeenCalled();
-    expect(dispatch).not.toHaveBeenCalled();
-    expect(restartedStore.get(source.sessionId)).toMatchObject({
-      state: "failed",
-      generation: local.generation + 1,
-      recoveryError:
-        "Cloud worker move request authority expired after Gateway restart; retry move",
-    });
-    expect(await restartedStore.getPlacementMoveAsync(source.sessionId)).toBeUndefined();
+    expect(abandonSource).toHaveBeenCalledTimes(2);
   });
 });

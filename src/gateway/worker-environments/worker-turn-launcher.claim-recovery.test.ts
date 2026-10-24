@@ -508,12 +508,11 @@ describe("worker pre-launch claim recovery", () => {
       }
       blocked = execute(second);
       const outcome = blocked.catch((error: unknown) => error);
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         entered.promise,
-        outcome.then(() => {
-          throw new Error("worker settled before reaching cancellation gate");
-        }),
-      ]);
+        outcome,
+        "worker settled before reaching cancellation gate",
+      );
       const oldClaim = currentClaim();
       expect(oldClaim?.runId).toBe("blocked-second");
       expect(await pendingResults()).toHaveLength(stage === "pending result" ? 1 : 0);
@@ -598,17 +597,11 @@ describe("worker pre-launch claim recovery", () => {
       expect(currentClaim()).toBeNull();
       successor = execute(turn("successor-third"));
       void successor.catch(() => undefined);
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         successorEntered.promise,
-        successor.then(
-          () => {
-            throw new Error("successor settled before reaching workspace gate");
-          },
-          (error: unknown) => {
-            throw error;
-          },
-        ),
-      ]);
+        successor,
+        "successor settled before reaching workspace gate",
+      );
       const replacement = currentClaim();
       expect(replacement?.runId).toBe("successor-third");
       resume.resolve();
