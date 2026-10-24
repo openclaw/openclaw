@@ -149,6 +149,154 @@ export function createNamedAllowlistAccounts() {
   };
 }
 
+export function policyForAgents(
+  scopeName: string,
+  agentIds: string[],
+  rules: Record<string, unknown>,
+) {
+  return { scopes: { [scopeName]: { agentIds, ...rules } } };
+}
+
+export function createDeniedTelegramPolicy(reason?: string) {
+  return {
+    channels: {
+      denyRules: [
+        {
+          id: "no-telegram",
+          when: { provider: "telegram" },
+          ...(reason === undefined ? {} : { reason }),
+        },
+      ],
+    },
+  };
+}
+
+export function createGatewayHttpInput() {
+  return {
+    endpoints: {
+      chatCompletions: {
+        enabled: true,
+        images: { allowUrl: true },
+      },
+      responses: {
+        enabled: true,
+        files: { allowUrl: true },
+        images: { allowUrl: true, urlAllowlist: ["images.example.test"] },
+      },
+    },
+  };
+}
+
+export function createDocsMcpPolicyConfig() {
+  return cfgWithPolicyOverrides({
+    mcp: {
+      servers: {
+        DocsServer: {
+          command: "npx",
+          args: ["-y", "@modelcontextprotocol/server-fetch"],
+        },
+      },
+    },
+  });
+}
+
+export function createStandardIngressPolicy() {
+  return {
+    session: { requireDmScope: "per-channel-peer" },
+    channels: {
+      allowDmPolicies: ["pairing", "allowlist", "disabled"],
+      denyOpenGroups: true,
+      requireMentionInGroups: true,
+    },
+  };
+}
+
+export function createDisabledOpenChannelInput() {
+  return {
+    enabled: false,
+    dmPolicy: "open",
+    groupPolicy: "open",
+    requireMention: false,
+  };
+}
+
+export function createOpenOpsGroups() {
+  return {
+    ops: {
+      groupPolicy: "open",
+      requireMention: false,
+    },
+  };
+}
+
+export function cfgWithPolicyAgents(agents: RawLegacyDoctorConfig["agents"]) {
+  return cfgWithPolicyOverrides({ agents });
+}
+
+export function cfgWithPolicyAgentDefaults(
+  defaults: NonNullable<RawLegacyDoctorConfig["agents"]>["defaults"],
+) {
+  return cfgWithPolicyAgents({ defaults });
+}
+
+export function cfgWithPolicyAgentEntries(
+  entries: NonNullable<RawLegacyDoctorConfig["agents"]>["entries"],
+) {
+  return cfgWithPolicyAgents({ entries });
+}
+
+export async function runToolMetadataFixture(required: string[], toolsRaw: string) {
+  const configPath = await writePolicyFixture({ tools: { requireMetadata: required } });
+  await fs.writeFile(join(workspaceDir, "AGENTS.md"), toolsRaw, "utf-8");
+  return runPolicyDoctorLint(ctx(configPath, cfgWithPolicy()));
+}
+
+export function createToolPosturePolicy(allowSecurity: string[]) {
+  return {
+    tools: {
+      profiles: { allow: ["messaging", "minimal"] },
+      fs: { requireWorkspaceOnly: true },
+      exec: { allowSecurity, requireAsk: ["always"], allowHosts: ["sandbox"] },
+      elevated: { allow: false },
+      denyTools: ["exec", "write", "edit", "apply_patch"],
+    },
+  };
+}
+
+export function createCustomBindInput(bind: "loopback" | "custom", customBindHost: string) {
+  return { gateway: { bind, customBindHost } };
+}
+
+export function createBackendContainerPolicy(allowBackends: string[]) {
+  return {
+    sandbox: {
+      allowBackends,
+      containers: {
+        denyHostNetwork: true,
+        denyContainerRuntimeSocketMounts: true,
+        denyUnconfinedProfiles: true,
+      },
+    },
+  };
+}
+
+export function createSharedSandboxRequirements(allowBackends: string[]) {
+  return {
+    sandbox: {
+      requireMode: ["all", "non-main"],
+      allowBackends,
+      containers: {
+        denyHostNetwork: true,
+        denyContainerNamespaceJoin: true,
+        requireReadOnlyMounts: true,
+        denyContainerRuntimeSocketMounts: true,
+        denyUnconfinedProfiles: true,
+      },
+      browser: { requireCdpSourceRange: true },
+    },
+  };
+}
+
 export function rawCfgWithPolicy(overrides: Record<string, unknown>): Record<string, unknown> {
   return { ...cfgWithPolicy(), ...overrides };
 }

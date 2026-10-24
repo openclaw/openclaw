@@ -11,6 +11,7 @@ import type {
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { createMockIncomingRequest, withTempHome } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { listenOnLoopback } from "../../../test-support/hanging-loopback-server.js";
 import { registerTelegramMiniApp } from "../../miniapp-api.js";
 import {
   createTelegramMiniAppLaunchTickets,
@@ -215,14 +216,8 @@ async function expectClosedHttpRequest(
   });
   let socket: Socket | undefined;
   try {
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const address = server.address();
-    if (!address || typeof address === "string") {
-      throw new Error("expected TCP server address");
-    }
-    socket = connect({ host: "127.0.0.1", port: address.port });
+    const port = await listenOnLoopback(server);
+    socket = connect({ host: "127.0.0.1", port });
     await new Promise<void>((resolve) => {
       socket?.once("connect", resolve);
     });

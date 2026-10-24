@@ -1702,18 +1702,7 @@ describe("Codex plugin thread config", () => {
       request: async (method, params) =>
         codexAppInventoryResponse(method, [blockedApp], params, runtimeOptions),
     });
-    const request = vi.fn(async (method: string) => {
-      if (method === "plugin/installed" || method === "plugin/list") {
-        return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
-      }
-      if (method === "plugin/read") {
-        return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
-      }
-      if (method === "config/read") {
-        return { config: {}, layers: [] };
-      }
-      throw new Error(`unexpected request ${method}`);
-    });
+    const request = vi.fn(createReadyCalendarRequest());
 
     const config = await buildCodexPluginThreadConfig({
       pluginConfig: calendarPluginConfig(),
@@ -2147,18 +2136,7 @@ describe("Codex plugin thread config", () => {
       appCache,
       appCacheKey: "runtime",
       nowMs: 1,
-      request: async (method) => {
-        if (method === "plugin/installed" || method === "plugin/list") {
-          return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
-        }
-        if (method === "plugin/read") {
-          return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
-        }
-        if (method === "config/read") {
-          return { config: {}, layers: [] };
-        }
-        throw new Error(`unexpected request ${method}`);
-      },
+      request: createReadyCalendarRequest(),
     });
 
     expect(config.configPatch).toEqual({
@@ -2602,19 +2580,23 @@ async function buildReadyGoogleCalendarThreadConfig(
     appCache,
     appCacheKey: "runtime",
     nowMs: 1,
-    request: async (method) => {
-      if (method === "plugin/installed" || method === "plugin/list") {
-        return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
-      }
-      if (method === "plugin/read") {
-        return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
-      }
-      if (method === "config/read") {
-        return { config: {}, layers: [] };
-      }
-      throw new Error(`unexpected request ${method}`);
-    },
+    request: createReadyCalendarRequest(),
   });
+}
+
+function createReadyCalendarRequest() {
+  return async (method: string) => {
+    if (method === "plugin/installed" || method === "plugin/list") {
+      return pluginList([pluginSummary("google-calendar", { installed: true, enabled: true })]);
+    }
+    if (method === "plugin/read") {
+      return pluginDetail("google-calendar", [appSummary("google-calendar-app")]);
+    }
+    if (method === "config/read") {
+      return { config: {}, layers: [] };
+    }
+    throw new Error(`unexpected request ${method}`);
+  };
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
 

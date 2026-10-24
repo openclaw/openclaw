@@ -183,7 +183,6 @@ src/agents/embedded-agent-runner/compact.hooks.test.ts
 src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts
 src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts
 src/agents/embedded-agent-runner/runs.ts
-src/agents/embedded-agent-runner/tool-result-truncation.test.ts
 src/agents/embedded-agent-runner/tool-result-truncation.ts
 src/agents/embedded-agent-subscribe.handlers.tools.test.ts
 src/agents/harness/native-hook-relay.test.ts

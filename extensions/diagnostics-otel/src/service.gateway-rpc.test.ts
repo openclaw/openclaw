@@ -18,7 +18,7 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { emitInternalDiagnosticEventForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, test } from "vitest";
-import { installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
+import { createTestMeter, installRealOtelSdkTestHarness } from "./service.real-sdk.test-support.js";
 import {
   startOtelService,
   startOtelServiceWithHostUsage,
@@ -34,10 +34,7 @@ function spanNamed(spans: ReadableSpan[], name: string) {
 }
 
 test("exports untimed response observations on their trusted turn without counting usage twice", async () => {
-  const reader = new PeriodicExportingMetricReader({
-    exporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
-  });
-  const meterProvider = new MeterProvider({ readers: [reader] });
+  const { reader, meterProvider } = createTestMeter();
   metrics.disable();
   expect(metrics.setGlobalMeterProvider(meterProvider)).toBe(true);
   try {
@@ -201,10 +198,7 @@ test.each([
 ])(
   "honors preloaded signal toggles (traces=$traces metrics=$metricsEnabled)",
   async ({ traces, metricsEnabled }) => {
-    const reader = new PeriodicExportingMetricReader({
-      exporter: new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE),
-    });
-    const meterProvider = new MeterProvider({ readers: [reader] });
+    const { reader, meterProvider } = createTestMeter();
     try {
       metrics.disable();
       expect(metrics.setGlobalMeterProvider(meterProvider)).toBe(true);
@@ -348,9 +342,7 @@ test("keeps parentless Gateway RPC spans out of unrelated ambient OpenTelemetry 
 });
 
 test("exports Gateway RPC phase metrics with real SDK aggregation and upstream trace parents", async () => {
-  const metricExporter = new InMemoryMetricExporter(AggregationTemporality.CUMULATIVE);
-  const reader = new PeriodicExportingMetricReader({ exporter: metricExporter });
-  const meterProvider = new MeterProvider({ readers: [reader] });
+  const { reader, meterProvider } = createTestMeter();
   metrics.disable();
   metrics.setGlobalMeterProvider(meterProvider);
   const { service, ctx } = await startOtelService({ traces: true, metrics: true });

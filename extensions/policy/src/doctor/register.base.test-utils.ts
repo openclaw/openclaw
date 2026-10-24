@@ -14,6 +14,9 @@ import { registerPolicyDoctorChecks } from "./register.js";
 import {
   workspaceDir,
   cfgWithPolicy,
+  policyForAgents,
+  createDeniedTelegramPolicy,
+  createGatewayHttpInput,
   cfgWithPolicyOverrides,
   collectChannelOnlyPolicyEvidence,
   createAcceptedPolicyAttestationHash,
@@ -832,11 +835,7 @@ describe("registerPolicyDoctorChecks", () => {
       ...cfgWithPolicy({ expectedHash: "sha256:not-the-policy", workspaceRepairs: true }),
       channels: { telegram: { enabled: true } },
     } satisfies OpenClawConfig;
-    const configPath = await writePolicyFixture({
-      channels: {
-        denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
-      },
-    });
+    const configPath = await writePolicyFixture(createDeniedTelegramPolicy());
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
 
@@ -896,11 +895,7 @@ describe("registerPolicyDoctorChecks", () => {
       ...cfgWithPolicy({ expectedAttestationHash: "sha256:not-current", workspaceRepairs: true }),
       channels: { telegram: { enabled: true } },
     } satisfies OpenClawConfig;
-    const configPath = await writePolicyFixture({
-      channels: {
-        denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
-      },
-    });
+    const configPath = await writePolicyFixture(createDeniedTelegramPolicy());
 
     const result = await runPolicyChecks(ctx(configPath, cfg));
 
@@ -1054,17 +1049,7 @@ describe("registerPolicyDoctorChecks", () => {
       channels: { telegram: { enabled: true } },
     }) satisfies OpenClawConfig;
     const configPath = await writePolicyFixture(
-      {
-        channels: {
-          denyRules: [
-            {
-              id: "no-telegram",
-              when: { provider: "telegram" },
-              reason: "Telegram is not approved for this workspace.",
-            },
-          ],
-        },
-      },
+      createDeniedTelegramPolicy("Telegram is not approved for this workspace."),
       null,
       2,
     );
@@ -1093,15 +1078,7 @@ describe("registerPolicyDoctorChecks", () => {
       ...cfgWithPolicy({ workspaceRepairs: true }),
       channels: { telegram: { enabled: true } },
     } satisfies OpenClawConfig;
-    const configPath = await writePolicyFixture(
-      {
-        channels: {
-          denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
-        },
-      },
-      null,
-      2,
-    );
+    const configPath = await writePolicyFixture(createDeniedTelegramPolicy(), null, 2);
 
     const result = await runDeniedChannelRepair(repairCtx(configPath, cfg));
 
@@ -1115,15 +1092,7 @@ describe("registerPolicyDoctorChecks", () => {
       ...cfgWithPolicy({ workspaceRepairs: false }),
       channels: { telegram: { enabled: true } },
     } satisfies OpenClawConfig;
-    const configPath = await writePolicyFixture(
-      {
-        channels: {
-          denyRules: [{ id: "no-telegram", when: { provider: "telegram" } }],
-        },
-      },
-      null,
-      2,
-    );
+    const configPath = await writePolicyFixture(createDeniedTelegramPolicy(), null, 2);
 
     const result = await runDeniedChannelRepair(repairCtx(configPath, cfg));
 
@@ -1207,14 +1176,9 @@ describe("registerPolicyDoctorChecks", () => {
         },
       },
     } satisfies OpenClawConfig;
-    const configPath = await writePolicyFixture({
-      scopes: {
-        reviewer: {
-          agentIds: ["reviewer"],
-          tools: { elevated: { allow: false } },
-        },
-      },
-    });
+    const configPath = await writePolicyFixture(
+      policyForAgents("reviewer", ["reviewer"], { tools: { elevated: { allow: false } } }),
+    );
 
     const result = await runPolicyRepairCheck(
       "policy/tools-elevated-enabled",
@@ -1237,14 +1201,9 @@ describe("registerPolicyDoctorChecks", () => {
         entries: { reviewer: {} },
       },
     } satisfies OpenClawConfig;
-    const configPath = await writePolicyFixture({
-      scopes: {
-        reviewer: {
-          agentIds: ["reviewer"],
-          tools: { elevated: { allow: false } },
-        },
-      },
-    });
+    const configPath = await writePolicyFixture(
+      policyForAgents("reviewer", ["reviewer"], { tools: { elevated: { allow: false } } }),
+    );
 
     const result = await runPolicyRepairCheck(
       "policy/tools-elevated-enabled",
@@ -1330,19 +1289,7 @@ describe("registerPolicyDoctorChecks", () => {
     const cfg = {
       ...cfgWithPolicy({ workspaceRepairs: true }),
       gateway: {
-        http: {
-          endpoints: {
-            chatCompletions: {
-              enabled: true,
-              images: { allowUrl: true },
-            },
-            responses: {
-              enabled: true,
-              files: { allowUrl: true },
-              images: { allowUrl: true, urlAllowlist: ["images.example.test"] },
-            },
-          },
-        },
+        http: createGatewayHttpInput(),
       },
     } satisfies OpenClawConfig;
     const configPath = await writePolicyFixture({
