@@ -145,6 +145,18 @@ export function expectWhatsAppLoginFollowup(harness: WizardPromptHarness): void 
   );
 }
 
+export function expectWhatsAppNextStepsNote(
+  harness: WizardPromptHarness,
+  account: string,
+  guidance: string,
+): void {
+  const calls = (harness.note as unknown as { mock: { calls: unknown[][] } }).mock.calls;
+  const message = calls.find((call) => call[1] === "WhatsApp next steps")?.[0];
+  expect(message).toEqual(expect.stringContaining(`Account: ${account}`));
+  expect(message).toEqual(expect.stringContaining("send a WhatsApp message"));
+  expect(message).toEqual(expect.stringContaining(guidance));
+}
+
 function expectAccountAccessNote(harness: WizardPromptHarness, account: string): void {
   const prefix = `channels.whatsapp.accounts.${account}`;
   expect(harness.note).toHaveBeenCalledWith(

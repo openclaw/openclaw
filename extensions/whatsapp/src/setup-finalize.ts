@@ -117,6 +117,25 @@ function parseWhatsAppAllowFromEntries(raw: string): { entries: string[]; invali
   return { entries: normalizeWhatsAppAllowFromEntries(entries) };
 }
 
+function buildWhatsAppNextStepsNote(cfg: OpenClawConfig, accountId: string): string {
+  const account = resolveWhatsAppAccount({ cfg, accountId });
+  const policy = account.dmPolicy ?? "pairing";
+  const policyGuidance: Record<DmPolicy, string> = {
+    pairing: t("wizard.whatsapp.nextStepsPairing"),
+    allowlist: t("wizard.whatsapp.nextStepsAllowlist"),
+    open: t("wizard.whatsapp.nextStepsOpen"),
+    disabled: t("wizard.whatsapp.nextStepsDisabled"),
+  };
+  return [
+    t("wizard.whatsapp.nextStepsAccount", {
+      account: accountId === DEFAULT_ACCOUNT_ID ? "default" : accountId,
+    }),
+    t("wizard.whatsapp.nextStepsMessage"),
+    policyGuidance[policy],
+    t("wizard.channels.docs", { link: formatDocsLink("/whatsapp", "whatsapp") }),
+  ].join("\n");
+}
+
 export async function finalizeWhatsAppSetup(params: {
   cfg: OpenClawConfig;
   accountId: string;
@@ -357,5 +376,9 @@ export async function finalizeWhatsAppSetup(params: {
     return setWhatsAppAllowFrom(accessConfig, accountId, parsed.entries);
   }
   next = await promptWhatsAppDmAccess();
+  await prompter.note(
+    buildWhatsAppNextStepsNote(next, selectedAccountId),
+    t("wizard.whatsapp.nextStepsTitle"),
+  );
   return { cfg: next };
 }

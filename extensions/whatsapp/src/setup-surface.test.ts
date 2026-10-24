@@ -16,6 +16,7 @@ import {
   createWhatsAppWorkAccountConfig,
   expectNoWhatsAppLoginFollowup,
   expectWhatsAppLoginFollowup,
+  expectWhatsAppNextStepsNote,
   expectWhatsAppOpenPolicySetup,
   expectWhatsAppOwnerAllowlistSetup,
   expectWhatsAppPersonalPhoneSetup,
@@ -121,6 +122,7 @@ describe("whatsapp setup wizard", () => {
 
     expect(hoisted.loginWeb).not.toHaveBeenCalled();
     expectWhatsAppOwnerAllowlistSetup(result.cfg, harness);
+    expectWhatsAppNextStepsNote(harness, "default", "covered by allowFrom");
   });
 
   it.each(["work", ""])("writes scoped DM policy for selected account %j", async (accountId) => {
@@ -133,6 +135,7 @@ describe("whatsapp setup wizard", () => {
 
     expectWhatsAppWorkAccountOpenAccess(named.cfg);
     expectWhatsAppWorkAccountAccessNote(harness);
+    expectWhatsAppNextStepsNote(harness, "work", "DMs are open");
   });
 
   it.each([
@@ -181,6 +184,7 @@ describe("whatsapp setup wizard", () => {
     const result = await runFinalizeWithHarness({ harness });
 
     expectWhatsAppPersonalPhoneSetup(result.cfg);
+    expectWhatsAppNextStepsNote(harness, "default", "covered by allowFrom");
   });
 
   it("forces wildcard allowFrom for open policy without allowFrom follow-up prompts", async () => {
@@ -278,5 +282,15 @@ describe("whatsapp setup wizard", () => {
     } else {
       expectWhatsAppLoginFollowup(harness);
     }
+    expectWhatsAppNextStepsNote(harness, "default", "DMs are disabled");
+  });
+
+  it("shows first-message pairing guidance after setup", async () => {
+    hoisted.hasWebCredsSync.mockReturnValue(true);
+    const harness = createSeparatePhoneHarness(["separate", "pairing", "unset"]);
+
+    await runFinalizeWithHarness({ harness });
+
+    expectWhatsAppNextStepsNote(harness, "default", "approve the DM access request");
   });
 });

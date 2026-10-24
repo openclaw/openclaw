@@ -82,6 +82,17 @@ openclaw gateway
 
   </Step>
 
+  <Step title="Send the first message">
+
+    From an allowlisted phone (or your own number in personal-number mode), send
+    `Hello` to the WhatsApp account you linked in OpenClaw.
+
+    In pairing mode, this first message creates an access request instead of an
+    immediate reply. Approve that request in the next step, then send the message
+    again.
+
+  </Step>
+
   <Step title="Approve the first DM access request (pairing mode)">
 
     Open **Settings → Channels → DM access requests**, find the WhatsApp account,

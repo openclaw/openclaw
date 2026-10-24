@@ -905,6 +905,16 @@ export const en = {
       linkLater: "Run `{command}` later to link WhatsApp.",
       linkNowPrompt: "Link WhatsApp now (QR)?",
       linkingTitle: "WhatsApp linking",
+      nextStepsAccount: "Account: {account}",
+      nextStepsAllowlist: "This sender is already covered by allowFrom.",
+      nextStepsDisabled:
+        "DMs are disabled. Enable pairing or allowlist in WhatsApp DM access before trying a message.",
+      nextStepsMessage:
+        'From an allowed phone, send a WhatsApp message to the linked account: "Hello".',
+      nextStepsOpen: "DMs are open, so any sender can message the linked account.",
+      nextStepsPairing:
+        "If this is a new sender, approve the DM access request; then send the message again.",
+      nextStepsTitle: "WhatsApp next steps",
       numberTitle: "WhatsApp number",
       ownerNumberNote: "We need the sender/owner number so OpenClaw can allowlist you.",
       personalNumberPrompt: "Your personal WhatsApp number (the phone you will message from)",
