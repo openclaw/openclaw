@@ -199,11 +199,24 @@ it("publishes lifecycle snapshot admission only after commit and reuses it on th
         expect(reader.db.isTransaction).toBe(false);
         expect(captureCanonicalSessionReaderContinuation(reader)).toBeUndefined();
       }
+      const queries = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(reader.db),
+        ["validation"],
+        (sql) =>
+          sql.includes("retained_window") ||
+          sql.includes('from "session_canonical_validation_pending"')
+            ? "validation"
+            : null,
+      );
+      using _ = { [Symbol.dispose]: () => queries.restore() };
+
       expect(read().entries[0]?.entry.sessionId).toBe("admitted-session");
       const admission = captureCanonicalSessionReaderContinuation(reader);
       expect(admission).toBeDefined();
       admission?.release();
+      queries.counts.validation = 0;
       expect(read().entries[0]?.entry.sessionId).toBe("admitted-session");
+      expect(queries.counts.validation).toBe(0);
     });
   }));
 
@@ -274,7 +287,7 @@ it.each([false, true])("reads row metadata (continuation: %s)", (useContinuation
       "INSERT INTO board_tabs (session_key, tab_id, title, position, created_by, revision) VALUES (?, ?, 'Board', 0, 'user', 0)",
     );
     for (const key of boardKeys) {
-      for (let tab = 0; tab < 2; tab++) {
+      for (let tab = 0; tab < 4; tab++) {
         insertTab.run(key, `tab-${tab}`);
       }
     }
@@ -328,6 +341,29 @@ it.each([false, true])("reads row metadata (continuation: %s)", (useContinuation
           });
           return readRow;
         });
+        const exec = vi.spyOn(reader.db, "exec");
+        const queries = trackSqliteStatementExecutions(
+          requireNativeSqliteDatabase(reader.db),
+          ["boards", "entries"],
+          (sql) => {
+            if (/\bfrom "session_nodes"/iu.test(sql) && sql.includes('"entry_json"')) {
+              return "entries";
+            }
+            if (/\bfrom "board_tabs"/iu.test(sql)) {
+              return "boards";
+            }
+            return null;
+          },
+        );
+        const parse = vi.spyOn(JSON, "parse");
+        const entryParseCount = () =>
+          parse.mock.calls.filter(
+            ([value]) =>
+              typeof value === "string" &&
+              value.includes('"sessionId":') &&
+              (value.includes(sessionId) ||
+                sessionKeys.slice(1).some((key) => value.includes(key))),
+          ).length;
         try {
           const read = (requestedKeys = [...sessionKeys, rawKey]) =>
             readSessionRowDatabaseFacts({
@@ -339,6 +375,10 @@ it.each([false, true])("reads row metadata (continuation: %s)", (useContinuation
             });
           const first = read();
           expect(first.rows).toHaveLength(64);
+          expect(queries.counts.boards).toBe(0);
+          expect(queries.counts.entries).toBe(1);
+          expect(queries.rowCounts.entries).toBe(63);
+          expect(entryParseCount()).toBe(64);
           expect(first.rows.filter((row) => row.hasBoard).map((row) => row.sessionKey)).toEqual(
             boardKeys,
           );
@@ -363,9 +403,20 @@ it.each([false, true])("reads row metadata (continuation: %s)", (useContinuation
             hasBoard: false,
             activitySummaryWatermark: { generation: "next-generation", maxSeq: 42 },
           });
+          expect(queries.counts.boards).toBe(0);
+          expect(queries.counts.entries).toBe(2);
+          expect(entryParseCount()).toBe(128);
+          expect(
+            exec.mock.calls
+              .map(([sql]) => sql)
+              .filter((sql) => /^(?:BEGIN|COMMIT|SAVEPOINT|RELEASE|ROLLBACK)\b/iu.test(sql)),
+          ).toEqual(["BEGIN", "COMMIT", "BEGIN", "COMMIT"]);
           expect(read([boardKeys[1]!]).rows[0]?.hasBoard).toBe(true);
         } finally {
           continuation?.release();
+          exec.mockRestore();
+          parse.mockRestore();
+          queries.restore();
         }
       });
     } finally {
@@ -390,6 +441,7 @@ it("consumes admitted board absence for a cohort and observes first use and publ
     using peer = openNodeSqliteDatabase(target.path);
 
     withRetainedReader(target, () => {
+      const reader = openReader(target, env);
       const read = () =>
         readSessionRowDatabaseFacts({
           kind: "session-row-facts",
@@ -397,9 +449,26 @@ it("consumes admitted board absence for a cohort and observes first use and publ
           env,
           sessionKeys,
         });
-      const result = read();
-      expect(result.rows).toHaveLength(64);
-      expect(result.rows.every((row) => !row.hasBoard)).toBe(true);
+      const queries = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(reader.db),
+        ["boards", "catalog"],
+        (sql) =>
+          /sqlite_master/iu.test(sql)
+            ? "catalog"
+            : /\bfrom "board_tabs"/iu.test(sql)
+              ? "boards"
+              : null,
+      );
+      try {
+        for (let refresh = 0; refresh < 2; refresh++) {
+          const result = read();
+          expect(result.rows).toHaveLength(64);
+          expect(result.rows.every((row) => !row.hasBoard)).toBe(true);
+        }
+        expect(queries.counts).toEqual({ boards: 0, catalog: 0 });
+      } finally {
+        queries.restore();
+      }
       boardStore.ensureBoardSchema({ db: peer, path: target.path });
       peer
         .prepare(
@@ -416,7 +485,7 @@ it("consumes admitted board absence for a cohort and observes first use and publ
     });
   }));
 
-it.each(["list", "full", "children", "worktree", "source-checks", "row-facts"] as const)(
+it.each(["worker", "exact", "full", "children", "worktree", "source-checks", "row-facts"] as const)(
   "refuses unavailable session metadata in the %s reader instead of reporting missing sessions",
   (reader) =>
     withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
@@ -441,7 +510,10 @@ it.each(["list", "full", "children", "worktree", "source-checks", "row-facts"] a
                   }
                 : {
                     sessionKeys,
-                    projection: reader === "full" || reader === "worktree" ? reader : "list",
+                    projection:
+                      reader === "exact" || reader === "full" || reader === "worktree"
+                        ? reader
+                        : "list",
                   }),
               ...(reader === "source-checks" ? { sourceChecks: [] } : {}),
             }).entries;
@@ -452,11 +524,15 @@ it.each(["list", "full", "children", "worktree", "source-checks", "row-facts"] a
     }),
 );
 
-it("rejects asynchronous batch consumers", () =>
+it("returns detached metadata and rejects asynchronous batch consumers", () =>
   withDatabase(async (database, env) => {
     const sessionKey = "agent:main:consumer";
     writeSessionEntry(database, sessionKey, { sessionId: "consumer-session", updatedAt: 1 });
     const input = { agentId: "main", storePath: database.path, sessionKeys: [sessionKey], env };
+    await withSessionEntriesFromStoresInWorker([input], ([read]) => {
+      expect(read!.result.entries[0]?.entry.sessionId).toBe("consumer-session");
+      read!.assertCurrent();
+    });
     await expect(withSessionEntriesFromStoresInWorker([input], async () => {})).rejects.toThrow(
       "consumers must remain synchronous",
     );
@@ -469,7 +545,10 @@ function seedRetainedSessionHeader(
 ) {
   writeSessionEntry(database, sessionKey, { sessionId, updatedAt: 1 });
   database.db
-    .prepare("UPDATE session_nodes SET entry_json = '{}', entry_valid = -1 WHERE session_key = ?")
+    .prepare("UPDATE session_nodes SET entry_json = '{}' WHERE session_key = ?")
+    .run(sessionKey);
+  database.db
+    .prepare("UPDATE session_nodes SET entry_valid = -1 WHERE session_key = ?")
     .run(sessionKey);
 }
 
@@ -664,27 +743,52 @@ it("keeps durable delivery generations live only through same-generation writes"
         { ...scope, storePath: database.path },
         { identityId: "ordinary-member", addedBy: "owner", addedAt: 2 },
       );
-      authority.assertCurrent();
+      const queries = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["all"],
+        () => "all",
+      );
+      try {
+        authority.assertCurrent();
+        // Native writers can share a handle with raw SDK writes; one final row read certifies it.
+        expect(queries.counts.all).toBe(1);
+        authority.assertCurrent();
+        expect(queries.counts.all).toBe(1);
+      } finally {
+        queries.restore();
+      }
       await expect(
         prepareSessionDeliveryGeneration({ ...descriptor, storePath: other.path }),
       ).rejects.toThrow(revoked);
       authority.assertCurrent();
-      runOpenClawAgentWriteTransaction(
-        (writer) => {
-          deleteSessionEntryRows(writer, sessionKey);
-          writeSessionEntry(writer, sessionKey, { sessionId: "replacement", updatedAt: 3 });
-        },
-        toDatabaseOptions(resolveSqliteScope(scope)),
-      );
+      replaceSessionEntrySync(scope, { ...entry, lifecycleRevision: "reset-generation" });
       expect(authority.assertCurrent).toThrow(revoked);
       await expect(prepareSessionDeliveryGeneration(descriptor)).rejects.toThrow(revoked);
-      const replacement = await prepareSessionDeliveryGeneration({
+      const replay = await prepareSessionDeliveryGeneration({
         ...descriptor,
-        sessionId: "replacement",
+        lifecycleRevision: "reset-generation",
       });
-      replacement.assertCurrent();
-      replacement.release();
-      expect(replacement.assertCurrent).toThrow(unavailable);
+      try {
+        replay.assertCurrent();
+        runOpenClawAgentWriteTransaction(
+          (writer) => {
+            deleteSessionEntryRows(writer, sessionKey);
+            writeSessionEntry(writer, sessionKey, { sessionId: "replacement", updatedAt: 3 });
+          },
+          toDatabaseOptions(resolveSqliteScope(scope)),
+        );
+        expect(replay.assertCurrent).toThrow(revoked);
+        await expect(prepareSessionDeliveryGeneration(descriptor)).rejects.toThrow(revoked);
+        const replacement = await prepareSessionDeliveryGeneration({
+          ...descriptor,
+          sessionId: "replacement",
+        });
+        replacement.assertCurrent();
+        replacement.release();
+        expect(replacement.assertCurrent).toThrow(unavailable);
+      } finally {
+        replay.release();
+      }
     } finally {
       authority.release();
     }

@@ -892,6 +892,24 @@ it.each(["insufficient", "unknown"] as const)(
       expect(backup.warnings).toContain(
         `Available disk space could not be measured near ${externalDirectories[0]}; database backup will be attempted.`,
       );
+      const retainedAgentFiles = (await fs.readdir(backup.directory, { recursive: true }))
+        .filter((file) => file.endsWith("agent.sqlite"))
+        .toSorted();
+      expect(retainedAgentFiles).toEqual([
+        expect.stringMatching(/[\\/]external-a[\\/]agent\.sqlite$/u),
+        expect.stringMatching(/[\\/]external-b[\\/]agent\.sqlite$/u),
+      ]);
+      for (const entry of backup.databases) {
+        await expectSnapshot(entry, [
+          entry.path === f.shared ? "retained" : path.basename(path.dirname(entry.path)),
+        ]);
+        if (entry.path !== f.shared) {
+          using db = new DatabaseSync(entry.snapshotPath, { readOnly: true });
+          expect(db.prepare("SELECT agent_id FROM schema_meta").get()).toEqual({
+            agent_id: "main",
+          });
+        }
+      }
     }
     expect(await readFiles([f.shared, ...f.external])).toEqual(originals);
   },

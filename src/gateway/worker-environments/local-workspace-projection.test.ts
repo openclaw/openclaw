@@ -15,7 +15,6 @@ import type { SandboxBackendHandle } from "../../agents/sandbox/backend-handle.t
 import { requireGit } from "../../agents/worktrees/git.js";
 import { deleteRegistryWorktree } from "../../agents/worktrees/registry.js";
 import { getRegistryWorktree } from "../../agents/worktrees/registry.test-support.js";
-import { makeWorktreeRecord } from "../../agents/worktrees/service.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -28,6 +27,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import {
   observeAcknowledgedUpdate,
   proveIncrementalWorkspaceEdits,
@@ -59,20 +59,11 @@ const settleProjection = () => withLocalWorkspaceProjection(owner, (state) => st
 const readProjection = () => readLocalWorkspaceProjection(owner.worktree.id);
 const writeText = (directory: string, relative: string, data: string) =>
   fs.writeFile(path.join(directory, relative), data);
-async function writeFiles(directory: string, files: Record<string, string>) {
-  for (const [relative, data] of Object.entries(files)) {
-    await fs.mkdir(path.dirname(path.join(directory, relative)), { recursive: true });
-    await writeText(directory, relative, data);
-  }
-}
 async function expectText(directory: string, relative: string, expected: string) {
   expect(await readText(directory, relative)).toBe(expected);
 }
 async function expectMissing(directory: string, ...parts: string[]) {
   await expect(fs.stat(path.join(directory, ...parts))).rejects.toMatchObject({ code: "ENOENT" });
-}
-async function expectDirectory(directory: string, relative: string) {
-  expect((await fs.stat(path.join(directory, relative))).isDirectory()).toBe(true);
 }
 
 async function archiveFixture(provisionedPaths: string[] = []) {
@@ -111,7 +102,8 @@ beforeEach(async () => {
   await git(repo, "init", "--quiet", "-b", "main");
   await git(repo, "config", "user.name", "Test");
   await git(repo, "config", "user.email", "test@example.invalid");
-  await writeFiles(repo, { "source.txt": "original\n", ".gitignore": ".env.local\n" });
+  await writeText(repo, "source.txt", "original\n");
+  await writeText(repo, ".gitignore", ".env.local\n");
   await git(repo, "add", ".");
   await git(repo, "commit", "--quiet", "-m", "base");
   await git(repo, "worktree", "add", "--quiet", "-b", "openclaw/guest", canonical);
@@ -129,12 +121,19 @@ beforeEach(async () => {
         throw new Error("revoked");
       }
     },
-    worktree: makeWorktreeRecord(repo, randomUUID(), {
+    worktree: {
+      id: randomUUID(),
+      name: "guest",
+      repoFingerprint: "test",
+      repoRoot: repo,
       path: canonical,
       branch: "openclaw/guest",
       baseRef: "main",
+      ownerKind: "session",
       ownerId: sessionKey,
-    }),
+      createdAt: 0,
+      lastActiveAt: 0,
+    },
   };
 });
 
@@ -183,7 +182,10 @@ it("preserves host-admitted build-root inputs while excluding guest cache churn"
     ".artifacts/build-cache-inputs/authored.json",
   ];
   await writeText(canonical, ".gitignore", ".env.local\n.artifacts/\n");
-  await writeFiles(canonical, Object.fromEntries(inputs.map((name) => [name, "original input\n"])));
+  for (const entryPath of inputs) {
+    await fs.mkdir(path.dirname(path.join(canonical, entryPath)), { recursive: true });
+    await writeText(canonical, entryPath, "original input\n");
+  }
   await git(canonical, "add", "--force", "--", ...inputs);
   const projection = await prepare();
   for (const entryPath of inputs) {
@@ -191,7 +193,8 @@ it("preserves host-admitted build-root inputs while excluding guest cache churn"
     await writeText(projection, entryPath, "guest input edit\n");
   }
   const cache = ".artifacts/build-all-cache/other/outputs/generated.js";
-  await writeFiles(projection, { [cache]: "disposable cache\n" });
+  await fs.mkdir(path.dirname(path.join(projection, cache)), { recursive: true });
+  await writeText(projection, cache, "disposable cache\n");
   // The guest's independent index cannot turn generated outputs into host-admitted inputs.
   await git(projection, "add", "--force", "--", cache);
   if (process.platform !== "win32" && process.getuid?.() !== 0) {
@@ -208,13 +211,10 @@ it("preserves host-admitted build-root inputs while excluding guest cache churn"
   await writeText(canonical, inputs[0]!, "human input edit\n");
   await writeText(projection, inputs[0]!, "conflicting guest edit\n");
   await expect(synchronize()).rejects.toThrow("conflict");
-  expect((await readProjection())?.pending_ref).toBeTruthy();
-  await expectText(projection, inputs[0]!, "conflicting guest edit\n");
   await expectText(canonical, inputs[0]!, "human input edit\n");
   await writeText(canonical, inputs[0]!, "guest input edit\n");
   await settleProjection();
   await expectText(canonical, inputs[0]!, "conflicting guest edit\n");
-  expect((await readProjection())?.pending_ref).toBeNull();
   if (process.platform !== "win32" && process.getuid?.() !== 0) {
     await fs.chmod(path.join(projection, inputs[1]!), 0);
     try {
@@ -272,7 +272,19 @@ it.runIf(process.env.OPENCLAW_TEST_LOCAL_PROJECTION_PODMAN === "1")(
 
 it("installs additive owner state without changing the database version", async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
-  const { tableExists } = await import("../../state/openclaw-state-db-schema-helpers.js");
+  const [
+    { tableExists },
+    { OPENCLAW_STATE_SCHEMA_SQL },
+    { FIRST_USE_STATE_TABLES },
+    { extractSqliteTableSchema },
+    { assertSqliteSchemaContains },
+  ] = await Promise.all([
+    import("../../state/openclaw-state-db-schema-helpers.js"),
+    import("../../state/openclaw-state-schema.js"),
+    import("../../state/openclaw-state-db-contract.js"),
+    import("../../infra/sqlite-schema-sql.js"),
+    import("../../infra/sqlite-schema-contract.test-support.js"),
+  ]);
   const db = openOpenClawStateDatabase().db;
   const version = db
     .prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'")
@@ -282,19 +294,32 @@ it("installs additive owner state without changing the database version", async 
   expect(
     db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get(),
   ).toEqual(version);
+  const priorSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(
+    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "local_workspace_projections"),
+    "",
+  );
+  expect(() =>
+    assertSqliteSchemaContains(requireNativeSqliteDatabase(db), "prior schema", priorSchema, {
+      allowedMissingTables: FIRST_USE_STATE_TABLES,
+    }),
+  ).not.toThrow();
   await closeOpenClawStateDatabaseAsync();
   expect((await readProjection())?.session_id).toBe(owner.sessionId);
 });
 
 it("seeds independent source-only Git and reconciles edits without host metadata or ignored secrets", async () => {
-  await writeFiles(canonical, { "src/lib/source.ts": "nested seed" });
+  await fs.mkdir(path.join(canonical, "src/lib"), { recursive: true });
+  await writeText(canonical, "src/lib/source.ts", "nested seed");
   await git(canonical, "add", "src/lib/source.ts");
   await git(canonical, "commit", "--quiet", "-m", "nested seed");
-  await writeFiles(canonical, {
-    "source.txt": "canonical edit\n",
-    "untracked.txt": "admitted source\n",
-  });
+  await writeText(canonical, "source.txt", "canonical edit\n");
+  await writeText(canonical, "untracked.txt", "admitted source\n");
+  const manifests = await import("./workspace-manifest-worker.js");
+  const capture = vi.spyOn(manifests, "captureWorkspaceManifestDocument");
   const projection = await prepare();
+  // The unpublished guest needs one baseline traversal; it cannot have guest edits yet.
+  expect(capture.mock.calls.filter(([input]) => input.root !== canonical)).toHaveLength(1);
+  capture.mockRestore();
   await expectText(projection, "src/lib/source.ts", "nested seed");
   await expectText(projection, "source.txt", "canonical edit\n");
   await expectText(projection, "untracked.txt", "admitted source\n");
@@ -312,15 +337,14 @@ it("seeds independent source-only Git and reconciles edits without host metadata
 
 it("never admits nested host secrets after guest de-ignore", async () => {
   const prefix = "nested/";
+  await fs.mkdir(path.join(canonical, prefix), { recursive: true });
   const ignore = prefix + ".gitignore";
-  await writeFiles(canonical, {
-    [ignore]: ".env.local\n.env.later\n",
-    [prefix + ".env.local"]: "synthetic host secret",
-  });
+  await fs.writeFile(path.join(canonical, ignore), ".env.local\n.env.later\n");
+  await fs.writeFile(path.join(canonical, prefix + ".env.local"), "synthetic host secret");
   const projection = await prepare();
-  await writeText(projection, ignore, "");
+  await fs.writeFile(path.join(projection, ignore), "");
   await synchronize();
-  await writeText(canonical, prefix + ".env.later", "new synthetic provisioning");
+  await fs.writeFile(path.join(canonical, prefix + ".env.later"), "new synthetic provisioning");
   await closeOpenClawStateDatabaseAsync();
   await prepare();
   for (const name of [".env.local", ".env.later"]) {
@@ -360,8 +384,8 @@ it.skipIf(process.platform === "win32").each(["initial", "later index"])(
   "rejects non-UTF-8 path aliases before guest capture: %s",
   async (when) => {
     const ignored = "private-\uFFFD";
-    await writeText(canonical, ".gitignore", ignored + "\n");
-    await writeText(canonical, ignored, "synthetic ignored host secret");
+    await fs.writeFile(path.join(canonical, ".gitignore"), ignored + "\n");
+    await fs.writeFile(path.join(canonical, ignored), "synthetic ignored host secret");
     if (when === "later index") {
       await prepare();
     }
@@ -392,8 +416,8 @@ it("rejects an untracked non-UTF-8 path before initial guest capture", async ({ 
     skip("filesystem does not preserve raw filename bytes");
   }
   const ignored = "private-\uFFFD";
-  await writeText(canonical, ".gitignore", ignored + "\n");
-  await writeText(canonical, ignored, "synthetic ignored host secret");
+  await fs.writeFile(path.join(canonical, ".gitignore"), ignored + "\n");
+  await fs.writeFile(path.join(canonical, ignored), "synthetic ignored host secret");
   await expect(prepare()).rejects.toThrow("UTF-8");
 });
 
@@ -453,18 +477,19 @@ it("keeps eligible nested project content and accepted empty directories across 
   await prepare();
   await expectText(projection, ".openclaw/project.json", "project content");
   await expectText(projection, "src/nested.ts", "nested content");
-  await expectDirectory(projection, "src/empty");
+  expect((await fs.stat(path.join(projection, "src/empty"))).isDirectory()).toBe(true);
   await expectMissing(canonical, ".openclaw/sandbox-skills");
 });
 
 it("retains an accepted directory after deleting its last file across turns", async () => {
   const projection = await prepare();
-  await writeFiles(projection, { "retained/nested/old.txt": "old content\n" });
+  await fs.mkdir(path.join(projection, "retained/nested"), { recursive: true });
+  await writeText(projection, "retained/nested/old.txt", "old content\n");
   await synchronize();
 
   await fs.unlink(path.join(projection, "retained/nested/old.txt"));
   await synchronize();
-  await expectDirectory(canonical, "retained/nested");
+  expect((await fs.stat(path.join(canonical, "retained/nested"))).isDirectory()).toBe(true);
   await expectMissing(canonical, "retained/nested/old.txt");
 
   await writeText(projection, "retained/nested/new.txt", "new content\n");
@@ -472,6 +497,20 @@ it("retains an accepted directory after deleting its last file across turns", as
   await prepare();
   await expectText(canonical, "retained/nested/new.txt", "new content\n");
   await expectText(projection, "retained/nested/new.txt", "new content\n");
+  expect((await readProjection())?.pending_ref).toBeNull();
+});
+
+it("retains both sides and a durable pending result when edits conflict", async () => {
+  const projection = await prepare();
+  await writeText(projection, "source.txt", "guest conflict\n");
+  await writeText(canonical, "source.txt", "human conflict\n");
+  await expect(synchronize()).rejects.toThrow("conflict");
+  expect((await readProjection())?.pending_ref).toBeTruthy();
+  await expectText(projection, "source.txt", "guest conflict\n");
+  await expectText(canonical, "source.txt", "human conflict\n");
+  await writeText(canonical, "source.txt", "original\n");
+  await settleProjection();
+  await expectText(canonical, "source.txt", "guest conflict\n");
   expect((await readProjection())?.pending_ref).toBeNull();
 });
 
@@ -616,33 +655,36 @@ it.for([false, true])(
       image: "fixture",
     };
     await registry.updateRegistry(entry);
-    const success = (stdout = "") => ({ code: 0, stdout, stderr: "" });
     vi.spyOn(engine, "execContainer").mockImplementation(async (_engine, args) => {
       if (args[0] === "info") {
-        return success("checkpoint-daemon");
+        return { code: 0, stdout: "checkpoint-daemon", stderr: "" };
       }
       if (args[0] === "inspect") {
         if (args.some((arg) => arg.includes("{{json .Mounts}}"))) {
-          return success(JSON.stringify({ Mounts: [], Tmpfs: {} }));
+          return { code: 0, stdout: JSON.stringify({ Mounts: [], Tmpfs: {} }), stderr: "" };
         }
         if (args.includes("{{json .State}}")) {
-          return success(
-            JSON.stringify({
+          return {
+            code: 0,
+            stdout: JSON.stringify({
               Running: true,
               Paused: runtimePaused,
               Pid: 1,
               StartedAt: "2026-01-01T00:00:00.000Z",
             }),
-          );
+            stderr: "",
+          };
         }
-        return success(
-          args.includes("{{.State.Paused}}")
+        return {
+          code: 0,
+          stderr: "",
+          stdout: args.includes("{{.State.Paused}}")
             ? String(runtimePaused)
             : `${"a".repeat(64)} true ${runtimePaused}`,
-        );
+        };
       }
       if (args[0] === "exec") {
-        return success("1 0 0:1 / / rw - overlay overlay rw\n");
+        return { code: 0, stdout: "1 0 0:1 / / rw - overlay overlay rw\n", stderr: "" };
       }
       if (args[0] === "pause") {
         runtimePaused = true;
@@ -653,7 +695,7 @@ it.for([false, true])(
         runtimePaused = false;
         events.push("resumed");
       }
-      return success();
+      return { code: 0, stdout: "", stderr: "" };
     });
     const dispatch = (kind: string) => {
       if (runtimePaused) {
@@ -712,10 +754,15 @@ it.for([false, true])(
       env: cleanup.env,
       usePty: false,
     });
-    const finalize = (token: unknown) =>
-      backend.finalizeExec!({ status: "completed", exitCode: 0, timedOut: false, token });
     events.length = 0;
-    const checkpoint = stopped ? finalize(accepted.finalizeToken) : projection.checkpoint();
+    const checkpoint = stopped
+      ? backend.finalizeExec!({
+          status: "completed",
+          exitCode: 0,
+          timedOut: false,
+          token: accepted.finalizeToken,
+        })
+      : projection.checkpoint();
     let commands: Promise<unknown>[] = [];
     let pendingExec: ReturnType<typeof backend.buildExecSpec> | undefined;
     const acceptedFinalization = stopped ? checkpoint : undefined;
@@ -770,12 +817,22 @@ it.for([false, true])(
       if (acceptedFinalization) {
         await acceptedFinalization;
       } else {
-        await finalize(accepted.finalizeToken);
+        await backend.finalizeExec!({
+          status: "completed",
+          exitCode: 0,
+          timedOut: false,
+          token: accepted.finalizeToken,
+        });
       }
       if (pendingExec) {
         const [result] = await Promise.allSettled([pendingExec]);
         if (result.status === "fulfilled") {
-          await finalize(result.value.finalizeToken);
+          await backend.finalizeExec!({
+            status: "completed",
+            exitCode: 0,
+            timedOut: false,
+            token: result.value.finalizeToken,
+          });
         }
       }
       await registry.removeRegistryEntry(entry.containerName);
@@ -789,12 +846,14 @@ it.each(["legacy decoder", "failed restore retry", "retention"] as const)(
     const { restoreProvisionedFiles } = await import("../../agents/worktrees/provisioned-files.js");
     const { service, registry, retentionMs } = await archiveFixture([".env.allowed"]);
     const originalInput = ".artifacts/build-cache-inputs/node_modules/archived.json";
-    await writeFiles(canonical, { [originalInput]: "original archived input\n" });
+    await fs.mkdir(path.dirname(path.join(canonical, originalInput)), { recursive: true });
+    await writeText(canonical, originalInput, "original archived input\n");
     await git(canonical, "add", "--force", "--", originalInput);
     await writeText(canonical, ".env.allowed", "original provisioned bytes");
     await fs.chmod(path.join(canonical, ".env.allowed"), 0o600);
     await writeText(canonical, ".gitignore", ".env.local\n.env.allowed\nguest-ignored/\n");
-    await writeFiles(canonical, { "guest-ignored/host-secret": "not guest custody" });
+    await fs.mkdir(path.join(canonical, "guest-ignored"));
+    await writeText(canonical, "guest-ignored/host-secret", "not guest custody");
     const projection = await prepare();
     await fs.mkdir(path.join(projection, "guest-ignored/empty"), { recursive: true });
     const bytes = Buffer.from("guest-owned ignored bytes\0\n");
@@ -902,7 +961,7 @@ it.each(["legacy decoder", "failed restore retry", "retention"] as const)(
     for (const workspace of [canonical, projection]) {
       await expectText(workspace, originalInput, "original archived input\n");
       expect(await fs.readFile(path.join(workspace, "guest-ignored/data"))).toEqual(bytes);
-      await expectDirectory(workspace, "guest-ignored/empty");
+      expect((await fs.stat(path.join(workspace, "guest-ignored/empty"))).isDirectory()).toBe(true);
       if (process.platform !== "win32") {
         expect(await fs.readlink(path.join(workspace, "guest-ignored/link"))).toBe("../source.txt");
       }
@@ -927,7 +986,8 @@ it("preserves later inputs from an older archive without admitting new caches", 
   const input = ".artifacts/build-cache-inputs/node_modules/late-original.json";
   expect(JSON.parse(originalAdmission)).not.toContain(input);
   await writeText(canonical, ".gitignore", ".env.local\n.artifacts/\n");
-  await writeFiles(canonical, { [input]: "host-admitted input\n" });
+  await fs.mkdir(path.dirname(path.join(canonical, input)), { recursive: true });
+  await writeText(canonical, input, "host-admitted input\n");
   await git(canonical, "add", "--force", "--", input);
   await prepare();
   await expectText(projection, input, "host-admitted input\n");
