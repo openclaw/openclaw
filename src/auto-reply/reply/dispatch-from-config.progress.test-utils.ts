@@ -274,32 +274,32 @@ describe("dispatchReplyFromConfig", () => {
         SessionKey: "agent:main:telegram:group:-100123",
       };
 
-      await dispatchReplyFromConfig({
-        ctx: buildTestCtx({
-          ...baseCtx,
-          Body: "@bot check this",
-          CommandBody: "@bot check this",
-        }),
-        cfg,
-        dispatcher,
-        replyResolver,
-      });
-      await dispatchReplyFromConfig({
-        ctx: buildTestCtx({
-          ...baseCtx,
-          Body: "@bot check this",
-          CommandBody: "@bot check this",
-          InboundEventKind: "room_event",
-        }),
-        cfg,
-        dispatcher,
-        replyResolver,
-      });
+      for (const kind of ["user_request", "room_event", "user_request", "room_event"] as const) {
+        const isRoomEvent = kind === "room_event";
+        await dispatchReplyFromConfig({
+          ctx: buildTestCtx({
+            ...baseCtx,
+            Body: isRoomEvent ? "Room context" : "@bot check this",
+            InboundEventKind: kind,
+            WasMentioned: !isRoomEvent,
+          }),
+          cfg,
+          dispatcher,
+          replyResolver,
+          // Channels pass the room-event mode as an explicit request.
+          replyOptions: { sourceReplyDeliveryMode: isRoomEvent ? "message_tool_only" : undefined },
+        });
+      }
 
       expect(seen).toEqual([
         { effective: expectedUserRequestMode, stable: expectedStableMode },
         { effective: "message_tool_only", stable: expectedStableMode },
+        { effective: expectedUserRequestMode, stable: expectedStableMode },
+        { effective: "message_tool_only", stable: expectedStableMode },
       ]);
+      expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(
+        expectedUserRequestMode === "automatic" ? 2 : 0,
+      );
     },
   );
 

@@ -78,9 +78,10 @@ describe("resolveSourceReplyDeliveryMode", () => {
         },
       }),
     ).toBe("automatic");
-    expect(
-      resolveSourceReplyDeliveryMode({
-        cfg: emptyConfig,
+    // Internal requests still take effect, so they stay session-stable contracts.
+    expectPolicyFields(
+      resolveSourceReplyVisibilityPolicy({
+        cfg: globalToolOnlyReplyConfig,
         ctx: {
           ChatType: "direct",
           InboundEventKind: "room_event",
@@ -88,8 +89,14 @@ describe("resolveSourceReplyDeliveryMode", () => {
           Surface: "webchat",
         },
         requested: "automatic",
+        sendPolicy: "allow",
       }),
-    ).toBe("automatic");
+      {
+        sourceReplyDeliveryMode: "automatic",
+        sessionStableSourceReplyDeliveryMode: "automatic",
+        suppressDelivery: false,
+      },
+    );
   });
 
   it("keeps routed external room events message-tool-only when provider is WebChat", () => {
@@ -289,15 +296,18 @@ describe("resolveSourceReplyVisibilityPolicy", () => {
   });
 
   it.each([
-    [automaticGroupReplyConfig, "automatic"],
-    [globalToolOnlyReplyConfig, "message_tool_only"],
+    [automaticGroupReplyConfig, undefined, "automatic"],
+    [automaticGroupReplyConfig, "message_tool_only", "automatic"],
+    [globalToolOnlyReplyConfig, undefined, "message_tool_only"],
+    [globalToolOnlyReplyConfig, "message_tool_only", "message_tool_only"],
   ] as const)(
     "keeps room-event effective delivery tool-only while session-stable mode follows config",
-    (cfg, expectedStableMode) => {
+    (cfg, requested, expectedStableMode) => {
       expectPolicyFields(
         resolveSourceReplyVisibilityPolicy({
           cfg,
           ctx: { ChatType: "group", InboundEventKind: "room_event" },
+          requested,
           sendPolicy: "allow",
         }),
         {

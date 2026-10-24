@@ -55,6 +55,17 @@ export function isInternalSourceReplyChannel(ctx: SourceReplyDeliveryModeContext
   );
 }
 
+/** Room events outside internal channels stay tool-only, whatever the turn requested. */
+function forcesMessageToolOnly(params: {
+  ctx: SourceReplyDeliveryModeContext;
+  strictMessageToolOnly?: boolean;
+}): boolean {
+  return (
+    params.strictMessageToolOnly === true ||
+    (params.ctx.InboundEventKind === "room_event" && !isInternalSourceReplyChannel(params.ctx))
+  );
+}
+
 export function resolveSourceReplyDeliveryMode(params: {
   cfg: OpenClawConfig;
   ctx: SourceReplyDeliveryModeContext;
@@ -63,10 +74,7 @@ export function resolveSourceReplyDeliveryMode(params: {
   messageToolAvailable?: boolean;
   defaultVisibleReplies?: "automatic" | "message_tool";
 }): SourceReplyDeliveryMode {
-  if (params.strictMessageToolOnly === true) {
-    return "message_tool_only";
-  }
-  if (params.ctx.InboundEventKind === "room_event" && !isInternalSourceReplyChannel(params.ctx)) {
+  if (forcesMessageToolOnly(params)) {
     return "message_tool_only";
   }
   if (
@@ -179,7 +187,10 @@ export function resolveSourceReplyVisibilityPolicy(params: {
   defaultVisibleReplies?: "automatic" | "message_tool";
 }) {
   const sourceReplyDeliveryMode = resolveSourceReplyDeliveryMode(params);
+  // Forced tool-only turns ignore requested modes and commands, so neither is a
+  // stable contract there; channels pass the room-event mode as `requested`.
   const hasStableTurnOverride =
+    !forcesMessageToolOnly(params) &&
     !isSyntheticSourceReplyTurn({
       inputProvenance: params.ctx.InputProvenance,
       scheduledAutomation: params.scheduledAutomation,
