@@ -271,6 +271,14 @@ describe("evidence summary", () => {
     expect(evidence.entries[0]?.result.rttMeasurement).toBeUndefined();
   });
 
+  it("keeps incomplete measurement timing without inventing RTT provenance", () => {
+    const evidence = suiteEvidence({
+      scenarioResults: [{ ...baseline, rttMeasurement: { finalMatchedReplyRttMs: 1750 } }],
+    });
+    expect(evidence.entries[0]?.result.timing).toEqual({ rttMs: 1750 });
+    expect(evidence.entries[0]?.result.rttMeasurement).toBeUndefined();
+  });
+
   it("validates structured RTT measurements as strict schema-v2 objects", () => {
     const evidence = suiteEvidence({
       channelId: "slack",
