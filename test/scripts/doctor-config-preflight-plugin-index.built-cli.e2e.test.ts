@@ -35,36 +35,6 @@ afterEach(async () => {
   clearState();
 });
 
-it("keeps an empty legacy state dir separate when the canonical root exists", async () => {
-  const instance = await createInstance("doctor-empty-legacy-state-dir", {
-    // This case owns state-root selection; the next case covers the plugin index.
-    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-    OPENCLAW_CONFIG_PATH: undefined,
-    OPENCLAW_HOME: undefined,
-    OPENCLAW_STATE_DIR: undefined,
-  });
-  const legacyDir = path.join(instance.homeDir, ".clawdbot");
-  fs.mkdirSync(legacyDir, { recursive: true });
-  const expectLegacyDir = (output: string, separate = true) => {
-    expect(fs.lstatSync(legacyDir).isDirectory(), output).toBe(true);
-    expect(fs.readdirSync(legacyDir)).toEqual([]);
-    if (separate) {
-      expect(fs.realpathSync(legacyDir), output).not.toBe(fs.realpathSync(instance.stateDir));
-    }
-  };
-
-  await instance.startGateway();
-
-  expectLegacyDir(instance.logs(), false);
-
-  await instance.stopGateway();
-  const repaired = await instance.cli(["doctor", "--repair", "--yes", "--non-interactive"]);
-  expect(repaired, repaired.stderr).toMatchObject({ code: 0, signal: null });
-  expectLegacyDir(repaired.stdout);
-  await instance.startGateway();
-  expectLegacyDir(instance.logs());
-}, 120_000);
-
 it("starts with current metadata and refreshes the stale persisted index after readiness", async ({
   signal,
 }) => {

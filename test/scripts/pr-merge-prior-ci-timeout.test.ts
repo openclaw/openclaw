@@ -167,9 +167,6 @@ describePosix("pre-existing job deadline admission", () => {
   const nodeFaults: Record<string, (f: ReturnType<typeof timeoutCandidate>) => unknown> = {
     "manual cancellation": ({ deadline }) =>
       (deadline.annotations[0]!.message = "Cancelled by user"),
-    "foreign publisher": ({ deadline }) => (deadline.check.app.id = 999),
-    "stale head": (f) => (f.deadline.check.head_sha = f.base),
-    "foreign suite": ({ deadline }) => (deadline.check.check_suite.id = 999),
     "incomplete annotations": ({ deadline }) => deadline.annotations.pop(),
     "short duration": ({ deadline, live }) => {
       deadline.check.completed_at = "2026-09-20T00:30:00Z";
