@@ -32,6 +32,16 @@ describe("normalizeMeetUrlForReuse", () => {
       "https://meet.google.com/abc-defg-hij",
     );
   });
+
+  it("treats the admitted /meet/<code> tab as the same meeting", () => {
+    expect(
+      isSameMeetUrlForReuse(
+        "https://meet.google.com/abc-defg-hij?hl=en",
+        "https://meet.google.com/meet/abc-defg-hij?hl=en",
+      ),
+    ).toBe(true);
+    expect(normalizeMeetUrlForReuse("https://meet.google.com/lookup/abc-defg-hij")).toBeUndefined();
+  });
 });
 
 describe("meetLeaveScript", () => {
@@ -57,6 +67,18 @@ describe("meetLeaveScript", () => {
         ) as string,
       ),
     ).toEqual({ departed: false, urlMatched: true });
+  });
+
+  it("does not report departure while the admitted tab shows /meet/<code>", () => {
+    const run = runInNewContext(
+      "(" + meetLeaveScript("https://meet.google.com/abc-defg-hij") + ")()",
+      {
+        URL,
+        location: { href: "https://meet.google.com/meet/abc-defg-hij?hl=en" },
+        document: { querySelectorAll: () => [] },
+      },
+    ) as string;
+    expect(JSON.parse(run)).toEqual({ departed: false, urlMatched: true });
   });
 });
 

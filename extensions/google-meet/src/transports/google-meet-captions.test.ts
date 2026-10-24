@@ -148,6 +148,13 @@ it("separates document epochs and meeting sessions", async () => {
   expect(page.read(false, "session-1").sessionMatched).toBe(false);
 });
 
+it("keeps reading captions after Meet rewrites the tab to /meet/<code>", async () => {
+  const page = createCaptionPage([caption()], "https://meet.google.com/meet/abc-defg-hij?hl=en");
+  await page.poll();
+  expect(page.read()).toMatchObject({ urlMatched: true, sessionMatched: true });
+  expect(pending(page).text).toBe(words);
+});
+
 it("separates native self and other observations when a DOM row is reused", async () => {
   const parent = new CaptionNode("", { "data-is-self": "true" });
   const row = new CaptionNode(`Assistant\n${words}`, {}, parent);
