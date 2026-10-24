@@ -13,7 +13,7 @@ import { isAbsolutePath } from "../../new-session/path.ts";
 import { FileDownloadButton } from "./chat-file-download-button.tsx";
 import type { FileViewControls } from "./chat-file-reader-controls.ts";
 import { FileSessionMenu } from "./chat-file-session-menu.tsx";
-import { copyImageToClipboard, convertImageBlobToPng } from "./chat-image-actions.tsx";
+import { copyImageToClipboard, convertImageBlobToPng } from "./chat-image-clipboard.ts";
 import type {
   AttachmentSidebarRuntime,
   FilePreviewSource,

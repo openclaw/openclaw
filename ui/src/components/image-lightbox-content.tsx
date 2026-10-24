@@ -5,6 +5,7 @@ import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t, registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
+import { ImageComparisonAction } from "./image-comparison-action.tsx";
 import { ImageLightboxHost } from "./image-lightbox-context.ts";
 import {
   downloadLightboxImage,
@@ -685,6 +686,12 @@ export function ImageLightboxContent(props: ImageLightboxProps) {
           </Show>
           <Show when={props.mediaKind === "image"}>
             <div class="zoom-controls">
+              <ImageComparisonAction
+                focusableRef={focusableRef}
+                image={currentImage() ?? props}
+                title={title()}
+                disabled={galleryState().busy}
+              />
               <LightboxAction
                 focusableRef={focusableRef}
                 class="zoom-control"
