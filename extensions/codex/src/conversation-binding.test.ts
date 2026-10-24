@@ -270,17 +270,7 @@ function conversationClient(
 ) {
   const notifications = new Set<(notification: unknown) => unknown>();
   const operations: Array<{ method: string; params: Record<string, unknown> }> = [];
-  const request = vi.fn(async (method: string, params: Record<string, unknown>) => {
-    operations.push({ method, params });
-    if (!(method in responses)) {
-      throw new Error(`unexpected method: ${method}`);
-    }
-    const response = responses[method];
-    if (response instanceof Error) {
-      throw response;
-    }
-    return typeof response === "function" ? response(params) : response;
-  });
+  const request = rpcResponses(responses, operations);
   const client = {
     request,
     getInstanceId: () => clientId,
@@ -392,8 +382,12 @@ function rpcError(message: string, method = "turn/start", code = -32_600) {
   return new CodexAppServerRpcError({ code, message }, method);
 }
 
-function rpcResponses(responses: Record<string, unknown>) {
-  return vi.fn(async (method: string) => {
+function rpcResponses(
+  responses: Record<string, ConversationResponse>,
+  operations?: Array<{ method: string; params: Record<string, unknown> }>,
+) {
+  return vi.fn(async (method: string, params: Record<string, unknown>) => {
+    operations?.push({ method, params });
     if (!(method in responses)) {
       throw new Error(`unexpected method: ${method}`);
     }
@@ -401,7 +395,7 @@ function rpcResponses(responses: Record<string, unknown>) {
     if (response instanceof Error) {
       throw response;
     }
-    return response;
+    return typeof response === "function" ? response(params) : response;
   });
 }
 
@@ -536,6 +530,19 @@ function runBoundClaim(
 ) {
   const { event, ctx } = boundConversationClaim(sessionFile, sessionKey);
   return claimConversation(event, ctx, options);
+}
+
+function claimData(
+  data: Parameters<typeof conversationClaimContext>[0],
+  options: Parameters<typeof claimConversation>[2] = {},
+  sessionKey?: string,
+  event: Parameters<typeof conversationMessage>[1] = {},
+) {
+  return claimConversation(
+    conversationMessage("continue", { sessionKey, ...event }),
+    conversationClaimContext(data, sessionKey),
+    options,
+  );
 }
 
 function exposeRetainedClient(client: CodexAppServerClient) {
@@ -912,17 +919,14 @@ it.each([true, false])(
 
 it("fails closed before client startup when the source session is rebound", async () => {
   const bindingId = "binding-rebound-source";
-  const sessionFile = path.join(tempDir, "rebound-source.jsonl");
   const storePath = path.join(tempDir, "rebound-source.sqlite");
   const source = sourceSession("source-session");
   await seedSession(source, storePath, { sessionId: "replacement-session" });
   await seedBinding({ kind: "conversation", bindingId }, { threadId: "thread-bound" });
-  const { event, ctx } = boundConversationClaim(sessionFile);
-  ctx.pluginBinding.data = conversationData(bindingId, { source });
   acquireClient.mockRejectedValue(new Error("Codex client must not start"));
 
   await expectReplyContaining(
-    claimConversation(event, ctx, {
+    claimData(conversationData(bindingId, { source }), {
       config: { session: { store: storePath } },
     }),
     "source session is missing or no longer current",
@@ -936,8 +940,6 @@ it("rejects sandbox revocation while a conversation awaits client acquisition", 
     storePath: path.join(tempDir, "sandbox-source.sqlite"),
   };
   await seedSession(source, source.storePath, { updatedAt: 1, sandboxMode: "off" });
-  const { event, ctx } = boundConversationClaim(path.join(tempDir, "sandbox-source.jsonl"));
-  ctx.pluginBinding.data = conversationData("binding-sandbox-source", { source });
   const request = vi.fn(async () => {
     throw new Error("Native requests must not run after sandbox revocation");
   });
@@ -946,7 +948,7 @@ it("rejects sandbox revocation while a conversation awaits client acquisition", 
     return { request };
   });
 
-  const result = await claimConversation(event, ctx, {
+  const result = await claimData(conversationData("binding-sandbox-source", { source }), {
     config: { agents: { defaults: { sandbox: { mode: "all" } } } },
   });
 
@@ -1566,13 +1568,10 @@ it("re-reads source-owned permission roots while resuming an unloaded bound thre
   });
   acquireClient.mockResolvedValue(client);
 
-  const result = await claimConversation(
-    conversationMessage("hi again", { bodyForAgent: "hi again" }),
-    conversationClaimContext(
-      conversationData(legacyCodexConversationBindingId(sessionFile), {
-        source: { agentId: source.agentId, sessionId: source.sessionId, threadId: source.threadId },
-      }),
-    ),
+  const result = await claimData(
+    conversationData(legacyCodexConversationBindingId(sessionFile), {
+      source: { agentId: source.agentId, sessionId: source.sessionId, threadId: source.threadId },
+    }),
     { config: { session: { store: storePath } } },
   );
 
@@ -1699,16 +1698,12 @@ it("moves session history while clamping rootless inherited cwd to the agent wor
   );
   exposeRetainedClient(client);
   await retainThread(client, source.threadId, releaseSource);
-  const { event, ctx } = boundConversationClaim(
-    path.join(tempDir, "session.jsonl"),
-    "agent:main:destination-session",
-  );
-  ctx.pluginBinding.data = conversationData("binding-source-transfer", { source });
-
   await expectReply(
-    claimConversation(event, ctx, {
-      config: { session: { store: storePath } },
-    }),
+    claimData(
+      conversationData("binding-source-transfer", { source }),
+      { config: { session: { store: storePath } } },
+      "agent:main:destination-session",
+    ),
     "Bound reply",
   );
 
@@ -1767,14 +1762,13 @@ it.each([
     isCompacting: () => false,
     abort: vi.fn(),
   };
-  const { event, ctx } = boundConversationClaim(path.join(tempDir, "active-source.jsonl"));
-  ctx.pluginBinding.data = conversationData("binding-active-source", {
+  const data = conversationData("binding-active-source", {
     source,
     start: { id: "start-active-source" },
   });
 
   const claimSource = async () => {
-    const result = await claimConversation(event, ctx, {
+    const result = await claimData(data, {
       config: { session: { store: storePath } },
     });
 
@@ -1841,15 +1835,11 @@ it("passes sandbox state when resolving bound turn policy", async () => {
     sandbox: "danger-full-access",
   });
 
-  const result = await claimConversation(
-    conversationMessage("continue", {
-      bodyForAgent: "continue",
-      sessionKey: "agent:main:session-1",
-    }),
-    conversationClaimContext(legacyConversationData(sessionFile), "agent:main:session-1"),
-    {
-      config: config as never,
-    },
+  const result = await claimData(
+    legacyConversationData(sessionFile),
+    { config: config as never },
+    "agent:main:session-1",
+    { bodyForAgent: "continue" },
   );
 
   expect(result?.handled).toBe(true);
@@ -2176,15 +2166,11 @@ it("refreshes stale network-proxy bound app-server threads before the turn", asy
   });
   acquireClient.mockResolvedValue(client);
 
-  const result = await claimConversation(
-    conversationMessage("hello"),
-    conversationClaimContext(legacyConversationData(sessionFile)),
-    {
-      pluginConfig: {
-        appServer: { ...NETWORK_PROXY_PLUGIN_CONFIG.appServer, serviceTier: "priority" },
-      },
+  const result = await runBoundClaim(sessionFile, {
+    pluginConfig: {
+      appServer: { ...NETWORK_PROXY_PLUGIN_CONFIG.appServer, serviceTier: "priority" },
     },
-  );
+  });
 
   await expectReply(result, "done");
   expect(requests.map((request) => request.method)).toEqual(["thread/start", "turn/start"]);

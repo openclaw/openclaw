@@ -69,14 +69,12 @@ function seedSummary(
   bindingStore: ReturnType<typeof createCodexTestBindingStore>,
   summary: SessionSummary,
   sourceThreadId: string,
-  pending = false,
 ) {
   return seedSupervisionBinding({
     bindingStore,
     sessionId: summary.entry.sessionId,
     sessionKey: summary.sessionKey,
     sourceThreadId,
-    pending,
   });
 }
 
@@ -125,8 +123,8 @@ function sessionRows(result: Awaited<ReturnType<typeof listCodexSessionCatalog>>
   return result.hosts[host]?.sessions;
 }
 
-function baseline(turnId: string, userMessageCount = 0) {
-  return { connectionFingerprint: "catalog-connection", turnId, userMessageCount };
+function baseline(turnId: string) {
+  return { connectionFingerprint: "catalog-connection", turnId, userMessageCount: 0 };
 }
 
 function catalogRow(threadId: string, status = "idle") {
@@ -142,7 +140,6 @@ function catalogControl(threadIds: string[], status = "idle") {
 async function adoptedSource(
   sourceThreadId: string,
   entry = adoptedEntry({ sourceThreadId }),
-  pending = false,
   options: Parameters<typeof createRuntime>[0] = {},
 ) {
   const sessionKey = supervisionSessionKey(sourceThreadId);
@@ -150,7 +147,7 @@ async function adoptedSource(
     { ...options, entries: [{ sessionKey, entry }] },
     catalogControl([sourceThreadId]),
   );
-  await seedSummary(fixture.bindingStore, fixture.entries[0]!, sourceThreadId, pending);
+  await seedSummary(fixture.bindingStore, fixture.entries[0]!, sourceThreadId);
   return { ...fixture, sessionKey };
 }
 
@@ -309,7 +306,7 @@ it("reports duplicate adoption across agents before decoding a later malformed b
 
 it("enriches only the local source row with its adopted OpenClaw session", async () => {
   const control = catalogControl(["source-thread"], "active");
-  const f = await adoptedSource("source-thread", undefined, false, {
+  const f = await adoptedSource("source-thread", undefined, {
     nodes: [
       { nodeId: "devbox", connected: true, commands: [CODEX_APP_SERVER_THREADS_LIST_COMMAND] },
     ],
