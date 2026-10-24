@@ -6,6 +6,10 @@ import {
 } from "../../../auto-reply/reply-payload.js";
 import { parseReplyDirectives } from "../../../auto-reply/reply/reply-directives.js";
 import { applyPreparedReplyMedia } from "../../../auto-reply/reply/reply-media-paths.js";
+import {
+  readAgentAssistantSource,
+  type AgentAssistantSourceReceipt,
+} from "../../../infra/agent-events.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { estimateAggregateUsageCost } from "../../../utils/usage-format.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
@@ -341,6 +345,7 @@ export function prepareEmbeddedRunTerminal(input: {
           payloads: payloadsWithToolMedia,
           assistantTexts: attempt.assistantTexts,
           recoveredText: recoveredFinalAssistantTextAfterPromptTimeout,
+          assistantTranscriptSource: readAgentAssistantSource(answerAssistant),
         })
       : undefined;
   const hasSuccessfulFinalAssistantAfterPromptTimeout =
@@ -410,6 +415,7 @@ function replacePartialAssistantPayload(input: {
   payloads: EmbeddedAgentRunResult["payloads"];
   assistantTexts?: string[];
   recoveredText: string;
+  assistantTranscriptSource?: Readonly<AgentAssistantSourceReceipt>;
 }): NonNullable<EmbeddedAgentRunResult["payloads"]> {
   const payloads = input.payloads ? [...input.payloads] : [];
   const assistantTextSignatures = new Set(
@@ -426,7 +432,13 @@ function replacePartialAssistantPayload(input: {
   );
   const partialPayload = payloads[partialPayloadIndex];
   if (!partialPayload) {
-    return [...payloads, { text: input.recoveredText }];
+    return [
+      ...payloads,
+      setReplyPayloadMetadata(
+        { text: input.recoveredText },
+        { assistantTranscriptSource: input.assistantTranscriptSource },
+      ),
+    ];
   }
   // Replacement text has not passed the local transcript observation.
   payloads[partialPayloadIndex] = setReplyPayloadMetadata(
@@ -434,7 +446,13 @@ function replacePartialAssistantPayload(input: {
       ...partialPayload,
       text: input.recoveredText,
     }),
-    { localTranscriptDeliveryConfirmed: undefined },
+    // Replacement text belongs to the recovered answer, even when that answer
+    // has no receipt. Never retain the partial response's unrelated custody.
+    {
+      localTranscriptDeliveryConfirmed: undefined,
+      assistantTranscriptSource: input.assistantTranscriptSource,
+      assistantTranscriptAggregate: undefined,
+    },
   );
   return payloads;
 }

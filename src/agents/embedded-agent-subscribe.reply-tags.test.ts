@@ -1,9 +1,11 @@
 import { describe, expect, it, onTestFinished, vi, afterEach } from "vitest";
 import {
   readReplyPayloadSourceOccurrence,
+  setReplyPayloadMetadata,
   type ReplyPayloadSourceOccurrence,
 } from "../auto-reply/reply-payload.js";
 import { createBlockReplyPipeline } from "../auto-reply/reply/block-reply-pipeline.js";
+import { readAgentAssistantSource } from "../infra/agent-events.js";
 import {
   createParagraphChunkedBlockReplyHarness,
   createSubscribedSessionHarness,
@@ -143,6 +145,8 @@ describe("fenced block streaming", () => {
     });
     onTestFinished(() => subscription.unsubscribe());
     const text = `\`\`\`txt\n${"a".repeat(80)}\n\`\`\``;
+    const message = textAssistant(text);
+    emit({ type: "message_start", message });
     emitAssistantTextDeltaAndEnd({ emit, text });
     await pipeline.flush({ force: true });
     expect(delivered.length).toBeGreaterThan(2);
@@ -150,7 +154,12 @@ describe("fenced block streaming", () => {
       delivered.map((chunk) => [{ text: chunk }]),
       "```txt",
     );
-    expect(pipeline.hasSentPayload({ text })).toBe(true);
+    const finalPayload = setReplyPayloadMetadata(
+      { text },
+      { assistantTranscriptSource: readAgentAssistantSource(message) },
+    );
+    expect(pipeline.hasSentPayload(finalPayload)).toBe(true);
+    expect(pipeline.hasSentPayload({ text })).toBe(false);
     expect(
       occurrences.some((occurrence, index) =>
         occurrences

@@ -459,6 +459,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     const assistantTranscriptMediaUrls = Array.from(new Set(payload.mediaUrls ?? []));
     copyReplyPayloadMetadata(payload, blockPayload);
     if (
+      (options?.assistantMessageIndex !== undefined && !payload.isReasoning) ||
       assistantTranscriptMediaUrls.length > 0 ||
       getReplyPayloadMetadata(payload)?.assistantMediaFailures?.length
     ) {

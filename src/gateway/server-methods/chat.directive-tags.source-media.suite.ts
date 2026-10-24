@@ -45,7 +45,7 @@ type SourceMediaFixture = {
     idempotencyKey?: string;
     model?: string;
     provider?: string;
-  }) => Promise<void>;
+  }) => ReturnType<typeof appendTranscriptMessage>;
   createMainSourceReply: (params: {
     idempotencyKey: string;
     text?: string;

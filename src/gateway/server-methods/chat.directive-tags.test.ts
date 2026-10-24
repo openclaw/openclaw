@@ -43,6 +43,7 @@ import { waitForSessionTranscriptIndexReconcile } from "../../config/sessions/se
 import { resolveSessionTranscriptActiveLeafEntryId } from "../../config/sessions/transcript-tree.js";
 import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AgentAssistantSourceReceipt } from "../../infra/agent-events.types.js";
 import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import { createStructuredOutboundPayloadPlan } from "../../infra/outbound/payloads.js";
 import { RUN_STALE_TAKEOVER_MS } from "../../logging/diagnostic-run-activity.js";
@@ -61,6 +62,7 @@ import {
 } from "../../sessions/session-controller.lifecycle.js";
 import { testing as controllerTesting } from "../../sessions/session-controller.test-support.js";
 import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
+import { attachSessionTranscriptRunId } from "../../sessions/transcript-events.js";
 import { projectAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import { extractFirstTextBlock } from "../../shared/chat-message-content.js";
 import { withEnvAsync } from "../../test-utils/env.js";
@@ -121,6 +123,11 @@ type RespondMock = ReturnType<typeof vi.fn<RespondFn>>;
 type TranscriptUpdate = Parameters<
   typeof import("../../sessions/transcript-events.js").emitSessionTranscriptUpdate
 >[0];
+type RuntimeAssistantMessageFixture = {
+  text: string;
+  content?: Array<Record<string, unknown>>;
+  source?: AgentAssistantSourceReceipt;
+};
 
 const TEST_TOOL_AUTHORITY_FINGERPRINT = "test-tool-authority";
 const TEST_TOOL_AUTHORITY_ROUTE = { provider: "openai", model: "gpt-6-astra" } as const;
@@ -190,8 +197,7 @@ const mockState = vi.hoisted(() => {
     dispatchBlockedByBeforeAgentRun: false,
     disposedTranscriptWriteContext: false,
     disposedTranscriptWriteAttempts: 0,
-    runtimeAssistantContentBeforeDelivery: null as Array<Record<string, unknown>> | null,
-    runtimeAssistantTextsBeforeDelivery: [] as string[],
+    runtimeAssistantMessagesBeforeDelivery: [] as RuntimeAssistantMessageFixture[],
     cronAuthorityProbe: undefined as
       | ((
           runId: string | undefined,
@@ -379,22 +385,21 @@ dispatchInboundMessageMock.mockImplementation(
     if (mockState.dispatchErrorAfterAgentRunStart) {
       throw mockState.dispatchErrorAfterAgentRunStart;
     }
-    if (mockState.runtimeAssistantContentBeforeDelivery) {
-      await appendSourceReplyMirrorEntry({
-        content: mockState.runtimeAssistantContentBeforeDelivery,
-        text: "",
+    for (const message of mockState.runtimeAssistantMessagesBeforeDelivery) {
+      const committed = await appendSourceReplyMirrorEntry({
+        content: message.content,
+        text: message.text,
         provider: "openai",
         model: "gpt-5.6-luna",
         now: Date.now(),
+        runId: mockState.agentRunId,
       });
-    }
-    for (const text of mockState.runtimeAssistantTextsBeforeDelivery) {
-      await appendSourceReplyMirrorEntry({
-        text,
-        provider: "openai",
-        model: "gpt-5.6-luna",
-        now: Date.now(),
-      });
+      if (message.source) {
+        message.source.committedMessageId = expectDefined(
+          committed?.messageId,
+          "committed runtime assistant message",
+        );
+      }
     }
     if (mockState.sessionMetadataChanges.length > 0) {
       params.onSessionMetadataChanges?.(mockState.sessionMetadataChanges);
@@ -744,36 +749,40 @@ async function appendSourceReplyMirrorEntry(params: {
   provider?: string;
   model?: string;
   now?: number;
+  runId?: string;
 }) {
   const now = params.now ?? 0;
-  await appendTranscriptMessage(transcriptScope(), {
+  return await appendTranscriptMessage(transcriptScope(), {
     idempotencyLookup: "scan",
     now,
-    message: {
-      role: "assistant",
-      content: params.content ?? [{ type: "text", text: params.text }],
-      api: "openai-responses",
-      provider: params.provider ?? "openclaw",
-      model: params.model ?? "delivery-mirror",
-      ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
-      ...(params.openclawDelivery ? { openclawDelivery: params.openclawDelivery } : {}),
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: {
+    message: attachSessionTranscriptRunId(
+      {
+        role: "assistant",
+        content: params.content ?? [{ type: "text", text: params.text }],
+        api: "openai-responses",
+        provider: params.provider ?? "openclaw",
+        model: params.model ?? "delivery-mirror",
+        ...(params.idempotencyKey ? { idempotencyKey: params.idempotencyKey } : {}),
+        ...(params.openclawDelivery ? { openclawDelivery: params.openclawDelivery } : {}),
+        usage: {
           input: 0,
           output: 0,
           cacheRead: 0,
           cacheWrite: 0,
-          total: 0,
+          totalTokens: 0,
+          cost: {
+            input: 0,
+            output: 0,
+            cacheRead: 0,
+            cacheWrite: 0,
+            total: 0,
+          },
         },
+        stopReason: "stop",
+        timestamp: now,
       },
-      stopReason: "stop",
-      timestamp: now,
-    },
+      params.runId,
+    ),
   });
 }
 
@@ -2541,17 +2550,23 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         mockState.triggerAgentRunStart = true;
         mockState.disposedTranscriptWriteContext = true;
         mockState.dispatchErrorAfterDelivery = new Error("after media delivery");
-        mockState.runtimeAssistantContentBeforeDelivery = [
+        const source = { itemId: "disposed-owner-reply" };
+        const originalContent = [
           { type: "thinking", thinking: "preserve runtime reasoning" },
-          { type: "text", text: "Earlier chunk" },
-          { type: "text", text: "[[reply_to_current]] Image reply" },
+          { type: "text", text: "Earlier chunk", textSignature: "earlier-signed-chunk" },
+          {
+            type: "text",
+            text: "[[reply_to_current]] Image reply",
+            textSignature: "signed-image-reply",
+          },
           { type: "text", text: `MEDIA:${mediaUrl}` },
           { type: "toolCall", id: "call-1", name: "read", arguments: {} },
         ];
-        const originalRuntimeContent = JSON.stringify(
-          mockState.runtimeAssistantContentBeforeDelivery,
-        );
-        mockState.runtimeAssistantTextsBeforeDelivery = [`Later reply\nMEDIA:${mediaUrl}`];
+        const originalRuntimeContent = JSON.stringify(originalContent);
+        mockState.runtimeAssistantMessagesBeforeDelivery = [
+          { text: "", content: originalContent, source },
+          { text: `Later reply\nMEDIA:${mediaUrl}` },
+        ];
         mockState.dispatchedReplies = [
           {
             kind: "final",
@@ -2561,7 +2576,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
                 mediaUrl,
                 mediaUrls: [mediaUrl],
               },
-              { assistantMessageIndex: 1, assistantTranscriptMediaUrls: [mediaUrl] },
+              {
+                assistantMessageIndex: 1,
+                assistantTranscriptSource: source,
+                assistantTranscriptMediaUrls: [mediaUrl],
+              },
             ),
           },
         ];
@@ -2582,7 +2601,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           ? (messages[1].content as Array<Record<string, unknown>>)
           : [];
         expect(content.filter((block) => block.type === "text")).toEqual([
-          { type: "text", text: "Earlier chunk" },
+          { type: "text", text: "Earlier chunk", textSignature: "earlier-signed-chunk" },
           { type: "text", text: "Image reply" },
         ]);
         expect(content.filter((block) => block.type === "image")).toHaveLength(1);
@@ -2611,14 +2630,19 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       const text =
         "Here is the movie.\nMEDIA:http://192.168.1.138:64384/movie.mp4?openclaw_portal=synthetic";
       const parsed = parseReplyDirectives(text);
+      const source = { itemId: "rejected-directive-reply" };
       mockState.triggerAgentRunStart = true;
-      mockState.runtimeAssistantTextsBeforeDelivery = [text];
+      mockState.runtimeAssistantMessagesBeforeDelivery = [{ text, source }];
       mockState.dispatchedReplies = [
         {
           kind: "final",
           payload: setReplyPayloadMetadata(
             { text: parsed.text },
-            { assistantMessageIndex: 1, assistantMediaFailures: parsed.mediaFailures },
+            {
+              assistantMessageIndex: 1,
+              assistantTranscriptSource: source,
+              assistantMediaFailures: parsed.mediaFailures,
+            },
           ),
         },
       ];
@@ -2630,6 +2654,9 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
 
       const messages = await readActiveAssistantTranscriptMessages();
       expect(messages).toHaveLength(1);
+      expect((await readRawActiveAssistantTranscriptMessages())[0]?.content).toEqual([
+        { type: "text", text },
+      ]);
       expect(JSON.stringify(messages)).not.toContain(":assistant-media");
       const content = Array.isArray(messages[0]?.content)
         ? (messages[0].content as Array<Record<string, unknown>>)
@@ -2656,9 +2683,11 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           now: Date.now(),
         });
         mockState.triggerAgentRunStart = true;
-        mockState.runtimeAssistantTextsBeforeDelivery = [
-          `First image\nMEDIA:${firstMediaUrl}`,
-          `Second image\nMEDIA:${secondMediaUrl}`,
+        const firstSource = { itemId: "first-media-reply" };
+        const secondSource = { itemId: "second-media-reply" };
+        mockState.runtimeAssistantMessagesBeforeDelivery = [
+          { text: `First image\nMEDIA:${firstMediaUrl}`, source: firstSource },
+          { text: `Second image\nMEDIA:${secondMediaUrl}`, source: secondSource },
         ];
         mockState.dispatchedReplies = [
           {
@@ -2667,6 +2696,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
               { text: "Draft first image", mediaUrl: firstMediaUrl, mediaUrls: [firstMediaUrl] },
               {
                 assistantMessageIndex: 1,
+                assistantTranscriptSource: firstSource,
                 assistantTranscriptMediaUrls: [firstMediaUrl],
               },
             ),
@@ -2677,6 +2707,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
               { text: "Second image", mediaUrl: secondMediaUrl, mediaUrls: [secondMediaUrl] },
               {
                 assistantMessageIndex: 2,
+                assistantTranscriptSource: secondSource,
                 assistantTranscriptMediaUrls: [secondMediaUrl],
               },
             ),
@@ -2687,6 +2718,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
               { text: "First image", mediaUrl: firstMediaUrl, mediaUrls: [firstMediaUrl] },
               {
                 assistantMessageIndex: 1,
+                assistantTranscriptSource: firstSource,
                 assistantTranscriptMediaUrls: [firstMediaUrl],
               },
             ),
@@ -2701,6 +2733,12 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
         const messages = await readActiveAssistantTranscriptMessages();
         expect(messages).toHaveLength(3);
         expect(messages[0]?.content).toEqual([{ type: "text", text: "Older assistant reply" }]);
+        expect(
+          (await readRawActiveAssistantTranscriptMessages()).slice(1).map((row) => row.content),
+        ).toEqual([
+          [{ type: "text", text: `First image\nMEDIA:${firstMediaUrl}` }],
+          [{ type: "text", text: `Second image\nMEDIA:${secondMediaUrl}` }],
+        ]);
         for (const [index, expectedText] of ["First image", "Second image"].entries()) {
           const message = messages[index + 1];
           const content = Array.isArray(message?.content)
@@ -2726,18 +2764,19 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     );
   });
 
-  it("supplements queued tool media without recreating saved runtime text", async () => {
+  it("enriches receipted queued tool media without recreating saved runtime text", async () => {
     await withTranscriptFixtureState("openclaw-chat-send-queued-media-", async (fixtureDir) => {
       const mediaUrl = writeSavedPng(fixtureDir, "fetched.png");
       const text = "The directory fetch is complete.";
+      const source = { itemId: "queued-tool-media-reply" };
       mockState.triggerAgentRunStart = true;
-      mockState.runtimeAssistantTextsBeforeDelivery = [text];
+      mockState.runtimeAssistantMessagesBeforeDelivery = [{ text, source }];
       mockState.dispatchedReplies = [
         {
           kind: "final",
           payload: setReplyPayloadMetadata(
             { text, mediaUrl, mediaUrls: [mediaUrl], trustedLocalMedia: true },
-            { assistantMessageIndex: 1 },
+            { assistantMessageIndex: 1, assistantTranscriptSource: source },
           ),
         },
       ];
@@ -2748,11 +2787,15 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       });
 
       const messages = await readActiveAssistantTranscriptMessages();
-      expect(messages).toHaveLength(2);
-      expect(messages[0]?.content).toEqual([{ type: "text", text }]);
-      const supplement = messages.at(-1);
-      expect(supplement?.content).toEqual([expect.objectContaining({ type: "image" })]);
-      expect(JSON.stringify(supplement)).not.toContain(text);
+      expect(messages).toHaveLength(1);
+      expect((await readRawActiveAssistantTranscriptMessages())[0]?.content).toEqual([
+        { type: "text", text },
+      ]);
+      expect(messages[0]?.content).toEqual([
+        { type: "text", text },
+        expect.objectContaining({ type: "image" }),
+      ]);
+      expect(JSON.stringify(messages)).not.toContain(":assistant-media");
     });
   });
 
@@ -2785,7 +2828,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
       ? (message.content as Array<Record<string, any>>)
       : [];
     expect(message?.role).toBe("assistant");
-    expect(message?.idempotencyKey).toBe("idem-agent-tts:assistant-media");
+    expect(message?.idempotencyKey).toMatch(/^idem-agent-tts:assistant-media:tts:[a-f0-9]{64}$/u);
     expect(content[0]).toEqual({ type: "text", text: "Audio reply" });
     expect(content[1]).toEqual(
       expect.objectContaining({
@@ -3206,7 +3249,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
           },
         ];
       } else {
-        mockState.runtimeAssistantTextsBeforeDelivery = [replyText];
+        mockState.runtimeAssistantMessagesBeforeDelivery = [{ text: replyText }];
         mockState.dispatchedReplies = [{ kind: "final", payload: { text: replyText } }];
       }
       if (

@@ -44,7 +44,9 @@ export async function rewriteAssistantTranscriptMessageById(params: {
       }
       return buildAssistantDisplayRewrite({
         message,
-        displayContent: params.content,
+        // The committed source owns visible text; streamed tails and media-only
+        // replacements must enrich that row without repeating provider text.
+        displayContent: params.content.filter((block) => block.type !== "text"),
         mediaBySource: params.mediaBySource,
         managedMediaUrls: params.mediaUrls,
         retainOriginalText: true,

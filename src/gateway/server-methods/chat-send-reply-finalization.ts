@@ -1,5 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import type { ReplyDispatchOperation } from "../../auto-reply/reply/reply-dispatcher.types.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { readAssistantDisplayContent } from "../../shared/assistant-display-content.js";
 import { appendChatCanvasBlocksToMessage } from "../chat-display-projection.canvas.js";
@@ -11,6 +13,7 @@ import {
   hasAssistantDisplayMediaContent,
   hasManagedOutgoingAssistantContent,
   hasVisibleAssistantFinalMessage,
+  isMediaBearingPayload,
   stripManagedOutgoingAssistantContentBlocks,
 } from "./chat-assistant-content.js";
 import {
@@ -34,7 +37,10 @@ import {
   appendInjectedAssistantMessageToTranscript,
   type GatewayInjectedTtsSupplementMarker,
 } from "./chat-transcript-inject.js";
-import { buildMediaOnlyTtsSupplementTranscriptMarker } from "./chat-tts-markers.js";
+import {
+  buildMediaOnlyTtsSupplementTranscriptMarker,
+  buildTtsSupplementTranscriptMarker,
+} from "./chat-tts-markers.js";
 import type { GatewayChatUserTurnPersist } from "./chat-user-turn-recorder.js";
 
 export const retainCommittedChatReplyMedia: NonNullable<
@@ -389,4 +395,117 @@ export async function finalizeChatSendDispatchedReplies(
   } finally {
     release();
   }
+}
+
+export const agentMediaTranscriptKey = (payload: ReplyPayload): string | undefined => {
+  if (
+    !isMediaBearingPayload(payload) &&
+    !getReplyPayloadMetadata(payload)?.assistantMediaFailures?.length
+  ) {
+    return undefined;
+  }
+  const metadata = getReplyPayloadMetadata(payload);
+  const supplement = buildTtsSupplementTranscriptMarker(payload);
+  const prefix = supplement ? `tts:${supplement.textSha256}:` : "";
+  const ownedIdempotencyKey =
+    metadata?.assistantTranscriptOwned === true
+      ? metadata.assistantTranscriptIdempotencyKey?.trim()
+      : undefined;
+  if (ownedIdempotencyKey) {
+    return `${prefix}owned:${ownedIdempotencyKey}`;
+  }
+  const contentIndex = metadata?.assistantMessageIndex;
+  const source = metadata?.assistantTranscriptSource;
+  const sourceId = source?.itemId ?? source?.committedMessageId;
+  if (sourceId) {
+    const sourceKey = `${prefix}source:${sourceId}`;
+    return contentIndex === undefined ? sourceKey : `${sourceKey}:index:${contentIndex}`;
+  }
+  return `${prefix}${contentIndex === undefined ? "unkeyed" : `index:${contentIndex}`}`;
+};
+
+/** Select delivered coverage before preparing each committed response as one media batch. */
+export function selectAgentMediaTranscriptInputs(
+  deliveredReplies: readonly DeliveredChatSendReply[],
+): ReplyDispatchOperation[][] {
+  const latestPayloadByKey = new Map<string, ReplyDispatchOperation>();
+  const byOccurrence = new Map<string, Map<string, ReplyDispatchOperation>>();
+  for (const { input } of deliveredReplies) {
+    const payload = readChatSendReplyPayload(input);
+    const key = agentMediaTranscriptKey(payload);
+    if (!key) {
+      continue;
+    }
+    latestPayloadByKey.set(key, input);
+    const source = getReplyPayloadMetadata(payload)?.assistantTranscriptSource;
+    const sourceId = source?.itemId ?? source?.committedMessageId;
+    if (sourceId && key.startsWith("source:")) {
+      const group = byOccurrence.get(sourceId) ?? new Map<string, ReplyDispatchOperation>();
+      // Keep actual delivery order when an aggregate reuses an earlier index.
+      group.delete(key);
+      group.set(key, input);
+      byOccurrence.set(sourceId, group);
+    }
+  }
+  const payloadMediaUrls = (payload: ReplyPayload) =>
+    resolveSendableOutboundReplyParts(payload).mediaUrls;
+  const failureKeys = (payload: ReplyPayload) =>
+    (getReplyPayloadMetadata(payload)?.assistantMediaFailures ?? []).map((failure) =>
+      JSON.stringify([failure.code, failure.kind, failure.label, failure.mimeType ?? null]),
+    );
+  for (const group of byOccurrence.values()) {
+    const inputs = Array.from(group.values());
+    const latest = inputs.at(-1);
+    if (!latest || inputs.length < 2) {
+      continue;
+    }
+    const latestPayload = readChatSendReplyPayload(latest);
+    if (getReplyPayloadMetadata(latestPayload)?.assistantTranscriptAggregate !== true) {
+      continue;
+    }
+    const coveredUrls = new Set(payloadMediaUrls(latestPayload));
+    const coveredFailures = failureKeys(latestPayload);
+    const preceding = inputs.slice(0, -1);
+    const requiredFailures = preceding.flatMap((input) =>
+      failureKeys(readChatSendReplyPayload(input)),
+    );
+    const coversFailures = requiredFailures.every((failure) => {
+      const index = coveredFailures.indexOf(failure);
+      if (index < 0) {
+        return false;
+      }
+      coveredFailures.splice(index, 1);
+      return true;
+    });
+    // A committed receipt does not prove message_end's aggregate was delivered.
+    // Coalesce only producer-owned aggregates with actual coverage; partial/error
+    // unwind keeps each content index, including identical URLs or failure cards.
+    if (
+      !coversFailures ||
+      !preceding.every((input) =>
+        payloadMediaUrls(readChatSendReplyPayload(input)).every((url) => coveredUrls.has(url)),
+      )
+    ) {
+      continue;
+    }
+    for (const [key, input] of group) {
+      if (input !== latest) {
+        latestPayloadByKey.delete(key);
+      }
+    }
+  }
+  const batches = new Map<string, ReplyDispatchOperation[]>();
+  for (const [key, input] of latestPayloadByKey) {
+    const payload = readChatSendReplyPayload(input);
+    const messageId =
+      getReplyPayloadMetadata(payload)?.assistantTranscriptSource?.committedMessageId;
+    const batchKey =
+      key.startsWith("source:") && messageId && !buildTtsSupplementTranscriptMarker(payload)
+        ? `message:${messageId}`
+        : key;
+    const batch = batches.get(batchKey) ?? [];
+    batch.push(input);
+    batches.set(batchKey, batch);
+  }
+  return Array.from(batches.values());
 }

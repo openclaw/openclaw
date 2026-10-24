@@ -250,6 +250,8 @@ export type ReplyPayloadMetadata = {
   assistantMessageIndex?: number;
   /** Shares the occurrence receipt so deferred delivery observes its eventual commit. */
   assistantTranscriptSource?: Readonly<AgentAssistantSourceReceipt>;
+  /** Complete message attachments selected by the producer, rather than one content flush. */
+  assistantTranscriptAggregate?: true;
   /** First index of this block's physical assistant message; each content item advances the index. */
   assistantMessageStartIndex?: number;
   /** Answer to a preceding user input in the same run. */
