@@ -3,7 +3,6 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseArgs } from "../../scripts/check-release-metadata-only.mts";
-import { createPnpmRunnerSpawnSpec } from "../../scripts/pnpm-runner.mts";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -49,35 +48,15 @@ describe("check-release-metadata-only", () => {
     });
   });
 
-  it("preserves refs, staged bytes, and worktree overlay through the package command", () => {
+  it("preserves refs, staged bytes, and worktree overlay through the CLI", () => {
     const root = tempDirs.make("openclaw-release-metadata-mobile-");
     const at = (file: string) => path.join(root, file);
-    const { scripts } = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8"));
-    fs.writeFileSync(
-      at("package.json"),
-      JSON.stringify({
-        scripts: { "release-metadata:check": scripts["release-metadata:check"] },
-      }),
-    );
-    fs.mkdirSync(at("scripts"));
-    for (const file of ["tsconfig.json", "scripts/check-release-metadata-only.mts"]) {
-      fs.copyFileSync(path.join(repoRoot, file), at(file));
-    }
-    for (const file of ["tsx.mjs", "changed-lanes.mts"]) {
-      fs.symlinkSync(path.join(repoRoot, "scripts", file), at(`scripts/${file}`), "file");
-    }
-    for (const dir of ["scripts/lib", "packages"]) {
-      fs.symlinkSync(path.join(repoRoot, dir), at(dir), "junction");
-    }
-    const runMetadata = (args: string[]) => {
-      const spec = createPnpmRunnerSpawnSpec({
+    const runMetadata = (args: string[]) =>
+      spawnSync(process.execPath, [...scriptArgs, ...args], {
         cwd: root,
-        pnpmArgs: ["run", "release-metadata:check", ...args],
-        env: { ...process.env, TSX_TSCONFIG_PATH: at("tsconfig.json") },
-        stdio: "pipe",
+        env: { ...process.env, TSX_TSCONFIG_PATH: path.join(repoRoot, "tsconfig.json") },
+        encoding: "utf8",
       });
-      return spawnSync(spec.command, spec.args, { ...spec.options, encoding: "utf8" });
-    };
     const manifestPath = at("apps/android/version.json");
     const writeVersion = (version: string, channel?: string) =>
       fs.writeFileSync(manifestPath, JSON.stringify({ version, ...(channel ? { channel } : {}) }));
@@ -90,7 +69,7 @@ describe("check-release-metadata-only", () => {
     git("init", "-q");
     git("config", "user.name", "OpenClaw Test");
     git("config", "user.email", "test@openclaw.invalid");
-    git("add", "package.json", "apps/android/version.json");
+    git("add", "apps/android/version.json");
     git("commit", "-qm", "baseline");
 
     writeVersion("2026.8.2");

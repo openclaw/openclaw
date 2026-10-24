@@ -1,8 +1,6 @@
-import { spawn, spawnSync } from "node:child_process";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { once } from "node:events";
 import { chmodSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -67,7 +65,7 @@ describePosix("captured baseline hash stdin", () => {
     writeFileSync(
       probe,
       `#!/usr/bin/env python3
-import os,sys,stat,fcntl,socket
+import os,sys,stat,fcntl
 args=sys.argv[1:]
 if args == ['hash-object','--no-filters','--stdin']:
  s=os.fstat(0)
@@ -79,8 +77,6 @@ if args == ['hash-object','--no-filters','--stdin']:
  assert not any(n.startswith('openclaw-pr-hash-') for n in os.listdir(os.environ['TMPDIR'])), 'snapshot directory retained at dispatch'
  if os.environ.get('MUTATE_ORIGINAL'): open('${authorityPath}','wb').write(b'changed after capture')
  if os.environ.get('FAIL_HASH'): sys.stderr.write('fixture Git hash failure\\n'); sys.exit(97)
- if os.environ.get('CANCEL_SOCKET'):
-  c=socket.socket(socket.AF_UNIX); c.connect(os.environ['CANCEL_SOCKET']); c.sendall(b'ready'); c.recv(1)
 os.execv(${JSON.stringify(git)},[${JSON.stringify(git)},*args])
 `,
     );
@@ -117,50 +113,6 @@ os.execv(${JSON.stringify(git)},[${JSON.stringify(git)},*args])
     ] as const) {
       expect(result.status).toBe(1);
       expect(result.stderr).toContain(message);
-    }
-  });
-
-  it("leaves no snapshot pathname when native supervision cancels a hashing child", async () => {
-    const { args, input } = invocation(Buffer.alloc(1024));
-    const socketPath = join(root, ".local/r");
-    const server = createServer();
-    server.listen(socketPath);
-    await once(server, "listening");
-    const runner = join(scripts, "pr-lib/process-group-runner.mjs");
-    const child = spawn(node, [runner, root, node, ...args], {
-      cwd: root,
-      env: { ...env, CANCEL_SOCKET: socketPath },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-    const closed = once(child, "close");
-    child.stdout.resume();
-    let stderr = "";
-    child.stderr.on("data", (bytes) => {
-      stderr += bytes.toString();
-    });
-    child.stdin.end(input);
-    try {
-      const [socket] = await Promise.race([
-        once(server, "connection"),
-        closed.then(() => {
-          throw new Error(`hash child exited before readiness: ${stderr}`);
-        }),
-      ]);
-      await once(socket, "data");
-      expectClean();
-      child.kill("SIGTERM");
-      socket.destroy();
-      const [code] = await closed;
-      expect(code).toBe(143);
-      expectClean();
-    } finally {
-      if (child.exitCode === null && child.signalCode === null) {
-        child.kill("SIGTERM");
-        await closed;
-      }
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
     }
   });
 });

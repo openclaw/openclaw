@@ -18,7 +18,6 @@ beforeEach(() => {
 });
 
 const quote = (value: string) => `'${value.replace(/'/gu, `'\\''`)}'`;
-const escapeRegex = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&");
 
 type StateOptions = Record<string, string>;
 async function render(command: string, options: StateOptions = {}, preload = false) {
@@ -32,13 +31,10 @@ async function render(command: string, options: StateOptions = {}, preload = fal
     ],
     { env: { ...process.env, TMPDIR: root } },
   );
+  if (command !== "create") {
+    await fs.writeFile(snippet, stdout, "utf8");
+  }
   return stdout;
-}
-
-async function renderSnippet(command: string, options: StateOptions = {}, preload = false) {
-  const text = await render(command, options, preload);
-  await fs.writeFile(snippet, text, "utf8");
-  return text;
 }
 
 async function probe(tmpDir?: string, after = "", login = true) {
@@ -72,7 +68,7 @@ describe("scripts/lib/openclaw-test-state", () => {
   });
 
   it("renders a Docker-friendly shell snippet", async () => {
-    await renderSnippet("shell", {
+    await render("shell", {
       label: "update-channel-switch",
       scenario: "update-stable",
     });
@@ -91,12 +87,11 @@ describe("scripts/lib/openclaw-test-state", () => {
       const custom = await probe(tmpDir);
       expect(custom).toMatchObject({
         tmpRoot: customTemp,
-        home: expect.stringMatching(
-          new RegExp(
-            `^${escapeRegex(customTemp)}/openclaw-update-channel-switch-update-stable-home\\.`,
-          ),
-        ),
       });
+      expect(path.dirname(custom.home)).toBe(customTemp);
+      expect(path.basename(custom.home)).toMatch(
+        /^openclaw-update-channel-switch-update-stable-home\./u,
+      );
       if (tmpDir.endsWith("/")) {
         expect(custom.stateDir).toBe(`${custom.home}/.openclaw`);
       }
@@ -116,7 +111,7 @@ describe("scripts/lib/openclaw-test-state", () => {
       allowFrom: ["111111111111111111"],
       policy: "allowlist",
     });
-    await renderSnippet("shell-function");
+    await render("shell-function");
     const shell = await probe(
       undefined,
       `openclaw_test_state_create ${quote(path.join(payload.root, "shell-home"))} upgrade-survivor;`,
@@ -126,7 +121,7 @@ describe("scripts/lib/openclaw-test-state", () => {
   });
 
   it("renders a reusable Docker shell function", async () => {
-    await renderSnippet("shell-function", {}, true);
+    await render("shell-function", {}, true);
     const temp = path.join(root, "function-tmp");
     for (const tmpDir of [temp, `${temp}/`]) {
       const payload = await probe(
