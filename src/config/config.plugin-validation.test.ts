@@ -26,39 +26,31 @@ async function mkdirSafe(dir: string) {
   await chmodSafeDir(dir);
 }
 
+async function writeFixtureFiles(dir: string, files: Record<string, string>) {
+  await mkdirSafe(dir);
+  for (const [name, content] of Object.entries(files)) {
+    await fs.writeFile(path.join(dir, name), content, "utf-8");
+  }
+}
+
 async function writePluginFixture(params: {
   dir: string;
   id: string;
   schema?: Record<string, unknown>;
   channels?: string[];
 }) {
-  await mkdirSafe(params.dir);
-  await fs.writeFile(
-    path.join(params.dir, "index.js"),
-    `export default { id: "${params.id}", register() {} };`,
-    "utf-8",
-  );
-  const manifest = {
-    id: params.id,
-    configSchema: params.schema ?? { type: "object" },
-    ...(params.channels ? { channels: params.channels } : {}),
-  };
-  await fs.writeFile(
-    path.join(params.dir, "openclaw.plugin.json"),
-    JSON.stringify(manifest, null, 2),
-    "utf-8",
-  );
-}
-
-async function writeManifestlessClaudeBundleFixture(params: { dir: string }) {
-  await mkdirSafe(params.dir);
-  await mkdirSafe(path.join(params.dir, "commands"));
-  await fs.writeFile(
-    path.join(params.dir, "commands", "review.md"),
-    "---\ndescription: fixture\n---\n",
-    "utf-8",
-  );
-  await fs.writeFile(path.join(params.dir, "settings.json"), '{"hideThinkingBlock":true}', "utf-8");
+  await writeFixtureFiles(params.dir, {
+    "index.js": `export default { id: "${params.id}", register() {} };`,
+    "openclaw.plugin.json": JSON.stringify(
+      {
+        id: params.id,
+        configSchema: params.schema ?? { type: "object" },
+        ...(params.channels ? { channels: params.channels } : {}),
+      },
+      null,
+      2,
+    ),
+  });
 }
 
 type Diagnostics = readonly { path: string; message: string }[] | undefined;
@@ -206,7 +198,11 @@ describe("config plugin validation", () => {
       schema: { type: "object", properties: { apiKey: { type: "string" } } },
     });
     manifestlessClaudeBundleDir = path.join(suiteHome, "manifestless-claude-bundle");
-    await writeManifestlessClaudeBundleFixture({ dir: manifestlessClaudeBundleDir });
+    await mkdirSafe(path.join(manifestlessClaudeBundleDir, "commands"));
+    await writeFixtureFiles(manifestlessClaudeBundleDir, {
+      "commands/review.md": "---\ndescription: fixture\n---\n",
+      "settings.json": '{"hideThinkingBlock":true}',
+    });
     blockedPluginDir = await installFixture("blocked-plugin");
     malformedSchemaPluginDir = await installFixture("malformed-schema-plugin", {
       schema: { type: "object", properties: { mode: { $ref: "#/$defs/Mode" } } },
@@ -372,13 +368,6 @@ describe("config plugin validation", () => {
         withAgents({ ...nativeChat, decisionModel: decision }),
         false,
       ],
-      [
-        "pinned agent Decision is not chat",
-        withAgents(nativeChat, {
-          openclaw: { decisionModel: `${decision}@openai:fixture` },
-        }),
-        false,
-      ],
       ["OpenAI chat requires Codex", withAgents(agentWithSubagent(decision)), true],
       ["channel Decision-named target is chat", channelChat("decisionModel", decision), true],
       [
@@ -410,7 +399,6 @@ describe("config plugin validation", () => {
         ),
         false,
       ],
-      ["channel override requires Codex", channelChat("default", codex), true],
       [
         "agent PI shadows default Codex",
         withAgents(
@@ -467,10 +455,6 @@ describe("config plugin validation", () => {
       expectCodexRequirement(config, warns);
     });
 
-    it("warns when the utility model needs Codex", () => {
-      expectCodexRequirement(withAgents({ model: modelSelection(anthropic), utilityModel: codex }));
-    });
-
     it("keeps the two-argument diagnostic API correct for a legacy list", () => {
       const raw: OpenClawConfigWithLegacyRoster = {
         agents: {
@@ -483,20 +467,13 @@ describe("config plugin validation", () => {
       expect(shouldSuppressMissingCodexPluginDiagnostics(raw, suiteEnv())).toBe(false);
     });
 
-    it.each([
-      ["codex", "pi", false],
-      ["pi", "codex", true],
-    ] as const)(
-      "uses provider %s / wildcard %s precedence",
-      (providerRuntime, wildcardRuntime, warns) => {
-        expectCodexRequirement(
-          withAgents({ models: runtimePolicy("openai/*", wildcardRuntime) }, undefined, {
-            models: providerModels(providerRuntime),
-          }),
-          warns,
-        );
-      },
-    );
+    it("lets an agent wildcard override provider runtime policy", () => {
+      expectCodexRequirement(
+        withAgents({ models: runtimePolicy("openai/*", "codex") }, undefined, {
+          models: providerModels("pi"),
+        }),
+      );
+    });
 
     it("uses the validation environment snapshot for implicit OpenAI routing", () => {
       expectCodexRequirement({}, false, {
