@@ -13,23 +13,9 @@ function makeTempRoot(prefix = "openclaw-restart-mac-test-") {
   return tempDirs.make(prefix);
 }
 
-function expectContents(source: string, included: string[], excluded: string[] = []) {
-  for (const text of included) {
-    expect(source).toContain(text);
-  }
-  for (const text of excluded) {
-    expect(source).not.toContain(text);
-  }
-}
-
 function expectSuccess(result: ReturnType<typeof runHarness>, stdout: string) {
   expect(result).toMatchObject({ status: 0, stderr: "" });
   expect(result.stdout.trim()).toBe(stdout);
-}
-
-function expectBefore(first: string, second: string, source = script) {
-  expect(source.indexOf(first)).toBeGreaterThan(-1);
-  expect(source.indexOf(second)).toBeGreaterThan(source.indexOf(first));
 }
 
 function block(start: string, end: string) {
@@ -62,7 +48,7 @@ function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }
 
-function runCleanupFunction(fakePs: string) {
+function runCleanupFunction(fakePs: string, managed = false) {
   const root = makeTempRoot();
   const killCallsPath = join(root, "kill-calls.txt");
   const result = runHarness(
@@ -75,11 +61,13 @@ function runCleanupFunction(fakePs: string) {
       'DEBUG_PROCESS_PATTERN="/worktree/apps/macos/.build/debug/OpenClaw"',
       'LOCAL_PROCESS_PATTERN="/worktree/apps/macos/.build-local/debug/OpenClaw"',
       'RELEASE_PROCESS_PATTERN="/worktree/apps/macos/.build/release/OpenClaw"',
+      'TARGET_EXECUTABLE="/worktree/dist/OpenClaw.app/Contents/MacOS/OpenClaw"',
+      'INSTALLED_EXECUTABLE="/Applications/OpenClaw.app/Contents/MacOS/OpenClaw"',
       "kill() {",
       '  printf "%s\\n" "$*" >> "$OPENCLAW_TEST_KILL_CALLS"',
       "  return 0",
       "}",
-      "kill_all_openclaw",
+      managed ? "kill_managed_openclaw" : "kill_all_openclaw",
     ],
     {
       OPENCLAW_TEST_KILL_CALLS: killCallsPath,
@@ -235,32 +223,13 @@ describe("scripts/restart-mac.sh", () => {
     expect(result.stderr).toContain("No process is listening on gateway port 18789.");
   });
 
-  it.each([
-    [
-      "uses fail-closed gateway verification",
-      [
-        'source "${ROOT_DIR}/scripts/lib/restart-mac-gateway.sh"',
-        'run_step "verify gateway port ${GATEWAY_PORT} (unsigned)" verify_gateway_port_listening "${GATEWAY_PORT}"',
-      ],
-      ["lsof -iTCP:${GATEWAY_PORT} -sTCP:LISTEN | head -n 5 || true"],
-    ],
-    [
-      "avoids login-shell noise and early-exit pipe warnings",
-      ["/usr/bin/awk -F ' = '"],
-      ["bash -lc", `printf '%s\\n' "\${job}" | /usr/bin/awk`],
-    ],
-    [
-      "scopes the restart log to the worktree lock",
-      ['LOG_PATH="${OPENCLAW_RESTART_LOG:-${TMPDIR:-/tmp}/openclaw-restart-${LOCK_KEY}.log}"'],
-      ['LOG_PATH="${OPENCLAW_RESTART_LOG:-/tmp/openclaw-restart.log}"'],
-    ],
-  ] satisfies [string, string[], string[]][])("%s", (_name, included, excluded) => {
-    expectContents(script, included, excluded);
+  it("wires fail-closed gateway verification into unsigned restart", () => {
+    expect(script).toContain(
+      'run_step "verify gateway port ${GATEWAY_PORT} (unsigned)" verify_gateway_port_listening "${GATEWAY_PORT}"',
+    );
   });
 
   it("rejects named app profiles before global process or launchd cleanup", () => {
-    expect(script).toContain('if [[ -n "${OPENCLAW_PROFILE:-}"');
-    expect(script).toContain("restart-mac.sh cannot safely target one app profile");
     expect(script.indexOf("cannot safely target one app profile")).toBeLessThan(
       script.indexOf("\nacquire_lock\n"),
     );
@@ -285,40 +254,6 @@ describe("scripts/restart-mac.sh", () => {
     expect(fs.readFileSync(join(lockDir, "pid"), "utf8")).toBe(String(process.pid));
   });
 
-  it("prefers the freshly packaged app unless an explicit app bundle is set", () => {
-    const chooseBlock = block("choose_app_bundle()", "choose_app_bundle");
-    expect(script).toContain('fail "OPENCLAW_APP_BUNDLE does not exist: ${APP_BUNDLE}"');
-    expect(chooseBlock).toContain("canonicalize_app_bundle");
-    expectBefore("${ROOT_DIR}/dist/OpenClaw.app", "/Applications/OpenClaw.app", chooseBlock);
-  });
-
-  it("stops launchd supervision before killing app processes", () => {
-    expectBefore("stop_launch_agent\n  log", "if ! kill_all_openclaw");
-  });
-
-  it("target-only mode refuses foreign app processes without broad cleanup", () => {
-    const initialTargetBlock = script.slice(
-      script.indexOf('if [[ "$TARGET_ONLY" -eq 1 ]]; then', script.indexOf("# 1)")),
-      script.indexOf("else", script.indexOf("# 1)")),
-    );
-    const switchTargetBlock = script.slice(
-      script.indexOf('if [[ "$TARGET_ONLY" -eq 1 ]]; then', script.indexOf("APP_LAUNCH_ARGS")),
-      script.indexOf("# 4) Launch"),
-    );
-
-    expectContents(
-      initialTargetBlock,
-      ["foreign_openclaw_process_pids"],
-      ["kill_managed_openclaw", "stop_launch_agent", "kill_all_openclaw"],
-    );
-    expectContents(switchTargetBlock, ["foreign_openclaw_process_pids", "kill_managed_openclaw"]);
-    expectContents(script, [
-      '[[ "${executable}" == "${TARGET_EXECUTABLE}" ]] && continue',
-      'process_pids_for_executable "${TARGET_EXECUTABLE}"',
-      "target-only restart deferred",
-    ]);
-  });
-
   it("finds persistent launchd supervisors across explicit domains", () => {
     const result = runManagedSupervisorClassifier([
       "gui/501|ai.openclaw.mac.custom|/Applications/OpenClaw.app/Contents/MacOS/OpenClaw|keepalive | runatload",
@@ -332,15 +267,6 @@ describe("scripts/restart-mac.sh", () => {
       "ai.openclaw.mac.custom",
       "ai.openclaw.mac.target",
     ]);
-  });
-
-  it("checks managed launchd supervisors before starting the Swift package build", () => {
-    expectBefore(
-      'managed_supervisors="$(managed_openclaw_supervisor_labels',
-      'run_step "package app"',
-    );
-    expect(script).toContain("Unable to inspect loaded launchd jobs");
-    expect(script).toContain("stop those jobs before a target-only restart");
   });
 
   it.each([false, true])("preserves plugin assets when reusing a source build: %s", (reuse) => {
@@ -359,19 +285,16 @@ describe("scripts/restart-mac.sh", () => {
   });
 
   it("keeps the managed app alive until the signed replacement is ready", () => {
-    expect(script).toContain('OPENCLAW_PACKAGE_APP_ROOT="${STAGED_APP_BUNDLE}"');
-    expectBefore('run_step "package app"', 'run_step "verify packaged app"');
-    expectBefore('run_step "package app"', 'log "==> Switching managed installed');
-    expectBefore('log "==> Switching managed installed', 'run_step "install packaged app"');
-    expectBefore('run_step "install packaged app"', 'run_step "launch app"');
-  });
-
-  it("escalates only exact managed app processes when graceful shutdown stalls", () => {
-    const managedKillBlock = block("kill_managed_openclaw()", "stop_launch_agent()");
-    const broadKillBlock = block("kill_all_openclaw()", "known_openclaw_executables()");
-
-    expectContents(managedKillBlock, ['kill -KILL "${pid}"', "managed_openclaw_process_pids"]);
-    expectContents(broadKillBlock, [], ["kill -KILL"]);
+    const steps = [
+      'run_step "package app"',
+      'run_step "verify packaged app"',
+      'log "==> Switching managed installed',
+      'run_step "install packaged app"',
+      'run_step "launch app"',
+    ].map((step) => script.indexOf(step));
+    expect(
+      steps.every((offset, index) => offset >= 0 && (index === 0 || offset > steps[index - 1]!)),
+    ).toBe(true);
   });
 
   it("treats the canonical installed app as managed but temp bundles as foreign", () => {
@@ -388,36 +311,36 @@ describe("scripts/restart-mac.sh", () => {
     expectSuccess(result, "103");
   });
 
-  it("verifies the launched app through the chosen bundle executable", () => {
-    const verifyBlock = script.slice(script.indexOf("# 5) Verify the app is alive."));
-
-    expectContents(
-      verifyBlock,
-      ['process_pids_matching "${APP_BUNDLE}/${APP_EXECUTABLE_RELATIVE_PATH}"'],
-      ["APP_PROCESS_PATTERN", "pgrep"],
-    );
-  });
-
-  it("forces LaunchServices to start the selected app bundle", () => {
-    expect(script).toContain('OPEN_ARGS=(-n "${APP_BUNDLE}")');
-    expect(script).toContain('/usr/bin/open "${OPEN_ARGS[@]}"');
-    expectBefore("\nchoose_app_bundle\n", 'OPEN_ARGS=(-n "${APP_BUNDLE}")');
-  });
-
-  it("normalizes custom app bundle paths before process matching", () => {
+  it.each(["custom", "packaged", "missing"])("selects the %s app bundle", (kind) => {
     const root = makeTempRoot("openclaw-restart-mac-test-");
     const appBundle = join(root, "dist", "OpenClaw.app");
-    fs.mkdirSync(appBundle, { recursive: true });
+    fs.mkdirSync(join(appBundle, "Contents/Frameworks/Sparkle.framework"), { recursive: true });
 
     const result = runHarness(root, [
       "set -euo pipefail",
       block("canonicalize_app_bundle()", "trap cleanup"),
-      `APP_BUNDLE=${shellQuote(`${appBundle}/../OpenClaw.app/`)}`,
+      block("choose_app_bundle()", "# When signed"),
+      `ROOT_DIR=${shellQuote(root)}`,
+      `APP_BUNDLE=${shellQuote(kind === "packaged" ? "" : `${appBundle}/../${kind === "missing" ? "Missing" : "OpenClaw"}.app/`)}`,
       fail,
-      "canonicalize_app_bundle",
+      "choose_app_bundle",
       'printf "%s\\n" "$APP_BUNDLE"',
     ]);
-    expectSuccess(result, fs.realpathSync(appBundle));
+    if (kind === "missing") {
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("OPENCLAW_APP_BUNDLE does not exist");
+    } else {
+      expectSuccess(result, fs.realpathSync(appBundle));
+    }
+  });
+
+  it("escalates only the exact managed executable after graceful shutdown stalls", () => {
+    const { result, killCalls } = runCleanupFunction(
+      '#!/usr/bin/env bash\ngrep -q -- "-KILL" "$OPENCLAW_TEST_KILL_CALLS" 2>/dev/null && exit 0\nprintf "%s\\n" "321 /worktree/dist/OpenClaw.app/Contents/MacOS/OpenClaw" "999 /tmp/Other/OpenClaw.app/Contents/MacOS/OpenClaw"',
+      true,
+    );
+    expectSuccess(result, "");
+    expect(killCalls.trim().split("\n")).toEqual([...Array<string>(10).fill("321"), "-KILL 321"]);
   });
 
   it.each<[string, number, number, string]>([

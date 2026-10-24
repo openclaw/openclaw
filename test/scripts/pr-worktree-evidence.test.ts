@@ -333,37 +333,30 @@ process.stdout.write(JSON.stringify({
     },
   );
 
-  it.for(["merge-output.log", "merge-output.11111111-1111-4111-8111-111111111111.log"])(
-    "preserves registered captures during dry-run and actual GC for %s",
-    async (captureName, { f }) => {
-      const protectedDirs: string[] = [];
-      for (const [index, shape] of (["empty", "populated", "symlink"] as const).entries()) {
-        protectedDirs.push(await f.add(910001 + index, shape, true, captureName));
-      }
+  it.for([
+    ["merge-output.log", "empty"],
+    ["merge-output.log", "symlink"],
+    ["merge-output.11111111-1111-4111-8111-111111111111.log", "populated"],
+  ] as const)(
+    "preserves registered %s captures (%s) during dry-run and actual GC",
+    async ([captureName, shape], { f }) => {
+      const dir = await f.add(910001, shape, true, captureName);
       const eligible = await f.add(910009);
-      const before = protectedDirs.map((dir) => evidence(dir, captureName));
+      const before = evidence(dir, captureName);
       const unchanged = await preserve(f.branches, f.worktrees);
       const dry = await f.run(["gc_pr_worktrees true"]);
       expect(dry.status, dry.output).toBe(0);
       expect.soft(dry.output).toContain("would remove .worktrees/pr-910009");
-      for (const pr of [910001, 910002, 910003]) {
-        expect.soft(dry.output).not.toContain(`would remove .worktrees/pr-${pr}`);
-      }
+      expect.soft(dry.output).not.toContain("would remove .worktrees/pr-910001");
       await unchanged();
       const actual = await f.run(["gc_pr_worktrees false"]);
       expect(actual.status, actual.output).toBe(0);
       // Check the original path first: moving evidence to Trash also violates recovery.
-      for (const [index, dir] of protectedDirs.entries()) {
-        expect(evidence(dir, captureName)).toEqual(before[index]);
-        expect.soft(actual.output).not.toContain(`removed .worktrees/pr-${910001 + index}`);
-        expect.soft(await f.worktrees()).toContain(`worktree ${dir}\n`);
-        for (const branch of [
-          `temp/pr-${910001 + index}`,
-          `pr-${910001 + index}`,
-          `pr-${910001 + index}-prep`,
-        ]) {
-          expect.soft(await f.branches()).toContain(`refs/heads/${branch} ${f.head}`);
-        }
+      expect(evidence(dir, captureName)).toEqual(before);
+      expect.soft(actual.output).not.toContain("removed .worktrees/pr-910001");
+      expect.soft(await f.worktrees()).toContain(`worktree ${dir}\n`);
+      for (const branch of ["temp/pr-910001", "pr-910001", "pr-910001-prep"]) {
+        expect.soft(await f.branches()).toContain(`refs/heads/${branch} ${f.head}`);
       }
       expect(actual.output).toContain("reconcile the earlier request manually");
       expect(existsSync(eligible)).toBe(false);

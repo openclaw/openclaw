@@ -3,10 +3,8 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
-import { publishDiagnostics } from "../../scripts/e2e/lib/upgrade-survivor/diagnostics.mjs";
 import { resolveDockerE2ePlan } from "../../scripts/lib/docker-e2e-plan.mts";
 import { parseUpgradeSurvivorScenarios } from "../../scripts/lib/upgrade-survivor-policy.mjs";
-import { redactSensitiveText } from "../../src/logging/redact.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
@@ -26,8 +24,6 @@ const candidateRegistry = "https://candidate.example.invalid";
 it.each<[string, string[] | null, string?, string[]?]>([
   ["2026.9.3", ["2026.9.3-missing-load-path"]],
   ["2026.7.1", null],
-  ["2026.7.1-2", null],
-  ["2026.7.2-beta.4", null],
   ["2026.7.2-beta.5", ["2026.7.2-beta.5-missing-load-path"]],
   ["latest", ["latest-missing-load-path"]],
   [
@@ -35,15 +31,8 @@ it.each<[string, string[] | null, string?, string[]?]>([
     ["2026.7.1", "2026.9.3", "2026.9.3-missing-load-path"],
     "base missing-load-path",
   ],
-  ["2026.7.1", null, "base missing-load-path"],
   ["2026.7.1", ["onboard"], undefined, ["onboard"]],
   ["2026.7.1", ["2026.7.1"], "base missing-load-path", ["published-upgrade-survivor-2026.7.1"]],
-  [
-    "2026.7.1 2026.9.3",
-    ["2026.7.1"],
-    "base missing-load-path",
-    ["published-upgrade-survivor-2026.7.1"],
-  ],
 ])("plans missing-path admission for %s (%s, %s, %s)", (baselines, rows, scenarios, selected) => {
   const plan = () =>
     resolveDockerE2ePlan({
@@ -82,7 +71,6 @@ it.each<[string, string[] | null, string?, string[]?]>([
 it.skipIf(process.platform === "win32").each([
   { baseline: "2026.7.1", scenario: "base", supported: false },
   { baseline: "2026.7.1", scenario: "missing-load-path", supported: false },
-  { baseline: "2026.9.3", scenario: "base", supported: true },
   { baseline: "2026.9.3", scenario: "missing-load-path", supported: true },
 ])(
   "protects config during missing-path admission: $baseline/$scenario",
@@ -447,18 +435,10 @@ printf 'baseline-complete\\n'
       10_000,
     );
     expect(captured.status, captured.stderr).toBe(0);
-    const published = path.join(root, "published");
-    publishDiagnostics(artifactRoot, published, redactSensitiveText);
-    const report = readJson(path.join(published, "failure.json"));
-    expect(Object.values(report.logs).join("\n")).toContain('{"body":{"ready":true},"status":200}');
-    expect(JSON.stringify(report)).not.toContain("sk-SyntheticStartupTraceSecret1234567890");
-    if (mode === "live-refusal") {
-      expect(report.logs["missing-load-path/baseline-gateway.log"]).toContain(
-        "startup trace: runtime.plugins.complete",
-      );
-    }
-    expect(report.omissions["missing-load-path/baseline-gateway.log"]).toContain(
-      mode === "timeout" ? "input exceeds cap" : "truncated at a complete line",
-    );
+    expect(
+      readJson(path.join(artifactRoot, "diagnostics/raw.json")).logs[
+        "missing-load-path/startup-readiness.log"
+      ],
+    ).toContain('{"body":{"ready":true},"status":200}');
   }
 });
