@@ -664,6 +664,12 @@ describe("resolveVoiceCallConfig realtime settings", () => {
     });
   });
 
+  it("accepts the explicit consult-no-tools policy", () => {
+    expect(
+      realtimeConfig({ toolPolicy: "consult-no-tools", consultPolicy: "always" }).realtime,
+    ).toMatchObject({ toolPolicy: "consult-no-tools", consultPolicy: "always" });
+  });
+
   it("accepts only positive integer realtime idle hangup values", () => {
     const parsed = realtimeConfig({ idleHangupMs: 45_000 });
     expect(resolveVoiceCallConfig(parsed).realtime.idleHangupMs).toBe(45_000);

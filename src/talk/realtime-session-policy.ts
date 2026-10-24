@@ -39,6 +39,15 @@ export function resolveRealtimeVoiceSessionPolicy(params: {
   agentId: string;
 }): RealtimeVoiceSessionPolicy {
   const handlesAgentConsult = params.capabilities?.handlesAgentConsult === true;
+  const toolPolicy = resolveRealtimeVoiceAgentConsultToolPolicy(
+    params.configuredToolPolicy,
+    params.isAgentProxy ? "owner" : "safe-read-only",
+  );
+  if (handlesAgentConsult && toolPolicy === "consult-no-tools") {
+    throw new Error(
+      "consult-no-tools is not supported by realtime models that use native agent delegation because hang-up requires the call-scoped delegated tool. Select a function-tool model or use safe-read-only or owner.",
+    );
+  }
   if (
     handlesAgentConsult &&
     (params.requireWakeName === true || params.configuredConsultPolicy === "always")
@@ -47,10 +56,6 @@ export function resolveRealtimeVoiceSessionPolicy(params: {
       "This realtime model owns voice responses and delegation. Remove requireWakeName: true and consultPolicy: always, or select a model that supports host-controlled turns.",
     );
   }
-  const toolPolicy = resolveRealtimeVoiceAgentConsultToolPolicy(
-    params.configuredToolPolicy,
-    params.isAgentProxy ? "owner" : "safe-read-only",
-  );
   const consultPolicy =
     params.configuredConsultPolicy ??
     (params.isAgentProxy && !handlesAgentConsult ? "always" : "auto");

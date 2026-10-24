@@ -119,18 +119,22 @@ describe("realtime voice agent consult tool", () => {
   it("normalizes policy values and resolves shared tool exposure", () => {
     expect(resolvePolicy(" OWNER ", "safe-read-only")).toBe("owner");
     expect(resolvePolicy("bad", "safe-read-only")).toBe("safe-read-only");
+    expect(resolvePolicy(" CONSULT-NO-TOOLS ", "owner")).toBe("consult-no-tools");
     expect(resolveToolsAllow("safe-read-only")).toEqual(
       "read web_search web_fetch x_search memory_search memory_get".split(" "),
     );
     expect(resolveToolsAllow("owner")).toBeUndefined();
+    expect(resolveToolsAllow("consult-no-tools")).toStrictEqual([]);
     expect(resolveToolsAllow("none")).toStrictEqual([]);
   });
 
   it.each<[ToolPolicy, RealtimeVoiceTool[] | undefined, RealtimeVoiceTool[]]>([
     ["safe-read-only", undefined, [consultTool]],
+    ["consult-no-tools", undefined, [consultTool]],
     ["none", undefined, []],
     ["safe-read-only", [duplicateConsultTool, customTool], [consultTool, customTool]],
     ["none", [customTool], [customTool]],
+    ["consult-no-tools", [customTool], [consultTool]],
     [
       "safe-read-only",
       [unreadableNameTool, nonStringNameTool, customTool],

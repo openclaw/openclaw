@@ -333,6 +333,7 @@ describe("realtime voice agent consult runtime", () => {
       timeoutMs: 10_000,
     });
     expect(call.toolsAllow).toStrictEqual(["read"]);
+    expect(call.disableTools).toBe(false);
     expect(call.toolBindings).toStrictEqual({
       voice_call: { kind: "active-call", callId: "call-1" },
     });

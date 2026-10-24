@@ -177,6 +177,19 @@ function assertRealtimeVoiceConsultNotInterrupted(
   }
 }
 
+export function resolveRealtimeVoiceAgentConsultEmbeddedToolPolicy(params: {
+  toolsAllow?: string[];
+  inheritedDisableTools: boolean;
+}): { toolsAllow: string[] | undefined; disableTools: boolean } {
+  return {
+    toolsAllow: params.toolsAllow,
+    // An explicitly empty consult allowlist is the narrow, fail-closed signal
+    // for a text-only delegated run. Preserve any stricter caller authority
+    // overlay and never infer this from inherited policy.
+    disableTools: params.inheritedDisableTools || params.toolsAllow?.length === 0,
+  };
+}
+
 export async function consultRealtimeVoiceAgent(params: {
   cfg: OpenClawConfig;
   agentRuntime: RealtimeVoiceAgentConsultRuntime;
@@ -545,7 +558,10 @@ export async function consultRealtimeVoiceAgent(params: {
         toolResultFormat: "plain",
         execSession: sessionEntry,
         sessionRoot: normalizeOptionalString(sessionEntry.sessionRoot),
-        toolsAllow: params.toolsAllow,
+        ...resolveRealtimeVoiceAgentConsultEmbeddedToolPolicy({
+          toolsAllow: params.toolsAllow,
+          inheritedDisableTools: toolAuthorityOverlay.disableTools,
+        }),
         toolBindings: params.toolBindings,
         timeoutMs,
         runId,
