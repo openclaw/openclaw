@@ -211,7 +211,7 @@ describe("worker placement dispatch reclaim", () => {
     });
 
     expect(await placementStore.listPendingWorkspaceResultsAsync()).toEqual([]);
-    expect(harness.log.slice(-11)).toEqual([
+    expect(harness.log.slice(-12)).toEqual([
       "placement:draining",
       "workspace",
       "tunnel:attached",
@@ -220,6 +220,7 @@ describe("worker placement dispatch reclaim", () => {
       "workspace:lease",
       "workspace:verify",
       "workspace:verify-local",
+      "teardown:stop",
       "teardown:destroy",
       "placement:reconciling",
       "placement:reclaimed",

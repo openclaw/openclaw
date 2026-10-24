@@ -27,7 +27,7 @@ export type ProviderFixtureDependencies = Partial<ProviderDependencies> & {
 };
 type Provider = ReturnType<typeof createCrabboxWorkerProvider>;
 export async function destroyAndWait(
-  provider: Provider,
+  provider: Pick<Provider, "destroy">,
   lease: Parameters<Provider["destroy"]>[0],
 ): Promise<void> {
   await provider.destroy(lease);

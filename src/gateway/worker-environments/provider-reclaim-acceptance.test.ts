@@ -4,6 +4,8 @@ import type { WorkerProvider } from "../../plugins/types.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { providerService } from "./provider-lifecycle.test-support.js";
 import * as support from "./service.test-support.js";
+import { createWorkerTunnelManager } from "./tunnel.js";
+import { fakeRunner, PWD_COMMAND, startTestTunnel, success } from "./tunnel.test-support.js";
 
 support.setupWorkerEnvironmentServiceSuite();
 
@@ -11,8 +13,8 @@ it("returns reclaim after local cleanup and acceptance, retaining physical destr
   signal,
 }) => {
   const environmentId = "reclaim-accepted";
-  await support.seedReadyNodeDesktop(environmentId);
-  await support.testState.store.transition({
+  await support.seedReady(environmentId);
+  const attached = await support.testState.store.transition({
     environmentId,
     from: "ready",
     to: "attached",
@@ -21,24 +23,25 @@ it("returns reclaim after local cleanup and acceptance, retaining physical destr
   const cleanupStarted = createDeferred();
   const cleanupFinished = createDeferred();
   const releaseFinished = createDeferred();
+  const fake = fakeRunner(() => success());
+  const tunnelManager = createWorkerTunnelManager({ runner: fake.runner });
+  const handle = await startTestTunnel(tunnelManager, environmentId, attached.ownerEpoch);
   const destroy = vi.fn<WorkerProvider["destroy"]>(async (lease) => {
+    expect(tunnelManager.status(environmentId)).toBe("stopped");
+    expect(support.testState.store.getCredential(environmentId)).toBeUndefined();
+    await expect(handle.runWorkspaceCommand(PWD_COMMAND)).rejects.toThrow(
+      "Worker tunnel owner is no longer connected",
+    );
     lease.onCleanupAccepted?.();
     await releaseFinished.promise;
   });
   const service = providerService(
     { destroy, supportsCleanupAcceptance: true },
     {
+      tunnelManager,
       closeEnvironmentComputers: async () => {
         cleanupStarted.resolve();
         await cleanupFinished.promise;
-      },
-      nodeTunnelManager: {
-        status: () => "stopped",
-        start: vi.fn(),
-        stop: async () => {},
-        stopAll: async () => {},
-        beginClose: vi.fn(),
-        observeProcesses: vi.fn(),
       },
     },
   );
@@ -69,6 +72,7 @@ it("returns reclaim after local cleanup and acceptance, retaining physical destr
     cleanupFinished.resolve();
     releaseFinished.resolve();
     await reclaim;
+    await tunnelManager.stopAll();
   }
 });
 

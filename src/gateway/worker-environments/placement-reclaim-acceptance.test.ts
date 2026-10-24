@@ -37,7 +37,7 @@ it("completes the placement while accepted provider cleanup is still pending", a
   const waitingForRelease = createDeferred();
   vi.spyOn(harness.environments, "reclaim").mockImplementation(async (environmentId) => {
     const attached = harness.environments.get(environmentId);
-    if (!attached) {
+    if (!attached || attached.state !== "attached") {
       throw new Error("Expected the active environment before reclaim acceptance");
     }
     const destroying = {
