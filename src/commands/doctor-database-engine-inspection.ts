@@ -25,9 +25,13 @@ import { loadBundledPluginManifestRegistry } from "../plugins/manifest-registry-
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginSourceCaptureStorage } from "../plugins/plugin-source-capture-context.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
-import { inspectDoctorDatabaseLegacyMigrations } from "./doctor-database-legacy-inspection.js";
+import type { DoctorDatabaseLegacyInspection } from "./doctor-database-legacy-inspection.js";
 
 type Input = { config: OpenClawConfig; stateDir: string; env: NodeJS.ProcessEnv };
+type WorkerInput = Input & {
+  selection?: DatabaseEngineSelection;
+  legacy?: Partial<Record<DatabaseEngineFamily, DoctorDatabaseLegacyInspection>>;
+};
 export type ObservedDatabaseEngines = Partial<Record<DatabaseEngineFamily, DatabaseEngineId[]>>;
 export type DoctorDatabaseEngineInspection = {
   observed: ObservedDatabaseEngines;
@@ -40,13 +44,35 @@ export type DoctorDatabaseEngineInspection = {
 export async function inspectDoctorDatabaseEngines(
   input: Input,
 ): Promise<DoctorDatabaseEngineInspection> {
-  const pool = new WorkerTaskPool<Input, DoctorDatabaseEngineInspection>({
+  const env = { ...input.env, OPENCLAW_STATE_DIR: input.stateDir };
+  let selection: DatabaseEngineSelection | undefined;
+  try {
+    selection = await resolveDatabaseEngineSelection(input.config, env);
+  } catch {
+    // Unresolved selection stays isolated from the host's installed engine in the worker.
+  }
+  let legacy: WorkerInput["legacy"];
+  if (selection) {
+    const { inspectDoctorDatabaseLegacyMigrations } =
+      await import("./doctor-database-legacy-inspection.js");
+    const { withDeferredPluginDoctorMigrations } =
+      await import("../plugins/doctor-contract-registry.js");
+    // Reuse Doctor's loaded contracts, but inspect retained data even for deferred repairs.
+    legacy = await withDatabaseEngineSelection(selection, () =>
+      withPluginSourceCaptureStorage({ stateDir: input.stateDir, placement: "temporary" }, () =>
+        withDeferredPluginDoctorMigrations([], () =>
+          inspectDoctorDatabaseLegacyMigrations({ ...input, env }),
+        ),
+      ),
+    );
+  }
+  const pool = new WorkerTaskPool<WorkerInput, DoctorDatabaseEngineInspection>({
     workerUrl: captureRuntimeWorkerSource(new URL(import.meta.url)).moduleUrl,
     maxWorkers: 1,
     workerOptions: { workerData: { doctorDatabaseEngines: true } },
   });
   try {
-    return await pool.run({ ...input, env: { ...input.env } }, {});
+    return await pool.run({ ...input, env, selection, legacy }, {});
   } finally {
     await pool.close();
   }
@@ -56,21 +82,15 @@ if (parentPort && workerData?.doctorDatabaseEngines === true) {
   const { serveWorkerTasks } = await import("../infra/worker-task-server.js");
   serveWorkerTasks<DoctorDatabaseEngineInspection>(async (value) => {
     // SAFETY: The Doctor host supplies this private, serializable input.
-    const input = value as Input;
-    const env = { ...input.env, OPENCLAW_STATE_DIR: input.stateDir };
+    const input = value as WorkerInput;
+    const { env, selection } = input;
     const stores: DatabaseStoreDiagnostic[] = [];
     const result: DoctorDatabaseEngineInspection = {
       observed: {},
       stateRoots: [],
-      discoveryFailed: false,
+      discoveryFailed: !selection,
       stores,
     };
-    let selection: DatabaseEngineSelection | undefined;
-    try {
-      selection = await resolveDatabaseEngineSelection(input.config, env);
-    } catch {
-      result.discoveryFailed = true;
-    }
     const inspect = async () => {
       let plugins: Pick<ReturnType<typeof resolvePluginMetadataSnapshot>, "plugins">;
       try {
@@ -84,7 +104,11 @@ if (parentPort && workerData?.doctorDatabaseEngines === true) {
           plugins = { plugins: [] };
         }
       }
-      const legacy = await inspectDoctorDatabaseLegacyMigrations({ ...input, env });
+      const legacy =
+        input.legacy ??
+        (await (
+          await import("./doctor-database-legacy-inspection.js")
+        ).inspectDoctorDatabaseLegacyMigrations({ ...input, env }));
       const inspected = new Set<string>();
       for (const family of describeDatabaseEngineSelection(input.config)) {
         const provider = databasePortProviders.find((entry) => entry.id === family.id);
