@@ -35,11 +35,7 @@ vi.mock("../src/binary-resolver.js", () => ({
 
 const baseConfig = resolveConfig({ timeoutSeconds: 120 });
 
-const baseParams = {
-  config: baseConfig,
-  runtimeId: "openclaw-mxc-test-abc12345",
-  workdir: "/workspace",
-};
+let cwd = "/workspace";
 type Handle = ReturnType<typeof createMxcSandboxBackendHandle>;
 type HandleOptions = Partial<Parameters<typeof createMxcSandboxBackendHandle>[0]>;
 type Payload = {
@@ -60,7 +56,12 @@ const testDirs = useAutoCleanupTempDirTracker(afterEach);
 const makeTestDir = (prefix = "mxc-test-") => testDirs.make(prefix);
 
 function makeHandle(overrides: HandleOptions = {}) {
-  return createMxcSandboxBackendHandle({ ...baseParams, ...overrides });
+  return createMxcSandboxBackendHandle({
+    config: baseConfig,
+    runtimeId: "openclaw-mxc-test-abc12345",
+    workdir: cwd,
+    ...overrides,
+  });
 }
 
 function buildSpec(
@@ -79,7 +80,7 @@ async function finalize(handle: Handle, token: unknown) {
 }
 
 function makeBridge(
-  workdir = baseParams.workdir,
+  workdir = cwd,
   overrides: Partial<Parameters<NonNullable<Handle["createFsBridge"]>>[0]["sandbox"]> = {},
 ) {
   const handle = makeHandle({ workdir });
@@ -113,22 +114,6 @@ type CapturedCommand = {
   script: string;
   options: { baseEnv?: NodeJS.ProcessEnv; input?: Uint8Array | string };
 };
-
-function captureShellCommand() {
-  let captured: CapturedCommand | undefined;
-  spawnCommandMock.mockImplementationOnce(
-    async (argv: string[], options: CapturedCommand["options"]) => {
-      const { config } = decodePayload(argv);
-      const file = expectDefined(
-        /""([^"]+\.cmd)"/u.exec(config.process.commandLine)?.[1],
-        "command file",
-      );
-      captured = { config, file, script: readText(file), options };
-      return successfulCommand;
-    },
-  );
-  return () => expectDefined(captured, "captured shell command");
-}
 
 const readText = (file: string) => readFileSync(file, "utf-8");
 function trySymlink(
@@ -202,8 +187,8 @@ function createBackend(overrides: Partial<CreateSandboxBackendParams> = {}) {
   return createMxcSandboxBackendFactory(baseConfig)({
     sessionKey: "agent:main:main",
     scopeKey: "mxc-test",
-    workspaceDir: baseParams.workdir,
-    agentWorkspaceDir: baseParams.workdir,
+    workspaceDir: cwd,
+    agentWorkspaceDir: cwd,
     cfg: backendConfig(),
     ...overrides,
   });
@@ -232,7 +217,7 @@ test("hashes workspace-qualified scopes without truncating their identity", asyn
 describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests)", () => {
   beforeEach(() => {
     spawnCommandMock.mockReset().mockResolvedValue(successfulCommand);
-    baseParams.workdir = makeTestDir("mxc-test-workspace-");
+    cwd = makeTestDir("mxc-test-workspace-");
   });
 
   afterEach(() => {
@@ -257,7 +242,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     expect(cfg).toMatchObject({
       process: {
         commandLine: `${expectedShell} /d /s /c "echo hello"`,
-        cwd: baseParams.workdir,
+        cwd,
         timeout: 120_000,
       },
       network: { defaultPolicy: "block", enforcementMode: "capabilities" },
@@ -284,7 +269,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
   test.each(["directory", "missing/child", "file", "file/child", "outside", "symlink"])(
     "validates execution workdir: %s",
     async (kind) => {
-      const root = baseParams.workdir;
+      const root = cwd;
       let workdir = kind === "directory" ? `${root}/directory` : path.join(root, kind);
       if (kind === "directory") {
         mkdirSync(workdir);
@@ -318,25 +303,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     },
   );
 
-  test("keeps command and environment secrets out of argv", async () => {
-    setEnv({ OPENCLAW_MXC_HOST_SECRET_TEST: "host-secret" });
-    const handle = makeHandle();
-    const spec = await buildSpec(handle, {
-      command: "printf secret-command",
-      env: { SECRET_TOKEN: "secret-env-value" },
-    });
-
-    expect(JSON.stringify(spec.argv)).not.toMatch(/secret-command|SECRET_TOKEN|secret-env-value/u);
-    expect(spec.env.OPENCLAW_MXC_HOST_SECRET_TEST).toBeUndefined();
-    expect(spec.argv[2]).toBe("--payload-file");
-
-    const payloadFile = expectDefined(spec.argv[3], "launcher payload");
-    expect(readText(payloadFile)).toContain("secret-env-value");
-    await finalize(handle, spec.finalizeToken);
-    expect(existsSync(path.dirname(payloadFile))).toBe(false);
-  });
-
-  test("curates process env and overrides keys case-insensitively", async () => {
+  test("isolates secret payloads and curates case-insensitive env overrides", async () => {
     const defaults = {
       ...windowsEnv,
       APPDATA: "C:\\Users\\openclaw\\AppData\\Roaming",
@@ -349,15 +316,29 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       ...defaults,
       ComSpec: "C:\\Windows\\System32\\cmd.exe",
       OPENCLAW_MXC_SECRET_TEST: "do-not-leak",
+      OPENCLAW_MXC_HOST_SECRET_TEST: "host-secret",
     });
-    const overrides = { CUSTOM_ENV: "caller", comspec: "C:\\Tools\\custom-cmd.exe" };
-    const spec = await buildSpec(makeHandle(), { env: overrides });
-    const env = decodePayload(spec.argv).config.process.env;
+    const overrides = {
+      CUSTOM_ENV: "caller",
+      comspec: "C:\\Tools\\custom-cmd.exe",
+      SECRET_TOKEN: "secret-env-value",
+    };
+    const handle = makeHandle();
+    const spec = await buildSpec(handle, { command: "printf secret-command", env: overrides });
+    expect(JSON.stringify(spec.argv)).not.toMatch(/secret-command|SECRET_TOKEN|secret-env-value/u);
+    expect(spec.env.OPENCLAW_MXC_HOST_SECRET_TEST).toBeUndefined();
+    expect(spec.argv[2]).toBe("--payload-file");
+    const payloadFile = expectDefined(spec.argv[3], "launcher payload");
+    expect(readText(payloadFile)).toContain("secret-env-value");
+    const payload: Payload = JSON.parse(readText(payloadFile));
+    const env = payload.config.process.env;
     includes(env, envEntries({ ...defaults, ...overrides }));
     expect(env.filter((entry) => entry.toLowerCase().startsWith("comspec="))).toHaveLength(1);
     expect(env.some((entry) => entry.startsWith("OPENCLAW_MXC_SECRET_TEST="))).toBe(false);
     const envKeys = env.map((entry) => entry.slice(0, entry.indexOf("=")));
     expect(envKeys).toEqual([...envKeys].toSorted((a, b) => a.localeCompare(b)));
+    await finalize(handle, spec.finalizeToken);
+    expect(existsSync(path.dirname(payloadFile))).toBe(false);
   });
 
   test("default network grants outbound capability", async () => {
@@ -381,25 +362,17 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       const agent = makeTestDir("mxc-distinct-agent-");
       const cfg = await execConfig({ workdir: sandbox, agentWorkspaceDir: agent, workspaceAccess });
       const { readonlyPaths: readonly, readwritePaths: readwrite } = cfg.filesystem;
-      if (workspaceAccess === "rw") {
-        expect(readwrite).toContain(path.resolve(agent));
-        expect(readwrite).not.toContain(path.resolve(sandbox));
-        expect(cfg.process.cwd).toBe(path.resolve(agent));
-      } else {
-        expect(readonly).toContain(path.resolve(sandbox));
-        expect(readwrite).not.toContain(path.resolve(agent));
-        if (workspaceAccess === "ro") {
-          expect(readonly).toContain(path.resolve(agent));
-          expect(cfg.process.cwd).toBe(path.resolve(sandbox));
-        } else {
-          expect(readonly).not.toContain(path.resolve(agent));
-        }
-      }
+      const writable = workspaceAccess === "rw";
+      expect(readwrite.includes(path.resolve(agent))).toBe(writable);
+      expect(readwrite).not.toContain(path.resolve(sandbox));
+      expect(readonly.includes(path.resolve(sandbox))).toBe(!writable);
+      expect(readonly.includes(path.resolve(agent))).toBe(workspaceAccess === "ro");
+      expect(cfg.process.cwd).toBe(path.resolve(writable ? agent : sandbox));
     },
   );
 
   test("rejects writable policy paths overlapping read-only roots", async () => {
-    const skillPath = path.join(baseParams.workdir, "skills");
+    const skillPath = path.join(cwd, "skills");
     mkdirSync(skillPath, { recursive: true });
     const handle = makeHandle({
       config: sandboxPolicyConfig({ filesystem: { additionalReadwritePaths: [skillPath] } }),
@@ -432,23 +405,23 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       });
     expect(await create("first")).toBe("created");
     expect(await create("replacement")).toBe("exists");
-    expect(readText(path.join(baseParams.workdir, "notes/file"))).toBe("first");
+    expect(readText(path.join(cwd, "notes/file"))).toBe("first");
     expect((await Promise.all([create("one", "race"), create("two", "race")])).toSorted()).toEqual([
       "created",
       "exists",
     ]);
-    const file = { filePath: "notes/file", cwd: baseParams.workdir };
+    const file = { filePath: "notes/file", cwd };
     await expect(bridge.readFile({ ...file, maxBytes: 5 })).resolves.toEqual(Buffer.from("first"));
     await rejects(bridge.readFile({ ...file, maxBytes: 4 }));
     expect(await bridge.stat(file)).toMatchObject({ type: "file", size: 5 });
     await bridge.rename({ from: file.filePath, to: "renamed" });
-    expect(readText(path.join(baseParams.workdir, "renamed"))).toBe("first");
+    expect(readText(path.join(cwd, "renamed"))).toBe("first");
     await bridge.remove({ filePath: "renamed" });
-    expect(existsSync(path.join(baseParams.workdir, "renamed"))).toBe(false);
+    expect(existsSync(path.join(cwd, "renamed"))).toBe(false);
   });
 
   test("protects skill mounts from mkdir, remove and rename", async () => {
-    const workdir = baseParams.workdir,
+    const workdir = cwd,
       agentDir = makeTestDir(),
       skillsDir = makeTestDir();
     const skill = "skills/demo/SKILL.md",
@@ -481,7 +454,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
   });
 
   test("stat rejects dangling links but accepts missing files", async () => {
-    const workdir = baseParams.workdir;
+    const workdir = cwd;
     const missingTarget = path.join(tmpdir(), "mxc-missing-outside-target");
     if (!trySymlink(missingTarget, path.join(workdir, "dangling-link"), "file")) {
       return;
@@ -492,7 +465,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
   });
 
   test("rejects mutations through symlinked parents", async () => {
-    const workdir = baseParams.workdir,
+    const workdir = cwd,
       outsideDir = makeTestDir();
     writeFixture(workdir, "normal.txt", "safe");
     writeFixture(outsideDir, "victim.txt", "outside");
@@ -511,7 +484,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
   test.each(["none", "ro"] as const)(
     "rejects writes with %s workspace access",
     async (workspaceAccess) => {
-      const bridge = makeBridge(baseParams.workdir, { workspaceAccess });
+      const bridge = makeBridge(cwd, { workspaceAccess });
 
       await readOnly(bridge.writeFile({ filePath: "notes.txt", data: "blocked" }));
     },
@@ -525,25 +498,6 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     expect(cfg.process.timeout).toBe(45_000);
   });
 
-  test("preserves policy paths containing spaces", async () => {
-    const workdir = makeTestDir("mxc-win-dacl-workdir-");
-    const readonlyRoot = makeTestDir("mxc-win-dacl-readonly-");
-    const rw = path.dirname(writeFixture(workdir, "write dir/file", "writable"));
-    const ro = path.dirname(writeFixture(readonlyRoot, "secret dir/file", "readonly"));
-    const file = writeFixture(readonlyRoot, "secret file.txt", "denied file contents");
-    const cfg = await execConfig({
-      workdir,
-      config: sandboxPolicyConfig({
-        filesystem: {
-          additionalReadwritePaths: [rw],
-          additionalReadonlyPaths: [ro, file],
-        },
-      }),
-    });
-    includes(cfg.filesystem.readwritePaths, [path.resolve(workdir), path.resolve(rw)]);
-    includes(cfg.filesystem.readonlyPaths, [ro, file]);
-  });
-
   test("runShellCommand isolates its env and argument bridge in writable temp", async () => {
     const tempRoot = makeTestDir();
     setEnv({
@@ -552,7 +506,18 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       TMP: undefined,
       OPENCLAW_MXC_SECRET_TEST: "do-not-leak",
     });
-    const capture = captureShellCommand();
+    const captured: CapturedCommand[] = [];
+    spawnCommandMock.mockImplementationOnce(
+      async (argv: string[], options: CapturedCommand["options"]) => {
+        const { config } = decodePayload(argv);
+        const file = expectDefined(
+          /""([^"]+\.cmd)"/u.exec(config.process.commandLine)?.[1],
+          "command file",
+        );
+        captured.push({ config, file, script: readText(file), options });
+        return successfulCommand;
+      },
+    );
     await shell(
       {
         args: ["C:\\workspace\\%USERPROFILE%\\file.txt", "0"],
@@ -561,7 +526,7 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
       { workspaceAccess: "ro" },
     );
 
-    const { config, file, script, options } = capture();
+    const { config, file, script, options } = expectDefined(captured[0], "captured command");
     const { env, commandLine } = config.process;
     expect(script.startsWith("@echo off\r\ntype con")).toBe(true);
     expect(commandLine).toMatch(/ \/c ""[^"]*\.openclaw-mxc-cmd-[^"]+\.cmd" /u);
@@ -573,14 +538,14 @@ describeOnWindows("createMxcSandboxBackendHandle (Windows-only MXC backend tests
     expect(options.input).toEqual(Buffer.from("shell-input", "utf-8"));
     expect(existsSync(path.dirname(file))).toBe(false);
     expect(isPathInside(tempRoot, file)).toBe(true);
-    expect(isPathInside(baseParams.workdir, file)).toBe(false);
+    expect(isPathInside(cwd, file)).toBe(false);
     const { readwritePaths, readonlyPaths } = config.filesystem;
     const sandboxTempDir = readwritePaths.find((entry) => isPathInside(tempRoot, entry));
     expect(readwritePaths).not.toContain(tempRoot);
     expect(sandboxTempDir).toEqual(expect.any(String));
     expect(sandboxTempDir ? isPathInside(sandboxTempDir, file) : false).toBe(true);
     includes(config.process.env, [`TEMP=${sandboxTempDir}`, `TMP=${sandboxTempDir}`]);
-    expect(readonlyPaths).toContain(path.resolve(baseParams.workdir));
+    expect(readonlyPaths).toContain(path.resolve(cwd));
   });
 
   test.each([
@@ -673,10 +638,10 @@ function expectPolicyError(file: string, detail: string) {
 }
 
 describeOnWindows("sandbox policy admission", () => {
-  test("layers paths deterministically, retaining provenance and the smallest timeout", () => {
-    const ro1 = makeTestDir(),
-      ro2 = makeTestDir();
-    const rw1 = makeTestDir(),
+  test("layers policy paths with spaces, retaining provenance and the smallest timeout", async () => {
+    const ro1 = makeTestDir("read only-"),
+      ro2 = writeFixture(makeTestDir(), "secret file.txt", "readonly");
+    const rw1 = makeTestDir("write dir-"),
       shared = makeTestDir(),
       rw2 = makeTestDir();
     const first = writePolicy({
@@ -700,6 +665,13 @@ describeOnWindows("sandbox policy admission", () => {
       { path: rw2, sources: [source(second, 0)] },
     ]);
     expect(policy.process.timeoutSeconds).toBe(90);
+    const workdir = makeTestDir();
+    const cfg = await execConfig({
+      workdir,
+      config: { ...baseConfig, mxcPolicyPaths: [first, second] },
+    });
+    includes(cfg.filesystem.readwritePaths, [path.resolve(workdir), rw1, shared, rw2]);
+    includes(cfg.filesystem.readonlyPaths, [ro1, ro2]);
   });
   test.each([
     [undefined, "does not exist"],
