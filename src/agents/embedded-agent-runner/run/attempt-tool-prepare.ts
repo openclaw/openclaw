@@ -9,7 +9,7 @@ import {
 import { resolveStagedInputMediaPaths } from "../../../media/staged-inputs.js";
 import { extractModelCompat } from "../../../plugins/provider-model-compat.js";
 import { getPluginToolMeta } from "../../../plugins/tool-metadata.js";
-import { isSubagentSessionKey } from "../../../routing/session-key.js";
+import { isIncognitoSessionKey, isSubagentSessionKey } from "../../../routing/session-key.js";
 import { getReplyOperationSessionReader } from "../../../sessions/session-controller.session-reader.js";
 import {
   readAdmittedRunOperatorAuthority,
@@ -64,6 +64,7 @@ import {
 } from "./attempt-tool-construction-plan.js";
 import { buildEmbeddedAttemptToolRunContext } from "./attempt-tool-run-context.js";
 import type { EmbeddedRunAttemptInternalParams } from "./internal-params.js";
+import { assertAgentHarnessRunAdmission } from "./session-bootstrap.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type OpenClawCodingToolsOptions = NonNullable<
@@ -302,6 +303,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
     },
   };
   let webSearchUnconfigured = false;
+  let runtimeContinuationStarted = false;
   const constructTools = async (
     sessionPermissionPolicy: PreparedSessionPermissionPolicy | undefined,
     abortSignal: AbortSignal,
@@ -315,6 +317,17 @@ export async function prepareEmbeddedAttemptToolBase(params: {
         attempt.admittedRunContext,
         abortSignal,
       );
+      const sessionAdmission = await assertAgentHarnessRunAdmission(attempt);
+      const nativeQuestionHandoff =
+        sessionAdmission?.entry.lifecycleRevision &&
+        !sessionAdmission.entry.incognito &&
+        !isIncognitoSessionKey(sessionAdmission.sessionKey)
+          ? (...args: Parameters<typeof params.onYield>) => {
+              // ask_user calls this only after its native durable custody was accepted.
+              runtimeContinuationStarted = true;
+              return params.onYield(...args);
+            }
+          : undefined;
       const codingToolOptions: OpenClawCodingToolsOptions = {
         awaitSessionDiffBaseline,
         pluginExecutionAuthority,
@@ -409,6 +422,7 @@ export async function prepareEmbeddedAttemptToolBase(params: {
             }
           : undefined,
         onYield: params.onYield,
+        nativeQuestionHandoff,
       };
       const allTools = await createOpenClawCodingToolsInternalAsync(
         codingToolOptions,
@@ -517,6 +531,9 @@ export async function prepareEmbeddedAttemptToolBase(params: {
       },
       get webSearchUnconfigured() {
         return webSearchUnconfigured;
+      },
+      get runtimeContinuationStarted() {
+        return runtimeContinuationStarted;
       },
       codeModeControlsEnabledForRun,
       codeModeSkills,

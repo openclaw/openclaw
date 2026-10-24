@@ -308,6 +308,18 @@ it("propagates rejected approval notice delivery while preserving later best-eff
   expect(delivered).toEqual(["later"]);
 });
 
+it("preserves the existing no-send result through the embedded tool callback", async () => {
+  const onToolResult = vi.fn(async () => false);
+  state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+    await expect(params.onToolResult?.({ text: "expired question" })).resolves.toBe(false);
+    return { payloads: [{ text: "final" }], meta: {} };
+  });
+  const input = createMinimalRunAgentTurnParams({ opts: { onToolResult } });
+  expect((await runTurn(input)).kind).toBe("success");
+  await Promise.all(input.pendingToolTasks);
+  expect(onToolResult).toHaveBeenCalledOnce();
+});
+
 it("delivers streamed tool results in callback order even when dispatch latency differs", async () => {
   const deliveryOrder: string[] = [];
   const onToolResult = vi.fn(async (payload: { text?: string }) => {

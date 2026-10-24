@@ -108,6 +108,8 @@ export type OpenClawSharedToolsOptions = {
   /** Host-only observation after a canonical progress-card replacement commits. */
   onProgressCardPlanSaved?: (unfinished: boolean) => void;
   onYield?: SessionsYieldCallback;
+  /** Private native executor handoff with a prelaunch batch barrier. */
+  nativeQuestionHandoff?: SessionsYieldCallback;
   claimYieldCompletion?: () => SessionsYieldRuntimeClaim | Promise<SessionsYieldRuntimeClaim>;
   /** Records hot-path tool-prep stages for reply startup diagnostics. */
   recordToolPrepStage?: (name: string) => void;

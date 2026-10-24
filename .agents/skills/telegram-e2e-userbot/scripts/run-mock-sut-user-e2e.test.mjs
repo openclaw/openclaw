@@ -15,6 +15,7 @@ import {
   drainSutUpdates,
   ownChild,
   runCommand,
+  runTelegramTestScenario,
   summarizeScenarioCommand,
   watchChildCompletion,
   writeConfig,
@@ -23,6 +24,56 @@ import { currentTelegramRun, withTelegramRun } from "./telegram-run-scope.mjs";
 
 // Bounds a stalled host. Each case takes well under a second on a loaded host.
 const TEST_TIMEOUT_MS = 60_000;
+
+nodeTest("offline preparation is forwarded and its failure joins run-owned cleanup", async () => {
+  const failure = new Error("offline fixture preparation failed");
+  let temp;
+  let released = false;
+  const prepareGatewayState = async ({ stateDir, configPath, testerId, signal }) => {
+    assert.equal(stateDir, temp.stateDir);
+    assert.equal(configPath, temp.configPath);
+    assert.equal(testerId, "123");
+    assert.equal(signal, currentTelegramRun().signal);
+    assert.equal(signal.aborted, false);
+    assert.equal(fs.existsSync(configPath), true);
+    throw failure;
+  };
+  await assert.rejects(
+    runTelegramTestScenario({
+      prepareGatewayState,
+      acquireCredential: async () => ({
+        assertLeaseHealthy() {},
+        whenLeaseUnhealthy: new Promise(() => {}),
+        async release() {
+          released = true;
+        },
+      }),
+      checkCredential: async () => {},
+      driveScenario: async (_args, _repo, _credential, options) => {
+        assert.equal(options.prepareGatewayState, prepareGatewayState);
+        temp = writeConfig({
+          sutToken: "42:synthetic-token",
+          testerId: "123",
+          groupId: "-1001",
+          backend: "mock",
+          gatewayPort: 19879,
+          mockPort: 19882,
+          telegramApiRoot: "http://127.0.0.1:19881",
+        });
+        await options.prepareGatewayState({
+          stateDir: temp.stateDir,
+          configPath: temp.configPath,
+          testerId: "123",
+          signal: options.signal,
+        });
+        assert.fail("failed offline preparation cannot proceed to runtime work");
+      },
+    }),
+    (error) => error === failure,
+  );
+  assert.equal(released, true);
+  assert.equal(fs.existsSync(temp.root), false);
+});
 
 // Cancellation cases return their expected terminal error after checking cleanup.
 const test = (name, run) =>

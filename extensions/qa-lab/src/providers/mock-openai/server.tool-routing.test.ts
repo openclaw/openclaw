@@ -905,3 +905,34 @@ describe("subagent-handoff", () => {
     });
   });
 });
+
+it("completes the ask_user fixture from its current durable answer without repeating the tool", async () => {
+  const server = await startMockServer();
+  const response = await expectNonStreamingResponsesJson(server, {
+    input: [
+      makeUserInput(
+        "tool search qa check target=ask_user ask_user_fixture=single. Ask the question. After the answer, reply with exactly: QA-DURABLE-ANSWER-OK",
+      ),
+      makeUserInput(
+        `The previously requested user question has resolved. Continue the original task using this result:\n${JSON.stringify({ id: "question-native", status: "answered", answers: { answers: { deploy_target: ["Production 🚀"] } } })}`,
+      ),
+    ],
+  });
+  expect(outputItems(response).some((item) => item.type === "function_call")).toBe(false);
+  expect(outputText(response)).toBe("QA-DURABLE-ANSWER-OK");
+});
+
+it.each(["pending", "error", "historical"])(
+  "does not complete the ask_user fixture from a %s answer",
+  async (kind) => {
+    const server = await startMockServer();
+    const fixture =
+      "tool search qa check target=ask_user ask_user_fixture=single. Ask the question.";
+    const resolution = `The previously requested user question has resolved. Continue the original task using this result:\n${JSON.stringify({ id: "question-native", status: kind === "historical" ? "answered" : kind, answers: { answers: { deploy_target: ["Production 🚀"] } } })}`;
+    const input = kind === "historical" ? [resolution, fixture] : [fixture, resolution];
+    const response = await expectNonStreamingResponsesJson(server, {
+      input: input.map(makeUserInput),
+    });
+    expect(outputItem(response)).toMatchObject({ type: "function_call", name: "ask_user" });
+  },
+);

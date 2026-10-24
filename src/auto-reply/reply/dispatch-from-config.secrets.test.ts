@@ -4,6 +4,9 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSubscribedSessionHarness } from "../../agents/embedded-agent-subscribe.e2e-harness.js";
 import * as questionDispatch from "../../agents/harness/gateway-question-dispatch.js";
 import { claimPendingAgentQuestionAnswer } from "../../agents/harness/gateway-question.js";
+import { createMissingReplyNotice } from "../../agents/reply-completion.js";
+import { validArgs } from "../../agents/tools/ask-user-tool.gateway.test-fixture.js";
+import { createAskUserTool } from "../../agents/tools/ask-user-tool.js";
 import { createSecretsTool } from "../../agents/tools/secrets-tool.js";
 import type { ReplyPayload } from "../types.js";
 import { askUserMocks, hookMocks, mocks } from "./dispatch-from-config.shared.test-harness.js";
@@ -183,3 +186,82 @@ it.for([false, true])(
     }
   },
 );
+
+it("does not retain source progress when the real dispatcher finds an expired question", async () => {
+  setNoAbort();
+  hookMocks.runner.hasHooks.mockReturnValue(false);
+  installThreadingTestPlugin({ id: "telegram" });
+  const sessionKey = "agent:main:telegram:group:expired-question";
+  const runId = "expired-question-run";
+  let questionId = "";
+  let questionStatus = "pending";
+  gateway
+    .mockReset()
+    .mockImplementation(async (method: string, _options: unknown, params: unknown) => {
+      if (method === "question.request") {
+        questionId = String(asNullableRecord(params)?.id);
+        return { id: questionId, durable: true };
+      }
+      if (method === "question.list") {
+        return { questions: [{ id: questionId, status: questionStatus }] };
+      }
+      throw new Error(`Unexpected expired question operation: ${method}`);
+    });
+  const deliver = vi.fn();
+  const handoff = vi.fn();
+  let callbackResult: boolean | void;
+  let unsubscribe: (() => void) | undefined;
+  try {
+    await dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        SessionKey: sessionKey,
+        Provider: "telegram",
+        Surface: "telegram",
+        ChatType: "group",
+      }),
+      cfg: {},
+      dispatcher: createReplyDispatcher({ deliver }),
+      replyResolver: async (_ctx, options) => {
+        const onToolResult = requireToolResultHandler(options?.onToolResult);
+        const h = createSubscribedSessionHarness({
+          runId,
+          sessionKey,
+          messageChannel: "telegram",
+          onToolResult: async (payload) => {
+            // Readiness released publication; expire the question at the actual send boundary.
+            questionStatus = "expired";
+            callbackResult = await onToolResult(payload);
+            return callbackResult;
+          },
+        });
+        unsubscribe = h.subscription.unsubscribe;
+        h.emit({
+          type: "tool_execution_start",
+          toolName: "ask_user",
+          toolCallId: "expired-prompt",
+          args: validArgs,
+        });
+        const tool = createAskUserTool({
+          sessionKey,
+          runId,
+          gatewayCall: gateway,
+          nativeQuestionHandoff: handoff,
+        });
+        await expect(tool.execute("expired-prompt", validArgs)).rejects.toThrow(
+          "ask_user prompt delivery failed",
+        );
+        expect(gateway.mock.calls.map(([method]) => method)).toContain("question.list");
+        expect(callbackResult).toBe(false);
+        expect(h.subscription.getMessagingToolSourceReplyPayloads()).toEqual([]);
+        expect(h.subscription.getMessagingToolSentTexts()).toEqual([]);
+        expect(h.subscription.getSourceReplyDeliveryState()).toBe("missing");
+        return undefined;
+      },
+    });
+    expect(handoff).toHaveBeenCalledOnce();
+    // The unsent prompt cannot suppress the ordinary required-reply fallback.
+    expect(deliver).toHaveBeenCalledExactlyOnceWith(createMissingReplyNotice(), { kind: "final" });
+  } finally {
+    unsubscribe?.();
+  }
+});

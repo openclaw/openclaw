@@ -99,8 +99,6 @@ import {
   QA_SKILL_WORKSHOP_GIF_PROMPT_RE,
   QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE,
   QA_RELEASE_AUDIT_PROMPT_RE,
-  QA_TOOL_SEARCH_PROMPT_RE,
-  QA_TOOL_SEARCH_FAILURE_PROMPT_RE,
   QA_MCP_CODE_MODE_PROMPT_RE,
   QA_RESTART_CODE_MODE_WAIT_PROMPT_RE,
   QA_RESTART_RECOVERY_PROMPT_RE,
@@ -127,7 +125,6 @@ import {
   extractBlockStreamingMarkerDirectives,
   hasDeclaredTool,
   hasToolDefinition,
-  findNamedToolDefinition,
   buildExplicitSessionsSpawnArgs,
   buildQaA2aMessageToolMirrorSessionsSendArgs,
   hasToolErrorOutput,
@@ -202,10 +199,7 @@ import {
   execCommandFromToolProgressPrompt,
   buildToolCallEventsWithArgs as buildRawToolCallEventsWithArgs,
   extractOrbitCode,
-  extractToolSearchTarget,
-  toolSearchOutputHasCandidate,
-  buildQaToolSearchArgs,
-  QA_TOOL_SEARCH_SECONDARY_TARGET,
+  buildQaToolSearchFixtureEvents,
   isActiveMemorySubagentPrompt,
   isSnackRecallPrompt,
   extractSnackPreference,
@@ -724,52 +718,20 @@ async function buildResponsesPayload(
     }
     return buildToolCallEventsWithArgs("read", { path: "LOOP_STEADY.txt" });
   }
-  if (
-    QA_TOOL_SEARCH_PROMPT_RE.test(allInputText) ||
-    QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText)
-  ) {
-    const targetTool = extractToolSearchTarget(allInputText);
-    const plannedArgs = targetTool
-      ? buildQaToolSearchArgs(
-          targetTool,
-          QA_TOOL_SEARCH_FAILURE_PROMPT_RE.test(allInputText),
-          allInputText,
-        )
-      : {};
-    if (
-      targetTool &&
-      hasCompletedToolOutput &&
-      completedToolName === "tool_search" &&
-      !toolOutput.includes("FAKE_PLUGIN_OK") &&
-      toolSearchOutputHasCandidate(parseToolOutputJson(toolOutput), targetTool) &&
-      hasDeclaredTool(body, "dispatch_action")
-    ) {
-      return buildToolCallEventsWithArgs("dispatch_action", { id: targetTool, args: plannedArgs });
-    }
-    if (
-      !hasCompletedToolOutput &&
-      targetTool &&
-      findNamedToolDefinition(toolDeclarationBody, targetTool)?.type === "custom" &&
-      typeof plannedArgs.input === "string"
-    ) {
-      return buildToolCallEventsWithArgs(targetTool, plannedArgs);
-    }
-    if (
-      !hasCompletedToolOutput &&
-      targetTool &&
-      !hasDeclaredTool(body, targetTool) &&
-      hasDeclaredTool(body, "tool_search")
-    ) {
-      return buildToolCallEventsWithArgs("tool_search", {
-        queries: [
-          { query: targetTool, limit: 1 },
-          { query: QA_TOOL_SEARCH_SECONDARY_TARGET, limit: 1 },
-        ],
-      });
-    }
-    if (!hasCompletedToolOutput && targetTool) {
-      return buildToolCallEventsWithArgs(targetTool, plannedArgs);
-    }
+  const toolSearchFixture = buildQaToolSearchFixtureEvents({
+    body,
+    toolDeclarationBody,
+    currentPrompt,
+    allInputText,
+    hasCompletedToolOutput,
+    completedToolName,
+    toolOutput,
+    finalReply: exactMarkerDirective ?? exactReplyDirective,
+    callTool: buildToolCallEventsWithArgs,
+    complete: buildAssistantEvents,
+  });
+  if (toolSearchFixture) {
+    return toolSearchFixture;
   }
   if (
     QA_MCP_CODE_MODE_API_FILE_PROMPT_RE.test(allInputText) ||

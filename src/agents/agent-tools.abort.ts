@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAbortError } from "../infra/abort-signal.js";
 /**
  * Combines per-call cancellation with run-level aborts while preserving
@@ -17,6 +18,19 @@ function throwAbortError(): never {
   throw registerTrustedToolNoStartError(createAbortError("Aborted"));
 }
 
+/** The caller supplies a run signal only for the exact initiating native tool. */
+export function isToolRunHandoff(signal: AbortSignal, yieldRunSignal?: AbortSignal): boolean {
+  const reason: unknown = yieldRunSignal?.reason;
+  return (
+    signal.aborted &&
+    yieldRunSignal?.aborted === true &&
+    signal.reason === reason &&
+    isRecord(reason) &&
+    reason.code === "sessions_yield" &&
+    reason.turnHandoff === true
+  );
+}
+
 /**
  * Races a tool execute promise against the combined abort signal so an abort
  * settles the wrapped call immediately instead of awaiting the tool forever.
@@ -34,17 +48,9 @@ export function raceWithAbortSignal<T>(
   return new Promise<T>((resolve, reject) => {
     const onAbort = () => {
       signal.removeEventListener("abort", onAbort);
-      const reason = yieldRunSignal?.reason as
-        | { code?: unknown; turnHandoff?: unknown }
-        | undefined;
       // Only the initiating tool may finish its run owner's deliberate handoff;
       // caller-authored aborts and concurrent sibling tools must still cancel.
-      if (
-        yieldRunSignal?.aborted &&
-        signal.reason === reason &&
-        reason?.code === "sessions_yield" &&
-        reason.turnHandoff === true
-      ) {
+      if (isToolRunHandoff(signal, yieldRunSignal)) {
         return;
       }
       reject(createAbortError("Aborted"));

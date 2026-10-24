@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { runWithOwnedSessionTranscriptWrite } from "../../../config/sessions/transcript-write-context.js";
 import { createNestedToolActivity } from "../../../sessions/nested-tool-activity.js";
 import { notifyToolActivity } from "../../../shared/tool-activity-heartbeat.js";
-import { raceWithAbortSignal } from "../../agent-tools.abort.js";
+import { isToolRunHandoff, raceWithAbortSignal } from "../../agent-tools.abort.js";
 import { recordStructuredReplayTrustForToolCall } from "../../agent-tools.before-tool-call.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import {
@@ -11,6 +11,7 @@ import {
 } from "../../runtime/internal-hooks.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { withSessionManagerAppend } from "../../sessions/session-manager-append-admission.js";
+import { getToolInvocationMetadata } from "../../tool-invocation-metadata.js";
 import { retainToolSearchImplementation } from "../../tool-search-scheduling.js";
 import type { ToolSearchCatalogToolExecutor } from "../../tool-search.js";
 import type { AnyAgentTool } from "../../tools/common.js";
@@ -44,7 +45,9 @@ export function createSubscribedToolSearchExecutor(params: {
       preparationFailure = { error };
     }
     const lifecycleArgs = preparationFailure ? toolParams.input : input;
-    const yieldRunSignal = toolParams.toolName === "sessions_yield" ? runSignal : undefined;
+    const yieldRunSignal = getToolInvocationMetadata(toolParams.tool, lifecycleArgs).ownsTurnHandoff
+      ? runSignal
+      : undefined;
     const startedAt = Date.now();
     const startOrder = nestedStartOrder++;
     const manager = params.sessionManager;
@@ -160,7 +163,9 @@ export function createSubscribedToolSearchExecutor(params: {
                   prepared.dispose();
                 }
               })().then((result) => {
-                signal.throwIfAborted();
+                if (!isToolRunHandoff(signal, yieldRunSignal)) {
+                  signal.throwIfAborted();
+                }
                 // Nested tools bypass the session's tool_result middleware hook.
                 // Preserve committed delivery before output acceptance can reject it.
                 recordEmbeddedToolReceipt(

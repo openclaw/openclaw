@@ -218,7 +218,7 @@ export type RunEmbeddedAgentParams = Pick<
   onReasoningStream?: (payload: ReasoningStreamPayload) => void | Promise<void>;
   streamReasoningInNonStreamModes?: boolean;
   onReasoningEnd?: () => void | Promise<void>;
-  onToolResult?: (payload: ReplyPayload) => void | Promise<void>;
+  onToolResult?: (payload: ReplyPayload) => boolean | void | Promise<boolean | void>;
   /** Synchronous private observer for the sanitized per-tool result. */
   onAgentToolResult?: (event: { toolName: string; result: unknown; isError: boolean }) => void;
   /** Reports a committed generic recovery compaction before its retry starts. */

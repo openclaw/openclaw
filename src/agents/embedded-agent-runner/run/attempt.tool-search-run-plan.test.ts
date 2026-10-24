@@ -125,6 +125,7 @@ async function plan(
         throw new Error("The catalog fixture does not prepare permission changes");
       },
       webSearchUnconfigured: false,
+      runtimeContinuationStarted: false,
       codeModeControlsEnabledForRun: surface.codeModeControlsEnabled,
       codeModeSkills: [],
       computerContextEpoch: { value: 0 },

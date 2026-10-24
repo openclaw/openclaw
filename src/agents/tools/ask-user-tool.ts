@@ -21,6 +21,7 @@ import {
   withAgentQuestionAnswerAuthority,
 } from "../harness/host-private-capabilities.js";
 import { ASK_USER_TOOL_DISPLAY_SUMMARY, describeAskUserTool } from "../tool-description-presets.js";
+import { markToolTurnHandoffOwner } from "../tool-invocation-metadata.js";
 import {
   AskUserToolSchema,
   DEFAULT_ASK_USER_TIMEOUT_SECONDS,
@@ -36,6 +37,7 @@ import {
   type GatewayQuestionCall,
 } from "./gateway-question-lifecycle.js";
 import { type QuestionPromptDelivery, sendQuestionToolPrompt } from "./question-prompt-send.js";
+import type { SessionsYieldCallback } from "./sessions-yield-tool.js";
 
 const ASK_USER_PROMPT_RECHECK_MS = 50;
 
@@ -441,7 +443,7 @@ function createAskUserPromptDelivery(
   return { state, delivery };
 }
 
-/** Creates the main-session-only blocking ask_user tool. */
+/** Creates a main-session question tool with host-negotiated durable custody. */
 export function createAskUserTool(params: {
   agentId?: string;
   sessionKey?: string;
@@ -449,15 +451,18 @@ export function createAskUserTool(params: {
   gatewayCall?: AgentHarnessQuestionGatewayCall | AgentQuestionDispatcher;
   /** How this run shows a prompt when its harness does not reserve one. */
   questionPrompt?: QuestionPromptDelivery;
+  /** Native batch-barrier owner; generic harness yield callbacks do not transfer custody. */
+  nativeQuestionHandoff?: SessionsYieldCallback;
 }): AnyAgentTool {
   // Tool callbacks may run outside their creation scope; never borrow the invoker's owner.
   const questionAuthority = resolveAgentQuestionAnswerAuthority();
   const gatewayCall = resolveAgentQuestionGatewayCall(params.gatewayCall);
-  return {
+  const tool: AnyAgentTool = {
     label: "Ask User",
     name: "ask_user",
+    ...(params.nativeQuestionHandoff ? { executionMode: "sequential" as const } : {}),
     displaySummary: ASK_USER_TOOL_DISPLAY_SUMMARY,
-    description: describeAskUserTool(),
+    description: describeAskUserTool({ durableHandoff: Boolean(params.nativeQuestionHandoff) }),
     parameters: AskUserToolSchema,
     execute: async (toolCallId, args, signal) => {
       const questionId = buildAskUserQuestionId(
@@ -476,6 +481,14 @@ export function createAskUserTool(params: {
       }
       const sessionKey = askUserSessionKey(params.sessionKey, params.agentId);
       const timeoutMs = normalized.timeoutSeconds * 1_000;
+      const handoff =
+        params.nativeQuestionHandoff &&
+        !normalized.questions.some(
+          (question) =>
+            question.isSecret || question.secretStore || question.presentation || question.resource,
+        )
+          ? params.nativeQuestionHandoff
+          : undefined;
       const send = params.questionPrompt?.send;
       const { state, delivery } = createAskUserPromptDelivery(
         questionId,
@@ -496,6 +509,8 @@ export function createAskUserTool(params: {
       );
       using prompt = createQuestionPromptLifetime(signal);
       let registered = false;
+      let handedOff = false;
+      let durableRegistered = false;
       const cancelPendingQuestion = createGatewayQuestionCanceller({
         gatewayCall,
         questionId,
@@ -558,15 +573,44 @@ export function createAskUserTool(params: {
                 ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
                 ...(params.runId ? { runId: params.runId } : {}),
                 timeoutMs,
+                ...(handoff ? { durable: true } : {}),
               },
               signal ? { signal } : undefined,
-            ) as Promise<{ id?: unknown }>,
+            ) as Promise<{ id?: unknown; durable?: unknown; status?: unknown }>,
         );
         state.claim.attachRegistration(registration);
         const requestResult = await registration;
         registered = true;
+        durableRegistered = requestResult.durable === true;
         if (requestResult.id !== questionId) {
           throw new Error("question.request returned an unexpected question id");
+        }
+        if (handoff && requestResult.durable === true) {
+          // A durable question transfers custody before the deliberate runtime abort.
+          // The old run's cancellation callback must never cancel its successor work.
+          const terminal =
+            requestResult.status === "answered" ||
+            requestResult.status === "cancelled" ||
+            requestResult.status === "expired";
+          if (!terminal) {
+            delivery.markReady();
+            if (delivery.hasSubscriber) {
+              const delivered = await delivery.waitForDelivery(signal);
+              if (delivered.error !== undefined) {
+                await cancelPendingQuestion("prompt-delivery-failed");
+                throw new Error("ask_user prompt delivery failed", { cause: delivered.error });
+              }
+            }
+          }
+          signal?.throwIfAborted();
+          handedOff = true;
+          await handoff(
+            `Waiting for durable question ${questionId}. Its answer will arrive as an explicit new turn.`,
+          );
+          return textResult("Question registered; the turn handed off until an answer arrives.", {
+            status: "waiting",
+            questionId,
+          });
         }
         if (state.claim.isCancellationRequested()) {
           const answered = await cancelPendingQuestion("superseded-input");
@@ -626,12 +670,24 @@ export function createAskUserTool(params: {
         signal?.throwIfAborted();
         return await finishWait(result);
       } catch (error) {
-        if (registered || readQuestionRejection(error)?.reason !== "QUESTION_ID_IN_USE") {
-          const answered = await cancelPendingQuestion(
-            signal?.aborted ? "run-abort" : registered ? "tool-error" : "registration-failed",
-          );
-          if (!signal?.aborted && answered) {
-            return answeredResult(normalized.questions, answered.answers);
+        try {
+          if (
+            !handedOff &&
+            (registered || readQuestionRejection(error)?.reason !== "QUESTION_ID_IN_USE")
+          ) {
+            const answered = await cancelPendingQuestion(
+              signal?.aborted ? "run-abort" : registered ? "tool-error" : "registration-failed",
+            );
+            if (!durableRegistered && !signal?.aborted && answered) {
+              return answeredResult(normalized.questions, answered.answers);
+            }
+          }
+        } finally {
+          if (durableRegistered && handoff && !handedOff && !signal?.aborted) {
+            handedOff = true;
+            await handoff(
+              "The durable question could not be delivered. Its committed outcome will arrive as a new turn.",
+            );
           }
         }
         throw error;
@@ -641,4 +697,5 @@ export function createAskUserTool(params: {
       }
     },
   };
+  return params.nativeQuestionHandoff ? markToolTurnHandoffOwner(tool) : tool;
 }

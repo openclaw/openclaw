@@ -3,8 +3,10 @@ import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.j
 import { ReplyDispatchDeliveryError } from "../../auto-reply/reply/reply-dispatch-outcome.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
-import * as questionDispatch from "../harness/gateway-question-dispatch.js";
-import type { AgentHarnessQuestionGatewayCall as GatewayCall } from "../harness/gateway-question-dispatch.js";
+import {
+  gatewayStub as createGatewayStub,
+  validArgs,
+} from "./ask-user-tool.gateway.test-fixture.js";
 import {
   cancelAskUserPromptDelivery,
   createAskUserTool,
@@ -28,58 +30,19 @@ const SESSION_KEY = "agent:main:test";
 const TOOL_CALL_ID = "call";
 const IMAGE_REPLY = [{ type: "image" as const, data: "pixels", mimeType: "image/png" }];
 
-const validArgs = {
-  questions: [
-    {
-      id: "deploy_target",
-      header: "Deployment target",
-      question: "Where should this deploy?",
-      options: [
-        { label: "Staging (Recommended)", description: "Safer default" },
-        { label: "Production" },
-      ],
-    },
-  ],
-};
-
 type RpcHandlers = Record<
   string,
   (params: Record<string, unknown>, extra?: { signal?: AbortSignal }) => Promise<unknown>
 >;
 
 function gatewayStub(handlers: RpcHandlers) {
-  const started = {
-    "question.request": createDeferred(),
-    "question.waitAnswer": createDeferred(),
-  };
-  const mock = vi.fn(
-    (
-      method: string,
-      _opts: Record<string, unknown>,
-      params: Record<string, unknown>,
-      extra?: { signal?: AbortSignal },
-    ) => {
-      const handler = handlers[method];
-      if (!handler) {
-        throw new Error(`unexpected method ${method}`);
-      }
-      const response = handler(params, extra);
-      // Callback setup has completed, but the owner's later prompt-delivery phase
-      // is not implied by starting either RPC.
-      if (method === "question.request" || method === "question.waitAnswer") {
-        started[method].resolve();
-      }
-      return response;
-    },
-  );
-  const call = questionDispatch.resolveAgentQuestionGatewayCall(mock as unknown as GatewayCall);
-  vi.spyOn(questionDispatch, "resolveAgentQuestionGatewayCall").mockReturnValue(call);
-  return {
-    mock,
-    call,
-    waitForCall: (method: keyof typeof started) =>
-      withTestTimeout(started[method].promise, 1_000, `ask_user did not start ${method}`),
-  };
+  return createGatewayStub((method, _opts, params, extra) => {
+    const handler = handlers[method];
+    if (!handler) {
+      throw new Error(`unexpected method ${method}`);
+    }
+    return handler(params, extra);
+  });
 }
 
 function reservePrompt(
@@ -446,7 +409,7 @@ describe("ask_user", () => {
     });
     const first = tool.execute("call-first", validArgs);
     settleOnCleanup(first, () => finishWait.resolve({ status: "cancelled" }));
-    await gateway.waitForCall("question.waitAnswer");
+    await gateway.waitForCall("question.waitAnswer", first);
 
     await expect(tool.execute("call-second", validArgs)).rejects.toThrow(
       "already has a pending question",
@@ -471,7 +434,7 @@ describe("ask_user", () => {
     });
     const pending = ask(controller.signal);
     settleOnCleanup(pending, () => controller.abort());
-    await gateway.waitForCall(method);
+    await gateway.waitForCall(method, pending);
     expect(gateway.mock.mock.calls.some((call) => call[0] === method)).toBe(true);
     const questionId = requestedQuestionId(gateway.mock);
     controller.abort(new Error("stop"));
@@ -492,7 +455,7 @@ describe("ask_user", () => {
       controller.abort();
       finishRegistration.resolve({ id: reservation.questionId });
     });
-    await gateway.waitForCall("question.request");
+    await gateway.waitForCall("question.request", pending);
 
     controller.abort(new Error("stop before registration completed"));
     finishRegistration.resolve({ id: reservation.questionId });
@@ -523,7 +486,7 @@ describe("ask_user", () => {
     });
     const pending = ask();
     settleOnCleanup(pending, () => finishRegistration.resolve({ id: registeredQuestionId }));
-    await gateway.waitForCall("question.request");
+    await gateway.waitForCall("question.request", pending);
     const questionId = requestedQuestionId(gateway.mock);
     const steer = vi.fn(async () => undefined);
 
@@ -565,7 +528,7 @@ describe("ask_user", () => {
     });
     const pending = ask();
     settleOnCleanup(pending, () => finishWait.resolve({ status: "cancelled" }));
-    await gateway.waitForCall("question.waitAnswer");
+    await gateway.waitForCall("question.waitAnswer", pending);
 
     const foreignModule = (await import(
       `${replyDispatchOutcomeModuleUrl}?instance=ask-user-foreign`
@@ -668,7 +631,7 @@ describe("ask_user", () => {
       sessionKey: "agent:main:claim",
     }).execute("call-claim", validArgs);
     settleOnCleanup(pending, () => answer.resolve({ status: "cancelled" }));
-    await gateway.waitForCall("question.waitAnswer");
+    await gateway.waitForCall("question.waitAnswer", pending);
     expect(finishWait).toBeTypeOf("function");
     const questionId = requestedQuestionId(gateway.mock);
     const steer = vi.fn(async () => undefined);
@@ -723,7 +686,7 @@ describe("ask_user", () => {
     });
     const pending = ask();
     settleOnCleanup(pending, () => finishWait.resolve({ status: "cancelled" }));
-    await gateway.waitForCall("question.waitAnswer");
+    await gateway.waitForCall("question.waitAnswer", pending);
     const questionId = requestedQuestionId(gateway.mock);
     const steer = vi.fn(async () => undefined);
 
@@ -764,7 +727,7 @@ describe("ask_user", () => {
     });
     const pending = ask();
     settleOnCleanup(pending, () => finishWait.resolve({ status: "cancelled" }));
-    await gateway.waitForCall("question.waitAnswer");
+    await gateway.waitForCall("question.waitAnswer", pending);
     const steer = vi.fn(async () => undefined);
     const persistApproved = vi.fn(async () => undefined);
 
@@ -791,7 +754,7 @@ describe("ask_user", () => {
     });
     const pending = ask();
     settleOnCleanup(pending, () => finishWait.resolve({ status: "cancelled" }));
-    await gateway.waitForCall("question.waitAnswer");
+    await gateway.waitForCall("question.waitAnswer", pending);
     const steer = vi.fn(async () => undefined);
 
     await steerReply(steer, "Follow-up message", { isInboundUserMessage: true });
