@@ -64,6 +64,10 @@ function runInput(
   return { config, agentId, agentDir, workspaceDir, runtimePluginSelections };
 }
 
+function publishedDispatch(agentId = "default") {
+  return loadPublishedGatewayReplyDispatchRuntime({ agentId });
+}
+
 function catalogGate(onRelease?: () => void) {
   const started = createDeferred();
   const finish = createDeferred();
@@ -218,7 +222,7 @@ describe("prepared reply dispatch runtime", () => {
         : (params.reusableRegistry ?? createEmptyPluginRegistry()),
     );
     await publishGateway(config);
-    const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+    const published = (await publishedDispatch())!;
     const input = runInput(
       published,
       [{ provider: "selected", modelId: "model", runtime: "openclaw" }],
@@ -266,7 +270,7 @@ describe("prepared reply dispatch runtime", () => {
       allowGatewaySubagentBinding: true,
       pluginMetadataSnapshot: metadata(config, manifests),
     });
-    const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+    const published = (await publishedDispatch())!;
     const input = (runtime: string) => ({
       ...runInput(
         published,
@@ -318,9 +322,7 @@ describe("prepared reply dispatch runtime", () => {
         () => (active ? lease.snapshot : undefined),
       );
     }
-    expect(
-      (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })) === published,
-    ).toBe(true);
+    expect(await publishedDispatch()).toBe(published);
     expect(published.pluginGeneration.pluginRegistry?.agentHarnesses).toEqual([]);
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(4);
   });
@@ -371,7 +373,7 @@ describe("prepared reply dispatch runtime", () => {
           },
         },
       });
-      const published = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }))!;
+      const published = (await publishedDispatch())!;
       const input = {
         ...runInput(
           published,
@@ -501,7 +503,7 @@ describe("prepared reply dispatch runtime", () => {
           });
           expect(resumed.pluginGeneration).toBe(dispatch.pluginGeneration);
         });
-        const latest = (await loadPublishedGatewayReplyDispatchRuntime({ agentId: "free" }))!;
+        const latest = (await publishedDispatch("free"))!;
         expect(latest.pluginGeneration).toBe(dispatch.pluginGeneration);
         expect(latest.config).toBe(latestConfig);
         await using admitted = await acquireAgentRunPreparedModelRuntime({
@@ -511,7 +513,7 @@ describe("prepared reply dispatch runtime", () => {
         });
         expect(admitted.snapshot.config).toBe(latestConfig);
         for (const agentId of mocks.configuredAgentIds.filter((id) => id !== "free")) {
-          expect(await loadPublishedGatewayReplyDispatchRuntime({ agentId })).toMatchObject({
+          expect(await publishedDispatch(agentId)).toMatchObject({
             agentId,
             config: latestConfig,
           });
@@ -527,7 +529,7 @@ describe("prepared reply dispatch runtime", () => {
     mocks.configuredAgentIds = ["default", "worker"];
     const input = fixture.agentInput("default", {});
     await publishGateway(input.config);
-    const original = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+    const original = await publishedDispatch();
     const gate = markPreparedModelRuntimeSnapshotsStale("worker agent reload", {
       waitForReplacement: true,
       agentIds: new Set(["worker"]),
@@ -556,12 +558,8 @@ describe("prepared reply dispatch runtime", () => {
       });
       expect(snapshot.isCurrent()).toBe(true);
       expect(lease.snapshot.isCurrent()).toBe(true);
-      await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })).resolves.toBe(
-        original,
-      );
-      await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" })).rejects.toThrow(
-        "was not published for worker",
-      );
+      await expect(publishedDispatch()).resolves.toBe(original);
+      await expect(publishedDispatch("worker")).rejects.toThrow("was not published for worker");
     } finally {
       rejectPendingPreparedModelRuntimeReplacement(gate, new Error("test cleanup"));
       await observed;
@@ -572,7 +570,7 @@ describe("prepared reply dispatch runtime", () => {
   it("recovers a rejected auth refresh projection without affecting siblings", async () => {
     mocks.configuredAgentIds = ["default", "worker"];
     await publishGateway();
-    const defaultRuntime = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+    const defaultRuntime = await publishedDispatch();
     const refreshFailed = publication("failed");
     mocks.discoverAuthStorage.mockImplementationOnce(() => {
       throw new Error("auth refresh rejected");
@@ -584,10 +582,8 @@ describe("prepared reply dispatch runtime", () => {
     });
     await refreshFailed();
 
-    await expect(
-      loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" }),
-    ).resolves.toMatchObject({ agentId: "worker" });
-    const retained = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+    await expect(publishedDispatch("worker")).resolves.toMatchObject({ agentId: "worker" });
+    const retained = await publishedDispatch();
     expect(retained?.pluginGeneration).toBe(defaultRuntime?.pluginGeneration);
   });
 
@@ -627,7 +623,7 @@ describe("prepared reply dispatch runtime", () => {
       expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
 
       finishAuthRefreshGate.resolve();
-      await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+      await publishedDispatch();
       expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
       const lease = await acquireAgentRunPreparedModelRuntime(input);
       expect(lease.snapshot).toMatchObject({
@@ -641,7 +637,7 @@ describe("prepared reply dispatch runtime", () => {
       finishAuthRefreshGate.resolve();
       await Promise.allSettled([
         admission?.then((lease) => lease[Symbol.asyncDispose]()),
-        loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" }),
+        publishedDispatch(),
       ]);
     }
   });

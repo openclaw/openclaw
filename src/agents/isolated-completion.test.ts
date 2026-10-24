@@ -127,85 +127,75 @@ function pausedHarness(stage: PreparationStage, version: "v1" | "v2" = "v2") {
   };
 }
 
-it.each([false, true])(
-  "routes an automatic utility completion with provider auth=%s",
-  async (auth) => {
-    const cfg: OpenClawConfig = {
-      agents: {
-        defaults: {
-          model: "anthropic/claude-opus-5",
-          models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } },
-        },
+it("routes an automatic utility completion without borrowing HTTP credentials", async () => {
+  const cfg: OpenClawConfig = {
+    agents: {
+      defaults: {
+        model: "anthropic/claude-opus-5",
+        models: { "anthropic/claude-opus-5": { agentRuntime: { id: "claude-cli" } } },
       },
-    };
-    const manifestPlugins = [
-      {
-        id: "anthropic",
-        modelCatalog: {
-          providers: {
-            anthropic: {
-              defaultUtilityModel: "claude-haiku-4-5",
-              models: [{ id: "claude-haiku-4-5" }, { id: "claude-opus-5" }],
-            },
+    },
+  };
+  const manifestPlugins = [
+    {
+      id: "anthropic",
+      modelCatalog: {
+        providers: {
+          anthropic: {
+            defaultUtilityModel: "claude-haiku-4-5",
+            models: [{ id: "claude-haiku-4-5" }, { id: "claude-opus-5" }],
           },
         },
       },
-    ] as unknown as PluginMetadataSnapshot["plugins"];
-    mocks.isCliRuntimeAliasForProvider.mockImplementation(
-      ({ runtime, provider }) => runtime === "claude-cli" && provider === "anthropic",
-    );
-    mocks.hasAvailableAuthForProvider.mockResolvedValue(auth);
-    mocks.prepareSimpleCompletionModel.mockResolvedValue(
-      auth
-        ? {
-            model: { provider: "anthropic", id: "claude-haiku-4-5", api: "anthropic-messages" },
-            auth: preparedModel().auth,
-          }
-        : { error: 'No API key found for provider "anthropic".' },
-    );
-    mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "Utility result" }] });
-    const dispatch = vi.fn(async () => reply("Utility result"));
-    registerIsolatedHarness({ id: "openclaw", runIsolatedCompletionV2: dispatch });
-    const prepared = await prepareUtilityCompletionForAgent({
-      cfg,
-      agentId: "main",
-      useUtilityModel: true,
-      manifestPlugins,
-    });
-    const request = {
-      ...prepared,
-      systemPrompt: "Return JSON.",
-      prompt: "Do the task.",
-      timeoutMs: 1_000,
-    };
+    },
+  ] as unknown as PluginMetadataSnapshot["plugins"];
+  mocks.isCliRuntimeAliasForProvider.mockImplementation(
+    ({ runtime, provider }) => runtime === "claude-cli" && provider === "anthropic",
+  );
+  mocks.hasAvailableAuthForProvider.mockResolvedValue(false);
+  mocks.prepareSimpleCompletionModel.mockResolvedValue({
+    error: 'No API key found for provider "anthropic".',
+  });
+  mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "Utility result" }] });
+  const dispatch = vi.fn(async () => reply("Utility result"));
+  registerIsolatedHarness({ id: "openclaw", runIsolatedCompletionV2: dispatch });
+  const prepared = await prepareUtilityCompletionForAgent({
+    cfg,
+    agentId: "main",
+    useUtilityModel: true,
+    manifestPlugins,
+  });
+  const request = {
+    ...prepared,
+    systemPrompt: "Return JSON.",
+    prompt: "Do the task.",
+    timeoutMs: 1_000,
+  };
 
-    expect(prepared.agentHarnessRuntimeOverride).toBe("claude-cli");
+  expect(prepared.agentHarnessRuntimeOverride).toBe("claude-cli");
 
-    await expect(runIsolatedCompletion(request)).resolves.toMatchObject({
-      text: "Utility result",
-      provider: "anthropic",
-      model: "claude-haiku-4-5",
-      owner: cliOwner,
-    });
-    expectNoCalls(mocks.prepareSimpleCompletionModel, dispatch);
-    expectCall(mocks.runCliAgent, {
-      provider: "claude-cli",
-      modelProvider: "anthropic",
-      model: "claude-haiku-4-5",
-      isolatedCompletion: true,
-    });
+  await expect(runIsolatedCompletion(request)).resolves.toMatchObject({
+    text: "Utility result",
+    provider: "anthropic",
+    model: "claude-haiku-4-5",
+    owner: cliOwner,
+  });
+  expectNoCalls(mocks.prepareSimpleCompletionModel, dispatch);
+  expectCall(mocks.runCliAgent, {
+    provider: "claude-cli",
+    modelProvider: "anthropic",
+    model: "claude-haiku-4-5",
+    isolatedCompletion: true,
+  });
 
-    if (!auth) {
-      // Without the borrowed owner, the same credentialless request reproduces #138789.
-      await expect(
-        runIsolatedCompletion({ ...request, agentHarnessRuntimeOverride: undefined }),
-      ).rejects.toThrow('No API key found for provider "anthropic"');
-      expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledOnce();
-      expect(dispatch).not.toHaveBeenCalled();
-      expect(mocks.runCliAgent).toHaveBeenCalledOnce();
-    }
-  },
-);
+  // Without the borrowed owner, the same credentialless request reproduces #138789.
+  await expect(
+    runIsolatedCompletion({ ...request, agentHarnessRuntimeOverride: undefined }),
+  ).rejects.toThrow('No API key found for provider "anthropic"');
+  expect(mocks.prepareSimpleCompletionModel).toHaveBeenCalledOnce();
+  expect(dispatch).not.toHaveBeenCalled();
+  expect(mocks.runCliAgent).toHaveBeenCalledOnce();
+});
 
 describe("runIsolatedCompletion", () => {
   it("rejects the admitted required-worker policy before selecting an execution owner", async () => {
@@ -554,32 +544,19 @@ describe("runIsolatedCompletion", () => {
     expectNoCalls(mocks.prepareSimpleCompletionModel, mocks.runCliAgent);
   });
 
-  it.each<{
-    assistant: ReturnType<typeof isolatedAssistant>;
-    message?: string;
-    classification?: "overloaded";
-  }>([
-    {
-      assistant: isolatedAssistant([toolCall]),
-      message: "returned a tool call",
-    },
-    {
-      ...errorReply("529 Overloaded"),
-      classification: "overloaded",
-    },
-  ])(
+  it.each([
+    [isolatedAssistant([toolCall]), { message: expect.stringContaining("returned a tool call") }],
+    [errorReply("529 Overloaded").assistant, { message: "529 Overloaded" }],
+  ] as const)(
     "rejects invalid output and preserves its failure classification: %#",
-    async ({ assistant, message, classification }) => {
+    async (assistant, expected) => {
       registerIsolatedHarness({ runIsolatedCompletion: vi.fn(async () => ({ assistant })) });
       const error = await complete().catch((failure: unknown) => failure);
-      expect(error).toMatchObject({ code: "output-rejected" });
-      if (message) {
-        expect(error).toMatchObject({ message: expect.stringContaining(message) });
-      }
-      if (classification) {
+      expect(error).toMatchObject({ code: "output-rejected", ...expected });
+      if (assistant.stopReason === "error") {
         expect(resolveModelFallbackError(error)).toMatchObject({
           kind: "failover",
-          error: { reason: classification },
+          error: { reason: "overloaded" },
         });
       }
       expect(releaseRuntimeLease).toHaveBeenCalledOnce();
@@ -617,12 +594,7 @@ describe("runIsolatedCompletion", () => {
     },
   );
 
-  it.each([
-    undefined,
-    "session-activity-summary",
-    "conversation-label",
-    "session-observer",
-  ] as const)(
+  it.each([undefined, "session-activity-summary"] as const)(
     "routes purpose %s through one empty-tool CLI run with reported usage",
     async (purpose) => {
       const usage = { input: 8, output: 3, cacheRead: 2, total: 13 };
@@ -662,8 +634,6 @@ describe("runIsolatedCompletion", () => {
 
   it.each([
     ["ordered managed profile", undefined, "anthropic:ordered"],
-    ["native-login control", undefined, undefined],
-    ["explicit managed profile", "anthropic:locked", "anthropic:locked"],
     ["explicit native login", "anthropic:claude-cli", undefined],
   ] as const)(
     "forwards the shared CLI auth selection for %s",

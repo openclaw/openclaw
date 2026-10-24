@@ -2,7 +2,7 @@
 // oxfmt-ignore
 import { usePreparedModelRuntimeHarness } from "./prepared-model-runtime.test-harness.js";
 import { describe, expect, it, vi } from "vitest";
-import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { loadPreparedGatewayModelCatalogSnapshot } from "../gateway/server-model-catalog.js";
 import { refreshModelRuntimeAfterHotReload } from "../gateway/server-reload-model-runtime-scope.js";
@@ -10,6 +10,11 @@ import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.te
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog-outcome.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import {
+  harnessRegistry,
+  model,
+  snapshot as makeCatalog,
+} from "./model-catalog-fixtures.test-support.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
 import { loadPreparedModelCatalogSnapshot } from "./prepared-model-catalog.js";
 import {
@@ -86,13 +91,6 @@ async function refreshCatalog(
   return owner.loadFullModelCatalog!({ refresh: true });
 }
 
-function makeCatalog(
-  entries: ModelCatalogSnapshot["entries"] = [],
-  options: Partial<Omit<ModelCatalogSnapshot, "entries">> = {},
-): ModelCatalogSnapshot {
-  return { entries, routeVariants: entries, ...options };
-}
-
 function catalogAuth(
   provider: string,
   authStore: PreparedModelCatalogAuth["authStore"],
@@ -111,15 +109,7 @@ function apiKeyStore(provider: string, key: string): PreparedModelCatalogAuth["a
 }
 
 function modelDefinition(id: string) {
-  return {
-    id,
-    name: id,
-    reasoning: false,
-    input: ["text"],
-    contextWindow: 32_000,
-    maxTokens: 4096,
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-  } satisfies ModelDefinitionConfig;
+  return model(id, id, { contextWindow: 32_000, maxTokens: 4096 });
 }
 
 function ownerInput(config: OpenClawConfig, agentId = "pro") {
@@ -730,33 +720,21 @@ describe("prepared model runtime scoped refresh", () => {
       api: "openai-responses",
       baseUrl,
     }));
-    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() => {
-      const registry = createEmptyPluginRegistry();
-      registry.agentHarnesses.push({
-        pluginId: runtime,
-        source: "fixture",
-        harness: {
-          id: runtime,
-          label: "Fixture native",
-          supports: () => ({ supported: true }),
-          async runAttempt() {
-            throw new Error("catalog-only fixture");
-          },
-          async loadModelCatalog({ config: currentConfig }) {
-            if (holdNative) {
-              nativeStarted.resolve();
-              await releaseNative.promise;
-            }
-            const original = currentConfig.agents?.defaults?.model === "demo/old-configured";
-            return {
-              entries: [nativeEntry(original ? "native-old" : "native-new")],
-              outcomes: [nativeOutcome(original ? "auth-rejected" : "ready")],
-            };
-          },
+    mocks.loadAgentRuntimePluginRegistryHandle.mockImplementation(() =>
+      harnessRegistry(runtime, {
+        async loadModelCatalog({ config: currentConfig }) {
+          if (holdNative) {
+            nativeStarted.resolve();
+            await releaseNative.promise;
+          }
+          const original = currentConfig.agents?.defaults?.model === "demo/old-configured";
+          return {
+            entries: [nativeEntry(original ? "native-old" : "native-new")],
+            outcomes: [nativeOutcome(original ? "auth-rejected" : "ready")],
+          };
         },
-      });
-      return registry;
-    });
+      }),
+    );
     const config = nativeConfig({ model: "demo/old-configured" });
     const learned = entry("demo", "learned", "Learned");
     const owner = await prepareCatalogOwner(
