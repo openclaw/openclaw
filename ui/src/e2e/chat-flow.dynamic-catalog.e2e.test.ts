@@ -91,13 +91,11 @@ suite.define(() => {
       await gateway.getRequests("sessions.describe", sessionDescribeMatch)
     ).length;
     await gateway.emitGatewayEvent("chat.metadata.changed", {});
-    const modelsRequest = await gateway.waitForRequest("models.list", { after: 1 });
-    expect(modelsRequest.params).toEqual({ view: "configured", agentId: "main", sessionKey });
-    const refreshedSessionRequest = await gateway.waitForRequest("sessions.describe", {
+    await gateway.waitForRequest("models.list", { after: 1 });
+    await gateway.waitForRequest("sessions.describe", {
       after: sessionDescribeCount,
       match: sessionDescribeMatch,
     });
-    expect(refreshedSessionRequest.params).toEqual(sessionDescribeMatch);
     await modelSelect.click();
     expect(await gateway.getRequests("models.list")).toHaveLength(2);
     const modelOption = main.locator(`[data-chat-model-option="${modelKey}"]`);

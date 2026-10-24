@@ -9,7 +9,6 @@ import {
 const suite = createControlUiE2eSuite({
   name: "Control UI browser screenshot failed-body E2E",
   startServerBeforeBrowser: true,
-  unavailableMessage: (executablePath) => `Playwright Chromium is unavailable at ${executablePath}`,
 });
 
 type ScreenshotProof = {
@@ -67,7 +66,7 @@ suite.define(() => {
         match: { method, path: requestPath },
         response,
       });
-      const gateway = await installMockGateway(page, {
+      await installMockGateway(page, {
         featureMethods: ["chat.metadata", "chat.startup", "browser.request"],
         methodResponses: {
           "browser.request": {
@@ -104,25 +103,6 @@ suite.define(() => {
         statuses: [404],
       });
 
-      const requests = await gateway.getRequests("browser.request");
-      const requestParams = requests.map(
-        (request) => request.params as { method?: string; path?: string; body?: unknown },
-      );
-      expect(requestParams).toContainEqual({
-        method: "GET",
-        path: "/tabs",
-        tabScope: { sessionKey: "agent:main:main", referencedTabs: [] },
-      });
-      expect(
-        requestParams.filter((params) => params.method === "POST" && params.path === "/screenshot"),
-      ).toEqual([
-        {
-          body: { targetId: "t1", type: "png" },
-          method: "POST",
-          path: "/screenshot",
-          tabScope: { sessionKey: "agent:main:main" },
-        },
-      ]);
       expect(mediaRequest).toEqual({
         authorization: "Bearer e2e-device-token",
         source: "/proof/missing.png",

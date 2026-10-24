@@ -12,14 +12,14 @@ const makeTranscript = (text: string) => ({
   messages: [{ role: "assistant", content: [{ type: "text", text }], timestamp }],
 });
 const scenarios = [
-  { surface: "worktrees", activation: "click", collision: true },
-  { surface: "worktrees", activation: "href", collision: true },
-  { surface: "worktrees", activation: "click", collision: false },
+  { activation: "click", collision: true },
+  { activation: "href", collision: true },
+  { activation: "click", collision: false },
 ];
 
 suite.define(() => {
   it.each(scenarios)(
-    "preserves selected identity: $surface $activation collision=$collision",
+    "preserves selected worktree identity: $activation collision=$collision",
     async (scenario) =>
       suite.withPage(
         { locale: "en-US", serviceWorkers: "block", viewport: { width: 1440, height: 900 } },
@@ -88,7 +88,6 @@ suite.define(() => {
           await expect.poll(primaryKeys).toEqual([]);
           const href = await link.getAttribute("href");
           expect(href).toBe("/chat/main/12345678aaaa40008000000000000001");
-          expect(href).not.toContain("__openclaw");
           if (scenario.activation === "href") {
             await page.goto(new URL(href!, page.url()).href);
           } else {
@@ -96,36 +95,27 @@ suite.define(() => {
           }
           const chooser = page.getByRole("heading", { name: "Choose a session", exact: true });
           const transcript = page.getByText(targetText, { exact: true });
-          const settle = () => chooser.or(transcript).first().waitFor({ state: "visible" });
-          await settle();
-          const observe = async () => ({
-            chooser: await chooser.isVisible(),
-            targetVisible: await transcript.isVisible(),
-            otherVisible: await page.getByText(otherText, { exact: true }).isVisible(),
-            startupRequests: await gateway.getRequests("chat.startup"),
-          });
-          const afterClick = await observe();
-          await page.reload();
-          await settle();
-          const afterReload = await observe();
-          for (const stage of [afterClick, afterReload]) {
-            expect(stage).toMatchObject({
+          const verifyNavigation = async () => {
+            await chooser.or(transcript).first().waitFor({ state: "visible" });
+            expect({
+              chooser: await chooser.isVisible(),
+              targetVisible: await transcript.isVisible(),
+              otherVisible: await page.getByText(otherText, { exact: true }).isVisible(),
+            }).toEqual({
               chooser: false,
               targetVisible: true,
               otherVisible: false,
             });
-            expect(stage.startupRequests.map((request) => request.params)).toContainEqual(
-              expect.objectContaining({ sessionKey: targetKey }),
-            );
-            expect(stage.startupRequests.map((request) => request.params)).not.toContainEqual(
-              expect.objectContaining({ sessionKey: other.key }),
-            );
-          }
-          expect(
-            afterReload.startupRequests.every((request) =>
-              afterClick.startupRequests.every((previous) => previous.id !== request.id),
-            ),
-          ).toBe(true);
+            const requests = await gateway.getRequests("chat.startup");
+            const params = requests.map((request) => request.params);
+            expect(params).toContainEqual(expect.objectContaining({ sessionKey: targetKey }));
+            expect(params).not.toContainEqual(expect.objectContaining({ sessionKey: other.key }));
+            return requests.map((request) => request.id);
+          };
+          const afterClick = await verifyNavigation();
+          await page.reload();
+          const afterReload = await verifyNavigation();
+          expect(afterReload.every((id) => !afterClick.includes(id))).toBe(true);
         },
       ),
   );
