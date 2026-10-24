@@ -1,11 +1,8 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it, onTestFinished } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { navigateToControlUiSession } from "../test-helpers/control-ui-e2e.ts";
 import {
-  captureUiProofEnabled,
   chatSessionListResponse,
   controlUiSessionUrl,
   createChatFlowE2eSuite,
@@ -16,6 +13,14 @@ import { holdModuleResponse } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const machineName = "Studio Mac";
+const nodeEnvironment = (id: string, label: string, available: number) => ({
+  id: `node:${id}`,
+  type: "node",
+  label,
+  status: "available",
+  sessionHost: true,
+  workerSlots: { total: 1, available },
+});
 const remoteSession = {
   key: "agent:main:environment-device",
   sessionId: "environment-device-session",
@@ -54,6 +59,17 @@ const localSession = {
   },
 } satisfies GatewaySessionRow;
 
+async function settleMotion(host: Locator) {
+  await host.evaluate(async (element) => {
+    await Promise.all(
+      element
+        .getAnimations({ subtree: true })
+        .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity)
+        .map((animation) => animation.finished.catch(() => {})),
+    );
+  });
+}
+
 suite.define(() => {
   it("opens the resolved device from mobile Environment, returns to Details and retires it on session change", async () => {
     await suite.withPage(
@@ -81,16 +97,7 @@ suite.define(() => {
             "sessions.list": chatSessionListResponse([offlineSession, localSession]),
             "environments.list": {
               profiles: [],
-              environments: [
-                {
-                  id: "node:studio",
-                  type: "node",
-                  label: machineName,
-                  status: "available",
-                  sessionHost: true,
-                  workerSlots: { total: 1, available: 0 },
-                },
-              ],
+              environments: [nodeEnvironment("studio", machineName, 0)],
             },
           },
         });
@@ -120,12 +127,6 @@ suite.define(() => {
           .getByRole("button", { name: remoteSession.label + " — Details", exact: true })
           .click();
         await machine.waitFor();
-        if (captureUiProofEnabled) {
-          await writeFile(
-            path.join(suite.artifactDir, "mobile-environment-machine.png"),
-            await takeControlUiViewportScreenshot(page, host, [header, machine]),
-          );
-        }
         await machine.click();
         await host
           .locator(".chat-machine__identity")
@@ -171,22 +172,8 @@ suite.define(() => {
             "environments.list": {
               profiles: [],
               environments: [
-                {
-                  id: "node:studio",
-                  type: "node",
-                  label: machineName,
-                  status: "available",
-                  sessionHost: true,
-                  workerSlots: { total: 1, available: 0 },
-                },
-                {
-                  id: "node:spare",
-                  type: "node",
-                  label: "Spare Mac",
-                  status: "available",
-                  sessionHost: true,
-                  workerSlots: { total: 1, available: 1 },
-                },
+                nodeEnvironment("studio", machineName, 0),
+                nodeEnvironment("spare", "Spare Mac", 1),
               ],
             },
           },
@@ -207,12 +194,6 @@ suite.define(() => {
         await destination.click();
         expect(await destination.getAttribute("aria-checked")).toBe("true");
         expect(await page.locator("openclaw-modal-dialog[open]").count()).toBe(0);
-        if (captureUiProofEnabled) {
-          await writeFile(
-            path.join(suite.artifactDir, "mobile-machine-move-docked.png"),
-            await takeControlUiViewportScreenshot(page, host, [picker]),
-          );
-        }
         const header = host.locator(".chat-mobile-host__header");
         const expand = header.getByRole("button", { name: "Expand Side panel", exact: true });
         expect(await expand.count()).toBe(1);
@@ -221,34 +202,14 @@ suite.define(() => {
         );
         await expand.click();
         await pane.locator('.chat-mobile-host[data-mode="expanded"]').waitFor();
-        await host.evaluate(async (element) => {
-          await Promise.all(
-            element
-              .getAnimations({ subtree: true })
-              .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity)
-              .map((animation) => animation.finished.catch(() => {})),
-          );
-        });
+        await settleMotion(host);
         expect(
           await host.evaluate((element) => element.getBoundingClientRect().height),
         ).toBeGreaterThan(dockedHeight + 100);
         expect(await destination.getAttribute("aria-checked")).toBe("true");
-        if (captureUiProofEnabled) {
-          await writeFile(
-            path.join(suite.artifactDir, "mobile-machine-move-expanded.png"),
-            await takeControlUiViewportScreenshot(page, host, [picker]),
-          );
-        }
         await header.getByRole("button", { name: "Restore", exact: true }).click();
         await pane.locator('.chat-mobile-host[data-mode="dock"]').waitFor();
-        await host.evaluate(async (element) => {
-          await Promise.all(
-            element
-              .getAnimations({ subtree: true })
-              .filter((animation) => animation.effect?.getComputedTiming().iterations !== Infinity)
-              .map((animation) => animation.finished.catch(() => {})),
-          );
-        });
+        await settleMotion(host);
         expect(
           Math.abs(
             (await host.evaluate((element) => element.getBoundingClientRect().height)) -
@@ -256,12 +217,6 @@ suite.define(() => {
           ),
         ).toBeLessThan(1);
         expect(await destination.getAttribute("aria-checked")).toBe("true");
-        if (captureUiProofEnabled) {
-          await writeFile(
-            path.join(suite.artifactDir, "mobile-machine-move-restored.png"),
-            await takeControlUiViewportScreenshot(page, host, [picker]),
-          );
-        }
         await header.getByRole("button", { name: "Back", exact: true }).click();
         await host
           .locator(".chat-machine__identity")

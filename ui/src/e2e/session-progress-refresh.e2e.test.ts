@@ -1,10 +1,7 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { openChatTaskProgress } from "./chat-details.test-support.ts";
 import {
-  captureUiProof,
   createChatFlowE2eSuite,
   installMockGateway,
   waitForChatScrollIdle,
@@ -29,22 +26,13 @@ function refreshScenario() {
       { ...sessionInfo, kind: "direct" as const, label: "Main", updatedAt: sessionInfo.endedAt },
     ],
     historyMessages: [
-      {
-        role: "user",
-        content: [{ type: "text", text: "Review the workspace and keep the work card current." }],
-        timestamp: 1,
-      },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: "The workspace review is ready. The work card tracks the remaining checks.",
-          },
-        ],
-        timestamp: 2,
-      },
-    ],
+      ["user", "Review the workspace and keep the work card current."],
+      ["assistant", "The workspace review is ready. The work card tracks the remaining checks."],
+    ].map(([role, text], index) => ({
+      role,
+      content: [{ type: "text", text }],
+      timestamp: index + 1,
+    })),
     featureMethods: [...scenario.featureMethods, "progressCard.refresh"],
     deferredMethods: [],
     heldMethods: ["progressCard.refresh"],
@@ -71,22 +59,20 @@ async function transcriptSnapshot(page: Page) {
 suite.define(() => {
   it.each([
     {
-      name: "desktop-expanded",
       width: 1280,
       height: 900,
       mobile: false,
       reducedMotion: "no-preference" as const,
     },
     {
-      name: "mobile-page",
       width: 390,
       height: 844,
       mobile: true,
       reducedMotion: "reduce" as const,
     },
   ])(
-    "refreshes only the work card and preserves its presentation: $name",
-    async ({ name, width, height, mobile, reducedMotion }) => {
+    "refreshes only the work card and preserves its presentation: $mobile",
+    async ({ width, height, mobile, reducedMotion }) => {
       await suite.withPage({ viewport: { width, height } }, async ({ page }) => {
         await page.emulateMedia({ reducedMotion });
         const scenario = refreshScenario();
@@ -126,7 +112,6 @@ suite.define(() => {
             new Date(scenario.methodResponses["progressCard.get"].card.updatedAt).toISOString(),
           );
         }
-        await captureUiProof(suite, page, name, "after-idle.png");
         await button.click();
         const request = await gateway.waitForRequest("progressCard.refresh");
         expect(request.params).toEqual({
@@ -158,7 +143,6 @@ suite.define(() => {
         expect(await card.locator(".session-progress-card__markdown").textContent()).toBe(
           initialMarkdown,
         );
-        await captureUiProof(suite, page, name, "after-pending.png");
         await gateway.resolveDeferred("progressCard.refresh", {
           runId: "hidden-refresh-run",
           status: "accepted",
@@ -205,11 +189,6 @@ suite.define(() => {
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
         expect(await gateway.getRequests("progressCard.refresh")).toHaveLength(1);
-        await captureUiProof(suite, page, name, "after-updated.png");
-        await writeFile(
-          path.join(suite.artifactDir, name + "-requests.json"),
-          JSON.stringify(await gateway.getRequests(), null, 2),
-        );
         await originalCard!.dispose();
       });
     },
@@ -243,7 +222,6 @@ suite.define(() => {
         initialMarkdown,
       );
       expect(await transcriptSnapshot(page)).toEqual(initial);
-      await captureUiProof(suite, page, "desktop-error", "after-error.png");
       await gateway.deferNext("progressCard.refresh");
       await status.getByRole("button", { name: "Retry", exact: true }).click();
       const retry = await gateway.waitForRequest("progressCard.refresh", { after: 1 });
