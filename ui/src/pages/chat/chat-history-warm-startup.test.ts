@@ -240,6 +240,29 @@ afterEach(() => {
 });
 
 describe("first chat startup snapshot ordering", () => {
+  it("keeps saved workspace icons passive until connection and route admission", () => {
+    const h = mountPane();
+    h.pane.context.gateway.connection.token = "saved-fixture-token";
+    const header = () =>
+      h.pane.renderPaneHeader(
+        createPaneHeaderWorkspaceFixture(h.state),
+        { key: sessionKey },
+        false,
+        "/workspace/project",
+        false,
+        null,
+      ).header;
+
+    expect(header().workspaceIcon).toBeNull();
+    h.connect();
+    h.pane.routeResolutionPending = true;
+    expect(header().workspaceIcon).toBeNull();
+    h.pane.routeResolutionPending = false;
+    expect(header().workspaceIcon).toMatchObject({ authReady: true });
+    h.state.connected = false;
+    expect(header().workspaceIcon).toBeNull();
+  });
+
   it.each(["hit", "miss", "error"] as const)(
     "waits for the cached title before painting a fallback (%s)",
     async (outcome) => {

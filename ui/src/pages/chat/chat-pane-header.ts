@@ -497,7 +497,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
       workspaceRoot: workspace.root,
       workspaceLabel: workspace.label,
       workspaceIcon: resolveChatPaneWorkspaceIcon({
-        sessionKey: workspace.root ? row?.key : undefined,
+        sessionKey:
+          workspace.root && this.state?.connected && !this.routeResolutionPending
+            ? row?.key
+            : undefined,
         resourceBasePath: this.context.resourceBasePath,
         hello: sharingSnapshot.hello,
         token: this.context.gateway.connection.token,
