@@ -134,6 +134,7 @@ import * as rollbackModule from "./update-command-rollback.js";
 import { registerStaleSessionReceiptUpdateTest } from "./update-command-stale-session-receipt.test-support.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
+const { objectContaining: partial, arrayContaining: containing } = expect;
 const stdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 
 type OrderedMock = { mock: { invocationCallOrder: number[] } };
@@ -145,7 +146,7 @@ function expectBefore(first: OrderedMock, second: OrderedMock, firstIndex = 0, s
 
 function expectReportedFailure(reason: string) {
   expect(mocks.printResult).toHaveBeenCalledOnce();
-  expectFailureReport(mocks.printResult, reason, expect.objectContaining({ json: true }));
+  expectFailureReport(mocks.printResult, reason, partial({ json: true }));
   expect(mocks.writeSentinel.mock.lastCall?.[0].result).toEqual(
     mocks.printResult.mock.lastCall?.[0],
   );
@@ -417,22 +418,10 @@ describe("successful update finalization ordering", () => {
   });
 
   it.each([
-    {
-      name: "retires the wrapper before persisting and printing success",
-      denied: false,
-      verified: false,
-    },
-    {
-      name: "recovers and retains the package before reporting failed wrapper retirement",
-      denied: true,
-      verified: false,
-    },
-    {
-      name: "keeps a verified target successful when wrapper retirement fails",
-      denied: true,
-      verified: true,
-    },
-  ])("$name", async ({ denied, verified }) => {
+    ["retires the wrapper before persisting and printing success", false, false],
+    ["recovers and retains the package before reporting failed wrapper retirement", true, false],
+    ["keeps a verified target successful when wrapper retirement fails", true, true],
+  ] as const)("%s", async (_name, denied, verified) => {
     const home = tempDirs.make("openclaw-finalize-wrapper-");
     const previousRoot = path.join(home, "old-root");
     const wrapper = path.join(home, ".local", "bin", "openclaw");
@@ -490,12 +479,12 @@ describe("successful update finalization ordering", () => {
       expect(mocks.printResult).toHaveBeenCalledOnce();
       expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
         status: "error",
-        steps: expect.arrayContaining([retained]),
+        steps: containing([retained]),
       });
       expect(mocks.writeSentinel).toHaveBeenCalledOnce();
       expectFailureReport(mocks.printResult, "wrapper-retirement-failed");
       expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
-        expect.objectContaining({ reason: "wrapper-retirement-failed" }),
+        partial({ reason: "wrapper-retirement-failed" }),
       );
     } else {
       await finishing;
@@ -503,8 +492,8 @@ describe("successful update finalization ordering", () => {
       if (verified) {
         expect(mocks.printResult.mock.lastCall?.[0]).toMatchObject({
           status: "ok",
-          steps: expect.arrayContaining([
-            expect.objectContaining({
+          steps: containing([
+            partial({
               advisory: {
                 kind: "recoverable-maintenance",
                 message: expect.stringContaining("unlink denied"),
@@ -705,11 +694,11 @@ describe("successful update finalization ordering", () => {
       await finishSuccessfulPackageSwitch();
 
       expect(mocks.restartService).toHaveBeenCalledWith(
-        expect.objectContaining({
+        partial({
           shouldRestart: true,
           refreshServiceEnv: false,
           serviceInstallEnv: null,
-          serviceUpdateVerdict: expect.objectContaining({ refreshDefinition: false }),
+          serviceUpdateVerdict: partial({ refreshDefinition: false }),
         }),
       );
       expect(mocks.restartService.mock.lastCall?.[0].gatewayPort).toBe(19305);
@@ -748,17 +737,9 @@ describe("successful update finalization ordering", () => {
     );
 
     it.each([
-      {
-        name: "marks failed activation without finalizing success",
-        activated: false,
-        unloaded: false,
-      },
-      {
-        name: "preserves the native context of an unloaded git service",
-        activated: true,
-        unloaded: true,
-      },
-    ])("canonical sealed post-update $name", async ({ activated, unloaded }) => {
+      ["marks failed activation without finalizing success", false, false],
+      ["preserves the native context of an unloaded git service", true, true],
+    ] as const)("canonical sealed post-update %s", async (_name, activated, unloaded) => {
       const serviceEnv = { MANAGED_VALUE: "revalidated" };
       const env = { OPENCLAW_STATE_DIR: tempDirs.make("update-retention-fact-") };
       const run = { runId: createUpdateRun({ trigger: "cli" }, { env }).runId, env };
@@ -786,7 +767,7 @@ describe("successful update finalization ordering", () => {
 
       expect(mocks.restartService).toHaveBeenCalledOnce();
       expect(mocks.restartService).toHaveBeenCalledWith(
-        expect.objectContaining({
+        partial({
           refreshServiceEnv: false,
           serviceEnv,
           serviceUpdateVerdict: {
@@ -795,7 +776,7 @@ describe("successful update finalization ordering", () => {
             refreshDefinition: false,
             fingerprint: "sealed",
           },
-          result: expect.objectContaining({
+          result: partial({
             after: { version: "2026.4.24", ...(unloaded ? { buildId: "new-build" } : {}) },
           }),
           requireRunningServiceAfterRestart: !unloaded,
@@ -810,13 +791,13 @@ describe("successful update finalization ordering", () => {
         expect(mocks.printResult).toHaveBeenCalledOnce();
         expectFailureReport(mocks.printResult, "readyz-unhealthy");
         expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
-          expect.objectContaining({ reason: "readyz-unhealthy" }),
+          partial({ reason: "readyz-unhealthy" }),
         );
         expect(getUpdateRun(run.runId, { env })).toMatchObject({
           status: "failed",
           reason: "readyz-unhealthy",
-          steps: expect.arrayContaining([
-            expect.objectContaining({
+          steps: containing([
+            partial({
               step: "package rollback",
               status: "skipped",
               detail:
@@ -841,7 +822,7 @@ describe("successful update finalization ordering", () => {
       expect(mocks.readServiceState).not.toHaveBeenCalled();
       expect(mocks.revalidateService).not.toHaveBeenCalled();
       expect(mocks.restartService).toHaveBeenCalledWith(
-        expect.objectContaining({
+        partial({
           shouldRestart: false,
           serviceMutationSkipMessage: expect.stringContaining("HOME set to the OS account home"),
         }),
@@ -951,9 +932,9 @@ process.exitCode = 1;
         await expect(fs.stat(lintLog)).rejects.toThrow();
         expect(steps).toEqual([
           ...initialSteps,
-          expect.objectContaining({
+          partial({
             name: "post-activation doctor inspections",
-            advisory: expect.objectContaining({
+            advisory: partial({
               kind: "recoverable-maintenance",
               message: expect.stringContaining("Gateway readiness was not verified"),
             }),
@@ -972,7 +953,7 @@ process.exitCode = 1;
       expect(options.severityMin).toBe("info");
       expect(options.only).toHaveLength(3);
       expect(options.only).toEqual(
-        expect.arrayContaining([
+        containing([
           "core/doctor/hooks-model",
           "core/doctor/runtime-tool-schemas",
           "core/doctor/provider-catalog-projection",
@@ -981,7 +962,7 @@ process.exitCode = 1;
       expect(lint.inProgress).toBeNull();
       expect(steps).toEqual([
         ...initialSteps,
-        expect.objectContaining({
+        partial({
           name: "post-activation doctor inspections",
           exitCode: 1,
           ...(!candidateRuntime || adoptedFinalization

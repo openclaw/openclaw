@@ -154,6 +154,31 @@ afterEach(() => {
 
 const fixture = (profile?: string) =>
   createPostUpdateRepairFixture(dirs.make("post-update-repair-"), profile);
+const { objectContaining: partial } = expect;
+
+function stoppedService(
+  root: string,
+  env: NodeJS.ProcessEnv,
+  managerUid?: number,
+): GatewayServiceState {
+  return {
+    installed: true,
+    loadState: { status: "loaded" },
+    running: false,
+    runtime: {
+      status: "stopped",
+      ...(managerUid === undefined ? {} : { systemd: { managerUid } }),
+    },
+    env,
+    command: { programArguments: ["node", path.join(root, "dist/entry.js"), "gateway"] },
+  };
+}
+
+function expectNoInferredRepair() {
+  for (const mock of [mocks.repair, mocks.restartCommand]) {
+    expect(mock).not.toHaveBeenCalled();
+  }
+}
 
 describe("post-activation failure settlement without inference", () => {
   beforeEach(async () => {
@@ -177,14 +202,7 @@ describe("post-activation failure settlement without inference", () => {
       .mockImplementation(verification.verifyUpdatedGateway);
     mocks.healthy = false;
     mocks.version = "2026.9.3";
-    mocks.readService.mockResolvedValue({
-      installed: true,
-      loadState: { status: "loaded" },
-      running: false,
-      runtime: { status: "stopped" },
-      env: process.env,
-      command: { programArguments: ["node", "/candidate/dist/entry.js", "gateway"] },
-    });
+    mocks.readService.mockResolvedValue(stoppedService("/candidate", process.env));
     mocks.converge.mockImplementation(async (params: { result: unknown }) => ({
       resultWithPostUpdate: params.result,
     }));
@@ -275,9 +293,8 @@ describe("post-activation failure settlement without inference", () => {
 
       expect(mocks.restart).toHaveBeenCalledOnce();
       expect(mocks.rollback).not.toHaveBeenCalled();
-      expect(mocks.repair).not.toHaveBeenCalled();
+      expectNoInferredRepair();
       expect(mocks.stop).not.toHaveBeenCalled();
-      expect(mocks.restartCommand).not.toHaveBeenCalled();
       expect(windowsRecovery.complete).toHaveBeenCalledWith(true);
       expect(windowsRecovery.complete).not.toHaveBeenCalledWith(false);
       expect(complete).toHaveBeenCalledTimes(ready ? 1 : 0);
@@ -303,7 +320,7 @@ describe("post-activation failure settlement without inference", () => {
       });
       if (!ready) {
         expect(recorded?.steps).toContainEqual(
-          expect.objectContaining({ step: "warning:gateway verification", detail: observation }),
+          partial({ step: "warning:gateway verification", detail: observation }),
         );
         expect(recorded?.origin.nextAction).not.toContain("Keep the gateway stopped");
         if (outcome === "still-starting" && recorded) {
@@ -371,16 +388,7 @@ describe("post-activation failure settlement without inference", () => {
         );
         params.result.root = candidateRoot;
         params.root = previousRoot;
-        const originalService: GatewayServiceState = {
-          installed: true,
-          loadState: { status: "loaded" },
-          running: false,
-          runtime: { status: "stopped", systemd: { managerUid: 2001 } },
-          env: run.env,
-          command: {
-            programArguments: ["node", path.join(previousRoot, "dist", "entry.js"), "gateway"],
-          },
-        };
+        const originalService = stoppedService(previousRoot, run.env, 2001);
         const originalVerdict = await inspectManagedGatewayServiceBeforeUpdate({
           root: previousRoot,
           state: originalService,
@@ -452,7 +460,7 @@ describe("post-activation failure settlement without inference", () => {
       expect(mocks.converge.mock.invocationCallOrder[0]).toBeLessThan(
         mocks.restart.mock.invocationCallOrder[0]!,
       );
-      expect(mocks.repair).not.toHaveBeenCalled();
+      expectNoInferredRepair();
       if (rollback === "restored") {
         expect(mocks.print.mock.calls.at(-1)?.[0]).toMatchObject({
           recovery: {
@@ -473,13 +481,10 @@ describe("post-activation failure settlement without inference", () => {
       expect(mocks.rollback).toHaveBeenCalledTimes(rollback === "unavailable" ? 0 : 1);
       if (rollback === "unavailable") {
         expect(getUpdateRun(run.runId, { env: run.env })?.steps).toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({ step: "package rollback", status: "skipped" }),
-          ]),
+          expect.arrayContaining([partial({ step: "package rollback", status: "skipped" })]),
         );
       }
       expect(mocks.restart).toHaveBeenCalledTimes(rollback === "restored" ? 2 : 1);
-      expect(mocks.restartCommand).not.toHaveBeenCalled();
       expect(getUpdateRun(run.runId, { env: run.env })).toMatchObject({
         status: restoredHealthy ? "rolled-back" : "failed",
         phase: "finished",
@@ -500,15 +505,9 @@ describe("post-activation failure settlement without inference", () => {
       const root = await fs.realpath(dirs.make("repair-plugin-windows-candidate-"));
       await writeOpenClawPackageFixture(root, "2026.9.3");
       const state: GatewayServiceState = {
-        installed: true,
-        loadState: { status: "loaded" },
-        running: false,
-        runtime: { status: "stopped" },
-        env: run.env,
-        command: { programArguments: ["node", path.join(root, "dist/entry.js"), "gateway"] },
+        ...stoppedService(root, run.env, 2001),
         definitionMutationCapability: { kind: "sealed", reason: "system-owned" },
       };
-      state.runtime!.systemd = { managerUid: 2001 };
       params.preManagedServiceStop!.serviceManagerUid = 2001;
       params.root = root;
       params.result.root = root;
@@ -612,9 +611,8 @@ describe("post-activation failure settlement without inference", () => {
         await originalRecovery.restore();
         await originalRecovery.complete();
         expect(mocks.rollback).toHaveBeenCalledTimes(activated ? 0 : 1);
-        expect(mocks.repair).not.toHaveBeenCalled();
+        expectNoInferredRepair();
         expect(mocks.restart).toHaveBeenCalledOnce();
-        expect(mocks.restartCommand).not.toHaveBeenCalled();
         expect(mocks.stop).not.toHaveBeenCalled();
         expect(enabled).toBe(activated);
         expect(signals.map((signal) => process.listenerCount(signal))).toEqual(baselineListeners);
@@ -633,8 +631,7 @@ describe("post-activation failure settlement without inference", () => {
       result: { status: "error", reason: "state-migrated-no-rollback" },
     });
     expect(mocks.restart).not.toHaveBeenCalled();
-    expect(mocks.restartCommand).not.toHaveBeenCalled();
-    expect(mocks.repair).not.toHaveBeenCalled();
+    expectNoInferredRepair();
     const run = params.opts.run!;
     expect(getUpdateRun(run.runId, { env: run.env })).toMatchObject({
       status: "failed",
@@ -931,7 +928,7 @@ describe("post-activation failure settlement without inference", () => {
         expect(failure.result.recovery, JSON.stringify(failure.result)).toEqual(
           untouched
             ? undefined
-            : expect.objectContaining(
+            : partial(
                 recovered
                   ? {
                       serviceRestartSafe: true,
@@ -969,12 +966,12 @@ describe("post-activation failure settlement without inference", () => {
         expect(report?.status).toBe("failed");
         if (receipt === "migration-verified") {
           expect(report?.steps).toContainEqual(
-            expect.objectContaining({ step: "package-backup-retention", exitCode: 1 }),
+            partial({ step: "package-backup-retention", exitCode: 1 }),
           );
         } else {
           expect(
             report?.steps.find((step) => step.step === "post-install verification")?.failureFacts,
-          ).toContainEqual(expect.objectContaining({ code: "authority-check-failed" }));
+          ).toContainEqual(partial({ code: "authority-check-failed" }));
         }
       }
       if (localVersionOnly && !recovered) {
