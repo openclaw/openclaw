@@ -10,6 +10,7 @@ type QuantifierRead = {
 type TokenState = {
   containsRepetition: boolean;
   hasAmbiguousAlternation: boolean;
+  hasDuplicateAlternatives: boolean;
   minLength: number;
   maxLength: number;
 };
@@ -18,15 +19,23 @@ type ParseFrame = {
   lastToken: TokenState | null;
   containsRepetition: boolean;
   hasAlternation: boolean;
+  hasDuplicateAlternatives: boolean;
   branchMinLength: number;
   branchMaxLength: number;
   altMinLength: number | null;
   altMaxLength: number | null;
+  branchSources: string[];
+  currentBranchStart: number;
 };
 
 const SAFE_REGEX_CACHE_MAX = 256;
 const SAFE_REGEX_TEST_WINDOW = 2048;
-export type SafeRegexRejectReason = "empty" | "unsafe-nested-repetition" | "invalid-regex";
+const MAX_DUPLICATE_ALTERNATIVE_REPEAT = 8;
+export type SafeRegexRejectReason =
+  | "empty"
+  | "unsafe-nested-repetition"
+  | "unsafe-ambiguous-alternation"
+  | "invalid-regex";
 
 export type SafeRegexCompileResult =
   | {
@@ -44,16 +53,40 @@ export type SafeRegexCompileResult =
 
 const safeRegexCache = new Map<string, SafeRegexCompileResult>();
 
-function createParseFrame(): ParseFrame {
+function createParseFrame(currentBranchStart: number): ParseFrame {
   return {
     lastToken: null,
     containsRepetition: false,
     hasAlternation: false,
+    hasDuplicateAlternatives: false,
     branchMinLength: 0,
     branchMaxLength: 0,
     altMinLength: null,
     altMaxLength: null,
+    branchSources: [],
+    currentBranchStart,
   };
+}
+
+/**
+ * Detects alternatives that are byte-identical inside the same group.
+ * A quantified group with identical alternatives (`(a|a)*`) matches the same
+ * strings through several paths, so the regex engine explores exponentially
+ * many partitions before failing. Such a group is always redundant, so
+ * rejecting it never removes a meaningful pattern.
+ */
+function hasDuplicateBranchSources(branchSources: string[]): boolean {
+  if (branchSources.length < 2) {
+    return false;
+  }
+  const seen = new Set<string>();
+  for (const branch of branchSources) {
+    if (seen.has(branch)) {
+      return true;
+    }
+    seen.add(branch);
+  }
+  return false;
 }
 
 function addLength(left: number, right: number): number {
@@ -129,8 +162,10 @@ function readQuantifier(source: string, index: number): QuantifierRead | null {
   return { consumed: i - index, minRepeat, maxRepeat };
 }
 
-function hasNestedRepetition(source: string): boolean {
-  const frames: ParseFrame[] = [createParseFrame()];
+function detectUnsafeRepetition(
+  source: string,
+): "unsafe-nested-repetition" | "unsafe-ambiguous-alternation" | null {
+  const frames: ParseFrame[] = [createParseFrame(0)];
   let inCharClass = false;
 
   const emitToken = (token: TokenState) => {
@@ -147,6 +182,7 @@ function hasNestedRepetition(source: string): boolean {
     emitToken({
       containsRepetition: false,
       hasAmbiguousAlternation: false,
+      hasDuplicateAlternatives: false,
       minLength: 1,
       maxLength: 1,
     });
@@ -174,13 +210,15 @@ function hasNestedRepetition(source: string): boolean {
     }
 
     if (ch === "(") {
-      frames.push(createParseFrame());
+      frames.push(createParseFrame(i + 1));
       continue;
     }
 
     if (ch === ")") {
       if (frames.length > 1) {
         const frame = frames.pop() as ParseFrame;
+        frame.branchSources.push(source.slice(frame.currentBranchStart, i));
+        frame.hasDuplicateAlternatives = hasDuplicateBranchSources(frame.branchSources);
         if (frame.hasAlternation) {
           recordAlternative(frame);
         }
@@ -197,6 +235,7 @@ function hasNestedRepetition(source: string): boolean {
             frame.altMinLength !== null &&
             frame.altMaxLength !== null &&
             frame.altMinLength !== frame.altMaxLength,
+          hasDuplicateAlternatives: frame.hasDuplicateAlternatives,
           minLength: groupMinLength,
           maxLength: groupMaxLength,
         });
@@ -207,6 +246,8 @@ function hasNestedRepetition(source: string): boolean {
     if (ch === "|") {
       const frame = expectDefined(frames[frames.length - 1], "frames entry at frames.length 1");
       frame.hasAlternation = true;
+      frame.branchSources.push(source.slice(frame.currentBranchStart, i));
+      frame.currentBranchStart = i + 1;
       recordAlternative(frame);
       frame.branchMinLength = 0;
       frame.branchMaxLength = 0;
@@ -226,10 +267,19 @@ function hasNestedRepetition(source: string): boolean {
       continue;
     }
     if (previousToken.containsRepetition) {
-      return true;
+      return "unsafe-nested-repetition";
+    }
+    // Duplicate-alternative groups only become exponential when the repeat count grows with
+    // the input; a small finite bound (`?`, `{2}`, `{2,3}`) multiplies the branches by a
+    // constant, so those patterns stay compilable and existing custom masks keep working.
+    if (
+      previousToken.hasDuplicateAlternatives &&
+      (quantifier.maxRepeat === null || quantifier.maxRepeat > MAX_DUPLICATE_ALTERNATIVE_REPEAT)
+    ) {
+      return "unsafe-ambiguous-alternation";
     }
     if (previousToken.hasAmbiguousAlternation && quantifier.maxRepeat === null) {
-      return true;
+      return "unsafe-nested-repetition";
     }
 
     const previousMinLength = previousToken.minLength;
@@ -250,7 +300,7 @@ function hasNestedRepetition(source: string): boolean {
     frame.branchMaxLength = addLength(branchMaxBase, previousToken.maxLength);
   }
 
-  return false;
+  return null;
 }
 
 function testRegexFromStart(regex: RegExp, value: string): boolean {
@@ -281,8 +331,9 @@ export function compileSafeRegexDetailed(source: string, flags = ""): SafeRegexC
   }
 
   let result: SafeRegexCompileResult;
-  if (hasNestedRepetition(trimmed)) {
-    result = { regex: null, source: trimmed, flags, reason: "unsafe-nested-repetition" };
+  const unsafeReason = detectUnsafeRepetition(trimmed);
+  if (unsafeReason) {
+    result = { regex: null, source: trimmed, flags, reason: unsafeReason };
   } else {
     try {
       result = { regex: new RegExp(trimmed, flags), source: trimmed, flags, reason: null };
