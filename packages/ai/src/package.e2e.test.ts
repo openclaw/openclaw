@@ -36,9 +36,9 @@ const compatibility = {
 async function runCommand(
   command: string,
   args: string[],
-  options: { cwd: string } & Pick<
+  options: { cwd: string; shell?: boolean } & Pick<
     SpawnOptionsWithoutStdio,
-    "env" | "shell" | "windowsVerbatimArguments"
+    "env" | "windowsVerbatimArguments"
   >,
 ): Promise<CommandResult> {
   const result = { stdout: "", stderr: "" };

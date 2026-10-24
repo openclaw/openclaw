@@ -1786,6 +1786,7 @@
     "src/gateway/node-plugin-tool-invoke-deadline.e2e.test.ts": 30,
     "src/gateway/operator-approvals-client.e2e.test.ts": 4,
     "src/gateway/server-methods/plugin-approval-turn-source-routing.e2e.test.ts": 1,
+    "src/gateway/server-network-runtime.e2e.test.ts": 3,
     "src/gateway/server.startup-matrix-migration.integration.test.ts": 1,
     "src/gateway/sessions-history-http.test.ts": 46,
     "src/hooks/hooks-lifecycle.e2e.test.ts": 34,

@@ -29,7 +29,11 @@ suite.define(() => {
         const readClipboard = () => page.evaluate(() => window.lobsterdexClipboardFault);
         const rejectWrite = (index: number) =>
           page.evaluate(async (pendingIndex) => {
-            window.lobsterdexClipboardFault.pendingRejects[pendingIndex](new Error("denied"));
+            const reject = window.lobsterdexClipboardFault.pendingRejects[pendingIndex];
+            if (!reject) {
+              throw new Error(`Missing pending clipboard write ${pendingIndex}`);
+            }
+            reject(new Error("denied"));
             await new Promise<void>((resolve) => {
               window.setTimeout(resolve, 0);
             });
