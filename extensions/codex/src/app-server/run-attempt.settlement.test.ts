@@ -138,10 +138,7 @@ describe("Codex app-server terminal settlement", () => {
           id: "active-command",
           type: "commandExecution",
           command: "synthetic-background-command",
-          cwd: params.workspaceDir,
-          commandActions: [],
           processId: "process-1",
-          source: "agent",
           status: "inProgress",
         }),
       );
@@ -196,10 +193,7 @@ describe("Codex app-server terminal settlement", () => {
         id: "failed-command",
         type: "commandExecution",
         command: "synthetic-failed-command",
-        cwd: params.workspaceDir,
-        commandActions: [],
         processId: "process-2",
-        source: "agent",
         status: "inProgress",
       }),
     );
@@ -580,10 +574,7 @@ describe("Codex app-server terminal settlement", () => {
           id: "checkpoint-command",
           type: "commandExecution",
           command: "echo saved",
-          cwd: params.workspaceDir,
-          commandActions: [],
-          processId: null,
-          source: "agent",
+
           status: "completed",
           aggregatedOutput: "saved",
           exitCode: 0,
@@ -699,19 +690,12 @@ describe("Codex app-server terminal settlement", () => {
             }),
           ]);
           if (termination === "timeout") {
-            expect(assistantRows[0]).toMatchObject({
-              message: {
-                __openclaw: {
-                  settlementWarning: expect.objectContaining({
-                    timeoutMs: TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
-                  }),
-                },
-              },
-            });
+            expect(assistantRows[0]).toHaveProperty(
+              "message.__openclaw.settlementWarning.timeoutMs",
+              TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS,
+            );
             if (queuedNetworkResult) {
-              expect(assistantRows[0]).toMatchObject({
-                message: { __openclaw: { turnTainted: true } },
-              });
+              expect(assistantRows[0]).toHaveProperty("message.__openclaw.turnTainted", true);
             }
           }
           if (boundary === "publication") {
