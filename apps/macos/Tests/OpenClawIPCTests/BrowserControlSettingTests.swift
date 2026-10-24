@@ -144,6 +144,37 @@ struct BrowserControlSettingTests {
         }
     }
 
+    @Test func `a click made on one replacement Gateway is never written to the next one`() async throws {
+        let gatewayA = RevisionedConfig(enabled: true)
+        let gatewayB = RevisionedConfig(enabled: false)
+        let gatewayC = RevisionedConfig(enabled: false)
+        let selected = SelectedGateway(gatewayA)
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let env = ["OPENCLAW_CONFIG_PATH": directory.appendingPathComponent("a.json").path]
+        try await self.withConfig(selected, env: env) {
+            let setting = BrowserControlSetting()
+            await setting.load()
+            gatewayA.holdWrites = true
+            setting.toggle()
+            try await self.waitUntil { gatewayA.held.count == 1 }
+
+            // Click on Gateway B, then select Gateway C before A's save settles.
+            setenv("OPENCLAW_CONFIG_PATH", directory.appendingPathComponent("b.json").path, 1)
+            selected.config = gatewayB
+            setting.toggle()
+            setenv("OPENCLAW_CONFIG_PATH", directory.appendingPathComponent("c.json").path, 1)
+            selected.config = gatewayC
+            gatewayA.release()
+
+            try await self.waitUntil { !setting.enabled }
+            for _ in 0..<50 {
+                await Task.yield()
+            }
+            #expect(gatewayC.revision == 0)
+            #expect(!gatewayC.enabled)
+        }
+    }
+
     @MainActor
     final class SelectedGateway {
         var config: RevisionedConfig
