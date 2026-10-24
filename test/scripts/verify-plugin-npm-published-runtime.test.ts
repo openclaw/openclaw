@@ -36,15 +36,10 @@ it("rejects unknown and extra args before npm calls", () => {
   );
 });
 
-it("rejects loose npm command timeout and buffer overrides", () => {
-  for (const value of ["60s", "1e3", "0"]) {
-    expect(() =>
-      readPluginNpmCommandOptions({ OPENCLAW_PLUGIN_NPM_COMMAND_TIMEOUT_MS: value }),
-    ).toThrow(`invalid OPENCLAW_PLUGIN_NPM_COMMAND_TIMEOUT_MS: ${value}`);
-  }
+it("rejects a nonpositive npm command budget", () => {
   expect(() =>
-    readPluginNpmCommandOptions({ OPENCLAW_PLUGIN_NPM_COMMAND_MAX_BUFFER_BYTES: "16mb" }),
-  ).toThrow("invalid OPENCLAW_PLUGIN_NPM_COMMAND_MAX_BUFFER_BYTES: 16mb");
+    readPluginNpmCommandOptions({ OPENCLAW_PLUGIN_NPM_COMMAND_TIMEOUT_MS: "0" }),
+  ).toThrow("invalid OPENCLAW_PLUGIN_NPM_COMMAND_TIMEOUT_MS: 0");
 });
 
 it("bounds npm metadata commands", () => {

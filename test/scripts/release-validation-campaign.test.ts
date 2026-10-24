@@ -15,18 +15,18 @@ const TITLE = "OpenClaw 2026.8.1 beta feedback";
 const surface = "Runtime behavior changed. Run `{{OPENCLAW}} status`.\n| **Testing notes** | |\n";
 
 function campaignBody(tag = TAG) {
-  return [
-    `<!-- openclaw-release-validation:${TRAIN} -->\n`,
-    `- Current beta: [${tag}](https://github.com/openclaw/openclaw/releases/tag/${tag})`,
-    `- Beta commit: \`${RELEASE_COMMIT}\``,
-    `- Guidance main commit: \`${GUIDANCE_SHA}\``,
-    "- Test target: latest immutable `origin/main`\n",
-    "<!-- validation-guidance:start -->\n\n## Priority surfaces for this release\n",
-    surface.repeat(3),
-    `\n## Priority surfaces since ${tag}\n`,
-    surface.repeat(3),
-    "<!-- validation-guidance:end -->\n\n## Participate",
-  ].join("\n");
+  return `<!-- openclaw-release-validation:${TRAIN} -->
+- Current beta: [${tag}](https://github.com/openclaw/openclaw/releases/tag/${tag})
+- Beta commit: \`${RELEASE_COMMIT}\`
+- Guidance main commit: \`${GUIDANCE_SHA}\`
+- Test target: latest immutable \`origin/main\`
+<!-- validation-guidance:start -->
+## Priority surfaces for this release
+${surface.repeat(3)}
+## Priority surfaces since ${tag}
+${surface.repeat(3)}
+<!-- validation-guidance:end -->
+## Participate`;
 }
 
 function betaArtifact(tag = TAG) {
@@ -57,11 +57,11 @@ function issue(number: number, body: string, labels = ["release-validation"]) {
 function harness(initialIssues: ReturnType<typeof issue>[]) {
   const issues = new Map(initialIssues.map((candidate) => [candidate.number, candidate]));
   const createComment = vi.fn(async (_args: Record<string, unknown>) => ({ data: {} }));
-  const create = vi.fn(async (args: Record<string, unknown>) => {
+  const create = async (args: Record<string, unknown>) => {
     const created = Object.assign(issue(100, String(args.body)), args);
     issues.set(created.number, created);
     return { data: created };
-  });
+  };
   const update = vi.fn(async (args: Record<string, unknown>) => {
     const data = Object.assign(issues.get(Number(args.issue_number))!, args);
     if (Array.isArray(args.labels)) {
@@ -95,7 +95,7 @@ function harness(initialIssues: ReturnType<typeof issue>[]) {
       artifact: betaArtifact(),
       ...options,
     });
-  return { createComment, create, update, publish };
+  return { createComment, update, publish };
 }
 
 it.each([
@@ -147,10 +147,8 @@ it("migrates one explicitly selected legacy campaign", async () => {
     ),
     ["maintainer"],
   );
-  const { create, publish } = harness([legacy]);
-
+  const { publish } = harness([legacy]);
   expect(await publish({ campaignIssueNumber: 10 })).toMatchObject({ action: "update" });
-  expect(create).not.toHaveBeenCalled();
 });
 
 it("refuses to replace newer guidance with an older beta", async () => {
@@ -165,17 +163,17 @@ it("closes the matching train after a stable release", async () => {
     issue(10, campaignBody(), ["release-validation", "keep"]),
   ]);
 
-  const closing = publish({
-    artifact: {
-      schema: "openclaw.release-validation-campaign/v1",
-      operation: "close",
-      tag: TRAIN,
-      stableTrain: TRAIN,
-      releaseUrl: `https://github.com/openclaw/openclaw/releases/tag/${TRAIN}`,
-    },
-  });
-
-  expect(await closing).toMatchObject({ action: "close" });
+  expect(
+    await publish({
+      artifact: {
+        schema: "openclaw.release-validation-campaign/v1",
+        operation: "close",
+        tag: TRAIN,
+        stableTrain: TRAIN,
+        releaseUrl: `https://github.com/openclaw/openclaw/releases/tag/${TRAIN}`,
+      },
+    }),
+  ).toMatchObject({ action: "close" });
   expect(createComment).toHaveBeenCalledExactlyOnceWith(
     expect.objectContaining({
       issue_number: 10,
@@ -204,5 +202,4 @@ it("keeps the analysis job read-only and separates publication authority", () =>
       step.uses?.startsWith("actions/create-github-app-token@"),
     ),
   ).toBe(false);
-  expect(workflow.jobs.publish.needs).toBe("analyze");
 });

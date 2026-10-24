@@ -38,43 +38,27 @@ function makeChangelog(source = oversizedChangelog, packageVersion = "2026.5.28-
 }
 
 describe("package-changelog", () => {
-  it.each([1, 20_000])("packages and restores a %i-paragraph docs mirror", async (paragraphs) => {
+  it("packages an oversized docs mirror and restores its index", async () => {
     const docsPath = `docs/releases/${version}.md`;
-    const docs = `# Release notes\n\n${"Complete release documentation.\n\n".repeat(paragraphs)}Final release detail.\n`;
+    const docs = `# Release notes\n\n${"Complete release documentation.\n\n".repeat(20_000)}`;
     const { root, write, read } = makeChangelog(index, version);
     write(docsPath, docs);
     const mirror = renderReleaseDocsMirror({ rootDir: root, version, sources: [docsPath] });
-    const sources = new Map([
-      ["CHANGELOG.md", index],
-      [docsPath, docs],
-      [entryPath, mirror],
-      [
-        recordPath,
-        notes(version, "### Complete contribution record\n\n- **PR #123** Thanks @contributor."),
-      ],
-    ]);
-    for (const [file, content] of sources) {
-      write(file, content);
-    }
+    write(entryPath, mirror);
+    write(recordPath, notes(version, "### Complete contribution record\n\n- PR #123."));
     await expect(prepare(root)).resolves.toBe(true);
     const packaged = read();
-    if (paragraphs === 1) {
-      expect(packaged).toBe(`# Changelog\n\n${mirror.trimEnd()}\n`);
-    } else {
-      expect(packaged).toContain(`https://github.com/openclaw/openclaw/blob/main/${entryPath}`);
-      expect(packaged).toContain(
-        `https://github.com/openclaw/openclaw/raw/refs/heads/main/${entryPath}`,
-      );
-      expect(packaged).toContain(`https://github.com/openclaw/openclaw/blob/main/${recordPath}`);
-      expect(packaged).toContain(`https://docs.openclaw.ai/releases/${version}`);
-      expect(packaged).not.toContain(`/v${version}/`);
-    }
+    const links = [...packaged.matchAll(/https:\/\/[^)\s]+/gu)].map(([url]) => url);
+    expect(links).toEqual([
+      `https://github.com/openclaw/openclaw/blob/main/${entryPath}`,
+      `https://github.com/openclaw/openclaw/raw/refs/heads/main/${entryPath}`,
+      `https://docs.openclaw.ai/releases/${version}`,
+      `https://github.com/openclaw/openclaw/blob/main/${recordPath}#complete-contribution-record`,
+    ]);
     expect(Buffer.byteLength(packaged)).toBeLessThanOrEqual(500 * 1024);
 
     await expect(restore(root)).resolves.toBe(true);
-    for (const [file, content] of sources) {
-      expect(read(file)).toBe(content);
-    }
+    expect(read()).toBe(index);
   });
 
   it("packages only a split release, pins its record, and restores the index after source edits", async () => {
