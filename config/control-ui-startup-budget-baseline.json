@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 281272,
-  "reason": "Earlier scoped warm transcript: remote median visible content 509.3 to 304.7 ms over 20 interleaved pairs, composer stable and scripting CPU within A/A noise; measured startup 281272 B gzip, 7 JS and 1 CSS request.",
+  "startupJsGzipBytes": 281359,
+  "reason": "Earlier saved transcript display: final production artifact is 281359 B gzip; measured remote visible content improves 509.3 to 304.7 ms, with unchanged startup requests.",
   "updatedAt": "2026-10-24"
 }

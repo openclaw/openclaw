@@ -133,6 +133,8 @@ duplicate row keys, and recorded zero CLS during live adoption. Whole-page CLS
 remained about 0.112 because earlier virtualizer, sidebar, and details updates
 still move content. Zero whole-page CLS is not established by this change.
 
-Startup is 281,272 B gzip with seven JavaScript requests and one CSS request
-(base: 281,184 B). Chat boot shrank by 201 B; New Session shrank by 3 B. The
-88 B startup increase carries the route-aware prewarm selection.
+The final production artifact, including workspace-icon admission, is 281,359 B
+gzip with seven JavaScript requests and one CSS request (base: 281,184 B).
+Chat boot is 1,274,875 B (+78 B); New Session is 770,837 B (-51 B). The
+175 B startup increase carries the route-aware prewarm selection; startup raw
+bytes are unchanged by the workspace-icon follow-up.
