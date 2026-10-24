@@ -1999,6 +1999,33 @@ before/after memory, and heap-snapshot path. Snapshots force GC and block the
 isolate; exclude this pass from latency and GC acceptance. Both sides include
 the same TypeScript observer overhead, including its parser source.
 
+For SQLite and model-catalog isolate retention, add `--worker-retained-heap`.
+`result.json.workerHeapEvidence` records each warmed worker's post-collection heap,
+thread CPU, GC totals and per-kind pause tails/maxima, event-loop tails, and final
+post-collection heap. Every tail includes its sample count. Missing, retired, or
+late-created target workers make the evidence incomplete. Both worker classes
+must be present. Promotion still comes from isolate-matched `--trace-gc` output;
+GCProfiler does not expose promoted bytes.
+
+`--worker-heap-snapshot` additionally captures the largest final isolate of each
+class, serially, after all measured windows and profiles have ended. Snapshots
+therefore do not affect the completed timing window. Keep these artifacts within
+the synthetic sandbox and check disk/dirty-memory budgets before capture.
+For paired unprofiled memory soaks without mixed RPCs or fingerprint retention, pass fresh, distinct
+`--worker-heap-done-file` and `--worker-heap-peer-done-file` paths to each side,
+reversing the paths on its peer. Each side publishes completion after its worker
+and whole-workload timing windows, then waits for its peer before collecting or
+snapshotting. Never reuse marker files from an earlier pair.
+For source-runtime comparisons in one checkout, `--worker-baseline-dir` selects
+mirrored TypeScript files while retaining their original module URLs; the worker
+replies record which replacements were loaded. Pass this flag on both sides with
+the same relative-file manifest and each side's source revision, so both register
+the same loading hook. Comparing a hooked baseline against an unhooked candidate
+confounds source changes with loader behavior. Use `--entry
+src/entry.ts`, identical fixtures, fixed `--soak-rounds` and `--duration-ms`, and
+the campaign's concurrent swapped CPU pairs and production guard. Source-runtime
+results include its loaders and are not packaged-worker absolute heap estimates.
+
 For a focused cold-process bounded-hydration diagnostic on that same fixture:
 
 ```sh
@@ -3419,13 +3446,14 @@ equally configured comparisons.
 
 For session-projection comparisons from one installed checkout, add
 `--entry src/entry.ts --session-projection-source <directory>` to both arms.
-The directory must contain all eight coherent owner files:
+The directory must contain all nine coherent owner files:
 `session-event-projection.ts`, `session-row-presentation.ts`,
 `session-sharing-read.ts`, `session-utils-list.ts`, `session-row-placement-projection.ts`,
 `session-ancestor-references.ts`,
-`server-connection-state.ts`, and `server-methods/sessions-read.ts`. Put their original
+`server-connection-state.ts`, `server-methods/sessions-read.ts`, and
+`server-methods/sessions-read-by-key.ts`. Put their original
 revision's files in a baseline directory and use `--session-projection-source
-src/gateway` for the candidate. The preload reads all eight before Gateway startup
+src/gateway` for the candidate. The preload reads all nine before Gateway startup
 and fails on a missing file; it substitutes raw TypeScript while retaining canonical
 module URLs, relative imports, and source line numbers. The report records the
 resolved `sessionProjectionSource`. It also loads the canonical broadcaster as
@@ -4041,3 +4069,54 @@ run a third pair when an inconclusive metric would gate. Every latency and loop
 tail includes its sample count. This simulation establishes persistence-path
 blocking behavior; it does not claim production throughput or macOS browser
 cookie-import latency.
+
+## Managed attachment cleanup
+
+`managed-attachment-cleanup-measure.mjs` exercises the actual managed-media
+cleanup owner with 5,000 unrelated 8 KiB transcript messages and two referenced
+managed originals. Prepare each side sequentially in a fresh synthetic directory;
+preparation uses the real media creator and transcript writer and is outside the
+capture. Each measured process warms cleanup once, then performs 30 cleanups
+paced over 30 seconds and verifies both originals remain registered.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/managed-attachment-cleanup-measure.mjs \
+  --state-dir /path/to/new-cleanup-state --output /path/to/prepare.json --prepare
+node --expose-gc --trace-gc-nvp --import ./scripts/tsx.mjs \
+  scripts/perf/managed-attachment-cleanup-measure.mjs \
+  --state-dir /path/to/new-cleanup-state --output /path/to/cleanup.json \
+  --allocations --start-at <shared-future-epoch-ms> --trace-log /path/to/cleanup.log \
+  > /path/to/cleanup.log 2>&1
+```
+
+`--messages`, `--message-bytes`, `--operations`, and `--seconds` select the workload.
+Use identical values, separate state/log/output paths, and the shared quiet-slot
+rules above. A missed `--start-at` rejects the run. Two concurrent pairs swap the
+interleaved CPU sets. The driver never starts or accesses a production Gateway.
+
+For one installed source tree, `--owner-dir /path/to/candidate-owners` replaces
+only these source files, preserved beneath that directory at their repository
+relative paths: `src/gateway/managed-image-attachments.ts`,
+`src/gateway/session-transcript-read.types.ts`,
+`src/gateway/session-transcript-archive-reader.ts`,
+`src/config/sessions/session-accessor.sqlite-history-source.ts`, and
+`src/config/sessions/session-actor-memory-history-projection.ts`.
+`--source-root` selects the installed source tree and defaults to the working
+directory. The generated preload also reaches workers through `NODE_OPTIONS`;
+`overriddenOwners` records the module paths and thread IDs actually replaced.
+An ordinary run uses the tree's unchanged sources. Do not change those sources
+or dependencies during a pair. For paired comparisons, also pass the unchanged
+source root as the baseline's `--owner-dir`, so both sides use the same esbuild
+preload and helper infrastructure.
+
+The report contains main-isolate sampled allocation and raw V8 frame names,
+process/thread CPU, before/after heap and RSS, worker-message counts and known
+payload bytes, per-collection GC percentiles and maximum pauses, total GC per
+cleanup, promotion from bounded main-isolate GC traces, and event-loop delay.
+GC and loop capture end before stopping allocation sampling, excluding its forced
+collection. Every tail carries a sample count; apply the shared v5.3 qualification
+and paired-delta rules. Worker byte counts are partial and retain their
+`unmeasuredMessages` counts; the observer never reserializes replies. Allocation
+sampling excludes worker heaps and external Buffer backing stores. RSS includes
+workers. This isolates the cleanup boundary; it is not a full Gateway throughput
+or retained-memory soak result.

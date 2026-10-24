@@ -42,6 +42,7 @@ describe("VisitorAccessService", () => {
       githubAccountId: 42,
       githubLogin: "Current-Visitor",
       invitedVia: "session:maintainer",
+      onboarding: { state: "pending", updatedAt: NOW },
       createdAt: NOW,
       expiresAt: NOW + 14 * DAY_MS,
     });

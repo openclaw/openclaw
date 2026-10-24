@@ -145,9 +145,8 @@ export async function resumeMainSession(
       },
     );
   }
-  const isCurrent = () => {
-    return source ? matchesRequester(source.readCurrent()) : retained?.isCurrent() === true;
-  };
+  const isCurrent = () =>
+    source ? matchesRequester(source.readCurrent()) : retained?.isCurrent() === true;
   if (!isCurrent()) {
     return "skipped";
   }
@@ -256,6 +255,7 @@ async function resumeMainSessionWithinAdmission(
     expectedRecoveryRunId: recoveryRunId,
     expectedRecoverySourceRunId: sourceRunId,
     expectedSessionId: params.entry.sessionId,
+    pendingFinalDelivery: params.entry.pendingFinalDelivery,
     lifecycleGeneration,
     sessionKeys: Array.from(new Set([dispatchSessionKey, params.sessionKey])),
     shouldContinue: params.shouldContinue,

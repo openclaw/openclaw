@@ -17,15 +17,15 @@ that the first select and its enclosing form are collectible after disposal.
 
 `@solidjs/signals@2.0.0-rc.16`, from the same upstream revision, has an approved
 idle-disposal patch in production, development, and observe builds. Disposing a
-staged computation now schedules the existing pending-queue drain even when no
-observer created a held transaction. This releases the last retired Workboard
-tree from its bundled runtime while preserving the existing transaction and
-stale-reader scheduling conditions. It neither flushes synchronously nor scans
-the queue during disposal.
+computation schedules the existing pending-queue drain when the queue has
+entries, including readers queued by an idle rejection without a staged flag.
+Already-drained nodes do not schedule empty flushes. This preserves the existing
+transaction and stale-reader scheduling conditions without a synchronous flush
+or queue scan during disposal.
 
 Remove this patch and its exact-version guard entry when the dependency probe
-passes with an upstream release. The idle case deliberately never calls
-`flush()` after disposal: doing so would mask the missing scheduled drain.
+passes with an upstream release. The idle case requires collection without
+subsequent reactive work. An explicit `flush()` is a no-op when no work is scheduled.
 
 `chrome-devtools-mcp@1.11.0` has an approved exact-version snapshot-identity patch, backported from [ChromeDevTools/chrome-devtools-mcp#2788](https://github.com/ChromeDevTools/chrome-devtools-mcp/pull/2788) at `06c8d4bc44f68bde8bd3fcd97dcc47375df81fe9` and forward-ported onto tag commit `a878bcad39584337e055778353246820deafa7c0`. Stable IDs include the frame's captured CDP session and document generation; ambiguous IDs stay capture-local, and stale lazy handles cannot resolve into a replacement renderer. Frame-local lookup and retained extra handles preserve actions and labeled screenshots. The 1.11.0 CSS-style lookup resolves the same guarded handle and stays within its captured renderer, failing closed when the embedded DevTools target cannot represent a cross-renderer frame. Version 1.11.0 already exports its bundled `CdpFrame`, so the patch changes only the snapshot owner and its DOM-result caller. Original license notices remain intact, with modifications recorded in `build/src/OPENCLAW_PATCH_NOTICE.md`.
 

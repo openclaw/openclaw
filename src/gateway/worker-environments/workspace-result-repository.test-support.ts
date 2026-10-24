@@ -236,6 +236,7 @@ export function useRepositoryWorkspaceResultFixture() {
       createWithRequest: vi.fn(async () => attachedEnvironment()),
       attachSession: vi.fn(async () => credential()),
       destroy: vi.fn(async () => attachedEnvironment()),
+      reclaim: vi.fn(async () => attachedEnvironment()),
       startTunnel: vi.fn(async () => tunnel),
       stopTunnel: vi.fn(async () => {}),
       reconcileEnvironment: vi.fn(async () => {}),

@@ -165,6 +165,7 @@ it("accepts an interrupted worker's completed edit before a fresh turn reuses it
         placements: recovered,
         environments: {
           ...environments,
+          reclaim: unexpected,
           fenceWorkerTurnForRecovery: unexpected,
           reconcileEnvironment: async () => {},
           reconcileOnce: async () => {},

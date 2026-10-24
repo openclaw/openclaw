@@ -15,7 +15,10 @@ import {
 } from "./main-session-recovery-store.js";
 import type { RestartRecoveryTerminalStatus } from "./main-session-restart-dispatch-start.js";
 import type { ResumeMainSessionParams } from "./main-session-restart-dispatch.types.js";
-import { finishDelegatedRestartRecovery } from "./main-session-restart-recovery-failure.js";
+import {
+  finishDelegatedRestartRecovery,
+  settleTerminalPendingFinalRecovery,
+} from "./main-session-restart-recovery-failure.js";
 
 export async function rollbackRestartRecoveryReservation(
   params: MainSessionRecoveryStoreTarget & {
@@ -90,11 +93,35 @@ async function settleRestartRecoveryDispatch(params: {
   expectedRecoveryRunId: string;
   expectedRecoverySourceRunId?: string;
   expectedSessionId: string;
+  pendingFinalDelivery?: SessionEntry["pendingFinalDelivery"];
+  sessionKey: string;
   sessionKeys: readonly string[];
   shouldContinue?: () => boolean;
   storePath: string;
   terminalStatus?: RestartRecoveryTerminalStatus;
 }): Promise<void> {
+  if (
+    params.terminalStatus &&
+    params.terminalStatus !== "ok" &&
+    (await settleTerminalPendingFinalRecovery({
+      ...params,
+      runId: params.expectedRecoveryRunId,
+      pendingFinalDelivery: params.pendingFinalDelivery,
+      status:
+        params.terminalStatus === "cancelled"
+          ? "killed"
+          : params.terminalStatus === "timeout"
+            ? "timeout"
+            : "failed",
+      assertCurrent: () => {
+        if (params.shouldContinue?.() === false) {
+          throw new Error("Restart recovery settlement is no longer current.");
+        }
+      },
+    }))
+  ) {
+    return;
+  }
   await applySessionEntryReplacements({
     agentId: params.agentId,
     sessionKeys: params.sessionKeys,
@@ -185,7 +212,6 @@ export async function settleAcceptedRestartRecovery(
   params: Parameters<typeof settleRestartRecoveryDispatch>[0] & {
     lifecycleGeneration: string;
     reservation?: MainSessionRecoveryReservation;
-    sessionKey: string;
   },
 ): Promise<boolean> {
   const admission = await commitMainSessionRecovery({

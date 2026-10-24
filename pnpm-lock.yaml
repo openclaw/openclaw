@@ -212,7 +212,7 @@ packageExtensionsChecksum: sha256-+aaViXQWMTYboC/2zljN8mTDYzt1x2ZpXFjRkJd9Eys=
 
 patchedDependencies:
   '@novnc/novnc@1.7.0': bfde0e1bda172da3525f9f5014d85ad28073325b74f09609084598a65d2f412d
-  '@solidjs/signals@2.0.0-rc.16': 0c4602444d885ba8daa74b081a10f2ccc845de3831ad11d5feea046188a2ce59
+  '@solidjs/signals@2.0.0-rc.16': 67b92c6776203e19cea46255c8e11be1c416f548e253246382ab92f6f10f8984
   '@solidjs/web@2.0.0-rc.16': 0612db277d44b0b93cb93e5047ac67609474e5fb13d387936de4e6d57ab6f484
   baileys@7.0.0-rc14: c3c4601486630c689ffd1a0e7a34f4b8cf8e7231e41c312ad33afdf4487d8ded
   chrome-devtools-mcp@1.11.0: c2e391b196607620c519f04eb1563dc4a8f01aebed3b70bd77e6635ae03a5c9a
@@ -3108,7 +3108,7 @@ importers:
         version: 4.6.2
       '@solidjs/signals':
         specifier: 2.0.0-rc.16
-        version: 2.0.0-rc.16(patch_hash=0c4602444d885ba8daa74b081a10f2ccc845de3831ad11d5feea046188a2ce59)
+        version: 2.0.0-rc.16(patch_hash=67b92c6776203e19cea46255c8e11be1c416f548e253246382ab92f6f10f8984)
       '@solidjs/web':
         specifier: 2.0.0-rc.16
         version: 2.0.0-rc.16(patch_hash=0612db277d44b0b93cb93e5047ac67609474e5fb13d387936de4e6d57ab6f484)(solid-js@2.0.0-rc.16)
@@ -14389,7 +14389,7 @@ snapshots:
       '@solidjs/compiler-wasm32-wasi': 2.0.0-rc.16
       '@solidjs/compiler-win32-x64-msvc': 2.0.0-rc.16
 
-  '@solidjs/signals@2.0.0-rc.16(patch_hash=0c4602444d885ba8daa74b081a10f2ccc845de3831ad11d5feea046188a2ce59)': {}
+  '@solidjs/signals@2.0.0-rc.16(patch_hash=67b92c6776203e19cea46255c8e11be1c416f548e253246382ab92f6f10f8984)': {}
 
   '@solidjs/testing-library@1.0.0-beta.3(@solidjs/web@2.0.0-rc.16(patch_hash=0612db277d44b0b93cb93e5047ac67609474e5fb13d387936de4e6d57ab6f484)(solid-js@2.0.0-rc.16))(solid-js@2.0.0-rc.16)':
     dependencies:
@@ -18891,7 +18891,7 @@ snapshots:
 
   solid-js@2.0.0-rc.16:
     dependencies:
-      '@solidjs/signals': 2.0.0-rc.16(patch_hash=0c4602444d885ba8daa74b081a10f2ccc845de3831ad11d5feea046188a2ce59)
+      '@solidjs/signals': 2.0.0-rc.16(patch_hash=67b92c6776203e19cea46255c8e11be1c416f548e253246382ab92f6f10f8984)
       csstype: 3.2.3
       seroval: 1.6.7
       seroval-plugins: 1.6.7(seroval@1.6.7)

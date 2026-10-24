@@ -293,6 +293,8 @@ configuration. Managed clones additionally set `pack.threads=1` and
 total process RSS. The existing hourly cleanup performs bounded pack maintenance
 outside agent commands, as described below.
 
+Internal worktree and publication Git commands also disable automatic maintenance and GC for operator-registered repositories without changing their saved configuration; scheduled maintenance remains owned by `src/agents/worktrees/git-maintenance.ts`.
+
 ## Capacity and disk space
 
 Creation and restoration enforce the [count and eviction policy](#capacity-and-eviction) before allocating files. Disk admission independently measures every affected volume.

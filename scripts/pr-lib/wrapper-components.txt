@@ -997,6 +997,7 @@ src/infra/gateway-supervision.ts
 src/infra/git-commit.ts
 src/infra/git-content-budget.ts
 src/infra/git-exec.ts
+src/infra/git-maintenance-env.ts
 src/infra/git-network-retry.ts
 src/infra/git-operation-timing.ts
 src/infra/git-operation.worker.ts

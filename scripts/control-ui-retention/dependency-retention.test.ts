@@ -106,3 +106,37 @@ it.each(["production", "development", "observe"])(
     expect(result.alive, "payload, root, GC control").toEqual([false, false, false]);
   },
 );
+
+it.each(["production", "development", "observe"])(
+  "%s releases a reader queued by an idle rejection in another root",
+  async (mode) => {
+    const result = await collectProbe(
+      mode,
+      `
+      import { createMemo, createRoot, flush, getOwner } from "solid-js";
+      const source = createRoot(dispose => {
+        let reject;
+        const read = createMemo(() => new Promise((_, fail) => { reject = fail; }), {
+          loadingValue: "ready"
+        });
+        return { read, reject, dispose };
+      });
+      async function retire() {
+        const payload = { pending: true };
+        const dispose = createRoot(dispose => {
+          references = [new WeakRef(payload), new WeakRef(getOwner()), new WeakRef({ control: true })];
+          createMemo(() => { source.read(); return payload; });
+          return dispose;
+        });
+        flush();
+        source.reject(new Error("idle rejection"));
+        await Promise.resolve();
+        dispose();
+        return true;
+      }
+    `,
+    );
+    expect(result.value, "reader disposed after source rejection").toBe(true);
+    expect(result.alive, "payload, reader root, GC control").toEqual([false, false, false]);
+  },
+);
