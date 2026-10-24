@@ -331,7 +331,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["cron.add", "cron", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["cron.update", "cron", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["cron.remove", "cron", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
-  ["cron.bind", "cron", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["cron.run", "cron", "operator.admin", "<=2026.7", CONTROL_PLANE_WRITE],
   ["cron.runs", "cron", "operator.read", "<=2026.7"],
   ["gateway.identity.get", "system", "operator.read", "<=2026.7"],
@@ -742,4 +741,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["chat.pendingInputs.dismiss", "chat", "operator.write", "2026.10", OWN_SESSION_WRITE],
   ["update.recovery.cleanup", "update", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["diagnostics.capabilities", "diagnostics", "operator.read", "2026.10"],
+  ["cron.bind", "cron", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

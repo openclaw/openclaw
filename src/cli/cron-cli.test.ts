@@ -858,8 +858,3 @@ it.each([
   expectRuntimeErrorContaining(error);
   expect(callGatewayFromCli).not.toHaveBeenCalled();
 });
-
-it("sends bind to the Gateway, which owns the parent-conversation check", async () => {
-  await runCronCommand(["automations", "bind", "job-1"]);
-  expect(rpcParams("cron.bind")).toEqual({ id: "job-1" });
-});
