@@ -6,7 +6,9 @@ eight deterministic input-replay fingerprints per assistant message. It never
 sends a model request or reads the operator's Gateway state or credentials.
 
 Build the UI once, keep the bundle immutable, and prepare a task-owned baseline
-checkout with its dependencies installed. Compare Gateway source changes with
+checkout with its dependencies installed. Detach both comparison checkouts at
+their intended commits: a named development branch renders a badge and loads an
+extra font, which would contaminate the comparison. Compare Gateway source changes with
 the same UI bundle:
 
 ```sh

@@ -1047,6 +1047,18 @@ if (values.worker) {
   const otherSource = values["compare-source-dir"]
     ? path.resolve(values["compare-source-dir"])
     : undefined;
+  if (otherSource) {
+    for (const source of new Set([ownSource, otherSource])) {
+      const branch = execFileSync("git", ["-C", source, "rev-parse", "--abbrev-ref", "HEAD"], {
+        encoding: "utf8",
+      }).trim();
+      if (branch !== "HEAD") {
+        throw new Error(
+          "Source comparisons require detached checkouts: dev-branch badges load extra fonts",
+        );
+      }
+    }
+  }
   const reports: unknown[] = [];
   if (otherSource && otherSource !== ownSource) {
     // A task-owned baseline checkout runs identical instrumentation against its source.
