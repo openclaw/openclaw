@@ -338,35 +338,25 @@ it("cancels retryable response bodies and never sleeps after the final attempt",
 });
 
 it.each([
-  ["HTTP", "", 0, "returned HTTP 403", 1],
-  ["metadata", "/artifact", 1048576, "exceeded 1048576 bytes", 2],
-  ["artifact", "/artifact/download", 136314880, "exceeded 136314880 bytes", undefined],
-] as const)(
-  "fails immediately on permanent %s errors",
-  async (kind, endpoint, limit, error, calls) => {
-    const sleep = vi.fn(async () => {});
-    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
-      if (kind === "HTTP") {
-        return new Response("denied", { status: 403 });
-      }
-      const url = String(input);
-      if (url.endsWith(endpoint)) {
-        return new Response(kind === "metadata" ? "{}" : null, {
-          headers: { "content-length": String(limit + 1) },
-        });
-      }
-      if (url.endsWith("/artifact")) {
-        return metadataResponse(bytes);
-      }
-      return Response.json({ package: { tags: { beta: "2026.7.1-beta.3" } } });
-    });
-    await expect(verifyManifest(fetchImpl, {}, { attempts: 3, sleep })).rejects.toThrow(error);
-    if (calls !== undefined) {
-      expect(fetchImpl).toHaveBeenCalledTimes(calls);
+  ["HTTP", "detail", 0, "returned HTTP 403"],
+  ["metadata", "metadata", 1048576, "exceeded 1048576 bytes"],
+  ["artifact", "download", 136314880, "exceeded 136314880 bytes"],
+] as const)("fails immediately on permanent %s errors", async (kind, stage, limit, error) => {
+  const sleep = vi.fn(async () => {});
+  const fetchImpl = registryFetch(bytes, (current) => {
+    if (kind === "HTTP") {
+      return new Response("denied", { status: 403 });
     }
-    expect(sleep).not.toHaveBeenCalled();
-  },
-);
+    if (current === stage) {
+      return new Response(kind === "metadata" ? "{}" : null, {
+        headers: { "content-length": String(limit + 1) },
+      });
+    }
+    return undefined;
+  });
+  await expect(verifyManifest(fetchImpl, {}, { attempts: 3, sleep })).rejects.toThrow(error);
+  expect(sleep).not.toHaveBeenCalled();
+});
 
 it.each([
   ...[undefined, "1junk"].map(

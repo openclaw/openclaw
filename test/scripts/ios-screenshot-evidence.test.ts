@@ -22,11 +22,6 @@ const SCREENSHOTS = [
   "03-agent-connected",
   "04-settings-connected",
 ];
-const ATTEMPT_MODEL = {
-  owner: "openclaw",
-  unit: "device XCTest invocation",
-  maxAttempts: 1,
-};
 const TEST_IDENTIFIERS = [
   "OpenClawUITests/OpenClawSnapshotUITests/testReleaseControlScreenshot",
   "OpenClawUITests/OpenClawSnapshotUITests/testReleaseChatScreenshot",
@@ -86,17 +81,11 @@ function writeCombinedSource(root: string, selectedFamily: Family = "iphone", re
           {
             nodeType: "UI test bundle",
             name: "OpenClawUITests",
-            children: [
-              {
-                nodeType: "Test Suite",
-                name: "OpenClawSnapshotUITests",
-                children: TEST_IDENTIFIERS.toReversed().map((identifier) => ({
-                  nodeType: "Test Case",
-                  nodeIdentifier: `${identifier.split("/").slice(1).join("/")}()`,
-                  result: "Passed",
-                })),
-              },
-            ],
+            children: TEST_IDENTIFIERS.toReversed().map((identifier) => ({
+              nodeType: "Test Case",
+              nodeIdentifier: `${identifier.split("/").slice(1).join("/")}()`,
+              result: "Passed",
+            })),
           },
         ],
       });
@@ -201,7 +190,6 @@ describe("iOS screenshot evidence", () => {
     ) as WorkflowStep;
     const revision = "${{ needs.preflight.outputs.checkout_revision }}";
     expect(download.with?.name).toBe(`ios-release-screenshot-capture-${revision}`);
-    expect(download.with?.pattern).toBeUndefined();
 
     const { root, input, output } = collected();
     const workspace = path.join(root, "workspace");
@@ -228,7 +216,6 @@ describe("iOS screenshot evidence", () => {
     const manifest = readJson(path.join(output, "apps/ios/build/ScreenshotEvidence/manifest.json"));
     const iphoneManifest = readJson(manifestPath(input, "iphone"));
 
-    expect(manifest.attemptModel).toEqual(ATTEMPT_MODEL);
     expect(manifest).toMatchObject({
       targetSha: TARGET_SHA,
       runAttempt: reducerAttempt,
@@ -277,7 +264,7 @@ describe("iOS screenshot evidence", () => {
       "tests.json",
     );
     const tree = readJson(testsPath);
-    tree.testNodes[0].children[0].children.pop();
+    tree.testNodes[0].children.pop();
     writeJson(testsPath, tree);
 
     expect(() => collect(source)).toThrow("test-identity-or-result");

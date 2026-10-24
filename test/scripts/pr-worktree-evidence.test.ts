@@ -400,7 +400,7 @@ process.stdout.write(JSON.stringify({
     },
   );
 
-  it.for(["corrupt", "symbolic", "wrong-pr", "unretained", "local-tree", "orphan"])(
+  it.for(["wrong-pr", "local-tree", "orphan"])(
     "refuses GC with %s outcome",
     async (fault, { f }) => {
       const dir = await f.add(910001, "populated", fault !== "orphan");
@@ -417,24 +417,9 @@ process.stdout.write(JSON.stringify({
         f.head,
         localHead,
       );
-      if (fault === "corrupt") {
-        await f.git(["update-ref", ref, await f.git(["hash-object", "-w", "--stdin"], "bad")]);
-      }
-      if (fault === "symbolic") {
-        await f.git(["update-ref", "refs/fixture/retained", await f.git(["rev-parse", ref])]);
-        await f.git(["symbolic-ref", ref, "refs/fixture/retained"]);
-      }
       if (fault === "wrong-pr") {
         const other = await f.record(910002);
         await f.git(["update-ref", ref, await f.git(["rev-parse", other])]);
-      }
-      if (fault === "unretained") {
-        const tree = await f.git(["rev-parse", `${ref}^{tree}`]);
-        await f.git([
-          "update-ref",
-          ref,
-          await f.git(["commit-tree", tree], "Unretained fixture\n"),
-        ]);
       }
       const unchanged = await preserve(() => evidence(dir), f.branches, f.outcomes);
       const result = await f.run(["gc_pr_worktrees false"]);

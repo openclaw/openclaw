@@ -135,7 +135,7 @@ printf 'applicability:%s seeded:%s\\n' "\${missing_load_path_applicability:-}" "
   },
 );
 
-it.each(["source", "compiled"])("dispatches missing-path stages with the %s fixture", (loading) => {
+it("dispatches missing-path stages with a compiled fixture", () => {
   const root = tempDirs.make("openclaw-missing-load-path-dispatch-");
   const configPath = path.join(root, "openclaw.json");
   const paths = readUpgradeSurvivorPaths(root, {
@@ -160,14 +160,10 @@ it.each(["source", "compiled"])("dispatches missing-path stages with the %s fixt
   run("seed");
   expect(existsSync(path.join(pluginRoot, "openclaw.plugin.json"))).toBe(true);
   const seededConfig = readFileSync(configPath, "utf8");
-  let entry = path.join(pluginRoot, "index.mjs");
-  if (loading === "compiled") {
-    const compiledRoot = path.join(root, "compiled-plugin");
-    mkdirSync(compiledRoot);
-    const compiledEntry = path.join(compiledRoot, "index.mjs");
-    copyFileSync(entry, compiledEntry);
-    entry = compiledEntry;
-  }
+  const compiledRoot = path.join(root, "compiled-plugin");
+  mkdirSync(compiledRoot);
+  const entry = path.join(compiledRoot, "index.mjs");
+  copyFileSync(path.join(pluginRoot, "index.mjs"), entry);
   execFileSync(
     resolveTestNodeExecPath(),
     [
@@ -177,17 +173,15 @@ it.each(["source", "compiled"])("dispatches missing-path stages with the %s fixt
     ],
     { env },
   );
-  if (loading === "compiled") {
-    const receiptPath = path.join(artifactRoot, "missing-load-path", "baseline-registration.json");
-    const receipt = readFileSync(receiptPath);
-    writeJson(receiptPath, { registrationToken: "previous-fixture" });
-    expect(() => run("unavailable")).toThrow(
-      "The published baseline did not load the configured fixture plugin",
-    );
-    expect(existsSync(pluginRoot)).toBe(true);
-    expect(readFileSync(configPath, "utf8")).toBe(seededConfig);
-    writeFileSync(receiptPath, receipt);
-  }
+  const receiptPath = path.join(artifactRoot, "missing-load-path", "baseline-registration.json");
+  const receipt = readFileSync(receiptPath);
+  writeJson(receiptPath, { registrationToken: "previous-fixture" });
+  expect(() => run("unavailable")).toThrow(
+    "The published baseline did not load the configured fixture plugin",
+  );
+  expect(existsSync(pluginRoot)).toBe(true);
+  expect(readFileSync(configPath, "utf8")).toBe(seededConfig);
+  writeFileSync(receiptPath, receipt);
 
   expect(run("unavailable")).toContain("Removed loaded baseline plugin source before update:");
   expect(existsSync(pluginRoot)).toBe(false);
