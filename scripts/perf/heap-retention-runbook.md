@@ -105,6 +105,25 @@ to appear. Never construct that allowlist from unreviewed snapshot strings.
 Do not substitute the ordinary two-file diff: its object labels and retaining paths are sensitive.
 Review the generated schema and output before exporting aggregates.
 
+`duplicateStringRetainers` ranks excess shallow bytes by a representative direct
+retainer constructor/property and its nearest context or named-constructor
+dominator. It keeps the first largest copy of each complete string and charges
+every other physical node once. Multiple incoming references do not multiply
+the bytes; `multipleIncomingCopies` flags that ambiguity. This is an attribution
+clue, not proof that changing that producer can reclaim the entire row. Shared
+values may remain live elsewhere. `attributedBytes` includes groups outside the
+top-N output; `unattributedBytes` accounts for nodes with no reachable strong
+incoming edge. Both sum to the duplicate estimate.
+
+The report includes safe paths for each displayed group's owner and an example
+retainer. Follow reviewed code identifiers back to source before assigning a
+module. Use `--node ID` to inspect a snapshot-local owner's immediate children;
+`inspectedNodes` prints only allowlisted labels, retained bytes and outgoing
+element-reference counts. The latter can count a sample array's populated
+entries, but is neither array length nor Map size. No payload strings are printed.
+JavaScript string equality compares values, so it cannot prove physical sharing;
+validate string-sharing changes with synthetic heap-node/byte counts instead.
+
 On a shared Linux host, run the analyzer in a dedicated systemd scope with an
 explicit memory bound, no swap, and low CPU/I/O priority. Choose approved CPUs
 for that host. For example:
