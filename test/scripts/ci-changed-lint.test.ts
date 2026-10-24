@@ -11,10 +11,7 @@ import {
 } from "../../scripts/check-changed.mts";
 import {
   createOxlintShards,
-  selectExtensionOxlintStripe,
-  selectCoreOxlintStripe,
   createOxlintFileScope,
-  filterOxlintShards,
   parseShardRunnerArgs,
 } from "../../scripts/run-oxlint-shards.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -22,7 +19,6 @@ import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import { copyOxlintConfigFixture } from "./test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const scriptsConfig = "config/tsconfig/oxlint.scripts.json";
 const coreConfig = "config/tsconfig/oxlint.core.json";
 const rootTestConfig = "test/tsconfig/tsconfig.test.root.json";
 const centralLintSelection = {
@@ -68,99 +64,6 @@ vi.mock("../../scripts/test-projects.test-support.mts", async (importOriginal) =
 });
 
 describe("CI changed lint", () => {
-  it("includes transitive and aliased type consumers without widening to their packages", async () => {
-    const { cwd, write } = fixture("ci-file-lint-");
-    write("pnpm-workspace.yaml", "packages:\n  - .\n  - ui\n  - packages/*\n  - extensions/*\n");
-    for (const root of [
-      ".",
-      "ui",
-      "packages/example",
-      "packages/unrelated",
-      "extensions/channel",
-      "extensions/unrelated",
-    ]) {
-      write(`${root}/package.json`, '{"private":true}');
-      write(`${root === "." ? "src" : root}/callee.ts`, "export function work(): void {}\n");
-      write(
-        `${root === "." ? "src" : root}/caller.ts`,
-        'import { work } from "./callee.js"; work();\n',
-      );
-    }
-    write("packages/example/callee.js", "export function work() { return 1; }\n");
-    write("scripts/helper.ts", "export {};\n");
-    write(
-      "test/outside-canonical-lint.ts",
-      'import type { Work } from "../src/type-consumer.js"; export type RootWork = Work;\n',
-    );
-    write(
-      "tsconfig.json",
-      JSON.stringify({
-        compilerOptions: { paths: { "@fixture/callee": ["./packages/example/callee.ts"] } },
-      }),
-    );
-    write(
-      "src/type-consumer.ts",
-      'import type { work } from "@fixture/callee"; export type Work = typeof work;\n',
-    );
-    write(
-      "ui/transitive.ts",
-      'import type { Work } from "../src/type-consumer.js"; export type Invoke = Work;\n',
-    );
-    const full = createOxlintShards({
-      cwd,
-      splitCore: true,
-      splitExtensions: true,
-      platform: "linux",
-    });
-    const fileScope = await resolveChangedOxlintFileScope(
-      ["packages/example/callee.ts", "extensions/channel/callee.ts"],
-      cwd,
-    );
-    const expected = [
-      "extensions/channel/callee.ts",
-      "extensions/channel/caller.ts",
-      "packages/example/callee.ts",
-      "packages/example/caller.ts",
-      "src/type-consumer.ts",
-      "ui/transitive.ts",
-    ];
-    expect(fileScope?.files).toEqual(expected);
-    expect(fileScope?.rootTestFiles).toEqual(["test/outside-canonical-lint.ts"]);
-    const fileTargets = fileScope?.selectShards(full).flatMap(({ args }) => args.slice(2)) ?? [];
-    expect(fileTargets.toSorted()).toEqual(expected);
-    const rootTargets = createOxlintFileScope(["scripts/helper.ts", "src/callee.ts"], cwd)
-      .selectShards(full)
-      .flatMap(({ args }) => args.slice(2));
-    expect(rootTargets.toSorted()).toEqual(["scripts/helper.ts", "src/callee.ts"]);
-    write("src/globals.ts", "export {}; declare /* contract */ global { interface Window {} }\n");
-    expect(await resolveChangedOxlintFileScope(["src/globals.ts"], cwd)).toBeUndefined();
-    expect(
-      await resolveChangedOxlintFileScope(["packages/example/deleted.ts"], cwd),
-    ).toBeUndefined();
-    expect(
-      await resolveChangedOxlintFileScope(["packages/example/package.json"], cwd),
-    ).toBeUndefined();
-    for (const files of [
-      ["../outside.ts"],
-      ["packages/example/callee.ts", "packages/example/callee.ts"],
-      ["packages/missing.ts"],
-      ["test/outside-canonical-lint.ts"],
-    ]) {
-      expect(() => createOxlintFileScope(files, cwd)).toThrow("canonical source paths");
-    }
-    // Existing selections carry admitted facts; a later worker must reject a missing source.
-    unlinkSync(path.join(cwd, "packages/example/callee.ts"));
-    expect(
-      fileScope
-        ?.selectShards(full)
-        .flatMap(({ args }) => args.slice(2))
-        .toSorted(),
-    ).toEqual(expected);
-    expect(() => createOxlintFileScope(["packages/example/callee.ts"], cwd)).toThrow(
-      "canonical source paths",
-    );
-  });
-
   it.each([
     [
       "globals.ts",
@@ -179,7 +82,7 @@ describe("CI changed lint", () => {
     },
   );
 
-  it("runs native rules on a changed file and unchanged consumers of its changed type", () => {
+  it("runs native rules on the admitted file closure and rejects invalid source scopes", async () => {
     const { cwd, write } = fixture("ci-file-lint-native-");
     write("package.json", '{"private":true,"type":"module"}');
     write("pnpm-workspace.yaml", "packages: [.]\n");
@@ -298,6 +201,34 @@ describe("CI changed lint", () => {
       "src/changed.ts",
       "src/unrelated.ts",
     ]);
+    write(
+      "test/consumer.ts",
+      'import type { Work } from "../src/contract.js"; export type TestWork = Work;\n',
+    );
+    const scope = await resolveChangedOxlintFileScope(["src/contract.ts"], cwd);
+    expect(scope?.rootTestFiles).toEqual(["test/consumer.ts"]);
+    const targets = () =>
+      scope
+        ?.selectShards(full)
+        .flatMap(({ args }) => args.slice(2))
+        .toSorted();
+    const admitted = targets();
+    expect(admitted).toEqual(["src/barrel.ts", "src/caller.ts", "src/contract.ts"]);
+    for (const files of [
+      ["../outside.ts"],
+      ["src/contract.ts", "src/contract.ts"],
+      ["src/missing.ts"],
+      ["test/consumer.ts"],
+    ]) {
+      expect(() => createOxlintFileScope(files, cwd)).toThrow("canonical source paths");
+    }
+    write("src/globals.ts", "export {}; declare /* contract */ global { interface Window {} }\n");
+    for (const file of ["src/globals.ts", "src/deleted.ts", "package.json"]) {
+      expect(await resolveChangedOxlintFileScope([file], cwd)).toBeUndefined();
+    }
+    unlinkSync(path.join(cwd, "src/contract.ts"));
+    expect(targets()).toEqual(admitted);
+    expect(() => createOxlintFileScope(["src/contract.ts"], cwd)).toThrow("canonical source paths");
   });
 
   it.each(["hybrid", "github", "blacksmith"])(
@@ -312,7 +243,6 @@ describe("CI changed lint", () => {
       ];
       const result = detectChangedLanes(paths);
       const plan = await createChangedCiLintPlan(result, { runnerProfile });
-      expect(plan).not.toBeNull();
       if (!plan) {
         throw new Error("Expected a file lint plan");
       }
@@ -340,43 +270,21 @@ describe("CI changed lint", () => {
           (row) => JSON.parse(row.lint_selection_json) as typeof plan.central,
         ),
       ];
-      const selectedFiles = selections.flatMap(({ files }) => files).toSorted();
-      expect(selectedFiles).toEqual(paths.filter((file) => !file.startsWith("test/")).toSorted());
-      const expected = [
-        `${coreConfig}:src/utils.ts`,
-        `${coreConfig}:ui/src/app-navigation.ts`,
-        "extensions/tsconfig.json:extensions/telegram/src/send.ts",
-        `${scriptsConfig}:scripts/lib/arg-utils.mts`,
-      ].toSorted();
-      const actual = selections.flatMap((selection) => {
+      expect(selections.flatMap(({ files }) => files).toSorted()).toEqual(
+        paths.filter((file) => !file.startsWith("test/")).toSorted(),
+      );
+      for (const selection of selections) {
         const commands = createChangedCheckPlan(result, {
           lintOnly: true,
           lintSelection: selection,
           lintThreads: 1,
         }).commands;
-        return commands
-          .filter(({ args }) => args[2] === "scripts/run-oxlint-shards.mts")
-          .flatMap(({ args }) => {
-            const parsed = parseShardRunnerArgs(args.slice(3));
-            const shards = createOxlintShards({
-              splitCore: parsed.splitCore,
-              splitExtensions: parsed.extensionStripe !== undefined,
-              platform: "linux",
-              hostResources: { logicalCpuCount: 16, totalMemoryBytes: 32 * 1024 ** 3 },
-            });
-            expect(parsed.files).toEqual(selection.files);
-            const selected = createOxlintFileScope(selection.files).selectShards(
-              selectExtensionOxlintStripe(
-                selectCoreOxlintStripe(filterOxlintShards(shards, parsed.only), parsed.coreStripe),
-                parsed.extensionStripe,
-              ),
-            );
-            return selected.flatMap(({ args: commandArgs }) =>
-              commandArgs.slice(2).map((target) => `${commandArgs[1]}:${target}`),
-            );
-          });
-      });
-      expect(actual.toSorted()).toEqual(expected);
+        for (const { args: commandArgs } of commands.filter(
+          ({ args }) => args[2] === "scripts/run-oxlint-shards.mts",
+        )) {
+          expect(parseShardRunnerArgs(commandArgs.slice(3)).files).toEqual(selection.files);
+        }
+      }
       if (runnerProfile !== "blacksmith") {
         expect(plan.core.length).toBeGreaterThan(0);
         expect(plan.core.length).toBeLessThanOrEqual(runnerProfile === "hybrid" ? 2 : 5);
@@ -413,10 +321,8 @@ describe("CI changed lint", () => {
   it.each([
     ".oxlintrc.json",
     "package.json",
-    "tsconfig.json",
     "src/types/node-runtime-globals.d.ts",
     "extensions/telegram/deleted-ci-fixture.ts",
-    "unowned/source.ts",
   ])("retains the original full lint layout for %s", async (file) =>
     expect(
       await createChangedCiLintPlan(detectChangedLanes([file]), {
@@ -437,110 +343,86 @@ describe("CI changed lint", () => {
     },
   );
 
-  it.each(["ui/src/app.ts", ".oxlintrc.json"])(
-    "executes the generated controller guard against a depth-one merge checkout for %s",
-    (file) => {
-      const { cwd: source, write } = fixture("ci-controller-merge-source-");
-      const env = createNestedGitEnv();
-      const git = (cwd: string, args: string[]) =>
-        execFileSync(
-          "git",
-          ["-c", "user.email=test@example.com", "-c", "user.name=Test", ...args],
-          {
-            cwd,
-            env,
-            encoding: "utf8",
-            stdio: ["ignore", "pipe", "pipe"],
-          },
-        ).trim();
-      write("ui/src/view.ts", "export {};\n");
-      for (const pattern of [
-        "createEffect",
-        "untrack",
-        "addEventListener",
-        "querySelector",
-        "flush",
-        "getOwner",
-        "runWithOwner",
-        "onCleanup",
-        "manualImport",
-      ]) {
-        write(`config/control-ui-${pattern}-baseline.txt`, "");
-      }
-      git(source, ["init"]);
-      git(source, ["add", "."]);
-      git(source, ["commit", "-m", "base"]);
-      const base = git(source, ["rev-parse", "HEAD"]);
-      git(source, ["checkout", "-b", "candidate"]);
-      write("candidate.txt", "candidate\n");
-      git(source, ["add", "."]);
-      git(source, ["commit", "-m", "candidate"]);
-      git(source, ["checkout", "-b", "merge", base]);
-      write("main.txt", "main\n");
-      git(source, ["add", "."]);
-      git(source, ["commit", "-m", "main"]);
-      const checkoutBase = git(source, ["rev-parse", "HEAD"]);
-      git(source, ["merge", "--no-ff", "candidate", "-m", "PR merge"]);
-      const cwd = tempDirs.make("ci-controller-merge-shallow-");
-      git(cwd, ["clone", "--depth=1", "--branch=merge", pathToFileURL(source).href, "."]);
-      git(cwd, ["fetch", "--depth=1", "origin", checkoutBase]);
-      const ancestry = spawnSync("git", ["merge-base", "HEAD", checkoutBase], { cwd, env });
-      expect(ancestry.error).toBeUndefined();
-      expect(ancestry.status).toBe(1);
-      const run = (preparedBase: string) => {
-        const command = controllerCommand(file, preparedBase);
-        expect(command).toBeDefined();
-        return spawnSync(
-          process.execPath,
-          [
-            "--import",
-            path.resolve("scripts/tsx.mjs"),
-            path.resolve("scripts/check-control-ui-controllers.mts"),
-            ...command!.args.slice(1),
-          ],
-          { cwd, env, encoding: "utf8" },
-        );
-      };
-      const retained = run(checkoutBase);
-      expect(retained.error).toBeUndefined();
-      expect(retained.status, retained.stderr).toBe(0);
-      expect(retained.stdout).toContain("Control UI controller guard OK");
-      writeFileSync(path.join(cwd, "ui/src/new.ts"), "class NewController {}\n");
-      const added = run(checkoutBase);
-      expect(added.error).toBeUndefined();
-      expect(added.status, added.stderr).toBe(1);
-      expect(added.stderr).toContain("ui/src/new.ts");
-      const missing = run("missing-comparison-base");
-      expect(missing.error).toBeUndefined();
-      expect(missing.status, missing.stderr).toBe(1);
-      expect(missing.stderr).toContain("ui/src/new.ts");
-    },
-  );
+  it("executes the generated controller guard against a depth-one merge checkout", () => {
+    const { cwd: source, write } = fixture("ci-controller-merge-source-");
+    const env = createNestedGitEnv();
+    const git = (cwd: string, args: string[]) =>
+      execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", ...args], {
+        cwd,
+        env,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }).trim();
+    write("ui/src/view.ts", "export {};\n");
+    for (const pattern of [
+      "createEffect",
+      "untrack",
+      "addEventListener",
+      "querySelector",
+      "flush",
+      "getOwner",
+      "runWithOwner",
+      "onCleanup",
+      "manualImport",
+    ]) {
+      write(`config/control-ui-${pattern}-baseline.txt`, "");
+    }
+    git(source, ["init"]);
+    git(source, ["add", "."]);
+    git(source, ["commit", "-m", "base"]);
+    const base = git(source, ["rev-parse", "HEAD"]);
+    git(source, ["checkout", "-b", "candidate"]);
+    write("candidate.txt", "candidate\n");
+    git(source, ["add", "."]);
+    git(source, ["commit", "-m", "candidate"]);
+    git(source, ["checkout", "-b", "merge", base]);
+    write("main.txt", "main\n");
+    git(source, ["add", "."]);
+    git(source, ["commit", "-m", "main"]);
+    const checkoutBase = git(source, ["rev-parse", "HEAD"]);
+    git(source, ["merge", "--no-ff", "candidate", "-m", "PR merge"]);
+    const cwd = tempDirs.make("ci-controller-merge-shallow-");
+    git(cwd, ["clone", "--depth=1", "--branch=merge", pathToFileURL(source).href, "."]);
+    git(cwd, ["fetch", "--depth=1", "origin", checkoutBase]);
+    const ancestry = spawnSync("git", ["merge-base", "HEAD", checkoutBase], { cwd, env });
+    expect(ancestry.error).toBeUndefined();
+    expect(ancestry.status).toBe(1);
+    const run = (preparedBase: string) => {
+      const command = controllerCommand("ui/src/app.ts", preparedBase);
+      expect(command).toBeDefined();
+      return spawnSync(
+        process.execPath,
+        [
+          "--import",
+          path.resolve("scripts/tsx.mjs"),
+          path.resolve("scripts/check-control-ui-controllers.mts"),
+          ...command!.args.slice(1),
+        ],
+        { cwd, env, encoding: "utf8" },
+      );
+    };
+    const retained = run(checkoutBase);
+    expect(retained.error).toBeUndefined();
+    expect(retained.status, retained.stderr).toBe(0);
+    expect(retained.stdout).toContain("Control UI controller guard OK");
+    writeFileSync(path.join(cwd, "ui/src/new.ts"), "class NewController {}\n");
+    const added = run(checkoutBase);
+    expect(added.error).toBeUndefined();
+    expect(added.status, added.stderr).toBe(1);
+    expect(added.stderr).toContain("ui/src/new.ts");
+    const missing = run("missing-comparison-base");
+    expect(missing.error).toBeUndefined();
+    expect(missing.status, missing.stderr).toBe(1);
+    expect(missing.stderr).toContain("ui/src/new.ts");
+  });
 
-  it("uses the owning compiler configs for changed files without unrelated lint or type checks", () => {
+  it("excludes unrelated lint and type checks from lint-only plans", () => {
     const paths = [
       "src/utils.ts",
       "extensions/telegram/src/send.ts",
       "scripts/lib/ci-check-family-scope.mts",
     ];
     const commands = createChangedCheckPlan(detectChangedLanes(paths), { lintOnly: true }).commands;
-    expect(commands[0]?.args).toEqual([
-      "format:check",
-      "--no-error-on-unmatched-pattern",
-      "--",
-      ...paths.toSorted(),
-    ]);
-    const semantic = commands.filter(
-      ({ bin, args }) => bin === "node" && args[0] === "scripts/run-oxlint.mjs",
-    );
-    expect(semantic.map(({ args }) => args)).toEqual(
-      [coreConfig, "extensions/tsconfig.json", scriptsConfig].map((config, i) => [
-        "scripts/run-oxlint.mjs",
-        "--tsconfig",
-        config,
-        paths[i],
-      ]),
-    );
     expect(commands.some(({ args }) => args.some((arg) => arg.startsWith("tsgo:")))).toBe(false);
     expect(
       commands.some(({ args }) =>

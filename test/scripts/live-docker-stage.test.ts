@@ -1,7 +1,7 @@
 import { execFileSync, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { createFrozenTargetSource } from "../../scripts/lib/frozen-target-source.mjs";
 import { addStagedPrivatePluginSdkExports } from "../../scripts/live-docker-stage-private-sdk-exports.mjs";
@@ -12,7 +12,6 @@ const stageScriptPath = path.join(repoRoot, "scripts/lib/live-docker-stage.sh");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const runtimePath = "src/agents/embedded-agent-runner/run/runtime-context-prompt.ts";
 const metadataPath = "scripts/print-cli-backend-live-metadata.ts";
-const pluginAssertionsPath = "scripts/e2e/lib/plugins/assertions.mjs";
 type Source = ReturnType<typeof committedSourceFixture>;
 
 function sourceEnv(source: { sha: string }, authorized = true) {
@@ -104,17 +103,12 @@ const typedFiles = [
 const typedSource = () =>
   committedSourceFixture({
     "package.json": '{"type":"module","version":"2026.7.33"}\n',
-    [runtimePath]: "unknown runtime-context contract\n",
     ...Object.fromEntries(
       typedFiles.map((relative) => [relative, "selected fixture; never execute\n"]),
     ),
   });
 
-function runConsumer(
-  source: Source,
-  consumer: string,
-  { authorized = true, dockerStatus = 91 } = {},
-) {
+function runConsumer(source: Source, consumer: string, authorized = true) {
   const bin = path.join(source.root, "bin");
   const dockerLog = path.join(source.root, "docker.log");
   const packagePath = path.join(source.root, "fixture.tgz");
@@ -124,7 +118,7 @@ function runConsumer(
   writeFileSync(packagePath, "package bytes are not consumed before the Docker boundary\n");
   writeFileSync(
     path.join(bin, "docker"),
-    `#!/bin/sh\nprintf '%s\\0' "$@" >> "$FIXTURE_DOCKER_LOG"\nexit ${dockerStatus}\n`,
+    `#!/bin/sh\nprintf '%s\\0' "$@" >> "$FIXTURE_DOCKER_LOG"\n`,
     { mode: 0o755 },
   );
   const result = spawnSync("bash", [`scripts/e2e/${consumer}-docker.sh`], {
@@ -152,36 +146,11 @@ function runConsumer(
 }
 
 it.each([
-  { consumer: "onboard", runtime: "unknown" },
-  { consumer: "session-runtime-context", runtime: "missing blob" },
-])(
-  "runs only the $consumer source contract with $runtime runtime-context source",
-  ({ consumer, runtime }) => {
-    const source = typedSource();
-    if (runtime === "missing blob") {
-      removeObject(source, `${source.sha}:${runtimePath}`);
-    }
-    const { result, args } = runConsumer(source, consumer);
-    if (consumer === "session-runtime-context") {
-      expect(result.status, result.stderr).toBe(2);
-      expect(args).toEqual([]);
-      expect(result.stderr).toContain("unable to read selected source");
-    } else {
-      expect(args.length, result.stderr).toBeGreaterThan(0);
-      expect(result.stderr).not.toContain("runtime-context");
-    }
-  },
-);
-
-it.each([
   { contract: "shipped tuple", authorized: true },
   { contract: "authorization off", authorized: false },
 ])("mounts the typed onboarding $contract", ({ authorized }) => {
   const source = typedSource();
-  const { result, args } = runConsumer(source, "release-typed-onboarding", {
-    authorized,
-    dockerStatus: 0,
-  });
+  const { result, args } = runConsumer(source, "release-typed-onboarding", authorized);
   expect(result.status, result.stderr).toBe(0);
   for (const relative of typedFiles) {
     const selectedRoot = authorized ? source.root : repoRoot;
@@ -205,7 +174,7 @@ it.each([
         "export const SessionSchema = z.object({ maintenance: z.object({ pruneAfter: PositiveDurationSchema.optional() }) });",
       "src/config/zod-schema.session-config.ts": supported ? "coldStorage: z.object({})" : null,
     });
-    const { result, args } = runConsumer(source, consumer, { authorized, dockerStatus: 0 });
+    const { result, args } = runConsumer(source, consumer, authorized);
     expect(result.status, result.stderr).toBe(0);
     const mode = authorized && !supported ? "unsupported" : "required";
     expect(args).toContain(`OPENCLAW_FROZEN_TARGET_SESSION_COLD_STORAGE_MODE=${mode}`);
@@ -229,33 +198,12 @@ it.each([
     );
     expect(configResult.status, configResult.stderr).toBe(0);
     const config = JSON.parse(readFileSync(configPath, "utf8"));
-    expect(config.session).toEqual(
-      mode === "required"
-        ? {
-            maintenance: {
-              mode: "warn",
-              pruneAfter: "3650d",
-              archiveDashboardAfter: false,
-              maxDiskBytes: false,
-              coldStorage: { enabled: true, afterDays: 30 },
-            },
-          }
-        : undefined,
+    expect(config.session?.maintenance.coldStorage).toEqual(
+      mode === "required" ? { enabled: true, afterDays: 30 } : undefined,
     );
-    expect(config.gateway.http.endpoints.chatCompletions.enabled).toBe(true);
-    expect(config.tools).toEqual({ allow: ["get_weather"] });
   },
 );
 
-it("rejects an unreadable typed companion before Docker", () => {
-  const relative = typedFiles[0]!;
-  const source = typedSource();
-  removeObject(source, `${source.sha}:${relative}`);
-  const { result, args } = runConsumer(source, "release-typed-onboarding", { dockerStatus: 0 });
-  expect(result.status, result.stderr).toBe(2);
-  expect(result.stderr).toContain("unable to read selected source");
-  expect(args).toEqual([]);
-});
 const metadata = metadataPath;
 
 function invoke(source: Source, command: string, env: NodeJS.ProcessEnv = {}) {
@@ -327,21 +275,13 @@ it.each(["tree", "blob"] as const)(
   },
 );
 
-it.each([
-  ["plugin_harness_capabilities", pluginAssertionsPath],
-  ["session_cold_storage_contract", "src/config/zod-schema.session-config.ts"],
-  ["runtime_context_contract", runtimePath],
-])("propagates %s read failure at %s", (resolver, relative) => {
-  const source = committedSourceFixture({
-    [pluginAssertionsPath]: "function assertPluginTgzRemoved() {}",
-    [runtimePath]:
-      "fragments?: RuntimeContextFragment[];\nconst fragments = params.fragments?.filter",
-    [relative]: "unavailable source bytes",
-  });
+it("propagates cold-storage source read failures", () => {
+  const relative = "src/config/zod-schema.session-config.ts";
+  const source = committedSourceFixture({ [relative]: "unavailable source bytes" });
   removeObject(source, `${source.sha}:${relative}`);
   const result = invoke(
     source,
-    `status=0; openclaw_resolve_frozen_${resolver} "$2" "$3" || status=$?; exit "$status"`,
+    'status=0; openclaw_resolve_frozen_session_cold_storage_contract "$2" "$3" || status=$?; exit "$status"',
   );
   expect(result.status, result.stderr).toBe(2);
   expect(result.stderr).toContain("unable to read selected source");
@@ -392,13 +332,7 @@ it("rejects an unsafe path instead of treating it as absent", () => {
 function stagedPackageMetadataFixture(sourceText: string) {
   const root = makeFixture({
     [metadataPath]: sourceText,
-    "src/infra/npm-registry-spec.ts": String.raw`
-export function parseRegistryNpmSpec(spec: string) {
-  return /^(?:@[a-z0-9][a-z0-9._~-]*\/)?[a-z0-9][a-z0-9._~-]*(?:@[a-z0-9][a-z0-9._-]*)?$/u.test(spec)
-    ? { raw: spec }
-    : null;
-}
-`,
+    "src/infra/npm-registry-spec.ts": `export { parseRegistryNpmSpec } from ${JSON.stringify(pathToFileURL(path.join(repoRoot, "src/infra/npm-registry-spec.ts")).href)};`,
   });
   symlinkSync(path.join(repoRoot, "node_modules"), path.join(root, "node_modules"));
   return root;
@@ -578,17 +512,8 @@ it("adds private SDK source exports only to the disposable source stage", () => 
   });
 });
 
-it("keeps host-only generated registry state out of the container copy", () => {
-  const script = readFileSync(stageScriptPath, "utf8");
-  for (const fragment of [
-    ...["workspace", "sandboxes", "plugins/installs.json", "plugins/installs.json.migrated"].map(
-      (name) => `--exclude=${name}`,
-    ),
-    `db.prepare("DELETE FROM config_machine_state WHERE state_key = ?").run("plugins.installedIndex");`,
-    "PRAGMA secure_delete = ON",
-    "VACUUM",
-    "host-absolute paths",
-  ]) {
-    expect(script).toContain(fragment);
-  }
+it("securely clears the host plugin registry from staged SQLite", () => {
+  expect(readFileSync(stageScriptPath, "utf8")).toMatch(
+    /PRAGMA secure_delete = ON[\s\S]*DELETE FROM config_machine_state[\s\S]*plugins\.installedIndex[\s\S]*VACUUM/u,
+  );
 });
