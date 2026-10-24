@@ -113,14 +113,16 @@ export function clonePromptHookEvent<T extends { messages: unknown[] }>(
 ): T {
   try {
     const shared: Array<{ index: number; key: string; value: object }> = [];
-    const messages = projectModelContextMessages(event.messages).map((message, index) => {
+    const messages = projectModelContextMessages(event.messages);
+    for (let index = 0; index < messages.length; index++) {
+      const message = messages[index];
       if (!message || typeof message !== "object") {
-        return message;
+        continue;
       }
       const prototype = Object.getPrototypeOf(message);
       // Preserve native cloning for non-record values, including Error.cause.
       if (prototype !== Object.prototype && prototype !== null) {
-        return message;
+        continue;
       }
       const envelope: Record<string, unknown> = { ...message };
       for (const key of Object.keys(envelope)) {
@@ -130,8 +132,8 @@ export function clonePromptHookEvent<T extends { messages: unknown[] }>(
           envelope[key] = undefined;
         }
       }
-      return envelope;
-    });
+      messages[index] = envelope;
+    }
     // Clone the remaining graph with the existing native-value and shared-memory checks.
     const snapshot = cloneHookIsolationValue(hookName, { ...event, messages });
     for (const { index, key, value } of shared) {
