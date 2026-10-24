@@ -3836,6 +3836,37 @@ exercises the session-event handoff and delivery-generation owners; ordinary
 `chat.send` does not. Report these workloads separately: the internal event uses
 session authority while ordinary chat carries the operator run authority.
 
+Add `--cron-operator-turn --sessions 1 --reset-every-rounds 0` to measure a
+scheduled continuation of the authenticated operator. Before warmup, the real
+automations tool creates a disabled same-conversation job from an ordinary root
+conversation. Each round force-runs that job through `cron.run`, joins its actual
+agent-start event, and requires a successful receipt for the original session.
+The loopback model invokes the existing read/exec tool workload and emits its
+final response. Every measured round must restore the captured operator source;
+the count pass additionally requires cron source and availability checks. This
+does not exercise an external messaging provider. Session-event wake and direct
+chat attachment/hold options cannot be combined with cron turns.
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts \
+  --state-dir /path/to/new-cron-authority-state --sessions 4 --runs 0 --approvals 0 \
+  --cron 0 --projects 1 --transcript-mib 0 --port 45674
+node --import ./scripts/tsx.mjs scripts/perf/transcript-broadcast-measure.ts \
+  --state-dir /path/to/new-cron-authority-state --entry src/entry.ts \
+  --port 45674 --mock-port 45675 --scenario chat.send --sessions 1 --runs 1 \
+  --clients 1 --rounds 5 --chunks 5 --chunk-interval-ms 0 --stress-tools \
+  --operator-access-policy --cron-operator-turn --authority-counts --reset-every-rounds 0
+```
+
+Use fresh, equivalent synthetic state for every side. For allocation and CPU/GC
+measurements, omit `--authority-counts` and use the existing profiling flags in
+separate matched passes. `--start-file` waits after creator setup and warmup
+(`PHASE warmed`); write a future epoch in milliseconds only once both sides are
+ready. It aligns the first measured turn, not every subsequent round. Run under
+the host's exclusive quiet lock and production guard, use the current interleaved
+CPU sets, and swap placement for the next pair. Count-pass timing is not latency
+evidence.
+
 Add `--authority-counts --entry src/entry.ts` in a separate count pass to observe
 main-isolate named authority assertion closures, source-composition guards,
 identity-owner `statSync` and `realpathSync.native` calls, all main-isolate `statSync` calls, tool-override
@@ -3856,6 +3887,13 @@ The same pass counts profile-owner `assertSettled` checks and transferable
 Report both: a local settlement check can read the owner's cells directly without
 constructing a cross-thread descriptor, so fewer descriptor reads do not imply
 fewer live checks. Caller-stack collection belongs only to this count pass.
+For cron attribution, `host.callers` also records up to 64 frames for source
+composition (`assertSources`), recovery (`assertRecoveryCurrent`), the cron
+delivery fence, and agent availability. These preserve the synchronous caller
+chain so repeated compositions can be separated from the effect that requested
+them. Group by source location and report counts per completed turn; nested
+assertions are not independent effects. Async stacks can end at an awaited
+boundary and do not establish that a later effect revalidated its authority.
 
 Matched `--allocations` runs without `--authority-counts` additionally report
 `allocation.authority`: sampled bytes and sample records attributed to the
