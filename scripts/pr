@@ -680,9 +680,12 @@ function materializeDependencies(owner, canonicalPath, destination, revision) {
       });
       rmSync(bin, { recursive: true });
       if (installed.error) throw installed.error;
-      if (installed.status !== 0 || !materialize(stage, join(stage, "node_modules"))) {
+      // Validation writes pins; keep them outside the install that will move.
+      const check = join(stage, ".pr-dependency-check");
+      if (installed.status !== 0 || !materialize(stage, check)) {
         throw new Error("Frozen dependency installation failed.");
       }
+      rmSync(check, { recursive: true });
       mkdirSync(join(stage, ".pr-complete"));
       try { renameSync(stage, entry); }
       catch (error) {

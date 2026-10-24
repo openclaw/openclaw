@@ -1322,6 +1322,18 @@ exit "$status"
 
   function makeFrozenDependencyFixture() {
     const fixture = makeToolingRootFixture();
+    fixture.git(fixture.canonical, ["checkout", "main"]);
+    const markdownManifest = "packages/markdown-core/package.json";
+    mkdirSync(join(fixture.canonical, "packages/markdown-core"), { recursive: true });
+    fixture.write(markdownManifest, readScript(markdownManifest));
+    const inventory = "scripts/pr-lib/wrapper-components.txt";
+    fixture.write(
+      inventory,
+      `${readScript(join(fixture.canonical, inventory))}${markdownManifest}\n`,
+    );
+    fixture.commit([markdownManifest, inventory], true);
+    fixture.git(fixture.canonical, ["fetch", "origin", "main"]);
+    fixture.git(fixture.canonical, ["checkout", "parked"]);
     const calls = join(fixture.root, "frozen-install-calls");
     writeFileSync(join(fixture.stale, "package.json"), '{"name":"tsx","version":"99.0.0"}');
     const expected = realpathSync(join(fixture.tooling, "node_modules/tsx"));
@@ -1340,6 +1352,14 @@ if (root === ${JSON.stringify(fixture.tooling)}) process.exit(0);
 fs.cpSync(${JSON.stringify(join(fixture.tooling, "node_modules"))}, path.join(root, "node_modules"), { recursive: true });
 fs.unlinkSync(path.join(root, "node_modules/tsx"));
 fs.symlinkSync(${JSON.stringify(expected)}, path.join(root, "node_modules/tsx"), "dir");
+const workspaceModules = path.join(root, "packages/markdown-core/node_modules");
+fs.mkdirSync(workspaceModules, { recursive: true });
+for (const name of Object.keys(${JSON.stringify(JSON.parse(readScript("packages/markdown-core/package.json")).dependencies)})) {
+  if (!name.startsWith("mdast-") && !name.startsWith("micromark-")) continue;
+  const target = path.join(root, "node_modules/.workspace", name);
+  fs.cpSync(fs.realpathSync(path.join(${JSON.stringify(fixture.tooling)}, "packages/markdown-core/node_modules", name)), target, { recursive: true });
+  fs.symlinkSync(path.relative(workspaceModules, target), path.join(workspaceModules, name), "dir");
+}
 if (process.env.PR_TEST_INSTALL_GATE) {
   console.log("frozen install ready");
   const fd = fs.openSync(process.env.PR_TEST_INSTALL_GATE, "r");
@@ -1367,6 +1387,12 @@ if (process.env.PR_TEST_INSTALL_GATE) {
       const cache = join(fixture.env.HOME!, ".cache/openclaw/pr-dependencies");
       const entry = readdirSync(cache)[0]!;
       expect(realpathSync(join(cache, entry, "node_modules/tsx"))).toBe(fixture.expected);
+      expect(existsSync(join(cache, entry, "packages/markdown-core/package.json"))).toBe(true);
+      expect(
+        lstatSync(join(cache, entry, "node_modules/mdast-util-from-markdown"), {
+          throwIfNoEntry: false,
+        }),
+      ).toBeUndefined();
       expect(jsonLines(calls)[0].slice(2)).toEqual([
         "install",
         "--frozen-lockfile",
